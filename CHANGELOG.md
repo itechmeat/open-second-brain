@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-06
+
+### Changed
+
+- Reworded the `--args` guidance in `after-install.md` and `docs/mcp.md` so
+  the docs no longer contain a literal copyable quoted-args anti-example.
+  The corrected `hermes mcp add open-second-brain --command o2b --args mcp
+  --vault /path/to/vault` example stays; the negative case is now described
+  in prose ("do not wrap all of those arguments into one quoted shell
+  string and do not repeat `--args` per token") so a careless copy/paste
+  cannot pick up the wrong form.
+- Bumped package, plugin, and Claude/Codex manifest versions to 0.4.2.
+
 ## [0.4.1] - 2026-05-06
 
 ### Added
@@ -92,7 +105,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.4.1...HEAD
+[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/itechmeat/open-second-brain/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/itechmeat/open-second-brain/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/itechmeat/open-second-brain/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/itechmeat/open-second-brain/compare/v0.3.0...v0.3.1

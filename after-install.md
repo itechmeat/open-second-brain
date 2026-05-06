@@ -27,9 +27,10 @@ hermes gateway restart
 
 `--args` is a single flag whose value is the remaining tokens on the line
 (here: `mcp --vault /path/to/vault`). Hermes hands those tokens to the MCP
-server's command line as-is — do not wrap them in one quoted string like
-`--args 'mcp --vault /path/to/vault'`, and do not repeat `--args` per token.
-Edit `~/.hermes/config.yaml` instead if you prefer YAML.
+server's command line as-is. Do not wrap all of those arguments into one
+quoted shell string, and do not repeat `--args` per token — both forms make
+Hermes pass a single concatenated argument to the MCP server. Edit
+`~/.hermes/config.yaml` instead if you prefer YAML.
 
 The CLI works on its own; the MCP server is opt-in. See `docs/mcp.md` for
 tool schemas, per-tool arguments, and Claude Code / Codex notes.

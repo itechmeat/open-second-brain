@@ -63,9 +63,9 @@ hermes mcp add open-second-brain --command o2b --args mcp --vault /path/to/vault
 
 `--args` is a single flag; everything after it on the line (here
 `mcp --vault /path/to/vault`) is collected as the argument list and forwarded
-to the MCP server's command line. Do not wrap those tokens in a single
-quoted string like `--args 'mcp --vault /path'` (Hermes would treat the whole
-thing as one argument), and do not repeat `--args` per token.
+to the MCP server's command line. Do not wrap all of those arguments into one
+quoted shell string and do not repeat `--args` per token — both forms make
+Hermes pass a single concatenated argument to the MCP server.
 
 You can also edit `~/.hermes/config.yaml` by hand:
 
