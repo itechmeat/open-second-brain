@@ -70,7 +70,16 @@ class CliTests(unittest.TestCase):
     def test_doctor_checks_valid_vault(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
-            result = run_cli("doctor", "--vault", str(vault))
+            result = run_cli(
+                "doctor",
+                "--vault",
+                str(vault),
+                env={
+                    "OPEN_SECOND_BRAIN_CONFIG": "",
+                    "XDG_CONFIG_HOME": "",
+                    "VAULT_DIR": "",
+                },
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("[OK]", result.stdout)
             self.assertIn("vault", result.stdout.lower())
@@ -82,7 +91,8 @@ class CliTests(unittest.TestCase):
 
     def test_doctor_with_repo_checks_manifests(self):
         with tempfile.TemporaryDirectory() as tmp:
-            vault = Path(tmp)
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
             repo = Path(tmp) / "repo"
             (repo / ".claude-plugin").mkdir(parents=True)
             (repo / ".codex-plugin").mkdir(parents=True)

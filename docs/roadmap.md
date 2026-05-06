@@ -18,34 +18,31 @@ Scope:
 - no required MCP server;
 - no automatic background writes.
 
-## v0.1: deterministic CLI
+## v0.1: deterministic CLI ✅
 
-Implemented foundation:
+Implemented:
 
 ```text
 o2b status
+o2b init
+o2b doctor
 o2b export-config
 o2b append-event
 vault-log
 ```
 
-Current behavior:
+- `o2b status` — locate config and list known keys.
+- `o2b init` — bootstrap a vault profile with AI Wiki structure.
+- `o2b doctor` — run health checks on vault, config, and plugin manifests.
+- `o2b export-config` — write a redacted config snapshot.
+- `o2b append-event` — append an event to the daily Markdown backend.
+- `vault-log` — compatibility wrapper for existing vault-log users.
 
-- locate config through `OPEN_SECOND_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, or the default user config path;
-- append event log entries to daily Markdown notes;
-- export redacted config snapshots;
-- keep the CLI dependency-free and testable with Python `unittest`.
+All commands are dependency-free and tested with Python `unittest` (34 tests).
 
-Still planned for this track:
+## v0.2: vault profile bootstrap ✅ (in-progress)
 
-```text
-o2b init
-o2b doctor
-```
-
-## v0.2: vault profile bootstrap
-
-Planned outputs:
+`o2b init` creates:
 
 ```text
 AI Wiki/_OPEN_SECOND_BRAIN.md
@@ -56,6 +53,10 @@ AI Wiki/log.md
 AI Wiki/identity/user.md
 AI Wiki/identity/agents.md
 ```
+
+Remaining v0.2 work:
+- vault-local operating manual (`_OPEN_SECOND_BRAIN.md`) to drive agent behavior;
+- query helpers for the wiki layer.
 
 ## v0.3: runtime polish
 

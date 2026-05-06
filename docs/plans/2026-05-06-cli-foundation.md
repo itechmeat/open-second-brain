@@ -16,7 +16,7 @@
 - Create `src/open_second_brain/__init__.py`: package version.
 - Create `src/open_second_brain/config.py`: config path discovery and minimal redacted status model.
 - Create `src/open_second_brain/event_log.py`: append-only daily Markdown event log backend.
-- Create `src/open_second_brain/cli.py`: `o2b` CLI with `status`, `append-event`, and `export-config` commands.
+- Create `src/open_second_brain/cli.py`: `o2b` CLI with `status`, `init`, `doctor`, `append-event`, and `export-config` commands.
 - Create `src/open_second_brain/vault_log.py`: compatibility CLI for `vault-log`.
 - Modify `scripts/o2b`: shell wrapper that runs `python3 -m open_second_brain.cli` with local `src` on `PYTHONPATH`.
 - Modify `scripts/vault-log`: shell wrapper that runs `python3 -m open_second_brain.vault_log` with local `src` on `PYTHONPATH`.
@@ -296,7 +296,7 @@ git commit -m "feat: add daily markdown event log backend"
 
 - [ ] **Step 1: Write failing CLI tests**
 
-Test `o2b status`, `o2b append-event`, and `vault-log --as` using temporary vault directories.
+Test `o2b status`, `o2b init`, `o2b doctor`, `o2b append-event`, and `vault-log --as` using temporary vault directories.
 
 - [ ] **Step 2: Run tests and verify failure**
 

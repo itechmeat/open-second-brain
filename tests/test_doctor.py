@@ -20,7 +20,9 @@ class DoctorTests(unittest.TestCase):
             self.assertIn("writable", result.message.lower())
 
     def test_check_vault_not_found(self):
-        result = check_vault_writeable(Path("/nonexistent/vault/path"))
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "does_not_exist"
+            result = check_vault_writeable(missing)
         self.assertFalse(result.ok)
         self.assertIn("missing", result.message.lower())
 
@@ -53,7 +55,9 @@ class DoctorTests(unittest.TestCase):
             self.assertFalse(result.ok)
 
     def test_check_json_manifest_missing(self):
-        result = check_json_manifest(Path("/nonexistent/plugin.json"), "Test")
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "does_not_exist.json"
+            result = check_json_manifest(missing, "Test")
         self.assertFalse(result.ok)
 
     def test_doctor_aggregates_results(self):

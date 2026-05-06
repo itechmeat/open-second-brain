@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
-from open_second_brain.config import discover_config, redact_mapping
+from open_second_brain.config import default_config_path, discover_config, redact_mapping
 from open_second_brain.doctor import doctor
 from open_second_brain.event_log import append_event
 from open_second_brain.init import bootstrap_vault
@@ -18,10 +19,10 @@ def build_parser() -> argparse.ArgumentParser:
     status = subcommands.add_parser("status", help="Show Open Second Brain configuration status")
     status.add_argument("--config", type=Path, default=None, help="Config file path")
 
-    init = subcommands.add_parser("init", help="Initialize a vault profile with required files")
-    init.add_argument("--vault", type=Path, required=True, help="Vault directory path")
-    init.add_argument("--name", default="Second Brain", help="Instance name (default: Second Brain)")
-    init.add_argument("--force", action="store_true", help="Overwrite existing files")
+    init_cmd = subcommands.add_parser("init", help="Initialize a vault profile with required files")
+    init_cmd.add_argument("--vault", type=Path, required=True, help="Vault directory path")
+    init_cmd.add_argument("--name", default="Second Brain", help="Instance name (default: Second Brain)")
+    init_cmd.add_argument("--force", action="store_true", help="Overwrite existing files")
 
     doctor_cmd = subcommands.add_parser("doctor", help="Run health checks on vault, config, and plugins")
     doctor_cmd.add_argument("--vault", type=Path, default=None, help="Vault directory path")
@@ -55,7 +56,11 @@ def command_status(args: argparse.Namespace) -> int:
 
 def command_init(args: argparse.Namespace) -> int:
     vault = args.vault
-    created = bootstrap_vault(vault, name=args.name, force=args.force)
+    try:
+        created = bootstrap_vault(vault, name=args.name, force=args.force)
+    except OSError as exc:
+        print(f"error: failed to initialize vault: {exc}", file=sys.stderr)
+        return 1
     if not created:
         print(f"vault already initialized: {vault}")
         print("use --force to overwrite existing files")
@@ -68,10 +73,14 @@ def command_init(args: argparse.Namespace) -> int:
 
 def command_doctor(args: argparse.Namespace) -> int:
     vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
-    config: Path | None = args.config
+    config = args.config or default_config_path()
     repo_root: Path | None = args.repo
 
-    results = doctor(vault=vault, config=config, repo_root=repo_root)
+    try:
+        results = doctor(vault=vault, config=config, repo_root=repo_root)
+    except OSError as exc:
+        print(f"error: doctor failed: {exc}", file=sys.stderr)
+        return 1
     all_ok = True
     for r in results:
         status = "OK" if r.ok else "FAIL"
@@ -83,7 +92,11 @@ def command_doctor(args: argparse.Namespace) -> int:
 
 def command_append_event(args: argparse.Namespace) -> int:
     vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
-    path = append_event(vault, args.agent, args.message, date=args.date, time=args.time)
+    try:
+        path = append_event(vault, args.agent, args.message, date=args.date, time=args.time)
+    except OSError as exc:
+        print(f"error: failed to append event: {exc}", file=sys.stderr)
+        return 1
     print(f"appended: {path}")
     return 0
 
@@ -95,8 +108,12 @@ def command_export_config(args: argparse.Namespace) -> int:
         "config_exists": result.exists,
         "config": redact_mapping(result.data),
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"error: failed to export config: {exc}", file=sys.stderr)
+        return 1
     print(f"exported: {args.output}")
     return 0
 
