@@ -129,8 +129,8 @@ Automatic release from a tag:
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v0.0.1 -m "Release v0.0.1"
-git push origin v0.0.1
+git tag -a v0.3.0 -m "Release v0.3.0"
+git push origin v0.3.0
 ```
 
 Manual release from GitHub Actions:

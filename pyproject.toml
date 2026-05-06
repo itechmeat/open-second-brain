@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-second-brain"
-version = "0.0.1"
+version = "0.3.0"
 description = "Plugin-first second brain package for AI agents and humans."
 readme = "README.md"
 requires-python = ">=3.11"
