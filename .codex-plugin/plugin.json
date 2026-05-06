@@ -1,0 +1,7 @@
+{
+  "name": "open-second-brain",
+  "version": "0.0.1",
+  "description": "Plugin-first second brain package for Codex, Hermes, Claude Code, and other agent runtimes.",
+  "skills": "./skills",
+  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log"]
+}

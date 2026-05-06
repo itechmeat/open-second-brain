@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'MSG'
+vault-log placeholder for open-second-brain
+
+This compatibility command will append short factual entries to the configured event log backend.
+In v0, the implementation is intentionally not included yet.
+MSG

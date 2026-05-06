@@ -1,0 +1,6 @@
+name: open-second-brain
+version: "0.0.1"
+description: "Hermes adapter skeleton for Open Second Brain."
+author: "Open Second Brain contributors"
+kind: standalone
+provides_hooks: []
