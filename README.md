@@ -120,6 +120,33 @@ Create disposable test vaults with `scripts/o2b init --vault /tmp/o2b-sandbox`.
 Keep secrets outside the vault and use `scripts/o2b export-config` when sharing
 debug snapshots so sensitive keys are redacted.
 
+## Releases
+
+Releases are published by GitHub Actions from `.github/workflows/release.yml`.
+
+Automatic release from a tag:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git tag -a v0.0.1 -m "Release v0.0.1"
+git push origin v0.0.1
+```
+
+Manual release from GitHub Actions:
+
+1. Open **Actions → Release → Run workflow**.
+2. Leave `version` empty to use `pyproject.toml`, or enter the same version with or
+   without the leading `v`.
+3. Set `prerelease` only for prerelease builds.
+
+The release workflow verifies the test suite, plugin manifests, shell wrappers,
+Hermes plugin syntax, and `scripts/o2b doctor --vault . --repo .` before building
+source and wheel distributions and publishing a GitHub release.
+
+Before changing `pyproject.toml` version for a future release, update
+`CHANGELOG.md` using Keep a Changelog sections.
+
 ## Development
 
 Run the test suite with the Python standard library:
