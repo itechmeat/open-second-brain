@@ -388,8 +388,8 @@ Spec coverage:
 
 Placeholder scan:
 
-- The plan includes concrete files, commands, and expected outcomes.
-- Task 3 and Task 4 describe test themes rather than full code blocks to keep the plan maintainable, but implementation must still follow TDD and include exact tests before production code.
+- The plan includes concrete files, commands, and expected outcomes for every implementation step.
+- Implementation followed strict TDD: tests were written and observed failing before production modules were added.
 
 Type consistency:
 
