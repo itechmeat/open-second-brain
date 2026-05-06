@@ -48,12 +48,44 @@ def parse_frontmatter(path: Path) -> tuple[dict[str, Any], str]:
     return metadata, body
 
 
+_PLAIN_SCALAR_RE = re.compile(r"^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$")
+
+
+def _format_yaml_scalar(value: Any) -> str:
+    text = str(value)
+    if (
+        text
+        and _PLAIN_SCALAR_RE.match(text)
+        and ": " not in text
+        and " #" not in text
+    ):
+        return text
+    escaped = (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def _format_yaml_value(value: Any) -> str:
+    if isinstance(value, list):
+        return "[" + ", ".join(_format_yaml_scalar(item) for item in value) + "]"
+    return _format_yaml_scalar(value)
+
+
 def write_frontmatter(path: Path, metadata: dict[str, Any], body: str) -> None:
-    """Write a Markdown file with YAML-like frontmatter and body text."""
+    """Write a Markdown file with YAML-like frontmatter and body text.
+
+    Lists are serialized as YAML inline arrays (``key: [a, b]``) so they round-trip
+    cleanly through Obsidian and the project's simple frontmatter parser.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---"]
     for key, value in metadata.items():
-        lines.append(f"{key}: {value}")
+        lines.append(f"{key}: {_format_yaml_value(value)}")
     lines.append("---")
     if body:
         lines.append("")

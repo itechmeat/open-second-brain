@@ -69,17 +69,17 @@ Implemented:
 - better install and runtime notes in README;
 - test fixtures for sandbox vaults and plugin manifest repos.
 
-## v1: MCP tool server
+## v1: MCP tool server ✅
 
-Optional MCP server over the same core operations:
+Implemented in v0.4.0 (`docs/mcp.md`):
 
-- `second_brain_status`;
-- `second_brain_query`;
-- `second_brain_capture`;
-- `event_log_append`;
-- `vault_health`.
+- stdio JSON-RPC 2.0 server on protocol version `2025-06-18`;
+- five tools: `second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`;
+- `o2b mcp` subcommand and `o2b-mcp` console script;
+- Hermes/Claude/Codex manifest metadata referencing the MCP entrypoint;
+- documentation for `~/.hermes/config.yaml mcp_servers` registration.
 
-The MCP server should be optional. CLI must remain the baseline.
+The MCP server is optional. The CLI remains the supported baseline.
 
 ## v2: richer automation
 

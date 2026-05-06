@@ -75,10 +75,24 @@ o2b doctor          Run vault and adapter checks
 o2b append-event    Append one daily event-log entry
 o2b index           Rebuild the Markdown page index
 o2b export-config   Write a redacted config snapshot
+o2b mcp             Run the optional MCP tool server (stdio)
 vault-log           Compatibility wrapper around append-event
 ```
 
 The local checkout can be used without installing the Python package. Run commands through `scripts/o2b` and `scripts/vault-log`, or set `PYTHONPATH=src` for module execution.
+
+## Optional MCP tool server
+
+OpenSecondBrain ships an optional Model Context Protocol server that exposes the same deterministic operations as MCP tools. Hermes Agent discovers it through `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  open-second-brain:
+    command: o2b
+    args: ["mcp", "--vault", "/path/to/vault"]
+```
+
+Tools: `second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`. See `docs/mcp.md` for full setup, tool schemas, and Claude Code/Codex notes. The CLI remains the supported baseline; the MCP server is opt-in.
 
 ## Safety model
 

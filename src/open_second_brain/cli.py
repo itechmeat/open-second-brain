@@ -10,6 +10,7 @@ from open_second_brain.config import default_config_path, discover_config, redac
 from open_second_brain.doctor import doctor
 from open_second_brain.event_log import append_event
 from open_second_brain.init import bootstrap_vault
+from open_second_brain.mcp import run_cli_command as run_mcp_server
 from open_second_brain.vault import list_vault_pages, write_frontmatter
 
 
@@ -43,6 +44,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     index_cmd = subcommands.add_parser("index", help="Regenerate the vault index from discovered pages")
     index_cmd.add_argument("--vault", type=Path, default=None, help="Vault directory path")
+
+    mcp_cmd = subcommands.add_parser(
+        "mcp",
+        help="Run the optional MCP tool server (stdio JSON-RPC)",
+        description=(
+            "Start an MCP server over stdio that exposes Second Brain tools. "
+            "Pair with Hermes ~/.hermes/config.yaml mcp_servers."
+        ),
+    )
+    mcp_cmd.add_argument("--vault", type=Path, default=None, help="Vault directory path")
+    mcp_cmd.add_argument("--config", type=Path, default=None, help="Config file path")
+    mcp_cmd.add_argument("--repo", type=Path, default=None, help="Repository root for plugin checks")
 
     return parser
 
@@ -156,6 +169,16 @@ def command_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_mcp(args: argparse.Namespace) -> int:
+    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
+    config = args.config or default_config_path()
+    repo_root: Path | None = args.repo
+    try:
+        return run_mcp_server(vault=vault, config_path=config, repo_root=repo_root)
+    except KeyboardInterrupt:
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -171,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_export_config(args)
     if args.command == "index":
         return command_index(args)
+    if args.command == "mcp":
+        return command_mcp(args)
     raise AssertionError(f"unhandled command: {args.command}")
 
 

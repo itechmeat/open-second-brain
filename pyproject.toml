@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-second-brain"
-version = "0.3.1"
+version = "0.4.0"
 description = "Hermes-first second brain package for Obsidian-compatible Markdown vaults."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,6 +16,7 @@ dependencies = []
 [project.scripts]
 o2b = "open_second_brain.cli:main"
 vault-log = "open_second_brain.vault_log:main"
+o2b-mcp = "open_second_brain.mcp:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

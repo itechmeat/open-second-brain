@@ -1,12 +1,12 @@
 {
   "name": "open-second-brain",
-  "version": "0.0.1",
+  "version": "0.4.0",
   "description": "Plugin-first second brain package for AI agents and humans.",
   "author": "Open Second Brain contributors",
   "license": "MIT",
   "homepage": "https://github.com/itechmeat/open-second-brain",
   "repository": "https://github.com/itechmeat/open-second-brain",
-  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log"],
+  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"],
   "commands": [
     {
       "name": "status",
@@ -43,6 +43,12 @@
       "description": "Write a redacted configuration snapshot as JSON.",
       "command": "scripts/o2b",
       "args": ["export-config"]
+    },
+    {
+      "name": "mcp",
+      "description": "Run the optional MCP tool server over stdio (JSON-RPC 2.0).",
+      "command": "scripts/o2b",
+      "args": ["mcp"]
     },
     {
       "name": "vault-log",

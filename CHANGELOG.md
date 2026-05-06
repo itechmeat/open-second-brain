@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-06
+
+### Added
+
+- Optional Model Context Protocol (MCP) tool server over stdio JSON-RPC 2.0 (`o2b mcp`, `o2b-mcp`).
+- Five MCP tools backed by the existing core: `second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`.
+- `docs/mcp.md` guide for Hermes `~/.hermes/config.yaml mcp_servers` registration, Claude Code, and Codex.
+- `mcp_server` metadata in the top-level Hermes plugin manifest and `plugins/hermes/plugin.yaml`.
+- `mcp` command entry in the Claude Code plugin manifest.
+- 20 dedicated MCP tests covering handshake, tools listing, every tool, stdio loop, and CLI integration.
+
+### Changed
+
+- Bumped package, plugin, and Claude/Codex manifest versions to 0.4.0.
+- Updated README and roadmap to mark v1 as implemented and link to the new MCP guide.
+
 ## [0.3.1] - 2026-05-06
 
 ### Added
@@ -32,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.3.1...HEAD
+[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/itechmeat/open-second-brain/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/itechmeat/open-second-brain/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/itechmeat/open-second-brain/releases/tag/v0.3.0

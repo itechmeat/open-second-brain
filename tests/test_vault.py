@@ -44,6 +44,42 @@ class VaultTests(unittest.TestCase):
             self.assertEqual(meta["title"], "Roundtrip")
             self.assertEqual(body, "The body.")
 
+    def test_write_frontmatter_serializes_list_values_as_inline_array(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "note.md"
+            write_frontmatter(
+                path,
+                {"title": "Tagged", "tags": ["draft", "demo"]},
+                "Body.",
+            )
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("tags: [draft, demo]", text)
+
+    def test_write_frontmatter_quotes_list_values_with_special_chars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "note.md"
+            write_frontmatter(
+                path,
+                {"tags": ["plain", "needs, comma"]},
+                "Body.",
+            )
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('tags: [plain, "needs, comma"]', text)
+
+    def test_write_frontmatter_quotes_scalar_with_colon_space(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "note.md"
+            write_frontmatter(path, {"title": "Hello: world"}, "Body.")
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('title: "Hello: world"', text)
+
+    def test_write_frontmatter_escapes_control_characters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "note.md"
+            write_frontmatter(path, {"summary": "line one\nline two"}, "Body.")
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(r'summary: "line one\nline two"', text)
+
     def test_extract_wikilinks_simple(self):
         content = "See [[Target]] and [[Other]] for details."
         links = extract_wikilinks(content)
