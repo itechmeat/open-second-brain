@@ -6,15 +6,27 @@ import os
 from pathlib import Path
 
 from open_second_brain.config import discover_config, redact_mapping
+from open_second_brain.doctor import doctor
 from open_second_brain.event_log import append_event
+from open_second_brain.init import bootstrap_vault
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="asb", description="Open Second Brain CLI")
+    parser = argparse.ArgumentParser(prog="o2b", description="Open Second Brain CLI")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     status = subcommands.add_parser("status", help="Show Open Second Brain configuration status")
     status.add_argument("--config", type=Path, default=None, help="Config file path")
+
+    init = subcommands.add_parser("init", help="Initialize a vault profile with required files")
+    init.add_argument("--vault", type=Path, required=True, help="Vault directory path")
+    init.add_argument("--name", default="Second Brain", help="Instance name (default: Second Brain)")
+    init.add_argument("--force", action="store_true", help="Overwrite existing files")
+
+    doctor_cmd = subcommands.add_parser("doctor", help="Run health checks on vault, config, and plugins")
+    doctor_cmd.add_argument("--vault", type=Path, default=None, help="Vault directory path")
+    doctor_cmd.add_argument("--config", type=Path, default=None, help="Config file path")
+    doctor_cmd.add_argument("--repo", type=Path, default=None, help="Repository root for plugin checks")
 
     append = subcommands.add_parser("append-event", help="Append an event to the configured event log backend")
     append.add_argument("message", help="Single-line event message")
@@ -39,6 +51,34 @@ def command_status(args: argparse.Namespace) -> int:
         for key in sorted(result.data):
             print(f"- {key}")
     return 0
+
+
+def command_init(args: argparse.Namespace) -> int:
+    vault = args.vault
+    created = bootstrap_vault(vault, name=args.name, force=args.force)
+    if not created:
+        print(f"vault already initialized: {vault}")
+        print("use --force to overwrite existing files")
+        return 0
+    print(f"initialized vault: {vault}")
+    for path in created:
+        print(f"  created: {path}")
+    return 0
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
+    config: Path | None = args.config
+    repo_root: Path | None = args.repo
+
+    results = doctor(vault=vault, config=config, repo_root=repo_root)
+    all_ok = True
+    for r in results:
+        status = "OK" if r.ok else "FAIL"
+        print(f"[{status}] {r.name}: {r.message}")
+        if not r.ok:
+            all_ok = False
+    return 0 if all_ok else 1
 
 
 def command_append_event(args: argparse.Namespace) -> int:
@@ -66,6 +106,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "status":
         return command_status(args)
+    if args.command == "init":
+        return command_init(args)
+    if args.command == "doctor":
+        return command_doctor(args)
     if args.command == "append-event":
         return command_append_event(args)
     if args.command == "export-config":

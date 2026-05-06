@@ -24,7 +24,7 @@ In v0, Open Second Brain is expected to provide documentation, scripts, skills, 
 1. Check whether Open Second Brain is configured.
 2. Read the machine-local config if available.
 3. Read the vault-local operating manual if available.
-4. Use `vault-log` or `asb append-event` for event logging.
+4. Use `vault-log` or `o2b append-event` for event logging.
 5. Use Markdown edits for durable synthesized knowledge only when the user asks or the configured policy allows it.
 
 ## Safety

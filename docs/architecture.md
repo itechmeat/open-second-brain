@@ -138,8 +138,8 @@ Open Second Brain should assume the vault is the primary portable backup unit.
 Recommended behavior:
 
 - vault-portable config is backed up with the vault;
-- machine-local config can be regenerated with `asb init --adopt-vault`;
-- `asb export-config` writes a redacted machine snapshot into the vault;
+- machine-local config can be regenerated with `o2b init --adopt-vault`;
+- `o2b export-config` writes a redacted machine snapshot into the vault;
 - secrets are excluded and represented as `[REDACTED]` only when needed.
 
 ## Vault layout

@@ -23,9 +23,9 @@ Scope:
 Implemented foundation:
 
 ```text
-asb status
-asb export-config
-asb append-event
+o2b status
+o2b export-config
+o2b append-event
 vault-log
 ```
 
@@ -39,8 +39,8 @@ Current behavior:
 Still planned for this track:
 
 ```text
-asb init
-asb doctor
+o2b init
+o2b doctor
 ```
 
 ## v0.2: vault profile bootstrap

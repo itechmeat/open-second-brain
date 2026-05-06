@@ -26,7 +26,7 @@ The compatibility command is `vault-log`.
 Future Open Second Brain CLI commands may include:
 
 ```bash
-asb append-event --as <agent-name> "message"
+o2b append-event --as <agent-name> "message"
 vault-log --as <agent-name> "message"
 ```
 

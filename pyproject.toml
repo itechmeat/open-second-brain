@@ -14,7 +14,7 @@ keywords = ["second-brain", "obsidian", "agents", "skills", "event-log"]
 dependencies = []
 
 [project.scripts]
-asb = "open_second_brain.cli:main"
+o2b = "open_second_brain.cli:main"
 vault-log = "open_second_brain.vault_log:main"
 
 [tool.setuptools.packages.find]
