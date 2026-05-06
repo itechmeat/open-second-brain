@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.0.1] - 2026-05-06
+## [0.3.0] - 2026-05-06
 
 ### Added
 
@@ -21,5 +21,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.0.1...HEAD
-[0.0.1]: https://github.com/itechmeat/open-second-brain/releases/tag/v0.0.1
+[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/itechmeat/open-second-brain/releases/tag/v0.3.0
