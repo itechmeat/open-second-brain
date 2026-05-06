@@ -8,7 +8,7 @@ Scope:
 
 - README and design documentation;
 - architecture notes;
-- CLI placeholders;
+- tested CLI foundation;
 - event log concept;
 - skills for Open Second Brain and event logging;
 - Hermes plugin skeleton;
@@ -20,25 +20,28 @@ Scope:
 
 ## v0.1: deterministic CLI
 
-Planned commands:
+Implemented foundation:
 
 ```text
-asb init
 asb status
-asb doctor
 asb export-config
 asb append-event
 vault-log
 ```
 
-Expected behavior:
+Current behavior:
 
-- locate config;
-- initialize machine-local config;
-- adopt an existing vault profile;
-- append event log entries;
-- export redacted snapshots;
-- validate schema and paths.
+- locate config through `OPEN_SECOND_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, or the default user config path;
+- append event log entries to daily Markdown notes;
+- export redacted config snapshots;
+- keep the CLI dependency-free and testable with Python `unittest`.
+
+Still planned for this track:
+
+```text
+asb init
+asb doctor
+```
 
 ## v0.2: vault profile bootstrap
 

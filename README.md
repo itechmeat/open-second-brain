@@ -4,7 +4,7 @@ Open Second Brain is an open-source, plugin-first second brain package for AI ag
 
 It is designed to give Hermes Agent, Claude Code, OpenAI Codex, and other agentic runtimes a shared, portable way to remember durable project knowledge, append operational event logs, query an Obsidian-compatible vault, and carry the same workflow across machines without locking knowledge into one agent runtime.
 
-Status: experimental v0 design. The first release target is documentation, CLI foundations, skills, and plugin manifests. Deeper runtime integrations and MCP support are planned for later versions.
+Status: experimental v0. The repository currently includes documentation, a tested Python CLI foundation, skills, and plugin manifests. Deeper runtime integrations and MCP support are planned for later versions.
 
 ## Goals
 
@@ -57,6 +57,42 @@ Open Second Brain is plugin-first, but not plugin-only.
 - Skills teach agentic runtimes the protocol and safety rules.
 - CLI tools provide deterministic operations that should not depend on model reasoning.
 - MCP can be added later as a shared tool API over the same core.
+
+## CLI foundation
+
+Run the local CLI without installing the package:
+
+```bash
+scripts/asb status
+scripts/asb append-event --vault /path/to/vault --as agent-name --date 2026.05.06 --time 10:15 "created first entry"
+scripts/asb export-config --config ~/.config/open-second-brain/config.yaml --output /tmp/open-second-brain-config.json
+scripts/vault-log --vault /path/to/vault --as agent-name "compatibility event entry"
+```
+
+The current CLI is intentionally small and dependency-free. It supports:
+
+- config path discovery through `OPEN_SECOND_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, or `~/.config/open-second-brain/config.yaml`;
+- redacted config export;
+- append-only daily Markdown event logging;
+- a `vault-log` compatibility wrapper.
+
+## Development
+
+Run the test suite with the Python standard library:
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
+
+Run static syntax checks used by the initial PRs:
+
+```bash
+python3 -m json.tool .claude-plugin/plugin.json >/dev/null
+python3 -m json.tool .codex-plugin/plugin.json >/dev/null
+python3 -m py_compile plugins/hermes/__init__.py
+bash -n scripts/asb
+bash -n scripts/vault-log
+```
 
 ## License
 

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-second-brain"
+version = "0.0.1"
+description = "Plugin-first second brain package for AI agents and humans."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Open Second Brain contributors" }]
+keywords = ["second-brain", "obsidian", "agents", "skills", "event-log"]
+dependencies = []
+
+[project.scripts]
+asb = "open_second_brain.cli:main"
+vault-log = "open_second_brain.vault_log:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
