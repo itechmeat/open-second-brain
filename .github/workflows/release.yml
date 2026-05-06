@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (with or without leading v). Defaults to pyproject.toml version."
+        required: false
+        type: string
+      prerelease:
+        description: "Mark the GitHub release as a prerelease."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}-${{ github.event.inputs.version || '' }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish GitHub release
+    runs-on: ubuntu-latest
+    env:
+      VERSION_INPUT: ${{ github.event.inputs.version || '' }}
+      PRERELEASE_INPUT: ${{ github.event.inputs.prerelease || 'false' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          pyproject_version=$(python -c 'import pathlib, tomllib; data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8")); print(data["project"]["version"])')
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+          elif [ -n "${VERSION_INPUT}" ]; then
+            version="${VERSION_INPUT#v}"
+            tag="v${version}"
+          else
+            version="${pyproject_version}"
+            tag="v${version}"
+          fi
+
+          if [ "${version}" != "${pyproject_version}" ]; then
+            echo "Release version ${version} does not match pyproject.toml version ${pyproject_version}" >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Run test suite
+        run: PYTHONPATH=src python -m unittest discover -s tests -v
+
+      - name: Run packaging and manifest checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m json.tool .claude-plugin/plugin.json >/dev/null
+          python -m json.tool .codex-plugin/plugin.json >/dev/null
+          python -m py_compile plugins/hermes/__init__.py
+          bash -n scripts/o2b
+          bash -n scripts/vault-log
+          scripts/o2b doctor --vault . --repo .
+
+      - name: Build source and wheel distributions
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          prerelease_args=()
+          if [ "${PRERELEASE_INPUT}" = "true" ]; then
+            prerelease_args+=(--prerelease)
+          fi
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists" >&2
+            exit 1
+          fi
+
+          gh release create "${TAG}" dist/* \
+            --target "${GITHUB_SHA}" \
+            --title "open-second-brain ${TAG}" \
+            --generate-notes \
+            "${prerelease_args[@]}"
