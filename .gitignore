@@ -1,0 +1,20 @@
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node
+node_modules/
+
+# Local config and sandbox data
+.env
+.env.*
+!.env.example
+.open-second-brain.local.yaml
+sandbox-vault/

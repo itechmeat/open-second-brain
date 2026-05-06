@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'MSG'
+open-second-brain CLI placeholder
+
+Planned commands:
+  asb init
+  asb status
+  asb doctor
+  asb export-config
+  asb append-event
+
+This repository is currently at the v0 documentation/skeleton stage.
+MSG
