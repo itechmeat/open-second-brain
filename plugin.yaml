@@ -1,6 +1,6 @@
 name: open-second-brain
 version: "0.3.1"
-description: "Hermes adapter for OpenSecondBrain vault health checks."
+description: "Hermes plugin entrypoint for OpenSecondBrain vault health checks."
 author: "OpenSecondBrain contributors"
 kind: standalone
 provides_hooks: []

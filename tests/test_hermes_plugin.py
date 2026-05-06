@@ -1,3 +1,5 @@
+import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
@@ -17,6 +19,22 @@ class HermesPluginTests(unittest.TestCase):
 
     def test_check_health_alias(self):
         self.assertEqual(check_health(ROOT)["name"], "open-second-brain")
+
+    def test_root_plugin_entrypoint_loads_like_hermes_git_install(self):
+        spec = importlib.util.spec_from_file_location(
+            "open_second_brain_plugin_test",
+            ROOT / "__init__.py",
+            submodule_search_locations=[str(ROOT)],
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+            self.assertEqual(module.check_health(ROOT)["name"], "open-second-brain")
+        finally:
+            sys.modules.pop(spec.name, None)
 
     def test_register_attaches_to_method_context(self):
         calls = []

@@ -1,170 +1,95 @@
-# open-second-brain
+# OpenSecondBrain
 
-Open Second Brain is an open-source, plugin-first second brain package for AI agents and humans.
+OpenSecondBrain gives Hermes Agent a small, filesystem-first second brain for Obsidian-compatible Markdown vaults.
 
-It is designed to give Hermes Agent, Claude Code, OpenAI Codex, and other agentic runtimes a shared, portable way to remember durable project knowledge, append operational event logs, query an Obsidian-compatible vault, and carry the same workflow across machines without locking knowledge into one agent runtime.
+It is built for Hermes first: install it as a Hermes plugin, point it at a vault, and let Hermes use deterministic commands for the parts that should not depend on model reasoning — setup checks, vault bootstrap, daily event logging, safe config export, and wiki indexing.
 
-Status: experimental v0.3. The repository currently includes documentation, a tested Python CLI foundation, skills, plugin manifests, and lightweight runtime health checks. Deeper runtime integrations and MCP support are planned for later versions.
+Claude Code and OpenAI Codex are supported through lightweight adapter manifests, but Hermes is the primary runtime.
 
-## Goals
+## What it does today
 
-- Provide a filesystem-first second brain that works with Obsidian-compatible Markdown vaults.
-- Keep mutable user data and configuration separate from immutable plugin/package code.
-- Support multiple agent runtimes through adapters instead of a single runtime-specific implementation.
-- Treat daily logs as one backend for an append-only agent event log.
-- Make setup, status checks, redacted config export, and future migrations deterministic through CLI tools.
-- Avoid storing secrets, tokens, credentials, or private connection strings in the vault.
+- Bootstraps an agent-owned area inside your vault: `AI Wiki/` plus `_OPEN_SECOND_BRAIN.md`.
+- Appends agent events to daily Markdown notes without editing your manual notes above `## Raw events`.
+- Regenerates a simple Markdown page index from frontmatter and wikilinks.
+- Exports config snapshots with secret-like values redacted.
+- Runs health checks for the vault, config file, Hermes plugin, and Claude/Codex manifests.
+- Ships with dependency-free CLI wrappers: `scripts/o2b` and `scripts/vault-log`.
 
-## Non-goals for v0
+OpenSecondBrain does not run a daemon, replace your vault, or write hidden background state outside the configured vault/config paths.
 
-- No always-on daemon.
-- No mandatory MCP server.
-- No automatic self-rewriting maintenance jobs.
-- No replacement of an existing personal vault.
-- No hidden background writes outside the configured agent-owned area.
+## Install in Hermes
 
-## Planned v0 shape
+In the Hermes Dashboard:
+
+1. Open Plugins.
+2. Choose Install from GitHub / Git URL.
+3. Paste this repository URL:
 
 ```text
-open-second-brain/
-  docs/
-    idea.md
-    architecture.md
-    roadmap.md
-  skills/
-    open-second-brain/
-      SKILL.md
-    agent-event-log/
-      SKILL.md
-  scripts/
-    o2b
-    vault-log
-  plugins/
-    hermes/
-      plugin.yaml
-      __init__.py
-  .claude-plugin/
-    plugin.json
-  .codex-plugin/
-    plugin.json
+https://github.com/itechmeat/open-second-brain
 ```
 
-## Runtime strategy
+4. Install and enable the plugin.
+5. Restart Hermes or start a fresh session if the plugin list was already loaded.
 
-Open Second Brain is plugin-first, but not plugin-only.
-
-- Plugins provide installation, discovery, lifecycle integration, and runtime adapters.
-- Skills teach agentic runtimes the protocol and safety rules.
-- CLI tools provide deterministic operations that should not depend on model reasoning.
-- MCP can be added later as a shared tool API over the same core.
-
-## CLI foundation
-
-Run the local CLI without installing the package:
+Hermes also supports the same flow from the CLI:
 
 ```bash
-scripts/o2b status
+hermes plugins install itechmeat/open-second-brain --enable
+```
+
+Hermes documentation describes plugin install identifiers as a Git URL or `owner/repo` shorthand; the dashboard field accepts the same formats.
+
+## First run
+
+Create or update the OpenSecondBrain profile inside a vault:
+
+```bash
 scripts/o2b init --vault /path/to/vault --name "My Second Brain"
+```
+
+Check that the vault and runtime adapters are healthy:
+
+```bash
 scripts/o2b doctor --vault /path/to/vault --repo .
+```
+
+Append an agent event:
+
+```bash
+scripts/o2b append-event --vault /path/to/vault --as hermes "initialized OpenSecondBrain"
+```
+
+Refresh the Markdown page index:
+
+```bash
 scripts/o2b index --vault /path/to/vault
-scripts/o2b append-event --vault /path/to/vault --as agent-name --date 2026.05.06 --time 10:15 "created first entry"
-scripts/o2b export-config --config ~/.config/open-second-brain/config.yaml --output /tmp/open-second-brain-config.json
-scripts/vault-log --vault /path/to/vault --as agent-name "compatibility event entry"
 ```
 
-The current CLI is intentionally small and dependency-free. It supports:
+## CLI commands
 
-- config path discovery through `OPEN_SECOND_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, or `~/.config/open-second-brain/config.yaml`;
-- vault bootstrap with an agent-owned `AI Wiki` profile;
-- vault, config, and plugin manifest health checks;
-- wiki index regeneration for Markdown pages;
-- redacted config export;
-- append-only daily Markdown event logging;
-- a `vault-log` compatibility wrapper.
-
-Common setup flow:
-
-```bash
-git clone https://github.com/itechmeat/open-second-brain.git
-cd open-second-brain
-scripts/o2b init --vault ~/SecondBrainSandbox --name "Sandbox Brain"
-scripts/o2b doctor --vault ~/SecondBrainSandbox --repo .
-scripts/o2b append-event --vault ~/SecondBrainSandbox --as setup "initialized sandbox vault"
-scripts/o2b index --vault ~/SecondBrainSandbox
+```text
+o2b status          Show config/vault status
+o2b init            Bootstrap the vault profile
+o2b doctor          Run vault and adapter checks
+o2b append-event    Append one daily event-log entry
+o2b index           Rebuild the Markdown page index
+o2b export-config   Write a redacted config snapshot
+vault-log           Compatibility wrapper around append-event
 ```
 
-The CLI is safe to run directly from the checkout. For shell use, add the repo's
-`scripts` directory to `PATH`, or call `scripts/o2b` and `scripts/vault-log`
-explicitly. For Python module use, set `PYTHONPATH=src` and run
-`python3 -m open_second_brain.cli ...`.
+The local checkout can be used without installing the Python package. Run commands through `scripts/o2b` and `scripts/vault-log`, or set `PYTHONPATH=src` for module execution.
 
-## Plugin and runtime install notes
+## Safety model
 
-The runtime adapters are intentionally thin. They advertise deterministic CLI
-commands and health checks; they do not start daemons, MCP servers, or background
-automation.
+- Your notes stay as plain Markdown.
+- Secrets are not meant to be stored in the vault.
+- Config export redacts secret-like keys and values.
+- Daily logs are append-only below `## Raw events`.
+- The current Hermes plugin only registers lightweight health checks; it does not start background jobs.
 
-- Claude Code: `.claude-plugin/plugin.json` contains command metadata for
-  `status`, `doctor`, `init`, `index`, `append-event`, `export-config`, and the
-  `vault-log` compatibility wrapper. Commands point at portable repo-relative
-  scripts.
-- Codex: `.codex-plugin/plugin.json` declares package metadata and the skills
-  directory. `scripts/o2b doctor --repo .` validates required Codex manifest
-  fields.
-- Hermes: `plugins/hermes/__init__.py` exposes `health(repo_root=None)` and
-  `check_health(repo_root=None)`. `register(ctx)` makes a best-effort attachment
-  to common context shapes such as `register_health_check(...)`,
-  `add_health_check(...)`, or a `health_checks` dict/list.
+## Repository
 
-Create disposable test vaults with `scripts/o2b init --vault /tmp/o2b-sandbox`.
-Keep secrets outside the vault and use `scripts/o2b export-config` when sharing
-debug snapshots so sensitive keys are redacted.
+GitHub: https://github.com/itechmeat/open-second-brain
 
-## Releases
-
-Releases are published by GitHub Actions from `.github/workflows/release.yml`.
-
-Automatic release from a tag:
-
-```bash
-git switch main
-git pull --ff-only origin main
-git tag -a v0.3.0 -m "Release v0.3.0"
-git push origin v0.3.0
-```
-
-Manual release from GitHub Actions:
-
-1. Open **Actions → Release → Run workflow**.
-2. Leave `version` empty to use `pyproject.toml`, or enter the same version with or
-   without the leading `v`.
-3. Set `prerelease` only for prerelease builds.
-
-The release workflow verifies the test suite, plugin manifests, shell wrappers,
-Hermes plugin syntax, and `scripts/o2b doctor --vault . --repo .` before building
-source and wheel distributions and publishing a GitHub release.
-
-Before changing `pyproject.toml` version for a future release, update
-`CHANGELOG.md` using Keep a Changelog sections.
-
-## Development
-
-Run the test suite with the Python standard library:
-
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-```
-
-Run static syntax checks used by the initial PRs:
-
-```bash
-python3 -m json.tool .claude-plugin/plugin.json >/dev/null
-python3 -m json.tool .codex-plugin/plugin.json >/dev/null
-python3 -m py_compile plugins/hermes/__init__.py
-bash -n scripts/o2b
-bash -n scripts/vault-log
-```
-
-## License
-
-MIT. See `LICENSE`.
+License: MIT.
