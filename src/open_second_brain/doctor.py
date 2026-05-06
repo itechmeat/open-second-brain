@@ -14,7 +14,7 @@ class CheckResult:
 
 def check_vault_writeable(vault: Path) -> CheckResult:
     if not vault.exists():
-        return CheckResult("vault_exists", False, f"vault directory missing: {vault}")
+        return CheckResult("vault_writeable", False, f"vault directory missing: {vault}")
     test_path = vault / ".open-second-brain-doctor-test"
     try:
         test_path.touch()
@@ -25,16 +25,18 @@ def check_vault_writeable(vault: Path) -> CheckResult:
 
 
 def check_config_writeable(config: Path) -> CheckResult:
+    created_for_check = False
     try:
-        if config.exists():
-            config.read_text(encoding="utf-8")
-        else:
-            config.parent.mkdir(parents=True, exist_ok=True)
-            config.touch()
+        config.parent.mkdir(parents=True, exist_ok=True)
+        if not config.exists():
+            created_for_check = True
+        with config.open("a", encoding="utf-8"):
+            pass
+        if created_for_check:
             config.unlink()
-    except (OSError, UnicodeDecodeError) as exc:
-        return CheckResult("config_readable", False, f"cannot read/write config {config}: {exc}")
-    return CheckResult("config_readable", True, f"config readable: {config}")
+    except OSError as exc:
+        return CheckResult("config_writeable", False, f"cannot write config {config}: {exc}")
+    return CheckResult("config_writeable", True, f"config writable: {config}")
 
 
 def check_json_manifest(path: Path, description: str) -> CheckResult:

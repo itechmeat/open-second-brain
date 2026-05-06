@@ -67,7 +67,7 @@ TEMPLATES: dict[Path, str] = {
         "# Agent Identity\n\n"
         "Allowed agents and their scopes.\n\n"
         "## Registered agents\n\n"
-        "- hermes-vps-agent: operator on vps-techmeat\n\n"
+        "- (add your agents here, e.g., my-agent: operator on my-server)\n\n"
         "## Scopes\n\n"
         "- Write scope: AI Wiki/, Daily/\n"
         "- Read scope: whole vault\n"

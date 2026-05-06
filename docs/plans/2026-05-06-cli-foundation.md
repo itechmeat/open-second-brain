@@ -290,7 +290,7 @@ git commit -m "feat: add daily markdown event log backend"
 **Files:**
 - Create: `src/open_second_brain/cli.py`
 - Create: `src/open_second_brain/vault_log.py`
-Modify: `scripts/o2b`
+- Modify: `scripts/o2b`
 - Modify: `scripts/vault-log`
 - Create: `tests/test_cli.py`
 
