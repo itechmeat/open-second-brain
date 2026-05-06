@@ -4,11 +4,16 @@ from pathlib import Path
 
 from open_second_brain.doctor import (
     CheckResult,
+    check_claude_manifest,
     check_config_writeable,
+    check_codex_manifest,
+    check_hermes_manifest,
     check_json_manifest,
     check_vault_writeable,
     doctor,
 )
+
+from tests.fixtures import create_plugin_repo, create_sandbox_vault
 
 
 class DoctorTests(unittest.TestCase):
@@ -62,13 +67,33 @@ class DoctorTests(unittest.TestCase):
 
     def test_doctor_aggregates_results(self):
         with tempfile.TemporaryDirectory() as tmp:
-            vault = Path(tmp)
+            vault = create_sandbox_vault(Path(tmp))
             config = Path(tmp) / "config.yaml"
             config.write_text("vault_path: /tmp", encoding="utf-8")
             results = doctor(vault=vault, config=config)
             self.assertGreater(len(results), 0)
             for r in results:
                 self.assertIsInstance(r, CheckResult)
+
+    def test_manifest_schema_checks_accept_valid_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = create_plugin_repo(Path(tmp), valid=True)
+            self.assertTrue(check_claude_manifest(repo / ".claude-plugin" / "plugin.json").ok)
+            self.assertTrue(check_codex_manifest(repo / ".codex-plugin" / "plugin.json").ok)
+            self.assertTrue(check_hermes_manifest(repo / "plugins" / "hermes" / "plugin.yaml").ok)
+
+    def test_manifest_schema_checks_reject_missing_required_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = create_plugin_repo(Path(tmp), valid=False)
+            claude = check_claude_manifest(repo / ".claude-plugin" / "plugin.json")
+            codex = check_codex_manifest(repo / ".codex-plugin" / "plugin.json")
+            hermes = check_hermes_manifest(repo / "plugins" / "hermes" / "plugin.yaml")
+            self.assertFalse(claude.ok)
+            self.assertFalse(codex.ok)
+            self.assertFalse(hermes.ok)
+            self.assertIn("schema invalid", claude.message)
+            self.assertIn("skills", codex.message)
+            self.assertIn("missing", hermes.message)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ vault-log
 
 All commands are dependency-free and tested with Python `unittest` (34 tests).
 
-## v0.2: vault profile bootstrap ✅ (in-progress)
+## v0.2: vault profile bootstrap ✅
 
 `o2b init` creates:
 
@@ -54,17 +54,20 @@ AI Wiki/identity/user.md
 AI Wiki/identity/agents.md
 ```
 
-Remaining v0.2 work:
+Implemented:
 - vault-local operating manual (`_OPEN_SECOND_BRAIN.md`) to drive agent behavior;
-- query helpers for the wiki layer.
+- query helpers for the wiki layer (`parse_frontmatter`, `extract_wikilinks`, `list_vault_pages`);
+- `o2b index` to regenerate `AI Wiki/index.md` from discovered vault pages.
 
-## v0.3: runtime polish
+## v0.3: runtime polish ✅
 
-- Hermes plugin health checks;
-- Claude Code plugin commands;
-- Codex plugin manifest validation;
-- better install docs;
-- test fixtures and sandbox vaults.
+Implemented:
+
+- Hermes plugin health checks with safe best-effort registration;
+- Claude Code plugin command metadata for `status`, `doctor`, `init`, `index`, `append-event`, `export-config`, and `vault-log`;
+- Codex, Claude, and Hermes plugin manifest validation in `o2b doctor --repo`;
+- better install and runtime notes in README;
+- test fixtures for sandbox vaults and plugin manifest repos.
 
 ## v1: MCP tool server
 

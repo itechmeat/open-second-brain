@@ -10,6 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENV = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
 
+from tests.fixtures import create_plugin_repo, create_sandbox_vault
+
 
 def run_module(module, *args, env=None):
     return subprocess.run(
@@ -91,17 +93,22 @@ class CliTests(unittest.TestCase):
 
     def test_doctor_with_repo_checks_manifests(self):
         with tempfile.TemporaryDirectory() as tmp:
-            vault = Path(tmp) / "vault"
-            vault.mkdir()
-            repo = Path(tmp) / "repo"
-            (repo / ".claude-plugin").mkdir(parents=True)
-            (repo / ".codex-plugin").mkdir(parents=True)
-            (repo / ".claude-plugin" / "plugin.json").write_text('{"name":"test"}', encoding="utf-8")
-            (repo / ".codex-plugin" / "plugin.json").write_text('{"name":"test"}', encoding="utf-8")
+            vault = create_sandbox_vault(Path(tmp))
+            repo = create_plugin_repo(Path(tmp), valid=True)
             result = run_cli("doctor", "--vault", str(vault), "--repo", str(repo))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("claude_manifest", result.stdout)
             self.assertIn("codex_manifest", result.stdout)
+            self.assertIn("hermes_manifest", result.stdout)
+
+    def test_doctor_with_repo_rejects_invalid_manifest_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = create_sandbox_vault(Path(tmp))
+            repo = create_plugin_repo(Path(tmp), valid=False)
+            result = run_cli("doctor", "--vault", str(vault), "--repo", str(repo))
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("[FAIL] claude_manifest", result.stdout)
+            self.assertIn("[FAIL] codex_manifest", result.stdout)
 
     def test_append_event_writes_daily_note(self):
         with tempfile.TemporaryDirectory() as tmp:
