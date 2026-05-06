@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-06
+
+### Added
+
+- `o2b uninstall` CLI helper that prints a read-only uninstall plan, including
+  the exact Hermes commands the user must run (`hermes mcp remove`,
+  `hermes plugins remove`, `hermes gateway restart`) and the location of the
+  machine-local config directory.
+- `--apply-local` flag for `o2b uninstall` that may remove the machine-local
+  config directory only (`~/.config/open-second-brain` or the parent of
+  `$OPEN_SECOND_BRAIN_CONFIG`). Refuses to act on directories whose name is
+  not a recognized Open Second Brain config dir, paths inside Hermes-owned
+  trees, or directories that look like git repositories.
+- `after-install.md` at the repository root so Hermes can show post-install
+  guidance (init, MCP registration, update, uninstall) right after
+  `hermes plugins install`.
+- `uninstall` command entry in the Claude Code plugin manifest.
+- README now documents an explicit Hermes CLI form for MCP registration
+  (`hermes mcp add open-second-brain --command o2b --args mcp --vault /path/to/vault`)
+  and adds dedicated **Updating** and **Uninstalling** sections that spell
+  out the Hermes-owned vs. machine-local layers.
+- `docs/mcp.md` now covers updating and removing the MCP registration, and
+  warns against passing `--args` as a single quoted string.
+- Dedicated `tests/test_uninstall.py` covering dry-run safety, vault and
+  Hermes config preservation, the `--apply-local` allow-list, the
+  `OPEN_SECOND_BRAIN_CONFIG` env override, and the help text invariants.
+
+### Changed
+
+- Bumped package, plugin, and Claude/Codex manifest versions to 0.4.1.
+
+### Migration / Uninstall notes
+
+- `o2b uninstall` is read-only by default. It **never** edits
+  `~/.hermes/config.yaml`, removes the installed plugin directory, or
+  touches the vault — including `Daily/`, `AI Wiki/`, or any Markdown.
+- To deregister the MCP server and remove the plugin run the Hermes
+  commands yourself (`hermes mcp remove open-second-brain`,
+  `hermes plugins remove open-second-brain`, `hermes gateway restart`).
+- `o2b uninstall --apply-local` only removes the machine-local
+  Open Second Brain config directory; it refuses to delete anything else.
+- Existing users do not need to re-register the MCP server after upgrading
+  to 0.4.1; the plugin update flow keeps `~/.hermes/config.yaml` untouched.
+
 ## [0.4.0] - 2026-05-06
 
 ### Added
@@ -48,7 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.4.0...HEAD
+[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/itechmeat/open-second-brain/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/itechmeat/open-second-brain/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/itechmeat/open-second-brain/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/itechmeat/open-second-brain/releases/tag/v0.3.0

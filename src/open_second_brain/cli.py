@@ -11,6 +11,7 @@ from open_second_brain.doctor import doctor
 from open_second_brain.event_log import append_event
 from open_second_brain.init import bootstrap_vault
 from open_second_brain.mcp import run_cli_command as run_mcp_server
+from open_second_brain.uninstall import plan_uninstall, render_plan
 from open_second_brain.vault import list_vault_pages, write_frontmatter
 
 
@@ -56,6 +57,28 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_cmd.add_argument("--vault", type=Path, default=None, help="Vault directory path")
     mcp_cmd.add_argument("--config", type=Path, default=None, help="Config file path")
     mcp_cmd.add_argument("--repo", type=Path, default=None, help="Repository root for plugin checks")
+
+    uninstall_cmd = subcommands.add_parser(
+        "uninstall",
+        help="Print an uninstall plan and (optionally) clean local config",
+        description=(
+            "Read-only by default. Prints the Hermes commands you must run yourself "
+            "(this tool never touches ~/.hermes/config.yaml or the installed plugin). "
+            "With --apply-local it may remove the machine-local Open Second Brain "
+            "config directory only. Your vault, Daily/, AI Wiki/, and Markdown notes "
+            "are never removed."
+        ),
+    )
+    uninstall_cmd.add_argument("--config", type=Path, default=None, help="Config file path")
+    uninstall_cmd.add_argument(
+        "--apply-local",
+        action="store_true",
+        help=(
+            "Remove the machine-local Open Second Brain config directory "
+            "(typically ~/.config/open-second-brain). Hermes config and the vault "
+            "are never touched."
+        ),
+    )
 
     return parser
 
@@ -179,6 +202,15 @@ def command_mcp(args: argparse.Namespace) -> int:
         return 0
 
 
+def command_uninstall(args: argparse.Namespace) -> int:
+    config = args.config or default_config_path()
+    plan = plan_uninstall(config_path=config, apply_local=args.apply_local)
+    sys.stdout.write(render_plan(plan))
+    if plan.errors:
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -196,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_index(args)
     if args.command == "mcp":
         return command_mcp(args)
+    if args.command == "uninstall":
+        return command_uninstall(args)
     raise AssertionError(f"unhandled command: {args.command}")
 
 

@@ -76,6 +76,7 @@ o2b append-event    Append one daily event-log entry
 o2b index           Rebuild the Markdown page index
 o2b export-config   Write a redacted config snapshot
 o2b mcp             Run the optional MCP tool server (stdio)
+o2b uninstall       Print an uninstall plan; --apply-local removes only local config
 vault-log           Compatibility wrapper around append-event
 ```
 
@@ -83,7 +84,13 @@ The local checkout can be used without installing the Python package. Run comman
 
 ## Optional MCP tool server
 
-OpenSecondBrain ships an optional Model Context Protocol server that exposes the same deterministic operations as MCP tools. Hermes Agent discovers it through `~/.hermes/config.yaml`:
+OpenSecondBrain ships an optional Model Context Protocol server that exposes the same deterministic operations as MCP tools. Register it through Hermes from the CLI:
+
+```bash
+hermes mcp add open-second-brain --command o2b --args mcp --vault /path/to/vault
+```
+
+Or edit `~/.hermes/config.yaml` directly:
 
 ```yaml
 mcp_servers:
@@ -93,6 +100,56 @@ mcp_servers:
 ```
 
 Tools: `second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`. See `docs/mcp.md` for full setup, tool schemas, and Claude Code/Codex notes. The CLI remains the supported baseline; the MCP server is opt-in.
+
+## Updating
+
+OpenSecondBrain follows the standard Hermes plugin update flow.
+
+```bash
+hermes plugins update open-second-brain
+hermes gateway restart
+```
+
+`hermes plugins update` runs `git pull` inside the installed plugin directory; it does not rewrite your `~/.hermes/config.yaml` MCP registration. After an update:
+
+- The `o2b` CLI is upgraded automatically.
+- The MCP entrypoint stays registered, so no `hermes mcp add` is needed for an in-place upgrade.
+- Restart the gateway (or open a fresh Hermes session) so cached plugin metadata and the MCP subprocess are reloaded.
+- Run `o2b doctor --vault /path/to/vault --repo .` to confirm the new manifest still validates.
+
+The `version` field in `plugin.yaml` is informational — Hermes installs whatever the current `main` branch contains. Pin to a specific release by checking out a tag inside the plugin directory if you want stricter control.
+
+## Uninstalling
+
+OpenSecondBrain treats your vault as the source of truth and never removes Markdown notes, `Daily/`, or `AI Wiki/`. Uninstalling has three independent layers; do them in this order.
+
+1. Print a plan and review the leftovers (read-only):
+
+   ```bash
+   o2b uninstall
+   ```
+
+   The plan tells you which Hermes commands to run yourself, where the machine-local config directory lives, and reminds you that the vault is untouched. The dry-run never modifies the filesystem.
+
+2. Deregister the MCP server and remove the Hermes plugin (Hermes-owned state):
+
+   ```bash
+   hermes mcp remove open-second-brain
+   hermes plugins remove open-second-brain
+   hermes gateway restart
+   ```
+
+   `hermes mcp remove` deletes the MCP registration and any OAuth tokens. `hermes plugins remove` deletes only the installed plugin directory. OpenSecondBrain itself never edits `~/.hermes/config.yaml` — these commands are run by you against Hermes.
+
+3. Optionally remove the machine-local config directory (typically `~/.config/open-second-brain` or `$OPEN_SECOND_BRAIN_CONFIG`'s parent):
+
+   ```bash
+   o2b uninstall --apply-local
+   ```
+
+   `--apply-local` only removes that one config directory. It refuses to act if the directory name is not a recognized Open Second Brain config dir, if it lives inside a Hermes-owned path, or if it looks like a git repository. It never touches the vault, Hermes config, or anything else.
+
+To delete the vault you must do that yourself with normal filesystem tools — OpenSecondBrain will not do it for you, even with `--apply-local`.
 
 ## Safety model
 

@@ -1,6 +1,6 @@
 {
   "name": "open-second-brain",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Plugin-first second brain package for AI agents and humans.",
   "author": "Open Second Brain contributors",
   "license": "MIT",
@@ -49,6 +49,12 @@
       "description": "Run the optional MCP tool server over stdio (JSON-RPC 2.0).",
       "command": "scripts/o2b",
       "args": ["mcp"]
+    },
+    {
+      "name": "uninstall",
+      "description": "Print an uninstall plan; --apply-local removes only the machine-local config directory.",
+      "command": "scripts/o2b",
+      "args": ["uninstall"]
     },
     {
       "name": "vault-log",

@@ -53,7 +53,21 @@ The server logs its banner to `stderr` and only writes JSON-RPC frames to
 
 Hermes discovers MCP servers from `~/.hermes/config.yaml` under the
 `mcp_servers` key. After installing this plugin, register the MCP server on
-the same machine that hosts the vault:
+the same machine that hosts the vault.
+
+The Hermes CLI accepts the registration directly:
+
+```bash
+hermes mcp add open-second-brain --command o2b --args mcp --vault /path/to/vault
+```
+
+`--args` is a single flag; everything after it on the line (here
+`mcp --vault /path/to/vault`) is collected as the argument list and forwarded
+to the MCP server's command line. Do not wrap those tokens in a single
+quoted string like `--args 'mcp --vault /path'` (Hermes would treat the whole
+thing as one argument), and do not repeat `--args` per token.
+
+You can also edit `~/.hermes/config.yaml` by hand:
 
 ```yaml
 mcp_servers:
@@ -87,6 +101,53 @@ server.
 The Hermes plugin manifest (`plugin.yaml`) advertises this MCP entrypoint via
 the `mcp_server` field so future Hermes releases can auto-register the server,
 but the official Hermes config flow is the source of truth today.
+
+## Updating the MCP registration
+
+Updating the plugin via `hermes plugins update open-second-brain` does not
+rewrite `~/.hermes/config.yaml`. Your existing `mcp_servers.open-second-brain`
+entry keeps working as long as the `command` and `args` you originally
+registered still resolve.
+
+After an update:
+
+- Restart the gateway so the MCP subprocess is reloaded:
+
+  ```bash
+  hermes gateway restart
+  ```
+
+- If the new release adds a flag, re-add the registration with the updated
+  `--args` list (or edit the YAML by hand):
+
+  ```bash
+  hermes mcp remove open-second-brain
+  hermes mcp add open-second-brain --command o2b --args mcp --vault /path/to/vault
+  ```
+
+`scripts/o2b mcp --vault /path/to/vault` from the checkout can be used to
+sanity-check the server before re-registering it.
+
+## Removing the MCP registration
+
+To remove just the MCP server without uninstalling the plugin, run:
+
+```bash
+hermes mcp remove open-second-brain
+hermes gateway restart
+```
+
+`hermes mcp remove` deletes the registration entry. Open Second Brain runs
+over stdio (JSON-RPC 2.0) and does not use OAuth, so there are no tokens for
+this server specifically; the OAuth-token cleanup `hermes mcp remove` performs
+only matters for transports that authenticate that way. The installed plugin
+and its CLI commands stay in place, so `hermes plugins update` will continue
+to track new releases.
+
+To remove both the MCP server and the plugin itself, follow the
+`Uninstalling` section in the project README. Open Second Brain never edits
+`~/.hermes/config.yaml` on your behalf, and `o2b uninstall` is a read-only
+helper that prints the exact Hermes commands to run.
 
 ## Claude Code and Codex
 
