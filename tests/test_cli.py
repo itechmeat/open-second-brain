@@ -156,6 +156,22 @@ class CliTests(unittest.TestCase):
             daily = Path(tmp) / "Daily" / "2026.05.06.md"
             self.assertIn("- 10:30 — @compat-agent — compat entry", daily.read_text(encoding="utf-8"))
 
+    def test_index_generates_wikilink_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / "AI Wiki").mkdir(parents=True)
+            (vault / "Concept.md").write_text(
+                "---\ntitle: Concept\n---\n\nBody.", encoding="utf-8"
+            )
+            (vault / "Other.md").write_text("No frontmatter.", encoding="utf-8")
+            result = run_cli("index", "--vault", str(vault))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            index_path = vault / "AI Wiki" / "index.md"
+            self.assertTrue(index_path.is_file())
+            content = index_path.read_text(encoding="utf-8")
+            self.assertIn("[[Concept]]", content)
+            self.assertIn("[[Other]]", content)
+
 
 if __name__ == "__main__":
     unittest.main()
