@@ -4,7 +4,7 @@
 
 **Goal:** Replace placeholder shell scripts with a tested Python CLI foundation for Open Second Brain.
 
-**Architecture:** The repository will expose a small Python package under `src/open_second_brain/`. The CLI entrypoint will be `open_second_brain.cli:main`, with the existing `scripts/asb` and `scripts/vault-log` shell wrappers delegating to Python modules. v0 keeps dependencies to the Python standard library.
+**Architecture:** The repository will expose a small Python package under `src/open_second_brain/`. The CLI entrypoint will be `open_second_brain.cli:main`, with the existing `scripts/o2b` and `scripts/vault-log` shell wrappers delegating to Python modules. v0 keeps dependencies to the Python standard library.
 
 **Tech Stack:** Python 3.11+, argparse, unittest, pathlib, json, datetime, tempfile.
 
@@ -16,9 +16,9 @@
 - Create `src/open_second_brain/__init__.py`: package version.
 - Create `src/open_second_brain/config.py`: config path discovery and minimal redacted status model.
 - Create `src/open_second_brain/event_log.py`: append-only daily Markdown event log backend.
-- Create `src/open_second_brain/cli.py`: `asb` CLI with `status`, `append-event`, and `export-config` commands.
+- Create `src/open_second_brain/cli.py`: `o2b` CLI with `status`, `init`, `doctor`, `append-event`, and `export-config` commands.
 - Create `src/open_second_brain/vault_log.py`: compatibility CLI for `vault-log`.
-- Modify `scripts/asb`: shell wrapper that runs `python3 -m open_second_brain.cli` with local `src` on `PYTHONPATH`.
+- Modify `scripts/o2b`: shell wrapper that runs `python3 -m open_second_brain.cli` with local `src` on `PYTHONPATH`.
 - Modify `scripts/vault-log`: shell wrapper that runs `python3 -m open_second_brain.vault_log` with local `src` on `PYTHONPATH`.
 - Create `tests/test_config.py`: config path/status tests.
 - Create `tests/test_event_log.py`: append-only daily Markdown backend tests.
@@ -53,7 +53,7 @@ keywords = ["second-brain", "obsidian", "agents", "skills", "event-log"]
 dependencies = []
 
 [project.scripts]
-asb = "open_second_brain.cli:main"
+o2b = "open_second_brain.cli:main"
 vault-log = "open_second_brain.vault_log:main"
 
 [tool.setuptools.packages.find]
@@ -290,13 +290,13 @@ git commit -m "feat: add daily markdown event log backend"
 **Files:**
 - Create: `src/open_second_brain/cli.py`
 - Create: `src/open_second_brain/vault_log.py`
-- Modify: `scripts/asb`
+- Modify: `scripts/o2b`
 - Modify: `scripts/vault-log`
 - Create: `tests/test_cli.py`
 
 - [ ] **Step 1: Write failing CLI tests**
 
-Test `asb status`, `asb append-event`, and `vault-log --as` using temporary vault directories.
+Test `o2b status`, `o2b init`, `o2b doctor`, `o2b append-event`, and `vault-log --as` using temporary vault directories.
 
 - [ ] **Step 2: Run tests and verify failure**
 
@@ -335,7 +335,7 @@ Expected: OK.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/open_second_brain/cli.py src/open_second_brain/vault_log.py scripts/asb scripts/vault-log tests/test_cli.py
+git add src/open_second_brain/cli.py src/open_second_brain/vault_log.py scripts/o2b scripts/vault-log tests/test_cli.py
 git commit -m "feat: add cli entrypoints"
 ```
 
@@ -358,7 +358,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 python3 -m json.tool .claude-plugin/plugin.json >/dev/null
 python3 -m json.tool .codex-plugin/plugin.json >/dev/null
 python3 -m py_compile plugins/hermes/__init__.py
-bash -n scripts/asb
+bash -n scripts/o2b
 bash -n scripts/vault-log
 ```
 
@@ -394,4 +394,4 @@ Placeholder scan:
 Type consistency:
 
 - Config module names are consistent: `default_config_path`, `discover_config`, `redact_mapping`.
-- Event log command names are consistent: `asb append-event`, `vault-log --as`.
+- Event log command names are consistent: `o2b append-event`, `vault-log --as`.

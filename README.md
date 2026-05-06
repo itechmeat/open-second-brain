@@ -37,7 +37,7 @@ open-second-brain/
     agent-event-log/
       SKILL.md
   scripts/
-    asb
+    o2b
     vault-log
   plugins/
     hermes/
@@ -63,9 +63,9 @@ Open Second Brain is plugin-first, but not plugin-only.
 Run the local CLI without installing the package:
 
 ```bash
-scripts/asb status
-scripts/asb append-event --vault /path/to/vault --as agent-name --date 2026.05.06 --time 10:15 "created first entry"
-scripts/asb export-config --config ~/.config/open-second-brain/config.yaml --output /tmp/open-second-brain-config.json
+scripts/o2b status
+scripts/o2b append-event --vault /path/to/vault --as agent-name --date 2026.05.06 --time 10:15 "created first entry"
+scripts/o2b export-config --config ~/.config/open-second-brain/config.yaml --output /tmp/open-second-brain-config.json
 scripts/vault-log --vault /path/to/vault --as agent-name "compatibility event entry"
 ```
 
@@ -90,7 +90,7 @@ Run static syntax checks used by the initial PRs:
 python3 -m json.tool .claude-plugin/plugin.json >/dev/null
 python3 -m json.tool .codex-plugin/plugin.json >/dev/null
 python3 -m py_compile plugins/hermes/__init__.py
-bash -n scripts/asb
+bash -n scripts/o2b
 bash -n scripts/vault-log
 ```
 
