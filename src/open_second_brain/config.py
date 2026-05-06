@@ -45,9 +45,12 @@ def parse_simple_yaml(text: str) -> dict[str, str]:
 
 def discover_config(path: Path | None = None) -> ConfigDiscovery:
     resolved = path or default_config_path()
-    if not resolved.exists():
+    if not resolved.is_file():
         return ConfigDiscovery(path=resolved, exists=False, data={})
-    data = parse_simple_yaml(resolved.read_text(encoding="utf-8"))
+    try:
+        data = parse_simple_yaml(resolved.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return ConfigDiscovery(path=resolved, exists=False, data={})
     return ConfigDiscovery(path=resolved, exists=True, data=data)
 
 

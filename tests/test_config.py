@@ -36,6 +36,23 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(result.data["instance_name"], "Test Brain")
             self.assertEqual(result.data["runtime"], "hermes")
 
+    def test_discover_config_reports_directory_as_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            result = discover_config(path)
+            self.assertFalse(result.exists)
+            self.assertEqual(result.path, path)
+            self.assertEqual(result.data, {})
+
+    def test_discover_config_reports_invalid_utf8_as_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.yaml"
+            path.write_bytes(b"\xff\xfe\x00")
+            result = discover_config(path)
+            self.assertFalse(result.exists)
+            self.assertEqual(result.path, path)
+            self.assertEqual(result.data, {})
+
     def test_redact_mapping_redacts_secret_like_keys(self):
         redacted = redact_mapping({"api_key": "abc", "path": "/tmp/vault", "token": "xyz"})
         self.assertEqual(redacted["api_key"], "[REDACTED]")

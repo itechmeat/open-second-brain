@@ -70,8 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         return command_append_event(args)
     if args.command == "export-config":
         return command_export_config(args)
-    parser.error(f"unknown command: {args.command}")
-    return 2
+    raise AssertionError(f"unhandled command: {args.command}")
 
 
 if __name__ == "__main__":

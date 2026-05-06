@@ -11,15 +11,20 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
 
 
-def run_cli(*args, env=None):
+def run_module(module, *args, env=None):
     return subprocess.run(
-        [sys.executable, "-m", "open_second_brain.cli", *args],
+        [sys.executable, "-m", module, *args],
         cwd=ROOT,
         env={**ENV, **(env or {})},
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=30,
     )
+
+
+def run_cli(*args, env=None):
+    return run_module("open_second_brain.cli", *args, env=env)
 
 
 class CliTests(unittest.TestCase):
@@ -68,26 +73,17 @@ class CliTests(unittest.TestCase):
 
     def test_vault_log_compatibility_module(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "open_second_brain.vault_log",
-                    "--as",
-                    "compat-agent",
-                    "--vault",
-                    tmp,
-                    "--date",
-                    "2026.05.06",
-                    "--time",
-                    "10:30",
-                    "compat entry",
-                ],
-                cwd=ROOT,
-                env=ENV,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            result = run_module(
+                "open_second_brain.vault_log",
+                "--as",
+                "compat-agent",
+                "--vault",
+                tmp,
+                "--date",
+                "2026.05.06",
+                "--time",
+                "10:30",
+                "compat entry",
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             daily = Path(tmp) / "Daily" / "2026.05.06.md"
