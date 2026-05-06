@@ -1,0 +1,43 @@
+import unittest
+from pathlib import Path
+
+from plugins.hermes import check_health, health, register
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class HermesPluginTests(unittest.TestCase):
+    def test_health_report_checks_repo_artifacts(self):
+        report = health(ROOT)
+        self.assertTrue(report["ok"], report)
+        self.assertIn("claude_manifest", report["checks"])
+        self.assertIn("codex_manifest", report["checks"])
+        self.assertIn("o2b_script", report["checks"])
+
+    def test_check_health_alias(self):
+        self.assertEqual(check_health(ROOT)["name"], "open-second-brain")
+
+    def test_register_attaches_to_method_context(self):
+        calls = []
+
+        class Context:
+            def register_health_check(self, name, callback):
+                calls.append((name, callback))
+
+        register(Context())
+        self.assertEqual(calls[0][0], "open-second-brain")
+        self.assertTrue(calls[0][1](ROOT)["ok"])
+
+    def test_register_attaches_to_dict_context(self):
+        class Context:
+            def __init__(self):
+                self.health_checks = {}
+
+        ctx = Context()
+        register(ctx)
+        self.assertIn("open-second-brain", ctx.health_checks)
+
+
+if __name__ == "__main__":
+    unittest.main()
