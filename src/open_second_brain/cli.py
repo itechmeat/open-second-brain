@@ -10,6 +10,7 @@ from open_second_brain.config import default_config_path, discover_config, redac
 from open_second_brain.doctor import doctor
 from open_second_brain.event_log import append_event
 from open_second_brain.init import bootstrap_vault
+from open_second_brain.vault import list_vault_pages, write_frontmatter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,6 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
     export = subcommands.add_parser("export-config", help="Write a redacted config snapshot")
     export.add_argument("--config", type=Path, default=None, help="Config file path")
     export.add_argument("--output", type=Path, required=True, help="Output JSON file")
+
+    index_cmd = subcommands.add_parser("index", help="Regenerate the vault index from discovered pages")
+    index_cmd.add_argument("--vault", type=Path, default=None, help="Vault directory path")
 
     return parser
 
@@ -118,6 +122,40 @@ def command_export_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_index(args: argparse.Namespace) -> int:
+    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
+    try:
+        pages = list_vault_pages(vault)
+    except OSError as exc:
+        print(f"error: failed to list vault pages: {exc}", file=sys.stderr)
+        return 1
+
+    if not pages:
+        print(f"no markdown pages found in vault: {vault}")
+        return 0
+
+    lines: list[str] = [
+        f"# Vault Index",
+        "",
+        f"Auto-generated index of {len(pages)} pages.",
+        "",
+    ]
+    for title, path, _ in pages:
+        rel = path.relative_to(vault)
+        lines.append(f"- [[{title}]]  `{rel}`")
+
+    index_path = vault / "AI Wiki" / "index.md"
+    try:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        write_frontmatter(index_path, {"title": "Index", "type": "index"}, "\n".join(lines))
+    except OSError as exc:
+        print(f"error: failed to write index: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"index regenerated: {index_path} ({len(pages)} pages)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -131,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_append_event(args)
     if args.command == "export-config":
         return command_export_config(args)
+    if args.command == "index":
+        return command_index(args)
     raise AssertionError(f"unhandled command: {args.command}")
 
 
