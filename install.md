@@ -1,6 +1,6 @@
 # open-second-brain — Agent Installation Guide
 
-> **Version 0.5.0**
+> **Version 0.5.1**
 > Repository: https://github.com/itechmeat/open-second-brain
 
 This guide is written for an **AI agent**, not a human. It contains the exact commands and decision logic needed to install and configure the **open-second-brain** plugin autonomously. Follow exactly one of the two branches below based on the target runtime (Hermes or OpenClaw). Complete every step in the chosen branch.
@@ -88,7 +88,7 @@ The vault and its Markdown files are never deleted by the uninstall process.
 From Git (pin to a version tag):
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.0
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.1
 ```
 
 Or from a local checkout:
@@ -111,15 +111,14 @@ Replace `/path/to/vault` with the actual vault path.
 o2b init --vault /path/to/vault --name "My Second Brain"
 ```
 
-### 3. Register the MCP server
+### 3. Configure the vault path
 
-The MCP server is started via:
+Tools are registered natively by the JS plugin entry — no MCP registration is needed. Set the vault path in the OpenClaw plugin config:
 
 ```bash
-o2b mcp --vault /path/to/vault
+openclaw config set plugins.entries.open-second-brain.config.vault '"/path/to/vault"'
+openclaw config set plugins.entries.open-second-brain.config.instanceName '"My Second Brain"'
 ```
-
-Point the OpenClaw MCP configuration at this command. The exact config method depends on the OpenClaw MCP setup in use — register `o2b mcp` as an stdio MCP server with the `--vault` argument.
 
 ### 4. Verify the installation
 

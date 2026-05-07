@@ -6,11 +6,13 @@ import os
 import sys
 from pathlib import Path
 
+import json as _json
+
 from open_second_brain.config import default_config_path, discover_config, redact_mapping
 from open_second_brain.doctor import doctor
 from open_second_brain.event_log import append_event
 from open_second_brain.init import bootstrap_vault
-from open_second_brain.mcp import run_cli_command as run_mcp_server
+from open_second_brain.mcp import MCPServer, run_cli_command as run_mcp_server
 from open_second_brain.uninstall import plan_uninstall, render_plan
 from open_second_brain.vault import list_vault_pages, write_frontmatter
 
@@ -21,6 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subcommands.add_parser("status", help="Show Open Second Brain configuration status")
     status.add_argument("--config", type=Path, default=None, help="Config file path")
+    status.add_argument("--vault", type=Path, default=None, help="Vault directory path")
+    status.add_argument("--json", action="store_true", help="Output as JSON")
 
     init_cmd = subcommands.add_parser("init", help="Initialize a vault profile with required files")
     init_cmd.add_argument("--vault", type=Path, required=True, help="Vault directory path")
@@ -80,17 +84,43 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    tool_call_cmd = subcommands.add_parser(
+        "tool-call",
+        help="Invoke an MCP tool handler from the CLI and print JSON to stdout.",
+    )
+    tool_call_cmd.add_argument("--vault", type=Path, default=None, help="Vault directory path")
+    tool_call_cmd.add_argument("tool_name", help="MCP tool name to invoke")
+    tool_call_cmd.add_argument(
+        "--tool-arg",
+        action="append",
+        default=[],
+        dest="tool_args",
+        help="Tool argument as key=value (repeatable)",
+    )
+
     return parser
 
 
 def command_status(args: argparse.Namespace) -> int:
     result = discover_config(args.config)
-    print(f"config_path: {result.path}")
-    print(f"config_exists: {str(result.exists).lower()}")
-    if result.data:
-        print("config_keys:")
-        for key in sorted(result.data):
-            print(f"- {key}")
+    if getattr(args, "json", False):
+        output = {
+            "config_path": str(result.path),
+            "config_exists": result.exists,
+        }
+        if result.data:
+            output["config_keys"] = sorted(result.data.keys())
+        vault = getattr(args, "vault", None)
+        if vault:
+            output["vault"] = str(vault)
+        print(json.dumps(output, indent=2, sort_keys=True))
+    else:
+        print(f"config_path: {result.path}")
+        print(f"config_exists: {str(result.exists).lower()}")
+        if result.data:
+            print("config_keys:")
+            for key in sorted(result.data):
+                print(f"- {key}")
     return 0
 
 
@@ -211,6 +241,37 @@ def command_uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_tool_call(args: argparse.Namespace) -> int:
+    """Bridge: invoke an MCP tool handler from the CLI and print JSON to stdout."""
+    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
+    config = default_config_path()
+    repo_root: Path | None = None
+
+    server = MCPServer(vault=vault, config_path=config, repo_root=repo_root)
+
+    tool_name = args.tool_name
+    if tool_name not in server._tools:
+        print(f"error: unknown tool: {tool_name}", file=sys.stderr)
+        return 1
+
+    # Parse --tool-arg key=value pairs into a dict
+    arguments: dict[str, object] = {}
+    for pair in args.tool_args:
+        if "=" not in pair:
+            print(f"error: --tool-arg must be key=value, got: {pair}", file=sys.stderr)
+            return 1
+        key, value = pair.split("=", 1)
+        # Attempt JSON decode for non-string types (arrays, numbers, booleans)
+        try:
+            arguments[key] = _json.loads(value)
+        except (_json.JSONDecodeError, ValueError):
+            arguments[key] = value
+
+    result = server._handle_tools_call({"name": tool_name, "arguments": arguments})
+    print(_json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -230,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_mcp(args)
     if args.command == "uninstall":
         return command_uninstall(args)
+    if args.command == "tool-call":
+        return command_tool_call(args)
     raise AssertionError(f"unhandled command: {args.command}")
 
 

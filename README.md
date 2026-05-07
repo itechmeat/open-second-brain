@@ -60,12 +60,12 @@ o2b doctor --vault /path/to/vault --repo .
 
 ### Install in OpenClaw
 
-OpenClaw supports this project through the **Bundle format**: OpenClaw auto-detects the `.claude-plugin/` and `.codex-plugin/` adapter directories and maps them to OpenClaw features. The `openclaw.plugin.json` manifest at the project root provides static discovery metadata.
+OpenClaw supports this project through the **Native plugin format**: a root `package.json` with `openclaw.extensions` pointing to a JS entry that registers tools natively inside OpenClaw's Node.js process. The JS entry spawns the Python CLI as a subprocess, so no MCP server is needed for basic operation.
 
 Install from Git:
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.0
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.1
 ```
 
 Or from a local checkout:
@@ -74,13 +74,14 @@ Or from a local checkout:
 openclaw plugins install ./open-second-brain
 ```
 
-After installing, register the MCP tool server so OpenClaw can route tool calls:
+After installing, configure the vault path:
 
 ```bash
-o2b mcp --vault /path/to/vault
+openclaw config set plugins.entries.open-second-brain.config.vault '"/path/to/vault"'
+openclaw config set plugins.entries.open-second-brain.config.instanceName '"My Second Brain"'
 ```
 
-The MCP server exposes five tools: `second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`. OpenClaw discovers these through the MCP protocol at runtime. The `openclaw.plugin.json` `contracts.tools` field declares them for cold discovery when the MCP server is not yet running.
+Tools are registered natively by the JS plugin entry — no MCP registration is needed. The five tools (`second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`) are available immediately after install and gateway restart. The optional MCP server (`o2b mcp`) can still be enabled for runtimes that prefer the MCP protocol.
 
 ## First run
 

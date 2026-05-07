@@ -160,6 +160,64 @@ def check_openclaw_manifest(path: Path) -> CheckResult:
     return CheckResult("openclaw_manifest", True, f"valid OpenClaw manifest: {path}")
 
 
+def check_openclaw_installability(repo_root: Path) -> list[CheckResult]:
+    """Check that the OpenClaw native plugin packaging is valid.
+
+    Validates:
+    - Root ``package.json`` exists and is valid JSON.
+    - ``package.json`` has an ``openclaw.extensions`` array.
+    - Each extension entry file exists on disk.
+    """
+    results: list[CheckResult] = []
+    pkg_path = repo_root / "package.json"
+
+    result, data = _load_json_manifest(pkg_path, "openclaw_package_json")
+    results.append(result)
+    if data is None:
+        return results
+
+    # Check openclaw.extensions
+    extensions = data.get("openclaw", {}).get("extensions")
+    if not isinstance(extensions, list) or not extensions:
+        results.append(CheckResult(
+            "openclaw_package_json_extensions",
+            False,
+            "package.json missing or empty openclaw.extensions array",
+        ))
+        return results
+
+    results.append(CheckResult(
+        "openclaw_package_json_extensions",
+        True,
+        f"package.json declares {len(extensions)} extension(s)",
+    ))
+
+    # Check each extension entry file exists
+    for entry in extensions:
+        if not isinstance(entry, str):
+            results.append(CheckResult(
+                f"openclaw_entry_invalid_{type(entry).__name__}",
+                False,
+                f"extension entry must be a string, got: {type(entry).__name__}",
+            ))
+            continue
+        entry_path = repo_root / entry
+        if entry_path.is_file():
+            results.append(CheckResult(
+                f"openclaw_entry_{entry}",
+                True,
+                f"extension entry exists: {entry}",
+            ))
+        else:
+            results.append(CheckResult(
+                f"openclaw_entry_{entry}",
+                False,
+                f"missing extension entry: {entry}",
+            ))
+
+    return results
+
+
 def doctor(
     *,
     vault: Path,
@@ -181,5 +239,6 @@ def doctor(
         results.append(check_codex_manifest(repo_root / ".codex-plugin" / "plugin.json"))
         results.append(check_hermes_manifest(repo_root / "plugins" / "hermes" / "plugin.yaml"))
         results.append(check_openclaw_manifest(repo_root / "openclaw.plugin.json"))
+        results.extend(check_openclaw_installability(repo_root))
 
     return results

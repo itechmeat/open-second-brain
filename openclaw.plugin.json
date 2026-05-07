@@ -1,8 +1,10 @@
 {
   "id": "open-second-brain",
   "name": "Open Second Brain",
-  "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults. Provides vault management, event logging, wiki indexing, and an MCP tool server.",
-  "version": "0.5.0",
+  "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults.",
+  "version": "0.5.1",
+  "activation": { "onStartup": true },
+  "skills": ["./skills"],
   "contracts": {
     "tools": [
       "second_brain_status",
@@ -26,9 +28,23 @@
       },
       "mcpEnabled": {
         "type": "boolean",
-        "default": true,
-        "description": "Whether to enable the MCP tool server."
+        "default": false,
+        "description": "Whether to also expose an MCP stdio server (optional)."
       }
+    }
+  },
+  "uiHints": {
+    "vault": {
+      "label": "Vault Path",
+      "help": "Absolute path to the Obsidian-compatible vault directory."
+    },
+    "instanceName": {
+      "label": "Instance Name",
+      "help": "Human-readable name for this second brain instance."
+    },
+    "mcpEnabled": {
+      "label": "Enable MCP Server",
+      "help": "Expose Open Second Brain as an MCP stdio server (optional)."
     }
   }
 }

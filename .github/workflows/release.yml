@@ -82,6 +82,16 @@ jobs:
           bash -n scripts/vault-log
           scripts/o2b doctor --vault . --repo .
 
+      - name: Validate OpenClaw packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m json.tool package.json >/dev/null
+          node -e "const pkg = require('./package.json'); if (!pkg.openclaw?.extensions?.length) throw new Error('missing openclaw.extensions')"
+          for entry in $(node -e "console.log(require('./package.json').openclaw.extensions.join(' '))"); do
+            [ -f "$entry" ] || { echo "Missing entry: $entry"; exit 1; }
+          done
+
       - name: Build source and wheel distributions
         run: |
           python -m pip install --upgrade pip build

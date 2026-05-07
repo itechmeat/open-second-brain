@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-07
+
+### Added
+
+- Root `package.json` with `openclaw.extensions` so OpenClaw can install the
+  plugin via `git:` and `npm-pack:` resolvers without errors.
+- `openclaw/index.js` runtime entry that registers five native OpenClaw tools
+  (`second_brain_status`, `second_brain_query`, `second_brain_capture`,
+  `event_log_append`, `vault_health`) through `definePluginEntry` and
+  `api.registerTool`. Tool execution spawns `python3 -m open_second_brain.cli`
+  with `PYTHONPATH` pointing at the plugin's `src/` directory.
+- `openclaw/o2b-runner.js` subprocess helper for calling Python from the JS
+  entry.
+- `tool-call` CLI subcommand that bridges MCP tool handlers to the command
+  line, enabling the JS entry to invoke tools like `second_brain_query` and
+  `second_brain_capture` without running a full MCP server.
+- `check_openclaw_installability` doctor checks that validate `package.json`
+  exists, has `openclaw.extensions`, and each extension file is present.
+- `uiHints` and `activation` fields in `openclaw.plugin.json`.
+- OpenClaw packaging validation step in the CI release workflow.
+
+### Changed
+
+- Bumped package, plugin, and manifest versions to 0.5.1.
+- `install.md` OpenClaw branch now uses `openclaw config set` for vault
+  configuration instead of manual MCP registration — tools are registered
+  natively by the plugin entry.
+- `mcpEnabled` default changed to `false` in `openclaw.plugin.json` because
+  native tool registration makes the MCP server unnecessary for most OpenClaw
+  setups.
+- `docs/architecture.md` OpenClaw adapter section now describes the JS entry +
+  Python bridge pattern instead of the Bundle-only approach.
+
 ## [0.5.0] - 2026-05-07
 
 ### Added
@@ -134,7 +167,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.5.0...HEAD
+[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/itechmeat/open-second-brain/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/itechmeat/open-second-brain/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/itechmeat/open-second-brain/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/itechmeat/open-second-brain/compare/v0.4.0...v0.4.1

@@ -76,31 +76,37 @@ v0 should keep Codex support simple: plugin manifest plus shared skills and scri
 
 ### OpenClaw adapter
 
-OpenClaw recognizes two plugin formats: **Native** (TypeScript/JS runtime module with `openclaw.plugin.json`) and **Bundle** (adapter directories like `.codex-plugin/`, `.claude-plugin/` mapped to OpenClaw features).
+OpenClaw recognizes two plugin formats: **Native** (JS runtime module with `package.json` + `openclaw.plugin.json`) and **Bundle** (adapter directories like `.codex-plugin/`, `.claude-plugin/` mapped to OpenClaw features).
 
-Since Open Second Brain is a Python project, it uses the **Bundle format** combined with a static `openclaw.plugin.json` manifest:
+Open Second Brain uses the **Native format** with a JS entry that bridges to the Python CLI:
 
 ```text
-openclaw.plugin.json    # static discovery metadata (id, configSchema, contracts.tools)
-.claude-plugin/         # auto-detected by OpenClaw Bundle format
-.codex-plugin/          # auto-detected by OpenClaw Bundle format
-scripts/o2b             # CLI entry point
-src/open_second_brain/mcp.py  # MCP server (runtime tool bridge)
+package.json             # openclaw.extensions → ./openclaw/index.js
+openclaw/
+  index.js               # JS entry: definePluginEntry + api.registerTool
+  o2b-runner.js          # Subprocess helper: spawns python3 -m open_second_brain.cli
+openclaw.plugin.json     # Static discovery metadata (id, configSchema, contracts.tools)
+src/open_second_brain/
+  cli.py                 # Python CLI (includes tool-call bridge subcommand)
+  mcp.py                 # MCP server (optional, for runtimes that prefer MCP)
+.claude-plugin/          # Auto-detected by OpenClaw Bundle format
+.codex-plugin/           # Auto-detected by OpenClaw Bundle format
 ```
 
-The OpenClaw integration does **not** add a TypeScript entry point or `package.json`. Instead:
+The integration flow:
 
-1. **Cold discovery**: `openclaw.plugin.json` declares the plugin ID, version, configuration schema, and the list of tool names the MCP server provides.
-2. **Feature mapping**: OpenClaw auto-detects `.claude-plugin/` and `.codex-plugin/` directories and maps their commands and skills to OpenClaw features.
-3. **Runtime bridge**: The MCP server (`o2b mcp`) serves as the tool runtime. OpenClaw discovers tool schemas and executes tool calls through the MCP protocol (stdio JSON-RPC 2.0).
+1. **Discovery**: OpenClaw reads `package.json`, finds `openclaw.extensions`, and loads `openclaw/index.js`.
+2. **Tool registration**: The JS entry calls `api.registerTool()` for each of the five tools (`second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`).
+3. **Runtime bridge**: Each tool's `execute()` spawns `python3 -m open_second_brain.cli` with `PYTHONPATH` set to the plugin's `src/` directory. For tools with direct CLI equivalents (`status`, `append-event`, `doctor`), it calls the relevant subcommand. For tools without (`second_brain_query`, `second_brain_capture`), it uses the `tool-call` bridge subcommand which invokes the MCP tool handlers directly.
+4. **Config**: `api.getConfig()` provides the vault path and instance name from OpenClaw's plugin config.
 
 Installation:
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.0
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.1
 ```
 
-The OpenClaw adapter must not introduce Node.js/TypeScript dependencies, must not add `package.json`, and must remain compatible with the Hermes, Claude Code, and Codex adapters.
+The OpenClaw adapter must remain compatible with the Hermes, Claude Code, and Codex adapters. The `o2b mcp` MCP server is still available for runtimes that prefer the MCP protocol.
 
 ## Configuration model
 

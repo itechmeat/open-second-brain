@@ -72,6 +72,14 @@ def create_plugin_repo(root: Path, *, valid: bool = True) -> Path:
 """,
             encoding="utf-8",
         )
+        # Native OpenClaw plugin packaging: package.json + extension entry
+        entry_js = repo / "openclaw" / "index.js"
+        entry_js.parent.mkdir(parents=True, exist_ok=True)
+        entry_js.write_text("// plugin entry\n", encoding="utf-8")
+        (repo / "package.json").write_text(
+            """{"name": "test-plugin", "openclaw": {"extensions": ["./openclaw/index.js"]}}""",
+            encoding="utf-8",
+        )
     else:
         (repo / ".claude-plugin" / "plugin.json").write_text("{\"name\": \"test\"}", encoding="utf-8")
         (repo / ".codex-plugin" / "plugin.json").write_text("{\"name\": \"test\"}", encoding="utf-8")

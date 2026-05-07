@@ -82,23 +82,32 @@ yourself with normal filesystem tools if that is what you want.
 ## OpenClaw
 
 If you are using OpenClaw instead of (or in addition to) Hermes, the plugin
-is already discoverable through the Bundle format. OpenClaw auto-detects the
-`.claude-plugin/` and `.codex-plugin/` directories.
+is now installed as a **native OpenClaw plugin**. Tools are registered
+automatically by the JS entry (`openclaw/index.js`) — no MCP server setup is
+required.
 
-The `openclaw.plugin.json` manifest at the project root declares the plugin ID
-(`open-second-brain`), a configuration schema, and the five tool names the MCP
-server exposes. To register the MCP server with OpenClaw, follow the same
-pattern as Hermes — point OpenClaw's MCP configuration at the `o2b mcp`
-command:
+The `package.json` at the project root declares `openclaw.extensions` pointing
+to the JS entry. The `openclaw.plugin.json` manifest provides static discovery
+metadata (plugin ID, configuration schema, declared tool names).
+
+To configure the vault path:
 
 ```bash
-o2b mcp --vault /path/to/vault
+openclaw config set plugins.entries.open-second-brain.config.vault '"/path/to/vault"'
+openclaw config set plugins.entries.open-second-brain.config.instanceName '"My Second Brain"'
 ```
 
-Run the doctor to verify the OpenClaw manifest is valid:
+Run the doctor to verify the OpenClaw manifest and packaging are valid:
 
 ```bash
 o2b doctor --vault /path/to/vault --repo .
 ```
 
-The doctor output should include `[OK] openclaw_manifest`.
+The doctor output should include `[OK] openclaw_manifest`, `[OK] openclaw_package_json`, and `[OK] openclaw_package_json_extensions`.
+
+If you want to also expose an MCP stdio server (e.g. for another runtime),
+the `o2b mcp` command is still available:
+
+```bash
+o2b mcp --vault /path/to/vault
+```

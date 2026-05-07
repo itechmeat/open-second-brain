@@ -9,6 +9,7 @@ from open_second_brain.doctor import (
     check_codex_manifest,
     check_hermes_manifest,
     check_json_manifest,
+    check_openclaw_installability,
     check_openclaw_manifest,
     check_vault_writeable,
     doctor,
@@ -99,6 +100,50 @@ class DoctorTests(unittest.TestCase):
             self.assertIn("skills", codex.message)
             self.assertIn("missing", hermes.message)
             self.assertIn("'id'", openclaw.message)
+
+    def test_check_openclaw_installability_on_valid_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = create_plugin_repo(Path(tmp), valid=True)
+            # Valid fixture now includes package.json and extension entry
+            results = check_openclaw_installability(repo)
+            self.assertGreater(len(results), 0)
+            for r in results:
+                self.assertTrue(r.ok, f"{r.name}: {r.message}")
+
+    def test_check_openclaw_installability_with_package_json(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = create_plugin_repo(Path(tmp), valid=True)
+            # Add a valid package.json with an extension entry
+            entry_js = repo / "openclaw" / "index.js"
+            entry_js.parent.mkdir(parents=True, exist_ok=True)
+            entry_js.write_text("// entry", encoding="utf-8")
+            (repo / "package.json").write_text(
+                json.dumps({"openclaw": {"extensions": ["./openclaw/index.js"]}}),
+                encoding="utf-8",
+            )
+            results = check_openclaw_installability(repo)
+            self.assertGreater(len(results), 0)
+            for r in results:
+                self.assertTrue(r.ok, f"{r.name}: {r.message}")
+
+    def test_doctor_includes_installability_checks_with_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = create_sandbox_vault(Path(tmp))
+            repo = create_plugin_repo(Path(tmp), valid=True)
+            # Add package.json to fixture so installability passes
+            import json
+            entry_js = repo / "openclaw" / "index.js"
+            entry_js.parent.mkdir(parents=True, exist_ok=True)
+            entry_js.write_text("// entry", encoding="utf-8")
+            (repo / "package.json").write_text(
+                json.dumps({"openclaw": {"extensions": ["./openclaw/index.js"]}}),
+                encoding="utf-8",
+            )
+            results = doctor(vault=vault, repo_root=repo)
+            names = [r.name for r in results]
+            self.assertIn("openclaw_package_json", names)
+            self.assertIn("openclaw_package_json_extensions", names)
 
 
 if __name__ == "__main__":

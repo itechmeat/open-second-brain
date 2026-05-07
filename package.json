@@ -1,0 +1,28 @@
+{
+  "name": "open-second-brain",
+  "version": "0.5.1",
+  "type": "module",
+  "private": false,
+  "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw.",
+  "license": "MIT",
+  "homepage": "https://github.com/itechmeat/open-second-brain",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itechmeat/open-second-brain.git"
+  },
+  "keywords": ["second-brain", "obsidian", "agents", "openclaw-plugin", "mcp"],
+  "files": [
+    "openclaw/",
+    "src/",
+    "skills/",
+    "scripts/",
+    "plugins/",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml"
+  ],
+  "openclaw": {
+    "extensions": ["./openclaw/index.js"]
+  }
+}
