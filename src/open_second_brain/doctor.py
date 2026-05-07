@@ -142,6 +142,24 @@ def check_hermes_manifest(path: Path) -> CheckResult:
     return CheckResult("hermes_manifest", True, f"readable Hermes manifest: {path}")
 
 
+def check_openclaw_manifest(path: Path) -> CheckResult:
+    result, data = _load_json_manifest(path, "openclaw_manifest")
+    if data is None:
+        return result
+    problems: list[str] = []
+
+    # Required top-level fields
+    if "id" not in data or not isinstance(data["id"], str) or not data["id"].strip():
+        problems.append("missing or empty field 'id'")
+    schema = data.get("configSchema")
+    if not isinstance(schema, dict) or not schema:
+        problems.append("missing or empty field 'configSchema'")
+
+    if problems:
+        return CheckResult("openclaw_manifest", False, f"schema invalid: {path} ({'; '.join(problems)})")
+    return CheckResult("openclaw_manifest", True, f"valid OpenClaw manifest: {path}")
+
+
 def doctor(
     *,
     vault: Path,
@@ -162,5 +180,6 @@ def doctor(
         results.append(check_claude_manifest(repo_root / ".claude-plugin" / "plugin.json"))
         results.append(check_codex_manifest(repo_root / ".codex-plugin" / "plugin.json"))
         results.append(check_hermes_manifest(repo_root / "plugins" / "hermes" / "plugin.yaml"))
+        results.append(check_openclaw_manifest(repo_root / "openclaw.plugin.json"))
 
     return results

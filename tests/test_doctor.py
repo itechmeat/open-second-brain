@@ -9,6 +9,7 @@ from open_second_brain.doctor import (
     check_codex_manifest,
     check_hermes_manifest,
     check_json_manifest,
+    check_openclaw_manifest,
     check_vault_writeable,
     doctor,
 )
@@ -81,6 +82,7 @@ class DoctorTests(unittest.TestCase):
             self.assertTrue(check_claude_manifest(repo / ".claude-plugin" / "plugin.json").ok)
             self.assertTrue(check_codex_manifest(repo / ".codex-plugin" / "plugin.json").ok)
             self.assertTrue(check_hermes_manifest(repo / "plugins" / "hermes" / "plugin.yaml").ok)
+            self.assertTrue(check_openclaw_manifest(repo / "openclaw.plugin.json").ok)
 
     def test_manifest_schema_checks_reject_missing_required_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -88,12 +90,15 @@ class DoctorTests(unittest.TestCase):
             claude = check_claude_manifest(repo / ".claude-plugin" / "plugin.json")
             codex = check_codex_manifest(repo / ".codex-plugin" / "plugin.json")
             hermes = check_hermes_manifest(repo / "plugins" / "hermes" / "plugin.yaml")
+            openclaw = check_openclaw_manifest(repo / "openclaw.plugin.json")
             self.assertFalse(claude.ok)
             self.assertFalse(codex.ok)
             self.assertFalse(hermes.ok)
+            self.assertFalse(openclaw.ok)
             self.assertIn("schema invalid", claude.message)
             self.assertIn("skills", codex.message)
             self.assertIn("missing", hermes.message)
+            self.assertIn("'id'", openclaw.message)
 
 
 if __name__ == "__main__":

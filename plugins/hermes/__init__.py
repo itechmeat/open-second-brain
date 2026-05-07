@@ -72,6 +72,7 @@ def health(repo_root: str | Path | None = None) -> HealthReport:
         "hermes_manifest": _check_text_manifest(root / "plugins" / "hermes" / "plugin.yaml"),
         "claude_manifest": _check_json(root / ".claude-plugin" / "plugin.json"),
         "codex_manifest": _check_json(root / ".codex-plugin" / "plugin.json"),
+        "openclaw_manifest": _check_json(root / "openclaw.plugin.json"),
         "o2b_script": _check_file(root / "scripts" / "o2b", executable=True),
         "vault_log_script": _check_file(root / "scripts" / "vault-log", executable=True),
     }

@@ -15,6 +15,7 @@ class HermesPluginTests(unittest.TestCase):
         self.assertTrue(report["ok"], report)
         self.assertIn("claude_manifest", report["checks"])
         self.assertIn("codex_manifest", report["checks"])
+        self.assertIn("openclaw_manifest", report["checks"])
         self.assertIn("o2b_script", report["checks"])
 
     def test_check_health_alias(self):

@@ -60,8 +60,21 @@ def create_plugin_repo(root: Path, *, valid: bool = True) -> Path:
             "name: test\nversion: \"1.0.0\"\ndescription: test manifest\n",
             encoding="utf-8",
         )
+        (repo / "openclaw.plugin.json").write_text(
+            """{
+  "id": "test-plugin",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+""",
+            encoding="utf-8",
+        )
     else:
         (repo / ".claude-plugin" / "plugin.json").write_text("{\"name\": \"test\"}", encoding="utf-8")
         (repo / ".codex-plugin" / "plugin.json").write_text("{\"name\": \"test\"}", encoding="utf-8")
         (repo / "plugins" / "hermes" / "plugin.yaml").write_text("name: test\n", encoding="utf-8")
+        (repo / "openclaw.plugin.json").write_text("{}", encoding="utf-8")
     return repo

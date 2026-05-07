@@ -4,7 +4,7 @@ OpenSecondBrain gives Hermes Agent a small, filesystem-first second brain for Ob
 
 It is built for Hermes first: install it as a Hermes plugin, point it at a vault, and let Hermes use deterministic commands for the parts that should not depend on model reasoning — setup checks, vault bootstrap, daily event logging, safe config export, and wiki indexing.
 
-Claude Code and OpenAI Codex are supported through lightweight adapter manifests, but Hermes is the primary runtime.
+Claude Code, OpenAI Codex, and OpenClaw are supported through lightweight adapter manifests and the MCP tool server. Hermes is the primary runtime.
 
 ## What it does today
 
@@ -17,7 +17,17 @@ Claude Code and OpenAI Codex are supported through lightweight adapter manifests
 
 OpenSecondBrain does not run a daemon, replace your vault, or write hidden background state outside the configured vault/config paths.
 
-## Install in Hermes
+## Installation
+
+> **Agent-assisted install (recommended):** The easiest way to install this plugin is to send your agent the following prompt with a link to the installation guide:
+>
+> ```
+> Install the open-second-brain plugin following the instructions at https://raw.githubusercontent.com/itechmeat/open-second-brain/main/install.md
+> ```
+>
+> The guide at `install.md` contains exact commands for both Hermes and OpenClaw runtimes. Below are the same instructions for manual installation.
+
+### Install in Hermes
 
 In the Hermes Dashboard:
 
@@ -36,9 +46,41 @@ Hermes also supports the same flow from the CLI:
 
 ```bash
 hermes plugins install itechmeat/open-second-brain --enable
+hermes gateway restart
 ```
 
-Hermes documentation describes plugin install identifiers as a Git URL or `owner/repo` shorthand; the dashboard field accepts the same formats.
+Then initialize the vault, register the MCP server, and verify:
+
+```bash
+o2b init --vault /path/to/vault --name "My Second Brain"
+hermes mcp add open-second-brain --command o2b --args mcp --vault /path/to/vault
+hermes gateway restart
+o2b doctor --vault /path/to/vault --repo .
+```
+
+### Install in OpenClaw
+
+OpenClaw supports this project through the **Bundle format**: OpenClaw auto-detects the `.claude-plugin/` and `.codex-plugin/` adapter directories and maps them to OpenClaw features. The `openclaw.plugin.json` manifest at the project root provides static discovery metadata.
+
+Install from Git:
+
+```bash
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.0
+```
+
+Or from a local checkout:
+
+```bash
+openclaw plugins install ./open-second-brain
+```
+
+After installing, register the MCP tool server so OpenClaw can route tool calls:
+
+```bash
+o2b mcp --vault /path/to/vault
+```
+
+The MCP server exposes five tools: `second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`. OpenClaw discovers these through the MCP protocol at runtime. The `openclaw.plugin.json` `contracts.tools` field declares them for cold discovery when the MCP server is not yet running.
 
 ## First run
 

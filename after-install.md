@@ -78,3 +78,27 @@ yourself with normal filesystem tools if that is what you want.
 - `README.md` — full feature description and CLI reference.
 - `docs/mcp.md` — MCP tool server, registration, update/remove flows.
 - `docs/architecture.md` — config model, vault layout, security rules.
+
+## OpenClaw
+
+If you are using OpenClaw instead of (or in addition to) Hermes, the plugin
+is already discoverable through the Bundle format. OpenClaw auto-detects the
+`.claude-plugin/` and `.codex-plugin/` directories.
+
+The `openclaw.plugin.json` manifest at the project root declares the plugin ID
+(`open-second-brain`), a configuration schema, and the five tool names the MCP
+server exposes. To register the MCP server with OpenClaw, follow the same
+pattern as Hermes — point OpenClaw's MCP configuration at the `o2b mcp`
+command:
+
+```bash
+o2b mcp --vault /path/to/vault
+```
+
+Run the doctor to verify the OpenClaw manifest is valid:
+
+```bash
+o2b doctor --vault /path/to/vault --repo .
+```
+
+The doctor output should include `[OK] openclaw_manifest`.
