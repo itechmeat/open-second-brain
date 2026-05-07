@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-05-07
+
+### Fixed
+
+- Added `name` field inside each tool object passed to `api.registerTool()`.
+  OpenClaw 2026.5.6 reads `tool.name` during normalization and calls `.trim()`
+  on it — omitting it caused `TypeError: Cannot read properties of undefined`.
+
 ## [0.5.3] - 2026-05-07
 
 ### Fixed

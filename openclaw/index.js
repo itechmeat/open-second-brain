@@ -184,6 +184,7 @@ export default definePluginEntry({
     // ── second_brain_status ────────────────────────────────────────────
     api.registerTool(
       {
+        name: "second_brain_status",
         description: "Report Open Second Brain configuration and vault status.",
         parameters: {
           type: "object",
@@ -239,6 +240,7 @@ export default definePluginEntry({
     // ── second_brain_query ─────────────────────────────────────────────
     api.registerTool(
       {
+        name: "second_brain_query",
         description: "List vault pages with optional title substring filter.",
         parameters: {
           type: "object",
@@ -295,6 +297,7 @@ export default definePluginEntry({
     // ── second_brain_capture ───────────────────────────────────────────
     api.registerTool(
       {
+        name: "second_brain_capture",
         description: "Write a new Markdown note to AI Wiki/notes/ with frontmatter.",
         parameters: {
           type: "object",
@@ -377,6 +380,7 @@ export default definePluginEntry({
     // ── event_log_append ───────────────────────────────────────────────
     api.registerTool(
       {
+        name: "event_log_append",
         description: "Append a single-line event to the daily Markdown event log.",
         parameters: {
           type: "object",
@@ -440,6 +444,7 @@ export default definePluginEntry({
     // ── vault_health ───────────────────────────────────────────────────
     api.registerTool(
       {
+        name: "vault_health",
         description: "Run vault, config, and plugin manifest health checks.",
         parameters: {
           type: "object",
