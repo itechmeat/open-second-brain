@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-07
+
+### Fixed
+
+- Changed `register(api)` from `async` to synchronous in `openclaw/index.js`.
+  OpenClaw requires `register` to be synchronous — only `execute()` callbacks
+  inside tools may be async.
+
 ## [0.5.2] - 2026-05-07
 
 ### Changed

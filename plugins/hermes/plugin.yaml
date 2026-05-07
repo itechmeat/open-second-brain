@@ -1,5 +1,5 @@
 name: open-second-brain
-version: "0.5.2"
+version: "0.5.3"
 description: "Hermes adapter for OpenSecondBrain vault health checks and optional MCP tool server."
 author: "OpenSecondBrain contributors"
 kind: standalone

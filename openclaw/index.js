@@ -180,7 +180,7 @@ async function checkNotesDir(vaultPath) {
 // ── Plugin entry ───────────────────────────────────────────────────────────
 
 export default definePluginEntry({
-  async register(api) {
+  register(api) {
     // ── second_brain_status ────────────────────────────────────────────
     api.registerTool(
       {

@@ -34,7 +34,7 @@ class OpenClawManifestValidityTests(unittest.TestCase):
         self.assertEqual(schema["type"], "object")
 
     def test_manifest_has_version(self):
-        self.assertEqual(self.manifest["version"], "0.5.2")
+        self.assertEqual(self.manifest["version"], "0.5.3")
 
     def test_manifest_declares_tools(self):
         tools = self.manifest["contracts"]["tools"]
@@ -133,7 +133,7 @@ class OpenClawPackageJsonTests(unittest.TestCase):
         self.assertEqual(self.pkg["name"], "open-second-brain")
 
     def test_package_json_has_version(self):
-        self.assertEqual(self.pkg["version"], "0.5.2")
+        self.assertEqual(self.pkg["version"], "0.5.3")
 
     def test_package_json_has_type_module(self):
         self.assertEqual(self.pkg["type"], "module")

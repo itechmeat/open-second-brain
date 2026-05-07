@@ -88,7 +88,7 @@ The vault and its Markdown files are never deleted by the uninstall process.
 From Git (pin to a version tag):
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.2
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.3
 ```
 
 Or from a local checkout:
