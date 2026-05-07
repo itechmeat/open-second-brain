@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-07
+
+### Added
+
+- OpenClaw native plugin compatibility through `openclaw.plugin.json` manifest at
+  the project root. OpenClaw discovers the plugin via the Bundle format
+  (auto-detecting `.claude-plugin/` and `.codex-plugin/`) combined with the
+  static manifest for cold discovery. The MCP server serves as the runtime tool
+  bridge. See `docs/architecture.md` for the adapter layout.
+- `check_openclaw_manifest` health check in `doctor.py` that validates
+  `openclaw.plugin.json` has required fields (`id`, `configSchema`) and that the
+  declared tool names match the MCP tool table.
+- `openclaw_manifest` check in the Hermes adapter health report
+  (`plugins/hermes/__init__.py`).
+- OpenClaw installation and configuration section in `README.md`.
+- OpenClaw post-install steps in `after-install.md`.
+- OpenClaw adapter section in `docs/architecture.md`.
+- Validation of `openclaw.plugin.json` in the CI release workflow
+  (`.github/workflows/release.yml`).
+- `tests/test_openclaw_plugin.py` covering manifest validity, required fields,
+  tool name consistency with the MCP server, and installability invariants.
+
+### Changed
+
+- Bumped package, plugin, MCP server, and Claude/Codex manifest versions to 0.5.0.
+- Updated `pyproject.toml` description to mention OpenClaw alongside Hermes,
+  Claude Code, and Codex.
+- Updated `.codex-plugin/plugin.json` description to mention OpenClaw.
+
 ## [0.4.2] - 2026-05-06
 
 ### Changed
@@ -105,7 +134,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.4.2...HEAD
+[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/itechmeat/open-second-brain/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/itechmeat/open-second-brain/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/itechmeat/open-second-brain/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/itechmeat/open-second-brain/compare/v0.3.1...v0.4.0

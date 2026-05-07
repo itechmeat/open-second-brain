@@ -76,6 +76,7 @@ jobs:
           set -euo pipefail
           python -m json.tool .claude-plugin/plugin.json >/dev/null
           python -m json.tool .codex-plugin/plugin.json >/dev/null
+          python -m json.tool openclaw.plugin.json >/dev/null
           python -m py_compile plugins/hermes/__init__.py
           bash -n scripts/o2b
           bash -n scripts/vault-log

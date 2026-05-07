@@ -25,7 +25,7 @@ The core should eventually provide deterministic operations for:
 - running migrations;
 - querying known indexes where available.
 
-The core should not depend on Hermes, Claude Code, Codex, or Obsidian internals.
+The core should not depend on Hermes, Claude Code, Codex, OpenClaw, or Obsidian internals.
 
 ## Runtime adapters
 
@@ -73,6 +73,34 @@ assets/          # later, optional
 ```
 
 v0 should keep Codex support simple: plugin manifest plus shared skills and scripts.
+
+### OpenClaw adapter
+
+OpenClaw recognizes two plugin formats: **Native** (TypeScript/JS runtime module with `openclaw.plugin.json`) and **Bundle** (adapter directories like `.codex-plugin/`, `.claude-plugin/` mapped to OpenClaw features).
+
+Since Open Second Brain is a Python project, it uses the **Bundle format** combined with a static `openclaw.plugin.json` manifest:
+
+```text
+openclaw.plugin.json    # static discovery metadata (id, configSchema, contracts.tools)
+.claude-plugin/         # auto-detected by OpenClaw Bundle format
+.codex-plugin/          # auto-detected by OpenClaw Bundle format
+scripts/o2b             # CLI entry point
+src/open_second_brain/mcp.py  # MCP server (runtime tool bridge)
+```
+
+The OpenClaw integration does **not** add a TypeScript entry point or `package.json`. Instead:
+
+1. **Cold discovery**: `openclaw.plugin.json` declares the plugin ID, version, configuration schema, and the list of tool names the MCP server provides.
+2. **Feature mapping**: OpenClaw auto-detects `.claude-plugin/` and `.codex-plugin/` directories and maps their commands and skills to OpenClaw features.
+3. **Runtime bridge**: The MCP server (`o2b mcp`) serves as the tool runtime. OpenClaw discovers tool schemas and executes tool calls through the MCP protocol (stdio JSON-RPC 2.0).
+
+Installation:
+
+```bash
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.0
+```
+
+The OpenClaw adapter must not introduce Node.js/TypeScript dependencies, must not add `package.json`, and must remain compatible with the Hermes, Claude Code, and Codex adapters.
 
 ## Configuration model
 
