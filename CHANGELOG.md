@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-07
+
+### Changed
+
+- Rewrote OpenClaw runtime entry in pure JavaScript — all five tools
+  (`second_brain_status`, `second_brain_query`, `second_brain_capture`,
+  `event_log_append`, `vault_health`) now operate directly on the vault
+  filesystem using `node:fs/promises` and `node:path` instead of spawning
+  a Python subprocess. This passes the OpenClaw security scanner which
+  blocks `child_process` imports.
+- Removed `openclaw/o2b-runner.js` subprocess helper (no longer needed).
+- Added `openclaw/vault.js` and `openclaw/event-log.js` pure JS modules.
+- Switched to `api.pluginConfig` for reading plugin configuration and
+  two-arg `api.registerTool(tool, { name })` registration pattern to
+  match bundled OpenClaw plugin conventions.
+
+### Removed
+
+- `openclaw/o2b-runner.js` — subprocess runner blocked by security scanner.
+
 ## [0.5.1] - 2026-05-07
 
 ### Added
@@ -167,7 +187,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.5.1...HEAD
+[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/itechmeat/open-second-brain/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/itechmeat/open-second-brain/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/itechmeat/open-second-brain/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/itechmeat/open-second-brain/compare/v0.4.1...v0.4.2

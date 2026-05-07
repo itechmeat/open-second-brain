@@ -78,16 +78,17 @@ v0 should keep Codex support simple: plugin manifest plus shared skills and scri
 
 OpenClaw recognizes two plugin formats: **Native** (JS runtime module with `package.json` + `openclaw.plugin.json`) and **Bundle** (adapter directories like `.codex-plugin/`, `.claude-plugin/` mapped to OpenClaw features).
 
-Open Second Brain uses the **Native format** with a JS entry that bridges to the Python CLI:
+Open Second Brain uses the **Native format** with a pure JavaScript entry that operates directly on the vault filesystem — no Python subprocess, no `child_process`:
 
 ```text
 package.json             # openclaw.extensions → ./openclaw/index.js
 openclaw/
-  index.js               # JS entry: definePluginEntry + api.registerTool
-  o2b-runner.js          # Subprocess helper: spawns python3 -m open_second_brain.cli
+  index.js               # JS entry: definePluginEntry + api.registerTool (two-arg)
+  vault.js               # Pure JS: frontmatter parse/write, slugify, wikilinks, page listing
+  event-log.js           # Pure JS: daily note creation, chronological event insertion
 openclaw.plugin.json     # Static discovery metadata (id, configSchema, contracts.tools)
 src/open_second_brain/
-  cli.py                 # Python CLI (includes tool-call bridge subcommand)
+  cli.py                 # Python CLI (for Hermes/standalone usage)
   mcp.py                 # MCP server (optional, for runtimes that prefer MCP)
 .claude-plugin/          # Auto-detected by OpenClaw Bundle format
 .codex-plugin/           # Auto-detected by OpenClaw Bundle format
@@ -96,14 +97,16 @@ src/open_second_brain/
 The integration flow:
 
 1. **Discovery**: OpenClaw reads `package.json`, finds `openclaw.extensions`, and loads `openclaw/index.js`.
-2. **Tool registration**: The JS entry calls `api.registerTool()` for each of the five tools (`second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`).
-3. **Runtime bridge**: Each tool's `execute()` spawns `python3 -m open_second_brain.cli` with `PYTHONPATH` set to the plugin's `src/` directory. For tools with direct CLI equivalents (`status`, `append-event`, `doctor`), it calls the relevant subcommand. For tools without (`second_brain_query`, `second_brain_capture`), it uses the `tool-call` bridge subcommand which invokes the MCP tool handlers directly.
-4. **Config**: `api.getConfig()` provides the vault path and instance name from OpenClaw's plugin config.
+2. **Tool registration**: The JS entry calls `api.registerTool(tool, { name })` for each of the five tools (`second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`).
+3. **Pure JS execution**: Each tool's `execute()` runs entirely in the Node.js process using `node:fs/promises` and `node:path` to read/write the vault directory. No subprocess is spawned — this passes the OpenClaw security scanner which blocks `child_process` imports.
+4. **Config**: `api.pluginConfig` provides the vault path and instance name from OpenClaw's plugin config.
+
+The Python CLI (`o2b`) and MCP server (`o2b mcp`) remain available for Hermes and standalone usage, but the OpenClaw runtime is self-contained JavaScript.
 
 Installation:
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.1
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.2
 ```
 
 The OpenClaw adapter must remain compatible with the Hermes, Claude Code, and Codex adapters. The `o2b mcp` MCP server is still available for runtimes that prefer the MCP protocol.

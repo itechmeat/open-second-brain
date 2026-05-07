@@ -29,7 +29,7 @@ from open_second_brain.vault import list_vault_pages, parse_frontmatter, write_f
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "open-second-brain"
-SERVER_VERSION = "0.5.1"
+SERVER_VERSION = "0.5.2"
 JSONRPC_VERSION = "2.0"
 
 # JSON-RPC 2.0 error codes used by the MCP server.

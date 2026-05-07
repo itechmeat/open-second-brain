@@ -1,6 +1,6 @@
 # open-second-brain — Agent Installation Guide
 
-> **Version 0.5.1**
+> **Version 0.5.2**
 > Repository: https://github.com/itechmeat/open-second-brain
 
 This guide is written for an **AI agent**, not a human. It contains the exact commands and decision logic needed to install and configure the **open-second-brain** plugin autonomously. Follow exactly one of the two branches below based on the target runtime (Hermes or OpenClaw). Complete every step in the chosen branch.
@@ -88,7 +88,7 @@ The vault and its Markdown files are never deleted by the uninstall process.
 From Git (pin to a version tag):
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.1
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.2
 ```
 
 Or from a local checkout:

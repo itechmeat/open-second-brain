@@ -34,7 +34,7 @@ class OpenClawManifestValidityTests(unittest.TestCase):
         self.assertEqual(schema["type"], "object")
 
     def test_manifest_has_version(self):
-        self.assertEqual(self.manifest["version"], "0.5.1")
+        self.assertEqual(self.manifest["version"], "0.5.2")
 
     def test_manifest_declares_tools(self):
         tools = self.manifest["contracts"]["tools"]
@@ -133,7 +133,7 @@ class OpenClawPackageJsonTests(unittest.TestCase):
         self.assertEqual(self.pkg["name"], "open-second-brain")
 
     def test_package_json_has_version(self):
-        self.assertEqual(self.pkg["version"], "0.5.1")
+        self.assertEqual(self.pkg["version"], "0.5.2")
 
     def test_package_json_has_type_module(self):
         self.assertEqual(self.pkg["type"], "module")
@@ -228,9 +228,61 @@ class OpenClawInstallabilityTests(unittest.TestCase):
         """The JS entry declared in package.json must exist."""
         self.assertTrue((ROOT / "openclaw" / "index.js").is_file())
 
-    def test_openclaw_runner_js_exists(self):
-        """The subprocess helper must exist."""
-        self.assertTrue((ROOT / "openclaw" / "o2b-runner.js").is_file())
+    def test_openclaw_vault_js_exists(self):
+        """The pure JS vault module must exist."""
+        self.assertTrue((ROOT / "openclaw" / "vault.js").is_file())
+
+    def test_openclaw_event_log_js_exists(self):
+        """The pure JS event-log module must exist."""
+        self.assertTrue((ROOT / "openclaw" / "event-log.js").is_file())
+
+
+class OpenClawSecurityTests(unittest.TestCase):
+    """Verify that the OpenClaw JS entry contains no subprocess calls."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.index_js = (ROOT / "openclaw" / "index.js").read_text(encoding="utf-8")
+        cls.vault_js = (ROOT / "openclaw" / "vault.js").read_text(encoding="utf-8")
+        cls.event_log_js = (ROOT / "openclaw" / "event-log.js").read_text(encoding="utf-8")
+
+    def test_index_js_no_child_process_import(self):
+        """index.js must not import child_process."""
+        self.assertNotIn("child_process", self.index_js)
+
+    def test_index_js_no_exec_file(self):
+        """index.js must not call execFile."""
+        self.assertNotIn("execFile", self.index_js)
+
+    def test_index_js_no_exec(self):
+        """index.js must not call exec (subprocess)."""
+        for line in self.index_js.splitlines():
+            stripped = line.strip()
+            # Skip method definitions like "async execute()" and "async execute(_id, params)"
+            if stripped.startswith("async execute("):
+                continue
+            # Look for standalone exec calls (not .exec() on regex)
+            if "exec" in stripped.lower() and ".exec(" not in stripped:
+                self.fail(f"Found subprocess-like 'exec' in index.js: {stripped}")
+
+    def test_index_js_no_spawn(self):
+        """index.js must not call spawn."""
+        self.assertNotIn("spawn", self.index_js)
+
+    def test_vault_js_no_child_process(self):
+        """vault.js must not import child_process."""
+        self.assertNotIn("child_process", self.vault_js)
+
+    def test_event_log_js_no_child_process(self):
+        """event-log.js must not import child_process."""
+        self.assertNotIn("child_process", self.event_log_js)
+
+    def test_runner_js_deleted(self):
+        """o2b-runner.js must no longer exist."""
+        self.assertFalse(
+            (ROOT / "openclaw" / "o2b-runner.js").exists(),
+            "openclaw/o2b-runner.js should have been deleted",
+        )
 
 
 if __name__ == "__main__":
