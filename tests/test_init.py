@@ -46,6 +46,52 @@ class InitTests(unittest.TestCase):
             )
             self.assertIn(AGENTS_PLACEHOLDER, agents_md)
 
+    def test_bootstrap_vault_registers_second_agent_when_first_already_present(self):
+        # Multi-runtime install: a previous `o2b init --agent-name X`
+        # already replaced the placeholder, so this run's agent name
+        # has to be APPENDED to the existing list, not skipped. Before
+        # this fix the second invocation was a silent no-op: the
+        # plugin config got the new identity but the vault registry
+        # never learned about it. Both Codex and Claude install
+        # sessions hit this in practice.
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            bootstrap_vault(vault, name="Test", agent_name="hermes-vps-agent")
+            agents_path = vault / "AI Wiki" / "identity" / "agents.md"
+            first_text = agents_path.read_text(encoding="utf-8")
+            self.assertIn("- hermes-vps-agent: primary agent on this server", first_text)
+            self.assertNotIn(AGENTS_PLACEHOLDER, first_text)
+
+            created = bootstrap_vault(vault, name="Test", agent_name="codex-vps-agent")
+            self.assertIn(Path("AI Wiki") / "identity" / "agents.md", created)
+            text = agents_path.read_text(encoding="utf-8")
+            # Both agents are present, in registration order.
+            self.assertIn("- hermes-vps-agent: primary agent on this server", text)
+            self.assertIn("- codex-vps-agent: primary agent on this server", text)
+            self.assertLess(
+                text.index("hermes-vps-agent"),
+                text.index("codex-vps-agent"),
+                "first-registered agent must come first",
+            )
+            # The "## Scopes" section that follows must still be intact.
+            self.assertIn("## Scopes", text)
+            self.assertLess(
+                text.index("codex-vps-agent"),
+                text.index("## Scopes"),
+                "new agent must be inserted under '## Registered agents', "
+                "not after the next section header",
+            )
+
+            # A third register of an already-present name is a no-op.
+            created_again = bootstrap_vault(vault, name="Test", agent_name="codex-vps-agent")
+            self.assertNotIn(Path("AI Wiki") / "identity" / "agents.md", created_again)
+            text_after = agents_path.read_text(encoding="utf-8")
+            self.assertEqual(
+                text_after.count("- codex-vps-agent: primary agent on this server"),
+                1,
+                "re-registering an existing agent must not duplicate the entry",
+            )
+
     def test_bootstrap_vault_upgrades_existing_placeholder_in_place(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)

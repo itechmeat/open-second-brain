@@ -4,9 +4,11 @@
 
 This guide is written for an **AI agent**, not a human. It contains the exact commands and decision logic needed to install and configure the **open-second-brain** plugin autonomously. Follow exactly one of the branches below based on the target runtime: **A — Hermes**, **B — OpenClaw**, **C — Codex**, **D — Claude Code**, or **E — generic adapter** (any other runtime not covered by A–D). Complete every step in the chosen branch.
 
-**Always install the latest version.** Every install command in this guide pulls the current state of the `main` branch — there are no version pins. Do **NOT** add `@vX.Y.Z`, `@<tag>`, or any other version specifier to the install commands below, even if you happen to know the most recent release number; the project ships fixes between releases and the canonical install always tracks `main`. After install, the agent's effective version is reported by `o2b status` / `o2b doctor` and by the runtime's plugin listing — read it from there if you need it, do not hard-code it anywhere.
+**Always install the latest released version.** When the user installs the plugin, they expect to receive the newest published release — for example, if `v0.6.1` is the most recent tag and `v0.6.0` was the previous one, the install **must** end up at `v0.6.1`, not at `v0.6.0`. Each runtime CLI in branches A–D below already resolves "latest" by default when handed a bare `owner/repo` identifier (or the runtime-specific equivalent). Manually appending a version specifier — `@v0.6.0`, `@v1.2.3`, `@<some-tag>`, `--ref v...`, etc. — **bypasses** that resolution and freezes the install at the literal value you typed, including back to an older release if you happen to know an outdated tag number. Do **NOT** add any version specifier to the install commands below; rely on the CLI's default-latest behavior. After install, the effective version is reported by `o2b status` / `o2b doctor` and by the runtime's own plugin listing — read it from there if you need to know what got installed, do not pre-suppose it.
 
-**`o2b init` is idempotent.** Re-running it on an already-initialized vault only fills in missing scaffolding (`AI Wiki/identity/agents.md`, etc.) and never rewrites the user's notes or templates. Re-running with `--agent-name <name>` is the supported way to switch identities: it rewrites the entry in `AI Wiki/identity/agents.md` and updates the persisted `agent_name` in the plugin config (`~/.config/open-second-brain/config.yaml`). Use `--force` only when the user explicitly asks for a reset of the scaffolding files.
+**`o2b init` is idempotent.** Re-running it on an already-initialized vault only fills in missing scaffolding (`AI Wiki/identity/agents.md`, etc.) and never rewrites the user's notes or templates. Re-running with `--agent-name <name>` is the supported way to switch identities: it appends the new agent's entry to `AI Wiki/identity/agents.md` (without removing existing ones, so the registry grows correctly across multi-runtime installs) and updates the persisted `agent_name` in the plugin config (`~/.config/open-second-brain/config.yaml`). Use `--force` only when the user explicitly asks for a reset of the scaffolding files.
+
+**The `o2b` CLI on PATH is shared across runtimes.** The first runtime to run `o2b install-cli` wires `~/.local/bin/o2b` (and `vault-log`) at its own checkout; subsequent runtimes' `install-cli` invocations detect the existing symlink and **deliberately refuse to overwrite it** (printing `warning: already points to ..., not overwriting`). This is by design: the `o2b` script is byte-identical across all runtime checkouts (they all clone the same repo at the same version), so a single symlink serves every runtime correctly, and overwriting silently would risk pointing at a stale-and-uninstalled checkout when one runtime updates faster than another. If you have a deliberate reason to point `o2b` at a specific runtime's checkout (e.g. you want CLI behavior to track that runtime's plugin update cycle), repoint with `ln -sfn <path> ~/.local/bin/o2b` manually — the plugin won't second-guess you. But the default state, with `o2b` pointing at whichever runtime got there first, is correct and does not need fixing.
 
 If at any point you are missing information — for example, the vault path is unknown, a required tool is not installed, or the runtime version is unclear — stop and ask the user for clarification. Offer concrete options where possible (e.g. suggest a default vault path, list supported Python versions, or propose an alternative runtime).
 
@@ -42,9 +44,33 @@ agreement. The plugin will refuse to write to the wrong place — but
 catching a misclick at this step is much cheaper than after entries
 have started accumulating.
 
-**Agent name.** Ask the user to choose the agent name that will appear
-as the `@agent-name` prefix in Daily event log entries. Offer these
-defaults plus a custom value:
+**Agent name.** You **MUST ask the user** to choose this. Do **not**
+silently pick a default value, do **not** assume the user wants
+whichever runtime-prefixed name looks reasonable. The value will
+appear as the `@agent-name` prefix in every single Daily event log
+entry written from this runtime; it has to be the user's deliberate
+choice, not the agent's guess.
+
+**Before asking, check for a previously-set identity.** If the user
+has installed Open Second Brain before — under another runtime, in a
+prior session, or after a reset — there are likely traces on disk:
+
+- `~/.config/open-second-brain/config.yaml` `agent_name` field — the
+  authoritative persisted identity (written by any past
+  `o2b init --agent-name` invocation, regardless of runtime).
+- `<vault>/AI Wiki/identity/agents.md` — usually has a line like
+  `- <name>: primary agent on this server`.
+- `<vault>/Daily/*.md` — recurring `@<name>` lines hint at past
+  identities the user has been writing under.
+
+If any of these surfaces a name, **show it to the user first** with a
+question like «This vault is already configured with `@<found-name>`.
+Should I reuse that name for the Hermes runtime, or do you want a
+different one for this runtime specifically?». Wait for an explicit
+answer — do not assume "reuse" or "change" on the user's behalf.
+
+Only when no prior identity is found, offer these defaults plus a
+custom value:
 
 - `hermes-main`
 - `hermes-vps-agent`
@@ -245,9 +271,33 @@ on the target machine in this order:
 Confirm the chosen path with the user (show them the absolute path you
 resolved) before passing it to `o2b init` and `openclaw config set`.
 
-**Agent name.** Ask the user to choose the agent name that will appear
-as the `@agent-name` prefix in Daily event log entries. Offer these
-defaults plus a custom value:
+**Agent name.** You **MUST ask the user** to choose this. Do **not**
+silently pick a default value, do **not** assume the user wants
+whichever runtime-prefixed name looks reasonable. The value will
+appear as the `@agent-name` prefix in every single Daily event log
+entry written from this runtime; it has to be the user's deliberate
+choice, not the agent's guess.
+
+**Before asking, check for a previously-set identity.** If the user
+has installed Open Second Brain before — under another runtime, in a
+prior session, or after a reset — there are likely traces on disk:
+
+- `~/.config/open-second-brain/config.yaml` `agent_name` field — the
+  authoritative persisted identity (written by any past
+  `o2b init --agent-name` invocation, regardless of runtime).
+- `<vault>/AI Wiki/identity/agents.md` — usually has a line like
+  `- <name>: primary agent on this server`.
+- `<vault>/Daily/*.md` — recurring `@<name>` lines hint at past
+  identities the user has been writing under.
+
+If any of these surfaces a name, **show it to the user first** with a
+question like «This vault is already configured with `@<found-name>`.
+Should I reuse that name for the OpenClaw runtime, or do you want a
+different one for this runtime specifically?». Wait for an explicit
+answer — do not assume "reuse" or "change" on the user's behalf.
+
+Only when no prior identity is found, offer these defaults plus a
+custom value:
 
 - `openclaw-main`
 - `openclaw-server`
@@ -287,7 +337,9 @@ by the optional `o2b mcp` server, not by the OpenClaw plugin runtime.
 
 ### 2. Install the plugin
 
-From Git (always installs the latest from `main`; do not append `@v...`):
+From Git (let the CLI resolve to the latest released version on its
+own; do not append `@v...` — see the prelude on why pinning a tag
+manually is the wrong move):
 
 ```bash
 openclaw plugins install git:github.com/itechmeat/open-second-brain
@@ -436,9 +488,33 @@ on the target machine in this order:
 Confirm the chosen path with the user (show them the absolute path you
 resolved) before passing it to `o2b init` and the Codex MCP entry.
 
-**Agent name.** Ask the user to choose the agent name that will appear
-as the `@agent-name` prefix in Daily event log entries. Offer these
-defaults plus a custom value:
+**Agent name.** You **MUST ask the user** to choose this. Do **not**
+silently pick a default value, do **not** assume the user wants
+whichever runtime-prefixed name looks reasonable. The value will
+appear as the `@agent-name` prefix in every single Daily event log
+entry written from this runtime; it has to be the user's deliberate
+choice, not the agent's guess.
+
+**Before asking, check for a previously-set identity.** If the user
+has installed Open Second Brain before — under another runtime, in a
+prior session, or after a reset — there are likely traces on disk:
+
+- `~/.config/open-second-brain/config.yaml` `agent_name` field — the
+  authoritative persisted identity (written by any past
+  `o2b init --agent-name` invocation, regardless of runtime).
+- `<vault>/AI Wiki/identity/agents.md` — usually has a line like
+  `- <name>: primary agent on this server`.
+- `<vault>/Daily/*.md` — recurring `@<name>` lines hint at past
+  identities the user has been writing under.
+
+If any of these surfaces a name, **show it to the user first** with a
+question like «This vault is already configured with `@<found-name>`.
+Should I reuse that name for the Codex runtime, or do you want a
+different one for this runtime specifically?». Wait for an explicit
+answer — do not assume "reuse" or "change" on the user's behalf.
+
+Only when no prior identity is found, offer these defaults plus a
+custom value:
 
 - `codex-main`
 - `codex-vps-agent`
@@ -478,10 +554,16 @@ This repository ships a single-plugin marketplace manifest at
 codex plugin marketplace add itechmeat/open-second-brain
 ```
 
-(Always pulls the latest commit on `main`; do not append `@v...`.) Codex
-clones the repo into `~/.codex/plugins/cache/open-second-brain/<plugin>/<hash>/`
-and registers a `[marketplaces.open-second-brain]` entry in
-`~/.codex/config.toml`.
+(The CLI resolves to the latest released version by default; do
+**not** append `@v...` — see the prelude.) Codex clones the repo
+somewhere under `~/.codex/`. The exact path varies by
+CLI version: older builds use `~/.codex/plugins/cache/<marketplace>/<plugin>/<hash>/`;
+Codex 0.129 stores it under `~/.codex/.tmp/marketplaces/<marketplace>/`.
+Step 3 below uses a `find` to locate the plugin scripts regardless of
+layout, so this difference is not user-visible. A
+`[marketplaces.open-second-brain]` entry is added to
+`~/.codex/config.toml`; the printed `Installed marketplace root: ...`
+line shows the absolute path of the install for that run.
 
 Then enable the plugin so its bundled skills/agents/commands become
 available — there is no `codex plugin enable` subcommand on current
@@ -505,13 +587,15 @@ enablement.
 The `o2b` and `vault-log` scripts ship inside the plugin checkout; this
 step symlinks them into `~/.local/bin` so they are usable on PATH.
 
+The cached path differs across Codex versions (see step 2), so locate
+the script by searching under `~/.codex/`:
+
 ```bash
-~/.codex/plugins/cache/open-second-brain/open-second-brain/*/scripts/o2b install-cli
+"$(find ~/.codex -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)" install-cli
 ```
 
-(The glob handles the version hash that Codex assigns to the cached
-clone. If you installed the marketplace from a local path, run
-`<that-path>/scripts/o2b install-cli` instead.)
+If you installed the marketplace from a local path, run
+`<that-path>/scripts/o2b install-cli` directly instead.
 
 ### 4. Initialize the vault
 
@@ -630,9 +714,36 @@ on the target machine in this order:
 Confirm the chosen path with the user (show them the absolute path
 you resolved) before passing it to `o2b init`.
 
-**Agent name.** Ask the user to choose the agent name that will appear
-as the `@agent-name` prefix in Daily event log entries. Offer these
-defaults plus a custom value:
+**Agent name.** You **MUST ask the user** to choose this. Do **not**
+silently pick a default value, do **not** assume the user wants
+whichever runtime-prefixed name looks reasonable. The value will
+appear as the `@agent-name` prefix in every single Daily event log
+entry written from this runtime; it has to be the user's deliberate
+choice, not the agent's guess.
+
+**Before asking, check for a previously-set identity.** If the user
+has installed Open Second Brain before — under another runtime, in a
+prior session, or after a reset — there are likely traces on disk:
+
+- `~/.config/open-second-brain/config.yaml` `agent_name` field — the
+  authoritative persisted identity (written by any past
+  `o2b init --agent-name` invocation, regardless of runtime). On
+  Claude Code specifically this field is what the bundled
+  `.mcp.json` resolves at runtime, so a stale value here will
+  silently become Claude's identity unless step 4 overwrites it.
+- `<vault>/AI Wiki/identity/agents.md` — usually has a line like
+  `- <name>: primary agent on this server`.
+- `<vault>/Daily/*.md` — recurring `@<name>` lines hint at past
+  identities the user has been writing under.
+
+If any of these surfaces a name, **show it to the user first** with a
+question like «This vault is already configured with `@<found-name>`.
+Should I reuse that name for the Claude Code runtime, or do you want
+a different one for this runtime specifically?». Wait for an explicit
+answer — do not assume "reuse" or "change" on the user's behalf.
+
+Only when no prior identity is found, offer these defaults plus a
+custom value:
 
 - `claude-main`
 - `claude-vps-agent`
@@ -671,11 +782,14 @@ claude plugin marketplace add itechmeat/open-second-brain
 claude plugin install open-second-brain@open-second-brain
 ```
 
-(The marketplace step always pulls the latest commit on `main`; do not
-append `@v...`.) After install, `claude plugin list` shows the plugin
-under user scope with `Status: ✔ enabled`. Claude clones the repo into
-`~/.claude/plugins/cache/open-second-brain/<plugin-name>/` and tracks
-the source via the `claude-plugins` config block.
+(The marketplace step resolves to the latest released version on its
+own; do **not** append `@v...` — see the prelude.) After install,
+`claude plugin list` shows the plugin under user scope with
+`Status: ✔ enabled`. Claude clones the repo
+under `~/.claude/plugins/cache/<marketplace>/<plugin-name>/<version>/`
+(the trailing `<version>` segment matches the installed plugin
+manifest's `version`, e.g. `0.6.1`) and tracks the source via the
+`claude-plugins` config block.
 
 The plugin auto-registers its MCP server through the bundled `.mcp.json`
 file at the repo root — **no `claude mcp add` step is needed**. After
@@ -687,8 +801,11 @@ step 4 below (vault init), `claude mcp list` will show
 The `o2b` and `vault-log` scripts ship inside the plugin checkout; this
 step symlinks them into `~/.local/bin` so they are usable on PATH.
 
+The cached path includes the plugin version segment, so locate the
+script by searching under the cache:
+
 ```bash
-~/.claude/plugins/cache/open-second-brain/open-second-brain/scripts/o2b install-cli
+"$(find ~/.claude/plugins/cache -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)" install-cli
 ```
 
 ### 4. Initialize the vault
@@ -804,7 +921,9 @@ runtimes will find one they understand:
 - A vanilla Git checkout (every runtime can clone a repo)
 
 Pick whichever your runtime documents. Do **not** add a version pin
-(`@v...`) — the canonical install always tracks the `main` branch.
+(`@v...`) — let the runtime CLI resolve to the latest released
+version on its own (see the prelude on why manual pinning freezes you
+to a stale release).
 
 ### 3. Publish CLI commands to PATH
 
@@ -903,6 +1022,39 @@ plugin keeps no state outside the vault and
 created in step 3. Vault Markdown files are never deleted.
 
 ---
+
+## Verification — identity registry
+
+The plugin's MCP-side identity (what gets stamped in Daily as
+`@<name>`) is one of two artifacts; the **vault's identity registry**
+(the human-/agent-readable list of who is allowed to write) is the
+other. Both must agree, and both must be checked. Past install
+sessions have skipped this and silently ended up with the runtime
+writing under one identity that the registry never recorded — the MCP
+server happily logged events without complaint, and the gap only
+surfaced later when someone audited the vault.
+
+After step 4's `o2b init --agent-name <name>` finishes, open
+`<vault>/AI Wiki/identity/agents.md` and confirm it contains a line
+like:
+
+```
+- <chosen-agent-name>: primary agent on this server
+```
+
+Multi-runtime installs build this list incrementally: each
+`o2b init --agent-name X` appends another entry under
+`## Registered agents` if `X` isn't already there. So on a vault
+that already has Hermes registered, a fresh Codex install should
+result in **two** lines — one for `hermes-vps-agent`, one for
+`codex-vps-agent` — not just one.
+
+If your runtime's identity is missing from the registry after
+`o2b init` ran without errors, treat the install as **incomplete**:
+report it to the user, then either re-run `o2b init --agent-name <name>`
+(it's idempotent and will append the missing entry), or add the line
+by hand if you have a reason not to re-run init. Don't proceed to
+the daily-identity check below without this in place.
 
 ## Verification — daily identity
 

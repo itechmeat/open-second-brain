@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-08
+
+### Added
+
+- install.md `## Verification — identity registry` block. Confirms
+  the chosen agent name appears in
+  `<vault>/AI Wiki/identity/agents.md` after `o2b init`. Multi-runtime
+  installs grow the list incrementally.
+- install.md prelude note: `o2b` CLI on PATH is a single shared
+  symlink across runtimes — first-installed wins, subsequent
+  `install-cli` refuses to overwrite. Manual repointing is allowed
+  but unnecessary.
+
+### Changed
+
+- install.md "Agent name" subsection (branches A–D): installer agent
+  **MUST** ask the user, **MUST** first check
+  `~/.config/open-second-brain/config.yaml`,
+  `<vault>/AI Wiki/identity/agents.md`, and `<vault>/Daily/*.md` for
+  a previously-set identity and surface it as a reuse-or-change
+  question. Defaults list only shown if no prior identity is found.
+- install.md "no version pin" guidance: replaced the ambiguous
+  "tracks `main`" framing with "**latest released version**" plus an
+  explicit `v0.6.1` vs `v0.6.0` example, and a direct statement that
+  manually appending `@v...` freezes the install at the literal tag
+  you typed.
+- install.md prelude: `o2b init` idempotency description updated to
+  describe the new multi-agent append behavior on
+  `AI Wiki/identity/agents.md`.
+
+### Fixed
+
+- Multi-agent registration in `AI Wiki/identity/agents.md`. Second and
+  later `o2b init --agent-name <name>` runs now append under
+  `## Registered agents` instead of being a silent no-op once the
+  placeholder is gone. Idempotent for already-registered names.
+- install.md Branch C steps 2–3: Codex CLI 0.129+ caches the
+  marketplace under `~/.codex/.tmp/marketplaces/<name>/`, not the
+  previously documented `~/.codex/plugins/cache/<marketplace>/<plugin>/<hash>/`.
+  Step 3 now uses a `find` pattern that works on either layout.
+- install.md Branch D step 3: Claude Code caches plugins under a
+  `<version>` segment (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/scripts/o2b`).
+  Same `find`-based fix as Branch C.
+
 ## [0.6.1] - 2026-05-08
 
 ### Added
@@ -514,7 +558,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.6.1...HEAD
+[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/itechmeat/open-second-brain/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/itechmeat/open-second-brain/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/itechmeat/open-second-brain/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/itechmeat/open-second-brain/compare/v0.5.4...v0.5.5
