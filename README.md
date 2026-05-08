@@ -49,9 +49,10 @@ hermes plugins install itechmeat/open-second-brain --enable
 hermes gateway restart
 ```
 
-Then initialize the vault, register the MCP server, and verify:
+Then publish the CLI commands to PATH, initialize the vault, register the MCP server, and verify:
 
 ```bash
+~/.hermes/plugins/open-second-brain/scripts/o2b install-cli
 o2b init --vault /path/to/vault --name "My Second Brain"
 hermes mcp add open-second-brain --command o2b --args mcp --vault /path/to/vault
 hermes gateway restart
@@ -114,16 +115,17 @@ scripts/o2b index --vault /path/to/vault
 ```text
 o2b status          Show config/vault status
 o2b init            Bootstrap the vault profile
+o2b install-cli     Symlink o2b and vault-log into ~/.local/bin
 o2b doctor          Run vault and adapter checks
 o2b append-event    Append one daily event-log entry
 o2b index           Rebuild the Markdown page index
 o2b export-config   Write a redacted config snapshot
 o2b mcp             Run the optional MCP tool server (stdio)
-o2b uninstall       Print an uninstall plan; --apply-local removes only local config
+o2b uninstall       Print an uninstall plan; --apply-local removes config; --remove-cli removes symlinks
 vault-log           Compatibility wrapper around append-event
 ```
 
-The local checkout can be used without installing the Python package. Run commands through `scripts/o2b` and `scripts/vault-log`, or set `PYTHONPATH=src` for module execution.
+After running `o2b install-cli`, the bare `o2b` and `vault-log` commands are available on PATH. The local checkout can also be used without installing the Python package — run commands through `scripts/o2b` and `scripts/vault-log`, or set `PYTHONPATH=src` for module execution.
 
 ## Optional MCP tool server
 
@@ -174,15 +176,16 @@ OpenSecondBrain treats your vault as the source of truth and never removes Markd
 
    The plan tells you which Hermes commands to run yourself, where the machine-local config directory lives, and reminds you that the vault is untouched. The dry-run never modifies the filesystem.
 
-2. Deregister the MCP server and remove the Hermes plugin (Hermes-owned state):
+2. Deregister the MCP server, clean up CLI symlinks, and remove the Hermes plugin (Hermes-owned state):
 
    ```bash
    hermes mcp remove open-second-brain
+   o2b uninstall --apply-local --remove-cli
    hermes plugins remove open-second-brain
    hermes gateway restart
    ```
 
-   `hermes mcp remove` deletes the MCP registration and any OAuth tokens. `hermes plugins remove` deletes only the installed plugin directory. OpenSecondBrain itself never edits `~/.hermes/config.yaml` — these commands are run by you against Hermes.
+   `hermes mcp remove` deletes the MCP registration and any OAuth tokens. `o2b uninstall --remove-cli` removes the CLI symlinks — run it *before* `hermes plugins remove` so the plugin directory still exists for symlink verification. `hermes plugins remove` deletes the installed plugin directory. OpenSecondBrain itself never edits `~/.hermes/config.yaml` — these commands are run by you against Hermes.
 
 3. Optionally remove the machine-local config directory (typically `~/.config/open-second-brain` or `$OPEN_SECOND_BRAIN_CONFIG`'s parent):
 
@@ -190,7 +193,7 @@ OpenSecondBrain treats your vault as the source of truth and never removes Markd
    o2b uninstall --apply-local
    ```
 
-   `--apply-local` only removes that one config directory. It refuses to act if the directory name is not a recognized Open Second Brain config dir, if it lives inside a Hermes-owned path, or if it looks like a git repository. It never touches the vault, Hermes config, or anything else.
+   `--apply-local` only removes that one config directory. It refuses to act outside its intended scope — it never touches the vault, Hermes config, or anything else.
 
 To delete the vault you must do that yourself with normal filesystem tools — OpenSecondBrain will not do it for you, even with `--apply-local`.
 

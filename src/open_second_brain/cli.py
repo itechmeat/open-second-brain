@@ -12,6 +12,12 @@ from open_second_brain.config import default_config_path, discover_config, redac
 from open_second_brain.doctor import doctor
 from open_second_brain.event_log import append_event
 from open_second_brain.init import bootstrap_vault
+from open_second_brain.install_cli import (
+    install_cli,
+    render_install_result,
+    render_uninstall_result,
+    uninstall_cli,
+)
 from open_second_brain.mcp import MCPServer, run_cli_command as run_mcp_server
 from open_second_brain.uninstall import plan_uninstall, render_plan
 from open_second_brain.vault import list_vault_pages, write_frontmatter
@@ -62,15 +68,33 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_cmd.add_argument("--config", type=Path, default=None, help="Config file path")
     mcp_cmd.add_argument("--repo", type=Path, default=None, help="Repository root for plugin checks")
 
+    install_cli_cmd = subcommands.add_parser(
+        "install-cli",
+        help="Create symlinks for o2b and vault-log in ~/.local/bin",
+        description=(
+            "Symlink the CLI wrapper scripts (scripts/o2b, scripts/vault-log) into "
+            "~/.local/bin so that bare 'o2b' and 'vault-log' commands work on PATH. "
+            "Run this once after 'hermes plugins install'. The symlinks survive "
+            "'hermes plugins update' because they point into the git checkout."
+        ),
+    )
+    install_cli_cmd.add_argument(
+        "--bindir",
+        type=Path,
+        default=None,
+        help="Target directory for symlinks (default: ~/.local/bin)",
+    )
+
     uninstall_cmd = subcommands.add_parser(
         "uninstall",
-        help="Print an uninstall plan and (optionally) clean local config",
+        help="Print an uninstall plan and (optionally) clean local config and CLI symlinks",
         description=(
             "Read-only by default. Prints the Hermes commands you must run yourself "
             "(this tool never touches ~/.hermes/config.yaml or the installed plugin). "
             "With --apply-local it may remove the machine-local Open Second Brain "
             "config directory only. Your vault, Daily/, AI Wiki/, and Markdown notes "
-            "are never removed."
+            "are never removed. With --remove-cli it also removes the o2b/vault-log "
+            "symlinks created by 'o2b install-cli'."
         ),
     )
     uninstall_cmd.add_argument("--config", type=Path, default=None, help="Config file path")
@@ -81,6 +105,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Remove the machine-local Open Second Brain config directory "
             "(typically ~/.config/open-second-brain). Hermes config and the vault "
             "are never touched."
+        ),
+    )
+    uninstall_cmd.add_argument(
+        "--remove-cli",
+        action="store_true",
+        dest="remove_cli",
+        help=(
+            "Remove the o2b and vault-log symlinks from ~/.local/bin "
+            "(created by 'o2b install-cli')."
         ),
     )
 
@@ -236,7 +269,25 @@ def command_uninstall(args: argparse.Namespace) -> int:
     config = args.config or default_config_path()
     plan = plan_uninstall(config_path=config, apply_local=args.apply_local)
     sys.stdout.write(render_plan(plan))
+    return_code = 0
+
+    if getattr(args, "remove_cli", False):
+        cli_result = uninstall_cli()
+        sys.stdout.write("\n")
+        sys.stdout.write(render_uninstall_result(cli_result))
+        if cli_result.errors:
+            return_code = 1
+
     if plan.errors:
+        return_code = 1
+    return return_code
+
+
+def command_install_cli(args: argparse.Namespace) -> int:
+    bindir = getattr(args, "bindir", None)
+    result = install_cli(bindir=bindir)
+    sys.stdout.write(render_install_result(result))
+    if result.errors:
         return 1
     return 0
 
@@ -289,6 +340,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_index(args)
     if args.command == "mcp":
         return command_mcp(args)
+    if args.command == "install-cli":
+        return command_install_cli(args)
     if args.command == "uninstall":
         return command_uninstall(args)
     if args.command == "tool-call":

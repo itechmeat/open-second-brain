@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-05-08
+
+### Added
+
+- `o2b install-cli` subcommand: creates symlinks for `o2b` and `vault-log`
+  in `~/.local/bin` pointing to the wrapper scripts inside the plugin
+  checkout. Run once after `hermes plugins install` to make bare `o2b`
+  available on PATH. Symlinks survive `hermes plugins update` because they
+  point into the git-managed checkout.
+- `o2b uninstall --remove-cli` flag: removes the symlinks created by
+  `install-cli` during uninstall.
+
+### Fixed
+
+- Installation instructions (`install.md`, `after-install.md`, `README.md`)
+  now include the `install-cli` step between `hermes plugins install` and
+  `o2b init`, closing the gap where bare `o2b` was not found on PATH after
+  a clean plugin install.
+
 ## [0.5.4] - 2026-05-07
 
 ### Fixed

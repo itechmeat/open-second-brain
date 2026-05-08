@@ -199,7 +199,8 @@ def render_plan(plan: UninstallPlan) -> str:
         lines.append("Next steps:")
         lines.append("  1. Run the Hermes commands above to deregister the MCP server and plugin.")
         lines.append("  2. Re-run with --apply-local to remove the machine-local config directory.")
-        lines.append("  3. Delete the vault yourself if and only if you really want to lose your notes.")
+        lines.append("  3. Add --remove-cli to also remove the o2b/vault-log symlinks from ~/.local/bin.")
+        lines.append("  4. Delete the vault yourself if and only if you really want to lose your notes.")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
