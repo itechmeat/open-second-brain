@@ -1,66 +1,19 @@
 {
   "name": "open-second-brain",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Plugin-first second brain package for AI agents and humans.",
-  "author": "Open Second Brain contributors",
+  "author": {
+    "name": "Open Second Brain contributors"
+  },
   "license": "MIT",
   "homepage": "https://github.com/itechmeat/open-second-brain",
   "repository": "https://github.com/itechmeat/open-second-brain",
-  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"],
-  "commands": [
-    {
-      "name": "status",
-      "description": "Show Open Second Brain configuration status.",
-      "command": "scripts/o2b",
-      "args": ["status"]
-    },
-    {
-      "name": "doctor",
-      "description": "Run vault, config, and plugin manifest health checks.",
-      "command": "scripts/o2b",
-      "args": ["doctor"]
-    },
-    {
-      "name": "init",
-      "description": "Initialize a sandbox or production vault profile.",
-      "command": "scripts/o2b",
-      "args": ["init"]
-    },
-    {
-      "name": "index",
-      "description": "Regenerate the vault wiki index from Markdown pages.",
-      "command": "scripts/o2b",
-      "args": ["index"]
-    },
-    {
-      "name": "append-event",
-      "description": "Append an agent event to the daily Markdown event log.",
-      "command": "scripts/o2b",
-      "args": ["append-event"]
-    },
-    {
-      "name": "export-config",
-      "description": "Write a redacted configuration snapshot as JSON.",
-      "command": "scripts/o2b",
-      "args": ["export-config"]
-    },
-    {
-      "name": "mcp",
-      "description": "Run the optional MCP tool server over stdio (JSON-RPC 2.0).",
-      "command": "scripts/o2b",
-      "args": ["mcp"]
-    },
-    {
-      "name": "uninstall",
-      "description": "Print an uninstall plan; --apply-local removes only the machine-local config directory.",
-      "command": "scripts/o2b",
-      "args": ["uninstall"]
-    },
-    {
-      "name": "vault-log",
-      "description": "Compatibility wrapper for appending event log entries.",
-      "command": "scripts/vault-log",
-      "args": []
-    }
+  "keywords": [
+    "second-brain",
+    "obsidian",
+    "agents",
+    "skills",
+    "event-log",
+    "mcp"
   ]
 }

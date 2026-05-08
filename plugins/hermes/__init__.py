@@ -111,15 +111,57 @@ def _attach_health(ctx: Any, callback: Callable[[], HealthReport]) -> bool:
     return True
 
 
-def register(ctx: Any) -> None:
-    """Register the Hermes plugin health check when the context supports it.
+_PRE_LLM_CALL_TEMPLATE = (
+    "[open-second-brain] Identity: @{agent}. After producing a durable "
+    "artifact — code shipped, bug fixed, config or deployment change, "
+    "instruction-file edit, content artifact created, research finding "
+    "or design decision reached, investigation that surfaced a fact "
+    "future sessions should know — call the event_log_append tool with "
+    "the plain event description as `message`. The server prepends "
+    "timestamp and `@{agent}` automatically, do not include them "
+    "yourself. Skip pure discussion, exploration, read-only queries, "
+    "and planning that hasn't yet produced an artifact."
+)
 
-    This remains safe/no-op-ish: unsupported context objects are ignored and no
-    exception is raised for registration incompatibilities.
+
+def on_pre_llm_call(**kwargs: Any) -> dict[str, str] | None:
+    """Plugin context injected into the current turn's user message.
+
+    The Hermes ``pre_llm_call`` hook contract: callbacks receive the turn
+    metadata as keyword arguments and may return ``{"context": "..."}`` —
+    Hermes appends the value to the user message of this turn (system prompt
+    is left untouched, so the cache prefix is preserved).
+
+    Returns ``None`` (skipping injection) when the agent identity is not
+    configured, because the only thing we'd otherwise inject is the literal
+    ``@agent`` placeholder, which is worse than silence.
+    """
+    try:
+        from open_second_brain.config import resolve_agent_name
+    except ImportError:
+        return None
+    agent = resolve_agent_name()
+    if agent == "agent":
+        return None
+    return {"context": _PRE_LLM_CALL_TEMPLATE.format(agent=agent)}
+
+
+def register(ctx: Any) -> None:
+    """Register Hermes-side hooks when the context supports them.
+
+    Best-effort: unsupported context shapes are ignored without raising, so a
+    minimal/test ``ctx`` won't break plugin loading.
     """
 
     try:
         _attach_health(ctx, check_health)
     except Exception:
-        return None
+        pass
+
+    register_hook = getattr(ctx, "register_hook", None)
+    if callable(register_hook):
+        try:
+            register_hook("pre_llm_call", on_pre_llm_call)
+        except Exception:
+            pass
     return None

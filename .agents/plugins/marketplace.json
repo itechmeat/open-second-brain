@@ -1,0 +1,19 @@
+{
+  "name": "open-second-brain",
+  "interface": {
+    "displayName": "Open Second Brain"
+  },
+  "plugins": [
+    {
+      "name": "open-second-brain",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

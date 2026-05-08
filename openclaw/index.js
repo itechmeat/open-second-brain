@@ -36,9 +36,31 @@ import { existsSync } from "node:fs";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const PLUGIN_VERSION = "0.6.0";
-
 const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"];
+
+// Strings the LLM is most likely to emit as a guess for the ``agent``
+// argument when it doesn't actually know its identity. Compared
+// case-insensitively, after a leading ``@`` is stripped. Mirrors the
+// Python ``_PLACEHOLDER_AGENT_VALUES`` set in ``mcp.py`` so all
+// runtimes filter the same hallucination shapes out of Daily.
+const PLACEHOLDER_AGENTS = new Set([
+  "agent",
+  "assistant",
+  "ai",
+  "ai-assistant",
+  "bot",
+  "chatbot",
+  "claude",
+  "copilot",
+  "gemini",
+  "gpt",
+  "gpt-4",
+  "gpt-5",
+  "llm",
+  "model",
+  "openai",
+  "user",
+]);
 
 // ── Config helpers ─────────────────────────────────────────────────────────
 
@@ -87,24 +109,55 @@ function resolveVaultPath(api) {
 }
 
 /**
- * Get current date in YYYY.MM.DD format.
+ * Resolve the IANA timezone the OpenClaw plugin should stamp Daily
+ * entries in.
+ *
+ * Resolution order (first hit wins):
+ *   1. ``api.pluginConfig.timezone`` — set by ``openclaw config set
+ *      plugins.entries.open-second-brain.config.timezone "..."``.
+ *   2. ``VAULT_TIMEZONE`` env var (legacy, parity with the Python
+ *      side's resolver).
+ *   3. ``null`` — caller falls back to the host's local clock.
+ *
+ * Whatever value comes out is validated against ``Intl.DateTimeFormat``
+ * before being returned: an invalid IANA name (e.g. user typo) would
+ * otherwise crash every ``event_log_append`` call inside
+ * ``Intl.DateTimeFormat`` with ``RangeError``. Mirrors the Python
+ * ``resolve_timezone`` helper, which also silently falls back when
+ * ``ZoneInfo(name)`` raises — agents shouldn't lose entries because
+ * of a typo in plugin config.
  */
-function currentDate() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}.${m}.${d}`;
+function resolveTimezone(api) {
+  const config = api.pluginConfig || {};
+  const candidate = config.timezone || process.env.VAULT_TIMEZONE || null;
+  if (!candidate) return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate });
+  } catch {
+    return null;
+  }
+  return candidate;
 }
 
 /**
- * Get current time in HH:MM 24-hour format.
+ * Sanitize an LLM-supplied ``agent`` argument.
+ *
+ * Strips a leading ``@`` (so ``@hermes-vps-agent`` doesn't end up as
+ * ``@@hermes-vps-agent`` once the event entry re-prefixes ``@``).
+ * Treats common LLM self-name guesses (``agent``, ``assistant``,
+ * ``claude``, ``gpt``, ...) as "no value" so a hallucinated identity
+ * falls back to the resolved default instead of being written
+ * verbatim into Daily.
+ *
+ * Returns ``null`` for empty or placeholder inputs. Mirrors
+ * ``open_second_brain.mcp._normalize_agent_argument``.
  */
-function currentTime() {
-  const now = new Date();
-  const h = String(now.getHours()).padStart(2, "0");
-  const m = String(now.getMinutes()).padStart(2, "0");
-  return `${h}:${m}`;
+function normalizeAgentArgument(value) {
+  if (value == null) return null;
+  const cleaned = String(value).trim().replace(/^@+/, "").trim();
+  if (!cleaned) return null;
+  if (PLACEHOLDER_AGENTS.has(cleaned.toLowerCase())) return null;
+  return cleaned;
 }
 
 /**
@@ -414,15 +467,17 @@ export default definePluginEntry({
 
           const pluginConfig = api.pluginConfig || {};
           const configuredAgent = pluginConfig.agentName || null;
+          const normalizedAgent = normalizeAgentArgument(params.agent);
           const agent =
-            params.agent ||
+            normalizedAgent ||
             process.env.VAULT_AGENT_NAME ||
             configuredAgent ||
             "agent";
           const date = params.date || null;
           const time = params.time || null;
+          const tz = resolveTimezone(api);
 
-          const result = await appendEvent(vault, agent, message, date, time);
+          const result = await appendEvent(vault, agent, message, date, time, tz);
 
           return {
             content: [

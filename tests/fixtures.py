@@ -34,13 +34,10 @@ def create_plugin_repo(root: Path, *, valid: bool = True) -> Path:
   "name": "test",
   "version": "1.0.0",
   "description": "test manifest",
-  "author": "tests",
+  "author": { "name": "tests" },
   "license": "MIT",
   "repository": "https://example.invalid/test",
-  "keywords": ["test"],
-  "commands": [
-    {"name": "status", "description": "status", "command": "scripts/o2b", "args": ["status"]}
-  ]
+  "keywords": ["test"]
 }
 """,
             encoding="utf-8",

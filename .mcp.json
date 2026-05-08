@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "open-second-brain": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/o2b",
+      "args": ["mcp"]
+    }
+  }
+}

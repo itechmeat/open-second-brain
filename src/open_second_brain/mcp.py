@@ -22,14 +22,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, IO
 
-from open_second_brain.config import default_config_path, discover_config, redact_mapping
+from open_second_brain.config import (
+    default_config_path,
+    discover_config,
+    redact_mapping,
+    resolve_agent_name,
+    resolve_timezone,
+    resolve_vault,
+)
 from open_second_brain.doctor import doctor
 from open_second_brain.event_log import append_event, validate_event_time
 from open_second_brain.vault import list_vault_pages, parse_frontmatter, write_frontmatter
 
+from open_second_brain import __version__ as SERVER_VERSION
+
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "open-second-brain"
-SERVER_VERSION = "0.6.0"
 JSONRPC_VERSION = "2.0"
 
 # JSON-RPC 2.0 error codes used by the MCP server.
@@ -168,12 +176,7 @@ class MCPServer:
             "protocolVersion": negotiated,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-            "instructions": (
-                "Open Second Brain MCP server. Tools are deterministic wrappers around the o2b CLI. "
-                "Use second_brain_status before writes, vault_health to verify the vault, "
-                "second_brain_query to look up notes, second_brain_capture to add wiki pages, "
-                "and event_log_append for daily operational events."
-            ),
+            "instructions": _build_instructions(_resolve_default_agent(self)),
         }
 
     def _handle_tools_list(self) -> dict[str, Any]:
@@ -235,7 +238,11 @@ def _tool_error(message: str) -> dict[str, Any]:
 
 def _coerce_str(arguments: dict[str, Any], key: str, *, required: bool = True, default: str | None = None) -> str | None:
     value = arguments.get(key)
-    if value is None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        # Many MCP clients (LLMs in tool-use mode) emit empty strings for
+        # optional fields they want to skip, instead of omitting the key.
+        # Treat ``""`` / whitespace-only the same as a missing value so
+        # downstream validators don't reject what is logically "no value".
         if required:
             raise MCPError(INVALID_PARAMS, f"missing required argument: {key}")
         return default
@@ -354,15 +361,87 @@ def _tool_second_brain_capture(server: MCPServer, arguments: dict[str, Any]) -> 
     }
 
 
+# Strings the LLM is most likely to emit as a guess for the ``agent`` argument
+# when it doesn't actually know its identity. None of these are useful as a
+# real ``@<name>`` in Daily — they should fall back to the server-resolved
+# default (env or plugin config). Compared case-insensitively, after a
+# leading ``@`` is stripped.
+_PLACEHOLDER_AGENT_VALUES = frozenset({
+    "agent",
+    "assistant",
+    "ai",
+    "ai-assistant",
+    "bot",
+    "chatbot",
+    "claude",
+    "copilot",
+    "gemini",
+    "gpt",
+    "gpt-4",
+    "gpt-5",
+    "llm",
+    "model",
+    "openai",
+    "user",
+})
+
+
 def _resolve_default_agent(server: MCPServer) -> str:
-    env_value = os.environ.get("VAULT_AGENT_NAME")
-    if env_value:
-        return env_value
-    discovery = discover_config(server.config_path)
-    config_value = discovery.data.get("agent_name") or discovery.data.get("agentName")
-    if config_value:
-        return config_value
-    return "agent"
+    return resolve_agent_name(server.config_path)
+
+
+def _normalize_agent_argument(value: str | None) -> str | None:
+    """Sanitize an LLM-supplied ``agent`` argument.
+
+    Strips a leading ``@`` (so ``@hermes-vps-agent`` doesn't end up as
+    ``@@hermes-vps-agent`` once ``append_event`` re-prefixes ``@``).
+    Treats common LLM self-name guesses (``agent``, ``assistant``, ``claude``,
+    ``gpt``, ...) as "no value" so a hallucinated identity falls back to the
+    server-resolved default instead of being written verbatim into Daily.
+    Returns ``None`` for empty / placeholder inputs.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip().lstrip("@").strip()
+    if not cleaned or cleaned.lower() in _PLACEHOLDER_AGENT_VALUES:
+        return None
+    return cleaned
+
+
+def _build_instructions(default_agent: str) -> str:
+    return (
+        f"You are @{default_agent} on this Open Second Brain vault. "
+        f"Always log under this identity; do not invent or change the name.\n\n"
+        "When to call event_log_append:\n"
+        "  - immediately after producing a durable artifact, including:\n"
+        "    * code shipped, bug fixed, refactor merged\n"
+        "    * config / deployment / infrastructure change\n"
+        "    * instruction-file edit (CLAUDE.md, SOUL.md, plugin docs, "
+        "system prompts, similar)\n"
+        "    * content artifact created (post, draft, documentation, "
+        "marketing copy, release notes)\n"
+        "    * research, investigation, or analysis that produced a "
+        "concrete finding, design, or decision worth recalling later\n"
+        "    * discovery of an external fact (CLI behaviour change, "
+        "API quirk, undocumented edge case) that future sessions should "
+        "know\n"
+        "  - skip for: pure discussion or brainstorming without "
+        "conclusion, read-only queries, or planning that hasn't yet "
+        "produced an artifact\n\n"
+        "If unsure, ask: \"would future-me want to find this in the log "
+        "by searching for it later?\". If yes, log it.\n\n"
+        "How to format the `message` argument:\n"
+        "  - plain prose describing what was done / found / decided and "
+        "why it matters\n"
+        "  - DO NOT prepend `HH:MM —` or `@<name> —` to the message; "
+        "the server adds these automatically\n"
+        "  - terse, append-only, factual; never edit historical lines\n\n"
+        "Identity is resolved server-side. Do not pass the `agent` argument "
+        "unless deliberately logging on another agent's behalf.\n\n"
+        "Other tools: second_brain_status (config status), "
+        "vault_health (verify vault), second_brain_query (look up notes), "
+        "second_brain_capture (add wiki pages)."
+    )
 
 
 def _tool_event_log_append(server: MCPServer, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -375,8 +454,9 @@ def _tool_event_log_append(server: MCPServer, arguments: dict[str, Any]) -> dict
     if time is not None:
         validate_event_time(time)
 
-    effective_agent = agent or _resolve_default_agent(server)
-    path = append_event(server.vault, effective_agent, message, date=date, time=time)
+    effective_agent = _normalize_agent_argument(agent) or _resolve_default_agent(server)
+    tz = resolve_timezone(server.config_path)
+    path = append_event(server.vault, effective_agent, message, date=date, time=time, tz=tz)
 
     return {
         "path": _vault_relpath(path, server.vault),
@@ -585,10 +665,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, default=None, help="Repository root for plugin checks")
     args = parser.parse_args(argv)
 
-    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
     config = args.config or default_config_path()
+    vault = args.vault or resolve_vault(config)
+    if vault is None:
+        print(
+            "error: no vault configured. Pass --vault <path> explicitly, "
+            "set VAULT_DIR in the environment, or run "
+            "`o2b init --vault <path> ...` first to persist a default.",
+            file=sys.stderr,
+        )
+        return 1
     repo_root = args.repo
-    return run_cli_command(vault=vault, config_path=config, repo_root=repo_root)
+    return run_cli_command(vault=Path(vault), config_path=config, repo_root=repo_root)
 
 
 if __name__ == "__main__":

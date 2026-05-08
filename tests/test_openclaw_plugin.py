@@ -34,7 +34,9 @@ class OpenClawManifestValidityTests(unittest.TestCase):
         self.assertEqual(schema["type"], "object")
 
     def test_manifest_has_version(self):
-        self.assertEqual(self.manifest["version"], "0.6.0")
+        from open_second_brain import __version__
+
+        self.assertEqual(self.manifest["version"], __version__)
 
     def test_manifest_declares_tools(self):
         tools = self.manifest["contracts"]["tools"]
@@ -75,6 +77,21 @@ class OpenClawManifestValidityTests(unittest.TestCase):
     def test_manifest_mcp_enabled_default_false(self):
         mcp_prop = self.manifest["configSchema"]["properties"]["mcpEnabled"]
         self.assertFalse(mcp_prop.get("default", True))
+
+    def test_manifest_declares_timezone_field(self):
+        # OpenClaw's native plugin entry reads timezone from
+        # api.pluginConfig.timezone (set via openclaw config set), with
+        # fallback to VAULT_TIMEZONE env. The configSchema must declare
+        # the field as a string so OpenClaw accepts it as a settable
+        # value, and uiHints must label it so the field surfaces in the
+        # config UI alongside agentName / vault.
+        tz_prop = self.manifest["configSchema"]["properties"].get("timezone")
+        self.assertIsNotNone(tz_prop, "configSchema is missing timezone field")
+        self.assertEqual(tz_prop["type"], "string")
+        tz_hint = self.manifest["uiHints"].get("timezone")
+        self.assertIsNotNone(tz_hint, "uiHints is missing timezone entry")
+        self.assertIn("label", tz_hint)
+        self.assertIn("help", tz_hint)
 
 
 class OpenClawManifestDoctorTests(unittest.TestCase):
@@ -133,7 +150,9 @@ class OpenClawPackageJsonTests(unittest.TestCase):
         self.assertEqual(self.pkg["name"], "open-second-brain")
 
     def test_package_json_has_version(self):
-        self.assertEqual(self.pkg["version"], "0.6.0")
+        from open_second_brain import __version__
+
+        self.assertEqual(self.pkg["version"], __version__)
 
     def test_package_json_has_type_module(self):
         self.assertEqual(self.pkg["type"], "module")

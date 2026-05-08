@@ -19,10 +19,10 @@ OpenSecondBrain does not run a daemon, replace your vault, or write hidden backg
 
 ## Installation
 
-> **Agent-assisted install (recommended):** The easiest way to install this plugin is to send your agent the following prompt with a link to the installation guide:
+> **Agent-assisted install (recommended):** The easiest way to install this plugin is to send your agent the following prompt with a link to the installation guide. <ins>Replace `[your_agent_name, Hermes for example]` with the runtime you are installing into</ins> — for example `Hermes`, `Claude Code`, `Codex`, or `OpenClaw`. The agent uses that name to pick the correct branch in the install guide.
 >
 > ```
-> Install the open-second-brain plugin following the instructions at https://raw.githubusercontent.com/itechmeat/open-second-brain/main/install.md
+> Install the open-second-brain plugin for [your_agent_name, Hermes for example] following the instructions at https://raw.githubusercontent.com/itechmeat/open-second-brain/main/install.md
 > ```
 >
 > The guide at `install.md` contains exact commands for both Hermes and OpenClaw runtimes. Below are the same instructions for manual installation.
@@ -63,10 +63,10 @@ o2b doctor --vault /path/to/vault --repo .
 
 OpenClaw supports this project through the **Native plugin format**: a root `package.json` with `openclaw.extensions` pointing to a JS entry that registers tools natively inside OpenClaw's Node.js process. The JS entry spawns the Python CLI as a subprocess, so no MCP server is needed for basic operation.
 
-Install from Git:
+Install from Git (always installs the latest from `main`; do not append `@v...`):
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.6.0
+openclaw plugins install git:github.com/itechmeat/open-second-brain
 ```
 
 Or from a local checkout:

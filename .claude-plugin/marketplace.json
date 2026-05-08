@@ -1,0 +1,27 @@
+{
+  "name": "open-second-brain",
+  "owner": {
+    "name": "itechmeat",
+    "url": "https://github.com/itechmeat"
+  },
+  "metadata": {
+    "description": "Open Second Brain marketplace (single self-hosted plugin).",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "open-second-brain",
+      "source": "./",
+      "description": "Plugin-first second brain for AI agents and humans (Obsidian-compatible Markdown vaults).",
+      "category": "knowledge",
+      "tags": [
+        "second-brain",
+        "obsidian",
+        "agents",
+        "skills",
+        "event-log",
+        "mcp"
+      ]
+    }
+  ]
+}

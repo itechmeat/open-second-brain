@@ -85,6 +85,24 @@ class HandshakeTests(unittest.TestCase):
             self.assertIn("tools", result["capabilities"])
             self.assertEqual(result["protocolVersion"], PROTOCOL_VERSION)
 
+    def test_initialize_instructions_embed_resolved_agent_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
+            config = Path(tmp) / "config.yaml"
+            config.write_text("agent_name: hermes-vps-agent\n", encoding="utf-8")
+            prior_env = os.environ.pop("VAULT_AGENT_NAME", None)
+            try:
+                server = _make_server(vault, config=config)
+                response = _initialize(server)
+            finally:
+                if prior_env is not None:
+                    os.environ["VAULT_AGENT_NAME"] = prior_env
+            instructions = response["result"]["instructions"]
+            self.assertIn("@hermes-vps-agent", instructions)
+            self.assertIn("event_log_append", instructions)
+            self.assertIn("DO NOT", instructions)
+
     def test_initialize_negotiates_alternate_client_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             server = _make_server(Path(tmp))
@@ -252,6 +270,214 @@ class ToolCallTests(unittest.TestCase):
             self.assertEqual(structured["agent"], "mcp-test")
             daily = vault / "Daily" / "2026.05.06.md"
             self.assertIn("- 11:42 — @mcp-test — via mcp", daily.read_text(encoding="utf-8"))
+
+    def test_event_log_append_strips_leading_at_in_agent(self):
+        # LLMs frequently echo the @-prefixed identity from the prompt back as
+        # the `agent` argument. The server must strip the leading @ so the
+        # final entry doesn't double up to `@@name`.
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
+            server = _make_server(vault)
+            _initialize(server)
+
+            response = _call_tool(
+                server,
+                "event_log_append",
+                {
+                    "message": "with-at-prefix",
+                    "agent": "@hermes-vps-agent",
+                    "date": "2026.05.06",
+                    "time": "11:55",
+                },
+            )
+            self.assertFalse(response["result"]["isError"])
+            structured = response["result"]["structuredContent"]
+            self.assertEqual(structured["agent"], "hermes-vps-agent")
+            daily = vault / "Daily" / "2026.05.06.md"
+            text = daily.read_text(encoding="utf-8")
+            self.assertIn("- 11:55 — @hermes-vps-agent — with-at-prefix", text)
+            self.assertNotIn("@@", text)
+
+    def test_event_log_append_placeholder_agent_falls_back_to_default(self):
+        # When the LLM hallucinates a placeholder/self-name (`agent`,
+        # `assistant`, `claude`, ...) into the call, the server must treat it
+        # as "no value" and fall back to the resolved default identity instead
+        # of writing the guess verbatim into Daily.
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
+            config = Path(tmp) / "config.yaml"
+            config.write_text("agent_name: hermes-vps-agent\n", encoding="utf-8")
+            server = _make_server(vault, config=config)
+            _initialize(server)
+
+            prior_env = os.environ.pop("VAULT_AGENT_NAME", None)
+            try:
+                cases = (
+                    "agent", "@agent", "AGENT", "  @agent  ",
+                    "assistant", "@assistant", "Assistant",
+                    "claude", "GPT", "gpt-5", "ai", "Bot", "model",
+                )
+                for trash in cases:
+                    response = _call_tool(
+                        server,
+                        "event_log_append",
+                        {
+                            "message": f"trash:{trash}",
+                            "agent": trash,
+                            "date": "2026.05.06",
+                            "time": "12:30",
+                        },
+                    )
+                    self.assertFalse(response["result"]["isError"])
+                    self.assertEqual(
+                        response["result"]["structuredContent"]["agent"],
+                        "hermes-vps-agent",
+                        msg=f"placeholder {trash!r} should fall back to default",
+                    )
+            finally:
+                if prior_env is not None:
+                    os.environ["VAULT_AGENT_NAME"] = prior_env
+
+    def test_event_log_append_empty_optional_strings_treated_as_missing(self):
+        # LLMs in tool-use mode often pass empty strings for optional fields
+        # they want to skip (e.g. `time=""`, `date=""`) instead of omitting
+        # them. The server must treat empty-string optional args the same as
+        # omitted, not pass `""` through to validators.
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
+            server = _make_server(vault)
+            _initialize(server)
+
+            response = _call_tool(
+                server,
+                "event_log_append",
+                {
+                    "message": "with-empty-optionals",
+                    "agent": "",
+                    "date": "",
+                    "time": "",
+                },
+            )
+            self.assertFalse(
+                response["result"]["isError"],
+                msg=f"empty optional strings should not error: {response}",
+            )
+            structured = response["result"]["structuredContent"]
+            # date/time were empty → server filled in current values, not ""
+            self.assertIsNone(structured["date"])
+            self.assertIsNone(structured["time"])
+
+    def test_event_log_append_uses_configured_timezone(self):
+        # The plugin config stores an IANA timezone alongside agent_name. When
+        # set, event_log_append must stamp Daily entries in that timezone, so
+        # that user-local clock time appears regardless of where the host is.
+        # Cross-checked with `datetime.now(ZoneInfo(...))` to avoid asserting
+        # against a wall-clock value that flips between test runs around the
+        # minute boundary.
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
+            config = Path(tmp) / "config.yaml"
+            config.write_text(
+                'agent_name: "hermes-vps-agent"\ntimezone: "Europe/Belgrade"\n',
+                encoding="utf-8",
+            )
+            server = _make_server(vault, config=config)
+            _initialize(server)
+
+            prior = {k: os.environ.pop(k, None) for k in ("VAULT_AGENT_NAME", "VAULT_TIMEZONE")}
+            try:
+                # Capture the local-tz wall clock immediately *before* the
+                # tool runs, so the assertion's expected date/hour are
+                # derived from an instant strictly earlier than the one
+                # the tool stamps. Capturing it after introduces a
+                # midnight-rollover race (tool stamps day N, assertion
+                # computes day N+1, mismatched filename).
+                expected_at_call = datetime.now(ZoneInfo("Europe/Belgrade"))
+                response = _call_tool(
+                    server,
+                    "event_log_append",
+                    {"message": "tz-test"},
+                )
+            finally:
+                for k, v in prior.items():
+                    if v is not None:
+                        os.environ[k] = v
+
+            self.assertFalse(response["result"]["isError"], response)
+            expected_file = vault / "Daily" / f"{expected_at_call.strftime('%Y.%m.%d')}.md"
+            self.assertTrue(expected_file.is_file(), f"missing: {expected_file}")
+            text = expected_file.read_text(encoding="utf-8")
+            self.assertIn(f"— @hermes-vps-agent — tz-test", text)
+            self.assertIn(f"- {expected_at_call.strftime('%H')}", text)
+
+    def test_event_log_append_uses_vault_timezone_env(self):
+        # Env var takes precedence over config. Useful for runtime overrides
+        # (Hermes mcp_servers env block) without touching the plugin config.
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
+            config = Path(tmp) / "config.yaml"
+            # Config says one zone; env says another — env must win.
+            config.write_text('timezone: "UTC"\n', encoding="utf-8")
+            server = _make_server(vault, config=config)
+            _initialize(server)
+
+            prior = os.environ.get("VAULT_TIMEZONE")
+            os.environ["VAULT_TIMEZONE"] = "Europe/Belgrade"
+            try:
+                # Capture before the tool call so a midnight rollover
+                # between the call and the assertion can't mismatch
+                # the expected filename.
+                expected_at_call = datetime.now(ZoneInfo("Europe/Belgrade"))
+                response = _call_tool(
+                    server,
+                    "event_log_append",
+                    {"message": "env-tz-test", "agent": "tester"},
+                )
+            finally:
+                if prior is None:
+                    os.environ.pop("VAULT_TIMEZONE", None)
+                else:
+                    os.environ["VAULT_TIMEZONE"] = prior
+
+            self.assertFalse(response["result"]["isError"], response)
+            expected_file = vault / "Daily" / f"{expected_at_call.strftime('%Y.%m.%d')}.md"
+            self.assertTrue(expected_file.is_file())
+
+    def test_event_log_append_invalid_config_timezone_falls_back_silently(self):
+        # A typo in the config timezone must NOT break logging — we silently
+        # fall back to system-local time. The entry still lands; only its
+        # stamp is in server time instead of user-intended time.
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
+            config = Path(tmp) / "config.yaml"
+            config.write_text('timezone: "Not/A/Real/Zone"\n', encoding="utf-8")
+            server = _make_server(vault, config=config)
+            _initialize(server)
+
+            prior = os.environ.pop("VAULT_TIMEZONE", None)
+            try:
+                response = _call_tool(
+                    server,
+                    "event_log_append",
+                    {"message": "fallback", "agent": "tester"},
+                )
+            finally:
+                if prior is not None:
+                    os.environ["VAULT_TIMEZONE"] = prior
+
+            self.assertFalse(response["result"]["isError"], response)
 
     def test_event_log_append_uses_config_agent_name_default(self):
         with tempfile.TemporaryDirectory() as tmp:

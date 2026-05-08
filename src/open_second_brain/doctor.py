@@ -99,30 +99,51 @@ def check_claude_manifest(path: Path) -> CheckResult:
     result, data = _load_json_manifest(path, "claude_manifest")
     if data is None:
         return result
+    # Schema as accepted by Claude Code 2.x:
+    #   - ``name`` / ``version`` / ``description``: required strings.
+    #   - ``author``: optional, **object** (``{"name": "..."}``) per the
+    #     current docs. The legacy string form was rejected by
+    #     Claude 2.1.x with ``author: Invalid input: expected object``.
+    #   - ``license`` / ``repository`` / ``homepage`` / ``keywords``:
+    #     optional metadata.
+    #   - ``commands``: legacy in-manifest array form is **no longer
+    #     accepted** by Claude (it now rejects the embedded slash-command
+    #     definitions that this field used to carry). Slash commands are
+    #     authored as Markdown files under ``commands/`` at plugin root
+    #     instead. We don't lint that directory here — its presence is
+    #     validated by Claude itself on install.
     required = {
         "name": str,
         "version": str,
         "description": str,
-        "author": str,
-        "license": str,
-        "repository": str,
-        "keywords": list,
-        "commands": list,
     }
     problems = _validate_required_fields(data, required)
-    commands = data.get("commands")
-    if isinstance(commands, list):
-        for index, command in enumerate(commands):
-            if not isinstance(command, dict):
-                problems.append(f"commands[{index}] must be object")
-                continue
-            for field in ("name", "description", "command"):
-                value = command.get(field)
-                if not isinstance(value, str) or not value.strip():
-                    problems.append(f"commands[{index}].{field} must be non-empty string")
-            args = command.get("args")
-            if args is not None and not (isinstance(args, list) and all(isinstance(arg, str) for arg in args)):
-                problems.append(f"commands[{index}].args must be list of strings")
+    optional_strings = ("license", "repository", "homepage")
+    for field in optional_strings:
+        if field in data and not isinstance(data[field], str):
+            problems.append(f"{field} must be string")
+    if "keywords" in data and not (
+        isinstance(data["keywords"], list)
+        and all(isinstance(kw, str) for kw in data["keywords"])
+    ):
+        problems.append("keywords must be list of strings")
+    if "author" in data:
+        author = data["author"]
+        author_name = author.get("name") if isinstance(author, dict) else None
+        if (
+            not isinstance(author, dict)
+            or not isinstance(author_name, str)
+            or not author_name.strip()
+        ):
+            problems.append(
+                "author must be an object with a non-empty 'name' field "
+                "(legacy string form is rejected by Claude 2.x)"
+            )
+    if "commands" in data:
+        problems.append(
+            "embedded 'commands' array is deprecated — author slash commands "
+            "as Markdown files under commands/ at plugin root instead"
+        )
     if problems:
         return CheckResult("claude_manifest", False, f"schema invalid: {path} ({'; '.join(problems)})")
     return CheckResult("claude_manifest", True, f"valid Claude manifest: {path}")

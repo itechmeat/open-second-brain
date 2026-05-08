@@ -38,23 +38,37 @@ function redactText(text) {
 
 /**
  * Get current date in YYYY.MM.DD format.
+ *
+ * When ``tz`` is an IANA timezone name, the date is computed in that
+ * zone rather than the host's local clock. Mirrors the Python
+ * ``current_date(tz)`` helper. Around midnight this matters: an event
+ * taken at 23:30 host-local UTC may be 01:30 the next day in the
+ * user's local timezone, so the entry must land in the next day's
+ * Daily file.
  */
-function currentDate() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}.${m}.${d}`;
+function currentDate(tz) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz || undefined,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((p) => p.type === type).value;
+  return `${get("year")}.${get("month")}.${get("day")}`;
 }
 
 /**
- * Get current time in HH:MM 24-hour format.
+ * Get current time in HH:MM 24-hour format, optionally in ``tz``.
  */
-function currentTime() {
-  const now = new Date();
-  const h = String(now.getHours()).padStart(2, "0");
-  const m = String(now.getMinutes()).padStart(2, "0");
-  return `${h}:${m}`;
+function currentTime(tz) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz || undefined,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((p) => p.type === type).value;
+  return `${get("hour")}:${get("minute")}`;
 }
 
 /**
@@ -135,11 +149,13 @@ function insertEventEntry(content, entry) {
  * @param {string} message - Event message text.
  * @param {string|null} date - Optional date in YYYY.MM.DD format.
  * @param {string|null} time - Optional time in HH:MM format.
+ * @param {string|null} tz - Optional IANA timezone (e.g. "Europe/Belgrade")
+ *   used when ``date`` / ``time`` are not provided. Default: host local.
  * @returns {Promise<{path: string, relativePath: string, agent: string, date: string|null, time: string|null}>}
  */
-export async function appendEvent(vaultPath, agent, message, date = null, time = null) {
-  const eventDate = date || currentDate();
-  const eventTime = validateEventTime(time || currentTime());
+export async function appendEvent(vaultPath, agent, message, date = null, time = null, tz = null) {
+  const eventDate = date || currentDate(tz);
+  const eventTime = validateEventTime(time || currentTime(tz));
 
   const dailyDir = join(vaultPath, "Daily");
   const filePath = join(dailyDir, `${eventDate}.md`);

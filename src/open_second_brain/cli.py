@@ -8,7 +8,14 @@ from pathlib import Path
 
 import json as _json
 
-from open_second_brain.config import default_config_path, discover_config, redact_mapping
+from open_second_brain.config import (
+    default_config_path,
+    discover_config,
+    redact_mapping,
+    resolve_timezone,
+    resolve_vault,
+    set_config_value,
+)
 from open_second_brain.doctor import doctor
 from open_second_brain.event_log import append_event
 from open_second_brain.init import bootstrap_vault
@@ -43,6 +50,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Agent identity used in Daily event log entries (e.g. 'openclaw-main'). "
             "When set, the chosen name is written into AI Wiki/identity/agents.md "
             "and replaces the @agent placeholder in subsequent event_log_append calls."
+        ),
+    )
+    init_cmd.add_argument(
+        "--timezone",
+        dest="timezone",
+        default=None,
+        help=(
+            "IANA timezone name (e.g. 'Europe/Belgrade', 'America/New_York', 'UTC') "
+            "used to stamp Daily event log entries in the user's local time. "
+            "Persisted to the plugin config so every runtime stamps consistently. "
+            "Validated via stdlib zoneinfo; invalid names are rejected immediately. "
+            "If omitted, entries are stamped in the host's system-local time."
         ),
     )
     init_cmd.add_argument("--force", action="store_true", help="Overwrite existing files")
@@ -144,6 +163,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _require_vault(args: argparse.Namespace, config_path: Path | None) -> Path:
+    """Resolve the vault path or exit with a clear error.
+
+    Resolution order: ``--vault`` CLI arg → ``VAULT_DIR`` env →
+    persisted plugin config (`vault` field, written by ``o2b init``).
+    If none of those is configured, the command aborts with a
+    user-readable error rather than silently falling back to the
+    current working directory — that fallback used to send write-mode
+    invocations like ``vault-log "..."`` into ``./Daily/...`` instead
+    of the user's actual vault, which is a quiet way to lose data.
+    """
+    vault = args.vault or resolve_vault(config_path)
+    if vault is None:
+        print(
+            "error: no vault configured. Pass --vault <path> explicitly, "
+            "set VAULT_DIR in the environment, or run "
+            "`o2b init --vault <path> ...` first to persist a default.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return Path(vault)
+
+
 def command_status(args: argparse.Namespace) -> int:
     result = discover_config(args.config)
     if getattr(args, "json", False):
@@ -170,6 +212,20 @@ def command_status(args: argparse.Namespace) -> int:
 def command_init(args: argparse.Namespace) -> int:
     vault = args.vault
     agent_name = getattr(args, "agent_name", None)
+    timezone_name = getattr(args, "timezone", None)
+
+    if timezone_name:
+        try:
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+            ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            print(
+                f"error: --timezone {timezone_name!r} is not a valid IANA name "
+                f"({exc}). Examples: Europe/Belgrade, America/New_York, UTC.",
+                file=sys.stderr,
+            )
+            return 1
+
     try:
         created = bootstrap_vault(
             vault,
@@ -180,21 +236,29 @@ def command_init(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"error: failed to initialize vault: {exc}", file=sys.stderr)
         return 1
-    if not created:
+    if created:
+        print(f"initialized vault: {vault}")
+        for path in created:
+            print(f"  created: {path}")
+    else:
         print(f"vault already initialized: {vault}")
         print("use --force to overwrite existing files")
-        return 0
-    print(f"initialized vault: {vault}")
-    for path in created:
-        print(f"  created: {path}")
+    config_path = set_config_value("vault", str(Path(vault).expanduser().resolve()))
+    print(f"vault path persisted to: {config_path}")
     if agent_name:
         print(f"agent name registered: {agent_name}")
+        set_config_value("agent_name", agent_name)
+        print(f"agent name persisted to: {config_path}")
+    if timezone_name:
+        print(f"timezone registered: {timezone_name}")
+        set_config_value("timezone", timezone_name)
+        print(f"timezone persisted to: {config_path}")
     return 0
 
 
 def command_doctor(args: argparse.Namespace) -> int:
-    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
     config = args.config or default_config_path()
+    vault = _require_vault(args, config)
     repo_root: Path | None = args.repo
 
     try:
@@ -212,13 +276,18 @@ def command_doctor(args: argparse.Namespace) -> int:
 
 
 def command_append_event(args: argparse.Namespace) -> int:
-    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
+    vault = _require_vault(args, default_config_path())
+    tz = resolve_timezone()
     try:
-        path = append_event(vault, args.agent, args.message, date=args.date, time=args.time)
+        path = append_event(vault, args.agent, args.message, date=args.date, time=args.time, tz=tz)
     except OSError as exc:
         print(f"error: failed to append event: {exc}", file=sys.stderr)
         return 1
-    print(f"appended: {path}")
+    # Always print the absolute path: a relative ``Daily/...`` line was
+    # the visual disguise that hid an earlier silent-cwd-fallback bug,
+    # where a user thought their entry landed in their vault but it
+    # actually landed in $(pwd)/Daily/.
+    print(f"appended: {Path(path).resolve()}")
     return 0
 
 
@@ -240,7 +309,7 @@ def command_export_config(args: argparse.Namespace) -> int:
 
 
 def command_index(args: argparse.Namespace) -> int:
-    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
+    vault = _require_vault(args, default_config_path())
     try:
         pages = list_vault_pages(vault)
     except OSError as exc:
@@ -274,8 +343,8 @@ def command_index(args: argparse.Namespace) -> int:
 
 
 def command_mcp(args: argparse.Namespace) -> int:
-    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
     config = args.config or default_config_path()
+    vault = _require_vault(args, config)
     repo_root: Path | None = args.repo
     try:
         return run_mcp_server(vault=vault, config_path=config, repo_root=repo_root)
@@ -312,8 +381,8 @@ def command_install_cli(args: argparse.Namespace) -> int:
 
 def command_tool_call(args: argparse.Namespace) -> int:
     """Bridge: invoke an MCP tool handler from the CLI and print JSON to stdout."""
-    vault = args.vault or Path(os.environ.get("VAULT_DIR", "."))
     config = default_config_path()
+    vault = _require_vault(args, config)
     repo_root: Path | None = None
 
     server = MCPServer(vault=vault, config_path=config, repo_root=repo_root)

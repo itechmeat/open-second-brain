@@ -4,7 +4,7 @@ import fcntl
 import os
 import re
 import tempfile
-from datetime import datetime
+from datetime import datetime, tzinfo
 from pathlib import Path
 
 SECRET_ASSIGNMENT_RE = re.compile(
@@ -19,12 +19,20 @@ def redact_text(text: str) -> str:
     return SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", text)
 
 
-def current_date() -> str:
-    return datetime.now().strftime("%Y.%m.%d")
+def current_date(tz: tzinfo | None = None) -> str:
+    """Return the current date in ``YYYY.MM.DD``.
+
+    When ``tz`` is provided, the date is computed in that timezone — this
+    matters around midnight: an event taken at 23:30 server-local UTC may
+    be 01:30 the **next day** in the user's local timezone, so the entry
+    must land in the next day's Daily file.
+    """
+    return datetime.now(tz).strftime("%Y.%m.%d")
 
 
-def current_time() -> str:
-    return datetime.now().strftime("%H:%M")
+def current_time(tz: tzinfo | None = None) -> str:
+    """Return the current time as ``HH:MM`` in ``tz`` (or server local)."""
+    return datetime.now(tz).strftime("%H:%M")
 
 
 def daily_note_path(vault_dir: Path, date: str) -> Path:
@@ -53,9 +61,10 @@ def append_event(
     *,
     date: str | None = None,
     time: str | None = None,
+    tz: tzinfo | None = None,
 ) -> Path:
-    event_date = date or current_date()
-    event_time = validate_event_time(time or current_time())
+    event_date = date or current_date(tz)
+    event_time = validate_event_time(time or current_time(tz))
     path = daily_note_path(vault_dir, event_date)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(f".{path.name}.lock")

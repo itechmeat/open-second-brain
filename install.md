@@ -1,9 +1,12 @@
 # open-second-brain — Agent Installation Guide
 
-> **Version 0.6.0**
 > Repository: https://github.com/itechmeat/open-second-brain
 
-This guide is written for an **AI agent**, not a human. It contains the exact commands and decision logic needed to install and configure the **open-second-brain** plugin autonomously. Follow exactly one of the branches below based on the target runtime (Hermes, OpenClaw, Codex, or Claude). Complete every step in the chosen branch.
+This guide is written for an **AI agent**, not a human. It contains the exact commands and decision logic needed to install and configure the **open-second-brain** plugin autonomously. Follow exactly one of the branches below based on the target runtime: **A — Hermes**, **B — OpenClaw**, **C — Codex**, **D — Claude Code**, or **E — generic adapter** (any other runtime not covered by A–D). Complete every step in the chosen branch.
+
+**Always install the latest version.** Every install command in this guide pulls the current state of the `main` branch — there are no version pins. Do **NOT** add `@vX.Y.Z`, `@<tag>`, or any other version specifier to the install commands below, even if you happen to know the most recent release number; the project ships fixes between releases and the canonical install always tracks `main`. After install, the agent's effective version is reported by `o2b status` / `o2b doctor` and by the runtime's plugin listing — read it from there if you need it, do not hard-code it anywhere.
+
+**`o2b init` is idempotent.** Re-running it on an already-initialized vault only fills in missing scaffolding (`AI Wiki/identity/agents.md`, etc.) and never rewrites the user's notes or templates. Re-running with `--agent-name <name>` is the supported way to switch identities: it rewrites the entry in `AI Wiki/identity/agents.md` and updates the persisted `agent_name` in the plugin config (`~/.config/open-second-brain/config.yaml`). Use `--force` only when the user explicitly asks for a reset of the scaffolding files.
 
 If at any point you are missing information — for example, the vault path is unknown, a required tool is not installed, or the runtime version is unclear — stop and ask the user for clarification. Offer concrete options where possible (e.g. suggest a default vault path, list supported Python versions, or propose an alternative runtime).
 
@@ -11,7 +14,77 @@ If at any point you are missing information — for example, the vault path is u
 
 ## Branch A — Hermes
 
-### 1. Install the plugin
+### 1. Collect installation parameters (vault path + agent name + timezone)
+
+Collect all three values before running any commands — step 4
+(`o2b init`) and step 5 (MCP `env`) both depend on them.
+
+**Vault path.** Locate (or have the user create) the directory that
+will hold the Obsidian-compatible Markdown vault. Do **not** hard-code
+a path; vault locations vary per user and per OS. Discover candidates
+on the target machine in this order:
+
+  1. Look for an existing Obsidian vault: any directory containing a
+     `.obsidian/` subdirectory is a vault. Common roots to scan:
+     `~/`, `~/Documents/`, `~/Sync/`, `~/Dropbox/`,
+     `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/`
+     (macOS iCloud), or — on this server — wherever Syncthing has
+     mounted a shared `vault` folder.
+  2. If multiple candidates exist, list them and ask the user to pick
+     one.
+  3. If none found, ask the user for a path (or for permission to
+     create a new vault directory at a sensible default like
+     `~/vault/`).
+
+Confirm the chosen path with the user before passing it to `o2b init`:
+show them the absolute path you resolved and wait for explicit
+agreement. The plugin will refuse to write to the wrong place — but
+catching a misclick at this step is much cheaper than after entries
+have started accumulating.
+
+**Agent name.** Ask the user to choose the agent name that will appear
+as the `@agent-name` prefix in Daily event log entries. Offer these
+defaults plus a custom value:
+
+- `hermes-main`
+- `hermes-vps-agent`
+- `hermes-server`
+- `second-brain-agent`
+- `<hostname>-hermes`
+
+Resolve `<hostname>` from the `hostname` command on the target system
+before showing the list (e.g. `vps-techmeat-hermes`).
+
+**Timezone.** Ask the user for their local timezone. Accept a free-form
+answer (city name, country, "my time", etc.) and translate it to a
+canonical IANA name yourself before passing it to `o2b init` — the
+plugin only accepts IANA. Examples of the translation you should do:
+
+- `Belgrade` / `Сербия` → `Europe/Belgrade`
+- `New York` / `EST` / `eastern` → `America/New_York`
+- `UTC` / `none` / `server time` → `UTC`
+- `Tokyo` / `JST` → `Asia/Tokyo`
+
+If the answer is ambiguous, ask one clarifying question (e.g. "Belgrade
+or somewhere else in Central Europe?"). If validation fails on the
+chosen name, ask again — do not silently fall back.
+
+Explain that the daily entry format is
+
+```
+- HH:MM — @agent-name — event message
+```
+
+…and that the `HH:MM` will be stamped in the timezone you collect here,
+not in the host's clock. Do not continue until all three values
+(vault path, agent name, timezone) are known. The vault path goes into
+`o2b init --vault` (step 4) and the MCP entry `args` (step 5). The
+agent name goes into `o2b init --agent-name` (step 4) **and** the MCP
+server `env.VAULT_AGENT_NAME` block (step 5) — the two must match.
+The timezone goes into `o2b init --timezone` (step 4) and is persisted
+to the plugin config; the MCP server reads it from there.
+
+### 2. Install the plugin
 
 ```bash
 hermes plugins install itechmeat/open-second-brain --enable
@@ -29,7 +102,7 @@ After install, restart the gateway:
 hermes gateway restart
 ```
 
-### 2. Publish CLI commands to PATH
+### 3. Publish CLI commands to PATH
 
 `hermes plugins install` clones the repository but does not pip-install the package, so the `o2b` and `vault-log` commands are not on PATH yet. Run this step to create symlinks:
 
@@ -41,52 +114,69 @@ This creates symlinks in `~/.local/bin` pointing to `scripts/o2b` and `scripts/v
 
 After this step, the bare commands `o2b` and `vault-log` will be available on PATH.
 
-### 3. Choose Daily log agent name
-
-Ask the user to choose the agent name used in Daily event log entries.
-Offer these defaults plus a custom value:
-
-- `hermes-main`
-- `hermes-vps-agent`
-- `hermes-server`
-- `second-brain-agent`
-- `<hostname>-hermes`
-
-Resolve `<hostname>` from `hostname` on the target system before showing the
-list (e.g. `vps-techmeat-hermes`).
-
-Explain that this name appears in `Daily/*.md` as
-
-```
-- HH:MM — @agent-name — event message
-```
-
-Do not continue until the value is known. Pass it as `--agent-name` to
-`o2b init` in the next step.
-
 ### 4. Initialize the vault
 
-Replace `/path/to/vault` and `<chosen-agent-name>` with the actual values.
+Replace `/path/to/vault`, `<chosen-agent-name>`, and `<chosen-timezone>`
+with the values collected in step 1.
 
 ```bash
-o2b init --vault /path/to/vault --name "My Second Brain" --agent-name "<chosen-agent-name>"
+o2b init --vault /path/to/vault --name "My Second Brain" \
+    --agent-name "<chosen-agent-name>" \
+    --timezone "<chosen-timezone>"
 ```
 
-`--agent-name` writes the chosen name into `AI Wiki/identity/agents.md` and
-removes the template placeholder.
+`--agent-name` writes the chosen name into `AI Wiki/identity/agents.md`
+and persists `agent_name` into the plugin config
+(`~/.config/open-second-brain/config.yaml`). `--timezone` validates the
+IANA name via stdlib `zoneinfo` and persists it to the same config; from
+that moment on, every `event_log_append` call stamps Daily entries in
+that timezone regardless of the host's clock.
 
 ### 5. Register the MCP server
 
+**Recommended path — edit `~/.hermes/config.yaml` directly.** Add the
+following entry under `mcp_servers:` (create the section if it does not
+exist), then restart the gateway. Substitute `/path/to/vault` and
+`<chosen-agent-name>` with the real values you collected in step 3 and
+will use again in step 4.
+
+```yaml
+mcp_servers:
+  open-second-brain:
+    command: o2b
+    args: [mcp, --vault, /path/to/vault]
+    env:
+      VAULT_AGENT_NAME: <chosen-agent-name>
+    enabled: true
+```
+
 ```bash
-hermes mcp add open-second-brain --command o2b --args mcp --vault /path/to/vault
 hermes gateway restart
 ```
 
-Set the agent name in the environment passed to the MCP server so
-`event_log_append` can default to it when no explicit `agent` argument is
-given. The simplest way is to add `VAULT_AGENT_NAME=<chosen-agent-name>` to
-the gateway environment (or to the MCP server entry in
-`~/.hermes/config.yaml`).
+The `env.VAULT_AGENT_NAME` value is what `event_log_append` falls back to
+when the LLM omits the explicit `agent` argument. **It must be set in
+this block** — without it, Daily entries will be written under the
+literal `@agent` placeholder (or an unrelated value inherited from the
+gateway's own environment), and the daily-identity check in step 6 will
+fail.
+
+**Alternative — `hermes mcp add` (CLI).** On older Hermes builds the
+following one-liner is equivalent and may work:
+
+```bash
+hermes mcp add open-second-brain \
+    --command o2b --args mcp --vault /path/to/vault \
+    --env VAULT_AGENT_NAME=<chosen-agent-name>
+hermes gateway restart
+```
+
+On the current Hermes release argparse stops collecting `--args [...]` as
+soon as it sees a token starting with `--`, so `--vault /path/to/vault`
+is rejected as an unknown top-level flag and the command fails with
+`unrecognized arguments: --vault ...`. Use the YAML path above if that
+happens. Do **not** also pass `--vault` as a top-level CLI flag — that
+will not be forwarded to the `o2b mcp` subprocess.
 
 ### 6. Verify the installation
 
@@ -131,12 +221,76 @@ The vault and its Markdown files are never deleted by the uninstall process.
 
 ## Branch B — OpenClaw
 
-### 1. Install the plugin
+### 1. Collect installation parameters (vault path + agent name + timezone)
 
-From Git (pin to a version tag):
+Collect all three values before running any commands — step 4
+(`o2b init`) and step 5 (OpenClaw config) both depend on them.
+
+**Vault path.** Locate (or have the user create) the directory that
+will hold the Obsidian-compatible Markdown vault. Do **not** hard-code
+a path; vault locations vary per user and per OS. Discover candidates
+on the target machine in this order:
+
+  1. Look for an existing Obsidian vault: any directory containing a
+     `.obsidian/` subdirectory is a vault. Common roots to scan:
+     `~/`, `~/Documents/`, `~/Sync/`, `~/Dropbox/`,
+     `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/`
+     (macOS iCloud), or any Syncthing-mounted shared `vault` folder.
+  2. If multiple candidates exist, list them and ask the user to pick
+     one.
+  3. If none found, ask the user for a path (or for permission to
+     create a new vault directory at a sensible default like
+     `~/vault/`).
+
+Confirm the chosen path with the user (show them the absolute path you
+resolved) before passing it to `o2b init` and `openclaw config set`.
+
+**Agent name.** Ask the user to choose the agent name that will appear
+as the `@agent-name` prefix in Daily event log entries. Offer these
+defaults plus a custom value:
+
+- `openclaw-main`
+- `openclaw-server`
+- `server-agent`
+- `second-brain-agent`
+- `<hostname>-openclaw`
+
+Resolve `<hostname>` from the `hostname` command on the target system
+before showing the list (e.g. `vps-techmeat-openclaw`).
+
+**Timezone.** Ask the user for their local timezone. Accept a free-form
+answer (city name, country, "my time", etc.) and translate it to a
+canonical IANA name yourself before passing it to `o2b init` — the
+plugin only accepts IANA. Examples: `Belgrade` → `Europe/Belgrade`,
+`New York` / `EST` → `America/New_York`, `UTC` / `none` → `UTC`,
+`Tokyo` → `Asia/Tokyo`. If the answer is ambiguous, ask one clarifying
+question. If validation fails on the chosen name, ask again — do not
+silently fall back.
+
+Explain that the daily entry format is
+
+```
+- HH:MM — @agent-name — event message
+```
+
+…and that the `HH:MM` will be stamped in the timezone you collect here,
+not in the host's clock. Do not continue until all three values
+(vault path, agent name, timezone) are known. On OpenClaw, the native
+JS plugin entry reads its config exclusively from OpenClaw's own
+per-plugin config store (`api.pluginConfig`, populated by
+`openclaw config set`), **not** from
+`~/.config/open-second-brain/config.yaml`. So vault path, agent name,
+and timezone must all be set via `openclaw config set` in step 5; the
+`o2b init` invocation in step 4 still runs (to scaffold the vault) but
+the values it persists into the Python-side config there are read only
+by the optional `o2b mcp` server, not by the OpenClaw plugin runtime.
+
+### 2. Install the plugin
+
+From Git (always installs the latest from `main`; do not append `@v...`):
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.6.0
+openclaw plugins install git:github.com/itechmeat/open-second-brain
 ```
 
 Or from a local checkout:
@@ -151,7 +305,7 @@ After install, restart the gateway:
 openclaw gateway restart
 ```
 
-### 2. Publish CLI commands to PATH
+### 3. Publish CLI commands to PATH
 
 The `o2b` and `vault-log` commands are not on PATH after OpenClaw plugin
 install. Run this step to create symlinks:
@@ -163,52 +317,39 @@ install. Run this step to create symlinks:
 This creates symlinks in `~/.local/bin`. After this, bare `o2b` and
 `vault-log` work on PATH.
 
-### 3. Choose Daily log agent name
-
-Ask the user to choose the agent name used in Daily event log entries.
-Offer these defaults plus a custom value:
-
-- `openclaw-main`
-- `openclaw-server`
-- `server-agent`
-- `second-brain-agent`
-- `<hostname>-openclaw`
-
-Resolve `<hostname>` from `hostname` on the target system before showing the
-list (e.g. `vps-techmeat-openclaw`).
-
-Explain that this name appears in `Daily/*.md` as
-
-```
-- HH:MM — @agent-name — event message
-```
-
-Do not continue until the value is known. The chosen name is stored in the
-plugin config in step 5 as `agentName` and is written into
-`AI Wiki/identity/agents.md` by `o2b init` in step 4.
-
 ### 4. Initialize the vault
 
-Replace `/path/to/vault` and `<chosen-agent-name>` with the actual values.
+Replace `/path/to/vault`, `<chosen-agent-name>`, and `<chosen-timezone>`
+with the values collected in step 1.
 
 ```bash
-o2b init --vault /path/to/vault --name "My Second Brain" --agent-name "<chosen-agent-name>"
+o2b init --vault /path/to/vault --name "My Second Brain" \
+    --agent-name "<chosen-agent-name>" \
+    --timezone "<chosen-timezone>"
 ```
 
-### 5. Configure the vault path and agent name
+`--agent-name` writes the chosen name into `AI Wiki/identity/agents.md`
+and persists `agent_name` into the plugin config
+(`~/.config/open-second-brain/config.yaml`). `--timezone` validates the
+IANA name via stdlib `zoneinfo` and persists it to the same config; from
+that moment on, every Daily entry is stamped in that timezone regardless
+of the host's clock.
 
-Tools are registered natively by the JS plugin entry — no MCP registration
-is needed. Set the vault path, instance name, and agent name in the
-OpenClaw plugin config:
+### 5. Configure the vault path, agent name, and timezone
+
+Tools are registered natively by the JS plugin entry — no MCP
+registration is needed. Set the vault path, instance name, agent name,
+and timezone in the OpenClaw plugin config:
 
 ```bash
 openclaw config set plugins.entries.open-second-brain.config.vault '"/path/to/vault"'
 openclaw config set plugins.entries.open-second-brain.config.instanceName '"My Second Brain"'
 openclaw config set plugins.entries.open-second-brain.config.agentName '"<chosen-agent-name>"'
+openclaw config set plugins.entries.open-second-brain.config.timezone '"<chosen-timezone>"'
 ```
 
-The resulting plugin entry must contain `agentName` as a separate field
-alongside `instanceName` (do not merge the two):
+The resulting plugin entry must contain `agentName` and `timezone` as
+separate fields alongside `instanceName` (do not merge them):
 
 ```json
 {
@@ -217,10 +358,17 @@ alongside `instanceName` (do not merge the two):
     "vault": "/path/to/vault",
     "instanceName": "My Second Brain",
     "agentName": "<chosen-agent-name>",
+    "timezone": "<chosen-timezone>",
     "mcpEnabled": false
   }
 }
 ```
+
+`agentName` and `timezone` are read by the native JS plugin from
+`api.pluginConfig` on every `event_log_append` call (with
+`VAULT_AGENT_NAME` / `VAULT_TIMEZONE` env vars as fallbacks). Without
+`timezone` set here, Daily entries fall back to the host's local
+clock — which is rarely what the user wants.
 
 ### 6. Verify the installation
 
@@ -264,25 +412,33 @@ The vault and its Markdown files are never deleted by the uninstall process.
 
 ## Branch C — Codex
 
-### 1. Install the plugin
+### 1. Collect installation parameters (vault path + agent name + timezone)
 
-Codex consumes the bundled `.codex-plugin/plugin.json` manifest. Install
-the plugin from Git through the Codex CLI:
+Collect all three values before running any commands — step 4
+(`o2b init`) and step 5 (Codex MCP `env`) both depend on them.
 
-```bash
-codex plugins install git:github.com/itechmeat/open-second-brain@v0.6.0
-```
+**Vault path.** Locate (or have the user create) the directory that
+will hold the Obsidian-compatible Markdown vault. Do **not** hard-code
+a path; vault locations vary per user and per OS. Discover candidates
+on the target machine in this order:
 
-### 2. Publish CLI commands to PATH
+  1. Look for an existing Obsidian vault: any directory containing a
+     `.obsidian/` subdirectory is a vault. Common roots to scan:
+     `~/`, `~/Documents/`, `~/Sync/`, `~/Dropbox/`,
+     `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/`
+     (macOS iCloud).
+  2. If multiple candidates exist, list them and ask the user to pick
+     one.
+  3. If none found, ask the user for a path (or for permission to
+     create a new vault directory at a sensible default like
+     `~/vault/`).
 
-```bash
-./scripts/o2b install-cli
-```
+Confirm the chosen path with the user (show them the absolute path you
+resolved) before passing it to `o2b init` and the Codex MCP entry.
 
-### 3. Choose Daily log agent name
-
-Ask the user to choose the agent name used in Daily event log entries.
-Offer these defaults plus a custom value:
+**Agent name.** Ask the user to choose the agent name that will appear
+as the `@agent-name` prefix in Daily event log entries. Offer these
+defaults plus a custom value:
 
 - `codex-main`
 - `codex-vps-agent`
@@ -290,86 +446,193 @@ Offer these defaults plus a custom value:
 - `second-brain-agent`
 - `<hostname>-codex`
 
-Resolve `<hostname>` from `hostname` on the target system before showing
-the list. Explain that this name appears in `Daily/*.md` as
-`- HH:MM — @agent-name — event message`. Do not continue until the value
-is known.
+Resolve `<hostname>` from the `hostname` command on the target system
+before showing the list.
+
+**Timezone.** Ask the user for their local timezone. Accept a free-form
+answer and translate it to a canonical IANA name yourself before passing
+it to `o2b init` — the plugin only accepts IANA. Examples: `Belgrade`
+→ `Europe/Belgrade`, `New York` / `EST` → `America/New_York`, `UTC` /
+`none` → `UTC`, `Tokyo` → `Asia/Tokyo`. If the answer is ambiguous, ask
+one clarifying question. If validation fails on the chosen name, ask
+again — do not silently fall back.
+
+Explain that this name and timezone appear in `Daily/*.md` as
+`- HH:MM — @agent-name — event message` (HH:MM in the chosen timezone,
+not the host's clock). Do not continue until all three values
+(vault path, agent name, timezone) are known. The vault path goes
+into `o2b init --vault` (step 4) and the Codex MCP entry's `args`
+(step 5). The agent name goes into `o2b init --agent-name` (step 4)
+and the `env.VAULT_AGENT_NAME` of the Codex MCP entry (step 5) — the
+two must match. The timezone goes into `o2b init --timezone` (step 4)
+and is persisted to the plugin config; the MCP server reads it from
+there.
+
+### 2. Install the plugin
+
+Codex 0.129 and later install plugins via the **marketplace** subsystem.
+This repository ships a single-plugin marketplace manifest at
+`.agents/plugins/marketplace.json`, so the official command is:
+
+```bash
+codex plugin marketplace add itechmeat/open-second-brain
+```
+
+(Always pulls the latest commit on `main`; do not append `@v...`.) Codex
+clones the repo into `~/.codex/plugins/cache/open-second-brain/<plugin>/<hash>/`
+and registers a `[marketplaces.open-second-brain]` entry in
+`~/.codex/config.toml`.
+
+Then enable the plugin so its bundled skills/agents/commands become
+available — there is no `codex plugin enable` subcommand on current
+Codex, this is done by adding one stanza to `~/.codex/config.toml`:
+
+```toml
+[plugins."open-second-brain@open-second-brain"]
+enabled = true
+```
+
+(The `<plugin>@<marketplace>` form here resolves to plugin
+`open-second-brain` from marketplace `open-second-brain` — both names
+come from the manifest.) The plugin's MCP tools (`event_log_append`,
+`second_brain_capture`, `second_brain_query`, `second_brain_status`,
+`vault_health`) become available **only** after step 5 below — Codex
+treats MCP server registration as a separate concern from plugin
+enablement.
+
+### 3. Publish CLI commands to PATH
+
+The `o2b` and `vault-log` scripts ship inside the plugin checkout; this
+step symlinks them into `~/.local/bin` so they are usable on PATH.
+
+```bash
+~/.codex/plugins/cache/open-second-brain/open-second-brain/*/scripts/o2b install-cli
+```
+
+(The glob handles the version hash that Codex assigns to the cached
+clone. If you installed the marketplace from a local path, run
+`<that-path>/scripts/o2b install-cli` instead.)
 
 ### 4. Initialize the vault
 
+Replace `/path/to/vault`, `<chosen-agent-name>`, and `<chosen-timezone>`
+with the values collected in step 1.
+
 ```bash
-o2b init --vault /path/to/vault --name "My Second Brain" --agent-name "<chosen-agent-name>"
+o2b init --vault /path/to/vault --name "My Second Brain" \
+    --agent-name "<chosen-agent-name>" \
+    --timezone "<chosen-timezone>"
 ```
 
-### 5. Wire up the agent name for the Codex runtime
+`--timezone` validates the IANA name via stdlib `zoneinfo` and persists
+it to the plugin config. From this moment on, every Daily entry is
+stamped in that timezone regardless of the host's clock.
 
-Codex consumes Open Second Brain through the optional MCP stdio server.
-Export `VAULT_AGENT_NAME=<chosen-agent-name>` in the environment that
-launches the MCP server so `event_log_append` defaults to that name when
-called without an explicit `agent` argument.
+### 5. Register the MCP server
 
-A minimal Codex `mcp_servers` entry:
+Codex consumes Open Second Brain's MCP tools through a stdio server
+configured in `~/.codex/config.toml`. The official command is:
 
-```yaml
-mcp_servers:
-  open-second-brain:
-    command: o2b
-    args: ["mcp", "--vault", "/path/to/vault"]
-    env:
-      VAULT_AGENT_NAME: "<chosen-agent-name>"
+```bash
+codex mcp add open-second-brain \
+    --env VAULT_AGENT_NAME=<chosen-agent-name> \
+    --env VAULT_TIMEZONE=<chosen-timezone> \
+    -- o2b mcp --vault /path/to/vault
 ```
+
+Note the `--` separator: everything before it is parsed by Codex,
+everything after is passed verbatim to the MCP subprocess as
+`command + args`. Codex writes the resulting block to `config.toml` in
+the form
+
+```toml
+[mcp_servers.open-second-brain]
+command = "o2b"
+args = ["mcp", "--vault", "/path/to/vault"]
+
+[mcp_servers.open-second-brain.env]
+VAULT_AGENT_NAME = "<chosen-agent-name>"
+VAULT_TIMEZONE = "<chosen-timezone>"
+```
+
+Both env vars are required for the daily-identity check in step 6 to
+succeed under the chosen identity and the user's local timezone — the
+MCP server reads them as the in-process default for `event_log_append`.
 
 ### 6. Verify the installation
 
 ```bash
 o2b doctor --vault /path/to/vault --repo .
+codex mcp list
 ```
 
-Then run the **daily identity** check (see § Verification — daily identity
-below). Installation is incomplete until that check passes.
+The `codex mcp list` output must show `open-second-brain` with
+`Status: enabled`. Then run the **daily identity** check (see
+§ Verification — daily identity below). Installation is incomplete
+until that check passes.
 
 ### 7. Update
 
 ```bash
-codex plugins update open-second-brain
+codex plugin marketplace upgrade open-second-brain
 ```
 
-The CLI symlinks created in step 2 do not need to be recreated after an
-update — they point into the git checkout, which the plugin updater
-refreshes.
+(Works only when the marketplace was added from a Git source. For a
+local source, the marketplace tracks the path live — pulling latest
+from upstream is up to whatever Git workflow you use on that path.)
+
+The CLI symlinks created in step 3 do not need to be recreated after an
+update — they point into the cached plugin checkout, which the
+upgrade refreshes via `git fetch + reset`.
 
 ### 8. Uninstall
 
 ```bash
-codex plugins uninstall open-second-brain
+codex mcp remove open-second-brain
+codex plugin marketplace remove open-second-brain
 o2b uninstall --apply-local --remove-cli
 ```
 
-The vault and its Markdown files are never deleted by the uninstall process.
+Then remove the `[plugins."open-second-brain@open-second-brain"]`
+stanza from `~/.codex/config.toml` if you added one in step 2. The
+vault and its Markdown files are never deleted by the uninstall
+process.
 
 ---
 
 ## Branch D — Claude Code
 
-### 1. Install the plugin
+### 1. Collect installation parameters (vault path + agent name + timezone)
 
-Claude Code consumes the bundled `.claude-plugin/plugin.json` manifest.
-Install the plugin from Git:
+Collect all three values before running any commands — step 4
+(`o2b init`) is the single point where they enter the system on Claude
+Code. The plugin's bundled `.mcp.json` auto-registers the MCP server
+with no flags or env vars, and the server reads vault path, agent
+name, and timezone from the persisted plugin config that `o2b init`
+writes — so there is no second place to keep in sync.
 
-```bash
-claude plugins install git:github.com/itechmeat/open-second-brain@v0.6.0
-```
+**Vault path.** Locate (or have the user create) the directory that
+will hold the Obsidian-compatible Markdown vault. Do **not** hard-code
+a path; vault locations vary per user and per OS. Discover candidates
+on the target machine in this order:
 
-### 2. Publish CLI commands to PATH
+  1. Look for an existing Obsidian vault: any directory containing a
+     `.obsidian/` subdirectory is a vault. Common roots to scan:
+     `~/`, `~/Documents/`, `~/Sync/`, `~/Dropbox/`,
+     `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/`
+     (macOS iCloud).
+  2. If multiple candidates exist, list them and ask the user to pick
+     one.
+  3. If none found, ask the user for a path (or for permission to
+     create a new vault directory at a sensible default like
+     `~/vault/`).
 
-```bash
-./scripts/o2b install-cli
-```
+Confirm the chosen path with the user (show them the absolute path
+you resolved) before passing it to `o2b init`.
 
-### 3. Choose Daily log agent name
-
-Ask the user to choose the agent name used in Daily event log entries.
-Offer these defaults plus a custom value:
+**Agent name.** Ask the user to choose the agent name that will appear
+as the `@agent-name` prefix in Daily event log entries. Offer these
+defaults plus a custom value:
 
 - `claude-main`
 - `claude-vps-agent`
@@ -377,62 +640,267 @@ Offer these defaults plus a custom value:
 - `second-brain-agent`
 - `<hostname>-claude`
 
-Resolve `<hostname>` from `hostname` on the target system before showing
-the list. Explain that this name appears in `Daily/*.md` as
-`- HH:MM — @agent-name — event message`. Do not continue until the value
-is known.
+Resolve `<hostname>` from the `hostname` command on the target system
+before showing the list.
+
+**Timezone.** Ask the user for their local timezone. Accept a free-form
+answer and translate it to a canonical IANA name yourself before passing
+it to `o2b init` — the plugin only accepts IANA. Examples: `Belgrade`
+→ `Europe/Belgrade`, `New York` / `EST` → `America/New_York`, `UTC` /
+`none` → `UTC`, `Tokyo` → `Asia/Tokyo`. If the answer is ambiguous, ask
+one clarifying question. If validation fails on the chosen name, ask
+again — do not silently fall back.
+
+Explain that this name and timezone appear in `Daily/*.md` as
+`- HH:MM — @agent-name — event message` (HH:MM in the chosen timezone,
+not the host's clock). Do not continue until all three values
+(vault path, agent name, timezone) are known. All three go into the
+single `o2b init` call in step 4; the bundled `.mcp.json`
+auto-registers the MCP server, and the server reads everything from
+the persisted plugin config — no second config to set.
+
+### 2. Install the plugin
+
+Claude Code 2.x installs plugins through its **marketplace** subsystem.
+This repository ships a single-plugin marketplace manifest at
+`.claude-plugin/marketplace.json` plus the plugin manifest at
+`.claude-plugin/plugin.json`, so the official two-step install is:
+
+```bash
+claude plugin marketplace add itechmeat/open-second-brain
+claude plugin install open-second-brain@open-second-brain
+```
+
+(The marketplace step always pulls the latest commit on `main`; do not
+append `@v...`.) After install, `claude plugin list` shows the plugin
+under user scope with `Status: ✔ enabled`. Claude clones the repo into
+`~/.claude/plugins/cache/open-second-brain/<plugin-name>/` and tracks
+the source via the `claude-plugins` config block.
+
+The plugin auto-registers its MCP server through the bundled `.mcp.json`
+file at the repo root — **no `claude mcp add` step is needed**. After
+step 4 below (vault init), `claude mcp list` will show
+`open-second-brain` with `✓ Connected`.
+
+### 3. Publish CLI commands to PATH
+
+The `o2b` and `vault-log` scripts ship inside the plugin checkout; this
+step symlinks them into `~/.local/bin` so they are usable on PATH.
+
+```bash
+~/.claude/plugins/cache/open-second-brain/open-second-brain/scripts/o2b install-cli
+```
 
 ### 4. Initialize the vault
 
+Replace `/path/to/vault`, `<chosen-agent-name>`, and `<chosen-timezone>`
+with the values collected in step 1.
+
 ```bash
-o2b init --vault /path/to/vault --name "My Second Brain" --agent-name "<chosen-agent-name>"
+o2b init --vault /path/to/vault --name "My Second Brain" \
+    --agent-name "<chosen-agent-name>" \
+    --timezone "<chosen-timezone>"
 ```
 
-### 5. Wire up the agent name for the Claude runtime
+`o2b init` persists all three values (`vault`, `agent_name`, `timezone`)
+into `~/.config/open-second-brain/config.yaml`. The `.mcp.json` that
+Claude auto-registered is intentionally minimal — it points only at
+`o2b mcp` with no flags, no env vars, no vault path. The MCP server
+discovers everything it needs from the persisted config when it
+spawns. This means the same `.mcp.json` works on every user's machine
+without per-user customization.
 
-Claude Code talks to Open Second Brain over the optional MCP stdio server.
-Export `VAULT_AGENT_NAME=<chosen-agent-name>` in the environment that
-launches the MCP server so `event_log_append` defaults to that name when
-called without an explicit `agent` argument.
+### 5. (No separate MCP wiring step on Claude Code)
 
-A minimal Claude Code `mcp_servers` entry:
-
-```yaml
-mcp_servers:
-  open-second-brain:
-    command: o2b
-    args: ["mcp", "--vault", "/path/to/vault"]
-    env:
-      VAULT_AGENT_NAME: "<chosen-agent-name>"
-```
+Skipped on this runtime — see step 2. Claude's `.mcp.json` auto-register
+already covers what Hermes does in `mcp_servers:` and Codex does via
+`codex mcp add`.
 
 ### 6. Verify the installation
 
 ```bash
 o2b doctor --vault /path/to/vault --repo .
+claude plugin list
+claude mcp list
 ```
 
-Then run the **daily identity** check (see § Verification — daily identity
+`claude plugin list` must show `open-second-brain@open-second-brain`
+with `Status: ✔ enabled`. `claude mcp list` must show
+`plugin:open-second-brain:open-second-brain` with `✓ Connected`. Then
+run the **daily identity** check (see § Verification — daily identity
 below). Installation is incomplete until that check passes.
 
 ### 7. Update
 
 ```bash
-claude plugins update open-second-brain
+claude plugin marketplace update open-second-brain
+claude plugin update open-second-brain@open-second-brain
 ```
 
-The CLI symlinks created in step 2 do not need to be recreated after an
-update — they point into the git checkout, which the plugin updater
-refreshes.
+The CLI symlinks created in step 3 do not need to be recreated after
+an update — they point into the cached plugin checkout, which the
+update step refreshes via `git fetch + reset`.
 
 ### 8. Uninstall
 
 ```bash
-claude plugins uninstall open-second-brain
+claude plugin uninstall open-second-brain@open-second-brain
+claude plugin marketplace remove open-second-brain
 o2b uninstall --apply-local --remove-cli
 ```
 
-The vault and its Markdown files are never deleted by the uninstall process.
+Claude removes the plugin's MCP server registration automatically when
+the plugin is uninstalled. The vault and its Markdown files are never
+deleted by the uninstall process.
+
+---
+
+## Branch E — Generic adapter (other runtimes)
+
+If the target runtime is **not** Hermes, OpenClaw, Codex, or Claude
+Code — for example a new MCP-aware client, a different agent platform,
+or one of the supported runtimes after a breaking CLI rename — use
+this branch. It describes the install **contract** the plugin needs,
+not literal commands. The agent doing the install must consult the
+target runtime's own plugin / MCP documentation and translate each
+step below into the equivalent runtime-specific operation. Where the
+runtime has no equivalent for a step, ask the user before proceeding
+rather than guessing.
+
+The plugin's runtime contract is small:
+
+- A directory tree on disk containing `scripts/o2b` (Python CLI) and
+  `src/open_second_brain/` (the package). This is what the runtime's
+  plugin install delivers.
+- The `o2b` CLI on PATH (used for vault scaffolding, status, and
+  doctor checks).
+- The `o2b mcp` stdio server registered with the runtime as an MCP
+  server (used by the LLM at runtime via the five tools
+  `event_log_append` / `second_brain_capture` / `second_brain_query` /
+  `second_brain_status` / `vault_health`).
+- A persisted plugin config at `~/.config/open-second-brain/config.yaml`
+  holding `vault` / `agent_name` / `timezone` (written by `o2b init`,
+  read by `o2b mcp` when its CLI flags / env vars are absent).
+
+### 1. Collect installation parameters (vault path + agent name + timezone)
+
+Same three values as branches A–D collect, same discovery rules. Read
+the "Collect installation parameters" subsection of any other branch
+above and apply it as-is — the questions and defaults are runtime-
+agnostic. For agent name, derive a runtime-appropriate prefix
+(`<runtime>-main`, `<runtime>-vps-agent`, etc.) so multi-runtime users
+can tell entries apart in Daily.
+
+### 2. Install the plugin
+
+Get the plugin source onto the target machine via whatever channel the
+runtime supports. The repo ships several manifest formats so most
+runtimes will find one they understand:
+
+- `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`
+- `.codex-plugin/plugin.json` + `.agents/plugins/marketplace.json`
+- `openclaw.plugin.json` + `package.json` `openclaw.extensions`
+- Hermes `plugin.yaml` (root)
+- A vanilla Git checkout (every runtime can clone a repo)
+
+Pick whichever your runtime documents. Do **not** add a version pin
+(`@v...`) — the canonical install always tracks the `main` branch.
+
+### 3. Publish CLI commands to PATH
+
+Run `<plugin-checkout>/scripts/o2b install-cli`. It symlinks `o2b` and
+`vault-log` into `~/.local/bin`. If your runtime caches plugins under
+a content-addressed path with a version hash, glob it:
+`<runtime-cache>/.../scripts/o2b install-cli`.
+
+### 4. Initialize the vault
+
+```bash
+o2b init --vault /path/to/vault --name "My Second Brain" \
+    --agent-name "<chosen-agent-name>" \
+    --timezone "<chosen-timezone>"
+```
+
+This is identical across runtimes — the values are persisted into
+`~/.config/open-second-brain/config.yaml` and read back by the MCP
+server with no further wiring required.
+
+### 5. Register the MCP server with your runtime
+
+The exact mechanism depends on the runtime. The minimum spec the
+plugin expects is a stdio MCP server invocation:
+
+| field | value |
+|---|---|
+| `command` | `o2b` |
+| `args` | `["mcp"]` (vault / agent / timezone resolved from the persisted plugin config; no flags needed) |
+| `env` | optional. Set `VAULT_AGENT_NAME=<chosen-agent-name>` and `VAULT_TIMEZONE=<chosen-tz>` if your runtime cannot read the plugin config (e.g. a per-runtime override is desired); otherwise leave empty. |
+
+If your runtime's MCP config is YAML (Hermes-style):
+
+```yaml
+mcp_servers:
+  open-second-brain:
+    command: o2b
+    args: [mcp]
+    env:
+      VAULT_AGENT_NAME: "<chosen-agent-name>"
+      VAULT_TIMEZONE: "<chosen-timezone>"
+    enabled: true
+```
+
+If TOML (Codex-style):
+
+```toml
+[mcp_servers.open-second-brain]
+command = "o2b"
+args = ["mcp"]
+
+[mcp_servers.open-second-brain.env]
+VAULT_AGENT_NAME = "<chosen-agent-name>"
+VAULT_TIMEZONE = "<chosen-timezone>"
+```
+
+If the runtime auto-registers MCP servers from a manifest at the
+plugin root (Claude Code's `.mcp.json`-style), use that — the plugin
+already ships `.mcp.json` with `${CLAUDE_PLUGIN_ROOT}/scripts/o2b mcp`
+and no env, which auto-resolves everything from the persisted plugin
+config at runtime.
+
+If the runtime does **not** support stdio MCP servers at all, the
+plugin's tools will not be available to that runtime; the user can
+still run `o2b` / `vault-log` manually from the shell, but agent-side
+integration is the runtime's missing capability, not the plugin's.
+
+### 6. Verify the installation
+
+```bash
+o2b doctor --vault /path/to/vault --repo <plugin-checkout>
+```
+
+All checks must pass. Then run the **daily identity** check (see
+§ Verification — daily identity below). Installation is incomplete
+until that check passes.
+
+### 7. Optional — surface plugin guidance to the LLM
+
+The plugin's MCP `initialize` response carries a full identity +
+workflow block in `serverInfo.instructions` (resolved per the
+configured agent name). Runtimes that respect the MCP `instructions`
+field show this to the LLM automatically. If yours does not — and the
+runtime has a "system prompt injection" or "per-turn context" hook
+analogous to Hermes's `pre_llm_call` — consider wiring the same
+content (or a paraphrase) through that channel. Without it, the LLM
+will still see the five tools but won't know when to call
+`event_log_append`.
+
+### 8. Update / Uninstall
+
+Use the runtime's native plugin update / uninstall commands. The
+plugin keeps no state outside the vault and
+`~/.config/open-second-brain/config.yaml`; `o2b uninstall
+--apply-local --remove-cli` cleans the latter and the PATH symlinks
+created in step 3. Vault Markdown files are never deleted.
 
 ---
 

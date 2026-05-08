@@ -103,10 +103,10 @@ The integration flow:
 
 The Python CLI (`o2b`) and MCP server (`o2b mcp`) remain available for Hermes and standalone usage, but the OpenClaw runtime is self-contained JavaScript.
 
-Installation:
+Installation (always installs the latest from `main`; do not append `@v...`):
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.6.0
+openclaw plugins install git:github.com/itechmeat/open-second-brain
 ```
 
 The OpenClaw adapter must remain compatible with the Hermes, Claude Code, and Codex adapters. The `o2b mcp` MCP server is still available for runtimes that prefer the MCP protocol.
@@ -130,15 +130,15 @@ Example:
 
 ```yaml
 version: 1
-instance_name: Hermes Second Brain
+instance_name: My Second Brain
 runtime: hermes
-environment_name: vps-techmeat
+environment_name: <hostname>
 vault:
-  path: /root/vault
+  path: <absolute-path-to-Obsidian-vault>
   agent_dir: AI Wiki
 identity:
-  agent_name: hermes-vps-agent
-  user_language: ru
+  agent_name: <chosen-agent-name>
+  user_language: <BCP-47 tag, e.g. en or ru>
 policy:
   write_mode: agent-owned-dir
 ```
