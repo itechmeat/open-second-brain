@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-second-brain"
-version = "0.6.1"
+version = "0.6.2"
 description = "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw."
 readme = "README.md"
 requires-python = ">=3.11"

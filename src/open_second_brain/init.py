@@ -111,20 +111,65 @@ def bootstrap_vault(
     return created
 
 
-def _upgrade_agents_file(path: Path, agent_name: str) -> bool:
-    """Replace the template placeholder with the chosen agent entry.
+_AGENTS_REGISTERED_HEADING = "## Registered agents"
 
-    Returns True if the file was rewritten.
+
+def _upgrade_agents_file(path: Path, agent_name: str) -> bool:
+    """Register ``agent_name`` in ``AI Wiki/identity/agents.md``.
+
+    Three cases this handles, in order:
+
+      * The file still contains the bootstrap placeholder
+        (``- (add your agents here, …)``): replace the placeholder with
+        ``- <agent_name>: primary agent on this server``.
+
+      * The file already contains an entry for ``agent_name``: no-op.
+        This makes ``o2b init --agent-name X`` idempotent on a vault
+        that already has X registered.
+
+      * Neither of the above — the file has already been initialised
+        with **another** agent's entry, and this is a multi-runtime
+        / multi-agent setup. Append the new entry under
+        ``## Registered agents``, before the next ``##`` section
+        heading. Previously this case was a silent no-op, so users
+        running ``o2b init --agent-name codex-vps-agent`` after a
+        prior ``--agent-name claude-vps-agent`` saw their identity
+        recorded in the plugin config but never written into the
+        vault registry. Fixed.
+
+    Returns True when the file was actually rewritten.
     """
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return False
+
     entry = f"- {agent_name}: primary agent on this server"
     if entry in text:
         return False
+
     if AGENTS_PLACEHOLDER in text:
         new_text = text.replace(AGENTS_PLACEHOLDER, entry)
         path.write_text(new_text, encoding="utf-8")
         return True
-    return False
+
+    # Multi-agent path: append under "## Registered agents". Locate the
+    # heading and the next "##" that follows it (or end-of-file), and
+    # insert the new bullet right before that boundary so subsequent
+    # sections (e.g. "## Scopes") stay where the user expects them.
+    heading_idx = text.find(_AGENTS_REGISTERED_HEADING)
+    if heading_idx == -1:
+        return False
+    after_heading = heading_idx + len(_AGENTS_REGISTERED_HEADING)
+    rest = text[after_heading:]
+    next_section_relative = rest.find("\n## ")
+    if next_section_relative == -1:
+        head = text[:after_heading] + rest.rstrip()
+        new_text = head + f"\n{entry}\n"
+    else:
+        boundary = after_heading + next_section_relative
+        before = text[:boundary].rstrip()
+        after = text[boundary:]
+        new_text = before + f"\n{entry}\n" + after
+    path.write_text(new_text, encoding="utf-8")
+    return True
