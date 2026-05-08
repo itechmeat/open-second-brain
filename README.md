@@ -66,7 +66,7 @@ OpenClaw supports this project through the **Native plugin format**: a root `pac
 Install from Git:
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.1
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.6.0
 ```
 
 Or from a local checkout:
@@ -75,21 +75,28 @@ Or from a local checkout:
 openclaw plugins install ./open-second-brain
 ```
 
-After installing, configure the vault path:
+After installing, configure the vault path, instance name, and agent identity:
 
 ```bash
 openclaw config set plugins.entries.open-second-brain.config.vault '"/path/to/vault"'
 openclaw config set plugins.entries.open-second-brain.config.instanceName '"My Second Brain"'
+openclaw config set plugins.entries.open-second-brain.config.agentName '"openclaw-main"'
 ```
+
+`agentName` is the identity used in `Daily/*.md` event log entries
+(`- HH:MM — @openclaw-main — message`). Pick a name that makes the host
+or runtime obvious — `openclaw-main`, `openclaw-server`,
+`<hostname>-openclaw`, etc.
 
 Tools are registered natively by the JS plugin entry — no MCP registration is needed. The five tools (`second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`) are available immediately after install and gateway restart. The optional MCP server (`o2b mcp`) can still be enabled for runtimes that prefer the MCP protocol.
 
 ## First run
 
-Create or update the OpenSecondBrain profile inside a vault:
+Create or update the OpenSecondBrain profile inside a vault. Pass
+`--agent-name` to register the identity used in Daily event log entries:
 
 ```bash
-scripts/o2b init --vault /path/to/vault --name "My Second Brain"
+scripts/o2b init --vault /path/to/vault --name "My Second Brain" --agent-name "openclaw-main"
 ```
 
 Check that the vault and runtime adapters are healthy:

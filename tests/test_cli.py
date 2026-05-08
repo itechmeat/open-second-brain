@@ -47,6 +47,26 @@ class CliTests(unittest.TestCase):
             self.assertTrue((vault / "AI Wiki" / "_OPEN_SECOND_BRAIN.md").is_file())
             self.assertTrue((vault / "AI Wiki" / "identity" / "agents.md").is_file())
 
+    def test_init_with_agent_name_writes_identity_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            result = run_cli(
+                "init",
+                "--vault",
+                str(vault),
+                "--name",
+                "Test",
+                "--agent-name",
+                "openclaw-main",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("agent name registered: openclaw-main", result.stdout)
+            agents_md = (vault / "AI Wiki" / "identity" / "agents.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("- openclaw-main: primary agent on this server", agents_md)
+            self.assertNotIn("(add your agents here", agents_md)
+
     def test_init_already_initialized_does_not_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)

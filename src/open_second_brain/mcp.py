@@ -29,7 +29,7 @@ from open_second_brain.vault import list_vault_pages, parse_frontmatter, write_f
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "open-second-brain"
-SERVER_VERSION = "0.5.4"
+SERVER_VERSION = "0.6.0"
 JSONRPC_VERSION = "2.0"
 
 # JSON-RPC 2.0 error codes used by the MCP server.
@@ -354,14 +354,20 @@ def _tool_second_brain_capture(server: MCPServer, arguments: dict[str, Any]) -> 
     }
 
 
+def _resolve_default_agent(server: MCPServer) -> str:
+    env_value = os.environ.get("VAULT_AGENT_NAME")
+    if env_value:
+        return env_value
+    discovery = discover_config(server.config_path)
+    config_value = discovery.data.get("agent_name") or discovery.data.get("agentName")
+    if config_value:
+        return config_value
+    return "agent"
+
+
 def _tool_event_log_append(server: MCPServer, arguments: dict[str, Any]) -> dict[str, Any]:
     message = _coerce_str(arguments, "message")
-    agent = _coerce_str(
-        arguments,
-        "agent",
-        required=False,
-        default=os.environ.get("VAULT_AGENT_NAME", "agent"),
-    )
+    agent = _coerce_str(arguments, "agent", required=False)
     date = _coerce_str(arguments, "date", required=False)
     time = _coerce_str(arguments, "time", required=False)
     assert message is not None  # required=True
@@ -369,7 +375,7 @@ def _tool_event_log_append(server: MCPServer, arguments: dict[str, Any]) -> dict
     if time is not None:
         validate_event_time(time)
 
-    effective_agent = agent or "agent"
+    effective_agent = agent or _resolve_default_agent(server)
     path = append_event(server.vault, effective_agent, message, date=date, time=time)
 
     return {

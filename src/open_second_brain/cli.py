@@ -35,6 +35,16 @@ def build_parser() -> argparse.ArgumentParser:
     init_cmd = subcommands.add_parser("init", help="Initialize a vault profile with required files")
     init_cmd.add_argument("--vault", type=Path, required=True, help="Vault directory path")
     init_cmd.add_argument("--name", default="Second Brain", help="Instance name (default: Second Brain)")
+    init_cmd.add_argument(
+        "--agent-name",
+        dest="agent_name",
+        default=None,
+        help=(
+            "Agent identity used in Daily event log entries (e.g. 'openclaw-main'). "
+            "When set, the chosen name is written into AI Wiki/identity/agents.md "
+            "and replaces the @agent placeholder in subsequent event_log_append calls."
+        ),
+    )
     init_cmd.add_argument("--force", action="store_true", help="Overwrite existing files")
 
     doctor_cmd = subcommands.add_parser("doctor", help="Run health checks on vault, config, and plugins")
@@ -159,8 +169,14 @@ def command_status(args: argparse.Namespace) -> int:
 
 def command_init(args: argparse.Namespace) -> int:
     vault = args.vault
+    agent_name = getattr(args, "agent_name", None)
     try:
-        created = bootstrap_vault(vault, name=args.name, force=args.force)
+        created = bootstrap_vault(
+            vault,
+            name=args.name,
+            agent_name=agent_name,
+            force=args.force,
+        )
     except OSError as exc:
         print(f"error: failed to initialize vault: {exc}", file=sys.stderr)
         return 1
@@ -171,6 +187,8 @@ def command_init(args: argparse.Namespace) -> int:
     print(f"initialized vault: {vault}")
     for path in created:
         print(f"  created: {path}")
+    if agent_name:
+        print(f"agent name registered: {agent_name}")
     return 0
 
 

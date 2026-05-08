@@ -253,6 +253,40 @@ class ToolCallTests(unittest.TestCase):
             daily = vault / "Daily" / "2026.05.06.md"
             self.assertIn("- 11:42 — @mcp-test — via mcp", daily.read_text(encoding="utf-8"))
 
+    def test_event_log_append_uses_config_agent_name_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
+            config = Path(tmp) / "config.yaml"
+            config.write_text("agent_name: openclaw-main\n", encoding="utf-8")
+            server = _make_server(vault, config=config)
+            _initialize(server)
+
+            # Ensure environment variable does not shadow the config default
+            prior_env = os.environ.pop("VAULT_AGENT_NAME", None)
+            try:
+                response = _call_tool(
+                    server,
+                    "event_log_append",
+                    {
+                        "message": "from-config-default",
+                        "date": "2026.05.06",
+                        "time": "12:00",
+                    },
+                )
+            finally:
+                if prior_env is not None:
+                    os.environ["VAULT_AGENT_NAME"] = prior_env
+
+            self.assertFalse(response["result"]["isError"])
+            structured = response["result"]["structuredContent"]
+            self.assertEqual(structured["agent"], "openclaw-main")
+            daily = vault / "Daily" / "2026.05.06.md"
+            self.assertIn(
+                "- 12:00 — @openclaw-main — from-config-default",
+                daily.read_text(encoding="utf-8"),
+            )
+
     def test_event_log_append_rejects_invalid_time(self):
         with tempfile.TemporaryDirectory() as tmp:
             server = _make_server(Path(tmp))

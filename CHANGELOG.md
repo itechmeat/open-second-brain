@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-08
+
+### Added
+
+- Daily-log agent identity workflow. Each runtime install now selects an
+  agent name (e.g. `openclaw-main`, `hermes-vps-agent`, `<hostname>-codex`,
+  …) that is used as the `@agent-name` prefix in `Daily/*.md` event log
+  entries.
+- `o2b init --agent-name <name>` writes the chosen identity into
+  `AI Wiki/identity/agents.md` and replaces the template placeholder
+  (`(add your agents here, …)`). Existing vaults are upgraded in place
+  without `--force`: the placeholder line is rewritten.
+- `agentName` field in `openclaw.plugin.json` `configSchema` and `uiHints`
+  alongside `vault` / `instanceName`. The OpenClaw native plugin reads
+  `api.pluginConfig.agentName` and uses it as the default agent for
+  `event_log_append` calls that omit the `agent` argument.
+- `event_log_append` (Python MCP) now resolves the default agent from
+  `VAULT_AGENT_NAME`, then from `agent_name` / `agentName` in the
+  discovered config file, then falls back to `agent`.
+- New "Verification — daily identity" step in `install.md` and
+  `after-install.md`. Calls `event_log_append` without an explicit
+  `agent` and asserts the daily entry shows `@<chosen-agent-name>` rather
+  than `@agent`.
+- `install.md` now covers all four runtimes (Hermes, OpenClaw, Codex,
+  Claude Code) with runtime-appropriate agent name defaults.
+- Installation readiness criteria now require `agentName` to be configured
+  (or `VAULT_AGENT_NAME` exported), the placeholder removed from
+  `agents.md`, and the daily-identity check to pass.
+
+### Changed
+
+- Bumped package, plugin, MCP server, OpenClaw plugin, and Hermes adapter
+  versions to 0.6.0.
+
 ## [0.5.5] - 2026-05-08
 
 ### Added
@@ -222,7 +256,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.5.2...HEAD
+[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/itechmeat/open-second-brain/compare/v0.5.5...v0.6.0
+[0.5.5]: https://github.com/itechmeat/open-second-brain/compare/v0.5.4...v0.5.5
 [0.5.2]: https://github.com/itechmeat/open-second-brain/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/itechmeat/open-second-brain/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/itechmeat/open-second-brain/compare/v0.4.2...v0.5.0

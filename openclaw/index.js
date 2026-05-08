@@ -36,7 +36,7 @@ import { existsSync } from "node:fs";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const PLUGIN_VERSION = "0.5.2";
+const PLUGIN_VERSION = "0.6.0";
 
 const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"];
 
@@ -412,7 +412,13 @@ export default definePluginEntry({
             throw new Error("missing required argument: message");
           }
 
-          const agent = params.agent || process.env.VAULT_AGENT_NAME || "agent";
+          const pluginConfig = api.pluginConfig || {};
+          const configuredAgent = pluginConfig.agentName || null;
+          const agent =
+            params.agent ||
+            process.env.VAULT_AGENT_NAME ||
+            configuredAgent ||
+            "agent";
           const date = params.date || null;
           const time = params.time || null;
 

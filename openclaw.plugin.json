@@ -2,7 +2,7 @@
   "id": "open-second-brain",
   "name": "Open Second Brain",
   "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults.",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "activation": { "onStartup": true },
   "skills": ["./skills"],
   "contracts": {
@@ -26,6 +26,10 @@
         "type": "string",
         "description": "Human-readable name for this second brain instance."
       },
+      "agentName": {
+        "type": "string",
+        "description": "Identity used in Daily/*.md event log entries (e.g. 'openclaw-main'). Falls back to VAULT_AGENT_NAME, then to '@agent'."
+      },
       "mcpEnabled": {
         "type": "boolean",
         "default": false,
@@ -41,6 +45,10 @@
     "instanceName": {
       "label": "Instance Name",
       "help": "Human-readable name for this second brain instance."
+    },
+    "agentName": {
+      "label": "Agent Name",
+      "help": "Identity used in Daily/*.md as @agent-name for event log entries."
     },
     "mcpEnabled": {
       "label": "Enable MCP Server",

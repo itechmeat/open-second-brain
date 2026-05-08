@@ -106,7 +106,7 @@ The Python CLI (`o2b`) and MCP server (`o2b mcp`) remain available for Hermes an
 Installation:
 
 ```bash
-openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.5.2
+openclaw plugins install git:github.com/itechmeat/open-second-brain@v0.6.0
 ```
 
 The OpenClaw adapter must remain compatible with the Hermes, Claude Code, and Codex adapters. The `o2b mcp` MCP server is still available for runtimes that prefer the MCP protocol.

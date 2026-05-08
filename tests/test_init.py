@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from open_second_brain.init import bootstrap_vault, VAULT_FILES
+from open_second_brain.init import AGENTS_PLACEHOLDER, bootstrap_vault, VAULT_FILES
 
 
 class InitTests(unittest.TestCase):
@@ -26,6 +26,40 @@ class InitTests(unittest.TestCase):
             # Check content has the name
             manual = (vault / "AI Wiki" / "_OPEN_SECOND_BRAIN.md").read_text(encoding="utf-8")
             self.assertIn("Test Brain", manual)
+
+    def test_bootstrap_vault_writes_agent_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            bootstrap_vault(vault, name="Test", agent_name="openclaw-main")
+            agents_md = (vault / "AI Wiki" / "identity" / "agents.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("- openclaw-main: primary agent on this server", agents_md)
+            self.assertNotIn(AGENTS_PLACEHOLDER, agents_md)
+
+    def test_bootstrap_vault_without_agent_name_keeps_placeholder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            bootstrap_vault(vault, name="Test")
+            agents_md = (vault / "AI Wiki" / "identity" / "agents.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(AGENTS_PLACEHOLDER, agents_md)
+
+    def test_bootstrap_vault_upgrades_existing_placeholder_in_place(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            # First init without agent name leaves placeholder.
+            bootstrap_vault(vault, name="Test")
+            agents_path = vault / "AI Wiki" / "identity" / "agents.md"
+            self.assertIn(AGENTS_PLACEHOLDER, agents_path.read_text(encoding="utf-8"))
+
+            # Second init with agent_name (no --force) must rewrite the placeholder.
+            created = bootstrap_vault(vault, name="Test", agent_name="hermes-main")
+            self.assertIn(Path("AI Wiki") / "identity" / "agents.md", created)
+            text = agents_path.read_text(encoding="utf-8")
+            self.assertIn("- hermes-main: primary agent on this server", text)
+            self.assertNotIn(AGENTS_PLACEHOLDER, text)
 
     def test_bootstrap_vault_does_not_overwrite_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:

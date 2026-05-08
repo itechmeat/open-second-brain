@@ -67,31 +67,64 @@ TEMPLATES: dict[Path, str] = {
         "# Agent Identity\n\n"
         "Allowed agents and their scopes.\n\n"
         "## Registered agents\n\n"
-        "- (add your agents here, e.g., my-agent: operator on my-server)\n\n"
+        "{agents_block}\n\n"
         "## Scopes\n\n"
         "- Write scope: AI Wiki/, Daily/\n"
         "- Read scope: whole vault\n"
     ),
 }
 
+AGENTS_PLACEHOLDER = "- (add your agents here, e.g., my-agent: operator on my-server)"
+
+
+def _agents_block(agent_name: str | None) -> str:
+    if agent_name:
+        return f"- {agent_name}: primary agent on this server"
+    return AGENTS_PLACEHOLDER
+
 
 def bootstrap_vault(
     vault_dir: Path,
     *,
     name: str = "Second Brain",
+    agent_name: str | None = None,
     force: bool = False,
 ) -> list[Path]:
     created: list[Path] = []
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    agents_block = _agents_block(agent_name)
 
     for rel_path in VAULT_FILES:
         target = vault_dir / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() and not force:
+            if rel_path == Path("AI Wiki") / "identity" / "agents.md" and agent_name:
+                upgraded = _upgrade_agents_file(target, agent_name)
+                if upgraded:
+                    created.append(rel_path)
             continue
         template = TEMPLATES.get(rel_path, "")
-        content = template.format(name=name, created=now)
+        content = template.format(name=name, created=now, agents_block=agents_block)
         target.write_text(content, encoding="utf-8")
         created.append(rel_path)
 
     return created
+
+
+def _upgrade_agents_file(path: Path, agent_name: str) -> bool:
+    """Replace the template placeholder with the chosen agent entry.
+
+    Returns True if the file was rewritten.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    entry = f"- {agent_name}: primary agent on this server"
+    if entry in text:
+        return False
+    if AGENTS_PLACEHOLDER in text:
+        new_text = text.replace(AGENTS_PLACEHOLDER, entry)
+        path.write_text(new_text, encoding="utf-8")
+        return True
+    return False
