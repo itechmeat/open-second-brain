@@ -14,6 +14,29 @@ If at any point you are missing information — for example, the vault path is u
 
 ---
 
+## Prerequisites — Bun runtime (all branches)
+
+**Open Second Brain v0.7+ runs on the [Bun](https://bun.sh) JavaScript runtime.** The `o2b` CLI, the MCP server (`o2b mcp`), and the OpenClaw native plugin all execute under Bun. Hermes still loads a small Python shim for the per-turn `pre_llm_call` hook, but every other runtime path is Bun-only.
+
+**Before running any branch below, verify Bun is on PATH:**
+
+```bash
+command -v bun >/dev/null 2>&1 || curl -fsSL https://bun.sh/install | bash
+```
+
+If the install runs, re-source your shell so `~/.bun/bin` lands on PATH:
+
+```bash
+export PATH="$HOME/.bun/bin:$PATH"
+bun --version
+```
+
+`bun --version` must report **1.1.0 or newer**. If it does not, stop and ask the user to upgrade Bun before continuing — older versions miss APIs the plugin relies on.
+
+If the user is on a system where they cannot install Bun (locked-down environment, unsupported architecture), abort the install and tell them so explicitly. Do **not** try to work around the missing runtime by re-exporting Python sources — those were removed in v0.7.0 and there is no Python fallback for the CLI.
+
+---
+
 ## Branch A — Hermes
 
 ### 1. Collect installation parameters (vault path + agent name + timezone)
@@ -86,7 +109,7 @@ answer (city name, country, "my time", etc.) and translate it to a
 canonical IANA name yourself before passing it to `o2b init` — the
 plugin only accepts IANA. Examples of the translation you should do:
 
-- `Belgrade` / `Сербия` → `Europe/Belgrade`
+- `Belgrade` / `Serbia` → `Europe/Belgrade`
 - `New York` / `EST` / `eastern` → `America/New_York`
 - `UTC` / `none` / `server time` → `UTC`
 - `Tokyo` / `JST` → `Asia/Tokyo`

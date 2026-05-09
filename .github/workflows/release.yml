@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (with or without leading v). Defaults to pyproject.toml version."
+        description: "Release version (with or without leading v). Defaults to package.json version."
         required: false
         type: string
       prerelease:
@@ -36,17 +36,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Set up Python (Hermes shim test only)
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
 
       - name: Resolve release version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          pyproject_version=$(python -c 'import pathlib, tomllib; data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8")); print(data["project"]["version"])')
+          pkg_version=$(node -p "require('./package.json').version")
 
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag="${GITHUB_REF_NAME}"
@@ -55,47 +63,64 @@ jobs:
             version="${VERSION_INPUT#v}"
             tag="v${version}"
           else
-            version="${pyproject_version}"
+            version="${pkg_version}"
             tag="v${version}"
           fi
 
-          if [ "${version}" != "${pyproject_version}" ]; then
-            echo "Release version ${version} does not match pyproject.toml version ${pyproject_version}" >&2
+          if [ "${version}" != "${pkg_version}" ]; then
+            echo "Release version ${version} does not match package.json version ${pkg_version}" >&2
             exit 1
           fi
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
-      - name: Run test suite
-        run: PYTHONPATH=src python -m unittest discover -s tests -v
+      - name: Verify manifest version sync
+        run: bun run sync-version:check
 
-      - name: Run packaging and manifest checks
+      - name: Run TypeScript typecheck
+        run: bun run typecheck
+
+      - name: Run TypeScript test suite (bun:test)
+        run: bun test
+
+      - name: Run Python shim tests
+        run: python -m unittest discover -s tests/python -v
+
+      - name: Validate manifests and CLI scripts
         shell: bash
         run: |
           set -euo pipefail
           python -m json.tool .claude-plugin/plugin.json >/dev/null
           python -m json.tool .codex-plugin/plugin.json >/dev/null
           python -m json.tool openclaw.plugin.json >/dev/null
+          python -m json.tool package.json >/dev/null
           python -m py_compile plugins/hermes/__init__.py
           bash -n scripts/o2b
           bash -n scripts/vault-log
-          scripts/o2b doctor --vault . --repo .
+          ./scripts/o2b doctor --vault . --repo .
+
+      - name: Validate OpenClaw bundle is in sync with sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Re-build into a temp file and diff against the committed bundle
+          # so a stale `openclaw/index.js` fails CI rather than ships silently.
+          bun build src/openclaw/index.ts \
+            --outfile /tmp/openclaw-rebuild.js \
+            --target=node --format=esm \
+            --external openclaw/plugin-sdk/plugin-entry
+          diff -q /tmp/openclaw-rebuild.js openclaw/index.js \
+            || { echo "openclaw/index.js is out of date; run: bun run build:openclaw" >&2; exit 1; }
 
       - name: Validate OpenClaw packaging
         shell: bash
         run: |
           set -euo pipefail
-          python -m json.tool package.json >/dev/null
           node -e "const pkg = require('./package.json'); if (!pkg.openclaw?.extensions?.length) throw new Error('missing openclaw.extensions')"
           for entry in $(node -e "console.log(require('./package.json').openclaw.extensions.join(' '))"); do
             [ -f "$entry" ] || { echo "Missing entry: $entry"; exit 1; }
           done
-
-      - name: Build source and wheel distributions
-        run: |
-          python -m pip install --upgrade pip build
-          python -m build
 
       - name: Publish GitHub release
         env:
@@ -115,7 +140,7 @@ jobs:
             exit 1
           fi
 
-          gh release create "${TAG}" dist/* \
+          gh release create "${TAG}" \
             --target "${GITHUB_SHA}" \
             --title "open-second-brain ${TAG}" \
             --generate-notes \

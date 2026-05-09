@@ -7,6 +7,9 @@ it can also be used directly by runtimes that expect an adapter subdirectory.
 
 from __future__ import annotations
 
-from .plugins.hermes import check_health, health, register
+try:
+    from .plugins.hermes import check_health, health, register
+except ImportError:
+    from plugins.hermes import check_health, health, register
 
 __all__ = ["check_health", "health", "register"]

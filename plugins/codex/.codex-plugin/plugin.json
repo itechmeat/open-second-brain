@@ -1,0 +1,23 @@
+{
+  "name": "open-second-brain",
+  "version": "0.7.0",
+  "description": "Plugin-first second brain package for Codex, Hermes, Claude Code, OpenClaw, and other agent runtimes.",
+  "author": {
+    "name": "Open Second Brain contributors",
+    "url": "https://github.com/itechmeat/open-second-brain"
+  },
+  "homepage": "https://github.com/itechmeat/open-second-brain",
+  "repository": "https://github.com/itechmeat/open-second-brain",
+  "license": "MIT",
+  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Open Second Brain",
+    "shortDescription": "Per-vault second brain for AI agents using Obsidian-compatible Markdown",
+    "longDescription": "Open Second Brain gives every agent on this machine a shared, append-only event log and a curated AI Wiki space inside a portable Markdown vault. The plugin exposes vault status, query, capture, event-log append, and vault health tools via MCP, and injects a per-turn identity reminder so agents reliably log durable artifacts.",
+    "developerName": "Open Second Brain contributors",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": ["Capture this finding to the second brain"]
+  }
+}

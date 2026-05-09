@@ -1,6 +1,6 @@
 {
   "name": "open-second-brain",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "type": "module",
   "private": false,
   "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw.",
@@ -11,6 +11,20 @@
     "url": "https://github.com/itechmeat/open-second-brain.git"
   },
   "keywords": ["second-brain", "obsidian", "agents", "openclaw-plugin", "mcp"],
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "bin": {
+    "o2b": "./scripts/o2b",
+    "vault-log": "./scripts/vault-log"
+  },
+  "scripts": {
+    "build:openclaw": "bun build src/openclaw/index.ts --outfile openclaw/index.js --target=node --format=esm --external openclaw/plugin-sdk/plugin-entry",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "sync-version": "bun run scripts/sync-version.ts",
+    "sync-version:check": "bun run scripts/sync-version.ts --check"
+  },
   "files": [
     "openclaw/",
     "src/",
@@ -22,6 +36,15 @@
     "LICENSE",
     "pyproject.toml"
   ],
+  "dependencies": {
+    "proper-lockfile": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "typescript": "^5.5.0"
+  },
   "openclaw": {
     "extensions": ["./openclaw/index.js"]
   }

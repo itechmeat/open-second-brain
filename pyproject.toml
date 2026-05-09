@@ -2,21 +2,22 @@
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
+# Open Second Brain v0.7+ runs on the Bun TypeScript runtime; the canonical
+# version lives in package.json. This pyproject.toml exists only so the
+# Hermes Python shim (`plugins/hermes/__init__.py`) and the root entry
+# (`__init__.py`) are addressable as a Python package — Hermes loads them
+# in-process as part of its plugin lifecycle. No runtime dependencies, no
+# CLI entry points (those moved to `package.json` `bin`).
 [project]
 name = "open-second-brain"
-version = "0.6.2"
-description = "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw."
+version = "0.7.0"
+description = "Hermes Python shim for Open Second Brain. Most of the project (CLI, MCP server, OpenClaw plugin) is TypeScript on Bun; see package.json."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Open Second Brain contributors" }]
-keywords = ["second-brain", "obsidian", "agents", "skills", "event-log"]
+keywords = ["second-brain", "obsidian", "agents", "hermes-plugin"]
 dependencies = []
 
-[project.scripts]
-o2b = "open_second_brain.cli:main"
-vault-log = "open_second_brain.vault_log:main"
-o2b-mcp = "open_second_brain.mcp:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = ["plugins.hermes"]
