@@ -31,7 +31,7 @@ If you are unsure: ask yourself "would future-me want to find this in the log by
 
 The MCP server resolves the agent identity from `~/.config/open-second-brain/config.yaml` automatically; you do **not** pass `agent` unless you are deliberately logging on someone else's behalf. Pass only `message`:
 
-```
+```json
 event_log_append({ "message": "migrated CLI from Python to Bun, all 175 tests green" })
 ```
 
@@ -60,7 +60,7 @@ Concrete rules:
 
 Illustrative shape, English example (substitute the user's language for the prose):
 
-```
+```text
 fixed event_log_append race: dailyNotePath now validates date via validateEventDate, blocking path traversal via "../"
 ```
 

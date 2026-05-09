@@ -38,10 +38,11 @@ describe("installCli", () => {
     writeFileSync(fake, "#!/bin/sh\n");
     symlinkSync(fake, join(tmp, "o2b"));
     const result = installCli(tmp);
-    expect(result.errors).toEqual([]);
-    expect(result.outcomes.some(([n, msg]) => n === "o2b" && msg.startsWith("warning:"))).toBe(
-      true,
-    );
+    // Conflicting symlink is now reported as an error so callers (CLI
+    // wrapper, scripted installs) exit non-zero instead of silently
+    // succeeding while the requested link is still pointing elsewhere.
+    expect(result.errors.length).toBeGreaterThanOrEqual(1);
+    expect(result.outcomes.some(([n, msg]) => n === "o2b" && msg.startsWith("error:"))).toBe(true);
     expect(readlinkSync(join(tmp, "o2b"))).toBe(fake);
   });
 });

@@ -1568,7 +1568,7 @@ import { basename, dirname, join } from "node:path";
 function atomicWriteFileSync(target, contents) {
   const dir = dirname(target);
   mkdirSync(dir, { recursive: true });
-  const tmpName = `.${basename(target)}.${process.pid}.${Date.now()}.tmp`;
+  const tmpName = `.${basename(target)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   const tmpPath = join(dir, tmpName);
   let fd = null;
   try {
@@ -2594,8 +2594,9 @@ var openclaw_default = definePluginEntry({
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
         const message = params["message"];
-        if (!message)
+        if (!message || !message.trim()) {
           throw new Error("missing required argument: message");
+        }
         const argAgent = params["agent"] ?? null;
         const date = params["date"] ?? null;
         const time = params["time"] ?? null;

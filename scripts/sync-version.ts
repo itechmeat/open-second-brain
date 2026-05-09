@@ -79,10 +79,12 @@ function main(argv: ReadonlyArray<string>): number {
   process.stdout.write(`canonical version: ${version}\n`);
 
   const drifted: string[] = [];
+  const unmatched: string[] = [];
   for (const { rel, regex } of TARGETS) {
     const { matched, wouldChange } = updateFile(rel, regex, version, !check);
     if (!matched) {
       process.stderr.write(`  WARN no version line in ${rel}\n`);
+      unmatched.push(rel);
       continue;
     }
     if (wouldChange) {
@@ -93,10 +95,10 @@ function main(argv: ReadonlyArray<string>): number {
     }
   }
 
-  if (check && drifted.length > 0) {
+  if (check && (drifted.length > 0 || unmatched.length > 0)) {
     process.stderr.write(
-      `\n${drifted.length} file(s) out of sync with package.json; ` +
-        "run scripts/sync-version.ts to fix.\n",
+      `\n${drifted.length} drifted, ${unmatched.length} unmatched target(s); ` +
+        "run scripts/sync-version.ts and add the missing version field where needed.\n",
     );
     return 1;
   }

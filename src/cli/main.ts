@@ -40,11 +40,20 @@ const NO_VAULT_ERROR =
   "set VAULT_DIR in the environment, or run " +
   "`o2b init --vault <path> ...` first to persist a default.";
 
+class NoVaultConfiguredError extends Error {
+  constructor() {
+    super(NO_VAULT_ERROR);
+    this.name = "NoVaultConfiguredError";
+  }
+}
+
 function requireVault(flagVal: string | undefined, configPath: string | null): string {
   const vault = flagVal ?? resolveVault(configPath ?? undefined);
   if (vault === null || vault === undefined) {
-    process.stderr.write(NO_VAULT_ERROR + "\n");
-    process.exit(1);
+    // Throw rather than process.exit so the dispatcher's catch can convert
+    // this into a clean exit code 1 — main() stays reusable in-process
+    // (e.g. test harnesses that import and call it).
+    throw new NoVaultConfiguredError();
   }
   return vault;
 }
@@ -125,16 +134,27 @@ async function cmdInit(argv: string[]): Promise<number> {
     process.stdout.write(`vault already initialized: ${vault}\n`);
     process.stdout.write("use --force to overwrite existing files\n");
   }
-  const configPath = setConfigValue("vault", resolve(vault));
+  // Persist vault/agent/timezone in one guarded block so a write failure
+  // (read-only config dir, disk full) surfaces as a clean CLI exit instead
+  // of an uncaught exception after the vault scaffolding is already on disk.
+  let configPath: string;
+  try {
+    configPath = setConfigValue("vault", resolve(vault));
+    if (agentName) setConfigValue("agent_name", agentName);
+    if (timezone) setConfigValue("timezone", timezone);
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to persist plugin config: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
   process.stdout.write(`vault path persisted to: ${configPath}\n`);
   if (agentName) {
     process.stdout.write(`agent name registered: ${agentName}\n`);
-    setConfigValue("agent_name", agentName);
     process.stdout.write(`agent name persisted to: ${configPath}\n`);
   }
   if (timezone) {
     process.stdout.write(`timezone registered: ${timezone}\n`);
-    setConfigValue("timezone", timezone);
     process.stdout.write(`timezone persisted to: ${configPath}\n`);
   }
   return 0;
@@ -312,8 +332,10 @@ async function cmdToolCall(argv: string[]): Promise<number> {
   for (const pair of (flags["tool-arg"] as string[] | undefined) ?? []) {
     const eq = pair.indexOf("=");
     if (eq === -1) {
+      // Argument-shape error: align with the dispatcher convention
+      // (CliError → exit 2). Tool execution failures keep using exit 1.
       process.stderr.write(`error: --tool-arg must be key=value, got: ${pair}\n`);
-      return 1;
+      return 2;
     }
     const k = pair.slice(0, eq);
     const v = pair.slice(eq + 1);
@@ -411,6 +433,10 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
     if (exc instanceof CliError) {
       process.stderr.write(`error: ${exc.message}\n`);
       return 2;
+    }
+    if (exc instanceof NoVaultConfiguredError) {
+      process.stderr.write(exc.message + "\n");
+      return 1;
     }
     throw exc;
   }

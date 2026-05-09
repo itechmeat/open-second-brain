@@ -10,7 +10,7 @@
   "repository": "https://github.com/itechmeat/open-second-brain",
   "license": "MIT",
   "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"],
-  "skills": "./skills/",
+  "skills": "./skills",
   "interface": {
     "displayName": "Open Second Brain",
     "shortDescription": "Per-vault second brain for AI agents using Obsidian-compatible Markdown",

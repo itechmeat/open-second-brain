@@ -5,8 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ## [0.7.0] - 2026-05-09
 
 Single TypeScript source of truth on the [Bun](https://bun.sh) runtime.
@@ -630,7 +628,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.6.2...HEAD
+[0.7.0]: https://github.com/itechmeat/open-second-brain/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/itechmeat/open-second-brain/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/itechmeat/open-second-brain/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/itechmeat/open-second-brain/compare/v0.5.5...v0.6.0

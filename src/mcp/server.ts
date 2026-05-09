@@ -79,8 +79,22 @@ export class MCPServer {
       return errorResponse(request.id ?? null, INVALID_PARAMS, "params must be an object");
     }
     const params = paramsRaw as Record<string, unknown>;
-    const requestId = request.id;
+    // JSON-RPC 2.0 §4.1: `id` MUST be a string, number, or null. Anything
+    // else (objects, symbols, arrays) is a protocol violation — respond
+    // with INVALID_REQUEST and id: null so a non-compliant client sees a
+    // well-formed error frame instead of getting our object back as `id`.
     const isNotification = !("id" in request);
+    if (!isNotification) {
+      const idType = typeof request.id;
+      if (
+        idType !== "string" &&
+        idType !== "number" &&
+        request.id !== null
+      ) {
+        return errorResponse(null, INVALID_REQUEST, "id must be string, number, or null");
+      }
+    }
+    const requestId = request.id;
 
     try {
       let result: unknown;

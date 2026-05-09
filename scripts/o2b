@@ -7,17 +7,7 @@ SELF=$(realpath -- "${BASH_SOURCE[0]}")
 SCRIPT_DIR=$(cd -- "$(dirname -- "$SELF")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 
-if ! command -v bun >/dev/null 2>&1; then
-  cat >&2 <<'EOS'
-error: 'bun' is not on PATH.
-
-Open Second Brain v0.7+ runs on the Bun JavaScript runtime. Install it with:
-
-  curl -fsSL https://bun.sh/install | bash
-
-Then re-open your shell or run `source ~/.bashrc` to pick up ~/.bun/bin.
-EOS
-  exit 127
-fi
+# shellcheck source=./_bun-precheck.sh
+. "$SCRIPT_DIR/_bun-precheck.sh"
 
 exec bun run "$REPO_ROOT/src/cli/main.ts" "$@"

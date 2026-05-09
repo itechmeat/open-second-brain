@@ -245,7 +245,11 @@ export default definePluginEntry({
         async execute(_id, params): Promise<unknown> {
           const vault = resolveVaultPath(api);
           const message = params["message"] as string | undefined;
-          if (!message) throw new Error("missing required argument: message");
+          if (!message || !message.trim()) {
+            // Treat whitespace-only the same as missing; the MCP-side
+            // `_coerce_str` does the same. Empty entries weaken the log.
+            throw new Error("missing required argument: message");
+          }
           const argAgent = (params["agent"] as string | undefined) ?? null;
           const date = (params["date"] as string | undefined) ?? null;
           const time = (params["time"] as string | undefined) ?? null;

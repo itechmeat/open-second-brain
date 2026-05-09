@@ -24,9 +24,88 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Verify (bun ${{ matrix.bun-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        # Floor matches `engines.bun` in package.json. Bumping that floor MUST
+        # also bump this matrix so CI never silently ships green at "latest"
+        # while the declared minimum no longer compiles.
+        bun-version: ["1.1.0", "latest"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun ${{ matrix.bun-version }}
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun-version }}
+
+      - name: Set up Python (Hermes shim test only)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify manifest version sync
+        run: bun run sync-version:check
+
+      - name: Run TypeScript typecheck
+        run: bun run typecheck
+
+      - name: Run TypeScript test suite (bun:test)
+        run: bun test
+
+      - name: Run Python shim tests
+        run: python -m unittest discover -s tests/python -v
+
+      - name: Validate manifests and CLI scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m json.tool .claude-plugin/plugin.json >/dev/null
+          python -m json.tool .codex-plugin/plugin.json >/dev/null
+          python -m json.tool openclaw.plugin.json >/dev/null
+          python -m json.tool package.json >/dev/null
+          python -m py_compile plugins/hermes/__init__.py
+          bash -n scripts/o2b
+          bash -n scripts/vault-log
+          bash -n scripts/_bun-precheck.sh
+          ./scripts/o2b doctor --vault . --repo .
+
+      - name: Validate OpenClaw bundle is in sync with sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Re-build into a temp file and diff against the committed bundle
+          # so a stale `openclaw/index.js` fails CI rather than ships silently.
+          bun build src/openclaw/index.ts \
+            --outfile /tmp/openclaw-rebuild.js \
+            --target=node --format=esm \
+            --external openclaw/plugin-sdk/plugin-entry
+          diff -q /tmp/openclaw-rebuild.js openclaw/index.js \
+            || { echo "openclaw/index.js is out of date; run: bun run build:openclaw" >&2; exit 1; }
+
+      - name: Validate OpenClaw packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "const pkg = require('./package.json'); if (!pkg.openclaw?.extensions?.length) throw new Error('missing openclaw.extensions')"
+          for entry in $(node -e "console.log(require('./package.json').openclaw.extensions.join(' '))"); do
+            [ -f "$entry" ] || { echo "Missing entry: $entry"; exit 1; }
+          done
+
   release:
     name: Build and publish GitHub release
+    needs: verify
     runs-on: ubuntu-latest
+    # Only fire on actual release events — every push triggers `verify`,
+    # but only tag pushes / workflow_dispatch should publish.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     env:
       VERSION_INPUT: ${{ github.event.inputs.version || '' }}
       PRERELEASE_INPUT: ${{ github.event.inputs.prerelease || 'false' }}
@@ -40,14 +119,6 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-
-      - name: Set up Python (Hermes shim test only)
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install JS dependencies
-        run: bun install --frozen-lockfile
 
       - name: Resolve release version
         id: version
@@ -74,53 +145,6 @@ jobs:
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-
-      - name: Verify manifest version sync
-        run: bun run sync-version:check
-
-      - name: Run TypeScript typecheck
-        run: bun run typecheck
-
-      - name: Run TypeScript test suite (bun:test)
-        run: bun test
-
-      - name: Run Python shim tests
-        run: python -m unittest discover -s tests/python -v
-
-      - name: Validate manifests and CLI scripts
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m json.tool .claude-plugin/plugin.json >/dev/null
-          python -m json.tool .codex-plugin/plugin.json >/dev/null
-          python -m json.tool openclaw.plugin.json >/dev/null
-          python -m json.tool package.json >/dev/null
-          python -m py_compile plugins/hermes/__init__.py
-          bash -n scripts/o2b
-          bash -n scripts/vault-log
-          ./scripts/o2b doctor --vault . --repo .
-
-      - name: Validate OpenClaw bundle is in sync with sources
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Re-build into a temp file and diff against the committed bundle
-          # so a stale `openclaw/index.js` fails CI rather than ships silently.
-          bun build src/openclaw/index.ts \
-            --outfile /tmp/openclaw-rebuild.js \
-            --target=node --format=esm \
-            --external openclaw/plugin-sdk/plugin-entry
-          diff -q /tmp/openclaw-rebuild.js openclaw/index.js \
-            || { echo "openclaw/index.js is out of date; run: bun run build:openclaw" >&2; exit 1; }
-
-      - name: Validate OpenClaw packaging
-        shell: bash
-        run: |
-          set -euo pipefail
-          node -e "const pkg = require('./package.json'); if (!pkg.openclaw?.extensions?.length) throw new Error('missing openclaw.extensions')"
-          for entry in $(node -e "console.log(require('./package.json').openclaw.extensions.join(' '))"); do
-            [ -f "$entry" ] || { echo "Missing entry: $entry"; exit 1; }
-          done
 
       - name: Publish GitHub release
         env:

@@ -94,13 +94,17 @@ export function installCli(bindir?: string): InstallResult {
         } catch {
           // ignore
         }
-        outcomes.push([
-          name,
-          `warning: ${link} already points to ${existing}, not overwriting`,
-        ]);
+        // Conflict: report as an error so cmdInstallCli exits non-zero.
+        // Otherwise the user thinks install succeeded but their CLI still
+        // points at the old checkout.
+        const msg = `error: ${link} already points to ${existing}, not overwriting`;
+        outcomes.push([name, msg]);
+        errors.push(msg);
       }
     } else if (existsSync(link)) {
-      outcomes.push([name, `warning: ${link} exists and is not a symlink, not overwriting`]);
+      const msg = `error: ${link} exists and is not a symlink, not overwriting`;
+      outcomes.push([name, msg]);
+      errors.push(msg);
     } else {
       try {
         symlinkSync(source, link);

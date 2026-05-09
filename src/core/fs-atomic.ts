@@ -18,7 +18,13 @@ export function atomicWriteFileSync(target: string, contents: string): void {
   const dir = dirname(target);
   mkdirSync(dir, { recursive: true });
 
-  const tmpName = `.${basename(target)}.${process.pid}.${Date.now()}.tmp`;
+  // pid + ms timestamp alone collide when two writes for the same target
+  // hit within the same millisecond (e.g. concurrent appendEvent calls
+  // bypassing the lockfile path). The random suffix makes openSync(..., "wx")
+  // safely unique even in that race.
+  const tmpName = `.${basename(target)}.${process.pid}.${Date.now()}.${Math.random()
+    .toString(16)
+    .slice(2)}.tmp`;
   const tmpPath = join(dir, tmpName);
 
   let fd: number | null = null;

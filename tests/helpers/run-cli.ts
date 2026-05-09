@@ -23,13 +23,20 @@ const ROOT = resolve(HERE, "..", "..");
 const CLI_ENTRY = join(ROOT, "src", "cli", "main.ts");
 
 /**
- * Env vars that the CLI reads for vault / identity / timezone resolution.
- * Each one MUST start unset in tests unless the caller passes it explicitly,
- * because the developer's shell almost certainly has `VAULT_AGENT_NAME` etc.
- * pointing at their real vault, and that would override anything we put in
- * `OPEN_SECOND_BRAIN_CONFIG` via env-precedence.
+ * Env vars that the CLI reads for vault / identity / timezone resolution
+ * AND `OPEN_SECOND_BRAIN_CONFIG` itself. Each one MUST start unset in tests
+ * unless the caller passes it explicitly — the developer's shell almost
+ * certainly has `VAULT_AGENT_NAME`, `OPEN_SECOND_BRAIN_CONFIG`, etc. pointing
+ * at their real vault / persisted config; if we let those leak into the
+ * child process, init-tests can write to the real `~/.config/open-second-brain/`
+ * instead of a per-test sandbox.
  */
-const RUNTIME_OVERRIDABLE_ENV = ["VAULT_DIR", "VAULT_AGENT_NAME", "VAULT_TIMEZONE"] as const;
+const RUNTIME_OVERRIDABLE_ENV = [
+  "VAULT_DIR",
+  "VAULT_AGENT_NAME",
+  "VAULT_TIMEZONE",
+  "OPEN_SECOND_BRAIN_CONFIG",
+] as const;
 
 export async function runCli(
   args: ReadonlyArray<string>,
