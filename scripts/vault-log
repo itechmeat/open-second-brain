@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Follow symlink so PYTHONPATH is correct even when invoked through
-# a symlink from ~/.local/bin (created by 'o2b install-cli').
+# `vault-log` is the legacy shortcut for `o2b append-event`. The two
+# entry points share an implementation in src/cli/main.ts; this wrapper
+# just forwards positional / option arguments to the unified CLI.
+#
+# Follow symlink so the repo root is correct even when invoked through
+# a symlink in ~/.local/bin (created by 'o2b install-cli').
 SELF=$(realpath -- "${BASH_SOURCE[0]}")
 SCRIPT_DIR=$(cd -- "$(dirname -- "$SELF")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
-export PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 -m open_second_brain.vault_log "$@"
+
+# shellcheck source=./_bun-precheck.sh
+. "$SCRIPT_DIR/_bun-precheck.sh"
+
+exec bun run "$REPO_ROOT/src/cli/main.ts" append-event "$@"

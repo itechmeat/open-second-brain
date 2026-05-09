@@ -5,7 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-05-09
+
+Single TypeScript source of truth on the [Bun](https://bun.sh) runtime.
+Hermes, Claude Code, Codex, and OpenClaw all consume the same `src/core/`
+modules; the duplicate JavaScript copy under `openclaw/*.js` and the
+parallel Python implementation under `src/open_second_brain/*.py` are gone.
+
+### Added
+
+- TypeScript core (`src/core/`) for config, event-log, vault, init, doctor.
+- `bun:test` suite (176 cases) + Python shim tests (13 cases). Includes a
+  12-worker multi-process append-event lock test.
+- Per-runtime install flows for local marketplaces (Claude `claude plugin
+  marketplace add <path>`, Codex `codex plugin marketplace add <path>`,
+  Hermes via plugin-dir symlink, OpenClaw `openclaw plugins install <path>`).
+- `agent-event-log` skill: stronger trigger description and a language
+  policy that follows the user's session language.
+- `scripts/sync-version.ts` and `bun run sync-version:check` to keep all
+  manifests aligned with `package.json`.
+- `bun.lock` for reproducible dependency resolution.
+
+### Changed (BREAKING)
+
+- **Runtime:** `o2b` CLI requires [Bun](https://bun.sh) (>=1.1.0). The
+  wrapper script aborts with an install hint if `bun` is not on PATH.
+- **Source layout:** Python `src/open_second_brain/*` replaced by TypeScript
+  `src/core/*`, `src/cli/*`, `src/mcp/*`.
+- **OpenClaw plugin:** `openclaw/index.js` is now a `bun build` bundle
+  (target=node) of `src/openclaw/index.ts`; no more hand-translated JS.
+  CI rebuilds and diffs the committed bundle.
+- **Hermes plugin:** `plugins/hermes/__init__.py` slimmed to a thin shim
+  (`pre_llm_call` + minimal health). Identity reminder template lives in
+  `templates/identity-reminder.txt`, shared with the OpenClaw
+  `before_prompt_build` hook.
+- **Version source of truth:** `package.json`. `pyproject.toml` and the
+  five plugin manifests carry synced copies.
+- **CI:** `oven-sh/setup-bun@v2`, `bun test`, `bun run typecheck`,
+  Python-shim tests, manifest + bundle freshness checks.
+
+### Fixed
+
+- **Security — path traversal in `event_log_append`:** `date` parameter is
+  now validated against `^\d{4}\.\d{2}\.\d{2}$` and rejects non-existent
+  calendar dates and `..` segments. Previously `date: "../AI Wiki/notes/pwn"`
+  could write outside `Daily/`.
+- **Identity hallucination:** placeholder blacklist extended to include
+  `codex`, `codex-cli`, `codex-exec`, `claude-code`, `hermes`, `openclaw`.
+  When the model echoes its runtime name as the `agent` argument the server
+  now falls back to the persisted `agent_name` instead of writing
+  `@codex` / `@hermes` / etc.
+- **Cross-platform paths:** `fs-atomic`, `install-cli`, `uninstall` use
+  `node:path` `basename` / `sep` instead of hard-coded `/`.
+- **Test reliability:** `expect(Bun.file(...).text()).resolves` now awaited
+  — assertion was silently dropped.
+- **Hermes shim:** `__init__.py` tolerates both relative and absolute
+  `plugins.hermes` import paths (Hermes loads it as a file directly).
+
+### Removed (BREAKING)
+
+- Python `open_second_brain` package and its pip entry points
+  (`o2b`, `vault-log`, `o2b-mcp`).
+- `openclaw/event-log.js` and `openclaw/vault.js` (rolled into the bundle).
+
+### Migration
+
+1. Install Bun (`curl -fsSL https://bun.sh/install | bash`).
+2. `git pull` the plugin checkout.
+3. Re-run `o2b install-cli` to refresh symlinks.
+4. `o2b doctor --vault <path> --repo <repo>` to verify.
+
+Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 
 ## [0.6.2] - 2026-05-08
 
@@ -558,7 +628,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[unreleased]: https://github.com/itechmeat/open-second-brain/compare/v0.6.2...HEAD
+[0.7.0]: https://github.com/itechmeat/open-second-brain/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/itechmeat/open-second-brain/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/itechmeat/open-second-brain/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/itechmeat/open-second-brain/compare/v0.5.5...v0.6.0

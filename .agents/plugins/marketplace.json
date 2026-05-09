@@ -8,7 +8,7 @@
       "name": "open-second-brain",
       "source": {
         "source": "local",
-        "path": "."
+        "path": "./plugins/codex"
       },
       "policy": {
         "installation": "AVAILABLE"

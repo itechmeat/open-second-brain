@@ -12,8 +12,9 @@ build/
 dist/
 *.egg-info/
 
-# Node
+# Node / Bun
 node_modules/
+.bun/
 
 # Local config and sandbox data
 .env
