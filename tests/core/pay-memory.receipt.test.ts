@@ -180,6 +180,25 @@ describe("writeReceipt", () => {
     expect(body).toContain("Approved by: sergey");
   });
 
+  test("payment_layer and network override hardcoded defaults", () => {
+    const out = writeReceipt(tmp, {
+      ...baseInput,
+      slug: "rail-1",
+      paymentLayer: "x402-direct",
+      network: "ethereum",
+    });
+    const [meta] = parseFrontmatter(out.path);
+    expect(meta["payment_layer"]).toBe("x402-direct");
+    expect(meta["network"]).toBe("ethereum");
+  });
+
+  test("payment_layer and network defaults stay pay.sh / solana when unset", () => {
+    const out = writeReceipt(tmp, { ...baseInput, slug: "rail-default" });
+    const [meta] = parseFrontmatter(out.path);
+    expect(meta["payment_layer"]).toBe("pay.sh");
+    expect(meta["network"]).toBe("solana");
+  });
+
   test("policy_status='denied' renders the truth — receipt records the override", () => {
     const out = writeReceipt(tmp, {
       ...baseInput,

@@ -55,7 +55,14 @@ export function ensureInsideVault(target: string, vault: string): string {
 }
 
 function isLexicallyInside(target: string, root: string): boolean {
-  return target === root || target.startsWith(root + sep);
+  // Windows file paths are case-insensitive at the filesystem level —
+  // `C:\Vault\x.md` and `c:\vault\x.md` resolve to the same inode. Doing
+  // a case-sensitive string compare on Windows would falsely reject a
+  // user's lower-cased argument against a vault stored with the canonical
+  // capitalisation. POSIX stays case-sensitive.
+  const t = process.platform === "win32" ? target.toLowerCase() : target;
+  const r = process.platform === "win32" ? root.toLowerCase() : root;
+  return t === r || t.startsWith(r + sep);
 }
 
 function deepestExistingAncestor(target: string): string {

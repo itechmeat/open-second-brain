@@ -308,6 +308,35 @@ describe("check-payment-policy", () => {
     expect(r.returncode).toBe(2);
     expect(r.stderr).toContain("must be a number");
   });
+
+  test("whitespace-only --expected-amount is treated as missing, not as 0", async () => {
+    // The bug: `Number(" ")` returns `0`. Without trimming the helper
+    // would let an agent (or a stray shell-escape) bypass the
+    // missing-amount guard by submitting whitespace.
+    await runCli(["init-pay-memory", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    writeFileSync(
+      join(vault, "AI Wiki", "policies", "spending.json"),
+      JSON.stringify({
+        allowed_services: ["x/y"],
+        max_single_call: 0.05,
+      }),
+      "utf8",
+    );
+    const r = await runCli(
+      [
+        "check-payment-policy",
+        "--vault", vault,
+        "--service", "x/y",
+        "--expected-amount", "   ",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    // approval_required → exit 3 (missing-amount guard fires)
+    expect(r.returncode).toBe(3);
+    expect(r.stdout).toContain("missing_expected_amount");
+  });
 });
 
 describe("approval workflow (request → approve → consume)", () => {

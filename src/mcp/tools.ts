@@ -375,6 +375,8 @@ async function toolPaymentReceiptAppend(
     service: coerceStr(args, "service", true)!,
     status: coerceStr(args, "status", true)!,
     reason: coerceStr(args, "reason", true)!,
+    paymentLayer: coerceStr(args, "payment_layer", false),
+    network: coerceStr(args, "network", false),
     category: coerceStr(args, "category", false),
     endpoint: coerceStr(args, "endpoint", false),
     expectedCost: coerceStr(args, "expected_cost", false),
@@ -729,6 +731,14 @@ export function buildToolTable(): ToolDefinition[] {
             type: "string",
             description:
               "Pending-payment-request id. When supplied, the receipt inherits policy / approval audit fields from that request — the agent doesn't have to re-state them.",
+          },
+          payment_layer: {
+            type: "string",
+            description: "Payment rail (default `pay.sh`). Override only when a different rail was used.",
+          },
+          network: {
+            type: "string",
+            description: "Settlement network (default `solana`). Override only when a different network was used.",
           },
         },
         required: ["service", "status", "reason"],

@@ -18,6 +18,18 @@ export interface ReceiptInput {
   readonly service: string;
   readonly status: string;
   readonly reason: string;
+  /**
+   * Payment rail used to authorise the call (default `pay.sh`). Override
+   * when a future rail joins the audit trail — hardcoding `pay.sh` would
+   * make the receipt lie about its provenance.
+   */
+  readonly paymentLayer?: string | null;
+  /**
+   * Underlying settlement network (default `solana`). Same reasoning:
+   * leave the door open for non-Solana rails without retconning past
+   * receipts to claim a network they didn't use.
+   */
+  readonly network?: string | null;
   readonly category?: string | null;
   readonly endpoint?: string | null;
   readonly expectedCost?: string | null;

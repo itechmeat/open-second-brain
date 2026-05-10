@@ -102,14 +102,21 @@ function failWith(action: string, exc: unknown): number {
  * Parse an optional `--<name>` flag whose value should be a finite number.
  * Returns `{ value: number | null, error: string | null }`. The caller is
  * expected to bail with exit 2 + the error string when `error` is set.
+ *
+ * Trim before testing for emptiness — `Number(" ")` evaluates to `0` in
+ * JS, and without this whitespace-only flags would silently bypass the
+ * missing-amount guard in `check-payment-policy` and
+ * `request-payment-approval`.
  */
 function parseOptionalNumberFlag(
   flags: Record<string, string | boolean | string[] | undefined>,
   name: string,
 ): { value: number | null; error: string | null } {
   const raw = flags[name] as string | undefined;
-  if (raw === undefined || raw === "") return { value: null, error: null };
-  const parsed = Number(raw);
+  if (raw === undefined) return { value: null, error: null };
+  const trimmed = raw.trim();
+  if (trimmed === "") return { value: null, error: null };
+  const parsed = Number(trimmed);
   if (!Number.isFinite(parsed)) {
     return { value: null, error: `--${name} must be a number, got: ${raw}` };
   }
@@ -425,6 +432,8 @@ async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
     "policy-reasons": { type: "string-array" },
     "policy-checked-at": { type: "string" },
     "from-request": { type: "string" },
+    "payment-layer": { type: "string" },
+    network: { type: "string" },
   });
   const config = defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
@@ -499,6 +508,8 @@ async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
       service: String(flags["service"]),
       status: String(flags["status"]),
       reason: String(flags["reason"]),
+      paymentLayer: (flags["payment-layer"] as string | undefined) ?? null,
+      network: (flags["network"] as string | undefined) ?? null,
       category: (flags["category"] as string | undefined) ?? null,
       endpoint: (flags["endpoint"] as string | undefined) ?? null,
       expectedCost: (flags["expected-cost"] as string | undefined) ?? null,
@@ -921,9 +932,15 @@ async function cmdListPendingPayments(argv: string[]): Promise<number> {
     process.stdout.write(`no requests with status: ${status}\n`);
   } else {
     for (const s of summaries) {
-      const cost = s.expectedAmount
-        ? ` (${s.expectedAmount}${s.currency ? " " + s.currency : ""})`
-        : "";
+      // Use an explicit null check; a truthy check would hide an actual
+      // `expected_amount: "0"` (legitimate for free-tier sandbox calls)
+      // because `Boolean("0") === true` only happens for *strings* — once
+      // any future change starts storing the field as a number, `0`
+      // would silently disappear from the list output.
+      const cost =
+        s.expectedAmount !== null && s.expectedAmount !== ""
+          ? ` (${s.expectedAmount}${s.currency ? " " + s.currency : ""})`
+          : "";
       process.stdout.write(`${s.status}\t${s.id}\t${s.service}${cost}\t${s.reason}\n`);
     }
   }

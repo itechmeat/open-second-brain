@@ -48,11 +48,13 @@ export function writeReceipt(vault: string, input: ReceiptInput): ReceiptOutput 
   ensureInsideVault(target, vault);
 
   const created = isoTimestampZ(date, time, tz);
+  const paymentLayer = input.paymentLayer?.trim() || "pay.sh";
+  const network = input.network?.trim() || "solana";
   const metadata: FrontmatterMap = {
     type: RECEIPT_FRONTMATTER_TYPE,
     agent: input.agent.trim(),
-    payment_layer: "pay.sh",
-    network: "solana",
+    payment_layer: paymentLayer,
+    network,
     service: input.service.trim(),
     status: input.status.trim(),
     reason: input.reason.trim(),

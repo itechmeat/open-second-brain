@@ -263,7 +263,7 @@ Behavior: aggregates receipts for `--date`, renders the report Markdown, writes 
 
 `HELP` constant in `src/cli/main.ts` gains a `Pay Memory` group:
 
-```
+```text
 Pay Memory:
   init-pay-memory          Bootstrap policies/, payments/, assets/, drafts/, reports/
   append-payment-receipt   Save a Markdown receipt for a paid API call

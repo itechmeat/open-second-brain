@@ -2192,7 +2192,9 @@ function ensureInsideVault(target, vault) {
   return resolvedTarget;
 }
 function isLexicallyInside(target, root) {
-  return target === root || target.startsWith(root + sep);
+  const t = process.platform === "win32" ? target.toLowerCase() : target;
+  const r = process.platform === "win32" ? root.toLowerCase() : root;
+  return t === r || t.startsWith(r + sep);
 }
 function deepestExistingAncestor(target) {
   let cur = target;
@@ -2741,11 +2743,13 @@ function writeReceipt(vault, input) {
   const target = receiptPath(vault, date, slug);
   ensureInsideVault(target, vault);
   const created = isoTimestampZ(date, time, tz);
+  const paymentLayer = input.paymentLayer?.trim() || "pay.sh";
+  const network = input.network?.trim() || "solana";
   const metadata = {
     type: RECEIPT_FRONTMATTER_TYPE,
     agent: input.agent.trim(),
-    payment_layer: "pay.sh",
-    network: "solana",
+    payment_layer: paymentLayer,
+    network,
     service: input.service.trim(),
     status: input.status.trim(),
     reason: input.reason.trim(),
@@ -3821,7 +3825,9 @@ var openclaw_default = definePluginEntry({
           policy_rule: { type: "string" },
           policy_reasons: { type: "array", items: { type: "string" } },
           policy_checked_at: { type: "string" },
-          from_request: { type: "string" }
+          from_request: { type: "string" },
+          payment_layer: { type: "string" },
+          network: { type: "string" }
         },
         required: ["service", "status", "reason"],
         additionalProperties: false
@@ -3878,6 +3884,8 @@ var openclaw_default = definePluginEntry({
           service: String(params["service"]),
           status: String(params["status"]),
           reason: String(params["reason"]),
+          paymentLayer: strOrNull(params["payment_layer"]),
+          network: strOrNull(params["network"]),
           category: strOrNull(params["category"]),
           endpoint: strOrNull(params["endpoint"]),
           expectedCost: strOrNull(params["expected_cost"]),
