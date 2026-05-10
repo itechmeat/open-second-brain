@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-05-10
+
+Pay Memory: a memory and audit layer for paid agent actions. Hermes (or any
+other supported runtime) makes a paid API call through `pay.sh`; Open Second
+Brain saves the reason, the policy check, the receipt, the generated asset,
+the spending policy decision, the human-approval state, and a per-task
+report — all as plain Markdown inside the configured vault.
+
+This release does not execute payments and does not hold wallet keys. The
+payment still happens through the agent's local `pay` CLI; Open Second Brain
+records what happened.
+
+### Added
+
+- **Core Pay Memory module** (`src/core/pay-memory/`):
+  - filesystem helpers (`paymentsDateDir`, `receiptPath`, `assetPath`,
+    `reportPath`) and `validateSlug` (defense-in-depth against path
+    traversal in user-supplied slugs);
+  - best-effort raw-output redactor for `api_key` / `token` / `secret` /
+    `bearer` / `authorization` / `private_key` / `password` / `passwd` /
+    `pwd` / `credential` / `session_token` in env, YAML, JSON, and
+    HTTP-header shapes;
+  - deterministic Markdown receipt / asset / report writers with
+    frontmatter; bracket and backtick sanitisation in wikilinks /
+    inline-code spans;
+  - spending policy template renderer (`spending.md`) plus a separate,
+    optional **machine-readable policy** (`spending.json`) with
+    allowlist, single-call cap, daily budget cap, per-category receipt
+    quotas, and "require approval above" threshold;
+  - daily payment digest (`buildPaymentDigest` +
+    `renderPaymentDigestTelegram`) for cron-friendly 4-line summaries;
+  - **approval workflow** (`pending-payment-request` artifact under
+    `AI Wiki/payments/_pending/`) with `pending → approved/rejected →
+    consumed` state machine.
+- **Path-safety helpers** (`src/core/path-safety.ts`): `ensureInsideVault`
+  and `vaultRelative` use `path.sep` so the prefix check works on Windows
+  too; replaces the duplicated POSIX-only versions previously inlined in
+  `src/mcp/tools.ts` and `src/core/pay-memory/paths.ts`.
+- **Atomic / race-safe writers** (`atomicCreateFileSyncExclusive`,
+  `writeFrontmatterAtomic`): Pay Memory artifacts are written via
+  `link(2)` semantics so "refuse to overwrite" is enforced atomically
+  even with concurrent CLI + MCP server processes.
+- **CLI commands** (eleven new in this version):
+  - `init-pay-memory` — bootstrap `AI Wiki/{policies,payments,assets,drafts,reports}/`
+    and write `policies/spending.md`.
+  - `append-payment-receipt` — save a Markdown receipt; `--raw-output-file`
+    is redacted before persisting.
+  - `capture-asset` — save a Markdown note for a generated asset.
+  - `payment-report` — aggregate a date's receipts into a Markdown report.
+  - `check-payment-policy` — evaluate a prospective paid call against
+    `spending.json`; exit 0 / 1 / 3 = allowed / denied / approval_required.
+  - `request-payment-approval` — create a pending request the user must
+    sign off on before the agent runs `pay`.
+  - `approve-payment-request`, `reject-payment-request`,
+    `consume-payment-request`, `list-pending-payments` — human / agent
+    sides of the approval workflow.
+  - `payment-digest` — render a Telegram-friendly 4-line summary for a
+    date (with `--empty-mode silent|empty|summary`).
+- **MCP tools** (eight new in this version): `payment_memory_init`,
+  `payment_receipt_append`, `asset_capture`, `payment_report_generate`,
+  `payment_policy_check`, `payment_request_approval`,
+  `payment_request_status`, `payment_request_consume`. Server
+  `initialize.instructions` describes the suggested call chain.
+- **Documentation**: `docs/hermes-cron.md` (wiring `payment-digest` into a
+  Hermes cron `--script --no-agent` job for daily Telegram delivery),
+  `examples/hermes-payment-digest.sh` reference wrapper,
+  `docs/plans/2026-05-10-pay-memory.md` (implementation plan), and
+  `tests/e2e/pay-memory-sandbox.sh` (manual end-to-end smoke test against
+  the real `pay --sandbox` CLI).
+
+### Changed
+
+- The MCP tool server now advertises **thirteen** tools (the previous five
+  plus eight Pay Memory tools).
+- `core/vault.ts` exposes `formatFrontmatter` (pure renderer) and
+  `writeFrontmatterAtomic` (race-safe writer used by Pay Memory). The
+  legacy `writeFrontmatter` keeps its non-atomic semantics for non-critical
+  callers (`init.ts`, the `o2b index` command, etc.).
+
+### Out of scope
+
+- On-chain anchoring of vault hashes (Solana memo, web3 RPC) is
+  intentionally excluded from this project. Pay Memory continues to record
+  `payment_proof` strings opaquely for whatever upstream system produced
+  them; the audit trail lives in the vault, not on a blockchain.
+
 ## [0.7.0] - 2026-05-09
 
 Single TypeScript source of truth on the [Bun](https://bun.sh) runtime.

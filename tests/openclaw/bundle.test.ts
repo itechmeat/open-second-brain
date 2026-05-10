@@ -8,13 +8,21 @@
  * `package.json` extension entry actually points at it.
  */
 
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUNDLE = join(ROOT, "openclaw", "index.js");
+
+let bundleText: string;
+
+beforeAll(() => {
+  // 128 KB bundle; read once and share across the substring-search tests
+  // instead of re-reading on every assertion.
+  bundleText = readFileSync(BUNDLE, "utf8");
+});
 
 describe("openclaw bundle", () => {
   test("file exists and is non-empty", () => {
@@ -24,27 +32,34 @@ describe("openclaw bundle", () => {
   });
 
   test("declares the SDK import as external", () => {
-    const text = readFileSync(BUNDLE, "utf8");
-    expect(text).toContain('from "openclaw/plugin-sdk/plugin-entry"');
+    expect(bundleText).toContain('from "openclaw/plugin-sdk/plugin-entry"');
   });
 
-  test("bundles all five tool registrations", () => {
-    const text = readFileSync(BUNDLE, "utf8");
+  test("bundles every Open Second Brain tool registration", () => {
     for (const tool of [
+      // core
       "second_brain_status",
       "second_brain_query",
       "second_brain_capture",
       "event_log_append",
       "vault_health",
+      // Pay Memory
+      "payment_memory_init",
+      "payment_receipt_append",
+      "asset_capture",
+      "payment_report_generate",
+      "payment_policy_check",
+      "payment_request_approval",
+      "payment_request_status",
+      "payment_request_consume",
     ]) {
-      expect(text).toContain(tool);
+      expect(bundleText).toContain(tool);
     }
   });
 
   test("does NOT contain Python references", () => {
-    const text = readFileSync(BUNDLE, "utf8");
-    expect(text).not.toContain("python3");
-    expect(text).not.toContain("from open_second_brain");
+    expect(bundleText).not.toContain("python3");
+    expect(bundleText).not.toContain("from open_second_brain");
   });
 
   test("package.json points to ./openclaw/index.js", () => {
@@ -53,8 +68,7 @@ describe("openclaw bundle", () => {
   });
 
   test("bundles before_prompt_build hook (per-turn identity reminder)", () => {
-    const text = readFileSync(BUNDLE, "utf8");
-    expect(text).toContain("before_prompt_build");
-    expect(text).toContain("prependContext");
+    expect(bundleText).toContain("before_prompt_build");
+    expect(bundleText).toContain("prependContext");
   });
 });

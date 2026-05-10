@@ -1554,8 +1554,8 @@ var require_proper_lockfile = __commonJS((exports, module) => {
 
 // src/openclaw/index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { existsSync as existsSync5 } from "node:fs";
-import { join as join6 } from "node:path";
+import { existsSync as existsSync7 } from "node:fs";
+import { join as join10, resolve as resolvePath } from "node:path";
 
 // src/core/config.ts
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -1563,14 +1563,40 @@ import { homedir } from "node:os";
 import { join as join2 } from "node:path";
 
 // src/core/fs-atomic.ts
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+  writeSync
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 function atomicWriteFileSync(target, contents) {
+  withTempFile(target, contents, (tmpPath) => {
+    renameSync(tmpPath, target);
+  });
+}
+function atomicCreateFileSyncExclusive(target, contents) {
+  withTempFile(target, contents, (tmpPath) => {
+    try {
+      linkSync(tmpPath, target);
+    } finally {
+      try {
+        unlinkSync(tmpPath);
+      } catch {}
+    }
+  });
+}
+function withTempFile(target, contents, commit) {
   const dir = dirname(target);
   mkdirSync(dir, { recursive: true });
   const tmpName = `.${basename(target)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   const tmpPath = join(dir, tmpName);
   let fd = null;
+  let committed = false;
   try {
     fd = openSync(tmpPath, "wx", 420);
     const buf = Buffer.from(contents, "utf8");
@@ -1581,7 +1607,8 @@ function atomicWriteFileSync(target, contents) {
     fsyncSync(fd);
     closeSync(fd);
     fd = null;
-    renameSync(tmpPath, target);
+    commit(tmpPath);
+    committed = true;
     try {
       const dfd = openSync(dir, "r");
       try {
@@ -1596,9 +1623,11 @@ function atomicWriteFileSync(target, contents) {
         closeSync(fd);
       } catch {}
     }
-    try {
-      unlinkSync(tmpPath);
-    } catch {}
+    if (!committed) {
+      try {
+        unlinkSync(tmpPath);
+      } catch {}
+    }
     throw err;
   }
 }
@@ -2141,9 +2170,318 @@ function buildReminder(agent) {
   return loadReminderTemplate().replace(/\{agent\}/g, agent);
 }
 
+// src/core/pay-memory/paths.ts
+import { join as join5 } from "node:path";
+
+// src/core/path-safety.ts
+import { existsSync as existsSync4, realpathSync } from "node:fs";
+import { dirname as dirname4, posix, relative, resolve as resolve2, sep } from "node:path";
+function ensureInsideVault(target, vault) {
+  const resolvedTarget = resolve2(target);
+  const resolvedVault = resolve2(vault);
+  if (!isLexicallyInside(resolvedTarget, resolvedVault)) {
+    throw new Error(`path escapes vault: ${target}`);
+  }
+  if (existsSync4(resolvedVault)) {
+    const realVault = safeRealpath(resolvedVault);
+    const realAncestor = safeRealpath(deepestExistingAncestor(resolvedTarget));
+    if (!isLexicallyInside(realAncestor, realVault)) {
+      throw new Error(`path escapes vault via symlink: ${target}`);
+    }
+  }
+  return resolvedTarget;
+}
+function isLexicallyInside(target, root) {
+  const t = process.platform === "win32" ? target.toLowerCase() : target;
+  const r = process.platform === "win32" ? root.toLowerCase() : root;
+  return t === r || t.startsWith(r + sep);
+}
+function deepestExistingAncestor(target) {
+  let cur = target;
+  while (!existsSync4(cur)) {
+    const parent = dirname4(cur);
+    if (parent === cur)
+      return cur;
+    cur = parent;
+  }
+  return cur;
+}
+function safeRealpath(p) {
+  try {
+    return realpathSync(p);
+  } catch (err) {
+    if (err?.code === "ENOENT")
+      return p;
+    throw err;
+  }
+}
+function vaultRelative(target, vault) {
+  const rel = relative(resolve2(vault), resolve2(target));
+  return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix.sep);
+}
+
+// src/core/pay-memory/paths.ts
+var ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+var HHMM_RE = /^(\d{2}):(\d{2})$/;
+function payMemoryDirs(vault) {
+  const root = join5(vault, "AI Wiki");
+  return {
+    policies: join5(root, "policies"),
+    payments: join5(root, "payments"),
+    assets: join5(root, "assets"),
+    drafts: join5(root, "drafts"),
+    reports: join5(root, "reports")
+  };
+}
+function policyPath(vault) {
+  return join5(payMemoryDirs(vault).policies, "spending.md");
+}
+function paymentsDateDir(vault, date) {
+  return join5(payMemoryDirs(vault).payments, validateIsoDate(date));
+}
+function receiptPath(vault, date, slug) {
+  return join5(paymentsDateDir(vault, date), `${validateSlug(slug)}.md`);
+}
+function assetPath(vault, slug) {
+  return join5(payMemoryDirs(vault).assets, `${validateSlug(slug)}.md`);
+}
+function reportPath(vault, slug) {
+  return join5(payMemoryDirs(vault).reports, `${validateSlug(slug)}.md`);
+}
+var WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+function validateSlug(slug) {
+  const trimmed = slug.trim();
+  if (!trimmed)
+    throw new Error("slug must not be empty");
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error(`slug must not contain path separators: ${slug}`);
+  }
+  if (trimmed === ".." || trimmed === "." || /(?:^|[^\w])\.\.(?:$|[^\w])/.test(trimmed)) {
+    throw new Error(`slug must not contain '..' traversal: ${slug}`);
+  }
+  if (/[. ]$/.test(trimmed)) {
+    throw new Error(`slug must not end with '.' or whitespace (Windows-incompatible): ${slug}`);
+  }
+  if (WINDOWS_RESERVED_BASENAME_RE.test(trimmed)) {
+    throw new Error(`slug uses a Windows-reserved filename: ${slug}`);
+  }
+  return trimmed;
+}
+function validateIsoDate(value) {
+  const m = ISO_DATE_RE.exec(value);
+  if (!m) {
+    throw new Error("payment date must use YYYY-MM-DD format");
+  }
+  const year = parseInt(m[1], 10);
+  const month = parseInt(m[2], 10);
+  const day = parseInt(m[3], 10);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  if (utc.getUTCFullYear() !== year || utc.getUTCMonth() !== month - 1 || utc.getUTCDate() !== day) {
+    throw new Error(`payment date is not a valid calendar date: ${value}`);
+  }
+  return value;
+}
+function validateIsoTime(value) {
+  const m = HHMM_RE.exec(value);
+  if (!m) {
+    throw new Error("payment time must use HH:MM 24-hour format");
+  }
+  const hour = parseInt(m[1], 10);
+  const minute = parseInt(m[2], 10);
+  if (hour > 23 || minute > 59) {
+    throw new Error(`payment time out of range: ${value} (hour must be 0-23, minute 0-59)`);
+  }
+  return value;
+}
+function isoDateNow(tz) {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz ?? undefined,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  return fmt.format(new Date);
+}
+function isoTimeNow(tz) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz ?? undefined,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(new Date);
+  const get = (type) => parts.find((p) => p.type === type).value;
+  return `${get("hour")}:${get("minute")}`;
+}
+function isoTimestampZ(date, time, tz) {
+  validateIsoDate(date);
+  validateIsoTime(time);
+  if (!tz) {
+    return `${date}T${time}:00Z`;
+  }
+  const utcMillis = utcMillisForLocalWallClock(date, time, tz);
+  return new Date(utcMillis).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function utcMillisForLocalWallClock(date, time, tz) {
+  const naiveUtc = Date.parse(`${date}T${time}:00Z`);
+  const offsetMinutes = tzOffsetMinutes(naiveUtc, tz);
+  return naiveUtc - offsetMinutes * 60000;
+}
+function tzOffsetMinutes(instantMs, tz) {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  });
+  const parts = fmt.formatToParts(new Date(instantMs));
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+  const localUtcMs = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  return Math.round((localUtcMs - instantMs) / 60000);
+}
+// src/core/pay-memory/redactor.ts
+var PLACEHOLDER = "***REDACTED***";
+var MAX_REDACTOR_INPUT = 256 * 1024;
+var TRUNCATION_MARKER = `
+
+[…truncated for size; original exceeded 256 KB. Inspect \`pay\` raw output before sharing.]
+`;
+var SECRET_KEYS = [
+  "api_key",
+  "token",
+  "access_token",
+  "refresh_token",
+  "bearer",
+  "secret",
+  "client_secret",
+  "authorization",
+  "private_key",
+  "password",
+  "passwd",
+  "pwd",
+  "credential",
+  "credentials",
+  "session_token"
+];
+var KEY_PATTERN = SECRET_KEYS.map((k) => k.replace(/[-_]/g, "[-_]?")).join("|");
+var ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
+var COLON_VALUE_RE = new RegExp(`(?<!")\\b(${KEY_PATTERN})(\\s*:\\s*)("[^"]*"|'[^']*'|[^\\r\\n]+)`, "gi");
+var JSON_ENTRY_RE = new RegExp(`("(?:${KEY_PATTERN})"\\s*:\\s*)("(?:[^"\\\\]|\\\\.)*"|true|false|null|-?\\d+(?:\\.\\d+)?)`, "gi");
+var BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._\-+/=]+)/gi;
+function redactRawOutput(text) {
+  if (!text)
+    return text;
+  let out = text.length > MAX_REDACTOR_INPUT ? text.slice(0, MAX_REDACTOR_INPUT) + TRUNCATION_MARKER : text;
+  out = out.replace(JSON_ENTRY_RE, (_match, keyPart, value) => {
+    if (value.startsWith('"'))
+      return `${keyPart}"${PLACEHOLDER}"`;
+    return `${keyPart}${PLACEHOLDER}`;
+  });
+  out = out.replace(ENV_RE, (_match, key, sep2) => {
+    return `${key}${sep2}${PLACEHOLDER}`;
+  });
+  out = out.replace(BEARER_RE, (_match, prefix) => `${prefix}${PLACEHOLDER}`);
+  out = out.replace(COLON_VALUE_RE, (match, key, sep2, value) => {
+    if (value.includes(PLACEHOLDER))
+      return match;
+    if (value.startsWith('"') && value.endsWith('"')) {
+      return `${key}${sep2}"${PLACEHOLDER}"`;
+    }
+    if (value.startsWith("'") && value.endsWith("'")) {
+      return `${key}${sep2}'${PLACEHOLDER}'`;
+    }
+    return `${key}${sep2}${PLACEHOLDER}`;
+  });
+  return out;
+}
+// src/core/pay-memory/policy.ts
+import { existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { dirname as dirname5 } from "node:path";
+var DEFAULT_POLICY_TEMPLATE = `# Agent Spending Policy
+
+This file is read by the agent before any paid action. The agent MUST cite
+this policy in the resulting payment receipt.
+
+This MVP does not enforce limits at the payment layer. The policy exists so
+that a human reviewer can see, after the fact, which rules the agent agreed
+to follow.
+
+## Budget
+
+- Max total spend for the current task: TODO (e.g. $0.10)
+- Max single paid call: TODO (e.g. $0.07)
+- Max paid generations per task: TODO (e.g. 1)
+- Approve repeats: false
+- Approve dynamic pricing: false
+
+## Allowed services
+
+List the services the agent is allowed to call. One per line. Edit before
+running a paid task.
+
+- TODO
+
+<!--
+Example for the OpenSecondBrain hackathon demo:
+
+- paysponge/fal
+-->
+
+## Required before each paid call
+
+The agent must state:
+
+- service name
+- expected price range
+- reason for payment
+- expected output
+- which vault files will be created or updated
+
+## Required after each paid call
+
+The agent must save:
+
+- raw payment-tool output (after redaction)
+- payment amount, if available
+- service endpoint, if available
+- generated asset URL or response identifier
+- payment receipt note in \`AI Wiki/payments/<date>/\`
+- daily event log entry referencing the receipt
+`;
+function writePolicyIfMissing(vault, opts = {}) {
+  const target = policyPath(vault);
+  const overwrite = opts.overwrite ?? false;
+  mkdirSync4(dirname5(target), { recursive: true });
+  if (overwrite) {
+    const existed = existsSync5(target);
+    atomicWriteFileSync(target, DEFAULT_POLICY_TEMPLATE);
+    return existed ? buildPolicyResult(target, "overwritten") : buildPolicyResult(target, "created");
+  }
+  try {
+    atomicCreateFileSyncExclusive(target, DEFAULT_POLICY_TEMPLATE);
+    return buildPolicyResult(target, "created");
+  } catch (err) {
+    if (err?.code === "EEXIST") {
+      return buildPolicyResult(target, "skipped");
+    }
+    throw err;
+  }
+}
+function buildPolicyResult(path, status) {
+  return {
+    path,
+    status,
+    created: status === "created",
+    overwritten: status === "overwritten",
+    skipped: status === "skipped"
+  };
+}
 // src/core/vault.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync, statSync as statSync3, writeFileSync } from "node:fs";
-import { dirname as dirname4, join as join5, relative } from "node:path";
+import { existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, readdirSync, statSync as statSync3, writeFileSync } from "node:fs";
+import { dirname as dirname6, join as join6, relative as relative2 } from "node:path";
 var FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 var KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
 var PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
@@ -2177,7 +2515,7 @@ var DEFAULT_SKIP_FILES = ["index.md", "log.md"];
 function parseFrontmatter(path) {
   let text;
   try {
-    text = readFileSync5(path, "utf8");
+    text = readFileSync6(path, "utf8");
   } catch {
     return [{}, ""];
   }
@@ -2207,8 +2545,7 @@ function parseFrontmatter(path) {
   }
   return [metadata, body];
 }
-function writeFrontmatter(path, metadata, body) {
-  mkdirSync4(dirname4(path), { recursive: true });
+function formatFrontmatter(metadata, body) {
   const lines = ["---"];
   for (const [key, value] of Object.entries(metadata)) {
     lines.push(`${key}: ${formatYamlValue(value)}`);
@@ -2218,9 +2555,29 @@ function writeFrontmatter(path, metadata, body) {
     lines.push("");
     lines.push(body);
   }
-  writeFileSync(path, lines.join(`
+  return lines.join(`
 `) + `
-`, "utf8");
+`;
+}
+function writeFrontmatter(path, metadata, body) {
+  mkdirSync5(dirname6(path), { recursive: true });
+  writeFileSync(path, formatFrontmatter(metadata, body), "utf8");
+}
+function writeFrontmatterAtomic(path, metadata, body, opts = {}) {
+  const contents = formatFrontmatter(metadata, body);
+  if (opts.overwrite) {
+    atomicWriteFileSync(path, contents);
+    return;
+  }
+  try {
+    atomicCreateFileSyncExclusive(path, contents);
+  } catch (err) {
+    if (opts.existsErrorKind && err?.code === "EEXIST") {
+      const rel = opts.vaultForRelativePath ? path.startsWith(opts.vaultForRelativePath + "/") ? path.slice(opts.vaultForRelativePath.length + 1) : path : path;
+      throw new Error(`${opts.existsErrorKind} already exists: ${rel}`);
+    }
+    throw err;
+  }
 }
 function slugify(value) {
   const lowered = value.trim().toLowerCase();
@@ -2246,7 +2603,7 @@ function walk(root, dir, skipDirs, skipFiles, out) {
     return;
   }
   for (const entry of entries) {
-    const full = join5(dir, entry.name);
+    const full = join6(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name))
         continue;
@@ -2259,7 +2616,7 @@ function walk(root, dir, skipDirs, skipFiles, out) {
       continue;
     if (skipFiles.has(entry.name.toLowerCase()))
       continue;
-    const rel = relative(root, full);
+    const rel = relative2(root, full);
     const parts = rel.split(/[\\/]/);
     if (parts.some((p) => skipDirs.has(p)))
       continue;
@@ -2331,63 +2688,797 @@ function formatYamlValue(value) {
   }
   return formatYamlScalar(value);
 }
-// package.json
-var package_default = {
-  name: "open-second-brain",
-  version: "0.7.0",
-  type: "module",
-  private: false,
-  description: "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw.",
-  license: "MIT",
-  homepage: "https://github.com/itechmeat/open-second-brain",
-  repository: {
-    type: "git",
-    url: "https://github.com/itechmeat/open-second-brain.git"
-  },
-  keywords: ["second-brain", "obsidian", "agents", "openclaw-plugin", "mcp"],
-  engines: {
-    bun: ">=1.1.0"
-  },
-  bin: {
-    o2b: "./scripts/o2b",
-    "vault-log": "./scripts/vault-log"
-  },
-  scripts: {
-    "build:openclaw": "bun build src/openclaw/index.ts --outfile openclaw/index.js --target=node --format=esm --external openclaw/plugin-sdk/plugin-entry",
-    test: "bun test",
-    typecheck: "tsc --noEmit",
-    "sync-version": "bun run scripts/sync-version.ts",
-    "sync-version:check": "bun run scripts/sync-version.ts --check"
-  },
-  files: [
-    "openclaw/",
-    "src/",
-    "skills/",
-    "scripts/",
-    "plugins/",
-    "openclaw.plugin.json",
-    "README.md",
-    "LICENSE",
-    "pyproject.toml"
-  ],
-  dependencies: {
-    "proper-lockfile": "^4.1.2"
-  },
-  devDependencies: {
-    "@types/bun": "^1.1.0",
-    "@types/node": "^22.0.0",
-    "@types/proper-lockfile": "^4.1.4",
-    typescript: "^5.5.0"
-  },
-  openclaw: {
-    extensions: ["./openclaw/index.js"]
+
+// src/core/pay-memory/_md.ts
+var NOT_PROVIDED = "_(not provided)_";
+function stripMarkdownExt(target) {
+  return target.replace(/\.md$/i, "");
+}
+function sanitizeWikilinkTarget(target) {
+  return target.replace(/[[\]]/g, "");
+}
+function wikiLink(target) {
+  return `[[${stripMarkdownExt(sanitizeWikilinkTarget(target.trim()))}]]`;
+}
+function formatCode(value) {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed)
+    return NOT_PROVIDED;
+  return `\`${trimmed.replace(/`/g, "ˋ")}\``;
+}
+function nowIsoZ() {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function putIfPresent(meta, key, value) {
+  if (value === null || value === undefined)
+    return;
+  const trimmed = String(value).trim();
+  if (!trimmed)
+    return;
+  meta[key] = trimmed;
+}
+function frontmatterStr(value) {
+  if (value === undefined || value === null)
+    return "";
+  if (Array.isArray(value))
+    return value.join(", ");
+  return String(value);
+}
+
+// src/core/pay-memory/receipt.ts
+var RECEIPT_FRONTMATTER_TYPE = "agent-payment-receipt";
+function writeReceipt(vault, input) {
+  if (!input.service?.trim())
+    throw new Error("receipt requires a service");
+  if (!input.status?.trim())
+    throw new Error("receipt requires a status");
+  if (!input.reason?.trim())
+    throw new Error("receipt requires a reason");
+  if (!input.agent?.trim())
+    throw new Error("receipt requires an agent");
+  const tz = input.tz ?? null;
+  const date = validateIsoDate(input.date ?? isoDateNow(tz));
+  const time = validateIsoTime(input.time ?? isoTimeNow(tz));
+  const slug = input.slug && input.slug.trim() || defaultReceiptSlug(input.service, input.reason);
+  const target = receiptPath(vault, date, slug);
+  ensureInsideVault(target, vault);
+  const created = isoTimestampZ(date, time, tz);
+  const paymentLayer = input.paymentLayer?.trim() || "pay.sh";
+  const network = input.network?.trim() || "solana";
+  const metadata = {
+    type: RECEIPT_FRONTMATTER_TYPE,
+    agent: input.agent.trim(),
+    payment_layer: paymentLayer,
+    network,
+    service: input.service.trim(),
+    status: input.status.trim(),
+    reason: input.reason.trim(),
+    created
+  };
+  if (tz)
+    metadata["timezone"] = tz;
+  putIfPresent(metadata, "category", input.category);
+  putIfPresent(metadata, "endpoint", input.endpoint);
+  putIfPresent(metadata, "expected_cost", input.expectedCost);
+  putIfPresent(metadata, "actual_amount", input.actualAmount);
+  putIfPresent(metadata, "currency", input.currency);
+  putIfPresent(metadata, "payment_proof", input.paymentProof);
+  putIfPresent(metadata, "result_ref", input.resultRef);
+  putIfPresent(metadata, "result_note", input.resultNote);
+  metadata["policy_status"] = input.policyStatus ?? "not_checked";
+  putIfPresent(metadata, "policy_rule", input.policyRule);
+  if (input.policyReasons && input.policyReasons.length > 0) {
+    metadata["policy_reasons"] = [...input.policyReasons];
   }
-};
+  putIfPresent(metadata, "policy_checked_at", input.policyCheckedAt);
+  putIfPresent(metadata, "approval_request", input.approvalRequestId);
+  putIfPresent(metadata, "approval_status", input.approvalStatus);
+  putIfPresent(metadata, "approved_by", input.approvedBy);
+  putIfPresent(metadata, "approved_at", input.approvedAt);
+  const body = renderReceiptBody(input);
+  writeFrontmatterAtomic(target, metadata, body, {
+    overwrite: input.overwrite,
+    existsErrorKind: "receipt",
+    vaultForRelativePath: vault
+  });
+  return {
+    path: target,
+    relativePath: vaultRelative(target, vault),
+    slug,
+    date,
+    created
+  };
+}
+function defaultReceiptSlug(service, reason) {
+  const tail = service.split("/").pop() ?? service;
+  return slugify(`${tail}-${reason}`);
+}
+function renderPolicySection(input) {
+  const status = input.policyStatus ?? "not_checked";
+  const out = ["Decision:", ""];
+  switch (status) {
+    case "allowed":
+      out.push("Allowed by the configured spending policy. The agent ran a policy", "check before initiating this paid call.");
+      break;
+    case "approval_required":
+      out.push("Policy returned `approval_required` — a human approval was needed", "before initiating this paid call.");
+      break;
+    case "denied":
+      out.push("Policy returned `denied` — this receipt records a paid call that", "the policy did not approve. If the call still proceeded, a human", "explicitly waved the policy aside; check the approval section", "below for who and why.");
+      break;
+    case "not_checked":
+    default:
+      out.push("Not checked. The receipt was created without a policy decision —", "either no `AI Wiki/policies/spending.json` is configured, or the", "caller chose not to evaluate the policy. This is *not* a claim", "that the call was allowed.");
+      break;
+  }
+  if (input.policyRule?.trim()) {
+    out.push("", `Rule fired: \`${input.policyRule.trim()}\``);
+  }
+  if (input.policyReasons && input.policyReasons.length > 0) {
+    out.push("", "Reasons:", "");
+    for (const r of input.policyReasons)
+      out.push(`- ${r}`);
+  }
+  if (input.policyCheckedAt?.trim()) {
+    out.push("", `Policy checked at: \`${input.policyCheckedAt.trim()}\``);
+  }
+  if (input.approvalRequestId?.trim() || input.approvalStatus?.trim() || input.approvedBy?.trim()) {
+    out.push("", "Approval:");
+    if (input.approvalRequestId?.trim()) {
+      out.push("", `Request: [[AI Wiki/payments/_pending/${input.approvalRequestId.trim()}]]`);
+    }
+    if (input.approvalStatus?.trim()) {
+      out.push(`Status: \`${input.approvalStatus.trim()}\``);
+    }
+    if (input.approvedBy?.trim()) {
+      out.push(`Approved by: ${input.approvedBy.trim()}`);
+    }
+    if (input.approvedAt?.trim()) {
+      out.push(`Approved at: \`${input.approvedAt.trim()}\``);
+    }
+  }
+  out.push("");
+  return out;
+}
+function fieldOrPlaceholder(value) {
+  if (value === null || value === undefined)
+    return NOT_PROVIDED;
+  const trimmed = String(value).trim();
+  return trimmed || NOT_PROVIDED;
+}
+function renderReceiptBody(input) {
+  const reason = input.reason.trim();
+  const title = `Payment Receipt: ${reason}`;
+  const resultNote = input.resultNote?.trim();
+  const resultNoteLine = resultNote ? `[[${stripMarkdownExt(sanitizeWikilinkTarget(resultNote))}]]` : NOT_PROVIDED;
+  const rawOutput = input.rawOutput ? redactRawOutput(input.rawOutput) : null;
+  const lines = [
+    `# ${title}`,
+    "",
+    "## Why this paid call was made",
+    "",
+    reason,
+    "",
+    "## Spending policy check",
+    "",
+    "Policy file:",
+    "",
+    "[[AI Wiki/policies/spending]]",
+    "",
+    ...renderPolicySection(input),
+    "## Expected cost",
+    "",
+    fieldOrPlaceholder(input.expectedCost),
+    "",
+    "## Request",
+    "",
+    "Service:",
+    "",
+    formatCode(input.service),
+    "",
+    "Endpoint:",
+    "",
+    formatCode(input.endpoint),
+    "",
+    "Reason:",
+    "",
+    reason,
+    "",
+    "## Payment",
+    "",
+    "Amount:",
+    "",
+    formatCode(input.actualAmount),
+    "",
+    "Currency:",
+    "",
+    formatCode(input.currency),
+    "",
+    "Payment proof / transaction / receipt:",
+    "",
+    formatCode(input.paymentProof),
+    "",
+    "## Result",
+    "",
+    "Generated asset:",
+    "",
+    formatCode(input.resultRef),
+    "",
+    "Asset note:",
+    "",
+    resultNoteLine,
+    "",
+    "## Raw pay.sh output",
+    ""
+  ];
+  if (rawOutput) {
+    lines.push("```text", rawOutput.replace(/\r\n?/g, `
+`).replace(/\s+$/g, ""), "```");
+  } else {
+    lines.push(NOT_PROVIDED);
+  }
+  lines.push("", "> Verify raw output above does not contain credentials before sharing this", "> receipt outside the vault. Best-effort redaction has been applied.");
+  return lines.join(`
+`);
+}
+// src/core/pay-memory/asset.ts
+var ASSET_FRONTMATTER_TYPE = "generated-asset";
+function writeAsset(vault, input) {
+  if (!input.title?.trim())
+    throw new Error("asset requires a title");
+  if (!input.service?.trim())
+    throw new Error("asset requires a service");
+  if (!input.resultUrl?.trim())
+    throw new Error("asset requires a result_url");
+  const slug = input.slug && input.slug.trim() || slugify(input.title);
+  const target = assetPath(vault, slug);
+  ensureInsideVault(target, vault);
+  const created = nowIsoZ();
+  const metadata = {
+    type: ASSET_FRONTMATTER_TYPE,
+    title: input.title.trim(),
+    source: input.service.trim(),
+    result_url: input.resultUrl.trim(),
+    created
+  };
+  if (input.sourceReceipt?.trim()) {
+    metadata["source_receipt"] = wikiLink(input.sourceReceipt);
+  }
+  if (input.usedIn?.trim()) {
+    metadata["used_in"] = wikiLink(input.usedIn);
+  }
+  writeFrontmatterAtomic(target, metadata, renderAssetBody(input), {
+    overwrite: input.overwrite,
+    existsErrorKind: "asset",
+    vaultForRelativePath: vault
+  });
+  return {
+    path: target,
+    relativePath: vaultRelative(target, vault),
+    slug,
+    created
+  };
+}
+function renderAssetBody(input) {
+  const title = input.title.trim();
+  const usedIn = input.usedIn?.trim();
+  const sourceReceipt = input.sourceReceipt?.trim();
+  const prompt = input.prompt?.trim();
+  const lines = [`# ${title}`, ""];
+  lines.push("## Purpose", "");
+  if (usedIn) {
+    lines.push(`Used in: ${wikiLink(usedIn)}`);
+  } else {
+    lines.push(NOT_PROVIDED);
+  }
+  lines.push("");
+  lines.push("## Prompt", "");
+  if (prompt) {
+    lines.push(...prompt.split(/\r?\n/).map((line) => line ? `> ${line}` : ">"));
+  } else {
+    lines.push(NOT_PROVIDED);
+  }
+  lines.push("");
+  lines.push("## Result", "", `${input.resultUrl.trim()}`, "");
+  lines.push("## Source", "");
+  lines.push(`Service: \`${input.service.trim().replace(/`/g, "ˋ")}\``);
+  if (sourceReceipt) {
+    lines.push(`Receipt: ${wikiLink(sourceReceipt)}`);
+  } else {
+    lines.push(`Receipt: ${NOT_PROVIDED}`);
+  }
+  lines.push("");
+  lines.push("## Notes", "", "Generated through a paid API call recorded in the linked receipt.");
+  return lines.join(`
+`);
+}
+// src/core/pay-memory/report.ts
+import { readdirSync as readdirSync2 } from "node:fs";
+import { join as join7 } from "node:path";
+var REPORT_FRONTMATTER_TYPE = "payment-report";
+function aggregateReceipts(vault, date) {
+  const dir = paymentsDateDir(vault, date);
+  let entries;
+  try {
+    entries = readdirSync2(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err?.code === "ENOENT")
+      return [];
+    throw err;
+  }
+  const summaries = [];
+  for (const entry of entries) {
+    if (!entry.isFile())
+      continue;
+    if (!entry.name.toLowerCase().endsWith(".md"))
+      continue;
+    const full = join7(dir, entry.name);
+    let meta;
+    try {
+      [meta] = parseFrontmatter(full);
+    } catch {
+      continue;
+    }
+    if (frontmatterStr(meta["type"]) !== RECEIPT_FRONTMATTER_TYPE)
+      continue;
+    const service = frontmatterStr(meta["service"]);
+    const status = frontmatterStr(meta["status"]);
+    if (!service || !status)
+      continue;
+    summaries.push({
+      path: vaultRelative(full, vault),
+      service,
+      status,
+      category: frontmatterStr(meta["category"]) || null,
+      actualAmount: frontmatterStr(meta["actual_amount"]) || null,
+      currency: frontmatterStr(meta["currency"]) || null,
+      resultRef: frontmatterStr(meta["result_ref"]) || null,
+      resultNote: frontmatterStr(meta["result_note"]) || null,
+      reason: frontmatterStr(meta["reason"]) || null
+    });
+  }
+  summaries.sort((a, b) => {
+    const s = a.service.localeCompare(b.service);
+    return s !== 0 ? s : a.path.localeCompare(b.path);
+  });
+  return summaries;
+}
+function writeReport(vault, input) {
+  const date = validateIsoDate(input.date);
+  const title = input.title && input.title.trim() || `Payment Report ${date}`;
+  const slug = input.slug && input.slug.trim() || slugify(`payment-report-${date}`);
+  const target = reportPath(vault, slug);
+  ensureInsideVault(target, vault);
+  const summaries = aggregateReceipts(vault, date);
+  const created = nowIsoZ();
+  const metadata = {
+    type: REPORT_FRONTMATTER_TYPE,
+    title,
+    date,
+    created,
+    receipts_used: summaries.length
+  };
+  if (input.task?.trim())
+    metadata["task"] = input.task.trim();
+  writeFrontmatterAtomic(target, metadata, renderReportBody(date, title, input.task ?? null, summaries), {
+    overwrite: input.overwrite,
+    existsErrorKind: "report",
+    vaultForRelativePath: vault
+  });
+  return {
+    path: target,
+    relativePath: vaultRelative(target, vault),
+    slug,
+    receiptsUsed: summaries.length
+  };
+}
+function renderReportBody(date, title, task, summaries) {
+  const lines = [`# ${title}`, "", `Date: ${date}`, ""];
+  lines.push("## Task", "");
+  lines.push(task && task.trim() ? task.trim() : NOT_PROVIDED);
+  lines.push("");
+  lines.push("## Paid services used", "");
+  if (summaries.length === 0) {
+    lines.push("No receipts found for this date.");
+  } else {
+    for (const s of summaries) {
+      lines.push(`### ${s.service}`, "");
+      lines.push(`Status: \`${s.status}\``);
+      if (s.reason)
+        lines.push(`Reason: ${s.reason}`);
+      lines.push(`Receipt: [[${stripMarkdownExt(s.path)}]]`);
+      if (s.actualAmount) {
+        const amount = s.currency ? `${s.actualAmount} ${s.currency}` : s.actualAmount;
+        lines.push(`Amount: \`${amount}\``);
+      }
+      if (s.resultRef)
+        lines.push(`Result: \`${s.resultRef}\``);
+      if (s.resultNote)
+        lines.push(`Asset: [[${stripMarkdownExt(s.resultNote)}]]`);
+      lines.push("");
+    }
+  }
+  lines.push("## Files", "");
+  if (summaries.length === 0) {
+    lines.push(NOT_PROVIDED);
+  } else {
+    for (const s of summaries) {
+      lines.push(`- [[${stripMarkdownExt(s.path)}]]`);
+      if (s.resultNote)
+        lines.push(`- [[${stripMarkdownExt(s.resultNote)}]]`);
+    }
+  }
+  return lines.join(`
+`);
+}
+// src/core/pay-memory/policy-rules.ts
+import { readFileSync as readFileSync7 } from "node:fs";
+import { join as join8 } from "node:path";
+var POLICY_SCHEMA_VERSION = 1;
+function policyJsonPath(vault) {
+  return join8(payMemoryDirs(vault).policies, "spending.json");
+}
+function loadPolicyRules(vault) {
+  const target = policyJsonPath(vault);
+  let text;
+  try {
+    text = readFileSync7(target, "utf8");
+  } catch (err) {
+    if (err?.code === "ENOENT")
+      return null;
+    throw new Error(`failed to read ${target}: ${err.message ?? String(err)}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${target} is not valid JSON: ${err.message ?? String(err)}`);
+  }
+  return validatePolicyRules(parsed, target);
+}
+function validatePolicyRules(value, source) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${source} must be a JSON object at the root`);
+  }
+  const obj = value;
+  const out = {};
+  if ("schema_version" in obj) {
+    const v = obj["schema_version"];
+    if (typeof v !== "number") {
+      throw new Error(`${source}: schema_version must be a number`);
+    }
+    if (v !== POLICY_SCHEMA_VERSION) {
+      throw new Error(`${source}: unsupported schema_version ${v}; expected ${POLICY_SCHEMA_VERSION}. ` + "Upgrade Open Second Brain or roll the policy back to the matching schema.");
+    }
+    out["schema_version"] = v;
+  }
+  if ("currency" in obj) {
+    if (typeof obj["currency"] !== "string") {
+      throw new Error(`${source}: currency must be a string`);
+    }
+    out["currency"] = obj["currency"];
+  }
+  for (const k of ["max_total_per_day", "max_single_call", "require_approval_above"]) {
+    if (k in obj) {
+      const v = obj[k];
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0) {
+        throw new Error(`${source}: ${k} must be a non-negative finite number`);
+      }
+      out[k] = v;
+    }
+  }
+  if ("allowed_services" in obj) {
+    const v = obj["allowed_services"];
+    if (!Array.isArray(v) || !v.every((s) => typeof s === "string")) {
+      throw new Error(`${source}: allowed_services must be an array of strings`);
+    }
+    out["allowed_services"] = [...v];
+  }
+  if ("max_per_category" in obj) {
+    const v = obj["max_per_category"];
+    if (typeof v !== "object" || v === null || Array.isArray(v)) {
+      throw new Error(`${source}: max_per_category must be an object`);
+    }
+    const map = {};
+    for (const [k, n] of Object.entries(v)) {
+      if (typeof n !== "number" || !Number.isInteger(n) || n < 0) {
+        throw new Error(`${source}: max_per_category.${k} must be a non-negative integer`);
+      }
+      map[k] = n;
+    }
+    out["max_per_category"] = map;
+  }
+  return out;
+}
+function evaluatePolicy(rules, request, context) {
+  if (!rules) {
+    return {
+      status: "allowed",
+      allowed: true,
+      approvalRequired: false,
+      reasons: [],
+      rule: null,
+      hasPolicy: false,
+      policyPath: null,
+      currency: null
+    };
+  }
+  const reasons = [];
+  let denyRule = null;
+  let approvalRule = null;
+  const policyCurrency = rules.currency ?? "USDC";
+  if (rules.allowed_services && rules.allowed_services.length > 0) {
+    if (!rules.allowed_services.includes(request.service)) {
+      reasons.push(`service ${JSON.stringify(request.service)} is not in allowed_services`);
+      denyRule ??= "allowed_services";
+    }
+  }
+  const reqCurrency = request.currency ?? policyCurrency;
+  if (request.currency && request.currency !== policyCurrency) {
+    reasons.push(`request currency ${request.currency} differs from policy ${policyCurrency} — ` + "amount-based limits cannot be evaluated; please normalize before checking");
+    denyRule ??= "currency_mismatch";
+  }
+  const amount = typeof request.expectedAmount === "number" ? request.expectedAmount : null;
+  if (amount === null && (rules.max_single_call !== undefined || rules.max_total_per_day !== undefined || rules.require_approval_above !== undefined)) {
+    reasons.push("expected_amount is required to evaluate amount-based policy rules; " + "request human approval explicitly");
+    approvalRule ??= "missing_expected_amount";
+  }
+  if (rules.max_single_call !== undefined && amount !== null && amount > rules.max_single_call) {
+    reasons.push(`expected amount ${amount} ${reqCurrency} exceeds max_single_call ` + `${rules.max_single_call} ${policyCurrency}`);
+    denyRule ??= "max_single_call";
+  }
+  if (rules.max_total_per_day !== undefined && amount !== null && context.daySpend + amount > rules.max_total_per_day) {
+    reasons.push(`daily spend ${context.daySpend} + ${amount} = ${context.daySpend + amount} ` + `exceeds max_total_per_day ${rules.max_total_per_day} ${policyCurrency}`);
+    denyRule ??= "max_total_per_day";
+  }
+  if (request.category && rules.max_per_category) {
+    const cap = rules.max_per_category[request.category];
+    if (cap !== undefined && context.dayCategoryCount >= cap) {
+      reasons.push(`category '${request.category}' already has ${context.dayCategoryCount} ` + `receipt(s) today; cap is ${cap}`);
+      denyRule ??= "max_per_category";
+    }
+  }
+  if (rules.require_approval_above !== undefined && amount !== null && amount > rules.require_approval_above) {
+    approvalRule = "require_approval_above";
+    reasons.push(`expected amount ${amount} ${reqCurrency} exceeds approval threshold ` + `${rules.require_approval_above} ${policyCurrency}`);
+  }
+  const status = denyRule ? "denied" : approvalRule ? "approval_required" : "allowed";
+  return {
+    status,
+    allowed: status === "allowed",
+    approvalRequired: status === "approval_required",
+    reasons,
+    rule: denyRule ?? approvalRule,
+    hasPolicy: true,
+    policyPath: null,
+    currency: policyCurrency
+  };
+}
+function checkPolicy(vault, request) {
+  const rules = loadPolicyRules(vault);
+  const date = validateIsoDate(request.date ?? isoDateNow(request.tz));
+  const summaries = aggregateReceipts(vault, date);
+  const policyCurrency = rules?.currency ?? "USDC";
+  let daySpend = 0;
+  for (const s of summaries) {
+    if (!s.actualAmount)
+      continue;
+    if (s.currency && s.currency !== policyCurrency)
+      continue;
+    const n = parseFloat(s.actualAmount);
+    if (Number.isFinite(n))
+      daySpend += n;
+  }
+  const dayCategoryCount = request.category ? summaries.filter((s) => s.category === request.category).length : 0;
+  const decision = evaluatePolicy(rules, request, { daySpend, dayCategoryCount });
+  return {
+    ...decision,
+    policyPath: rules ? policyJsonPath(vault) : null
+  };
+}
+// src/core/pay-memory/approval.ts
+var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
+import { join as join9 } from "node:path";
+var PENDING_REQUEST_FRONTMATTER_TYPE = "pending-payment-request";
+function pendingDir(vault) {
+  return join9(payMemoryDirs(vault).payments, "_pending");
+}
+function pendingRequestPath(vault, id) {
+  return join9(pendingDir(vault), `${validateSlug(id)}.md`);
+}
+function writePendingRequest(vault, input) {
+  if (!input.service?.trim())
+    throw new Error("pending request requires a service");
+  if (!input.reason?.trim())
+    throw new Error("pending request requires a reason");
+  if (!input.agent?.trim())
+    throw new Error("pending request requires an agent");
+  const tz = input.tz ?? null;
+  const date = validateIsoDate(input.date ?? isoDateNow(tz));
+  const time = validateIsoTime(input.time ?? isoTimeNow(tz));
+  const id = input.slug && input.slug.trim() || defaultRequestSlug(input, date, time);
+  const target = pendingRequestPath(vault, id);
+  ensureInsideVault(target, vault);
+  const decision = checkPolicy(vault, {
+    service: input.service.trim(),
+    expectedAmount: input.expectedAmount ?? null,
+    currency: input.currency ?? null,
+    category: input.category ?? null,
+    date,
+    tz
+  });
+  if (input.enforcePolicy && !decision.allowed && !decision.approvalRequired) {
+    throw new Error(`policy denied: ${decision.reasons.join("; ") || decision.rule || "no reason given"}`);
+  }
+  const created = isoTimestampZ(date, time, tz);
+  const metadata = {
+    type: PENDING_REQUEST_FRONTMATTER_TYPE,
+    id,
+    agent: input.agent.trim(),
+    service: input.service.trim(),
+    reason: input.reason.trim(),
+    status: "pending",
+    created,
+    policy_status: decision.status
+  };
+  if (tz)
+    metadata["timezone"] = tz;
+  if (decision.rule)
+    metadata["policy_rule"] = decision.rule;
+  putIfPresent(metadata, "category", input.category);
+  putIfPresent(metadata, "endpoint", input.endpoint);
+  putIfPresent(metadata, "currency", input.currency);
+  if (typeof input.expectedAmount === "number") {
+    metadata["expected_amount"] = String(input.expectedAmount);
+  }
+  writeFrontmatterAtomic(target, metadata, renderRequestBody(input, decision), {
+    overwrite: false,
+    existsErrorKind: "pending request",
+    vaultForRelativePath: vault
+  });
+  return {
+    path: target,
+    relativePath: vaultRelative(target, vault),
+    id,
+    status: "pending",
+    created,
+    policyDecision: decision
+  };
+}
+function loadPendingRequest(vault, id) {
+  const target = pendingRequestPath(vault, id);
+  const [metadata, body] = parseFrontmatter(target);
+  if (frontmatterStr(metadata["type"]) !== PENDING_REQUEST_FRONTMATTER_TYPE)
+    return null;
+  const status = parseStatus(frontmatterStr(metadata["status"]));
+  return {
+    metadata,
+    body,
+    path: target,
+    relativePath: vaultRelative(target, vault),
+    id,
+    status
+  };
+}
+async function consumePendingRequest(vault, id, opts) {
+  const receiptPath2 = opts.receiptPath?.trim();
+  if (!receiptPath2) {
+    throw new Error("consume-payment-request requires a non-empty receiptPath");
+  }
+  return transitionRequest(vault, id, "approved", "consumed", (meta) => {
+    meta["receipt"] = receiptPath2;
+    meta["consumed_at"] = nowIsoZ();
+  });
+}
+async function transitionRequest(vault, id, expectedFrom, newStatus, patch) {
+  const lockTarget = pendingRequestPath(vault, id);
+  const initial = loadPendingRequest(vault, id);
+  if (!initial) {
+    throw new Error(`pending request not found: ${id}`);
+  }
+  const release = await import_proper_lockfile2.default.lock(lockTarget, {
+    retries: { retries: 30, factor: 1.2, minTimeout: 30, maxTimeout: 500 },
+    stale: 1e4,
+    realpath: false
+  });
+  try {
+    const loaded = loadPendingRequest(vault, id);
+    if (!loaded) {
+      throw new Error(`pending request not found: ${id}`);
+    }
+    if (loaded.status !== expectedFrom) {
+      throw new Error(`cannot transition request ${id} from ${loaded.status} to ${newStatus} ` + `(expected ${expectedFrom})`);
+    }
+    const newMeta = { ...loaded.metadata };
+    newMeta["status"] = newStatus;
+    patch(newMeta);
+    writeFrontmatterAtomic(loaded.path, newMeta, loaded.body, { overwrite: true });
+    return {
+      path: loaded.path,
+      relativePath: loaded.relativePath,
+      id,
+      status: newStatus,
+      created: frontmatterStr(loaded.metadata["created"]),
+      policyDecision: {
+        status: parseDecisionStatus(frontmatterStr(loaded.metadata["policy_status"])),
+        allowed: frontmatterStr(loaded.metadata["policy_status"]) === "allowed",
+        approvalRequired: frontmatterStr(loaded.metadata["policy_status"]) === "approval_required",
+        reasons: [],
+        rule: frontmatterStr(loaded.metadata["policy_rule"]) || null,
+        hasPolicy: Boolean(frontmatterStr(loaded.metadata["policy_status"])),
+        policyPath: null,
+        currency: frontmatterStr(loaded.metadata["currency"]) || null
+      }
+    };
+  } finally {
+    await release();
+  }
+}
+function defaultRequestSlug(input, date, time) {
+  const tail = input.service.split("/").pop() ?? input.service;
+  return slugify(`req-${date}-${time.replace(":", "")}-${tail}-${input.reason}`);
+}
+function renderRequestBody(input, decision) {
+  const reason = input.reason.trim();
+  const lines = [
+    `# Pending Payment Request: ${reason}`,
+    "",
+    "## Service",
+    "",
+    formatCode(input.service),
+    "",
+    "## Reason",
+    "",
+    reason,
+    "",
+    "## Expected cost",
+    "",
+    typeof input.expectedAmount === "number" ? `\`${input.expectedAmount}\`${input.currency ? ` ${input.currency}` : ""}` : NOT_PROVIDED,
+    "",
+    "## Endpoint",
+    "",
+    formatCode(input.endpoint),
+    "",
+    "## Expected output",
+    "",
+    input.expectedOutput?.trim() ?? NOT_PROVIDED,
+    "",
+    "## Vault files that will change",
+    ""
+  ];
+  if (input.vaultFiles && input.vaultFiles.length > 0) {
+    for (const f of input.vaultFiles)
+      lines.push(`- \`${f}\``);
+  } else {
+    lines.push(NOT_PROVIDED);
+  }
+  lines.push("", "## Policy check", "", `Status: \`${decision.status}\``);
+  if (decision.rule)
+    lines.push(`Rule fired: \`${decision.rule}\``);
+  if (decision.reasons.length > 0) {
+    lines.push("", "Reasons:", "");
+    for (const r of decision.reasons)
+      lines.push(`- ${r}`);
+  }
+  lines.push("", "## How to approve / reject", "", "Use the `o2b` CLI:", "", "```bash", `o2b approve-payment-request --vault <vault> --id <id> --approved-by <name>`, `o2b reject-payment-request --vault <vault> --id <id> --rejected-by <name> [--reason "..."]`, "```", "", "Once approved, the agent will execute the paid call and call", "`o2b consume-payment-request` to link the resulting receipt back here.");
+  return lines.join(`
+`);
+}
+function parseStatus(raw) {
+  if (raw === "pending" || raw === "approved" || raw === "rejected" || raw === "consumed") {
+    return raw;
+  }
+  throw new Error(`invalid payment-request status: ${JSON.stringify(raw)}`);
+}
+function parseDecisionStatus(raw) {
+  if (raw === "denied" || raw === "approval_required")
+    return raw;
+  return "allowed";
+}
+// src/openclaw/index.ts
+import { mkdirSync as mkdirSync6 } from "node:fs";
 
-// src/mcp/protocol.ts
-var SERVER_VERSION = package_default.version;
-
-// src/mcp/tools.ts
+// src/core/agent-identity.ts
 var PLACEHOLDER_AGENT_VALUES = new Set([
   "agent",
   "assistant",
@@ -2412,6 +3503,17 @@ var PLACEHOLDER_AGENT_VALUES = new Set([
   "openclaw",
   "user"
 ]);
+function normalizeAgentArgument(value) {
+  if (value === null || value === undefined)
+    return null;
+  const cleaned = String(value).trim().replace(/^@+/, "").trim();
+  if (!cleaned)
+    return null;
+  const canonical = cleaned.toLowerCase().replace(/_/g, "-");
+  if (PLACEHOLDER_AGENT_VALUES.has(canonical))
+    return null;
+  return cleaned;
+}
 
 // src/openclaw/index.ts
 function resolveVaultPath(api) {
@@ -2431,32 +3533,51 @@ function resolveOpenclawTimezone(api) {
   }
 }
 function resolveOpenclawAgent(api, argAgent) {
-  const normalized = normalizeAgentArg(argAgent);
+  const normalized = normalizeAgentArgument(argAgent);
   if (normalized)
     return normalized;
   const cfg = api.pluginConfig ?? {};
   return cfg.agentName ?? process.env["VAULT_AGENT_NAME"] ?? resolveAgentName();
 }
-function normalizeAgentArg(value) {
-  if (value === null || value === undefined)
+function coerceExpectedAmount(value) {
+  if (value === undefined || value === null)
     return null;
-  const cleaned = String(value).trim().replace(/^@+/, "").trim();
-  if (!cleaned)
-    return null;
-  if (PLACEHOLDER_AGENT_VALUES.has(cleaned.toLowerCase()))
-    return null;
-  return cleaned;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error("expected_amount must be a finite number");
+    }
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed === "")
+      return null;
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      throw new Error("expected_amount must be a number or numeric string");
+    }
+    return parsed;
+  }
+  throw new Error("expected_amount must be a number or numeric string");
 }
-function vaultRel(target, vault) {
-  if (target.startsWith(vault + "/"))
-    return target.slice(vault.length + 1);
-  return target;
+function strOrNull(value) {
+  if (value === undefined || value === null)
+    return null;
+  if (typeof value !== "string")
+    return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+function asJson(payload) {
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+  };
 }
 var openclaw_default = definePluginEntry({
   register(api) {
     api.on("before_prompt_build", () => {
       const cfg = api.pluginConfig ?? {};
-      const agent = normalizeAgentArg(cfg.agentName ?? null) ?? process.env["VAULT_AGENT_NAME"] ?? resolveAgentName();
+      const agent = normalizeAgentArgument(cfg.agentName ?? null) ?? process.env["VAULT_AGENT_NAME"] ?? resolveAgentName();
       if (agent === "agent")
         return;
       return { prependContext: buildReminder(agent) };
@@ -2474,7 +3595,7 @@ var openclaw_default = definePluginEntry({
           config_keys: Object.keys(discovery.data).sort(),
           config: redactMapping(discovery.data),
           vault_path: vault,
-          vault_exists: existsSync5(vault)
+          vault_exists: existsSync7(vault)
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -2500,7 +3621,7 @@ var openclaw_default = definePluginEntry({
       },
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
-        if (!existsSync5(vault))
+        if (!existsSync7(vault))
           throw new Error(`vault directory missing: ${vault}`);
         const pattern = params["pattern"] ?? null;
         const limit = typeof params["limit"] === "number" ? params["limit"] : 50;
@@ -2508,7 +3629,7 @@ var openclaw_default = definePluginEntry({
           throw new Error("argument 'limit' must be between 1 and 500");
         const pages = listVaultPages(vault);
         const needle = pattern ? pattern.toLowerCase() : null;
-        const matched = (needle === null ? pages : pages.filter((p) => p.title.toLowerCase().includes(needle))).slice(0, limit).map((p) => ({ title: p.title, path: vaultRel(p.path, vault), metadata: p.metadata }));
+        const matched = (needle === null ? pages : pages.filter((p) => p.title.toLowerCase().includes(needle))).slice(0, limit).map((p) => ({ title: p.title, path: vaultRelative(p.path, vault), metadata: p.metadata }));
         const result = {
           vault_path: vault,
           total_pages: pages.length,
@@ -2543,7 +3664,7 @@ var openclaw_default = definePluginEntry({
       },
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
-        if (!existsSync5(vault))
+        if (!existsSync7(vault))
           throw new Error(`vault directory missing: ${vault}`);
         const title = params["title"] ?? "";
         const content = params["content"] ?? "";
@@ -2553,12 +3674,12 @@ var openclaw_default = definePluginEntry({
           throw new Error("title must not be empty");
         if (!content.trim())
           throw new Error("content must not be empty");
-        const notesDir = join6(vault, "AI Wiki", "notes");
+        const notesDir = join10(vault, "AI Wiki", "notes");
         const slug = slugify(title);
-        const target = join6(notesDir, `${slug}.md`);
-        const noteExisted = existsSync5(target);
+        const target = join10(notesDir, `${slug}.md`);
+        const noteExisted = existsSync7(target);
         if (noteExisted && !overwrite) {
-          throw new Error(`note already exists: ${vaultRel(target, vault)}`);
+          throw new Error(`note already exists: ${vaultRelative(target, vault)}`);
         }
         const metadata = {
           title,
@@ -2569,7 +3690,7 @@ var openclaw_default = definePluginEntry({
           metadata["tags"] = tags;
         writeFrontmatter(target, metadata, content.trim());
         const result = {
-          path: vaultRel(target, vault),
+          path: vaultRelative(target, vault),
           absolute_path: target,
           slug,
           overwritten: noteExisted && overwrite
@@ -2606,7 +3727,7 @@ var openclaw_default = definePluginEntry({
         const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
         const path = await appendEvent(vault, agent, message, { date, time, tz });
         const result = {
-          path: vaultRel(path, vault),
+          path: vaultRelative(path, vault),
           absolute_path: path,
           agent,
           date,
@@ -2638,6 +3759,399 @@ var openclaw_default = definePluginEntry({
           checks: results.map((r) => ({ name: r.name, ok: r.ok, message: r.message }))
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+    });
+    api.registerTool({
+      name: "payment_memory_init",
+      description: "Bootstrap the Pay Memory layout (policies/, payments/, assets/, drafts/, reports/) and write the spending policy template.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent: { type: "string" },
+          overwrite: { type: "boolean" }
+        },
+        additionalProperties: false
+      },
+      async execute(_id, params) {
+        const vault = resolveVaultPath(api);
+        const overwrite = Boolean(params["overwrite"] ?? false);
+        const agent = resolveOpenclawAgent(api, params["agent"] ?? null);
+        const dirs = payMemoryDirs(vault);
+        const created = [];
+        const skipped = [];
+        for (const dir of [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports]) {
+          const existed = existsSync7(dir);
+          mkdirSync6(dir, { recursive: true });
+          (existed ? skipped : created).push(vaultRelative(dir, vault));
+        }
+        const policy = writePolicyIfMissing(vault, { overwrite });
+        return asJson({
+          vault_path: vault,
+          agent,
+          created,
+          skipped,
+          policy_path: vaultRelative(policy.path, vault),
+          policy_status: policy.status
+        });
+      }
+    });
+    api.registerTool({
+      name: "payment_receipt_append",
+      description: "Save a Markdown receipt for one paid API call. raw_output is run through a redactor before persisting.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent: { type: "string" },
+          service: { type: "string" },
+          status: { type: "string" },
+          reason: { type: "string" },
+          category: { type: "string" },
+          endpoint: { type: "string" },
+          expected_cost: { type: "string" },
+          actual_amount: { type: "string" },
+          currency: { type: "string" },
+          payment_proof: { type: "string" },
+          result_ref: { type: "string" },
+          result_note: { type: "string" },
+          raw_output: { type: "string" },
+          slug: { type: "string" },
+          date: { type: "string" },
+          time: { type: "string" },
+          overwrite: { type: "boolean" },
+          policy_status: {
+            type: "string",
+            enum: ["allowed", "approval_required", "denied", "not_checked"]
+          },
+          policy_rule: { type: "string" },
+          policy_reasons: { type: "array", items: { type: "string" } },
+          policy_checked_at: { type: "string" },
+          from_request: { type: "string" },
+          payment_layer: { type: "string" },
+          network: { type: "string" }
+        },
+        required: ["service", "status", "reason"],
+        additionalProperties: false
+      },
+      async execute(_id, params) {
+        const vault = resolveVaultPath(api);
+        const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
+        const agent = resolveOpenclawAgent(api, params["agent"] ?? null);
+        let policyStatus = strOrNull(params["policy_status"]);
+        let policyRule = strOrNull(params["policy_rule"]);
+        const policyReasonsRaw = params["policy_reasons"];
+        let policyReasons = null;
+        if (policyReasonsRaw !== undefined && policyReasonsRaw !== null) {
+          if (!Array.isArray(policyReasonsRaw) || !policyReasonsRaw.every((s) => typeof s === "string")) {
+            throw new Error("policy_reasons must be an array of strings");
+          }
+          policyReasons = [...policyReasonsRaw];
+        }
+        let policyCheckedAt = strOrNull(params["policy_checked_at"]);
+        let approvalStatus = null;
+        let approvedBy = null;
+        let approvedAt = null;
+        const fromRequest = strOrNull(params["from_request"]);
+        if (fromRequest) {
+          const loaded = loadPendingRequest(vault, fromRequest);
+          if (!loaded)
+            throw new Error(`pending request not found: ${fromRequest}`);
+          const meta = loaded.metadata;
+          const get = (k) => {
+            const v = meta[k];
+            if (v === undefined || v === null)
+              return null;
+            return Array.isArray(v) ? v.join(", ") : String(v);
+          };
+          policyStatus ??= get("policy_status") ?? null;
+          policyRule ??= get("policy_rule");
+          approvalStatus = loaded.status;
+          approvedBy = get("approved_by");
+          approvedAt = get("approved_at");
+        }
+        if (policyStatus !== null) {
+          const allowed = [
+            "allowed",
+            "approval_required",
+            "denied",
+            "not_checked"
+          ];
+          if (!allowed.includes(policyStatus)) {
+            throw new Error(`policy_status must be one of: ${allowed.join(", ")}`);
+          }
+        }
+        const result = writeReceipt(vault, {
+          agent,
+          service: String(params["service"]),
+          status: String(params["status"]),
+          reason: String(params["reason"]),
+          paymentLayer: strOrNull(params["payment_layer"]),
+          network: strOrNull(params["network"]),
+          category: strOrNull(params["category"]),
+          endpoint: strOrNull(params["endpoint"]),
+          expectedCost: strOrNull(params["expected_cost"]),
+          actualAmount: strOrNull(params["actual_amount"]),
+          currency: strOrNull(params["currency"]),
+          paymentProof: strOrNull(params["payment_proof"]),
+          resultRef: strOrNull(params["result_ref"]),
+          resultNote: strOrNull(params["result_note"]),
+          rawOutput: strOrNull(params["raw_output"]),
+          slug: strOrNull(params["slug"]),
+          date: strOrNull(params["date"]),
+          time: strOrNull(params["time"]),
+          overwrite: Boolean(params["overwrite"] ?? false),
+          tz,
+          policyStatus,
+          policyRule,
+          policyReasons,
+          policyCheckedAt,
+          approvalRequestId: fromRequest,
+          approvalStatus,
+          approvedBy,
+          approvedAt
+        });
+        return asJson({
+          path: result.relativePath,
+          absolute_path: resolvePath(result.path),
+          slug: result.slug,
+          date: result.date,
+          created: result.created
+        });
+      }
+    });
+    api.registerTool({
+      name: "asset_capture",
+      description: "Save a Markdown note for an asset produced by a paid call, linked to its receipt.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          service: { type: "string" },
+          result_url: { type: "string" },
+          source_receipt: { type: "string" },
+          prompt: { type: "string" },
+          used_in: { type: "string" },
+          slug: { type: "string" },
+          overwrite: { type: "boolean" }
+        },
+        required: ["title", "service", "result_url"],
+        additionalProperties: false
+      },
+      async execute(_id, params) {
+        const vault = resolveVaultPath(api);
+        const result = writeAsset(vault, {
+          title: String(params["title"]),
+          service: String(params["service"]),
+          resultUrl: String(params["result_url"]),
+          sourceReceipt: strOrNull(params["source_receipt"]),
+          prompt: strOrNull(params["prompt"]),
+          usedIn: strOrNull(params["used_in"]),
+          slug: strOrNull(params["slug"]),
+          overwrite: Boolean(params["overwrite"] ?? false)
+        });
+        return asJson({
+          path: result.relativePath,
+          absolute_path: resolvePath(result.path),
+          slug: result.slug,
+          created: result.created
+        });
+      }
+    });
+    api.registerTool({
+      name: "payment_report_generate",
+      description: "Aggregate a date's payment receipts into a Markdown report under AI Wiki/reports/.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string" },
+          title: { type: "string" },
+          task: { type: "string" },
+          slug: { type: "string" },
+          overwrite: { type: "boolean" }
+        },
+        required: ["date"],
+        additionalProperties: false
+      },
+      async execute(_id, params) {
+        const vault = resolveVaultPath(api);
+        const result = writeReport(vault, {
+          date: String(params["date"]),
+          title: strOrNull(params["title"]),
+          task: strOrNull(params["task"]),
+          slug: strOrNull(params["slug"]),
+          overwrite: Boolean(params["overwrite"] ?? false)
+        });
+        return asJson({
+          path: result.relativePath,
+          absolute_path: resolvePath(result.path),
+          slug: result.slug,
+          receipts_used: result.receiptsUsed
+        });
+      }
+    });
+    api.registerTool({
+      name: "payment_policy_check",
+      description: "Evaluate a prospective paid call against AI Wiki/policies/spending.json. Returns allowed / approval_required / denied + the rule that fired.",
+      parameters: {
+        type: "object",
+        properties: {
+          service: { type: "string" },
+          expected_amount: { type: ["number", "string"] },
+          currency: { type: "string" },
+          category: { type: "string" },
+          date: { type: "string" }
+        },
+        required: ["service"],
+        additionalProperties: false
+      },
+      async execute(_id, params) {
+        const vault = resolveVaultPath(api);
+        const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
+        const decision = checkPolicy(vault, {
+          service: String(params["service"]),
+          expectedAmount: coerceExpectedAmount(params["expected_amount"]),
+          currency: strOrNull(params["currency"]),
+          category: strOrNull(params["category"]),
+          date: strOrNull(params["date"]),
+          tz
+        });
+        return asJson({
+          status: decision.status,
+          allowed: decision.allowed,
+          approval_required: decision.approvalRequired,
+          rule: decision.rule,
+          reasons: decision.reasons,
+          has_policy: decision.hasPolicy,
+          policy_path: decision.policyPath !== null ? vaultRelative(decision.policyPath, vault) : null,
+          currency: decision.currency
+        });
+      }
+    });
+    api.registerTool({
+      name: "payment_request_approval",
+      description: "Create a pending-payment-request that the user must approve before the agent runs `pay`. Records the policy check at request time.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent: { type: "string" },
+          service: { type: "string" },
+          reason: { type: "string" },
+          expected_amount: { type: ["number", "string"] },
+          currency: { type: "string" },
+          category: { type: "string" },
+          endpoint: { type: "string" },
+          expected_output: { type: "string" },
+          vault_files: { type: "array", items: { type: "string" } },
+          slug: { type: "string" },
+          date: { type: "string" },
+          time: { type: "string" },
+          enforce_policy: { type: "boolean" }
+        },
+        required: ["service", "reason"],
+        additionalProperties: false
+      },
+      async execute(_id, params) {
+        const vault = resolveVaultPath(api);
+        const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
+        const agent = resolveOpenclawAgent(api, params["agent"] ?? null);
+        const vaultFilesRaw = params["vault_files"];
+        let vaultFiles = null;
+        if (vaultFilesRaw !== undefined && vaultFilesRaw !== null) {
+          if (!Array.isArray(vaultFilesRaw) || !vaultFilesRaw.every((s) => typeof s === "string")) {
+            throw new Error("vault_files must be an array of strings");
+          }
+          vaultFiles = [...vaultFilesRaw];
+        }
+        const result = writePendingRequest(vault, {
+          agent,
+          service: String(params["service"]),
+          reason: String(params["reason"]),
+          expectedAmount: coerceExpectedAmount(params["expected_amount"]),
+          currency: strOrNull(params["currency"]),
+          category: strOrNull(params["category"]),
+          endpoint: strOrNull(params["endpoint"]),
+          expectedOutput: strOrNull(params["expected_output"]),
+          vaultFiles,
+          slug: strOrNull(params["slug"]),
+          date: strOrNull(params["date"]),
+          time: strOrNull(params["time"]),
+          enforcePolicy: Boolean(params["enforce_policy"] ?? false),
+          tz
+        });
+        return asJson({
+          id: result.id,
+          path: result.relativePath,
+          absolute_path: resolvePath(result.path),
+          status: result.status,
+          created: result.created,
+          policy_status: result.policyDecision.status,
+          policy_rule: result.policyDecision.rule
+        });
+      }
+    });
+    api.registerTool({
+      name: "payment_request_status",
+      description: "Look up a pending-payment-request by id and return its current status and metadata. The agent uses this to poll for human approval.",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+        additionalProperties: false
+      },
+      async execute(_id, params) {
+        const vault = resolveVaultPath(api);
+        const id = String(params["id"]);
+        const loaded = loadPendingRequest(vault, id);
+        if (!loaded)
+          throw new Error(`pending request not found: ${id}`);
+        const meta = loaded.metadata;
+        const get = (k) => {
+          const v = meta[k];
+          if (v === undefined || v === null)
+            return null;
+          return Array.isArray(v) ? v.join(", ") : String(v);
+        };
+        return asJson({
+          id,
+          path: loaded.relativePath,
+          status: loaded.status,
+          service: get("service"),
+          reason: get("reason"),
+          expected_amount: get("expected_amount"),
+          currency: get("currency"),
+          created: get("created"),
+          approved_by: get("approved_by"),
+          approved_at: get("approved_at"),
+          rejected_by: get("rejected_by"),
+          rejected_at: get("rejected_at"),
+          rejection_reason: get("rejection_reason"),
+          receipt: get("receipt"),
+          policy_status: get("policy_status"),
+          policy_rule: get("policy_rule")
+        });
+      }
+    });
+    api.registerTool({
+      name: "payment_request_consume",
+      description: "Mark an `approved` request as `consumed` and link the resulting receipt path. Called by the agent after the paid call succeeded.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          receipt: { type: "string" }
+        },
+        required: ["id", "receipt"],
+        additionalProperties: false
+      },
+      async execute(_id, params) {
+        const vault = resolveVaultPath(api);
+        const result = await consumePendingRequest(vault, String(params["id"]), {
+          receiptPath: String(params["receipt"])
+        });
+        return asJson({
+          id: result.id,
+          path: result.relativePath,
+          status: result.status
+        });
       }
     });
   }

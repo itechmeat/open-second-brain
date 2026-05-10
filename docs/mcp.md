@@ -25,11 +25,54 @@ in Open Second Brain depends on the MCP server being running.
 | `second_brain_capture` | Write a Markdown note under `AI Wiki/notes/` with frontmatter. | `title`, `content` |
 | `event_log_append` | Append a single-line event to the daily Markdown event log. | `message` |
 | `vault_health` | Run vault, config, and plugin manifest health checks. | — |
+| `payment_memory_init` | Bootstrap `AI Wiki/{policies,payments,assets,drafts,reports}/` and write the spending policy template. | — |
+| `payment_receipt_append` | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting. | `service`, `status`, `reason` |
+| `asset_capture` | Save a Markdown note for an asset produced by a paid call, linked to its receipt. | `title`, `service`, `result_url` |
+| `payment_report_generate` | Aggregate a date's receipts into a Markdown report under `AI Wiki/reports/`. | `date` |
+| `payment_policy_check` | Evaluate a prospective paid call against `policies/spending.json` (allowed / approval_required / denied). | `service` |
+| `payment_request_approval` | Create a pending-payment-request the user must approve before the agent runs `pay`. | `service`, `reason` |
+| `payment_request_status` | Look up a pending request by id; agent uses this to poll for approval. | `id` |
+| `payment_request_consume` | Mark an `approved` request as `consumed` and link the resulting receipt. | `id`, `receipt` |
 
 `second_brain_query` accepts `pattern` (string) and `limit` (1–500, default 50).
 `second_brain_capture` also accepts `tags` (array of strings) and `overwrite`
 (boolean). `event_log_append` accepts `agent`, `date` (YYYY.MM.DD), and `time`
 (HH:MM). `vault_health` accepts `repo` (string) for plugin manifest validation.
+
+`payment_memory_init` accepts `agent` (string) and `overwrite` (boolean — to
+refresh the policy template). `payment_receipt_append` accepts the same
+optional fields as the CLI: `agent`, `category`, `endpoint`, `expected_cost`,
+`actual_amount`, `currency`, `payment_proof`, `result_ref`, `result_note`,
+`raw_output`, `slug`, `date` (`YYYY-MM-DD`), `time` (`HH:MM`), `overwrite`.
+`asset_capture` accepts `source_receipt`, `prompt`, `used_in`, `slug`,
+`overwrite`. `payment_report_generate` accepts `title`, `task`, `slug`,
+`overwrite`.
+
+> **Date format note.** `event_log_append` uses `YYYY.MM.DD` to match the
+> `Daily/<date>.md` filename convention; Pay Memory tools (`payment_receipt_append`,
+> `payment_report_generate`, `payment_policy_check`, `payment_request_approval`)
+> use ISO 8601 `YYYY-MM-DD` because the `AI Wiki/payments/<date>/`
+> subdirectory layout is independent of `Daily/`. Both accept the matching
+> `--date` form on the CLI.
+
+`payment_policy_check` accepts `expected_amount` (number or numeric
+string), `currency`, `category`, and `date`. `payment_request_approval`
+mirrors `payment_receipt_append` for the descriptive fields plus
+`expected_output`, `vault_files` (array of strings), and `enforce_policy`
+(boolean — refuses to create the request when the policy denies the call
+outright). `payment_request_status` returns the named request's `status`
+plus a curated subset of frontmatter fields (`service`, `reason`,
+`expected_amount`, `currency`, `created`, `approved_by`, `approved_at`,
+`rejected_by`, `rejected_at`, `rejection_reason`, `receipt`,
+`policy_status`, `policy_rule`) — agents poll this to see whether their
+request has moved from `pending` to `approved`. Fields that were not
+captured at request time (e.g. `vault_files`, `endpoint`) are not
+re-derived; read the underlying Markdown file via the path returned in
+the response if you need them.
+
+The Pay Memory tools never execute payments themselves — the agent makes the
+paid call through its own `pay` CLI and passes the resulting metadata into
+these tools, which only persist it as Markdown.
 
 All tool results contain both an unstructured `content` text block (a JSON
 serialization of the structured payload) and a `structuredContent` object so
@@ -83,6 +126,17 @@ mcp_servers:
         - second_brain_capture
         - event_log_append
         - vault_health
+        # Pay Memory tools (v0.8.0+); drop any line below to disable a
+        # specific tool, or remove the whole `tools.include` block to
+        # expose every advertised tool.
+        - payment_memory_init
+        - payment_receipt_append
+        - asset_capture
+        - payment_report_generate
+        - payment_policy_check
+        - payment_request_approval
+        - payment_request_status
+        - payment_request_consume
 ```
 
 If you run Open Second Brain from a checkout instead of an installed package,
