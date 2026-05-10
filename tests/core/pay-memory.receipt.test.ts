@@ -137,6 +137,62 @@ describe("writeReceipt", () => {
     expect(text).not.toContain("`weird/`inject`-svc`");
   });
 
+  test("policy_status defaults to `not_checked` and the body says so", () => {
+    const out = writeReceipt(tmp, baseInput);
+    const text = readFileSync(out.path, "utf8");
+    const [meta, body] = parseFrontmatter(out.path);
+    expect(meta["policy_status"]).toBe("not_checked");
+    expect(body).toContain("Not checked.");
+    // The old hardcoded "Allowed by the configured spending policy" line
+    // must NOT appear when no decision was supplied — that was the
+    // pre-fix lie the v0.8.0 review flagged.
+    expect(text).not.toContain("Allowed by the configured spending policy");
+  });
+
+  test("policy_status='allowed' renders the explicit allowed message", () => {
+    const out = writeReceipt(tmp, { ...baseInput, slug: "a-1", policyStatus: "allowed" });
+    const [meta, body] = parseFrontmatter(out.path);
+    expect(meta["policy_status"]).toBe("allowed");
+    expect(body).toContain("Allowed by the configured spending policy");
+  });
+
+  test("approval_required renders rule + reasons + approval link", () => {
+    const out = writeReceipt(tmp, {
+      ...baseInput,
+      slug: "ar-1",
+      policyStatus: "approval_required",
+      policyRule: "max_single_call",
+      policyReasons: ["expected amount 0.10 USDC exceeds max_single_call 0.07 USDC"],
+      approvalRequestId: "req-2026-05-10-fal",
+      approvalStatus: "approved",
+      approvedBy: "sergey",
+      approvedAt: "2026-05-10T17:25:00Z",
+    });
+    const [meta, body] = parseFrontmatter(out.path);
+    expect(meta["policy_status"]).toBe("approval_required");
+    expect(meta["policy_rule"]).toBe("max_single_call");
+    expect(meta["approval_status"]).toBe("approved");
+    expect(meta["approved_by"]).toBe("sergey");
+    expect(body).toContain("Policy returned `approval_required`");
+    expect(body).toContain("Rule fired: `max_single_call`");
+    expect(body).toContain("expected amount 0.10 USDC exceeds max_single_call 0.07 USDC");
+    expect(body).toContain("[[AI Wiki/payments/_pending/req-2026-05-10-fal]]");
+    expect(body).toContain("Approved by: sergey");
+  });
+
+  test("policy_status='denied' renders the truth — receipt records the override", () => {
+    const out = writeReceipt(tmp, {
+      ...baseInput,
+      slug: "d-1",
+      policyStatus: "denied",
+      policyRule: "allowed_services",
+    });
+    const [meta, body] = parseFrontmatter(out.path);
+    expect(meta["policy_status"]).toBe("denied");
+    expect(body).toContain("Policy returned `denied`");
+    expect(body).toContain("explicitly waved the policy aside");
+  });
+
   test("concurrent writers to the same slug: exactly one succeeds", async () => {
     // Race two writers via Promise.allSettled. Both call writeReceipt
     // synchronously inside an async wrapper, so they hit the

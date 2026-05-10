@@ -24,6 +24,7 @@
  * pass `enforcePolicy: true` and the helper will throw before writing.)
  */
 
+import lockfile from "proper-lockfile";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -159,6 +160,7 @@ export function writePendingRequest(
     created,
     policy_status: decision.status,
   };
+  if (tz) metadata["timezone"] = tz;
   if (decision.rule) metadata["policy_rule"] = decision.rule;
   putIfPresent(metadata, "category", input.category);
   putIfPresent(metadata, "endpoint", input.endpoint);
@@ -200,13 +202,16 @@ export function loadPendingRequest(vault: string, id: string): LoadedPendingRequ
   // pending-payment-request returns non-null.
   const [metadata, body] = parseFrontmatter(target);
   if (frontmatterStr(metadata["type"]) !== PENDING_REQUEST_FRONTMATTER_TYPE) return null;
+  // parseStatus throws on malformed status — propagate, since transitions
+  // need a known starting state. Listing walks catch the throw.
+  const status = parseStatus(frontmatterStr(metadata["status"]));
   return {
     metadata,
     body,
     path: target,
     relativePath: vaultRelative(target, vault),
     id,
-    status: parseStatus(frontmatterStr(metadata["status"])),
+    status,
   };
 }
 
@@ -239,7 +244,16 @@ export function listPendingRequests(
       continue;
     }
     if (frontmatterStr(metadata["type"]) !== PENDING_REQUEST_FRONTMATTER_TYPE) continue;
-    const status = parseStatus(frontmatterStr(metadata["status"]));
+    let status: RequestStatus;
+    try {
+      status = parseStatus(frontmatterStr(metadata["status"]));
+    } catch {
+      // The walker is best-effort: a corrupted entry shouldn't crash a
+      // user-facing list. We skip it instead of throwing — the strict
+      // validation in `loadPendingRequest` still surfaces the failure
+      // when an actual transition is attempted on the offending file.
+      continue;
+    }
     if (filter !== "all" && status !== filter) continue;
     out.push({
       id: frontmatterStr(metadata["id"]) || stem(entry.name),
@@ -271,13 +285,17 @@ export interface ApproveOptions {
   readonly note?: string | null;
 }
 
-export function approvePendingRequest(
+export async function approvePendingRequest(
   vault: string,
   id: string,
   opts: ApproveOptions,
-): PendingRequestOutput {
+): Promise<PendingRequestOutput> {
+  const approvedBy = opts.approvedBy?.trim();
+  if (!approvedBy) {
+    throw new Error("approve-payment-request requires a non-empty approvedBy");
+  }
   return transitionRequest(vault, id, "pending", "approved", (meta) => {
-    meta["approved_by"] = opts.approvedBy.trim();
+    meta["approved_by"] = approvedBy;
     meta["approved_at"] = nowIsoZ();
     if (opts.note?.trim()) meta["approval_note"] = opts.note.trim();
   });
@@ -288,13 +306,17 @@ export interface RejectOptions {
   readonly reason?: string | null;
 }
 
-export function rejectPendingRequest(
+export async function rejectPendingRequest(
   vault: string,
   id: string,
   opts: RejectOptions,
-): PendingRequestOutput {
+): Promise<PendingRequestOutput> {
+  const rejectedBy = opts.rejectedBy?.trim();
+  if (!rejectedBy) {
+    throw new Error("reject-payment-request requires a non-empty rejectedBy");
+  }
   return transitionRequest(vault, id, "pending", "rejected", (meta) => {
-    meta["rejected_by"] = opts.rejectedBy.trim();
+    meta["rejected_by"] = rejectedBy;
     meta["rejected_at"] = nowIsoZ();
     if (opts.reason?.trim()) meta["rejection_reason"] = opts.reason.trim();
   });
@@ -304,58 +326,97 @@ export interface ConsumeOptions {
   readonly receiptPath: string;
 }
 
-export function consumePendingRequest(
+export async function consumePendingRequest(
   vault: string,
   id: string,
   opts: ConsumeOptions,
-): PendingRequestOutput {
+): Promise<PendingRequestOutput> {
+  const receiptPath = opts.receiptPath?.trim();
+  if (!receiptPath) {
+    throw new Error("consume-payment-request requires a non-empty receiptPath");
+  }
   return transitionRequest(vault, id, "approved", "consumed", (meta) => {
-    meta["receipt"] = opts.receiptPath.trim();
+    meta["receipt"] = receiptPath;
     meta["consumed_at"] = nowIsoZ();
   });
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function transitionRequest(
+/**
+ * Atomic state-machine transition for a pending-payment-request.
+ *
+ * The naive shape — loadPendingRequest → validate → patch → write — is
+ * vulnerable to a textbook lost-update race: two CLI/MCP processes can
+ * both read `pending`, both pass the validation, then both write — last
+ * writer wins. For an approval workflow that changes financial decisions,
+ * that's a correctness bug.
+ *
+ * `proper-lockfile` (already used by `event-log.ts`) gives us a portable
+ * per-file mutex. We hold it across the entire read-modify-write so two
+ * concurrent transitions on the same id are serialised: the second one
+ * sees the first one's `approved`/`rejected` state and fails the
+ * "expectedFrom" check instead of clobbering it.
+ */
+async function transitionRequest(
   vault: string,
   id: string,
   expectedFrom: RequestStatus,
   newStatus: RequestStatus,
   patch: (meta: FrontmatterMap) => void,
-): PendingRequestOutput {
-  const loaded = loadPendingRequest(vault, id);
-  if (!loaded) {
+): Promise<PendingRequestOutput> {
+  const lockTarget = pendingRequestPath(vault, id);
+  // The lock target must exist; if the request file is missing the
+  // transition would fail anyway with "not found" — so resolve that
+  // first with a cheap pre-check, then take the lock and re-validate.
+  const initial = loadPendingRequest(vault, id);
+  if (!initial) {
     throw new Error(`pending request not found: ${id}`);
   }
-  if (loaded.status !== expectedFrom) {
-    throw new Error(
-      `cannot transition request ${id} from ${loaded.status} to ${newStatus} ` +
-        `(expected ${expectedFrom})`,
-    );
+
+  const release = await lockfile.lock(lockTarget, {
+    retries: { retries: 30, factor: 1.2, minTimeout: 30, maxTimeout: 500 },
+    stale: 10_000,
+    realpath: false,
+  });
+  try {
+    // Re-load inside the lock — the artefact may have been rewritten
+    // between the pre-check and the lock acquisition.
+    const loaded = loadPendingRequest(vault, id);
+    if (!loaded) {
+      throw new Error(`pending request not found: ${id}`);
+    }
+    if (loaded.status !== expectedFrom) {
+      throw new Error(
+        `cannot transition request ${id} from ${loaded.status} to ${newStatus} ` +
+          `(expected ${expectedFrom})`,
+      );
+    }
+    const newMeta: FrontmatterMap = { ...loaded.metadata };
+    newMeta["status"] = newStatus;
+    patch(newMeta);
+    writeFrontmatterAtomic(loaded.path, newMeta, loaded.body, { overwrite: true });
+    return {
+      path: loaded.path,
+      relativePath: loaded.relativePath,
+      id,
+      status: newStatus,
+      created: frontmatterStr(loaded.metadata["created"]),
+      policyDecision: {
+        status: parseDecisionStatus(frontmatterStr(loaded.metadata["policy_status"])),
+        allowed: frontmatterStr(loaded.metadata["policy_status"]) === "allowed",
+        approvalRequired:
+          frontmatterStr(loaded.metadata["policy_status"]) === "approval_required",
+        reasons: [],
+        rule: frontmatterStr(loaded.metadata["policy_rule"]) || null,
+        hasPolicy: Boolean(frontmatterStr(loaded.metadata["policy_status"])),
+        policyPath: null,
+        currency: frontmatterStr(loaded.metadata["currency"]) || null,
+      },
+    };
+  } finally {
+    await release();
   }
-  const newMeta: FrontmatterMap = { ...loaded.metadata };
-  newMeta["status"] = newStatus;
-  patch(newMeta);
-  writeFrontmatterAtomic(loaded.path, newMeta, loaded.body, { overwrite: true });
-  return {
-    path: loaded.path,
-    relativePath: loaded.relativePath,
-    id,
-    status: newStatus,
-    created: frontmatterStr(loaded.metadata["created"]),
-    policyDecision: {
-      status: parseDecisionStatus(frontmatterStr(loaded.metadata["policy_status"])),
-      allowed: frontmatterStr(loaded.metadata["policy_status"]) === "allowed",
-      approvalRequired:
-        frontmatterStr(loaded.metadata["policy_status"]) === "approval_required",
-      reasons: [],
-      rule: frontmatterStr(loaded.metadata["policy_rule"]) || null,
-      hasPolicy: Boolean(frontmatterStr(loaded.metadata["policy_status"])),
-      policyPath: null,
-      currency: frontmatterStr(loaded.metadata["currency"]) || null,
-    },
-  };
 }
 
 function defaultRequestSlug(
@@ -431,8 +492,20 @@ function renderRequestBody(input: PendingRequestInput, decision: PolicyDecision)
 }
 
 function parseStatus(raw: string): RequestStatus {
-  if (raw === "approved" || raw === "rejected" || raw === "consumed") return raw;
-  return "pending";
+  if (
+    raw === "pending" ||
+    raw === "approved" ||
+    raw === "rejected" ||
+    raw === "consumed"
+  ) {
+    return raw;
+  }
+  // Reject malformed / hand-edited status values rather than silently
+  // collapsing to "pending". A receipt that's been manually scrubbed to
+  // `status: closed` or whatever should not become actionable as a fresh
+  // pending approval. Callers that need to be lenient (e.g. the listing
+  // walker) catch this and skip the entry.
+  throw new Error(`invalid payment-request status: ${JSON.stringify(raw)}`);
 }
 
 function parseDecisionStatus(raw: string): PolicyDecision["status"] {

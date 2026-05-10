@@ -29,6 +29,7 @@ import {
   checkPolicy,
   consumePendingRequest,
   listPendingRequests,
+  loadPendingRequest,
   payMemoryDirs,
   rejectPendingRequest,
   renderPaymentDigestTelegram,
@@ -39,6 +40,7 @@ import {
   writeReceipt,
   writeReport,
 } from "../core/pay-memory/index.ts";
+import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import {
@@ -418,6 +420,11 @@ async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
     time: { type: "string" },
     overwrite: { type: "boolean" },
     json: { type: "boolean" },
+    "policy-status": { type: "string" },
+    "policy-rule": { type: "string" },
+    "policy-reasons": { type: "string-array" },
+    "policy-checked-at": { type: "string" },
+    "from-request": { type: "string" },
   });
   const config = defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
@@ -435,6 +442,53 @@ async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
         `error: cannot read raw-output-file: ${(exc as Error).message ?? exc}\n`,
       );
       return 1;
+    }
+  }
+
+  // --policy-status / --from-request audit context. `--from-request`
+  // pulls policy + approval state from the named pending-payment-request
+  // so the agent doesn't have to repeat it on the command line. Explicit
+  // flags win over `--from-request` so a caller can override individual
+  // fields.
+  let policyStatus = (flags["policy-status"] as string | undefined) ?? null;
+  let policyRule = (flags["policy-rule"] as string | undefined) ?? null;
+  let policyReasons = (flags["policy-reasons"] as string[] | undefined) ?? null;
+  let policyCheckedAt =
+    (flags["policy-checked-at"] as string | undefined) ?? null;
+  let approvalStatus: string | null = null;
+  let approvedBy: string | null = null;
+  let approvedAt: string | null = null;
+  const fromRequest = (flags["from-request"] as string | undefined) ?? null;
+  if (fromRequest) {
+    const loaded = loadPendingRequest(vault, fromRequest);
+    if (!loaded) {
+      process.stderr.write(`error: pending request not found: ${fromRequest}\n`);
+      return 1;
+    }
+    const meta = loaded.metadata;
+    const get = (k: string): string | null => {
+      const v = meta[k];
+      if (v === undefined || v === null) return null;
+      return Array.isArray(v) ? v.join(", ") : String(v);
+    };
+    policyStatus ??= get("policy_status");
+    policyRule ??= get("policy_rule");
+    approvalStatus ??= loaded.status;
+    approvedBy ??= get("approved_by");
+    approvedAt ??= get("approved_at");
+  }
+  if (policyStatus !== null) {
+    const allowed: ReadonlyArray<ReceiptPolicyStatus> = [
+      "allowed",
+      "approval_required",
+      "denied",
+      "not_checked",
+    ];
+    if (!allowed.includes(policyStatus as ReceiptPolicyStatus)) {
+      process.stderr.write(
+        `error: --policy-status must be one of: ${allowed.join(", ")}\n`,
+      );
+      return 2;
     }
   }
 
@@ -459,6 +513,19 @@ async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
       time: (flags["time"] as string | undefined) ?? null,
       overwrite: Boolean(flags["overwrite"]),
       tz,
+      policyStatus: policyStatus as ReceiptPolicyStatus | null,
+      policyRule,
+      policyReasons,
+      policyCheckedAt,
+      approvalRequestId: fromRequest,
+      approvalStatus: approvalStatus as
+        | "pending"
+        | "approved"
+        | "rejected"
+        | "consumed"
+        | null,
+      approvedBy,
+      approvedAt,
     });
   } catch (exc) {
     process.stderr.write(
@@ -704,7 +771,7 @@ async function cmdApprovePaymentRequest(argv: string[]): Promise<number> {
 
   let result;
   try {
-    result = approvePendingRequest(vault, String(flags["id"]), {
+    result = await approvePendingRequest(vault, String(flags["id"]), {
       approvedBy: String(flags["approved-by"]),
       note: (flags["note"] as string | undefined) ?? null,
     });
@@ -742,7 +809,7 @@ async function cmdRejectPaymentRequest(argv: string[]): Promise<number> {
 
   let result;
   try {
-    result = rejectPendingRequest(vault, String(flags["id"]), {
+    result = await rejectPendingRequest(vault, String(flags["id"]), {
       rejectedBy: String(flags["rejected-by"]),
       reason: (flags["reason"] as string | undefined) ?? null,
     });
@@ -779,7 +846,7 @@ async function cmdConsumePaymentRequest(argv: string[]): Promise<number> {
 
   let result;
   try {
-    result = consumePendingRequest(vault, String(flags["id"]), {
+    result = await consumePendingRequest(vault, String(flags["id"]), {
       receiptPath: String(flags["receipt"]),
     });
   } catch (exc) {

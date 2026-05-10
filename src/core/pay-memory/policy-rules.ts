@@ -109,10 +109,21 @@ function validatePolicyRules(value: unknown, source: string): PolicyRules {
   const out: Record<string, unknown> = {};
 
   if ("schema_version" in obj) {
-    if (typeof obj["schema_version"] !== "number") {
+    const v = obj["schema_version"];
+    if (typeof v !== "number") {
       throw new Error(`${source}: schema_version must be a number`);
     }
-    out["schema_version"] = obj["schema_version"];
+    // Fail-fast on unsupported versions instead of silently degrading to v1
+    // semantics. A future schema bump will change field meanings (e.g. new
+    // amount-rule shapes), so misreading v2 as v1 could approve calls the
+    // user thought they had blocked.
+    if (v !== POLICY_SCHEMA_VERSION) {
+      throw new Error(
+        `${source}: unsupported schema_version ${v}; expected ${POLICY_SCHEMA_VERSION}. ` +
+          "Upgrade Open Second Brain or roll the policy back to the matching schema.",
+      );
+    }
+    out["schema_version"] = v;
   }
   if ("currency" in obj) {
     if (typeof obj["currency"] !== "string") {
@@ -205,6 +216,27 @@ export function evaluatePolicy(
   }
 
   const amount = typeof request.expectedAmount === "number" ? request.expectedAmount : null;
+
+  // 2b. Missing-amount guard. If the policy declares any amount-based
+  //     rule, an absent `expected_amount` cannot be evaluated against it
+  //     and we MUST NOT fail-open: an agent that omits the amount would
+  //     otherwise bypass the daily budget, the single-call cap, and the
+  //     approval threshold simultaneously. We require explicit user
+  //     approval in that case (denial would also be defensible, but
+  //     `approval_required` keeps the door open for low-stakes prices
+  //     the agent honestly cannot estimate).
+  if (
+    amount === null &&
+    (rules.max_single_call !== undefined ||
+      rules.max_total_per_day !== undefined ||
+      rules.require_approval_above !== undefined)
+  ) {
+    reasons.push(
+      "expected_amount is required to evaluate amount-based policy rules; " +
+        "request human approval explicitly",
+    );
+    approvalRule ??= "missing_expected_amount";
+  }
 
   // 3. Single-call cap.
   if (

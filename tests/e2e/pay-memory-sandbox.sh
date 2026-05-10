@@ -54,6 +54,10 @@ echo "==> pay --version"
 pay --version
 
 echo "==> sandbox call to pay.sh debugger (free)"
+# Endpoint per `solana-foundation/pay` README. The pay.sh docs site lists
+# `https://payment-debugger.vercel.app/mpp/quote/AAPL` as a fallback —
+# both deployments serve the same free MPP/x402 demo and either works
+# with `pay --sandbox curl`. Using the README's branded host by default.
 pay --sandbox curl https://debugger.pay.sh/mpp/quote/AAPL 2>&1 | tee "$RAW_OUTPUT"
 
 echo

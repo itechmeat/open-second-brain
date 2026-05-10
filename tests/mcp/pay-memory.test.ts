@@ -16,6 +16,11 @@ beforeEach(() => {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
+  // Pin OPEN_SECOND_BRAIN_CONFIG to a non-existent path inside this
+  // run's tmpdir so `resolveTimezone` returns null instead of leaking
+  // the developer's real config (which on this VPS sets Europe/Belgrade
+  // and would shift the timestamp assertions by the local UTC offset).
+  process.env["OPEN_SECOND_BRAIN_CONFIG"] = join(tmp, "isolated-config.yaml");
 });
 
 afterEach(() => {

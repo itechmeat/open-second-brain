@@ -1554,7 +1554,7 @@ var require_proper_lockfile = __commonJS((exports, module) => {
 
 // src/openclaw/index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { existsSync as existsSync6 } from "node:fs";
+import { existsSync as existsSync7 } from "node:fs";
 import { join as join10, resolve as resolvePath } from "node:path";
 
 // src/core/config.ts
@@ -2174,14 +2174,44 @@ function buildReminder(agent) {
 import { join as join5 } from "node:path";
 
 // src/core/path-safety.ts
-import { posix, relative, resolve as resolve2, sep } from "node:path";
+import { existsSync as existsSync4, realpathSync } from "node:fs";
+import { dirname as dirname4, posix, relative, resolve as resolve2, sep } from "node:path";
 function ensureInsideVault(target, vault) {
   const resolvedTarget = resolve2(target);
   const resolvedVault = resolve2(vault);
-  if (resolvedTarget !== resolvedVault && !resolvedTarget.startsWith(resolvedVault + sep)) {
+  if (!isLexicallyInside(resolvedTarget, resolvedVault)) {
     throw new Error(`path escapes vault: ${target}`);
   }
+  if (existsSync4(resolvedVault)) {
+    const realVault = safeRealpath(resolvedVault);
+    const realAncestor = safeRealpath(deepestExistingAncestor(resolvedTarget));
+    if (!isLexicallyInside(realAncestor, realVault)) {
+      throw new Error(`path escapes vault via symlink: ${target}`);
+    }
+  }
   return resolvedTarget;
+}
+function isLexicallyInside(target, root) {
+  return target === root || target.startsWith(root + sep);
+}
+function deepestExistingAncestor(target) {
+  let cur = target;
+  while (!existsSync4(cur)) {
+    const parent = dirname4(cur);
+    if (parent === cur)
+      return cur;
+    cur = parent;
+  }
+  return cur;
+}
+function safeRealpath(p) {
+  try {
+    return realpathSync(p);
+  } catch (err) {
+    if (err?.code === "ENOENT")
+      return p;
+    throw err;
+  }
 }
 function vaultRelative(target, vault) {
   const rel = relative(resolve2(vault), resolve2(target));
@@ -2216,6 +2246,7 @@ function assetPath(vault, slug) {
 function reportPath(vault, slug) {
   return join5(payMemoryDirs(vault).reports, `${validateSlug(slug)}.md`);
 }
+var WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 function validateSlug(slug) {
   const trimmed = slug.trim();
   if (!trimmed)
@@ -2225,6 +2256,12 @@ function validateSlug(slug) {
   }
   if (trimmed === ".." || trimmed === "." || /(?:^|[^\w])\.\.(?:$|[^\w])/.test(trimmed)) {
     throw new Error(`slug must not contain '..' traversal: ${slug}`);
+  }
+  if (/[. ]$/.test(trimmed)) {
+    throw new Error(`slug must not end with '.' or whitespace (Windows-incompatible): ${slug}`);
+  }
+  if (WINDOWS_RESERVED_BASENAME_RE.test(trimmed)) {
+    throw new Error(`slug uses a Windows-reserved filename: ${slug}`);
   }
   return trimmed;
 }
@@ -2276,7 +2313,32 @@ function isoTimeNow(tz) {
 function isoTimestampZ(date, time, tz) {
   validateIsoDate(date);
   validateIsoTime(time);
-  return `${date}T${time}:00Z`;
+  if (!tz) {
+    return `${date}T${time}:00Z`;
+  }
+  const utcMillis = utcMillisForLocalWallClock(date, time, tz);
+  return new Date(utcMillis).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function utcMillisForLocalWallClock(date, time, tz) {
+  const naiveUtc = Date.parse(`${date}T${time}:00Z`);
+  const offsetMinutes = tzOffsetMinutes(naiveUtc, tz);
+  return naiveUtc - offsetMinutes * 60000;
+}
+function tzOffsetMinutes(instantMs, tz) {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  });
+  const parts = fmt.formatToParts(new Date(instantMs));
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+  const localUtcMs = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  return Math.round((localUtcMs - instantMs) / 60000);
 }
 // src/core/pay-memory/redactor.ts
 var PLACEHOLDER = "***REDACTED***";
@@ -2334,8 +2396,8 @@ function redactRawOutput(text) {
   return out;
 }
 // src/core/pay-memory/policy.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
-import { dirname as dirname4 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { dirname as dirname5 } from "node:path";
 var DEFAULT_POLICY_TEMPLATE = `# Agent Spending Policy
 
 This file is read by the agent before any paid action. The agent MUST cite
@@ -2390,9 +2452,9 @@ The agent must save:
 function writePolicyIfMissing(vault, opts = {}) {
   const target = policyPath(vault);
   const overwrite = opts.overwrite ?? false;
-  mkdirSync4(dirname4(target), { recursive: true });
+  mkdirSync4(dirname5(target), { recursive: true });
   if (overwrite) {
-    const existed = existsSync4(target);
+    const existed = existsSync5(target);
     atomicWriteFileSync(target, DEFAULT_POLICY_TEMPLATE);
     return existed ? buildPolicyResult(target, "overwritten") : buildPolicyResult(target, "created");
   }
@@ -2416,8 +2478,8 @@ function buildPolicyResult(path, status) {
   };
 }
 // src/core/vault.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync6, readdirSync, statSync as statSync3, writeFileSync } from "node:fs";
-import { dirname as dirname5, join as join6, relative as relative2 } from "node:path";
+import { existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, readdirSync, statSync as statSync3, writeFileSync } from "node:fs";
+import { dirname as dirname6, join as join6, relative as relative2 } from "node:path";
 var FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 var KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
 var PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
@@ -2496,7 +2558,7 @@ function formatFrontmatter(metadata, body) {
 `;
 }
 function writeFrontmatter(path, metadata, body) {
-  mkdirSync5(dirname5(path), { recursive: true });
+  mkdirSync5(dirname6(path), { recursive: true });
   writeFileSync(path, formatFrontmatter(metadata, body), "utf8");
 }
 function writeFrontmatterAtomic(path, metadata, body, opts = {}) {
@@ -2689,6 +2751,8 @@ function writeReceipt(vault, input) {
     reason: input.reason.trim(),
     created
   };
+  if (tz)
+    metadata["timezone"] = tz;
   putIfPresent(metadata, "category", input.category);
   putIfPresent(metadata, "endpoint", input.endpoint);
   putIfPresent(metadata, "expected_cost", input.expectedCost);
@@ -2697,6 +2761,16 @@ function writeReceipt(vault, input) {
   putIfPresent(metadata, "payment_proof", input.paymentProof);
   putIfPresent(metadata, "result_ref", input.resultRef);
   putIfPresent(metadata, "result_note", input.resultNote);
+  metadata["policy_status"] = input.policyStatus ?? "not_checked";
+  putIfPresent(metadata, "policy_rule", input.policyRule);
+  if (input.policyReasons && input.policyReasons.length > 0) {
+    metadata["policy_reasons"] = [...input.policyReasons];
+  }
+  putIfPresent(metadata, "policy_checked_at", input.policyCheckedAt);
+  putIfPresent(metadata, "approval_request", input.approvalRequestId);
+  putIfPresent(metadata, "approval_status", input.approvalStatus);
+  putIfPresent(metadata, "approved_by", input.approvedBy);
+  putIfPresent(metadata, "approved_at", input.approvedAt);
   const body = renderReceiptBody(input);
   writeFrontmatterAtomic(target, metadata, body, {
     overwrite: input.overwrite,
@@ -2714,6 +2788,53 @@ function writeReceipt(vault, input) {
 function defaultReceiptSlug(service, reason) {
   const tail = service.split("/").pop() ?? service;
   return slugify(`${tail}-${reason}`);
+}
+function renderPolicySection(input) {
+  const status = input.policyStatus ?? "not_checked";
+  const out = ["Decision:", ""];
+  switch (status) {
+    case "allowed":
+      out.push("Allowed by the configured spending policy. The agent ran a policy", "check before initiating this paid call.");
+      break;
+    case "approval_required":
+      out.push("Policy returned `approval_required` — a human approval was needed", "before initiating this paid call.");
+      break;
+    case "denied":
+      out.push("Policy returned `denied` — this receipt records a paid call that", "the policy did not approve. If the call still proceeded, a human", "explicitly waved the policy aside; check the approval section", "below for who and why.");
+      break;
+    case "not_checked":
+    default:
+      out.push("Not checked. The receipt was created without a policy decision —", "either no `AI Wiki/policies/spending.json` is configured, or the", "caller chose not to evaluate the policy. This is *not* a claim", "that the call was allowed.");
+      break;
+  }
+  if (input.policyRule?.trim()) {
+    out.push("", `Rule fired: \`${input.policyRule.trim()}\``);
+  }
+  if (input.policyReasons && input.policyReasons.length > 0) {
+    out.push("", "Reasons:", "");
+    for (const r of input.policyReasons)
+      out.push(`- ${r}`);
+  }
+  if (input.policyCheckedAt?.trim()) {
+    out.push("", `Policy checked at: \`${input.policyCheckedAt.trim()}\``);
+  }
+  if (input.approvalRequestId?.trim() || input.approvalStatus?.trim() || input.approvedBy?.trim()) {
+    out.push("", "Approval:");
+    if (input.approvalRequestId?.trim()) {
+      out.push("", `Request: [[AI Wiki/payments/_pending/${input.approvalRequestId.trim()}]]`);
+    }
+    if (input.approvalStatus?.trim()) {
+      out.push(`Status: \`${input.approvalStatus.trim()}\``);
+    }
+    if (input.approvedBy?.trim()) {
+      out.push(`Approved by: ${input.approvedBy.trim()}`);
+    }
+    if (input.approvedAt?.trim()) {
+      out.push(`Approved at: \`${input.approvedAt.trim()}\``);
+    }
+  }
+  out.push("");
+  return out;
 }
 function fieldOrPlaceholder(value) {
   if (value === null || value === undefined)
@@ -2740,11 +2861,7 @@ function renderReceiptBody(input) {
     "",
     "[[AI Wiki/policies/spending]]",
     "",
-    "Decision:",
-    "",
-    "Allowed by the configured spending policy. The agent has read the policy",
-    "before initiating this paid call.",
-    "",
+    ...renderPolicySection(input),
     "## Expected cost",
     "",
     fieldOrPlaceholder(input.expectedCost),
@@ -2846,7 +2963,7 @@ function renderAssetBody(input) {
   const lines = [`# ${title}`, ""];
   lines.push("## Purpose", "");
   if (usedIn) {
-    lines.push(`Used in: [[${stripMarkdownExt(usedIn)}]]`);
+    lines.push(`Used in: ${wikiLink(usedIn)}`);
   } else {
     lines.push(NOT_PROVIDED);
   }
@@ -2862,7 +2979,7 @@ function renderAssetBody(input) {
   lines.push("## Source", "");
   lines.push(`Service: \`${input.service.trim().replace(/`/g, "ˋ")}\``);
   if (sourceReceipt) {
-    lines.push(`Receipt: [[${stripMarkdownExt(sanitizeWikilinkTarget(sourceReceipt))}]]`);
+    lines.push(`Receipt: ${wikiLink(sourceReceipt)}`);
   } else {
     lines.push(`Receipt: ${NOT_PROVIDED}`);
   }
@@ -2993,6 +3110,7 @@ function renderReportBody(date, title, task, summaries) {
 // src/core/pay-memory/policy-rules.ts
 import { readFileSync as readFileSync7 } from "node:fs";
 import { join as join8 } from "node:path";
+var POLICY_SCHEMA_VERSION = 1;
 function policyJsonPath(vault) {
   return join8(payMemoryDirs(vault).policies, "spending.json");
 }
@@ -3021,10 +3139,14 @@ function validatePolicyRules(value, source) {
   const obj = value;
   const out = {};
   if ("schema_version" in obj) {
-    if (typeof obj["schema_version"] !== "number") {
+    const v = obj["schema_version"];
+    if (typeof v !== "number") {
       throw new Error(`${source}: schema_version must be a number`);
     }
-    out["schema_version"] = obj["schema_version"];
+    if (v !== POLICY_SCHEMA_VERSION) {
+      throw new Error(`${source}: unsupported schema_version ${v}; expected ${POLICY_SCHEMA_VERSION}. ` + "Upgrade Open Second Brain or roll the policy back to the matching schema.");
+    }
+    out["schema_version"] = v;
   }
   if ("currency" in obj) {
     if (typeof obj["currency"] !== "string") {
@@ -3093,6 +3215,10 @@ function evaluatePolicy(rules, request, context) {
     denyRule ??= "currency_mismatch";
   }
   const amount = typeof request.expectedAmount === "number" ? request.expectedAmount : null;
+  if (amount === null && (rules.max_single_call !== undefined || rules.max_total_per_day !== undefined || rules.require_approval_above !== undefined)) {
+    reasons.push("expected_amount is required to evaluate amount-based policy rules; " + "request human approval explicitly");
+    approvalRule ??= "missing_expected_amount";
+  }
   if (rules.max_single_call !== undefined && amount !== null && amount > rules.max_single_call) {
     reasons.push(`expected amount ${amount} ${reqCurrency} exceeds max_single_call ` + `${rules.max_single_call} ${policyCurrency}`);
     denyRule ??= "max_single_call";
@@ -3147,6 +3273,7 @@ function checkPolicy(vault, request) {
   };
 }
 // src/core/pay-memory/approval.ts
+var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
 import { join as join9 } from "node:path";
 var PENDING_REQUEST_FRONTMATTER_TYPE = "pending-payment-request";
 function pendingDir(vault) {
@@ -3190,6 +3317,8 @@ function writePendingRequest(vault, input) {
     created,
     policy_status: decision.status
   };
+  if (tz)
+    metadata["timezone"] = tz;
   if (decision.rule)
     metadata["policy_rule"] = decision.rule;
   putIfPresent(metadata, "category", input.category);
@@ -3217,50 +3346,69 @@ function loadPendingRequest(vault, id) {
   const [metadata, body] = parseFrontmatter(target);
   if (frontmatterStr(metadata["type"]) !== PENDING_REQUEST_FRONTMATTER_TYPE)
     return null;
+  const status = parseStatus(frontmatterStr(metadata["status"]));
   return {
     metadata,
     body,
     path: target,
     relativePath: vaultRelative(target, vault),
     id,
-    status: parseStatus(frontmatterStr(metadata["status"]))
+    status
   };
 }
-function consumePendingRequest(vault, id, opts) {
+async function consumePendingRequest(vault, id, opts) {
+  const receiptPath2 = opts.receiptPath?.trim();
+  if (!receiptPath2) {
+    throw new Error("consume-payment-request requires a non-empty receiptPath");
+  }
   return transitionRequest(vault, id, "approved", "consumed", (meta) => {
-    meta["receipt"] = opts.receiptPath.trim();
+    meta["receipt"] = receiptPath2;
     meta["consumed_at"] = nowIsoZ();
   });
 }
-function transitionRequest(vault, id, expectedFrom, newStatus, patch) {
-  const loaded = loadPendingRequest(vault, id);
-  if (!loaded) {
+async function transitionRequest(vault, id, expectedFrom, newStatus, patch) {
+  const lockTarget = pendingRequestPath(vault, id);
+  const initial = loadPendingRequest(vault, id);
+  if (!initial) {
     throw new Error(`pending request not found: ${id}`);
   }
-  if (loaded.status !== expectedFrom) {
-    throw new Error(`cannot transition request ${id} from ${loaded.status} to ${newStatus} ` + `(expected ${expectedFrom})`);
-  }
-  const newMeta = { ...loaded.metadata };
-  newMeta["status"] = newStatus;
-  patch(newMeta);
-  writeFrontmatterAtomic(loaded.path, newMeta, loaded.body, { overwrite: true });
-  return {
-    path: loaded.path,
-    relativePath: loaded.relativePath,
-    id,
-    status: newStatus,
-    created: frontmatterStr(loaded.metadata["created"]),
-    policyDecision: {
-      status: parseDecisionStatus(frontmatterStr(loaded.metadata["policy_status"])),
-      allowed: frontmatterStr(loaded.metadata["policy_status"]) === "allowed",
-      approvalRequired: frontmatterStr(loaded.metadata["policy_status"]) === "approval_required",
-      reasons: [],
-      rule: frontmatterStr(loaded.metadata["policy_rule"]) || null,
-      hasPolicy: Boolean(frontmatterStr(loaded.metadata["policy_status"])),
-      policyPath: null,
-      currency: frontmatterStr(loaded.metadata["currency"]) || null
+  const release = await import_proper_lockfile2.default.lock(lockTarget, {
+    retries: { retries: 30, factor: 1.2, minTimeout: 30, maxTimeout: 500 },
+    stale: 1e4,
+    realpath: false
+  });
+  try {
+    const loaded = loadPendingRequest(vault, id);
+    if (!loaded) {
+      throw new Error(`pending request not found: ${id}`);
     }
-  };
+    if (loaded.status !== expectedFrom) {
+      throw new Error(`cannot transition request ${id} from ${loaded.status} to ${newStatus} ` + `(expected ${expectedFrom})`);
+    }
+    const newMeta = { ...loaded.metadata };
+    newMeta["status"] = newStatus;
+    patch(newMeta);
+    writeFrontmatterAtomic(loaded.path, newMeta, loaded.body, { overwrite: true });
+    return {
+      path: loaded.path,
+      relativePath: loaded.relativePath,
+      id,
+      status: newStatus,
+      created: frontmatterStr(loaded.metadata["created"]),
+      policyDecision: {
+        status: parseDecisionStatus(frontmatterStr(loaded.metadata["policy_status"])),
+        allowed: frontmatterStr(loaded.metadata["policy_status"]) === "allowed",
+        approvalRequired: frontmatterStr(loaded.metadata["policy_status"]) === "approval_required",
+        reasons: [],
+        rule: frontmatterStr(loaded.metadata["policy_rule"]) || null,
+        hasPolicy: Boolean(frontmatterStr(loaded.metadata["policy_status"])),
+        policyPath: null,
+        currency: frontmatterStr(loaded.metadata["currency"]) || null
+      }
+    };
+  } finally {
+    await release();
+  }
 }
 function defaultRequestSlug(input, date, time) {
   const tail = input.service.split("/").pop() ?? input.service;
@@ -3313,9 +3461,10 @@ function renderRequestBody(input, decision) {
 `);
 }
 function parseStatus(raw) {
-  if (raw === "approved" || raw === "rejected" || raw === "consumed")
+  if (raw === "pending" || raw === "approved" || raw === "rejected" || raw === "consumed") {
     return raw;
-  return "pending";
+  }
+  throw new Error(`invalid payment-request status: ${JSON.stringify(raw)}`);
 }
 function parseDecisionStatus(raw) {
   if (raw === "denied" || raw === "approval_required")
@@ -3387,14 +3536,21 @@ function resolveOpenclawAgent(api, argAgent) {
   return cfg.agentName ?? process.env["VAULT_AGENT_NAME"] ?? resolveAgentName();
 }
 function coerceExpectedAmount(value) {
-  if (value === undefined || value === null || value === "")
+  if (value === undefined || value === null)
     return null;
-  if (typeof value === "number" && Number.isFinite(value))
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error("expected_amount must be a finite number");
+    }
     return value;
+  }
   if (typeof value === "string") {
-    const parsed = Number(value);
+    const trimmed = value.trim();
+    if (trimmed === "")
+      return null;
+    const parsed = Number(trimmed);
     if (!Number.isFinite(parsed)) {
-      throw new Error("expected_amount must be a number");
+      throw new Error("expected_amount must be a number or numeric string");
     }
     return parsed;
   }
@@ -3435,7 +3591,7 @@ var openclaw_default = definePluginEntry({
           config_keys: Object.keys(discovery.data).sort(),
           config: redactMapping(discovery.data),
           vault_path: vault,
-          vault_exists: existsSync6(vault)
+          vault_exists: existsSync7(vault)
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -3461,7 +3617,7 @@ var openclaw_default = definePluginEntry({
       },
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
-        if (!existsSync6(vault))
+        if (!existsSync7(vault))
           throw new Error(`vault directory missing: ${vault}`);
         const pattern = params["pattern"] ?? null;
         const limit = typeof params["limit"] === "number" ? params["limit"] : 50;
@@ -3504,7 +3660,7 @@ var openclaw_default = definePluginEntry({
       },
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
-        if (!existsSync6(vault))
+        if (!existsSync7(vault))
           throw new Error(`vault directory missing: ${vault}`);
         const title = params["title"] ?? "";
         const content = params["content"] ?? "";
@@ -3517,7 +3673,7 @@ var openclaw_default = definePluginEntry({
         const notesDir = join10(vault, "AI Wiki", "notes");
         const slug = slugify(title);
         const target = join10(notesDir, `${slug}.md`);
-        const noteExisted = existsSync6(target);
+        const noteExisted = existsSync7(target);
         if (noteExisted && !overwrite) {
           throw new Error(`note already exists: ${vaultRelative(target, vault)}`);
         }
@@ -3620,7 +3776,7 @@ var openclaw_default = definePluginEntry({
         const created = [];
         const skipped = [];
         for (const dir of [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports]) {
-          const existed = existsSync6(dir);
+          const existed = existsSync7(dir);
           mkdirSync6(dir, { recursive: true });
           (existed ? skipped : created).push(vaultRelative(dir, vault));
         }
@@ -3657,7 +3813,15 @@ var openclaw_default = definePluginEntry({
           slug: { type: "string" },
           date: { type: "string" },
           time: { type: "string" },
-          overwrite: { type: "boolean" }
+          overwrite: { type: "boolean" },
+          policy_status: {
+            type: "string",
+            enum: ["allowed", "approval_required", "denied", "not_checked"]
+          },
+          policy_rule: { type: "string" },
+          policy_reasons: { type: "array", items: { type: "string" } },
+          policy_checked_at: { type: "string" },
+          from_request: { type: "string" }
         },
         required: ["service", "status", "reason"],
         additionalProperties: false
@@ -3666,6 +3830,49 @@ var openclaw_default = definePluginEntry({
         const vault = resolveVaultPath(api);
         const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
         const agent = resolveOpenclawAgent(api, params["agent"] ?? null);
+        let policyStatus = strOrNull(params["policy_status"]);
+        let policyRule = strOrNull(params["policy_rule"]);
+        const policyReasonsRaw = params["policy_reasons"];
+        let policyReasons = null;
+        if (policyReasonsRaw !== undefined && policyReasonsRaw !== null) {
+          if (!Array.isArray(policyReasonsRaw) || !policyReasonsRaw.every((s) => typeof s === "string")) {
+            throw new Error("policy_reasons must be an array of strings");
+          }
+          policyReasons = [...policyReasonsRaw];
+        }
+        let policyCheckedAt = strOrNull(params["policy_checked_at"]);
+        let approvalStatus = null;
+        let approvedBy = null;
+        let approvedAt = null;
+        const fromRequest = strOrNull(params["from_request"]);
+        if (fromRequest) {
+          const loaded = loadPendingRequest(vault, fromRequest);
+          if (!loaded)
+            throw new Error(`pending request not found: ${fromRequest}`);
+          const meta = loaded.metadata;
+          const get = (k) => {
+            const v = meta[k];
+            if (v === undefined || v === null)
+              return null;
+            return Array.isArray(v) ? v.join(", ") : String(v);
+          };
+          policyStatus ??= get("policy_status") ?? null;
+          policyRule ??= get("policy_rule");
+          approvalStatus = loaded.status;
+          approvedBy = get("approved_by");
+          approvedAt = get("approved_at");
+        }
+        if (policyStatus !== null) {
+          const allowed = [
+            "allowed",
+            "approval_required",
+            "denied",
+            "not_checked"
+          ];
+          if (!allowed.includes(policyStatus)) {
+            throw new Error(`policy_status must be one of: ${allowed.join(", ")}`);
+          }
+        }
         const result = writeReceipt(vault, {
           agent,
           service: String(params["service"]),
@@ -3684,7 +3891,15 @@ var openclaw_default = definePluginEntry({
           date: strOrNull(params["date"]),
           time: strOrNull(params["time"]),
           overwrite: Boolean(params["overwrite"] ?? false),
-          tz
+          tz,
+          policyStatus,
+          policyRule,
+          policyReasons,
+          policyCheckedAt,
+          approvalRequestId: fromRequest,
+          approvalStatus,
+          approvedBy,
+          approvedAt
         });
         return asJson({
           path: result.relativePath,
@@ -3921,7 +4136,7 @@ var openclaw_default = definePluginEntry({
       },
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
-        const result = consumePendingRequest(vault, String(params["id"]), {
+        const result = await consumePendingRequest(vault, String(params["id"]), {
           receiptPath: String(params["receipt"])
         });
         return asJson({

@@ -62,9 +62,17 @@ export function reportPath(vault: string, slug: string): string {
   return join(payMemoryDirs(vault).reports, `${validateSlug(slug)}.md`);
 }
 
+// Windows reserves a small set of base filenames (case-insensitive) and
+// rejects any path whose final component matches them — even with an
+// extension. We reject these here so the same vault can be cloned to a
+// Windows host without surprise EINVALs at write time.
+const WINDOWS_RESERVED_BASENAME_RE =
+  /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
 /**
  * Reject slugs that could escape the intended Pay Memory subdirectory or
- * (under `..` traversal) silently land elsewhere in the vault.
+ * (under `..` traversal) silently land elsewhere in the vault, plus a few
+ * Windows-specific filename hazards so the artefact is portable.
  *
  * `ensureInsideVault` would still catch a slug that resolves outside the
  * vault root, but a slug like `../etc/passwd` resolves to a sibling vault
@@ -78,6 +86,14 @@ export function validateSlug(slug: string): string {
   }
   if (trimmed === ".." || trimmed === "." || /(?:^|[^\w])\.\.(?:$|[^\w])/.test(trimmed)) {
     throw new Error(`slug must not contain '..' traversal: ${slug}`);
+  }
+  if (/[. ]$/.test(trimmed)) {
+    throw new Error(
+      `slug must not end with '.' or whitespace (Windows-incompatible): ${slug}`,
+    );
+  }
+  if (WINDOWS_RESERVED_BASENAME_RE.test(trimmed)) {
+    throw new Error(`slug uses a Windows-reserved filename: ${slug}`);
   }
   return trimmed;
 }
@@ -141,17 +157,68 @@ export function isoTimeNow(tz?: string | null): string {
   return `${get("hour")}:${get("minute")}`;
 }
 
-/** Compose an ISO Z timestamp from a `YYYY-MM-DD` + `HH:MM` pair. */
+/**
+ * Compose an ISO Z timestamp from a `YYYY-MM-DD` + `HH:MM` pair, treating
+ * the supplied wall-clock as occurring in `tz` (or UTC if `tz` is null).
+ *
+ * Without `tz`, the wall-clock is taken to already be UTC and we emit the
+ * `Z` form directly. With a `tz`, we compute that zone's offset for the
+ * given instant and shift the wall-clock to a true UTC moment — so a
+ * 09:00 Belgrade event becomes the correct `07:00Z` (or `06:00Z` outside
+ * DST) instead of falsely labelling 09:00 itself as `Z`.
+ *
+ * The offset trick uses `Intl.DateTimeFormat` to format the same instant
+ * twice (in UTC and in `tz`) and reads the difference. It's accurate to
+ * the minute for every IANA zone except during the one-hour DST overlap,
+ * where the choice is arbitrary — acceptable for a Markdown audit trail.
+ */
 export function isoTimestampZ(date: string, time: string, tz?: string | null): string {
   validateIsoDate(date);
   validateIsoTime(time);
-  // Treat the supplied wall-clock as UTC unless a timezone is provided.
-  // We don't try to round-trip arbitrary IANA zones offline — agents that
-  // need precise local timestamps pass the date/time explicitly and we
-  // serialize them as-is in the Z form. The optional `tz` argument is a
-  // hook for the CLI to record the configured zone in metadata, not to
-  // shift the wall-clock.
-  void tz;
-  return `${date}T${time}:00Z`;
+  if (!tz) {
+    return `${date}T${time}:00Z`;
+  }
+  const utcMillis = utcMillisForLocalWallClock(date, time, tz);
+  return new Date(utcMillis).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/**
+ * Given a wall-clock `YYYY-MM-DD HH:MM` interpreted as occurring in IANA
+ * `tz`, return the corresponding UTC milliseconds-since-epoch.
+ *
+ * Strategy: take the naive UTC instant for the literal wall-clock, then
+ * subtract the offset between UTC and `tz` at that instant. That gives
+ * the real UTC moment whose local-tz formatting matches the input.
+ */
+function utcMillisForLocalWallClock(date: string, time: string, tz: string): number {
+  const naiveUtc = Date.parse(`${date}T${time}:00Z`);
+  const offsetMinutes = tzOffsetMinutes(naiveUtc, tz);
+  return naiveUtc - offsetMinutes * 60_000;
+}
+
+function tzOffsetMinutes(instantMs: number, tz: string): number {
+  // Format the same instant in both `tz` and UTC; the spread between the
+  // two formatted wall-clocks IS the zone's offset at that instant.
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = fmt.formatToParts(new Date(instantMs));
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+  const localUtcMs = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second"),
+  );
+  return Math.round((localUtcMs - instantMs) / 60_000);
 }
 

@@ -28,6 +28,7 @@ import {
   writeReceipt,
   writeReport,
 } from "../core/pay-memory/index.ts";
+import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import {
   normalizeAgentArgument,
   PLACEHOLDER_AGENT_VALUES,
@@ -110,6 +111,40 @@ function coerceInt(
     throw new MCPError(INVALID_PARAMS, `argument '${key}' must be between ${min} and ${max}`);
   }
   return value;
+}
+
+/**
+ * Coerce an optional MCP argument that should be a finite number. Accepts
+ * a real number, a numeric string (`"0.05"`), or an absent value
+ * (`undefined`/`null`/empty string/whitespace-only string → `null`).
+ * Anything else throws INVALID_PARAMS.
+ *
+ * Crucially, `Number(" ")` evaluates to `0` in JS — without this helper a
+ * whitespace-only field would silently change a policy decision. We trim
+ * first and treat trimmed-empty as "not provided".
+ */
+function coerceOptionalNumber(
+  args: Record<string, unknown>,
+  key: string,
+): number | null {
+  const raw = args[key];
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) {
+      throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a finite number`);
+    }
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "") return null;
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a number or numeric string`);
+    }
+    return parsed;
+  }
+  throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a number or numeric string`);
 }
 
 
@@ -283,6 +318,58 @@ async function toolPaymentReceiptAppend(
     normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
   const tz = resolveTimezone(ctx.configPath ?? undefined);
 
+  let policyStatus = coerceStr(args, "policy_status", false) as
+    | ReceiptPolicyStatus
+    | null;
+  let policyRule = coerceStr(args, "policy_rule", false);
+  const policyReasonsRaw = args["policy_reasons"];
+  let policyReasons: string[] | null = null;
+  if (policyReasonsRaw !== undefined && policyReasonsRaw !== null) {
+    if (
+      !Array.isArray(policyReasonsRaw) ||
+      !policyReasonsRaw.every((s) => typeof s === "string")
+    ) {
+      throw new MCPError(INVALID_PARAMS, "policy_reasons must be an array of strings");
+    }
+    policyReasons = [...policyReasonsRaw] as string[];
+  }
+  let policyCheckedAt = coerceStr(args, "policy_checked_at", false);
+  let approvalStatus: "pending" | "approved" | "rejected" | "consumed" | null = null;
+  let approvedBy: string | null = null;
+  let approvedAt: string | null = null;
+  const fromRequest = coerceStr(args, "from_request", false);
+  if (fromRequest) {
+    const loaded = loadPendingRequest(ctx.vault, fromRequest);
+    if (!loaded) {
+      throw new Error(`pending request not found: ${fromRequest}`);
+    }
+    const meta = loaded.metadata;
+    const get = (k: string): string | null => {
+      const v = meta[k];
+      if (v === undefined || v === null) return null;
+      return Array.isArray(v) ? v.join(", ") : String(v);
+    };
+    policyStatus ??= (get("policy_status") as ReceiptPolicyStatus | null) ?? null;
+    policyRule ??= get("policy_rule");
+    approvalStatus = loaded.status;
+    approvedBy = get("approved_by");
+    approvedAt = get("approved_at");
+  }
+  if (policyStatus !== null) {
+    const allowed: ReadonlyArray<ReceiptPolicyStatus> = [
+      "allowed",
+      "approval_required",
+      "denied",
+      "not_checked",
+    ];
+    if (!allowed.includes(policyStatus)) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `policy_status must be one of: ${allowed.join(", ")}`,
+      );
+    }
+  }
+
   const result = writeReceipt(ctx.vault, {
     agent,
     service: coerceStr(args, "service", true)!,
@@ -302,6 +389,14 @@ async function toolPaymentReceiptAppend(
     time: coerceStr(args, "time", false),
     overwrite: Boolean(args["overwrite"] ?? false),
     tz,
+    policyStatus,
+    policyRule,
+    policyReasons,
+    policyCheckedAt,
+    approvalRequestId: fromRequest,
+    approvalStatus,
+    approvedBy,
+    approvedAt,
   });
   return {
     path: result.relativePath,
@@ -343,21 +438,7 @@ async function toolPaymentRequestApproval(
     normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
   const tz = resolveTimezone(ctx.configPath ?? undefined);
 
-  const expectedRaw = args["expected_amount"];
-  let expectedAmount: number | null = null;
-  if (expectedRaw !== undefined && expectedRaw !== null && expectedRaw !== "") {
-    if (typeof expectedRaw === "number" && Number.isFinite(expectedRaw)) {
-      expectedAmount = expectedRaw;
-    } else if (typeof expectedRaw === "string") {
-      const parsed = Number(expectedRaw);
-      if (!Number.isFinite(parsed)) {
-        throw new MCPError(INVALID_PARAMS, "expected_amount must be a number");
-      }
-      expectedAmount = parsed;
-    } else {
-      throw new MCPError(INVALID_PARAMS, "expected_amount must be a number or numeric string");
-    }
-  }
+  const expectedAmount = coerceOptionalNumber(args, "expected_amount");
 
   const vaultFiles = args["vault_files"];
   let vaultFilesList: string[] | null = null;
@@ -436,7 +517,7 @@ async function toolPaymentRequestConsume(
 ): Promise<Record<string, unknown>> {
   const id = coerceStr(args, "id", true)!;
   const receiptPath = coerceStr(args, "receipt", true)!;
-  const result = consumePendingRequest(ctx.vault, id, { receiptPath });
+  const result = await consumePendingRequest(ctx.vault, id, { receiptPath });
   return {
     id: result.id,
     path: result.relativePath,
@@ -448,22 +529,7 @@ async function toolPaymentPolicyCheck(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const expectedRaw = args["expected_amount"];
-  let expectedAmount: number | null = null;
-  if (expectedRaw !== undefined && expectedRaw !== null && expectedRaw !== "") {
-    if (typeof expectedRaw === "number" && Number.isFinite(expectedRaw)) {
-      expectedAmount = expectedRaw;
-    } else if (typeof expectedRaw === "string") {
-      const parsed = Number(expectedRaw);
-      if (!Number.isFinite(parsed)) {
-        throw new MCPError(INVALID_PARAMS, "expected_amount must be a number");
-      }
-      expectedAmount = parsed;
-    } else {
-      throw new MCPError(INVALID_PARAMS, "expected_amount must be a number or numeric string");
-    }
-  }
-
+  const expectedAmount = coerceOptionalNumber(args, "expected_amount");
   const tz = resolveTimezone(ctx.configPath ?? undefined);
   const decision = checkPolicy(ctx.vault, {
     service: coerceStr(args, "service", true)!,
@@ -640,6 +706,30 @@ export function buildToolTable(): ToolDefinition[] {
           date: { type: "string", description: "Receipt date in YYYY-MM-DD; default = today (vault tz)." },
           time: { type: "string", description: "Receipt time in HH:MM 24h; default = now (vault tz)." },
           overwrite: { type: "boolean", description: "Allow overwriting an existing receipt." },
+          policy_status: {
+            type: "string",
+            enum: ["allowed", "approval_required", "denied", "not_checked"],
+            description:
+              "Real outcome of the spending-policy check. Defaults to `not_checked` when omitted — the receipt body will explicitly say so rather than claiming the policy approved the call.",
+          },
+          policy_rule: {
+            type: "string",
+            description: "Policy rule name that fired (e.g. `max_single_call`).",
+          },
+          policy_reasons: {
+            type: "array",
+            items: { type: "string" },
+            description: "Human-readable reasons returned by the policy check.",
+          },
+          policy_checked_at: {
+            type: "string",
+            description: "ISO-Z timestamp at which the policy was evaluated.",
+          },
+          from_request: {
+            type: "string",
+            description:
+              "Pending-payment-request id. When supplied, the receipt inherits policy / approval audit fields from that request — the agent doesn't have to re-state them.",
+          },
         },
         required: ["service", "status", "reason"],
         additionalProperties: false,

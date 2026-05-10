@@ -8,26 +8,81 @@
  * file outside the vault root.
  */
 
-import { posix, relative, resolve, sep } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, posix, relative, resolve, sep } from "node:path";
 
 /**
- * Throw if `target` (after `path.resolve`) is not the vault root or a
- * descendant of it. The platform path separator is used for the prefix
- * check so the same code works on POSIX and Windows.
+ * Throw if `target` is not the vault root or a descendant of it.
  *
- * Returns the resolved absolute path of `target` for callers that want
- * to use it directly (avoids a second `resolve` round-trip).
+ * The check is twofold:
+ *
+ *   1. `path.resolve` normalises `..` so a slug like `../etc/passwd`
+ *      cannot pretend to be inside the vault. The platform path
+ *      separator (`/` or `\`) is used for the prefix check so siblings
+ *      that share a name prefix (`/v` vs `/v-evil`) are rejected.
+ *   2. `fs.realpathSync` follows symlinks for the deepest existing
+ *      ancestor of the target, then re-runs the prefix check on the
+ *      resolved real paths. This blocks the case where a directory
+ *      *inside* the vault is itself a symlink to somewhere outside it
+ *      (`<vault>/AI Wiki/payments/escape -> /tmp/outside`) — without
+ *      realpath, the lexical check would happily admit the path.
+ *
+ * Returns the resolved (lexical) absolute path of `target`. Callers that
+ * need the realpath should call `realpathSync` themselves on the result;
+ * we deliberately return the lexical form so wikilinks rendered from it
+ * keep matching what the user sees in Obsidian.
  */
 export function ensureInsideVault(target: string, vault: string): string {
   const resolvedTarget = resolve(target);
   const resolvedVault = resolve(vault);
-  if (
-    resolvedTarget !== resolvedVault &&
-    !resolvedTarget.startsWith(resolvedVault + sep)
-  ) {
+
+  if (!isLexicallyInside(resolvedTarget, resolvedVault)) {
     throw new Error(`path escapes vault: ${target}`);
   }
+
+  // Realpath protection only matters when the vault actually exists on
+  // disk — otherwise there is no symlink to follow. Pure-lexical inputs
+  // (used by unit tests) skip this branch and rely on step 1 above.
+  if (existsSync(resolvedVault)) {
+    const realVault = safeRealpath(resolvedVault);
+    const realAncestor = safeRealpath(deepestExistingAncestor(resolvedTarget));
+    if (!isLexicallyInside(realAncestor, realVault)) {
+      throw new Error(`path escapes vault via symlink: ${target}`);
+    }
+  }
+
   return resolvedTarget;
+}
+
+function isLexicallyInside(target: string, root: string): boolean {
+  return target === root || target.startsWith(root + sep);
+}
+
+function deepestExistingAncestor(target: string): string {
+  let cur = target;
+  // Walk up until we hit a path that exists. `dirname` of a top-level
+  // path returns itself; the loop terminates either at the first existing
+  // ancestor (the common case — vault root exists) or at the root.
+  while (!existsSync(cur)) {
+    const parent = dirname(cur);
+    if (parent === cur) return cur;
+    cur = parent;
+  }
+  return cur;
+}
+
+function safeRealpath(p: string): string {
+  // realpath throws on non-existent paths and on permission failure.
+  // For non-existent we fall back to the lexical form (the
+  // `deepestExistingAncestor` walk above tries to avoid this case);
+  // for permission failure we surface the error so the caller learns
+  // about it instead of silently disabling symlink protection.
+  try {
+    return realpathSync(p);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return p;
+    throw err;
+  }
 }
 
 /**

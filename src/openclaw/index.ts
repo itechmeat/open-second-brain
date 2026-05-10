@@ -37,6 +37,7 @@ import {
   writeReport,
   payMemoryDirs,
 } from "../core/pay-memory/index.ts";
+import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import { mkdirSync } from "node:fs";
 import { listVaultPages, slugify, writeFrontmatter } from "../core/vault.ts";
 import {
@@ -82,14 +83,25 @@ function resolveOpenclawAgent(
  * Helper for Pay Memory tools that need a numeric `expected_amount` field.
  * The OpenClaw schema declares the type as `["number", "string"]` to match
  * the MCP shape — agents sometimes serialise numbers as strings.
+ *
+ * Whitespace-only strings are treated as "not provided", *not* as `0`.
+ * Without the explicit trim, `Number(" ")` evaluates to `0` and would
+ * silently change a policy decision.
  */
 function coerceExpectedAmount(value: unknown): number | null {
-  if (value === undefined || value === null || value === "") return null;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value === undefined || value === null) return null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error("expected_amount must be a finite number");
+    }
+    return value;
+  }
   if (typeof value === "string") {
-    const parsed = Number(value);
+    const trimmed = value.trim();
+    if (trimmed === "") return null;
+    const parsed = Number(trimmed);
     if (!Number.isFinite(parsed)) {
-      throw new Error("expected_amount must be a number");
+      throw new Error("expected_amount must be a number or numeric string");
     }
     return parsed;
   }
@@ -394,6 +406,14 @@ export default definePluginEntry({
           date: { type: "string" },
           time: { type: "string" },
           overwrite: { type: "boolean" },
+          policy_status: {
+            type: "string",
+            enum: ["allowed", "approval_required", "denied", "not_checked"],
+          },
+          policy_rule: { type: "string" },
+          policy_reasons: { type: "array", items: { type: "string" } },
+          policy_checked_at: { type: "string" },
+          from_request: { type: "string" },
         },
         required: ["service", "status", "reason"],
         additionalProperties: false,
@@ -402,6 +422,61 @@ export default definePluginEntry({
         const vault = resolveVaultPath(api);
         const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
         const agent = resolveOpenclawAgent(api, (params["agent"] as string | undefined) ?? null);
+
+        let policyStatus = strOrNull(params["policy_status"]) as
+          | ReceiptPolicyStatus
+          | null;
+        let policyRule = strOrNull(params["policy_rule"]);
+        const policyReasonsRaw = params["policy_reasons"];
+        let policyReasons: string[] | null = null;
+        if (policyReasonsRaw !== undefined && policyReasonsRaw !== null) {
+          if (
+            !Array.isArray(policyReasonsRaw) ||
+            !policyReasonsRaw.every((s) => typeof s === "string")
+          ) {
+            throw new Error("policy_reasons must be an array of strings");
+          }
+          policyReasons = [...policyReasonsRaw] as string[];
+        }
+        let policyCheckedAt = strOrNull(params["policy_checked_at"]);
+        let approvalStatus:
+          | "pending"
+          | "approved"
+          | "rejected"
+          | "consumed"
+          | null = null;
+        let approvedBy: string | null = null;
+        let approvedAt: string | null = null;
+        const fromRequest = strOrNull(params["from_request"]);
+        if (fromRequest) {
+          const loaded = loadPendingRequest(vault, fromRequest);
+          if (!loaded) throw new Error(`pending request not found: ${fromRequest}`);
+          const meta = loaded.metadata;
+          const get = (k: string): string | null => {
+            const v = meta[k];
+            if (v === undefined || v === null) return null;
+            return Array.isArray(v) ? v.join(", ") : String(v);
+          };
+          policyStatus ??= (get("policy_status") as ReceiptPolicyStatus | null) ?? null;
+          policyRule ??= get("policy_rule");
+          approvalStatus = loaded.status;
+          approvedBy = get("approved_by");
+          approvedAt = get("approved_at");
+        }
+        if (policyStatus !== null) {
+          const allowed: ReadonlyArray<ReceiptPolicyStatus> = [
+            "allowed",
+            "approval_required",
+            "denied",
+            "not_checked",
+          ];
+          if (!allowed.includes(policyStatus)) {
+            throw new Error(
+              `policy_status must be one of: ${allowed.join(", ")}`,
+            );
+          }
+        }
+
         const result = writeReceipt(vault, {
           agent,
           service: String(params["service"]),
@@ -421,6 +496,14 @@ export default definePluginEntry({
           time: strOrNull(params["time"]),
           overwrite: Boolean(params["overwrite"] ?? false),
           tz,
+          policyStatus,
+          policyRule,
+          policyReasons,
+          policyCheckedAt,
+          approvalRequestId: fromRequest,
+          approvalStatus,
+          approvedBy,
+          approvedAt,
         });
         return asJson({
           path: result.relativePath,
@@ -673,7 +756,7 @@ export default definePluginEntry({
       },
       async execute(_id, params): Promise<unknown> {
         const vault = resolveVaultPath(api);
-        const result = consumePendingRequest(vault, String(params["id"]), {
+        const result = await consumePendingRequest(vault, String(params["id"]), {
           receiptPath: String(params["receipt"]),
         });
         return asJson({

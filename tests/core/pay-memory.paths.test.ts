@@ -134,12 +134,37 @@ describe("isoDateNow / isoTimeNow", () => {
 });
 
 describe("isoTimestampZ", () => {
-  test("composes ISO Z timestamp from date+time", () => {
+  test("composes ISO Z timestamp from date+time (no tz = treat as UTC)", () => {
     expect(isoTimestampZ("2026-05-10", "17:20")).toBe("2026-05-10T17:20:00Z");
   });
 
   test("propagates validation errors", () => {
     expect(() => isoTimestampZ("nope", "17:20")).toThrow();
     expect(() => isoTimestampZ("2026-05-10", "25:00")).toThrow();
+  });
+
+  test("converts a local wall-clock in the given tz to real UTC", () => {
+    // 09:00 in Asia/Tokyo (UTC+9, no DST) == 00:00Z same day. The point
+    // of the tz-aware path is that 09:00 is not just relabelled `09:00Z`
+    // (the bug the v0.8.0 review flagged) but actually shifted by the
+    // zone's offset.
+    expect(isoTimestampZ("2026-05-10", "09:00", "Asia/Tokyo")).toBe(
+      "2026-05-10T00:00:00Z",
+    );
+    // Day rollover: 06:00 Tokyo = 21:00 UTC the previous day.
+    expect(isoTimestampZ("2026-05-10", "06:00", "Asia/Tokyo")).toBe(
+      "2026-05-09T21:00:00Z",
+    );
+  });
+
+  test("uses the offset that was in effect for that specific instant (DST aware)", () => {
+    // Belgrade is UTC+1 in winter, UTC+2 in summer. Same wall-clock,
+    // different real UTC depending on the date.
+    expect(isoTimestampZ("2026-01-15", "12:00", "Europe/Belgrade")).toBe(
+      "2026-01-15T11:00:00Z",
+    );
+    expect(isoTimestampZ("2026-07-15", "12:00", "Europe/Belgrade")).toBe(
+      "2026-07-15T10:00:00Z",
+    );
   });
 });

@@ -7,6 +7,12 @@
  * delegate, so the helpers stay pure and easy to test.
  */
 
+export type ReceiptPolicyStatus =
+  | "allowed"
+  | "approval_required"
+  | "denied"
+  | "not_checked";
+
 export interface ReceiptInput {
   readonly agent: string;
   readonly service: string;
@@ -26,6 +32,25 @@ export interface ReceiptInput {
   readonly time?: string | null;
   readonly overwrite?: boolean;
   readonly tz?: string | null;
+  /**
+   * Policy / approval audit fields. The receipt renderer uses these to
+   * tell the truth about how the paid call was authorised — without
+   * them the body falls back to "policy: not checked" rather than
+   * cheerfully claiming the policy approved a call we never evaluated.
+   */
+  readonly policyStatus?: ReceiptPolicyStatus | null;
+  readonly policyRule?: string | null;
+  readonly policyReasons?: ReadonlyArray<string> | null;
+  readonly policyCheckedAt?: string | null;
+  readonly approvalRequestId?: string | null;
+  readonly approvalStatus?:
+    | "pending"
+    | "approved"
+    | "rejected"
+    | "consumed"
+    | null;
+  readonly approvedBy?: string | null;
+  readonly approvedAt?: string | null;
 }
 
 export interface ReceiptOutput {

@@ -108,9 +108,9 @@ describe("writePendingRequest", () => {
 });
 
 describe("state transitions", () => {
-  test("pending → approved sets status, approved_by, approved_at", () => {
+  test("pending → approved sets status, approved_by, approved_at", async () => {
     const created = writePendingRequest(tmp, { ...baseInput, slug: "t-1" });
-    const out = approvePendingRequest(tmp, "t-1", { approvedBy: "sergey", note: "ok" });
+    const out = await approvePendingRequest(tmp, "t-1", { approvedBy: "sergey", note: "ok" });
     expect(out.status).toBe("approved");
     expect(out.id).toBe("t-1");
     const reloaded = loadPendingRequest(tmp, "t-1")!;
@@ -121,21 +121,21 @@ describe("state transitions", () => {
     void created;
   });
 
-  test("pending → rejected sets reason", () => {
+  test("pending → rejected sets reason", async () => {
     writePendingRequest(tmp, { ...baseInput, slug: "t-2" });
-    rejectPendingRequest(tmp, "t-2", { rejectedBy: "sergey", reason: "too expensive" });
+    await rejectPendingRequest(tmp, "t-2", { rejectedBy: "sergey", reason: "too expensive" });
     const reloaded = loadPendingRequest(tmp, "t-2")!;
     expect(reloaded.metadata["status"]).toBe("rejected");
     expect(reloaded.metadata["rejection_reason"]).toBe("too expensive");
   });
 
-  test("approve then consume requires the approved state", () => {
+  test("approve then consume requires the approved state", async () => {
     writePendingRequest(tmp, { ...baseInput, slug: "t-3" });
-    expect(() => consumePendingRequest(tmp, "t-3", { receiptPath: "x" })).toThrow(
-      /cannot transition request t-3 from pending to consumed/,
-    );
-    approvePendingRequest(tmp, "t-3", { approvedBy: "sergey" });
-    const out = consumePendingRequest(tmp, "t-3", {
+    await expect(
+      consumePendingRequest(tmp, "t-3", { receiptPath: "x" }),
+    ).rejects.toThrow(/cannot transition request t-3 from pending to consumed/);
+    await approvePendingRequest(tmp, "t-3", { approvedBy: "sergey" });
+    const out = await consumePendingRequest(tmp, "t-3", {
       receiptPath: "AI Wiki/payments/2026-05-10/x.md",
     });
     expect(out.status).toBe("consumed");
@@ -143,29 +143,52 @@ describe("state transitions", () => {
     expect(reloaded.metadata["receipt"]).toBe("AI Wiki/payments/2026-05-10/x.md");
   });
 
-  test("rejected and consumed are terminal", () => {
+  test("rejected and consumed are terminal", async () => {
     writePendingRequest(tmp, { ...baseInput, slug: "t-4" });
-    rejectPendingRequest(tmp, "t-4", { rejectedBy: "sergey" });
-    expect(() => approvePendingRequest(tmp, "t-4", { approvedBy: "x" })).toThrow();
+    await rejectPendingRequest(tmp, "t-4", { rejectedBy: "sergey" });
+    await expect(
+      approvePendingRequest(tmp, "t-4", { approvedBy: "x" }),
+    ).rejects.toThrow();
 
     writePendingRequest(tmp, { ...baseInput, slug: "t-5" });
-    approvePendingRequest(tmp, "t-5", { approvedBy: "sergey" });
-    consumePendingRequest(tmp, "t-5", { receiptPath: "x" });
-    expect(() => consumePendingRequest(tmp, "t-5", { receiptPath: "y" })).toThrow();
+    await approvePendingRequest(tmp, "t-5", { approvedBy: "sergey" });
+    await consumePendingRequest(tmp, "t-5", { receiptPath: "x" });
+    await expect(
+      consumePendingRequest(tmp, "t-5", { receiptPath: "y" }),
+    ).rejects.toThrow();
   });
 
-  test("transitioning a non-existent request throws", () => {
-    expect(() => approvePendingRequest(tmp, "nope", { approvedBy: "x" })).toThrow(
-      /not found/,
-    );
+  test("transitioning a non-existent request throws", async () => {
+    await expect(
+      approvePendingRequest(tmp, "nope", { approvedBy: "x" }),
+    ).rejects.toThrow(/not found/);
+  });
+
+  test("concurrent approve+reject on the same id: exactly one transition wins", async () => {
+    // The race the v0.8.0 review flagged: two processes both read
+    // `pending`, both pass the check, both write — last writer wins.
+    // With the per-request lockfile the second transition observes the
+    // first one's terminal state and is rejected.
+    writePendingRequest(tmp, { ...baseInput, slug: "race-1" });
+    const results = await Promise.allSettled([
+      approvePendingRequest(tmp, "race-1", { approvedBy: "sergey" }),
+      rejectPendingRequest(tmp, "race-1", { rejectedBy: "sergey" }),
+    ]);
+    const ok = results.filter((r) => r.status === "fulfilled");
+    const failed = results.filter((r) => r.status === "rejected");
+    expect(ok.length).toBe(1);
+    expect(failed.length).toBe(1);
+    if (failed[0]!.status === "rejected") {
+      expect(String(failed[0]!.reason)).toMatch(/cannot transition/);
+    }
   });
 });
 
 describe("listPendingRequests", () => {
-  test("filters by status (default pending)", () => {
+  test("filters by status (default pending)", async () => {
     writePendingRequest(tmp, { ...baseInput, slug: "p-1" });
     writePendingRequest(tmp, { ...baseInput, slug: "p-2" });
-    rejectPendingRequest(tmp, "p-2", { rejectedBy: "x" });
+    await rejectPendingRequest(tmp, "p-2", { rejectedBy: "x" });
 
     const pending = listPendingRequests(tmp);
     expect(pending.map((s) => s.id)).toEqual(["p-1"]);

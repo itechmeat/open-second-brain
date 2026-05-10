@@ -123,6 +123,34 @@ describe("evaluatePolicy", () => {
     expect(d.rule).toBe("require_approval_above");
   });
 
+  test("missing expected_amount triggers approval_required when amount-rules exist", () => {
+    // Policy declares any amount-based rule; agent omits expectedAmount.
+    // Must not fail-open — otherwise the daily budget / single-call cap /
+    // approval threshold can be bypassed by simply not stating the cost.
+    for (const rule of [
+      { max_single_call: 0.05 },
+      { max_total_per_day: 0.10 },
+      { require_approval_above: 0.03 },
+    ] as const) {
+      const d = evaluatePolicy(
+        { allowed_services: ["x/y"], ...rule },
+        { service: "x/y" }, // expectedAmount omitted
+        { daySpend: 0, dayCategoryCount: 0 },
+      );
+      expect(d.status).toBe("approval_required");
+      expect(d.rule).toBe("missing_expected_amount");
+    }
+  });
+
+  test("missing expected_amount stays allowed when policy has no amount-rules", () => {
+    const d = evaluatePolicy(
+      { allowed_services: ["x/y"] },
+      { service: "x/y" },
+      { daySpend: 0, dayCategoryCount: 0 },
+    );
+    expect(d.status).toBe("allowed");
+  });
+
   test("currency mismatch flags as denied with currency_mismatch rule", () => {
     const d = evaluatePolicy(
       { currency: "USDC", max_single_call: 0.1 },

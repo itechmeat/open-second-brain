@@ -11,8 +11,6 @@ import { slugify, writeFrontmatterAtomic } from "../vault.ts";
 import {
   nowIsoZ,
   NOT_PROVIDED,
-  sanitizeWikilinkTarget,
-  stripMarkdownExt,
   wikiLink,
 } from "./_md.ts";
 import { assetPath, ensureInsideVault, vaultRelative } from "./paths.ts";
@@ -68,7 +66,10 @@ function renderAssetBody(input: AssetInput): string {
 
   lines.push("## Purpose", "");
   if (usedIn) {
-    lines.push(`Used in: [[${stripMarkdownExt(usedIn)}]]`);
+    // Run every wikilink target through the same sanitizer/extension stripper
+    // — `usedIn`, `sourceReceipt`, and `resultNote` (in receipts) all become
+    // `[[...]]` and a stray `[`/`]` would prematurely close the link.
+    lines.push(`Used in: ${wikiLink(usedIn)}`);
   } else {
     lines.push(NOT_PROVIDED);
   }
@@ -87,7 +88,7 @@ function renderAssetBody(input: AssetInput): string {
   lines.push("## Source", "");
   lines.push(`Service: \`${input.service.trim().replace(/`/g, "ˋ")}\``);
   if (sourceReceipt) {
-    lines.push(`Receipt: [[${stripMarkdownExt(sanitizeWikilinkTarget(sourceReceipt))}]]`);
+    lines.push(`Receipt: ${wikiLink(sourceReceipt)}`);
   } else {
     lines.push(`Receipt: ${NOT_PROVIDED}`);
   }

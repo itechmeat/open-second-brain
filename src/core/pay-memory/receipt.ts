@@ -58,6 +58,7 @@ export function writeReceipt(vault: string, input: ReceiptInput): ReceiptOutput 
     reason: input.reason.trim(),
     created,
   };
+  if (tz) metadata["timezone"] = tz;
   putIfPresent(metadata, "category", input.category);
   putIfPresent(metadata, "endpoint", input.endpoint);
   putIfPresent(metadata, "expected_cost", input.expectedCost);
@@ -66,6 +67,21 @@ export function writeReceipt(vault: string, input: ReceiptInput): ReceiptOutput 
   putIfPresent(metadata, "payment_proof", input.paymentProof);
   putIfPresent(metadata, "result_ref", input.resultRef);
   putIfPresent(metadata, "result_note", input.resultNote);
+
+  // Policy + approval audit fields. Always emit `policy_status` so a
+  // human reading the receipt can tell the difference between "we
+  // checked and it was allowed" and "we never checked" — the latter is
+  // not a problem in itself, but it must not masquerade as the former.
+  metadata["policy_status"] = input.policyStatus ?? "not_checked";
+  putIfPresent(metadata, "policy_rule", input.policyRule);
+  if (input.policyReasons && input.policyReasons.length > 0) {
+    metadata["policy_reasons"] = [...input.policyReasons];
+  }
+  putIfPresent(metadata, "policy_checked_at", input.policyCheckedAt);
+  putIfPresent(metadata, "approval_request", input.approvalRequestId);
+  putIfPresent(metadata, "approval_status", input.approvalStatus);
+  putIfPresent(metadata, "approved_by", input.approvedBy);
+  putIfPresent(metadata, "approved_at", input.approvedAt);
 
   const body = renderReceiptBody(input);
   writeFrontmatterAtomic(target, metadata, body, {
@@ -86,6 +102,83 @@ export function writeReceipt(vault: string, input: ReceiptInput): ReceiptOutput 
 function defaultReceiptSlug(service: string, reason: string): string {
   const tail = service.split("/").pop() ?? service;
   return slugify(`${tail}-${reason}`);
+}
+
+/**
+ * Render the body of the "Spending policy check" section. The previous
+ * version always claimed the policy approved the call — which is a lie
+ * when the caller never ran a policy check at all, when the check
+ * returned `denied`, or when the call was waved through by a human
+ * after `approval_required`. This version shows the real state.
+ */
+function renderPolicySection(input: ReceiptInput): string[] {
+  const status = input.policyStatus ?? "not_checked";
+  const out: string[] = ["Decision:", ""];
+  switch (status) {
+    case "allowed":
+      out.push(
+        "Allowed by the configured spending policy. The agent ran a policy",
+        "check before initiating this paid call.",
+      );
+      break;
+    case "approval_required":
+      out.push(
+        "Policy returned `approval_required` — a human approval was needed",
+        "before initiating this paid call.",
+      );
+      break;
+    case "denied":
+      out.push(
+        "Policy returned `denied` — this receipt records a paid call that",
+        "the policy did not approve. If the call still proceeded, a human",
+        "explicitly waved the policy aside; check the approval section",
+        "below for who and why.",
+      );
+      break;
+    case "not_checked":
+    default:
+      out.push(
+        "Not checked. The receipt was created without a policy decision —",
+        "either no `AI Wiki/policies/spending.json` is configured, or the",
+        "caller chose not to evaluate the policy. This is *not* a claim",
+        "that the call was allowed.",
+      );
+      break;
+  }
+  if (input.policyRule?.trim()) {
+    out.push("", `Rule fired: \`${input.policyRule.trim()}\``);
+  }
+  if (input.policyReasons && input.policyReasons.length > 0) {
+    out.push("", "Reasons:", "");
+    for (const r of input.policyReasons) out.push(`- ${r}`);
+  }
+  if (input.policyCheckedAt?.trim()) {
+    out.push("", `Policy checked at: \`${input.policyCheckedAt.trim()}\``);
+  }
+  if (
+    input.approvalRequestId?.trim() ||
+    input.approvalStatus?.trim() ||
+    input.approvedBy?.trim()
+  ) {
+    out.push("", "Approval:");
+    if (input.approvalRequestId?.trim()) {
+      out.push(
+        "",
+        `Request: [[AI Wiki/payments/_pending/${input.approvalRequestId.trim()}]]`,
+      );
+    }
+    if (input.approvalStatus?.trim()) {
+      out.push(`Status: \`${input.approvalStatus.trim()}\``);
+    }
+    if (input.approvedBy?.trim()) {
+      out.push(`Approved by: ${input.approvedBy.trim()}`);
+    }
+    if (input.approvedAt?.trim()) {
+      out.push(`Approved at: \`${input.approvedAt.trim()}\``);
+    }
+  }
+  out.push("");
+  return out;
 }
 
 function fieldOrPlaceholder(value: string | null | undefined): string {
@@ -116,11 +209,7 @@ function renderReceiptBody(input: ReceiptInput): string {
     "",
     "[[AI Wiki/policies/spending]]",
     "",
-    "Decision:",
-    "",
-    "Allowed by the configured spending policy. The agent has read the policy",
-    "before initiating this paid call.",
-    "",
+    ...renderPolicySection(input),
     "## Expected cost",
     "",
     fieldOrPlaceholder(input.expectedCost),
