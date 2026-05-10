@@ -45,6 +45,11 @@ export function normalizeAgentArgument(value: string | null | undefined): string
   if (value === null || value === undefined) return null;
   const cleaned = String(value).trim().replace(/^@+/, "").trim();
   if (!cleaned) return null;
-  if (PLACEHOLDER_AGENT_VALUES.has(cleaned.toLowerCase())) return null;
+  // Normalize hyphens / underscores to a single canonical form before the
+  // set lookup. The placeholder list stores the hyphenated spelling
+  // (`claude-code`, `gpt-4`, …) but agents emit either form interchangeably
+  // — without this, `claude_code` or `gpt_4` would slip past the filter.
+  const canonical = cleaned.toLowerCase().replace(/_/g, "-");
+  if (PLACEHOLDER_AGENT_VALUES.has(canonical)) return null;
   return cleaned;
 }

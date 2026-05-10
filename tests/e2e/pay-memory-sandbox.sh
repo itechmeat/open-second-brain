@@ -40,6 +40,13 @@ if ! command -v pay >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v bun >/dev/null 2>&1; then
+  echo "error: \`bun\` CLI not found on PATH (needed by \`o2b\`)." >&2
+  echo "Install from https://bun.sh — e.g. \`curl -fsSL https://bun.sh/install | bash\`," >&2
+  echo "then re-run this script. Open Second Brain requires Bun >= 1.1.0." >&2
+  exit 1
+fi
+
 mkdir -p "$VAULT"
 export OPEN_SECOND_BRAIN_CONFIG="$CONFIG"
 

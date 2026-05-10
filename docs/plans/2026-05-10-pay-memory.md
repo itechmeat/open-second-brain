@@ -1,5 +1,13 @@
 # Pay Memory Implementation Plan
 
+> **Status (2026-05-10):** the work landed in v0.8.0 with an expanded
+> scope. The plan below describes the original 4 CLI + 4 MCP MVP; the
+> shipped release added `check-payment-policy`, the approval workflow
+> (`request-/approve-/reject-/consume-payment-request`,
+> `list-pending-payments`), and `payment-digest` — totalling 11 CLI
+> commands and 8 MCP tools, plus an OpenClaw native-plugin parity pass.
+> See `CHANGELOG [0.8.0]` for the final inventory.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a memory/audit layer for paid agent actions to OpenSecondBrain. The agent (Hermes / Claude Code / Codex / OpenClaw) makes paid API calls through `pay.sh`; OpenSecondBrain records the reason, the policy check, the receipt, the generated asset, and a per-task report — all as plain Markdown inside the configured vault.

@@ -57,7 +57,7 @@ describe("buildPaymentDigest", () => {
     expect(d.currency).toBe("USDC");
   });
 
-  test("currency=null when receipts mix currencies", () => {
+  test("totalAmount=null when receipts mix currencies", () => {
     writeReceipt(tmp, {
       ...baseInput, service: "x/y", slug: "u1",
       actualAmount: "0.05", currency: "USDC",
@@ -68,7 +68,9 @@ describe("buildPaymentDigest", () => {
     });
     const d = buildPaymentDigest(tmp, { date: "2026-05-10" });
     expect(d.receipts).toBe(2);
-    expect(d.totalAmount).toBeCloseTo(1.05, 6);
+    // Mixed-currency days do not produce a unitless numeric sum — both
+    // total and currency are null so the renderer falls back to "—".
+    expect(d.totalAmount).toBeNull();
     expect(d.currency).toBeNull();
   });
 

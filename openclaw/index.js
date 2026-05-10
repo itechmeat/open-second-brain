@@ -2319,7 +2319,10 @@ function redactRawOutput(text) {
   out = out.replace(ENV_RE, (_match, key, sep2) => {
     return `${key}${sep2}${PLACEHOLDER}`;
   });
-  out = out.replace(COLON_VALUE_RE, (_match, key, sep2, value) => {
+  out = out.replace(BEARER_RE, (_match, prefix) => `${prefix}${PLACEHOLDER}`);
+  out = out.replace(COLON_VALUE_RE, (match, key, sep2, value) => {
+    if (value.includes(PLACEHOLDER))
+      return match;
     if (value.startsWith('"') && value.endsWith('"')) {
       return `${key}${sep2}"${PLACEHOLDER}"`;
     }
@@ -2328,7 +2331,6 @@ function redactRawOutput(text) {
     }
     return `${key}${sep2}${PLACEHOLDER}`;
   });
-  out = out.replace(BEARER_RE, (_match, prefix) => `${prefix}${PLACEHOLDER}`);
   return out;
 }
 // src/core/pay-memory/policy.ts
@@ -3354,7 +3356,8 @@ function normalizeAgentArgument(value) {
   const cleaned = String(value).trim().replace(/^@+/, "").trim();
   if (!cleaned)
     return null;
-  if (PLACEHOLDER_AGENT_VALUES.has(cleaned.toLowerCase()))
+  const canonical = cleaned.toLowerCase().replace(/_/g, "-");
+  if (PLACEHOLDER_AGENT_VALUES.has(canonical))
     return null;
   return cleaned;
 }

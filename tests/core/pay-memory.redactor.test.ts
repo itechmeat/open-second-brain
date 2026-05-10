@@ -26,9 +26,9 @@ describe("redactRawOutput", () => {
     );
   });
 
-  test("redacts Authorization: Bearer headers", () => {
+  test("redacts Authorization: Bearer headers and preserves the `Bearer` prefix", () => {
     expect(redactRawOutput("Authorization: Bearer abc.def.ghi")).toBe(
-      "Authorization: ***REDACTED***",
+      "Authorization: Bearer ***REDACTED***",
     );
     // When the key is absent but the bearer token is, fall back to the bearer rule.
     expect(redactRawOutput("Sent header: Bearer abc.def")).toBe(

@@ -60,9 +60,15 @@ string), `currency`, `category`, and `date`. `payment_request_approval`
 mirrors `payment_receipt_append` for the descriptive fields plus
 `expected_output`, `vault_files` (array of strings), and `enforce_policy`
 (boolean — refuses to create the request when the policy denies the call
-outright). `payment_request_status` returns the full frontmatter of the
-named request — agents poll this to see whether their request has moved
-from `pending` to `approved`.
+outright). `payment_request_status` returns the named request's `status`
+plus a curated subset of frontmatter fields (`service`, `reason`,
+`expected_amount`, `currency`, `created`, `approved_by`, `approved_at`,
+`rejected_by`, `rejected_at`, `rejection_reason`, `receipt`,
+`policy_status`, `policy_rule`) — agents poll this to see whether their
+request has moved from `pending` to `approved`. Fields that were not
+captured at request time (e.g. `vault_files`, `endpoint`) are not
+re-derived; read the underlying Markdown file via the path returned in
+the response if you need them.
 
 The Pay Memory tools never execute payments themselves — the agent makes the
 paid call through its own `pay` CLI and passes the resulting metadata into
@@ -120,6 +126,17 @@ mcp_servers:
         - second_brain_capture
         - event_log_append
         - vault_health
+        # Pay Memory tools (v0.8.0+); drop any line below to disable a
+        # specific tool, or remove the whole `tools.include` block to
+        # expose every advertised tool.
+        - payment_memory_init
+        - payment_receipt_append
+        - asset_capture
+        - payment_report_generate
+        - payment_policy_check
+        - payment_request_approval
+        - payment_request_status
+        - payment_request_consume
 ```
 
 If you run Open Second Brain from a checkout instead of an installed package,

@@ -63,4 +63,4 @@ When there were no receipts the day before, the literal token `[SILENT]` is emit
 
 ## Standalone shell wrapper (optional)
 
-If you'd rather invoke this from systemd, GitHub Actions, or any non-Hermes scheduler, see [`examples/hermes-payment-digest.sh`](../examples/hermes-payment-digest.sh) — a thin POSIX-shell wrapper around `o2b payment-digest` that takes the vault path as `$1`.
+If you'd rather invoke this from systemd, GitHub Actions, or any non-Hermes scheduler, see [`examples/hermes-payment-digest.sh`](../examples/hermes-payment-digest.sh) — a thin Bash wrapper around `o2b payment-digest` that takes the vault path as `$1`.

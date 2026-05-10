@@ -99,7 +99,20 @@ export function redactRawOutput(text: string): string {
     return `${key}${sep}${PLACEHOLDER}`;
   });
 
-  out = out.replace(COLON_VALUE_RE, (_match, key: string, sep: string, value: string) => {
+  // Bearer headers BEFORE the generic colon rule. Otherwise the
+  // `authorization: ...` clause in COLON_VALUE_RE would consume the entire
+  // `Bearer <token>` value first, leaving the helpful `Bearer ` prefix
+  // stripped from the receipt. Running BEARER_RE first replaces the token
+  // alone; the COLON pass below then skips any value that already contains
+  // the placeholder so the prefix survives.
+  out = out.replace(BEARER_RE, (_match, prefix: string) => `${prefix}${PLACEHOLDER}`);
+
+  out = out.replace(COLON_VALUE_RE, (match, key: string, sep: string, value: string) => {
+    // Already-redacted values (e.g. `Authorization: Bearer ***REDACTED***`
+    // from the BEARER pass above) are passed through verbatim — re-running
+    // the colon rule on them would clobber the `Bearer ` prefix that we
+    // intentionally preserved.
+    if (value.includes(PLACEHOLDER)) return match;
     if (value.startsWith('"') && value.endsWith('"')) {
       return `${key}${sep}"${PLACEHOLDER}"`;
     }
@@ -108,8 +121,6 @@ export function redactRawOutput(text: string): string {
     }
     return `${key}${sep}${PLACEHOLDER}`;
   });
-
-  out = out.replace(BEARER_RE, (_match, prefix: string) => `${prefix}${PLACEHOLDER}`);
 
   return out;
 }

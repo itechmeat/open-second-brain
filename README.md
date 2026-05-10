@@ -162,7 +162,7 @@ mcp_servers:
     args: ["mcp", "--vault", "/path/to/vault"]
 ```
 
-Tools: `second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`, plus the four Pay Memory tools described below. See `docs/mcp.md` for full setup, tool schemas, and Claude Code/Codex notes. The CLI remains the supported baseline; the MCP server is opt-in.
+Tools: `second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`, plus the eight Pay Memory tools (`payment_memory_init`, `payment_receipt_append`, `asset_capture`, `payment_report_generate`, `payment_policy_check`, `payment_request_approval`, `payment_request_status`, `payment_request_consume`). See `docs/mcp.md` for full setup, tool schemas, and Claude Code/Codex notes. The CLI remains the supported baseline; the MCP server is opt-in.
 
 ## Pay Memory
 

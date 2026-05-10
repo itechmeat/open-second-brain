@@ -48,6 +48,7 @@ export function buildPaymentDigest(
   let totalAmount: number | null = null;
   let currency: string | null = null;
   let consistentCurrency: string | null | undefined = undefined;
+  let mixedCurrency = false;
   let sum = 0;
   let counted = 0;
   for (const s of summaries) {
@@ -60,9 +61,14 @@ export function buildPaymentDigest(
       consistentCurrency = s.currency;
     } else if (consistentCurrency !== s.currency) {
       consistentCurrency = null;
+      mixedCurrency = true;
     }
   }
-  if (counted > 0) {
+  if (counted > 0 && !mixedCurrency) {
+    // Only emit a numeric total when every receipt shares a single
+    // currency. Summing values across different currencies and reporting
+    // the sum without a unit is misleading — the renderer will fall back
+    // to the "—" placeholder so the user knows the day was mixed.
     totalAmount = sum;
     currency = consistentCurrency ?? null;
   }
