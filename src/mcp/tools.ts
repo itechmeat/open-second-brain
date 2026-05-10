@@ -16,6 +16,26 @@ import {
 } from "../core/config.ts";
 import { doctor } from "../core/doctor.ts";
 import { appendEvent, validateEventTime } from "../core/event-log.ts";
+import {
+  checkPolicy,
+  consumePendingRequest,
+  loadPendingRequest,
+  payMemoryDirs,
+  vaultRelativePath,
+  writeAsset,
+  writePendingRequest,
+  writePolicyIfMissing,
+  writeReceipt,
+  writeReport,
+} from "../core/pay-memory/index.ts";
+import {
+  normalizeAgentArgument,
+  PLACEHOLDER_AGENT_VALUES,
+} from "../core/agent-identity.ts";
+import {
+  ensureInsideVault,
+  vaultRelative,
+} from "../core/path-safety.ts";
 import { listVaultPages, slugify, writeFrontmatter } from "../core/vault.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
 
@@ -32,55 +52,24 @@ export interface ToolDefinition {
   readonly handler: (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown;
 }
 
-/**
- * Strings the LLM is most likely to emit as a guess for the `agent` argument
- * when it doesn't actually know its identity. None are useful as a real
- * `@<name>` in Daily — they should fall back to the server-resolved default.
- * Compared case-insensitively, after a leading `@` is stripped.
- *
- * Mirrored verbatim by the OpenClaw plugin entry so all runtimes filter the
- * same hallucination shapes out of Daily.
- */
-const PLACEHOLDER_AGENT_VALUES = new Set([
-  "agent",
-  "assistant",
-  "ai",
-  "ai-assistant",
-  "bot",
-  "chatbot",
-  "claude",
-  "claude-code",
-  "codex",
-  "codex-cli",
-  "codex-exec",
-  "copilot",
-  "gemini",
-  "gpt",
-  "gpt-4",
-  "gpt-5",
-  "hermes",
-  "llm",
-  "model",
-  "openai",
-  "openclaw",
-  "user",
-]);
+// PLACEHOLDER_AGENT_VALUES + normalizeAgentArgument live in
+// `src/core/agent-identity.ts` so the OpenClaw native plugin can import
+// the same constants without reaching across to the MCP module. Re-exported
+// at the bottom of this file for callers that previously imported them
+// from here.
 
+/**
+ * Wrapper that swallows path-escape errors and returns the raw input —
+ * used in tool *output* paths where we'd rather hand back the unsafe
+ * string than throw mid-render. Keep this as a separate verb so callers
+ * deliberately opt into the lenient behaviour.
+ */
 function vaultRelpath(target: string, vault: string): string {
   try {
-    return relative(resolve(vault), resolve(target));
+    return vaultRelative(target, vault);
   } catch {
     return target;
   }
-}
-
-function ensureInsideVault(target: string, vault: string): string {
-  const resolvedTarget = resolve(target);
-  const resolvedVault = resolve(vault);
-  if (resolvedTarget !== resolvedVault && !resolvedTarget.startsWith(resolvedVault + "/")) {
-    throw new Error(`path escapes vault: ${target}`);
-  }
-  return resolvedTarget;
 }
 
 function coerceStr(args: Record<string, unknown>, key: string, required = true, defaultValue: string | null = null): string | null {
@@ -123,13 +112,6 @@ function coerceInt(
   return value;
 }
 
-function normalizeAgentArgument(value: string | null): string | null {
-  if (value === null || value === undefined) return null;
-  const cleaned = value.trim().replace(/^@+/, "").trim();
-  if (!cleaned) return null;
-  if (PLACEHOLDER_AGENT_VALUES.has(cleaned.toLowerCase())) return null;
-  return cleaned;
-}
 
 // ── Tool implementations ────────────────────────────────────────────────────
 
@@ -261,6 +243,270 @@ async function toolVaultHealth(
   };
 }
 
+// ── Pay Memory tools ────────────────────────────────────────────────────────
+
+async function toolPaymentMemoryInit(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const overwrite = Boolean(args["overwrite"] ?? false);
+  const agentArg = coerceStr(args, "agent", false);
+  const agent =
+    normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+
+  const dirs = payMemoryDirs(ctx.vault);
+  const dirList = [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports];
+  const created: string[] = [];
+  const skipped: string[] = [];
+  for (const dir of dirList) {
+    const existed = existsSync(dir);
+    mkdirSync(dir, { recursive: true });
+    (existed ? skipped : created).push(vaultRelativePath(dir, ctx.vault));
+  }
+  const policy = writePolicyIfMissing(ctx.vault, { overwrite });
+  return {
+    vault_path: ctx.vault,
+    agent,
+    created,
+    skipped,
+    policy_path: vaultRelativePath(policy.path, ctx.vault),
+    policy_status: policy.status,
+  };
+}
+
+async function toolPaymentReceiptAppend(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const agentArg = coerceStr(args, "agent", false);
+  const agent =
+    normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+  const tz = resolveTimezone(ctx.configPath ?? undefined);
+
+  const result = writeReceipt(ctx.vault, {
+    agent,
+    service: coerceStr(args, "service", true)!,
+    status: coerceStr(args, "status", true)!,
+    reason: coerceStr(args, "reason", true)!,
+    category: coerceStr(args, "category", false),
+    endpoint: coerceStr(args, "endpoint", false),
+    expectedCost: coerceStr(args, "expected_cost", false),
+    actualAmount: coerceStr(args, "actual_amount", false),
+    currency: coerceStr(args, "currency", false),
+    paymentProof: coerceStr(args, "payment_proof", false),
+    resultRef: coerceStr(args, "result_ref", false),
+    resultNote: coerceStr(args, "result_note", false),
+    rawOutput: coerceStr(args, "raw_output", false),
+    slug: coerceStr(args, "slug", false),
+    date: coerceStr(args, "date", false),
+    time: coerceStr(args, "time", false),
+    overwrite: Boolean(args["overwrite"] ?? false),
+    tz,
+  });
+  return {
+    path: result.relativePath,
+    absolute_path: resolve(result.path),
+    slug: result.slug,
+    date: result.date,
+    created: result.created,
+  };
+}
+
+async function toolAssetCapture(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const result = writeAsset(ctx.vault, {
+    title: coerceStr(args, "title", true)!,
+    service: coerceStr(args, "service", true)!,
+    resultUrl: coerceStr(args, "result_url", true)!,
+    sourceReceipt: coerceStr(args, "source_receipt", false),
+    prompt: coerceStr(args, "prompt", false),
+    usedIn: coerceStr(args, "used_in", false),
+    slug: coerceStr(args, "slug", false),
+    overwrite: Boolean(args["overwrite"] ?? false),
+  });
+  return {
+    path: result.relativePath,
+    absolute_path: resolve(result.path),
+    slug: result.slug,
+    created: result.created,
+  };
+}
+
+async function toolPaymentRequestApproval(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const agentArg = coerceStr(args, "agent", false);
+  const agent =
+    normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+  const tz = resolveTimezone(ctx.configPath ?? undefined);
+
+  const expectedRaw = args["expected_amount"];
+  let expectedAmount: number | null = null;
+  if (expectedRaw !== undefined && expectedRaw !== null && expectedRaw !== "") {
+    if (typeof expectedRaw === "number" && Number.isFinite(expectedRaw)) {
+      expectedAmount = expectedRaw;
+    } else if (typeof expectedRaw === "string") {
+      const parsed = Number(expectedRaw);
+      if (!Number.isFinite(parsed)) {
+        throw new MCPError(INVALID_PARAMS, "expected_amount must be a number");
+      }
+      expectedAmount = parsed;
+    } else {
+      throw new MCPError(INVALID_PARAMS, "expected_amount must be a number or numeric string");
+    }
+  }
+
+  const vaultFiles = args["vault_files"];
+  let vaultFilesList: string[] | null = null;
+  if (vaultFiles !== undefined && vaultFiles !== null) {
+    if (!Array.isArray(vaultFiles) || !vaultFiles.every((s) => typeof s === "string")) {
+      throw new MCPError(INVALID_PARAMS, "vault_files must be an array of strings");
+    }
+    vaultFilesList = [...vaultFiles] as string[];
+  }
+
+  const result = writePendingRequest(ctx.vault, {
+    agent,
+    service: coerceStr(args, "service", true)!,
+    reason: coerceStr(args, "reason", true)!,
+    expectedAmount,
+    currency: coerceStr(args, "currency", false),
+    category: coerceStr(args, "category", false),
+    endpoint: coerceStr(args, "endpoint", false),
+    expectedOutput: coerceStr(args, "expected_output", false),
+    vaultFiles: vaultFilesList,
+    slug: coerceStr(args, "slug", false),
+    date: coerceStr(args, "date", false),
+    time: coerceStr(args, "time", false),
+    enforcePolicy: Boolean(args["enforce_policy"] ?? false),
+    tz,
+  });
+  return {
+    id: result.id,
+    path: result.relativePath,
+    absolute_path: resolve(result.path),
+    status: result.status,
+    created: result.created,
+    policy_status: result.policyDecision.status,
+    policy_rule: result.policyDecision.rule,
+  };
+}
+
+async function toolPaymentRequestStatus(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const id = coerceStr(args, "id", true)!;
+  const loaded = loadPendingRequest(ctx.vault, id);
+  if (!loaded) {
+    throw new Error(`pending request not found: ${id}`);
+  }
+  const meta = loaded.metadata;
+  const get = (k: string): string | null => {
+    const v = meta[k];
+    if (v === undefined || v === null) return null;
+    return Array.isArray(v) ? v.join(", ") : String(v);
+  };
+  return {
+    id,
+    path: loaded.relativePath,
+    status: loaded.status,
+    service: get("service"),
+    reason: get("reason"),
+    expected_amount: get("expected_amount"),
+    currency: get("currency"),
+    created: get("created"),
+    approved_by: get("approved_by"),
+    approved_at: get("approved_at"),
+    rejected_by: get("rejected_by"),
+    rejected_at: get("rejected_at"),
+    rejection_reason: get("rejection_reason"),
+    receipt: get("receipt"),
+    policy_status: get("policy_status"),
+    policy_rule: get("policy_rule"),
+  };
+}
+
+async function toolPaymentRequestConsume(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const id = coerceStr(args, "id", true)!;
+  const receiptPath = coerceStr(args, "receipt", true)!;
+  const result = consumePendingRequest(ctx.vault, id, { receiptPath });
+  return {
+    id: result.id,
+    path: result.relativePath,
+    status: result.status,
+  };
+}
+
+async function toolPaymentPolicyCheck(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const expectedRaw = args["expected_amount"];
+  let expectedAmount: number | null = null;
+  if (expectedRaw !== undefined && expectedRaw !== null && expectedRaw !== "") {
+    if (typeof expectedRaw === "number" && Number.isFinite(expectedRaw)) {
+      expectedAmount = expectedRaw;
+    } else if (typeof expectedRaw === "string") {
+      const parsed = Number(expectedRaw);
+      if (!Number.isFinite(parsed)) {
+        throw new MCPError(INVALID_PARAMS, "expected_amount must be a number");
+      }
+      expectedAmount = parsed;
+    } else {
+      throw new MCPError(INVALID_PARAMS, "expected_amount must be a number or numeric string");
+    }
+  }
+
+  const tz = resolveTimezone(ctx.configPath ?? undefined);
+  const decision = checkPolicy(ctx.vault, {
+    service: coerceStr(args, "service", true)!,
+    expectedAmount,
+    currency: coerceStr(args, "currency", false),
+    category: coerceStr(args, "category", false),
+    date: coerceStr(args, "date", false),
+    tz,
+  });
+  return {
+    status: decision.status,
+    allowed: decision.allowed,
+    approval_required: decision.approvalRequired,
+    rule: decision.rule,
+    reasons: decision.reasons,
+    has_policy: decision.hasPolicy,
+    policy_path:
+      decision.policyPath !== null
+        ? vaultRelativePath(decision.policyPath, ctx.vault)
+        : null,
+    currency: decision.currency,
+  };
+}
+
+async function toolPaymentReportGenerate(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const result = writeReport(ctx.vault, {
+    date: coerceStr(args, "date", true)!,
+    title: coerceStr(args, "title", false),
+    task: coerceStr(args, "task", false),
+    slug: coerceStr(args, "slug", false),
+    overwrite: Boolean(args["overwrite"] ?? false),
+  });
+  return {
+    path: result.relativePath,
+    absolute_path: resolve(result.path),
+    slug: result.slug,
+    receipts_used: result.receiptsUsed,
+  };
+}
+
 function isDir(p: string): boolean {
   if (!existsSync(p)) return false;
   try {
@@ -353,6 +599,171 @@ export function buildToolTable(): ToolDefinition[] {
       },
       handler: toolVaultHealth,
     },
+    {
+      name: "payment_memory_init",
+      description:
+        "Bootstrap the Pay Memory layout (policies/, payments/, assets/, drafts/, reports/) and write the spending policy template.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          agent: { type: "string", description: "Agent identity (defaults to server-resolved name)." },
+          overwrite: {
+            type: "boolean",
+            description: "Overwrite an existing policy file. Directories are always idempotent.",
+          },
+        },
+        additionalProperties: false,
+      },
+      handler: toolPaymentMemoryInit,
+    },
+    {
+      name: "payment_receipt_append",
+      description:
+        "Save a Markdown receipt for one paid API call. raw_output is run through a redactor before persisting.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          agent: { type: "string", description: "Agent identity (defaults to server-resolved name)." },
+          service: { type: "string", description: "Provider/skill identifier, e.g. 'paysponge/fal'." },
+          status: { type: "string", description: "Outcome of the paid call ('success', 'failed', ...)." },
+          reason: { type: "string", description: "Why the paid call was made — short imperative sentence." },
+          category: { type: "string", description: "Optional category tag." },
+          endpoint: { type: "string", description: "Gateway endpoint URL returned by pay-skills." },
+          expected_cost: { type: "string", description: "Pre-call expected price range." },
+          actual_amount: { type: "string", description: "Actual amount charged (parsed from pay-tool output)." },
+          currency: { type: "string", description: "Currency code (e.g. 'USDC')." },
+          payment_proof: { type: "string", description: "Public proof / signature / receipt id." },
+          result_ref: { type: "string", description: "Generated asset URL or response id." },
+          result_note: { type: "string", description: "Vault path to the asset note (wikilink target)." },
+          raw_output: { type: "string", description: "Raw payment-tool output to persist after redaction." },
+          slug: { type: "string", description: "Optional slug override; default derives from service+reason." },
+          date: { type: "string", description: "Receipt date in YYYY-MM-DD; default = today (vault tz)." },
+          time: { type: "string", description: "Receipt time in HH:MM 24h; default = now (vault tz)." },
+          overwrite: { type: "boolean", description: "Allow overwriting an existing receipt." },
+        },
+        required: ["service", "status", "reason"],
+        additionalProperties: false,
+      },
+      handler: toolPaymentReceiptAppend,
+    },
+    {
+      name: "asset_capture",
+      description:
+        "Save a Markdown note for an asset produced by a paid API call. Frontmatter links back to the receipt.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Human-readable asset title." },
+          service: { type: "string", description: "Provider/skill identifier that produced the asset." },
+          result_url: { type: "string", description: "URL or identifier of the generated asset." },
+          source_receipt: { type: "string", description: "Vault path to the receipt note." },
+          prompt: { type: "string", description: "Prompt sent to the service (rendered as a quote block)." },
+          used_in: { type: "string", description: "Vault path of the draft/page that consumes this asset." },
+          slug: { type: "string", description: "Optional slug override; default derives from title." },
+          overwrite: { type: "boolean", description: "Allow overwriting an existing asset note." },
+        },
+        required: ["title", "service", "result_url"],
+        additionalProperties: false,
+      },
+      handler: toolAssetCapture,
+    },
+    {
+      name: "payment_request_approval",
+      description:
+        "Create a pending-payment-request that the user must approve before the agent runs `pay`. Records the policy check at request time.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          agent: { type: "string" },
+          service: { type: "string" },
+          reason: { type: "string" },
+          expected_amount: { type: ["number", "string"] },
+          currency: { type: "string" },
+          category: { type: "string" },
+          endpoint: { type: "string" },
+          expected_output: { type: "string" },
+          vault_files: { type: "array", items: { type: "string" } },
+          slug: { type: "string" },
+          date: { type: "string" },
+          time: { type: "string" },
+          enforce_policy: {
+            type: "boolean",
+            description: "If true, refuse to create the request when the policy denies it.",
+          },
+        },
+        required: ["service", "reason"],
+        additionalProperties: false,
+      },
+      handler: toolPaymentRequestApproval,
+    },
+    {
+      name: "payment_request_status",
+      description:
+        "Look up a pending-payment-request by id and return its current status and metadata. The agent uses this to poll for human approval.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "The request id (slug)." },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      handler: toolPaymentRequestStatus,
+    },
+    {
+      name: "payment_request_consume",
+      description:
+        "Mark an `approved` request as `consumed` and link the resulting receipt path. Called by the agent after the paid call succeeded.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          receipt: { type: "string", description: "Vault-relative path to the receipt note." },
+        },
+        required: ["id", "receipt"],
+        additionalProperties: false,
+      },
+      handler: toolPaymentRequestConsume,
+    },
+    {
+      name: "payment_policy_check",
+      description:
+        "Evaluate a prospective paid call against AI Wiki/policies/spending.json. Returns allowed / approval_required / denied + the rule that fired.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          service: { type: "string", description: "Provider/skill identifier, e.g. 'paysponge/fal'." },
+          expected_amount: {
+            type: ["number", "string"],
+            description: "Expected payment amount; numeric or numeric-string.",
+          },
+          currency: { type: "string", description: "Currency code; defaults to the policy currency." },
+          category: { type: "string", description: "Optional category for per-category caps." },
+          date: { type: "string", description: "Date in YYYY-MM-DD; default = today (vault tz)." },
+        },
+        required: ["service"],
+        additionalProperties: false,
+      },
+      handler: toolPaymentPolicyCheck,
+    },
+    {
+      name: "payment_report_generate",
+      description:
+        "Aggregate a date's payment receipts into a Markdown report under AI Wiki/reports/.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "Date in YYYY-MM-DD whose receipts will be aggregated." },
+          title: { type: "string", description: "Report title; default 'Payment Report <date>'." },
+          task: { type: "string", description: "Optional task description rendered in the body." },
+          slug: { type: "string", description: "Optional slug override." },
+          overwrite: { type: "boolean", description: "Allow overwriting an existing report." },
+        },
+        required: ["date"],
+        additionalProperties: false,
+      },
+      handler: toolPaymentReportGenerate,
+    },
   ];
 }
 
@@ -362,5 +773,7 @@ export function findTool(tools: ReadonlyArray<ToolDefinition>, name: string): To
   return tool;
 }
 
-// Re-export for callers that need to filter agent guesses themselves.
-export { PLACEHOLDER_AGENT_VALUES };
+// Re-export for callers that previously imported these from here. The
+// canonical home is `src/core/agent-identity.ts`; new code should import
+// from there.
+export { PLACEHOLDER_AGENT_VALUES, normalizeAgentArgument };

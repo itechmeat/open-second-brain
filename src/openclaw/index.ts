@@ -5,16 +5,16 @@
  * is no longer a hand-translated copy of the Python original — both runtimes
  * share the same source of truth.
  *
- * The plugin exposes the same five tools the MCP server does
- * (`second_brain_status`, `second_brain_query`, `second_brain_capture`,
- * `event_log_append`, `vault_health`), with parameter schemas mirrored from
- * `src/mcp/tools.ts`.  No subprocess creation; passes the OpenClaw security
- * scanner.
+ * The plugin exposes the full Open Second Brain tool surface — the original
+ * five (`second_brain_status`, `second_brain_query`, `second_brain_capture`,
+ * `event_log_append`, `vault_health`) plus the eight Pay Memory tools added
+ * in v0.8.0 — with parameter schemas mirrored from `src/mcp/tools.ts`.
+ * No subprocess creation; passes the OpenClaw security scanner.
  */
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 
 import {
   discoverConfig,
@@ -25,8 +25,24 @@ import {
 import { doctor } from "../core/doctor.ts";
 import { appendEvent, validateEventTime } from "../core/event-log.ts";
 import { buildReminder } from "../core/identity-reminder.ts";
+import {
+  checkPolicy,
+  consumePendingRequest,
+  loadPendingRequest,
+  vaultRelativePath,
+  writeAsset,
+  writePendingRequest,
+  writePolicyIfMissing,
+  writeReceipt,
+  writeReport,
+  payMemoryDirs,
+} from "../core/pay-memory/index.ts";
+import { mkdirSync } from "node:fs";
 import { listVaultPages, slugify, writeFrontmatter } from "../core/vault.ts";
-import { PLACEHOLDER_AGENT_VALUES } from "../mcp/tools.ts";
+import {
+  normalizeAgentArgument,
+  PLACEHOLDER_AGENT_VALUES,
+} from "../core/agent-identity.ts";
 
 interface PluginConfig {
   vault?: string;
@@ -56,23 +72,41 @@ function resolveOpenclawAgent(
   api: { pluginConfig?: Record<string, unknown> },
   argAgent: string | null,
 ): string {
-  const normalized = normalizeAgentArg(argAgent);
+  const normalized = normalizeAgentArgument(argAgent);
   if (normalized) return normalized;
   const cfg = (api.pluginConfig ?? {}) as PluginConfig;
   return cfg.agentName ?? process.env["VAULT_AGENT_NAME"] ?? resolveAgentName();
 }
 
-function normalizeAgentArg(value: string | null): string | null {
-  if (value === null || value === undefined) return null;
-  const cleaned = String(value).trim().replace(/^@+/, "").trim();
-  if (!cleaned) return null;
-  if (PLACEHOLDER_AGENT_VALUES.has(cleaned.toLowerCase())) return null;
-  return cleaned;
+/**
+ * Helper for Pay Memory tools that need a numeric `expected_amount` field.
+ * The OpenClaw schema declares the type as `["number", "string"]` to match
+ * the MCP shape — agents sometimes serialise numbers as strings.
+ */
+function coerceExpectedAmount(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      throw new Error("expected_amount must be a number");
+    }
+    return parsed;
+  }
+  throw new Error("expected_amount must be a number or numeric string");
 }
 
-function vaultRel(target: string, vault: string): string {
-  if (target.startsWith(vault + "/")) return target.slice(vault.length + 1);
-  return target;
+function strOrNull(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function asJson(payload: unknown): { content: Array<{ type: "text"; text: string }> } {
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+  };
 }
 
 export default definePluginEntry({
@@ -90,7 +124,7 @@ export default definePluginEntry({
     api.on("before_prompt_build", () => {
       const cfg = (api.pluginConfig ?? {}) as PluginConfig;
       const agent =
-        normalizeAgentArg(cfg.agentName ?? null) ??
+        normalizeAgentArgument(cfg.agentName ?? null) ??
         process.env["VAULT_AGENT_NAME"] ??
         resolveAgentName();
       if (agent === "agent") return undefined;
@@ -152,7 +186,7 @@ export default definePluginEntry({
             : pages.filter((p) => p.title.toLowerCase().includes(needle))
           )
             .slice(0, limit)
-            .map((p) => ({ title: p.title, path: vaultRel(p.path, vault), metadata: p.metadata }));
+            .map((p) => ({ title: p.title, path: vaultRelativePath(p.path, vault), metadata: p.metadata }));
 
           const result = {
             vault_path: vault,
@@ -207,7 +241,7 @@ export default definePluginEntry({
           // signal whenever overwrite=true.
           const noteExisted = existsSync(target);
           if (noteExisted && !overwrite) {
-            throw new Error(`note already exists: ${vaultRel(target, vault)}`);
+            throw new Error(`note already exists: ${vaultRelativePath(target, vault)}`);
           }
           const metadata: Record<string, string | number | boolean | string[]> = {
             title,
@@ -217,7 +251,7 @@ export default definePluginEntry({
           if (tags.length > 0) metadata["tags"] = tags;
           writeFrontmatter(target, metadata, content.trim());
           const result = {
-            path: vaultRel(target, vault),
+            path: vaultRelativePath(target, vault),
             absolute_path: target,
             slug,
             overwritten: noteExisted && overwrite,
@@ -258,7 +292,7 @@ export default definePluginEntry({
           const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
           const path = await appendEvent(vault, agent, message, { date, time, tz });
           const result = {
-            path: vaultRel(path, vault),
+            path: vaultRelativePath(path, vault),
             absolute_path: path,
             agent,
             date,
@@ -296,5 +330,358 @@ export default definePluginEntry({
         },
       },
     );
+
+    // ── Pay Memory tools ───────────────────────────────────────────────────
+
+    api.registerTool({
+      name: "payment_memory_init",
+      description:
+        "Bootstrap the Pay Memory layout (policies/, payments/, assets/, drafts/, reports/) and write the spending policy template.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent: { type: "string" },
+          overwrite: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const overwrite = Boolean(params["overwrite"] ?? false);
+        const agent = resolveOpenclawAgent(api, (params["agent"] as string | undefined) ?? null);
+
+        const dirs = payMemoryDirs(vault);
+        const created: string[] = [];
+        const skipped: string[] = [];
+        for (const dir of [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports]) {
+          const existed = existsSync(dir);
+          mkdirSync(dir, { recursive: true });
+          (existed ? skipped : created).push(vaultRelativePath(dir, vault));
+        }
+        const policy = writePolicyIfMissing(vault, { overwrite });
+        return asJson({
+          vault_path: vault,
+          agent,
+          created,
+          skipped,
+          policy_path: vaultRelativePath(policy.path, vault),
+          policy_status: policy.status,
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "payment_receipt_append",
+      description:
+        "Save a Markdown receipt for one paid API call. raw_output is run through a redactor before persisting.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent: { type: "string" },
+          service: { type: "string" },
+          status: { type: "string" },
+          reason: { type: "string" },
+          category: { type: "string" },
+          endpoint: { type: "string" },
+          expected_cost: { type: "string" },
+          actual_amount: { type: "string" },
+          currency: { type: "string" },
+          payment_proof: { type: "string" },
+          result_ref: { type: "string" },
+          result_note: { type: "string" },
+          raw_output: { type: "string" },
+          slug: { type: "string" },
+          date: { type: "string" },
+          time: { type: "string" },
+          overwrite: { type: "boolean" },
+        },
+        required: ["service", "status", "reason"],
+        additionalProperties: false,
+      },
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
+        const agent = resolveOpenclawAgent(api, (params["agent"] as string | undefined) ?? null);
+        const result = writeReceipt(vault, {
+          agent,
+          service: String(params["service"]),
+          status: String(params["status"]),
+          reason: String(params["reason"]),
+          category: strOrNull(params["category"]),
+          endpoint: strOrNull(params["endpoint"]),
+          expectedCost: strOrNull(params["expected_cost"]),
+          actualAmount: strOrNull(params["actual_amount"]),
+          currency: strOrNull(params["currency"]),
+          paymentProof: strOrNull(params["payment_proof"]),
+          resultRef: strOrNull(params["result_ref"]),
+          resultNote: strOrNull(params["result_note"]),
+          rawOutput: strOrNull(params["raw_output"]),
+          slug: strOrNull(params["slug"]),
+          date: strOrNull(params["date"]),
+          time: strOrNull(params["time"]),
+          overwrite: Boolean(params["overwrite"] ?? false),
+          tz,
+        });
+        return asJson({
+          path: result.relativePath,
+          absolute_path: resolvePath(result.path),
+          slug: result.slug,
+          date: result.date,
+          created: result.created,
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "asset_capture",
+      description:
+        "Save a Markdown note for an asset produced by a paid call, linked to its receipt.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          service: { type: "string" },
+          result_url: { type: "string" },
+          source_receipt: { type: "string" },
+          prompt: { type: "string" },
+          used_in: { type: "string" },
+          slug: { type: "string" },
+          overwrite: { type: "boolean" },
+        },
+        required: ["title", "service", "result_url"],
+        additionalProperties: false,
+      },
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const result = writeAsset(vault, {
+          title: String(params["title"]),
+          service: String(params["service"]),
+          resultUrl: String(params["result_url"]),
+          sourceReceipt: strOrNull(params["source_receipt"]),
+          prompt: strOrNull(params["prompt"]),
+          usedIn: strOrNull(params["used_in"]),
+          slug: strOrNull(params["slug"]),
+          overwrite: Boolean(params["overwrite"] ?? false),
+        });
+        return asJson({
+          path: result.relativePath,
+          absolute_path: resolvePath(result.path),
+          slug: result.slug,
+          created: result.created,
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "payment_report_generate",
+      description:
+        "Aggregate a date's payment receipts into a Markdown report under AI Wiki/reports/.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string" },
+          title: { type: "string" },
+          task: { type: "string" },
+          slug: { type: "string" },
+          overwrite: { type: "boolean" },
+        },
+        required: ["date"],
+        additionalProperties: false,
+      },
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const result = writeReport(vault, {
+          date: String(params["date"]),
+          title: strOrNull(params["title"]),
+          task: strOrNull(params["task"]),
+          slug: strOrNull(params["slug"]),
+          overwrite: Boolean(params["overwrite"] ?? false),
+        });
+        return asJson({
+          path: result.relativePath,
+          absolute_path: resolvePath(result.path),
+          slug: result.slug,
+          receipts_used: result.receiptsUsed,
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "payment_policy_check",
+      description:
+        "Evaluate a prospective paid call against AI Wiki/policies/spending.json. Returns allowed / approval_required / denied + the rule that fired.",
+      parameters: {
+        type: "object",
+        properties: {
+          service: { type: "string" },
+          expected_amount: { type: ["number", "string"] },
+          currency: { type: "string" },
+          category: { type: "string" },
+          date: { type: "string" },
+        },
+        required: ["service"],
+        additionalProperties: false,
+      },
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
+        const decision = checkPolicy(vault, {
+          service: String(params["service"]),
+          expectedAmount: coerceExpectedAmount(params["expected_amount"]),
+          currency: strOrNull(params["currency"]),
+          category: strOrNull(params["category"]),
+          date: strOrNull(params["date"]),
+          tz,
+        });
+        return asJson({
+          status: decision.status,
+          allowed: decision.allowed,
+          approval_required: decision.approvalRequired,
+          rule: decision.rule,
+          reasons: decision.reasons,
+          has_policy: decision.hasPolicy,
+          policy_path:
+            decision.policyPath !== null
+              ? vaultRelativePath(decision.policyPath, vault)
+              : null,
+          currency: decision.currency,
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "payment_request_approval",
+      description:
+        "Create a pending-payment-request that the user must approve before the agent runs `pay`. Records the policy check at request time.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent: { type: "string" },
+          service: { type: "string" },
+          reason: { type: "string" },
+          expected_amount: { type: ["number", "string"] },
+          currency: { type: "string" },
+          category: { type: "string" },
+          endpoint: { type: "string" },
+          expected_output: { type: "string" },
+          vault_files: { type: "array", items: { type: "string" } },
+          slug: { type: "string" },
+          date: { type: "string" },
+          time: { type: "string" },
+          enforce_policy: { type: "boolean" },
+        },
+        required: ["service", "reason"],
+        additionalProperties: false,
+      },
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
+        const agent = resolveOpenclawAgent(api, (params["agent"] as string | undefined) ?? null);
+        const vaultFilesRaw = params["vault_files"];
+        let vaultFiles: string[] | null = null;
+        if (vaultFilesRaw !== undefined && vaultFilesRaw !== null) {
+          if (
+            !Array.isArray(vaultFilesRaw) ||
+            !vaultFilesRaw.every((s) => typeof s === "string")
+          ) {
+            throw new Error("vault_files must be an array of strings");
+          }
+          vaultFiles = [...vaultFilesRaw] as string[];
+        }
+        const result = writePendingRequest(vault, {
+          agent,
+          service: String(params["service"]),
+          reason: String(params["reason"]),
+          expectedAmount: coerceExpectedAmount(params["expected_amount"]),
+          currency: strOrNull(params["currency"]),
+          category: strOrNull(params["category"]),
+          endpoint: strOrNull(params["endpoint"]),
+          expectedOutput: strOrNull(params["expected_output"]),
+          vaultFiles,
+          slug: strOrNull(params["slug"]),
+          date: strOrNull(params["date"]),
+          time: strOrNull(params["time"]),
+          enforcePolicy: Boolean(params["enforce_policy"] ?? false),
+          tz,
+        });
+        return asJson({
+          id: result.id,
+          path: result.relativePath,
+          absolute_path: resolvePath(result.path),
+          status: result.status,
+          created: result.created,
+          policy_status: result.policyDecision.status,
+          policy_rule: result.policyDecision.rule,
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "payment_request_status",
+      description:
+        "Look up a pending-payment-request by id and return its current status and metadata. The agent uses this to poll for human approval.",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const id = String(params["id"]);
+        const loaded = loadPendingRequest(vault, id);
+        if (!loaded) throw new Error(`pending request not found: ${id}`);
+        const meta = loaded.metadata;
+        const get = (k: string): string | null => {
+          const v = meta[k];
+          if (v === undefined || v === null) return null;
+          return Array.isArray(v) ? v.join(", ") : String(v);
+        };
+        return asJson({
+          id,
+          path: loaded.relativePath,
+          status: loaded.status,
+          service: get("service"),
+          reason: get("reason"),
+          expected_amount: get("expected_amount"),
+          currency: get("currency"),
+          created: get("created"),
+          approved_by: get("approved_by"),
+          approved_at: get("approved_at"),
+          rejected_by: get("rejected_by"),
+          rejected_at: get("rejected_at"),
+          rejection_reason: get("rejection_reason"),
+          receipt: get("receipt"),
+          policy_status: get("policy_status"),
+          policy_rule: get("policy_rule"),
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "payment_request_consume",
+      description:
+        "Mark an `approved` request as `consumed` and link the resulting receipt path. Called by the agent after the paid call succeeded.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          receipt: { type: "string" },
+        },
+        required: ["id", "receipt"],
+        additionalProperties: false,
+      },
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const result = consumePendingRequest(vault, String(params["id"]), {
+          receiptPath: String(params["receipt"]),
+        });
+        return asJson({
+          id: result.id,
+          path: result.relativePath,
+          status: result.status,
+        });
+      },
+    });
   },
 });

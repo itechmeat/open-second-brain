@@ -11,10 +11,68 @@
  * directory entry to durably persist the rename).
  */
 
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 export function atomicWriteFileSync(target: string, contents: string): void {
+  withTempFile(target, contents, (tmpPath) => {
+    // POSIX `rename(2)` is atomic and clobbers an existing target — that's
+    // exactly the "overwrite" semantic we want. No exclusivity guarantee.
+    renameSync(tmpPath, target);
+  });
+}
+
+/**
+ * Like {@link atomicWriteFileSync} but fails with `EEXIST` if `target`
+ * already exists, atomically. Implemented via `link(2)` instead of
+ * `rename(2)` because POSIX `link` returns EEXIST when the destination
+ * inode is taken — there is no `rename`-with-no-clobber primitive that's
+ * portable.
+ *
+ * Use this where the caller's "refuse to overwrite" guarantee must be
+ * race-free: a plain `existsSync(target) || writeFileSync(...)` is
+ * vulnerable to TOCTOU when two processes (CLI + MCP server, concurrent
+ * agents) target the same path in parallel.
+ *
+ * Requires `tmpPath` and `target` to live on the same filesystem, which
+ * is guaranteed because the temp file is placed alongside the target.
+ */
+export function atomicCreateFileSyncExclusive(target: string, contents: string): void {
+  withTempFile(target, contents, (tmpPath) => {
+    try {
+      linkSync(tmpPath, target);
+    } finally {
+      // Always remove the temp inode regardless of whether linkSync
+      // succeeded — the temp is an implementation detail.
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+        // already gone; ignore
+      }
+    }
+  });
+}
+
+/**
+ * Internal helper: write `contents` to a sibling temp file (atomic + fsynced),
+ * then call `commit` to attach the temp inode to the final path. The temp
+ * file is unlinked on any failure; durability fsync of the parent directory
+ * is best-effort after a successful commit.
+ */
+function withTempFile(
+  target: string,
+  contents: string,
+  commit: (tmpPath: string) => void,
+): void {
   const dir = dirname(target);
   mkdirSync(dir, { recursive: true });
 
@@ -28,6 +86,7 @@ export function atomicWriteFileSync(target: string, contents: string): void {
   const tmpPath = join(dir, tmpName);
 
   let fd: number | null = null;
+  let committed = false;
   try {
     fd = openSync(tmpPath, "wx", 0o644);
     const buf = Buffer.from(contents, "utf8");
@@ -38,9 +97,10 @@ export function atomicWriteFileSync(target: string, contents: string): void {
     fsyncSync(fd);
     closeSync(fd);
     fd = null;
-    renameSync(tmpPath, target);
+    commit(tmpPath);
+    committed = true;
 
-    // Durably persist the rename by fsyncing the parent directory.
+    // Durably persist the new directory entry by fsyncing the parent dir.
     // Node has no portable directory fsync; on Linux the open-O_RDONLY trick works.
     try {
       const dfd = openSync(dir, "r");
@@ -52,7 +112,7 @@ export function atomicWriteFileSync(target: string, contents: string): void {
     } catch {
       // Directory fsync is a best-effort durability optimization.
       // Failure on platforms that don't support it (rare) is not fatal —
-      // the rename itself is already atomic at the inode level.
+      // the rename/link itself is already atomic at the inode level.
     }
   } catch (err) {
     if (fd !== null) {
@@ -62,10 +122,12 @@ export function atomicWriteFileSync(target: string, contents: string): void {
         // ignore
       }
     }
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // tmp file may not exist if openSync failed
+    if (!committed) {
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+        // tmp file may not exist if openSync failed
+      }
     }
     throw err;
   }

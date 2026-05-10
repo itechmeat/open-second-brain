@@ -8,13 +8,14 @@
  * statement, not a registry — keeps the control flow obvious.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
   defaultConfigPath,
   discoverConfig,
   redactMapping,
+  resolveAgentName,
   resolveTimezone,
   resolveVault,
   setConfigValue,
@@ -22,6 +23,24 @@ import {
 import { doctor } from "../core/doctor.ts";
 import { appendEvent } from "../core/event-log.ts";
 import { bootstrapVault } from "../core/init.ts";
+import {
+  approvePendingRequest,
+  buildPaymentDigest,
+  checkPolicy,
+  consumePendingRequest,
+  listPendingRequests,
+  loadPendingRequest,
+  payMemoryDirs,
+  policyPath,
+  rejectPendingRequest,
+  renderPaymentDigestTelegram,
+  vaultRelativePath,
+  writeAsset,
+  writePendingRequest,
+  writePolicyIfMissing,
+  writeReceipt,
+  writeReport,
+} from "../core/pay-memory/index.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import {
@@ -56,6 +75,45 @@ function requireVault(flagVal: string | undefined, configPath: string | null): s
     throw new NoVaultConfiguredError();
   }
   return vault;
+}
+
+/**
+ * Emit `payload` as pretty-printed JSON with sorted keys, plus a trailing
+ * newline. Centralises the format so the eleven Pay Memory subcommands
+ * don't each repeat the same `JSON.stringify(...) + "\n"` boilerplate.
+ */
+function writeJson(payload: unknown): void {
+  process.stdout.write(JSON.stringify(payload, sortedReplacer, 2) + "\n");
+}
+
+/**
+ * Render a uniform `error: failed to <action>: <reason>\n` message on
+ * stderr and return exit-code 1. Use as the `return failWith(...)` last
+ * expression of a catch arm so the subcommand keeps its single-exit
+ * shape.
+ */
+function failWith(action: string, exc: unknown): number {
+  const reason = (exc as Error)?.message ?? String(exc);
+  process.stderr.write(`error: failed to ${action}: ${reason}\n`);
+  return 1;
+}
+
+/**
+ * Parse an optional `--<name>` flag whose value should be a finite number.
+ * Returns `{ value: number | null, error: string | null }`. The caller is
+ * expected to bail with exit 2 + the error string when `error` is set.
+ */
+function parseOptionalNumberFlag(
+  flags: Record<string, string | boolean | string[] | undefined>,
+  name: string,
+): { value: number | null; error: string | null } {
+  const raw = flags[name] as string | undefined;
+  if (raw === undefined || raw === "") return { value: null, error: null };
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return { value: null, error: `--${name} must be a number, got: ${raw}` };
+  }
+  return { value: parsed, error: null };
 }
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
@@ -272,6 +330,663 @@ async function cmdIndex(argv: string[]): Promise<number> {
   return 0;
 }
 
+// ── Pay Memory subcommands ──────────────────────────────────────────────────
+
+async function cmdInitPayMemory(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    agent: { type: "string" },
+    overwrite: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const agent =
+    (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+
+  const dirs = payMemoryDirs(vault);
+  const dirList = [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports];
+  const created: string[] = [];
+  const skipped: string[] = [];
+  for (const dir of dirList) {
+    const existed = existsSync(dir);
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch (exc) {
+      process.stderr.write(
+        `error: failed to create ${dir}: ${(exc as Error).message ?? exc}\n`,
+      );
+      return 1;
+    }
+    (existed ? skipped : created).push(vaultRelativePath(dir, vault));
+  }
+
+  let policy;
+  try {
+    policy = writePolicyIfMissing(vault, { overwrite: Boolean(flags["overwrite"]) });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to write policy: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+  const policyRel = vaultRelativePath(policy.path, vault);
+  const policyStatus = policy.status;
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          vault_path: vault,
+          agent,
+          created,
+          skipped,
+          policy_path: policyRel,
+          policy_status: policyStatus,
+        },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+    return 0;
+  }
+
+  process.stdout.write(`pay-memory layout initialized: ${vault}\n`);
+  for (const rel of created) process.stdout.write(`  created: ${rel}\n`);
+  for (const rel of skipped) process.stdout.write(`  exists: ${rel}\n`);
+  process.stdout.write(`  ${policyStatus}: ${policyRel}\n`);
+  process.stdout.write(`agent: ${agent}\n`);
+  return 0;
+}
+
+async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    agent: { type: "string" },
+    service: { type: "string", required: true },
+    status: { type: "string", required: true },
+    reason: { type: "string", required: true },
+    category: { type: "string" },
+    endpoint: { type: "string" },
+    "expected-cost": { type: "string" },
+    "actual-amount": { type: "string" },
+    currency: { type: "string" },
+    "payment-proof": { type: "string" },
+    "result-ref": { type: "string" },
+    "result-note": { type: "string" },
+    "raw-output-file": { type: "string" },
+    slug: { type: "string" },
+    date: { type: "string" },
+    time: { type: "string" },
+    overwrite: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const agent =
+    (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const tz = resolveTimezone(config);
+
+  let rawOutput: string | undefined;
+  const rawOutputFile = flags["raw-output-file"] as string | undefined;
+  if (rawOutputFile) {
+    try {
+      rawOutput = readFileSync(rawOutputFile, "utf8");
+    } catch (exc) {
+      process.stderr.write(
+        `error: cannot read raw-output-file: ${(exc as Error).message ?? exc}\n`,
+      );
+      return 1;
+    }
+  }
+
+  let result;
+  try {
+    result = writeReceipt(vault, {
+      agent,
+      service: String(flags["service"]),
+      status: String(flags["status"]),
+      reason: String(flags["reason"]),
+      category: (flags["category"] as string | undefined) ?? null,
+      endpoint: (flags["endpoint"] as string | undefined) ?? null,
+      expectedCost: (flags["expected-cost"] as string | undefined) ?? null,
+      actualAmount: (flags["actual-amount"] as string | undefined) ?? null,
+      currency: (flags["currency"] as string | undefined) ?? null,
+      paymentProof: (flags["payment-proof"] as string | undefined) ?? null,
+      resultRef: (flags["result-ref"] as string | undefined) ?? null,
+      resultNote: (flags["result-note"] as string | undefined) ?? null,
+      rawOutput: rawOutput ?? null,
+      slug: (flags["slug"] as string | undefined) ?? null,
+      date: (flags["date"] as string | undefined) ?? null,
+      time: (flags["time"] as string | undefined) ?? null,
+      overwrite: Boolean(flags["overwrite"]),
+      tz,
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to write receipt: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          path: result.relativePath,
+          absolute_path: result.path,
+          slug: result.slug,
+          date: result.date,
+          created: result.created,
+        },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else {
+    process.stdout.write(`receipt: ${result.relativePath}\n`);
+    process.stdout.write(`slug: ${result.slug}\n`);
+    process.stdout.write(`date: ${result.date}\n`);
+  }
+  return 0;
+}
+
+async function cmdCaptureAsset(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    title: { type: "string", required: true },
+    service: { type: "string", required: true },
+    "result-url": { type: "string", required: true },
+    "source-receipt": { type: "string" },
+    "prompt-file": { type: "string" },
+    "used-in": { type: "string" },
+    slug: { type: "string" },
+    overwrite: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+
+  let prompt: string | undefined;
+  const promptFile = flags["prompt-file"] as string | undefined;
+  if (promptFile) {
+    try {
+      prompt = readFileSync(promptFile, "utf8");
+    } catch (exc) {
+      process.stderr.write(
+        `error: cannot read prompt-file: ${(exc as Error).message ?? exc}\n`,
+      );
+      return 1;
+    }
+  }
+
+  let result;
+  try {
+    result = writeAsset(vault, {
+      title: String(flags["title"]),
+      service: String(flags["service"]),
+      resultUrl: String(flags["result-url"]),
+      sourceReceipt: (flags["source-receipt"] as string | undefined) ?? null,
+      prompt: prompt ?? null,
+      usedIn: (flags["used-in"] as string | undefined) ?? null,
+      slug: (flags["slug"] as string | undefined) ?? null,
+      overwrite: Boolean(flags["overwrite"]),
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to write asset: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          path: result.relativePath,
+          absolute_path: result.path,
+          slug: result.slug,
+          created: result.created,
+        },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else {
+    process.stdout.write(`asset: ${result.relativePath}\n`);
+    process.stdout.write(`slug: ${result.slug}\n`);
+  }
+  return 0;
+}
+
+async function cmdPaymentDigest(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    date: { type: "string" },
+    "empty-mode": { type: "string", default: "silent" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const tz = resolveTimezone(config);
+
+  const emptyMode = String(flags["empty-mode"]);
+  if (!["silent", "empty", "summary"].includes(emptyMode)) {
+    process.stderr.write(`error: --empty-mode must be silent|empty|summary\n`);
+    return 2;
+  }
+
+  let digest;
+  try {
+    digest = buildPaymentDigest(vault, {
+      date: (flags["date"] as string | undefined) ?? null,
+      tz,
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to build digest: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          date: digest.date,
+          services: digest.services,
+          receipts: digest.receipts,
+          total_amount: digest.totalAmount,
+          currency: digest.currency,
+        },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else {
+    const text = renderPaymentDigestTelegram(digest, {
+      emptyMode: emptyMode as "silent" | "empty" | "summary",
+    });
+    if (text) process.stdout.write(text + "\n");
+  }
+  return 0;
+}
+
+async function cmdRequestPaymentApproval(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    agent: { type: "string" },
+    service: { type: "string", required: true },
+    reason: { type: "string", required: true },
+    "expected-amount": { type: "string" },
+    currency: { type: "string" },
+    category: { type: "string" },
+    endpoint: { type: "string" },
+    "expected-output": { type: "string" },
+    "vault-files": { type: "string-array" },
+    slug: { type: "string" },
+    date: { type: "string" },
+    time: { type: "string" },
+    "enforce-policy": { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const agent =
+    (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const tz = resolveTimezone(config);
+
+  const { value: expectedAmount, error: expectedErr } = parseOptionalNumberFlag(
+    flags,
+    "expected-amount",
+  );
+  if (expectedErr) {
+    process.stderr.write(`error: ${expectedErr}\n`);
+    return 2;
+  }
+
+  let result;
+  try {
+    result = writePendingRequest(vault, {
+      agent,
+      service: String(flags["service"]),
+      reason: String(flags["reason"]),
+      expectedAmount,
+      currency: (flags["currency"] as string | undefined) ?? null,
+      category: (flags["category"] as string | undefined) ?? null,
+      endpoint: (flags["endpoint"] as string | undefined) ?? null,
+      expectedOutput: (flags["expected-output"] as string | undefined) ?? null,
+      vaultFiles: (flags["vault-files"] as string[] | undefined) ?? null,
+      slug: (flags["slug"] as string | undefined) ?? null,
+      date: (flags["date"] as string | undefined) ?? null,
+      time: (flags["time"] as string | undefined) ?? null,
+      tz,
+      enforcePolicy: Boolean(flags["enforce-policy"]),
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to create pending request: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          id: result.id,
+          path: result.relativePath,
+          status: result.status,
+          created: result.created,
+          policy_status: result.policyDecision.status,
+          policy_rule: result.policyDecision.rule,
+        },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else {
+    process.stdout.write(`pending: ${result.relativePath}\n`);
+    process.stdout.write(`id: ${result.id}\n`);
+    process.stdout.write(`policy: ${result.policyDecision.status}\n`);
+  }
+  return 0;
+}
+
+async function cmdApprovePaymentRequest(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    id: { type: "string", required: true },
+    "approved-by": { type: "string", required: true },
+    note: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+
+  let result;
+  try {
+    result = approvePendingRequest(vault, String(flags["id"]), {
+      approvedBy: String(flags["approved-by"]),
+      note: (flags["note"] as string | undefined) ?? null,
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to approve request: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        { id: result.id, status: result.status, path: result.relativePath },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else {
+    process.stdout.write(`approved: ${result.relativePath}\n`);
+    process.stdout.write(`status: ${result.status}\n`);
+  }
+  return 0;
+}
+
+async function cmdRejectPaymentRequest(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    id: { type: "string", required: true },
+    "rejected-by": { type: "string", required: true },
+    reason: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+
+  let result;
+  try {
+    result = rejectPendingRequest(vault, String(flags["id"]), {
+      rejectedBy: String(flags["rejected-by"]),
+      reason: (flags["reason"] as string | undefined) ?? null,
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to reject request: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        { id: result.id, status: result.status, path: result.relativePath },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else {
+    process.stdout.write(`rejected: ${result.relativePath}\n`);
+    process.stdout.write(`status: ${result.status}\n`);
+  }
+  return 0;
+}
+
+async function cmdConsumePaymentRequest(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    id: { type: "string", required: true },
+    receipt: { type: "string", required: true },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+
+  let result;
+  try {
+    result = consumePendingRequest(vault, String(flags["id"]), {
+      receiptPath: String(flags["receipt"]),
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to consume request: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        { id: result.id, status: result.status, path: result.relativePath },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else {
+    process.stdout.write(`consumed: ${result.relativePath}\n`);
+    process.stdout.write(`status: ${result.status}\n`);
+  }
+  return 0;
+}
+
+async function cmdListPendingPayments(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    status: { type: "string", default: "pending" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const status = String(flags["status"]);
+  const valid = ["pending", "approved", "rejected", "consumed", "all"];
+  if (!valid.includes(status)) {
+    process.stderr.write(
+      `error: --status must be one of: ${valid.join(", ")}\n`,
+    );
+    return 2;
+  }
+
+  let summaries;
+  try {
+    summaries = listPendingRequests(vault, {
+      status: status as "pending" | "approved" | "rejected" | "consumed" | "all",
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to list requests: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        summaries.map((s) => ({
+          id: s.id,
+          path: s.relativePath,
+          status: s.status,
+          service: s.service,
+          reason: s.reason,
+          expected_amount: s.expectedAmount,
+          currency: s.currency,
+          created: s.created,
+          policy_status: s.policyStatus,
+        })),
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else if (summaries.length === 0) {
+    process.stdout.write(`no requests with status: ${status}\n`);
+  } else {
+    for (const s of summaries) {
+      const cost = s.expectedAmount
+        ? ` (${s.expectedAmount}${s.currency ? " " + s.currency : ""})`
+        : "";
+      process.stdout.write(`${s.status}\t${s.id}\t${s.service}${cost}\t${s.reason}\n`);
+    }
+  }
+  return 0;
+}
+
+async function cmdCheckPaymentPolicy(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    service: { type: "string", required: true },
+    "expected-amount": { type: "string" },
+    currency: { type: "string" },
+    category: { type: "string" },
+    date: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const tz = resolveTimezone(config);
+
+  const { value: expectedAmount, error: expectedErr } = parseOptionalNumberFlag(
+    flags,
+    "expected-amount",
+  );
+  if (expectedErr) {
+    process.stderr.write(`error: ${expectedErr}\n`);
+    return 2;
+  }
+
+  let decision;
+  try {
+    decision = checkPolicy(vault, {
+      service: String(flags["service"]),
+      expectedAmount,
+      currency: (flags["currency"] as string | undefined) ?? null,
+      category: (flags["category"] as string | undefined) ?? null,
+      date: (flags["date"] as string | undefined) ?? null,
+      tz,
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to evaluate policy: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          status: decision.status,
+          allowed: decision.allowed,
+          approval_required: decision.approvalRequired,
+          rule: decision.rule,
+          reasons: decision.reasons,
+          has_policy: decision.hasPolicy,
+          policy_path:
+            decision.policyPath !== null
+              ? vaultRelativePath(decision.policyPath, vault)
+              : null,
+          currency: decision.currency,
+        },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else {
+    process.stdout.write(`status: ${decision.status}\n`);
+    process.stdout.write(`has_policy: ${decision.hasPolicy}\n`);
+    if (decision.rule) process.stdout.write(`rule: ${decision.rule}\n`);
+    for (const r of decision.reasons) process.stdout.write(`  - ${r}\n`);
+  }
+  // Exit 0 when allowed; 1 when denied; 3 when approval is required (the
+  // shell distinguishes the three so a calling script can branch).
+  if (decision.allowed) return 0;
+  if (decision.approvalRequired) return 3;
+  return 1;
+}
+
+async function cmdPaymentReport(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    date: { type: "string", required: true },
+    title: { type: "string" },
+    task: { type: "string" },
+    slug: { type: "string" },
+    overwrite: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+
+  let result;
+  try {
+    result = writeReport(vault, {
+      date: String(flags["date"]),
+      title: (flags["title"] as string | undefined) ?? null,
+      task: (flags["task"] as string | undefined) ?? null,
+      slug: (flags["slug"] as string | undefined) ?? null,
+      overwrite: Boolean(flags["overwrite"]),
+    });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to write report: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          path: result.relativePath,
+          absolute_path: result.path,
+          slug: result.slug,
+          receipts_used: result.receiptsUsed,
+        },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  } else {
+    process.stdout.write(`report: ${result.relativePath}\n`);
+    process.stdout.write(`receipts: ${result.receiptsUsed}\n`);
+  }
+  return 0;
+}
+
 async function cmdMcp(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, {
     vault: { type: "string" },
@@ -359,16 +1074,29 @@ async function cmdToolCall(argv: string[]): Promise<number> {
 const HELP = `usage: o2b <command> [args...]
 
 Commands:
-  status            Show Open Second Brain configuration status
-  init              Initialize a vault profile with required files
-  doctor            Run health checks on vault, config, and plugins
-  append-event      Append an event to the configured event log backend
-  export-config     Write a redacted config snapshot
-  index             Regenerate the vault index from discovered pages
-  mcp               Run the optional MCP tool server (stdio JSON-RPC)
-  install-cli       Create symlinks for o2b and vault-log in ~/.local/bin
-  uninstall         Print an uninstall plan and (optionally) clean local config and CLI symlinks
-  tool-call         Invoke an MCP tool handler from the CLI and print JSON to stdout
+  status                    Show Open Second Brain configuration status
+  init                      Initialize a vault profile with required files
+  doctor                    Run health checks on vault, config, and plugins
+  append-event              Append an event to the configured event log backend
+  export-config             Write a redacted config snapshot
+  index                     Regenerate the vault index from discovered pages
+  mcp                       Run the optional MCP tool server (stdio JSON-RPC)
+  install-cli               Create symlinks for o2b and vault-log in ~/.local/bin
+  uninstall                 Print an uninstall plan and (optionally) clean local config and CLI symlinks
+  tool-call                 Invoke an MCP tool handler from the CLI and print JSON to stdout
+
+Pay Memory:
+  init-pay-memory           Bootstrap policies/, payments/, assets/, drafts/, reports/
+  append-payment-receipt    Save a Markdown receipt for a paid API call
+  capture-asset             Save a Markdown note for an asset produced by a paid call
+  payment-report            Aggregate a date's receipts into a Markdown report
+  check-payment-policy      Evaluate a prospective paid call against policies/spending.json
+  request-payment-approval  Create a pending payment request the user must approve
+  approve-payment-request   Mark a pending request as approved (human action)
+  reject-payment-request    Mark a pending request as rejected (human action)
+  consume-payment-request   Link an approved request to its resulting receipt
+  list-pending-payments     List pending/approved/etc. requests
+  payment-digest            Render a Telegram-friendly 4-line summary for a date (Hermes cron-friendly)
 `;
 
 function sortedReplacer(_key: string, value: unknown): unknown {
@@ -424,6 +1152,28 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         return await cmdUninstall(rest);
       case "tool-call":
         return await cmdToolCall(rest);
+      case "init-pay-memory":
+        return await cmdInitPayMemory(rest);
+      case "append-payment-receipt":
+        return await cmdAppendPaymentReceipt(rest);
+      case "capture-asset":
+        return await cmdCaptureAsset(rest);
+      case "payment-report":
+        return await cmdPaymentReport(rest);
+      case "check-payment-policy":
+        return await cmdCheckPaymentPolicy(rest);
+      case "request-payment-approval":
+        return await cmdRequestPaymentApproval(rest);
+      case "approve-payment-request":
+        return await cmdApprovePaymentRequest(rest);
+      case "reject-payment-request":
+        return await cmdRejectPaymentRequest(rest);
+      case "consume-payment-request":
+        return await cmdConsumePaymentRequest(rest);
+      case "list-pending-payments":
+        return await cmdListPendingPayments(rest);
+      case "payment-digest":
+        return await cmdPaymentDigest(rest);
       default:
         process.stderr.write(`error: unknown command: ${command}\n`);
         process.stderr.write(HELP);

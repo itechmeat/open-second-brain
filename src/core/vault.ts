@@ -10,6 +10,10 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
+import {
+  atomicCreateFileSyncExclusive,
+  atomicWriteFileSync,
+} from "./fs-atomic.ts";
 import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
@@ -73,12 +77,11 @@ export function parseFrontmatter(path: string): readonly [FrontmatterMap, string
 }
 
 /**
- * Write a Markdown file with YAML-like frontmatter. Lists are serialized as
- * inline arrays. Scalars that would break the simple parser are quoted and
- * standard control chars are escaped.
+ * Render a Markdown file with YAML-like frontmatter to a string. Pure
+ * function — exposed so callers can decide *how* to persist (atomic,
+ * exclusive, plain) without duplicating the YAML formatter.
  */
-export function writeFrontmatter(path: string, metadata: FrontmatterMap, body: string): void {
-  mkdirSync(dirname(path), { recursive: true });
+export function formatFrontmatter(metadata: FrontmatterMap, body: string): string {
   const lines: string[] = ["---"];
   for (const [key, value] of Object.entries(metadata)) {
     lines.push(`${key}: ${formatYamlValue(value)}`);
@@ -88,7 +91,89 @@ export function writeFrontmatter(path: string, metadata: FrontmatterMap, body: s
     lines.push("");
     lines.push(body);
   }
-  writeFileSync(path, lines.join("\n") + "\n", "utf8");
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Write a Markdown file with YAML-like frontmatter. Lists are serialized as
+ * inline arrays. Scalars that would break the simple parser are quoted and
+ * standard control chars are escaped.
+ *
+ * This variant is non-atomic — used for non-critical writes where a torn
+ * file on crash is acceptable (the regenerated `index.md` would just be
+ * rebuilt next run; the bootstrap files are templates that can be
+ * re-emitted). For Pay Memory writes that must survive concurrent
+ * agents and crashes, use `writeFrontmatterAtomic` instead.
+ */
+export function writeFrontmatter(path: string, metadata: FrontmatterMap, body: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, formatFrontmatter(metadata, body), "utf8");
+}
+
+export interface WriteFrontmatterAtomicOptions {
+  /**
+   * When `true`, overwrite an existing target atomically (`rename(2)`).
+   * When `false` (default), fail with an `EEXIST`-shaped Error if the
+   * target already exists, atomically (`link(2)` semantics).
+   */
+  readonly overwrite?: boolean;
+  /**
+   * Optional human-readable label for the artifact kind (e.g. `"receipt"`,
+   * `"asset"`, `"pending request"`). When the underlying write hits
+   * `EEXIST` and `overwrite` is false, the resulting error message becomes
+   * `"<kind> already exists: <path>"` instead of the raw `EEXIST: ...`.
+   * The label is purely cosmetic — callers that don't supply it get the
+   * native errno error.
+   */
+  readonly existsErrorKind?: string;
+  /** Vault root used to render the relative path in the EEXIST message. */
+  readonly vaultForRelativePath?: string;
+}
+
+/**
+ * Atomic frontmatter writer with optional exclusive-create semantics.
+ *
+ * Used by Pay Memory writers (receipt, asset, report, policy) where:
+ *   - the file must not be torn on crash → atomic rename/link;
+ *   - "refuse to overwrite" must be race-free across concurrent processes
+ *     (CLI + MCP server, multiple agents) → exclusive `link(2)` instead
+ *     of the TOCTOU-prone `existsSync` + `writeFileSync` pair.
+ *
+ * On EEXIST the function throws either:
+ *   - the native `Error & { code: "EEXIST" }` when no `existsErrorKind`
+ *     was supplied (matches the underlying `link(2)` semantics so callers
+ *     that want to inspect `err.code` still can), or
+ *   - a friendlier `Error("<kind> already exists: <relative-path>")`
+ *     when `existsErrorKind` was supplied — saves every caller from
+ *     re-implementing the same try/catch.
+ */
+export function writeFrontmatterAtomic(
+  path: string,
+  metadata: FrontmatterMap,
+  body: string,
+  opts: WriteFrontmatterAtomicOptions = {},
+): void {
+  const contents = formatFrontmatter(metadata, body);
+  if (opts.overwrite) {
+    atomicWriteFileSync(path, contents);
+    return;
+  }
+  try {
+    atomicCreateFileSyncExclusive(path, contents);
+  } catch (err) {
+    if (
+      opts.existsErrorKind &&
+      (err as NodeJS.ErrnoException)?.code === "EEXIST"
+    ) {
+      const rel = opts.vaultForRelativePath
+        ? path.startsWith(opts.vaultForRelativePath + "/")
+          ? path.slice(opts.vaultForRelativePath.length + 1)
+          : path
+        : path;
+      throw new Error(`${opts.existsErrorKind} already exists: ${rel}`);
+    }
+    throw err;
+  }
 }
 
 /**

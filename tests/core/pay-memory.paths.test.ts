@@ -1,0 +1,145 @@
+import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
+
+import {
+  assetPath,
+  isoDateNow,
+  isoTimeNow,
+  isoTimestampZ,
+  payMemoryDirs,
+  paymentsDateDir,
+  policyPath,
+  receiptPath,
+  reportPath,
+  validateIsoDate,
+  validateIsoTime,
+  validateSlug,
+} from "../../src/core/pay-memory/paths.ts";
+
+describe("payMemoryDirs", () => {
+  test("composes the canonical AI Wiki layout", () => {
+    const dirs = payMemoryDirs("/vault");
+    expect(dirs.policies).toBe(join("/vault", "AI Wiki", "policies"));
+    expect(dirs.payments).toBe(join("/vault", "AI Wiki", "payments"));
+    expect(dirs.assets).toBe(join("/vault", "AI Wiki", "assets"));
+    expect(dirs.drafts).toBe(join("/vault", "AI Wiki", "drafts"));
+    expect(dirs.reports).toBe(join("/vault", "AI Wiki", "reports"));
+  });
+
+  test("policyPath, receiptPath, assetPath, reportPath", () => {
+    expect(policyPath("/v")).toBe(join("/v", "AI Wiki", "policies", "spending.md"));
+    expect(receiptPath("/v", "2026-05-10", "fal-x")).toBe(
+      join("/v", "AI Wiki", "payments", "2026-05-10", "fal-x.md"),
+    );
+    expect(assetPath("/v", "header")).toBe(join("/v", "AI Wiki", "assets", "header.md"));
+    expect(reportPath("/v", "demo")).toBe(join("/v", "AI Wiki", "reports", "demo.md"));
+  });
+
+  test("paymentsDateDir validates date", () => {
+    expect(paymentsDateDir("/v", "2026-05-10")).toBe(
+      join("/v", "AI Wiki", "payments", "2026-05-10"),
+    );
+    expect(() => paymentsDateDir("/v", "2026.05.10")).toThrow();
+    expect(() => paymentsDateDir("/v", "10-05-2026")).toThrow();
+  });
+});
+
+describe("validateIsoDate", () => {
+  test("accepts well-formed ISO dates", () => {
+    expect(validateIsoDate("2026-05-10")).toBe("2026-05-10");
+    expect(validateIsoDate("2024-02-29")).toBe("2024-02-29"); // leap year
+  });
+
+  test("rejects bad shapes and impossible calendar dates", () => {
+    expect(() => validateIsoDate("2026/05/10")).toThrow();
+    expect(() => validateIsoDate("2026-13-01")).toThrow();
+    expect(() => validateIsoDate("2026-02-30")).toThrow();
+    expect(() => validateIsoDate("2025-02-29")).toThrow(); // non-leap
+    expect(() => validateIsoDate("")).toThrow();
+  });
+
+  test("differentiates format vs calendar errors", () => {
+    expect(() => validateIsoDate("nope")).toThrow(/format/);
+    expect(() => validateIsoDate("2026-13-01")).toThrow(/valid calendar date/);
+    expect(() => validateIsoDate("2025-02-29")).toThrow(/valid calendar date/);
+  });
+});
+
+describe("validateIsoTime", () => {
+  test("accepts 24-hour HH:MM", () => {
+    expect(validateIsoTime("00:00")).toBe("00:00");
+    expect(validateIsoTime("23:59")).toBe("23:59");
+  });
+
+  test("rejects out-of-range or malformed", () => {
+    expect(() => validateIsoTime("24:00")).toThrow();
+    expect(() => validateIsoTime("12:60")).toThrow();
+    expect(() => validateIsoTime("9:30")).toThrow();
+  });
+
+  test("differentiates format vs range errors", () => {
+    expect(() => validateIsoTime("nope")).toThrow(/format/);
+    expect(() => validateIsoTime("24:00")).toThrow(/out of range/);
+    expect(() => validateIsoTime("12:60")).toThrow(/out of range/);
+  });
+});
+
+describe("validateSlug", () => {
+  test("accepts plain slugs", () => {
+    expect(validateSlug("fal-blog-header")).toBe("fal-blog-header");
+    expect(validateSlug("alpha_beta-2")).toBe("alpha_beta-2");
+  });
+
+  test("rejects path separators", () => {
+    expect(() => validateSlug("a/b")).toThrow(/path separators/);
+    expect(() => validateSlug("a\\b")).toThrow(/path separators/);
+  });
+
+  test("rejects traversal", () => {
+    expect(() => validateSlug("..")).toThrow(/traversal/);
+    expect(() => validateSlug("..-evil")).toThrow(/traversal/);
+    expect(() => validateSlug("evil-..")).toThrow(/traversal/);
+  });
+
+  test("rejects empty", () => {
+    expect(() => validateSlug("")).toThrow();
+    expect(() => validateSlug("   ")).toThrow();
+  });
+
+  test("trims whitespace", () => {
+    expect(validateSlug("  ok-slug  ")).toBe("ok-slug");
+  });
+});
+
+describe("receiptPath / assetPath / reportPath reject traversal slugs", () => {
+  test("receiptPath rejects '../escape'", () => {
+    expect(() => receiptPath("/v", "2026-05-10", "../escape")).toThrow();
+  });
+  test("assetPath rejects 'a/b'", () => {
+    expect(() => assetPath("/v", "a/b")).toThrow();
+  });
+  test("reportPath rejects '..'", () => {
+    expect(() => reportPath("/v", "..")).toThrow();
+  });
+});
+
+describe("isoDateNow / isoTimeNow", () => {
+  test("returns YYYY-MM-DD and HH:MM shapes", () => {
+    expect(isoDateNow()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(isoTimeNow()).toMatch(/^\d{2}:\d{2}$/);
+    // With an explicit timezone the shape is preserved.
+    expect(isoDateNow("UTC")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(isoTimeNow("UTC")).toMatch(/^\d{2}:\d{2}$/);
+  });
+});
+
+describe("isoTimestampZ", () => {
+  test("composes ISO Z timestamp from date+time", () => {
+    expect(isoTimestampZ("2026-05-10", "17:20")).toBe("2026-05-10T17:20:00Z");
+  });
+
+  test("propagates validation errors", () => {
+    expect(() => isoTimestampZ("nope", "17:20")).toThrow();
+    expect(() => isoTimestampZ("2026-05-10", "25:00")).toThrow();
+  });
+});

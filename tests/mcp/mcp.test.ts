@@ -129,7 +129,7 @@ describe("handshake", () => {
 });
 
 describe("tool listing", () => {
-  test("advertises all five tools", async () => {
+  test("advertises the core and Pay Memory tools", async () => {
     const server = new MCPServer({ vault: tmp });
     await initialize(server);
     const r = (await server.handleRequest({
@@ -145,6 +145,14 @@ describe("tool listing", () => {
         "second_brain_capture",
         "event_log_append",
         "vault_health",
+        "payment_memory_init",
+        "payment_receipt_append",
+        "asset_capture",
+        "payment_report_generate",
+        "payment_policy_check",
+        "payment_request_approval",
+        "payment_request_status",
+        "payment_request_consume",
       ]),
     );
     for (const t of r.result.tools) {
@@ -468,7 +476,7 @@ describe("stdio loop", () => {
     const list = JSON.parse(lines[1]!);
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
-    expect(list.result.tools.length).toBe(5);
+    expect(list.result.tools.length).toBe(13);
   });
 
   test("returns parse error for invalid JSON", async () => {

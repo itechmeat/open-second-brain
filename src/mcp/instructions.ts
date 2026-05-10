@@ -38,6 +38,27 @@ export function buildInstructions(defaultAgent: string): string {
     "unless deliberately logging on another agent's behalf.\n\n" +
     "Other tools: second_brain_status (config status), " +
     "vault_health (verify vault), second_brain_query (look up notes), " +
-    "second_brain_capture (add wiki pages)."
+    "second_brain_capture (add wiki pages).\n\n" +
+    "Pay Memory tools record paid agent actions as inspectable Markdown:\n" +
+    "  - payment_memory_init bootstraps the layout and writes the " +
+    "spending policy template (run once per vault).\n" +
+    "  - payment_policy_check evaluates a prospective paid call against " +
+    "`policies/spending.json` (allowed / approval_required / denied).\n" +
+    "  - payment_request_approval creates a pending-payment-request the " +
+    "user must approve before you run `pay`; payment_request_status polls " +
+    "for approval; payment_request_consume links the eventual receipt.\n" +
+    "  - payment_receipt_append saves a Markdown receipt for one paid " +
+    "API call (`raw_output` is redacted before persisting).\n" +
+    "  - asset_capture saves a generated asset note linked back to its " +
+    "source receipt.\n" +
+    "  - payment_report_generate aggregates a date's receipts into a " +
+    "Markdown report.\n" +
+    "These tools never execute payments — they only persist memory. " +
+    "After a successful paid call also append a daily event with " +
+    "event_log_append so the receipt is discoverable in `Daily/`. When " +
+    "an approval workflow is in use, the recommended sequence is: " +
+    "payment_policy_check → payment_request_approval → poll " +
+    "payment_request_status → run `pay` → payment_receipt_append → " +
+    "asset_capture → payment_request_consume → event_log_append."
   );
 }
