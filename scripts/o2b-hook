@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Entry point Claude Code and Codex call from `hooks/hooks.json`. The
+# only reason this exists separately from `o2b` is path resolution:
+# both runtimes spawn the hook command through /bin/sh with the user's
+# session cwd, and neither one substitutes a `${PLUGIN_ROOT}`-style
+# env var that we could rely on cross-runtime. Putting a thin wrapper
+# on PATH (via `o2b install-cli`) lets `hooks/hooks.json` invoke
+# `o2b-hook <name>` and have it always find the right plugin checkout.
+#
+# The wrapper follows its own symlink back to whichever runtime's
+# checkout `install-cli` pointed it at, then execs the requested hook
+# under Bun. Bun precheck mirrors `scripts/o2b` so the failure modes
+# stay consistent.
+#
+# Usage: o2b-hook <hook-basename> [args...]
+#   e.g. o2b-hook stop-log-guardrail
+
+set -euo pipefail
+
+SELF=$(realpath -- "${BASH_SOURCE[0]}")
+SCRIPT_DIR=$(cd -- "$(dirname -- "$SELF")" && pwd)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+
+# shellcheck source=./_bun-precheck.sh
+. "$SCRIPT_DIR/_bun-precheck.sh"
+
+HOOK_NAME=${1:-}
+if [[ -z $HOOK_NAME ]]; then
+  echo "usage: o2b-hook <hook-name> [args...]" >&2
+  exit 2
+fi
+shift
+
+HOOK_FILE="$REPO_ROOT/hooks/$HOOK_NAME.ts"
+if [[ ! -f "$HOOK_FILE" ]]; then
+  echo "o2b-hook: $HOOK_FILE not found" >&2
+  exit 2
+fi
+
+exec bun run "$HOOK_FILE" "$@"

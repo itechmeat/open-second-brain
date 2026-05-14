@@ -27,6 +27,7 @@ const YAML_TARGETS = ["plugin.yaml", "plugins/hermes/plugin.yaml"] as const;
 const JSON_TARGETS = [
   ".claude-plugin/plugin.json",
   ".codex-plugin/plugin.json",
+  "plugins/codex/.codex-plugin/plugin.json",
   "openclaw.plugin.json",
 ] as const;
 const PYPROJECT = "pyproject.toml";

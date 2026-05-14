@@ -16,10 +16,10 @@ afterEach(() => {
 });
 
 describe("installCli", () => {
-  test("creates symlinks for o2b and vault-log", () => {
+  test("creates symlinks for o2b, vault-log, and o2b-hook", () => {
     const result = installCli(tmp);
     expect(result.errors).toEqual([]);
-    for (const name of ["o2b", "vault-log"]) {
+    for (const name of ["o2b", "vault-log", "o2b-hook"]) {
       const link = join(tmp, name);
       expect(lstatSync(link).isSymbolicLink()).toBe(true);
       expect(readlinkSync(link)).toContain(`scripts/${name}`);

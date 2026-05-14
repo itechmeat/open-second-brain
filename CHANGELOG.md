@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-05-14
+
+Plugin-bundled lifecycle hooks for Claude Code and Codex that close a
+real silent-skip bug: the MCP server's `instructions` reminder to call
+`event_log_append` after a durable artifact was being dropped under
+load with no visible signal — agent finished the turn, the vault's
+Daily log stayed empty, no stderr trail. This release moves the
+reminder out of soft instructions and into a runtime-side guardrail.
+
+Hermes and OpenClaw are unaffected: Hermes already injects the
+equivalent reminder through its `pre_llm_call` shim, and OpenClaw's
+native JS plugin format predates the hook schema. The new hooks are
+loaded only by Claude Code and Codex.
+
+### Added
+
+- **Lifecycle hooks** (`hooks/`):
+  - `PostToolUse` (matcher `Write|Edit|MultiEdit|apply_patch`) — emits
+    a developer-context reminder right after the file-mutating tool
+    returns. Skipped when `tool_response` reports `is_error: true` or
+    `success: false` so failed edits do not generate noise.
+  - `Stop` — parses the runtime's transcript JSONL, decides whether
+    the turn produced a durable artifact AND whether
+    `event_log_append` was called (recognising both the bare Codex
+    name `event_log_append` and the Claude-decorated
+    `mcp__plugin_open-second-brain_open-second-brain__event_log_append`,
+    matched via `/(?:^|__)event_log_append$/` so future prefix
+    renames keep working). Emits `{"decision":"block","reason":…}`
+    once per turn; respects `stop_hook_active === true` so the next
+    Stop passes unconditionally — the agent decides whether to log
+    or just finish, no deadlocks.
+  - Bash logging counts: if the agent ran `o2b append-event …` or
+    `vault-log …` through `Bash` (Claude) or `exec_command` /
+    `shell` (Codex), the parser pulls the command string out of the
+    transcript and the guardrail treats it as a valid log call.
+- **`scripts/o2b-hook`** — PATH-deployed shim that both runtimes
+  invoke from `hooks/hooks.json`. Resolves its own location, runs
+  the Bun precheck, and execs `hooks/<name>.ts`. `o2b install-cli`
+  now symlinks `o2b-hook` alongside `o2b` and `vault-log`. One
+  PATH-discoverable entry point works in both runtimes without a
+  per-runtime `${PLUGIN_ROOT}` env var (Codex 0.129 exposes none).
+- **Codex manifest wiring**: `"hooks": "./hooks/hooks.json"` added to
+  both `.codex-plugin/plugin.json` and
+  `plugins/codex/.codex-plugin/plugin.json`; `plugins/codex/hooks`
+  symlinked to `../../hooks` (mirrors the existing
+  `plugins/codex/skills` pattern).
+- **Tests** (`tests/hooks/`): 52 new bun:test cases covering format
+  detection, Claude / Codex transcript shapes, artifact / log
+  classification (including the prefix-decorated MCP names),
+  Bash-as-log paths, the trailing-newline JSON contract, malformed
+  JSONL, empty transcripts, missing `transcript_path`,
+  `stop_hook_active`, failed-edit suppression.
+- **Documentation**:
+  - `hooks/README.md` — full design notes (cross-runtime detection,
+    PATH-based shim rationale, symlink caveat for Codex marketplace
+    staging, cwd contract for test subprocesses).
+  - `install.md` branches C (Codex) and D (Claude Code) — new
+    `### 6b. Lifecycle hooks (auto-enabled)` sections; step 3 in
+    every branch now mentions the `o2b-hook` symlink.
+  - `install.md` readiness checklist — split the `VAULT_AGENT_NAME`
+    line so it requires the env var for Hermes / Codex only;
+    Claude Code derives identity from the persisted plugin config
+    that `o2b init --agent-name` writes.
+  - `README.md` rewritten to be runtime-neutral — removed Hermes-first
+    framing and duplication with `install.md`, added a
+    Supported-runtimes table and a Lifecycle-hooks section.
+
+### Fixed
+
+- Silent `event_log_append` skips after a durable artifact landed,
+  visible in real Claude Code sessions where a Write or Edit was
+  followed by no log call and no warning. The `Stop` guardrail now
+  blocks the turn once with a clear reason; the agent must either
+  log or explicitly skip by sending its final reply a second time.
+
+### Changed
+
+- `sync-version` now also updates `plugins/codex/.codex-plugin/plugin.json`
+  (it was stuck at 0.7.0). All seven manifests stay in lockstep with
+  `package.json`.
+- `tsconfig.json` `include` extended to cover `hooks/**/*.ts`.
+
 ## [0.8.0] - 2026-05-10
 
 Pay Memory: a memory and audit layer for paid agent actions. Hermes (or any
