@@ -72,6 +72,37 @@ describe("summarizeTurn", () => {
     expect(s).toEqual({ hadArtifact: true, hadLog: true });
   });
 
+  test("artifact + bash that runs the legacy `vault-log` wrapper counts as log", () => {
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ["vault-log 'noted finding'"],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadLog: true });
+  });
+
+  test("the trailing space in the `vault-log ` needle prevents false matches on paths", () => {
+    // A path like `/srv/audit/vault-log.json` must NOT be misread as
+    // an `o2b vault-log` invocation. The needle's trailing space (the
+    // CLI is always followed by an argument) makes the match precise.
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ["cat /srv/audit/vault-log.json"],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadLog: false });
+  });
+
+  test("starting the MCP server (`o2b mcp …`) does NOT count as log", () => {
+    // Spawning `o2b mcp` only launches the server subprocess — it
+    // does not append anything to the daily log. Regression guard
+    // against an earlier, looser needle list that incorrectly
+    // treated `o2b mcp` as a log call.
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ["o2b mcp --vault /tmp/vault"],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadLog: false });
+  });
+
   test("bash without an OSB log command does NOT count as log", () => {
     const s = summarizeTurn([{ name: "Write" }, { name: "Bash" }], ["echo hello"]);
     expect(s).toEqual({ hadArtifact: true, hadLog: false });

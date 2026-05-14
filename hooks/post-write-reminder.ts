@@ -55,7 +55,7 @@ async function main(): Promise<void> {
       additionalContext: text,
     },
   };
-  process.stdout.write(JSON.stringify(out));
+  process.stdout.write(JSON.stringify(out) + "\n");
 }
 
 function isToolResponseError(response: unknown): boolean {

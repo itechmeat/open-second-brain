@@ -73,6 +73,7 @@ describe("stop-log-guardrail hook", () => {
       stop_hook_active: false,
     });
     expect(r.exit).toBe(0);
+    expect(r.stdout.endsWith("\n")).toBe(true);
     const out = JSON.parse(r.stdout);
     expect(out.decision).toBe("block");
     expect(out.reason).toContain("event_log_append");

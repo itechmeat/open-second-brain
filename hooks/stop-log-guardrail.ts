@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     decision: "block",
     reason: stopGuardrailReason(),
   };
-  process.stdout.write(JSON.stringify(out));
+  process.stdout.write(JSON.stringify(out) + "\n");
 }
 
 main().catch(() => {

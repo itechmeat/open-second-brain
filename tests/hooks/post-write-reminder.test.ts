@@ -46,6 +46,9 @@ describe("post-write-reminder hook", () => {
       tool_input: { file_path: "/tmp/foo.md", content: "hello" },
     });
     expect(r.exit).toBe(0);
+    // Line-oriented runtimes (stream-json on Claude Code) parse hook
+    // stdout line-by-line, so the terminator is part of the contract.
+    expect(r.stdout.endsWith("\n")).toBe(true);
     const out = JSON.parse(r.stdout);
     expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
     expect(out.hookSpecificOutput.additionalContext).toContain("`Write`");

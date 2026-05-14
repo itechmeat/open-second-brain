@@ -46,11 +46,12 @@ const LOG_NAME_SUFFIX = /(?:^|__)event_log_append$/;
 
 // Bash command substrings that indicate the agent called the CLI
 // equivalent of `event_log_append`. We deliberately keep this list
-// narrow: anything matched here suppresses the guardrail.
+// narrow: anything matched here suppresses the guardrail. Spawning
+// the MCP server (`o2b mcp …`) does NOT log on its own, so it is not
+// in the list — only the explicit append commands are.
 const LOG_BASH_NEEDLES = [
   "o2b append-event",
   "vault-log ", // trailing space distinguishes the CLI from a literal log path
-  "o2b mcp", // running the MCP server itself counts as plugin work
 ];
 
 export function isArtifactToolName(name: string): boolean {

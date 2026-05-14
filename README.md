@@ -43,7 +43,7 @@ name. The recommended way to install is to send your agent the
 prompt below — replace `[runtime]` with `Hermes`, `Claude Code`,
 `Codex`, or `OpenClaw`:
 
-```
+```text
 Install the open-second-brain plugin for [runtime] following the
 instructions at
 https://raw.githubusercontent.com/itechmeat/open-second-brain/main/install.md

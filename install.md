@@ -1168,8 +1168,13 @@ The installation is complete **only** when **all** of the following hold:
 - [ ] `vault_health` (or `o2b doctor`) reports OK;
 - [ ] for OpenClaw: `plugins.entries.open-second-brain.config.agentName` is
       set to the chosen name;
-- [ ] for Hermes / Codex / Claude: `VAULT_AGENT_NAME` is exported in the
-      environment that launches the MCP server;
+- [ ] for Hermes / Codex: `VAULT_AGENT_NAME` is exported in the
+      environment that launches the MCP server (or set in the runtime's
+      MCP-config stanza);
+- [ ] for Claude Code: `agent_name` is persisted in
+      `~/.config/open-second-brain/config.yaml` by `o2b init --agent-name`.
+      Claude Code's bundled `.mcp.json` reads from that config at server
+      spawn, so no `VAULT_AGENT_NAME` env var is required;
 - [ ] `AI Wiki/identity/agents.md` contains the chosen agent name and no
       longer contains the `(add your agents here, …)` template
       placeholder;
