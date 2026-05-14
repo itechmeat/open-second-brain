@@ -3,5 +3,6 @@
   "version": "0.8.0",
   "description": "Plugin-first second brain package for Codex, Hermes, Claude Code, OpenClaw, and other agent runtimes.",
   "skills": "./skills",
+  "hooks": "./hooks/hooks.json",
   "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"]
 }

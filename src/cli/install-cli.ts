@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 
 import type { InstallResult, UninstallResult } from "../core/types.ts";
 
-const CLI_SCRIPTS = ["o2b", "vault-log"] as const;
+const CLI_SCRIPTS = ["o2b", "vault-log", "o2b-hook"] as const;
 
 function repoRoot(): string {
   // src/cli/install-cli.ts → repo/

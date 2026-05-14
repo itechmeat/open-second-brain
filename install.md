@@ -153,15 +153,21 @@ hermes gateway restart
 
 ### 3. Publish CLI commands to PATH
 
-`hermes plugins install` clones the repository but does not pip-install the package, so the `o2b` and `vault-log` commands are not on PATH yet. Run this step to create symlinks:
+`hermes plugins install` clones the repository but does not pip-install the package, so the `o2b`, `vault-log`, and `o2b-hook` commands are not on PATH yet. Run this step to create symlinks:
 
 ```bash
 ~/.hermes/plugins/open-second-brain/scripts/o2b install-cli
 ```
 
-This creates symlinks in `~/.local/bin` pointing to `scripts/o2b` and `scripts/vault-log` inside the plugin checkout. The symlinks survive `hermes plugins update` because they point into the git-managed checkout.
+This creates symlinks in `~/.local/bin` pointing to `scripts/o2b`,
+`scripts/vault-log`, and `scripts/o2b-hook` inside the plugin
+checkout. The symlinks survive `hermes plugins update` because they
+point into the git-managed checkout.
 
-After this step, the bare commands `o2b` and `vault-log` will be available on PATH.
+After this step, the bare commands `o2b`, `vault-log`, and
+`o2b-hook` will be available on PATH. (`o2b-hook` is the launcher
+that Claude Code and Codex use for lifecycle hooks; it is not used
+by Hermes itself but installing it costs nothing.)
 
 ### 4. Initialize the vault
 
@@ -383,14 +389,15 @@ openclaw gateway restart
 ### 3. Publish CLI commands to PATH
 
 The `o2b` and `vault-log` commands are not on PATH after OpenClaw plugin
-install. Run this step to create symlinks:
+install (and `o2b-hook`, even though OpenClaw doesn't use it).
+Run this step to create symlinks:
 
 ```bash
 ./scripts/o2b install-cli
 ```
 
-This creates symlinks in `~/.local/bin`. After this, bare `o2b` and
-`vault-log` work on PATH.
+This creates symlinks in `~/.local/bin` for `o2b`, `vault-log`, and
+`o2b-hook`. After this, the bare commands work on PATH.
 
 ### 4. Initialize the vault
 
@@ -607,8 +614,10 @@ enablement.
 
 ### 3. Publish CLI commands to PATH
 
-The `o2b` and `vault-log` scripts ship inside the plugin checkout; this
-step symlinks them into `~/.local/bin` so they are usable on PATH.
+The `o2b`, `vault-log`, and `o2b-hook` scripts ship inside the plugin
+checkout; this step symlinks them into `~/.local/bin` so they are
+usable on PATH. (`o2b-hook` is the launcher that lifecycle hooks
+invoke — see step 6b.)
 
 The cached path differs across Codex versions (see step 2), so locate
 the script by searching under `~/.codex/`:
@@ -677,6 +686,22 @@ The `codex mcp list` output must show `open-second-brain` with
 `Status: enabled`. Then run the **daily identity** check (see
 § Verification — daily identity below). Installation is incomplete
 until that check passes.
+
+### 6b. Lifecycle hooks (auto-enabled)
+
+The plugin ships a `hooks/hooks.json` that Codex loads automatically
+from the bundled plugin tree. Two hooks fire per turn:
+
+- `PostToolUse` (matcher `Write|Edit|MultiEdit|apply_patch`) — reminds
+  the agent to call `event_log_append` when a durable artifact landed.
+- `Stop` — blocks the turn at most once if the agent produced an
+  artifact but did not log. The next Stop passes through, so the agent
+  decides whether to log or just finish.
+
+Both hooks invoke `o2b-hook` from PATH. That CLI was symlinked into
+`~/.local/bin` by step 3, so no extra wiring is needed. If
+`o2b-hook` is missing from PATH the hooks fail closed (turn proceeds
+normally with a stderr trace) — re-run step 3 to fix.
 
 ### 7. Update
 
@@ -821,8 +846,10 @@ step 4 below (vault init), `claude mcp list` will show
 
 ### 3. Publish CLI commands to PATH
 
-The `o2b` and `vault-log` scripts ship inside the plugin checkout; this
-step symlinks them into `~/.local/bin` so they are usable on PATH.
+The `o2b`, `vault-log`, and `o2b-hook` scripts ship inside the plugin
+checkout; this step symlinks them into `~/.local/bin` so they are
+usable on PATH. (`o2b-hook` is the launcher that lifecycle hooks
+invoke — see step 6b.)
 
 The cached path includes the plugin version segment, so locate the
 script by searching under the cache:
@@ -869,6 +896,23 @@ with `Status: ✔ enabled`. `claude mcp list` must show
 `plugin:open-second-brain:open-second-brain` with `✓ Connected`. Then
 run the **daily identity** check (see § Verification — daily identity
 below). Installation is incomplete until that check passes.
+
+### 6b. Lifecycle hooks (auto-enabled)
+
+The plugin ships a `hooks/hooks.json` that Claude Code loads
+automatically from the cached plugin tree. Two hooks fire per turn:
+
+- `PostToolUse` (matcher `Write|Edit|MultiEdit|apply_patch`) — reminds
+  the agent to call `event_log_append` when a durable artifact landed.
+- `Stop` — blocks the turn at most once if the agent produced an
+  artifact but did not log. The next Stop passes through, so the agent
+  decides whether to log or just finish.
+
+Both hooks invoke `o2b-hook` from PATH. That CLI was symlinked into
+`~/.local/bin` by step 3, so no extra wiring is needed. To watch the
+hooks fire end-to-end use `--output-format=stream-json --verbose
+--include-hook-events`; you should see `hook_started` /
+`hook_response` events around each `Write` / `Edit` and around `Stop`.
 
 ### 7. Update
 
