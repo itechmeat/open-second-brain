@@ -23,14 +23,19 @@ export function postWriteReminder({ toolName, filePath }: PostWriteReminderInput
   return [
     `Open Second Brain hook: you just ran \`${toolName}\` against ${target}.`,
     "",
-    "If this change is a durable artifact (code shipped, config or",
-    "deployment change, instruction-file edit, content artifact,",
-    "research / investigation finding, or external-fact discovery),",
-    "call `event_log_append` before you finish this turn.",
+    "If this turn contained a user preference, correction, or rule that",
+    "should outlast the current task (\"don't do X\", \"prefer Y\", \"use",
+    "A instead of B\"), call `brain_feedback` once per signal to record",
+    "it into `Brain/inbox/`.",
     "",
-    "If it is trivial (typo fix, formatting, intermediate scratch),",
-    "no log is needed — just finish your reply and the Stop guardrail",
-    "will not block you a second time.",
+    "If a confirmed or unconfirmed preference in `Brain/preferences/`",
+    "scopes to the artifact you just produced, call",
+    "`brain_apply_evidence` with `result: applied | violated` so the",
+    "dream pass can update confidence and retire stale rules.",
+    "",
+    "Trivial edits (typo fix, pure formatting) don't need either call.",
+    "A misrecorded signal is worse than a missed one — skip when not",
+    "confident; the dream pass will pick up patterns from repeats.",
   ].join("\n");
 }
 

@@ -5,6 +5,125 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-05-15
+
+Brain: a new top-level vault layer for observing, accreting memory.
+Agents record taste signals from conversation and per-artifact
+evidence of preference application; a deterministic `dream` pass
+turns repeat signals into rules whose confidence grows from real use
+and decays when nothing applies them. Filesystem-first, Obsidian-
+native, no LLM inside the algorithm — counters, thresholds, atomic
+file operations only. Conceptually mirrors Anthropic's *Dreaming*
+research preview (2026-05-06) but stays runtime-agnostic and
+deterministic.
+
+The previous agent-facing write paths (`event_log_append` and
+`second_brain_capture` MCP tools, the `agent-event-log` skill) are
+soft-deprecated in v0.9.0: the handlers remain in the codebase and
+the CLI counterparts (`o2b append-event`, `vault-log`) keep working
+for humans on the shell, but agents through the plugin surface no
+longer see them. Brain replaces them as the writable surface.
+
+Pay Memory is **unchanged** in v0.9.0 — it remains agent-visible as
+an orthogonal audit layer for paid actions.
+
+### Added
+
+- **Brain layer** at top-level `Brain/` directory in the vault.
+  Subdirectories: `inbox/`, `preferences/`, `retired/`, `log/`,
+  `.snapshots/`. Plus `_brain.yaml` (schema-versioned config with
+  thresholds for `candidate_threshold`, `unconfirmed_window_days`,
+  `contradiction_window_days`, `stale_evidence_days`,
+  `high_freshness_factor`, `snapshots.retention_count`) and
+  `_BRAIN.md` (agent-facing operating manual, rendered by `o2b
+  brain init`, kept under 200 lines).
+- **CLI namespace `o2b brain *`** with 11 verbs: `init`,
+  `feedback`, `dream`, `apply-evidence`, `digest`, `query`,
+  `reject`, `pin`, `unpin`, `rollback`, `doctor`.
+- **MCP tool namespace `brain_*`** with 6 tools: `brain_feedback`,
+  `brain_dream`, `brain_apply_evidence`, `brain_digest`,
+  `brain_query`, `brain_doctor`. `init`, `reject`, `pin`, `unpin`,
+  `rollback` are intentionally CLI-only (admin / destructive
+  operations are not exposed to autonomous agents).
+- **Pre-run snapshots**: each `dream` run that mutates state writes
+  `Brain/.snapshots/<run_id>.tar.zst` of the entire `Brain/` tree
+  (excluding `.snapshots/` itself) before any mutation. Retention
+  is configurable in `_brain.yaml` (default 10 most-recent).
+  `o2b brain rollback <run_id>` restores from a snapshot.
+- **Pin protection**: preferences marked `pinned: true` are exempt
+  from automatic retirement (`stale-no-evidence`,
+  `expired-unconfirmed`, `rebutted`). Only `o2b brain reject` can
+  retire a pinned preference (with an extra warning). CLI verbs
+  `o2b brain pin` and `o2b brain unpin` toggle the flag; both are
+  CLI-only — the MCP surface intentionally does not expose them.
+- **Skill `brain-memory`** (`skills/brain-memory/SKILL.md`):
+  instructs agents when to call `brain_feedback` (taste signals
+  from dialogue) and `brain_apply_evidence` (per durable artifact).
+  Loaded automatically alongside the existing `open-second-brain`
+  skill.
+- **Brain digest**: `o2b brain digest` renders a Markdown or JSON
+  summary of new unconfirmed preferences, confirmations,
+  retirements, confidence shifts, and contradictions in a window.
+  Exit code `2` when empty and `--silent-if-empty` is set — fits
+  Hermes cron `--no-agent --script` jobs cleanly. Recipe in
+  [`docs/hermes-cron.md`](docs/hermes-cron.md).
+
+### Changed
+
+- **`AI Wiki/_OPEN_SECOND_BRAIN.md`** is now overwritten by
+  `o2b brain init` to a Brain-first operating manual; the file
+  previously described agent-owned write conventions for
+  `AI Wiki/` itself. With approximately zero non-author users at
+  this stage no backup of the prior file is taken — by design.
+- **`hooks/lib/messages.ts` PostToolUse reminder** rewritten:
+  no longer references `event_log_append`. Points the agent at
+  `brain_feedback` (when the turn contained a user preference)
+  and `brain_apply_evidence` (when an active preference scopes
+  to the artifact just produced).
+- **`skills/open-second-brain/SKILL.md`** body rewritten to
+  describe the three-layer model (`Brain/` writable, `AI Wiki/` +
+  `Daily/` read-only, Pay Memory orthogonal). Cross-references
+  the new `brain-memory` skill.
+
+### Removed (from agent-facing surface; handlers retained in code)
+
+- **`Stop` lifecycle hook** that previously blocked the turn once
+  on missing `event_log_append`. The entry is removed from
+  `hooks/hooks.json`; the handler file
+  `hooks/stop-log-guardrail.ts` remains in the codebase. No
+  Brain-specific Stop guardrail is added in v0.9.0 — the
+  PostToolUse reminder is the only nudge.
+
+### Deprecated (agent-facing only, code and CLI retained)
+
+- **MCP tool `event_log_append`** — no longer in the advertised
+  tool list returned by `src/mcp/tools.ts`. Handler stays on disk.
+  The CLI counterparts `o2b append-event` and `vault-log` remain
+  fully functional for human shell use.
+- **MCP tool `second_brain_capture`** — same pattern: removed
+  from advertisement, handler retained.
+- **Skill `agent-event-log`** moved to `docs/legacy-skills/` so
+  the runtime skill scanner stops loading it. The Markdown remains
+  accessible as documentation.
+
+### Notes
+
+- Pay Memory is unchanged. All 11 Pay Memory CLI commands and
+  8 MCP tools work exactly as in v0.8.1.
+- `AI Wiki/` and `Daily/` remain on disk and stay readable for
+  agents via `second_brain_query`. Agents do not write to them
+  in v0.9.0+.
+- OpenClaw native JavaScript parity for Brain tools is deferred
+  to v0.9.1 (tracked as BRAIN-FUT-007 in
+  [`docs/plans/2026-05-15-brain-roadmap.md`](docs/plans/2026-05-15-brain-roadmap.md)).
+  v0.9.0 ships Brain through the TypeScript CLI + MCP path used by
+  Hermes, Claude Code, and Codex.
+- Hard removal of the deprecated v0.8.x agent-facing write code
+  is deferred to v0.10 or later, gated on observed usage of Brain
+  (BRAIN-FUT-009).
+- Full design and implementation plan:
+  [`docs/plans/2026-05-15-brain-observing-memory.md`](docs/plans/2026-05-15-brain-observing-memory.md).
+
 ## [0.8.1] - 2026-05-14
 
 Plugin-bundled lifecycle hooks for Claude Code and Codex that close a

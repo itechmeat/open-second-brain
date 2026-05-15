@@ -1,0 +1,308 @@
+/**
+ * Filesystem paths and slug allocation for the Brain layer.
+ *
+ * Layout lives under `<vault>/Brain/`:
+ *
+ *   Brain/
+ *     _brain.yaml
+ *     inbox/
+ *       sig-<date>-<slug>.md
+ *       processed/sig-<date>-<slug>.md
+ *     preferences/
+ *       pref-<slug>.md
+ *     retired/
+ *       ret-<slug>.md
+ *     log/
+ *       <YYYY-MM-DD>.md
+ *     .snapshots/
+ *       <run_id>.tar.zst
+ *
+ * Every constructor here funnels through `ensureInsideVault` (re-exported
+ * from `../path-safety`) so a malformed slug or a `..` traversal cannot
+ * land a file outside the vault root. Slug validation rejects empties,
+ * path separators, traversal sequences, and Windows-reserved basenames
+ * — same contract as the Pay Memory layer.
+ */
+
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+import { ensureInsideVault, vaultRelative } from "../path-safety.ts";
+
+export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
+
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+// Run IDs follow `dream-<YYYY-MM-DD>-<HHMMSS>`; we accept the same generic
+// "no path separators / no traversal" rules as slugs, plus a tighter
+// shape check for the date-time stem.
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+const WINDOWS_RESERVED_BASENAME_RE =
+  /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+export interface BrainDirs {
+  readonly brain: string;
+  readonly inbox: string;
+  /** Holding area for signals already folded into a preference. */
+  readonly processed: string;
+  readonly preferences: string;
+  readonly retired: string;
+  readonly log: string;
+  /** Pre-`dream` archive directory. Never recursed into by `dream`. */
+  readonly snapshots: string;
+}
+
+/**
+ * Compose every Brain subdirectory under `<vault>/Brain/`. Returns
+ * absolute paths so callers can hand them straight to `mkdirSync` /
+ * `readdirSync`. Each path is verified to resolve inside the vault.
+ */
+export function brainDirs(vault: string): BrainDirs {
+  const brain = ensureInsideVault(join(vault, "Brain"), vault);
+  return {
+    brain,
+    inbox: ensureInsideVault(join(brain, "inbox"), vault),
+    processed: ensureInsideVault(join(brain, "inbox", "processed"), vault),
+    preferences: ensureInsideVault(join(brain, "preferences"), vault),
+    retired: ensureInsideVault(join(brain, "retired"), vault),
+    log: ensureInsideVault(join(brain, "log"), vault),
+    snapshots: ensureInsideVault(join(brain, ".snapshots"), vault),
+  };
+}
+
+/** Path of `Brain/_brain.yaml`. */
+export function brainConfigPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, "_brain.yaml"), vault);
+}
+
+/** Path of the Brain operating manual rendered into the vault. */
+export function brainManualPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, "_BRAIN.md"), vault);
+}
+
+/** Active-signal path: `Brain/inbox/sig-<date>-<slug>.md`. */
+export function signalPath(vault: string, date: string, slug: string): string {
+  const d = validateIsoDate(date);
+  const s = validateSlug(slug);
+  return ensureInsideVault(
+    join(brainDirs(vault).inbox, `sig-${d}-${s}.md`),
+    vault,
+  );
+}
+
+/** Processed-signal path: `Brain/inbox/processed/sig-<date>-<slug>.md`. */
+export function processedSignalPath(
+  vault: string,
+  date: string,
+  slug: string,
+): string {
+  const d = validateIsoDate(date);
+  const s = validateSlug(slug);
+  return ensureInsideVault(
+    join(brainDirs(vault).processed, `sig-${d}-${s}.md`),
+    vault,
+  );
+}
+
+/** Preference path: `Brain/preferences/pref-<slug>.md`. */
+export function preferencePath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(
+    join(brainDirs(vault).preferences, `pref-${s}.md`),
+    vault,
+  );
+}
+
+/** Retired-preference path: `Brain/retired/ret-<slug>.md`. */
+export function retiredPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(
+    join(brainDirs(vault).retired, `ret-${s}.md`),
+    vault,
+  );
+}
+
+/** Log file for the given UTC date: `Brain/log/<YYYY-MM-DD>.md`. */
+export function logPath(vault: string, date: string): string {
+  const d = validateIsoDate(date);
+  return ensureInsideVault(join(brainDirs(vault).log, `${d}.md`), vault);
+}
+
+/** Snapshots directory: `Brain/.snapshots/`. */
+export function snapshotsDir(vault: string): string {
+  return brainDirs(vault).snapshots;
+}
+
+/** Snapshot archive path: `Brain/.snapshots/<run_id>.tar.zst`. */
+export function snapshotPath(vault: string, runId: string): string {
+  const id = validateRunId(runId);
+  return ensureInsideVault(
+    join(brainDirs(vault).snapshots, `${id}.tar.zst`),
+    vault,
+  );
+}
+
+// ----- Validators -----------------------------------------------------------
+
+/**
+ * Reject slugs that could escape their intended subdirectory or hit a
+ * Windows-incompatible filename. Same shape rules as Pay Memory's
+ * `validateSlug`, copied here to avoid coupling the two layers.
+ */
+export function validateSlug(slug: string): string {
+  const trimmed = slug.trim();
+  if (!trimmed) throw new Error("slug must not be empty");
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error(`slug must not contain path separators: ${slug}`);
+  }
+  // Reject Windows-invalid filename characters (`:*?"<>|`) and ASCII
+  // control characters (0x00-0x1F). On NTFS these are forbidden in a
+  // filename; on POSIX a NUL byte is illegal in a path and the rest are
+  // ambiguous when round-tripped through cross-platform tooling (zip
+  // archives, syncthing, git on Windows).
+  if (/[:*?"<>|\x00-\x1F]/.test(trimmed)) {
+    throw new Error(
+      `slug contains invalid character: ${JSON.stringify(slug)}`,
+    );
+  }
+  if (
+    trimmed === ".." ||
+    trimmed === "." ||
+    /(?:^|[^\w])\.\.(?:$|[^\w])/.test(trimmed)
+  ) {
+    throw new Error(`slug must not contain '..' traversal: ${slug}`);
+  }
+  if (/[. ]$/.test(trimmed)) {
+    throw new Error(
+      `slug must not end with '.' or whitespace (Windows-incompatible): ${slug}`,
+    );
+  }
+  if (WINDOWS_RESERVED_BASENAME_RE.test(trimmed)) {
+    throw new Error(`slug uses a Windows-reserved filename: ${slug}`);
+  }
+  return trimmed;
+}
+
+/** Validate `YYYY-MM-DD`. Throws on bad shape or impossible calendar date. */
+export function validateIsoDate(value: string): string {
+  const m = ISO_DATE_RE.exec(value);
+  if (!m) {
+    throw new Error(`brain date must use YYYY-MM-DD format: ${value}`);
+  }
+  const year = parseInt(m[1]!, 10);
+  const month = parseInt(m[2]!, 10);
+  const day = parseInt(m[3]!, 10);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  if (
+    utc.getUTCFullYear() !== year ||
+    utc.getUTCMonth() !== month - 1 ||
+    utc.getUTCDate() !== day
+  ) {
+    throw new Error(`brain date is not a valid calendar date: ${value}`);
+  }
+  return value;
+}
+
+/**
+ * Validate a snapshot run_id. The dream algorithm forms run_ids as
+ * `dream-<YYYY-MM-DD>-<HHMMSS>`; the validator is intentionally
+ * permissive about the exact stem (we want manual snapshots later) and
+ * focuses on filesystem-safety: no separators, no traversal, no Windows
+ * reservation, no leading dot.
+ */
+export function validateRunId(runId: string): string {
+  const trimmed = runId.trim();
+  if (!trimmed) throw new Error("run_id must not be empty");
+  if (!RUN_ID_RE.test(trimmed)) {
+    throw new Error(
+      `run_id must match /^[A-Za-z0-9][A-Za-z0-9._-]*$/: ${runId}`,
+    );
+  }
+  if (
+    trimmed.includes("..") ||
+    trimmed.includes("/") ||
+    trimmed.includes("\\")
+  ) {
+    throw new Error(`run_id must not contain '..' or path separators: ${runId}`);
+  }
+  if (WINDOWS_RESERVED_BASENAME_RE.test(trimmed)) {
+    throw new Error(`run_id uses a Windows-reserved filename: ${runId}`);
+  }
+  return trimmed;
+}
+
+// ----- Slug-collision allocator --------------------------------------------
+
+export interface AllocateSlugOptions {
+  /** Vault root. Required so collision probes stay inside the vault. */
+  readonly vault: string;
+  /** Directory the file will live in (absolute). */
+  readonly targetDir: string;
+  /** File-name prefix without trailing dash, e.g. `sig-2026-05-14`. */
+  readonly prefix: string;
+  /** Base slug requested by the caller. */
+  readonly slug: string;
+  /**
+   * Hard upper bound on suffix attempts. The default of 10_000 is far
+   * beyond any realistic same-day collision count and exists only to
+   * make a misuse error (caller passing a `targetDir` that resolves
+   * outside the vault, say) terminate instead of loop forever.
+   */
+  readonly maxAttempts?: number;
+}
+
+export interface AllocateSlugResult {
+  /** Allocated slug ready to be combined with the prefix. */
+  readonly slug: string;
+  /** Final absolute filename (`<targetDir>/<prefix>-<slug>.md`). */
+  readonly path: string;
+  /** Suffix that was appended (`null` when no collision). */
+  readonly suffix: number | null;
+}
+
+/**
+ * Find the first free `<prefix>-<slug>.md` under `targetDir`, appending
+ * `-2`, `-3`, … to the slug on collision. The probe is read-only —
+ * callers create the file themselves via the atomic-exclusive writer
+ * (which closes the residual TOCTOU window).
+ *
+ * Returns the chosen slug + the absolute path. The path is funnelled
+ * through `ensureInsideVault` so a misconfigured `targetDir` (e.g. one
+ * the caller assembled by hand and that points outside the vault)
+ * raises before any disk probe is made.
+ */
+export function allocateSlug(opts: AllocateSlugOptions): AllocateSlugResult {
+  const { vault, targetDir, prefix } = opts;
+  const baseSlug = validateSlug(opts.slug);
+  const maxAttempts = opts.maxAttempts ?? 10_000;
+
+  if (!prefix || /[\\/]/.test(prefix)) {
+    throw new Error(`allocateSlug: prefix must be non-empty and path-clean: ${prefix}`);
+  }
+
+  // The first candidate is the bare slug. Subsequent attempts append
+  // `-2`, `-3`, … per §5.1 / §9.2 of the design doc. Cap at
+  // `maxAttempts` to prevent an unbounded loop when the caller passes
+  // a target directory containing infinite collisions (e.g. on a fuzz
+  // test); the realistic worst case is a handful.
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const slug = attempt === 1 ? baseSlug : `${baseSlug}-${attempt}`;
+    const candidate = ensureInsideVault(
+      join(targetDir, `${prefix}-${slug}.md`),
+      vault,
+    );
+    if (!existsSync(candidate)) {
+      return { slug, path: candidate, suffix: attempt === 1 ? null : attempt };
+    }
+  }
+  throw new Error(
+    `allocateSlug: could not find a free name after ${maxAttempts} attempts ` +
+      `(prefix=${prefix}, slug=${baseSlug})`,
+  );
+}
+
+/** Vault-relative renderer kept here for the `tests/core/brain.paths.test.ts` import. */
+export function brainVaultRelative(target: string, vault: string): string {
+  return vaultRelative(target, vault);
+}

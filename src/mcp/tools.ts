@@ -1,8 +1,19 @@
 /**
- * MCP tool registry: the five tools exposed by Open Second Brain
- * (`second_brain_status`, `second_brain_query`, `second_brain_capture`,
- * `event_log_append`, `vault_health`). Each handler delegates to the
- * core/* helpers so the contract stays identical to the CLI.
+ * MCP tool registry. As of v0.9.0 the advertised surface is:
+ *
+ *   - Core read/health tools (`second_brain_status`, `second_brain_query`,
+ *     `vault_health`).
+ *   - Brain tools (`brain_feedback`, `brain_dream`,
+ *     `brain_apply_evidence`, `brain_digest`, `brain_query`,
+ *     `brain_doctor`) — see `./brain-tools.ts`.
+ *   - Pay Memory tools (`payment_*`, `asset_capture`).
+ *
+ * `event_log_append` and `second_brain_capture` are intentionally
+ * *not* registered here in v0.9.0 — Brain replaces them as the
+ * agent-facing writable surface (design doc §11.1). Their handler
+ * functions remain on disk (`toolEventLogAppend`, `toolCapture` below)
+ * so the CLI / shell tooling keeps working; only the entries in the
+ * exported tool array are removed.
  */
 
 import { existsSync, mkdirSync, statSync } from "node:fs";
@@ -16,6 +27,7 @@ import {
 } from "../core/config.ts";
 import { doctor } from "../core/doctor.ts";
 import { appendEvent, validateEventTime } from "../core/event-log.ts";
+import { BRAIN_TOOLS } from "./brain-tools.ts";
 import {
   checkPolicy,
   consumePendingRequest,
@@ -613,45 +625,12 @@ export function buildToolTable(): ToolDefinition[] {
       },
       handler: toolQuery,
     },
-    {
-      name: "second_brain_capture",
-      description: "Write a new Markdown note to AI Wiki/notes/ with frontmatter.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "Human-readable note title." },
-          content: { type: "string", description: "Markdown body of the note." },
-          tags: {
-            type: "array",
-            items: { type: "string" },
-            description: "Optional list of tag strings.",
-          },
-          overwrite: {
-            type: "boolean",
-            description: "Allow overwriting an existing note with the same slug.",
-          },
-        },
-        required: ["title", "content"],
-        additionalProperties: false,
-      },
-      handler: toolCapture,
-    },
-    {
-      name: "event_log_append",
-      description: "Append a single-line event to the daily Markdown event log.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          message: { type: "string", description: "Single-line event message." },
-          agent: { type: "string", description: "Agent name (default 'agent')." },
-          date: { type: "string", description: "Optional event date in YYYY.MM.DD format." },
-          time: { type: "string", description: "Optional event time in 24-hour HH:MM format." },
-        },
-        required: ["message"],
-        additionalProperties: false,
-      },
-      handler: toolEventLogAppend,
-    },
+    // `second_brain_capture` and `event_log_append` are intentionally
+    // not advertised in v0.9.0+. Their handlers (`toolCapture`,
+    // `toolEventLogAppend`) remain in this file for human-side shell
+    // use (`o2b append-event`); only the entries in the exported tool
+    // array are removed — see §11.1 of the v0.9.0 design doc.
+    ...BRAIN_TOOLS,
     {
       name: "vault_health",
       description: "Run vault, config, and plugin manifest health checks.",

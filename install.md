@@ -16,7 +16,7 @@ If at any point you are missing information — for example, the vault path is u
 
 ## Prerequisites — Bun runtime (all branches)
 
-**Open Second Brain v0.7+ runs on the [Bun](https://bun.sh) JavaScript runtime.** The `o2b` CLI, the MCP server (`o2b mcp`), and the OpenClaw native plugin all execute under Bun. Hermes still loads a small Python shim for the per-turn `pre_llm_call` hook, but every other runtime path is Bun-only.
+**Open Second Brain runs on the [Bun](https://bun.sh) JavaScript runtime.** The `o2b` CLI, the MCP server (`o2b mcp`), and the OpenClaw native plugin all execute under Bun. Hermes still loads a small Python shim for the per-turn `pre_llm_call` hook, but every other runtime path is Bun-only.
 
 **Before running any branch below, verify Bun is on PATH:**
 
@@ -33,7 +33,7 @@ bun --version
 
 `bun --version` must report **1.1.0 or newer**. If it does not, stop and ask the user to upgrade Bun before continuing — older versions miss APIs the plugin relies on.
 
-If the user is on a system where they cannot install Bun (locked-down environment, unsupported architecture), abort the install and tell them so explicitly. Do **not** try to work around the missing runtime by re-exporting Python sources — those were removed in v0.7.0 and there is no Python fallback for the CLI.
+If the user is on a system where they cannot install Bun (locked-down environment, unsupported architecture), abort the install and tell them so explicitly. There is no Python fallback for the CLI; do **not** try to work around the missing runtime by hand-rolling one.
 
 ---
 
@@ -178,6 +178,11 @@ with the values collected in step 1.
 o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" \
     --timezone "<chosen-timezone>"
+
+# Recommended on v0.9.0+: bootstrap the Brain observing-memory layer
+# next to AI Wiki/. Idempotent; safe to skip on first install if the
+# user explicitly opts out of Brain.
+o2b brain init --vault /path/to/vault
 ```
 
 `--agent-name` writes the chosen name into `AI Wiki/identity/agents.md`
@@ -186,6 +191,30 @@ and persists `agent_name` into the plugin config
 IANA name via stdlib `zoneinfo` and persists it to the same config; from
 that moment on, every `event_log_append` call stamps Daily entries in
 that timezone regardless of the host's clock.
+
+**Wire the `brain-memory` skill into the default Hermes profile.** The
+plugin ships `skills/brain-memory/SKILL.md`, which tells the agent when
+to call `brain_feedback` / `brain_apply_evidence` in conversation —
+without it the MCP tools are registered but the agent does not know to
+proactively use them. If the user has a `hermes-skills-sync` helper
+configured (typical on systems following the `/root/.agents/` skill
+convention), enable the skill once:
+
+```bash
+ln -sfn "$(hermes plugins inspect open-second-brain --plugin-root)/skills/brain-memory" \
+        /root/.agents/hermes-skills-pool/.agents/skills/brain-memory
+/root/.agents/hermes-skills-sync enable <profile-name> brain-memory
+hermes gateway restart
+```
+
+`<profile-name>` is the Hermes profile your default gateway inherits
+(commonly `product-tech-lead` per local convention). If the system does
+not use that convention, simply expose the skill anywhere Hermes scans
+(`/root/.agents/skills/` is global; per-profile views live under
+`/root/.agents/hermes-skillsets/<profile>/`). After `hermes skills list`
+shows `brain-memory │ enabled`, the agent will start recognising
+preference signals in conversation and writing them through
+`brain_feedback`.
 
 ### 5. Register the MCP server
 
@@ -408,6 +437,11 @@ with the values collected in step 1.
 o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" \
     --timezone "<chosen-timezone>"
+
+# Recommended on v0.9.0+: bootstrap the Brain observing-memory layer
+# next to AI Wiki/. Idempotent; safe to skip on first install if the
+# user explicitly opts out of Brain.
+o2b brain init --vault /path/to/vault
 ```
 
 `--agent-name` writes the chosen name into `AI Wiki/identity/agents.md`
@@ -606,11 +640,20 @@ enabled = true
 
 (The `<plugin>@<marketplace>` form here resolves to plugin
 `open-second-brain` from marketplace `open-second-brain` — both names
-come from the manifest.) The plugin's MCP tools (`event_log_append`,
-`second_brain_capture`, `second_brain_query`, `second_brain_status`,
-`vault_health`) become available **only** after step 5 below — Codex
-treats MCP server registration as a separate concern from plugin
-enablement.
+come from the manifest.) The plugin's advertised MCP tools become
+available **only** after step 5 below — Codex treats MCP server
+registration as a separate concern from plugin enablement. The
+advertised set is:
+
+- **Core (3):** `second_brain_status`, `second_brain_query`,
+  `vault_health`.
+- **Brain (6):** `brain_feedback`, `brain_dream`,
+  `brain_apply_evidence`, `brain_digest`, `brain_query`,
+  `brain_doctor`.
+- **Pay Memory (8):** `payment_memory_init`, `payment_receipt_append`,
+  `asset_capture`, `payment_report_generate`, `payment_policy_check`,
+  `payment_request_approval`, `payment_request_status`,
+  `payment_request_consume`.
 
 ### 3. Publish CLI commands to PATH
 
@@ -638,6 +681,11 @@ with the values collected in step 1.
 o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" \
     --timezone "<chosen-timezone>"
+
+# Recommended on v0.9.0+: bootstrap the Brain observing-memory layer
+# next to AI Wiki/. Idempotent; safe to skip on first install if the
+# user explicitly opts out of Brain.
+o2b brain init --vault /path/to/vault
 ```
 
 `--timezone` validates the IANA name via stdlib `zoneinfo` and persists
@@ -690,17 +738,18 @@ until that check passes.
 ### 6b. Lifecycle hooks (auto-enabled)
 
 The plugin ships a `hooks/hooks.json` that Codex loads automatically
-from the bundled plugin tree. Two hooks fire per turn:
+from the bundled plugin tree. One hook fires per turn:
 
-- `PostToolUse` (matcher `Write|Edit|MultiEdit|apply_patch`) — reminds
-  the agent to call `event_log_append` when a durable artifact landed.
-- `Stop` — blocks the turn at most once if the agent produced an
-  artifact but did not log. The next Stop passes through, so the agent
-  decides whether to log or just finish.
+- `PostToolUse` (matcher `Write|Edit|MultiEdit|apply_patch`) — after
+  a file-mutating tool succeeds, injects a short reminder pointing
+  the agent at `brain_feedback` (when the turn contained a user
+  preference or correction) and `brain_apply_evidence` (when an
+  active preference in `Brain/preferences/` scopes to the artifact
+  just produced).
 
-Both hooks invoke `o2b-hook` from PATH. That CLI was symlinked into
+The hook invokes `o2b-hook` from PATH. That CLI was symlinked into
 `~/.local/bin` by step 3, so no extra wiring is needed. If
-`o2b-hook` is missing from PATH the hooks fail closed (turn proceeds
+`o2b-hook` is missing from PATH the hook fails closed (turn proceeds
 normally with a stderr trace) — re-run step 3 to fix.
 
 ### 7. Update
@@ -867,6 +916,11 @@ with the values collected in step 1.
 o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" \
     --timezone "<chosen-timezone>"
+
+# Recommended on v0.9.0+: bootstrap the Brain observing-memory layer
+# next to AI Wiki/. Idempotent; safe to skip on first install if the
+# user explicitly opts out of Brain.
+o2b brain init --vault /path/to/vault
 ```
 
 `o2b init` persists all three values (`vault`, `agent_name`, `timezone`)
@@ -900,19 +954,20 @@ below). Installation is incomplete until that check passes.
 ### 6b. Lifecycle hooks (auto-enabled)
 
 The plugin ships a `hooks/hooks.json` that Claude Code loads
-automatically from the cached plugin tree. Two hooks fire per turn:
+automatically from the cached plugin tree. One hook fires per turn:
 
-- `PostToolUse` (matcher `Write|Edit|MultiEdit|apply_patch`) — reminds
-  the agent to call `event_log_append` when a durable artifact landed.
-- `Stop` — blocks the turn at most once if the agent produced an
-  artifact but did not log. The next Stop passes through, so the agent
-  decides whether to log or just finish.
+- `PostToolUse` (matcher `Write|Edit|MultiEdit|apply_patch`) — after
+  a file-mutating tool succeeds, injects a short reminder pointing
+  the agent at `brain_feedback` (when the turn contained a user
+  preference or correction) and `brain_apply_evidence` (when an
+  active preference in `Brain/preferences/` scopes to the artifact
+  just produced).
 
-Both hooks invoke `o2b-hook` from PATH. That CLI was symlinked into
+The hook invokes `o2b-hook` from PATH. That CLI was symlinked into
 `~/.local/bin` by step 3, so no extra wiring is needed. To watch the
-hooks fire end-to-end use `--output-format=stream-json --verbose
+hook fire end-to-end use `--output-format=stream-json --verbose
 --include-hook-events`; you should see `hook_started` /
-`hook_response` events around each `Write` / `Edit` and around `Stop`.
+`hook_response` events around each `Write` / `Edit`.
 
 ### 7. Update
 
@@ -959,9 +1014,12 @@ The plugin's runtime contract is small:
 - The `o2b` CLI on PATH (used for vault scaffolding, status, and
   doctor checks).
 - The `o2b mcp` stdio server registered with the runtime as an MCP
-  server (used by the LLM at runtime via the five tools
-  `event_log_append` / `second_brain_capture` / `second_brain_query` /
-  `second_brain_status` / `vault_health`).
+  server. The advertised tool set is 17 tools across three groups
+  — Core (3: `second_brain_status` / `second_brain_query` /
+  `vault_health`), Brain (6: `brain_feedback` / `brain_dream` /
+  `brain_apply_evidence` / `brain_digest` / `brain_query` /
+  `brain_doctor`), and Pay Memory (8: `payment_*` and
+  `asset_capture`).
 - A persisted plugin config at `~/.config/open-second-brain/config.yaml`
   holding `vault` / `agent_name` / `timezone` (written by `o2b init`,
   read by `o2b mcp` when its CLI flags / env vars are absent).
@@ -1005,6 +1063,11 @@ a content-addressed path with a version hash, glob it:
 o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" \
     --timezone "<chosen-timezone>"
+
+# Recommended on v0.9.0+: bootstrap the Brain observing-memory layer
+# next to AI Wiki/. Idempotent; safe to skip on first install if the
+# user explicitly opts out of Brain.
+o2b brain init --vault /path/to/vault
 ```
 
 This is identical across runtimes — the values are persisted into

@@ -8,19 +8,7 @@
             "type": "command",
             "command": "o2b-hook post-write-reminder",
             "timeout": 10,
-            "statusMessage": "OSB: reminding to log"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "o2b-hook stop-log-guardrail",
-            "timeout": 15,
-            "statusMessage": "OSB: checking event log"
+            "statusMessage": "OSB: reminding to log signals/evidence"
           }
         ]
       }

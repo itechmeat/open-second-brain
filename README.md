@@ -3,37 +3,45 @@
 A filesystem-first, agent-owned second brain for Obsidian-compatible
 Markdown vaults. Plugs into the agent runtime you already use — Hermes
 Agent, Claude Code, OpenAI Codex, OpenClaw, or any MCP-aware client —
-and gives it deterministic CLI / MCP / hook surfaces for vault setup,
-daily event logging, wiki indexing, paid-action audit, and health
-checks. The model never has to guess at any of that.
+and gives it deterministic CLI / MCP / hook surfaces for observing
+memory (preference accretion via the `Brain/` layer), wiki indexing,
+paid-action audit, and health checks. The model never has to guess at
+any of that.
 
-Open Second Brain is **not** a daemon, **not** a vault replacement, and
-never writes hidden state outside the configured vault and config
-directory.
+Open Second Brain is **not** a daemon, **not** a vault replacement,
+and **not** an LLM-driven knowledge store — the `dream` consolidation
+pass is pure deterministic counters. The plugin never writes hidden
+state outside the configured vault and config directory.
 
 ## Supported runtimes
 
 | Runtime         | Integration                                              | Notes                                                                                            |
 | --------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Hermes Agent    | Hermes plugin (`plugin.yaml`) + MCP server               | Adds a per-turn identity reminder via the `pre_llm_call` hook.                                   |
-| Claude Code     | Marketplace plugin + bundled `.mcp.json` + lifecycle hooks | `hooks/hooks.json` registers `PostToolUse` reminder + `Stop` guardrail (see [`hooks/`](hooks/)). |
+| Claude Code     | Marketplace plugin + bundled `.mcp.json` + lifecycle hooks | `hooks/hooks.json` registers a `PostToolUse` reminder that points the agent at `brain_feedback` / `brain_apply_evidence` after every Write/Edit. See [`hooks/`](hooks/). |
 | OpenAI Codex    | Marketplace plugin + MCP server + lifecycle hooks         | Same hook bundle as Claude Code.                                                                 |
-| OpenClaw        | Native JS plugin (`openclaw.extensions`) — no MCP needed | The five core tools are registered directly inside OpenClaw's Node.js process.                  |
+| OpenClaw        | Native JS plugin (`openclaw.extensions`) — no MCP needed | Core query/status/health tools are registered directly inside OpenClaw's Node.js process. Native parity with the `brain_*` tools is tracked separately in the post-v0.9 roadmap. |
 | Other MCP hosts | Generic adapter (stdio MCP server, persisted plugin config) | See `install.md` branch E for the contract.                                                      |
 
 ## What it does
 
-- Bootstraps an agent-owned area inside your vault — `AI Wiki/`
-  plus `_OPEN_SECOND_BRAIN.md`.
-- Appends agent events to daily Markdown notes
-  (`Daily/YYYY.MM.DD.md`, append-only below `## Raw events`).
-- Regenerates a Markdown page index from frontmatter and wikilinks.
-- Exports config snapshots with secret-like values redacted.
-- Runs vault + adapter health checks (`o2b doctor`).
+- Bootstraps `Brain/` — the observing-memory layer where the agent
+  records taste signals, accreted preferences, evidence, and
+  pre-run snapshots.
+- Runs a deterministic `dream` pass that turns repeat signals into
+  confirmed rules, retires stale ones, and surfaces contradictions
+  — no LLM inside the algorithm, only counters, thresholds, and
+  atomic file operations. See [Brain section](#brain-observing-memory).
+- Regenerates a Markdown page index from frontmatter and wikilinks
+  (`o2b index`).
+- Exports config snapshots with secret-like values redacted
+  (`o2b export-config`).
+- Runs vault + adapter health checks (`o2b doctor`, plus
+  `o2b brain doctor` for Brain-specific invariants).
 - (Optional) Records paid agent actions through **Pay Memory**:
   receipts, generated assets, spending policy decisions, human
-  approval state, and per-day reports — all as plain Markdown inside
-  the vault.
+  approval state, and per-day reports — all as plain Markdown
+  inside the vault.
 
 ## Install
 
@@ -70,14 +78,25 @@ After `o2b install-cli` the following commands are on PATH:
 ```text
 o2b status                    Show config / vault status
 o2b init                      Bootstrap the vault profile (idempotent)
-o2b install-cli               Symlink o2b, vault-log, o2b-hook into ~/.local/bin
+o2b install-cli               Symlink o2b and o2b-hook into ~/.local/bin
 o2b doctor                    Run vault + adapter checks
-o2b append-event              Append one daily event-log entry
 o2b index                     Rebuild the Markdown page index
 o2b export-config             Write a redacted config snapshot
-o2b mcp                       Run the optional MCP tool server (stdio)
+o2b mcp                       Run the MCP tool server (stdio)
 o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
+
+# Brain (observing memory — 11 verbs)
+o2b brain init                Bootstrap Brain/{inbox,preferences,retired,log,.snapshots}/ + _brain.yaml + _BRAIN.md
+o2b brain feedback            Record one taste signal (--topic, --signal, --principle, ...)
+o2b brain dream               Run the deterministic consolidation pass (idempotent; usually cron'd)
+o2b brain apply-evidence      Record applied / violated against a preference for a durable artifact
+o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions
+o2b brain query               Read helper: by preference, by topic, or by log timestamp
+o2b brain reject              (CLI-only) Move a preference to retired/ with reason: user-rejected
+o2b brain pin / unpin         (CLI-only) Toggle pinned: true on a preference (exempt from auto-retire)
+o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot
+o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, …)
 
 # Pay Memory
 o2b init-pay-memory           Bootstrap AI Wiki/{policies,payments,assets,drafts,reports}/
@@ -93,7 +112,6 @@ o2b list-pending-payments     List pending / approved / etc. requests
 o2b payment-digest            Render a 4-line digest for a date
 
 # Helpers
-vault-log                     Compatibility wrapper around `o2b append-event`
 o2b-hook                      Internal launcher invoked by hooks/hooks.json (Claude Code & Codex)
 ```
 
@@ -105,8 +123,12 @@ The local checkout can also be used without installing the symlinks
 The plugin ships an optional stdio MCP server (`o2b mcp`) that
 exposes the same deterministic operations as MCP tools:
 
-- **Core (5):** `second_brain_status`, `second_brain_query`,
-  `second_brain_capture`, `event_log_append`, `vault_health`.
+- **Core (3):** `second_brain_status`, `second_brain_query`,
+  `vault_health`.
+- **Brain (6):** `brain_feedback`, `brain_dream`,
+  `brain_apply_evidence`, `brain_digest`, `brain_query`,
+  `brain_doctor`. See the [Brain section](#brain-observing-memory)
+  below.
 - **Pay Memory (8):** `payment_memory_init`,
   `payment_receipt_append`, `asset_capture`,
   `payment_report_generate`, `payment_policy_check`,
@@ -123,23 +145,69 @@ schemas, and lifecycle details are in [`docs/mcp.md`](docs/mcp.md).
 ## Lifecycle hooks (Claude Code & Codex)
 
 The plugin bundles a `hooks/hooks.json` that both runtimes auto-load.
-Two hooks fire per turn:
+One hook fires per turn:
 
 - **PostToolUse** (matcher `Write|Edit|MultiEdit|apply_patch`) —
-  after a file-mutating tool succeeds, injects a short reminder that
-  the agent should call `event_log_append` if the change is a
-  durable artifact.
-- **Stop** — when the runtime is about to end the turn, parses the
-  transcript JSONL, and if a durable-looking artifact was produced
-  without a matching log call, blocks the Stop **once** with
-  `decision: "block"`. The next Stop passes unconditionally, so the
-  agent can deliberately skip logging on trivial edits by just
-  finishing again. No deadlocks.
+  after a file-mutating tool succeeds, injects a short reminder
+  pointing the agent at `brain_feedback` (when the turn contained a
+  user preference or correction) and `brain_apply_evidence` (when an
+  active preference in `Brain/preferences/` scopes to the artifact
+  just produced).
 
-This was added to close the gap exposed by a real bug where soft
-MCP-server instructions were silently dropped under load.
 Hermes and OpenClaw don't load these hooks — they have their own
-per-turn channels. Full design notes: [`hooks/README.md`](hooks/README.md).
+per-turn channels. Full design notes:
+[`hooks/README.md`](hooks/README.md).
+
+## Brain (observing memory)
+
+Brain is the agent-writable observing-memory layer. Agents record
+user preferences as raw taste signals; a deterministic `dream` pass
+accretes repeat signals into rules with confidence that grows from
+real applications and decays when nothing applies the rule any more.
+There is no LLM inside the algorithm — only counters, thresholds,
+and `mv` operations.
+
+```bash
+o2b brain init --vault /path/to/vault
+# → Brain/{inbox,preferences,retired,log,.snapshots}/ plus _brain.yaml and _BRAIN.md
+
+# Record a taste signal (agent or human, mid-conversation):
+o2b brain feedback \
+  --vault /path/to/vault \
+  --topic no-internal-abbrev --signal negative \
+  --principle "Do not use internal abbreviations in user-facing copy unless explained first" \
+  --agent claude
+
+# After producing a durable artifact, record evidence:
+o2b brain apply-evidence \
+  --vault /path/to/vault \
+  --pref pref-no-internal-abbrev \
+  --artifact "[[Daily/2026.05.14#section-blog-post]]" \
+  --result applied --agent claude
+
+# Run a dream pass (cron or manual): promotes candidates, retires stale rules:
+o2b brain dream --vault /path/to/vault
+
+# Short daily summary (markdown or JSON), suitable for Hermes cron → Telegram:
+o2b brain digest --vault /path/to/vault --silent-if-empty
+```
+
+Eleven CLI verbs in total: `init`, `feedback`, `dream`,
+`apply-evidence`, `digest`, `query`, `reject`, `pin`, `unpin`,
+`rollback`, `doctor`. Six are mirrored as MCP tools (`brain_*`);
+`init`, `reject`, `pin`, `unpin`, `rollback` are intentionally
+CLI-only because they change the protected set or overwrite vault
+state. Pre-run snapshots of `Brain/` go to `Brain/.snapshots/` and
+support `o2b brain rollback <run_id>`. Pinned preferences are exempt
+from automatic retire (`stale-no-evidence`, `expired-unconfirmed`,
+`rebutted`); only `o2b brain reject` can retire them.
+
+Full design and implementation plan:
+[`docs/plans/2026-05-15-brain-observing-memory.md`](docs/plans/2026-05-15-brain-observing-memory.md).
+Post-v0.9 trigger-based roadmap:
+[`docs/plans/2026-05-15-brain-roadmap.md`](docs/plans/2026-05-15-brain-roadmap.md).
+The `brain-memory` skill (loaded automatically) instructs agents when
+to call `brain_feedback` and `brain_apply_evidence`.
 
 ## Pay Memory
 
@@ -350,8 +418,13 @@ you want to.
   optional MCP server is a stdio subprocess that exits when its
   parent runtime exits.
 - Hooks (Claude Code, Codex) only inject text into the agent's
-  context. They never write to the vault directly — every log
-  entry still goes through `event_log_append` or the equivalent CLI.
+  context. They never write to the vault directly — every Brain
+  entry goes through `brain_feedback` / `brain_apply_evidence`
+  (MCP) or the equivalent CLI (`o2b brain *`).
+- Brain mutations (`o2b brain dream`) take an automatic pre-run
+  snapshot (`Brain/.snapshots/<run_id>.tar.zst`) before any state
+  change. `o2b brain rollback <run_id>` restores from a snapshot;
+  retention is configurable in `_brain.yaml`.
 
 ## Repository
 

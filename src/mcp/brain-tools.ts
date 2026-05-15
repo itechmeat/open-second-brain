@@ -1,0 +1,854 @@
+/**
+ * MCP tool registrations for the Brain layer.
+ *
+ * Exposes the six Brain operations that are safe to invoke from an
+ * agent harness:
+ *
+ *   - `brain_feedback`        — record a single taste signal (or a
+ *                                directly-confirmed preference when
+ *                                `force_confirmed: true`).
+ *   - `brain_dream`           — run the deterministic learning pass.
+ *   - `brain_apply_evidence`  — record whether a preference was applied
+ *                                or violated on a freshly-produced
+ *                                artifact.
+ *   - `brain_digest`          — render a human-readable summary of the
+ *                                last activity window.
+ *   - `brain_query`           — read-only aggregation by preference id,
+ *                                topic, or time window.
+ *   - `brain_doctor`          — invariant / schema health check.
+ *
+ * The five Brain commands that remain CLI-only on purpose
+ * (`init`, `reject`, `pin`, `unpin`, `rollback`) deliberately do *not*
+ * have MCP wrappers — see design doc §9.1 "absence from MCP protects
+ * against autonomous mistakes". Their handler functions live in
+ * `src/core/brain/*` and `src/cli/*` for shell-side use.
+ *
+ * Each handler delegates to the corresponding `src/core/brain/*`
+ * function so the contract stays byte-identical to the CLI. Arguments
+ * are coerced/validated locally with the same helpers the legacy tools
+ * use; we re-implement the small ones here rather than re-exporting
+ * private functions from `tools.ts` to keep the dependency direction
+ * one-way (Brain tools may grow their own coercion rules later).
+ */
+
+import { existsSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
+
+import { resolveAgentName } from "../core/config.ts";
+import {
+  appendApplyEvidence,
+  BrainPreferenceNotFoundError,
+  type AppendApplyEvidenceInput,
+} from "../core/brain/apply-evidence.ts";
+import {
+  renderDigest,
+  type DigestFormat,
+} from "../core/brain/digest.ts";
+import { dream } from "../core/brain/dream.ts";
+import { runDoctor } from "../core/brain/doctor.ts";
+import {
+  BrainNotFoundError,
+  queryByLogSince,
+  queryByPreference,
+  queryByTopic,
+} from "../core/brain/query.ts";
+import { writeSignal } from "../core/brain/signal.ts";
+import { writePreference } from "../core/brain/preference.ts";
+import { preferencePath } from "../core/brain/paths.ts";
+import { isoDate, isoSecond } from "../core/brain/time.ts";
+import { loadBrainConfig } from "../core/brain/policy.ts";
+import { slugify } from "../core/vault.ts";
+import { normalizeAgentArgument } from "../core/agent-identity.ts";
+import {
+  BRAIN_LOG_EVENT_KIND,
+  BRAIN_PREFERENCE_STATUS,
+  BRAIN_SIGNAL_SIGN,
+  BRAIN_APPLY_RESULT,
+  type BrainApplyResult,
+  type BrainPreference,
+  type BrainRetired,
+  type BrainSignal,
+  type BrainSignalSign,
+} from "../core/brain/types.ts";
+import { appendLogEvent } from "../core/brain/log.ts";
+import type { BrainLogEntry } from "../core/brain/log.ts";
+
+import { INVALID_PARAMS, MCPError } from "./protocol.ts";
+import type { ServerContext, ToolDefinition } from "./tools.ts";
+
+// ----- Local coercion helpers ----------------------------------------------
+//
+// Mirrors `tools.ts:coerceStr` family. We keep a private copy so the Brain
+// tool module does not depend on the legacy `tools.ts` private API
+// surface — the only shared types it imports are `ServerContext` and
+// `ToolDefinition`.
+
+function coerceStr(
+  args: Record<string, unknown>,
+  key: string,
+  required = true,
+  defaultValue: string | null = null,
+): string | null {
+  const value = args[key];
+  if (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && value.trim() === "")
+  ) {
+    if (required) {
+      throw new MCPError(INVALID_PARAMS, `missing required argument: ${key}`);
+    }
+    return defaultValue;
+  }
+  if (typeof value !== "string") {
+    throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a string`);
+  }
+  return value;
+}
+
+function coerceStrList(
+  args: Record<string, unknown>,
+  key: string,
+): string[] | null {
+  const value = args[key];
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument '${key}' must be a list of strings`,
+    );
+  }
+  return [...value] as string[];
+}
+
+function coerceBool(
+  args: Record<string, unknown>,
+  key: string,
+): boolean {
+  const value = args[key];
+  if (value === undefined || value === null) return false;
+  if (typeof value !== "boolean") {
+    throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a boolean`);
+  }
+  return value;
+}
+
+/**
+ * Parse an optional ISO-8601 timestamp argument. Empty / missing → null.
+ * Anything else must be a parseable date string; otherwise INVALID_PARAMS.
+ */
+function coerceIsoDate(
+  args: Record<string, unknown>,
+  key: string,
+): Date | null {
+  const raw = coerceStr(args, key, false);
+  if (raw === null) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument '${key}' must be a valid ISO-8601 timestamp`,
+    );
+  }
+  return d;
+}
+
+/**
+ * Coerce the optional `format` argument shared across digest / query /
+ * doctor. Accepts `markdown` (default) or `json`. Anything else throws.
+ */
+function coerceFormat(
+  args: Record<string, unknown>,
+  key = "format",
+): "markdown" | "json" {
+  const raw = coerceStr(args, key, false);
+  if (raw === null) return "markdown";
+  if (raw !== "markdown" && raw !== "json") {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument '${key}' must be 'markdown' or 'json'`,
+    );
+  }
+  return raw;
+}
+
+// ----- brain_feedback ------------------------------------------------------
+
+/**
+ * Build the slug used in the signal / preference filename. We never let
+ * the agent decide the slug directly — taking `topic` as the slug stem
+ * is what the design doc §9.2 prescribes (slugs are deterministic from
+ * topic). The slug is run through `slugify` defensively so a slightly
+ * mis-shaped topic still yields a filesystem-safe basename.
+ */
+function deriveSlug(topic: string): string {
+  return slugify(topic);
+}
+
+async function toolBrainFeedback(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const topic = coerceStr(args, "topic", true)!;
+  const signalRaw = coerceStr(args, "signal", true)!;
+  if (
+    signalRaw !== BRAIN_SIGNAL_SIGN.positive &&
+    signalRaw !== BRAIN_SIGNAL_SIGN.negative
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument 'signal' must be 'positive' or 'negative'`,
+    );
+  }
+  const principle = coerceStr(args, "principle", true)!;
+  const scope = coerceStr(args, "scope", false);
+  const source = coerceStrList(args, "source");
+  const agentArg = coerceStr(args, "agent", false);
+  const raw = coerceStr(args, "raw", false);
+  const forceConfirmed = coerceBool(args, "force_confirmed");
+
+  const agent =
+    normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+  const now = new Date();
+  const date = isoDate(now);
+  const createdAt = isoSecond(now);
+  const slug = deriveSlug(topic);
+
+  // 1. Always write the signal to inbox/. Mirrors the CLI handler so the
+  //    audit trail in `Brain/log/` and `inbox/processed/` stays consistent
+  //    across CLI and MCP entry points. `--force-confirmed` ADDITIONALLY
+  //    creates a confirmed pref below.
+  const sigResult = writeSignal(ctx.vault, {
+    topic: topic.trim(),
+    signal: signalRaw as BrainSignalSign,
+    agent,
+    principle: principle.trim(),
+    created_at: createdAt,
+    date,
+    slug,
+    ...(scope ? { scope } : {}),
+    ...(source && source.length > 0 ? { source } : {}),
+    ...(raw ? { raw } : {}),
+  });
+
+  try {
+    appendLogEvent(ctx.vault, {
+      timestamp: createdAt,
+      eventType: BRAIN_LOG_EVENT_KIND.feedback,
+      body: {
+        signal: `[[${sigResult.id}]]`,
+        topic: topic.trim(),
+        sign: signalRaw,
+        agent,
+      },
+    });
+  } catch (err) {
+    process.stderr.write(
+      `warning: append feedback log failed: ${(err as Error).message}\n`,
+    );
+  }
+
+  let prefResult: { path: string; id: string } | null = null;
+  if (forceConfirmed) {
+    // Escape hatch: skip the dream pass and create the confirmed rule now.
+    // `confirmed_at` is now; `unconfirmed_until` is also now so the trial
+    // window collapses on inspection. The just-written signal is recorded
+    // as the rule's origin under `evidenced_by`.
+    prefResult = writePreference(ctx.vault, {
+      slug,
+      topic: topic.trim(),
+      principle: principle.trim(),
+      created_at: createdAt,
+      unconfirmed_until: createdAt,
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [`[[${sigResult.id}]]`],
+      confirmed_at: createdAt,
+      ...(scope ? { scope } : {}),
+    });
+    try {
+      // Offset by 1s so the force-confirmed event sorts after the feedback
+      // event on the same UTC second (parseLogDay is stable on ties, but a
+      // visible chronology reads cleaner).
+      appendLogEvent(ctx.vault, {
+        timestamp: isoSecond(new Date(now.getTime() + 1000)),
+        eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
+        body: {
+          preference: `[[${prefResult.id}]]`,
+          agent,
+        },
+      });
+    } catch (err) {
+      process.stderr.write(
+        `warning: append force-confirmed log failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  return {
+    kind: prefResult ? "preference" : "signal",
+    signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
+    signal_absolute_path: resolve(sigResult.path),
+    signal_id: sigResult.id,
+    ...(prefResult
+      ? {
+          preference_path: vaultRelativeSafe(ctx.vault, prefResult.path),
+          preference_absolute_path: resolve(prefResult.path),
+          preference_id: prefResult.id,
+          // Back-compat: top-level `path`/`id` previously pointed at the
+          // pref on the force-confirmed branch. Keep them aligned for
+          // callers that look at the bare fields.
+          path: vaultRelativeSafe(ctx.vault, prefResult.path),
+          absolute_path: resolve(prefResult.path),
+          id: prefResult.id,
+        }
+      : {
+          path: vaultRelativeSafe(ctx.vault, sigResult.path),
+          absolute_path: resolve(sigResult.path),
+          id: sigResult.id,
+        }),
+    agent,
+  };
+}
+
+// ----- brain_dream ---------------------------------------------------------
+
+async function toolBrainDream(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const dryRun = coerceBool(args, "dry_run");
+  const nowDate = coerceIsoDate(args, "now");
+
+  const summary = dream(ctx.vault, {
+    dryRun,
+    ...(nowDate ? { now: nowDate } : {}),
+  });
+
+  // The summary is already a Plain Old Frozen Object — JSON-serialise
+  // verbatim. We surface `snapshot_path` / `log_path` as vault-relative
+  // for caller convenience while preserving the absolute path as well.
+  return {
+    run_id: summary.run_id,
+    changed: summary.changed,
+    dry_run: dryRun,
+    new_unconfirmed: [...summary.new_unconfirmed],
+    confirmed: [...summary.confirmed],
+    retired: summary.retired.map((r) => ({ id: r.id, reason: r.reason })),
+    contradictions: [...summary.contradictions],
+    moved_to_processed: [...summary.moved_to_processed],
+    snapshot_path: summary.snapshot_path
+      ? vaultRelativeSafe(ctx.vault, summary.snapshot_path)
+      : null,
+    log_path: summary.log_path
+      ? vaultRelativeSafe(ctx.vault, summary.log_path)
+      : null,
+  };
+}
+
+// ----- brain_apply_evidence ------------------------------------------------
+
+async function toolBrainApplyEvidence(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const prefId = coerceStr(args, "pref_id", true)!;
+  const artifact = coerceStr(args, "artifact", true)!;
+  const resultRaw = coerceStr(args, "result", true)!;
+  if (
+    resultRaw !== BRAIN_APPLY_RESULT.applied &&
+    resultRaw !== BRAIN_APPLY_RESULT.violated
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument 'result' must be 'applied' or 'violated'`,
+    );
+  }
+  const agentArg = coerceStr(args, "agent", false);
+  const note = coerceStr(args, "note", false);
+
+  const agent =
+    normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+
+  const input: AppendApplyEvidenceInput = {
+    pref_id: prefId,
+    artifact,
+    result: resultRaw as BrainApplyResult,
+    agent,
+    ...(note ? { note } : {}),
+  };
+
+  // Surface BrainPreferenceNotFoundError as a tool-level error envelope
+  // (isError: true) rather than an MCP protocol error. The design doc
+  // says "not an error condition" — the agent should see an informative
+  // payload that explains what to do next, not a JSON-RPC error frame.
+  try {
+    const res = appendApplyEvidence(ctx.vault, input);
+    return {
+      logged_at: res.logged_at,
+      log_path: vaultRelativeSafe(ctx.vault, res.log_path),
+      absolute_log_path: resolve(res.log_path),
+      agent,
+    };
+  } catch (exc) {
+    if (exc instanceof BrainPreferenceNotFoundError) {
+      // Re-throw as a non-MCPError so `server.handleToolsCall` packs it
+      // into a `toolError` envelope (isError: true, single-text content).
+      // This matches the pay-memory "pending request not found" pattern.
+      throw new Error(exc.message);
+    }
+    throw exc;
+  }
+}
+
+// ----- brain_digest --------------------------------------------------------
+
+async function toolBrainDigest(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const since = coerceIsoDate(args, "since");
+  const until = coerceIsoDate(args, "until");
+  const format = coerceFormat(args) satisfies DigestFormat;
+
+  const result = renderDigest(ctx.vault, {
+    ...(since ? { since } : {}),
+    ...(until ? { until } : {}),
+    format,
+  });
+
+  return {
+    format,
+    empty: result.empty,
+    content: result.content,
+  };
+}
+
+// ----- brain_query ---------------------------------------------------------
+
+async function toolBrainQuery(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const preference = coerceStr(args, "preference", false);
+  const topic = coerceStr(args, "topic", false);
+  const since = coerceIsoDate(args, "since");
+  // `format` is accepted for forward-compat (design doc §9.2 names it),
+  // but the structured response shape is identical regardless — the
+  // caller serialises however they want. We validate the value to catch
+  // typos early.
+  coerceFormat(args);
+
+  const supplied = [preference, topic, since].filter((v) => v !== null).length;
+  if (supplied === 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_query requires exactly one of: preference, topic, since",
+    );
+  }
+  if (supplied > 1) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_query accepts at most one of: preference, topic, since",
+    );
+  }
+
+  if (preference !== null) {
+    try {
+      const res = queryByPreference(ctx.vault, preference);
+      return {
+        mode: "preference",
+        preference: serializePreference(res.preference),
+        evidence: res.evidence.map(serializeLogEntry),
+      };
+    } catch (exc) {
+      if (exc instanceof BrainNotFoundError) {
+        throw new Error(exc.message);
+      }
+      throw exc;
+    }
+  }
+
+  if (topic !== null) {
+    const res = queryByTopic(ctx.vault, topic);
+    return {
+      mode: "topic",
+      topic,
+      signals: res.signals.map(serializeSignal),
+      preference: res.preference ? serializePreference(res.preference) : null,
+      all_log_events: res.all_log_events.map(serializeLogEntry),
+    };
+  }
+
+  // since
+  const res = queryByLogSince(ctx.vault, since!);
+  return {
+    mode: "since",
+    since: since!.toISOString(),
+    events: res.map(serializeLogEntry),
+  };
+}
+
+// ----- brain_doctor --------------------------------------------------------
+
+async function toolBrainDoctor(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const strict = coerceBool(args, "strict");
+  const format = coerceFormat(args);
+
+  const result = runDoctor(ctx.vault, { strict });
+
+  // Decide a single ok flag — `strict` only changes the CLI exit code,
+  // so we mirror that semantic here: with `strict`, warnings demote ok
+  // to false. Errors always do.
+  const ok =
+    result.errors.length === 0 && (!strict || result.warnings.length === 0);
+
+  return {
+    format,
+    ok,
+    strict,
+    errors: result.errors.map((i) => ({
+      severity: i.severity,
+      code: i.code,
+      message: i.message,
+      ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
+    })),
+    warnings: result.warnings.map((i) => ({
+      severity: i.severity,
+      code: i.code,
+      message: i.message,
+      ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
+    })),
+  };
+}
+
+// ----- Serializers ---------------------------------------------------------
+
+function serializeSignal(s: BrainSignal): Record<string, unknown> {
+  return {
+    kind: s.kind,
+    id: s.id,
+    created_at: s.created_at,
+    topic: s.topic,
+    signal: s.signal,
+    agent: s.agent,
+    principle: s.principle,
+    tags: [...s.tags],
+    ...(s.scope !== undefined ? { scope: s.scope } : {}),
+    ...(s.source !== undefined ? { source: [...s.source] } : {}),
+    ...(s.raw !== undefined ? { raw: s.raw } : {}),
+  };
+}
+
+function serializePreference(
+  p: BrainPreference | BrainRetired,
+): Record<string, unknown> {
+  if (p.kind === "brain-retired") {
+    return {
+      kind: p.kind,
+      id: p.id,
+      status: p.status,
+      retired_at: p.retired_at,
+      retired_reason: p.retired_reason,
+      retired_by: p.retired_by,
+      ...(p.superseded_by !== undefined ? { superseded_by: p.superseded_by } : {}),
+      created_at: p.created_at,
+      topic: p.topic,
+      ...(p.scope !== undefined ? { scope: p.scope } : {}),
+      principle: p.principle,
+      evidenced_by: [...p.evidenced_by],
+      applied_count: p.applied_count,
+      violated_count: p.violated_count,
+      last_evidence_at: p.last_evidence_at,
+      confidence: p.confidence,
+      pinned: p.pinned,
+      tags: [...p.tags],
+      ...(p.aliases !== undefined ? { aliases: [...p.aliases] } : {}),
+    };
+  }
+  return {
+    kind: p.kind,
+    id: p.id,
+    created_at: p.created_at,
+    confirmed_at: p.confirmed_at,
+    unconfirmed_until: p.unconfirmed_until,
+    topic: p.topic,
+    ...(p.scope !== undefined ? { scope: p.scope } : {}),
+    status: p.status,
+    principle: p.principle,
+    evidenced_by: [...p.evidenced_by],
+    applied_count: p.applied_count,
+    violated_count: p.violated_count,
+    last_evidence_at: p.last_evidence_at,
+    confidence: p.confidence,
+    pinned: p.pinned,
+    tags: [...p.tags],
+    ...(p.supersedes !== undefined ? { supersedes: p.supersedes } : {}),
+    ...(p.aliases !== undefined ? { aliases: [...p.aliases] } : {}),
+  };
+}
+
+function serializeLogEntry(e: BrainLogEntry): Record<string, unknown> {
+  // Preserve the structured payload verbatim (array values stay arrays).
+  // JSON.stringify handles `ReadonlyArray<string>` and string values
+  // identically. `Object.entries` widens the value type to `unknown` for
+  // generic-keyed records under `verbatimModuleSyntax`; narrow explicitly.
+  const body: Record<string, string | ReadonlyArray<string>> = {};
+  for (const [k, v] of Object.entries(e.body) as ReadonlyArray<
+    readonly [string, string | ReadonlyArray<string>]
+  >) {
+    body[k] = Array.isArray(v) ? [...v] : v;
+  }
+  return {
+    timestamp: e.timestamp,
+    event_type: e.eventType,
+    body,
+  };
+}
+
+// ----- Misc ----------------------------------------------------------------
+
+/**
+ * Produce a vault-relative path, swallowing errors (Pay Memory uses the
+ * same defensive pattern for output rendering). Exported for unit tests
+ * — internal callers stay inside this module.
+ *
+ * @internal
+ */
+export function vaultRelativeSafe(vault: string, target: string): string {
+  const absVault = resolve(vault);
+  const absTarget = resolve(target);
+  // Use Node's path.relative so the separator handling matches the host
+  // OS (forward-slashes on POSIX, back-slashes on Windows). The prior
+  // implementation hard-coded `"/"` and silently broke on Windows when
+  // the vault sat under e.g. `C:\Users\...`.
+  const rel = relative(absVault, absTarget);
+  if (rel === "") return "";
+  // `relative()` returns a path starting with `..` (or, in rare drive-
+  // mismatch cases on Windows, an absolute path) when the target sits
+  // outside the vault. In both situations we return the original target
+  // unchanged — callers treat that as "not under vault" and render it
+  // as-is.
+  if (rel.startsWith("..") || isAbsolute(rel)) return target;
+  return rel;
+}
+
+// Reference to satisfy "may need to look up pref path in MCP handler"
+// without re-exporting the helper from `core/brain/paths.ts` for the
+// public surface. Used only by the typecheck on `BrainPreferenceNotFoundError`
+// rethrow; we keep the import alive intentionally so future grep finds
+// the MCP layer using the same path helper as the core.
+//
+// (The function is invoked indirectly through `appendApplyEvidence`.)
+void preferencePath;
+
+// Loadable so future MCP-level config introspection can reuse the
+// validation surface without depending on the CLI module. Currently
+// unused — explicit import keeps the dependency graph documented.
+void loadBrainConfig;
+void existsSync;
+
+// ----- Tool registration ---------------------------------------------------
+
+export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: "brain_feedback",
+    description:
+      "Record one Brain taste signal in `Brain/inbox/sig-*.md`. With `force_confirmed: true`, create the preference directly (skips the dream trial window).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        topic: {
+          type: "string",
+          description:
+            "Stable kebab-slug for the rule, e.g. `no-internal-abbrev`.",
+        },
+        signal: {
+          type: "string",
+          enum: ["positive", "negative"],
+          description:
+            "`positive` when the principle is the rule to follow, `negative` when it's what to avoid.",
+        },
+        principle: {
+          type: "string",
+          description:
+            "One-line, agent-readable formulation of the rule (imperative voice).",
+        },
+        scope: {
+          type: "string",
+          description:
+            "Optional soft category for later application-scope matching, e.g. `writing`, `coding`.",
+        },
+        source: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional wikilinks to the artifacts or notes that triggered the signal.",
+        },
+        agent: {
+          type: "string",
+          description:
+            "Optional agent identity override; defaults to the server-resolved name.",
+        },
+        raw: {
+          type: "string",
+          description:
+            "Optional free-form raw quote (rendered under `## Raw` in the signal file).",
+        },
+        force_confirmed: {
+          type: "boolean",
+          description:
+            "When true, additionally creates a `pref-*` resource with `status: confirmed` alongside the inbox signal. The signal is always written to `Brain/inbox/`; this flag only adds an immediately-active preference (skipping the usual dream-pass promotion step).",
+        },
+      },
+      required: ["topic", "signal", "principle"],
+      additionalProperties: false,
+    },
+    handler: toolBrainFeedback,
+  },
+  {
+    name: "brain_dream",
+    description:
+      "Run the deterministic learning pass over `Brain/inbox/` (clusters signals, promotes preferences, retires stale rules). Typically scheduled via cron rather than invoked interactively.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dry_run: {
+          type: "boolean",
+          description:
+            "When true, compute the plan without writing any files.",
+        },
+        now: {
+          type: "string",
+          description:
+            "Optional ISO-8601 timestamp used as the wall clock for the run (testing / replay).",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainDream,
+  },
+  {
+    name: "brain_apply_evidence",
+    description:
+      "Record whether an active preference was applied or violated against a freshly-produced durable artifact. Appends one event to `Brain/log/<today>.md`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pref_id: {
+          type: "string",
+          description:
+            "Preference id (`pref-<slug>` or bare `<slug>`).",
+        },
+        artifact: {
+          type: "string",
+          description:
+            "Wikilink identifying the artifact, e.g. `[[Daily/2026.05.14#section]]` or `[[src/cli/main.ts]]`.",
+        },
+        result: {
+          type: "string",
+          enum: ["applied", "violated"],
+          description:
+            "`applied` if the rule held in this artifact, `violated` if it was broken.",
+        },
+        agent: {
+          type: "string",
+          description:
+            "Optional agent identity override; defaults to the server-resolved name.",
+        },
+        note: {
+          type: "string",
+          description: "Optional one-line context.",
+        },
+      },
+      required: ["pref_id", "artifact", "result"],
+      additionalProperties: false,
+    },
+    handler: toolBrainApplyEvidence,
+  },
+  {
+    name: "brain_digest",
+    description:
+      "Render a human-readable summary of Brain activity in the last 24h (default) or a custom window. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        since: {
+          type: "string",
+          description:
+            "Inclusive lower bound (ISO-8601). Defaults to `until - 24h`.",
+        },
+        until: {
+          type: "string",
+          description:
+            "Exclusive upper bound (ISO-8601). Defaults to `now`.",
+        },
+        format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Output format. Defaults to `markdown`.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainDigest,
+  },
+  {
+    name: "brain_query",
+    description:
+      "Read-only lookup: one preference + its evidence trail, all artifacts under a topic, or every log event after a timestamp. Exactly one of `preference`, `topic`, `since` must be supplied.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        preference: {
+          type: "string",
+          description:
+            "Preference id (`pref-...` or `ret-...`) to look up with its evidence trail.",
+        },
+        topic: {
+          type: "string",
+          description:
+            "Topic slug to aggregate signals + active/retired preference + log events.",
+        },
+        since: {
+          type: "string",
+          description:
+            "ISO-8601 timestamp; returns every Brain log event with timestamp >= since.",
+        },
+        format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description:
+            "Reserved for forward-compat; the structured response is the same regardless.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainQuery,
+  },
+  {
+    name: "brain_doctor",
+    description:
+      "Validate `Brain/` invariants: status-vs-folder consistency, frontmatter validity, duplicate ids, ISO parsing, log header parsing. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        strict: {
+          type: "boolean",
+          description:
+            "When true, warnings demote `ok` to false (CLI exit-code parity).",
+        },
+        format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description:
+            "Output format hint. Structured result is identical; caller decides rendering.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainDoctor,
+  },
+]);

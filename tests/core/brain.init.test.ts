@@ -1,0 +1,206 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { brainDirs } from "../../src/core/brain/paths.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
+
+// Shared temp scratch for both vault and machine-config directories.
+// Tests that need to assert the "missing machine config" path can
+// override `configPath` explicitly to point at a non-existent file.
+
+let vault: string;
+let configHome: string;
+let configPath: string;
+
+beforeEach(() => {
+  vault = mkdtempSync(join(tmpdir(), "o2b-brain-init-vault-"));
+  configHome = mkdtempSync(join(tmpdir(), "o2b-brain-init-cfg-"));
+  configPath = join(configHome, "config.yaml");
+  // A minimal but valid plugin config: just the vault pointer. This
+  // mirrors what `o2b init` writes during normal onboarding.
+  mkdirSync(configHome, { recursive: true });
+  writeFileSync(configPath, `vault: "${vault}"\n`, "utf8");
+});
+
+afterEach(() => {
+  rmSync(vault, { recursive: true, force: true });
+  rmSync(configHome, { recursive: true, force: true });
+});
+
+describe("bootstrapBrain — empty vault", () => {
+  test("creates every Brain directory and the three managed files", () => {
+    const result = bootstrapBrain(vault, { configPath });
+
+    // Directories: every entry in brainDirs() must exist as a real dir.
+    const dirs = brainDirs(vault);
+    for (const dir of [
+      dirs.brain,
+      dirs.inbox,
+      dirs.processed,
+      dirs.preferences,
+      dirs.retired,
+      dirs.log,
+      dirs.snapshots,
+    ]) {
+      expect(existsSync(dir)).toBe(true);
+      expect(statSync(dir).isDirectory()).toBe(true);
+    }
+
+    // Files: _brain.yaml, _BRAIN.md, AI Wiki/_OPEN_SECOND_BRAIN.md.
+    expect(existsSync(join(vault, "Brain", "_brain.yaml"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "_BRAIN.md"))).toBe(true);
+    expect(existsSync(join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"))).toBe(
+      true,
+    );
+
+    // Counts: three created, none overwritten, none skipped.
+    expect(result.created.length).toBe(3);
+    expect(result.overwritten.length).toBe(0);
+    expect(result.skipped.length).toBe(0);
+
+    // _brain.yaml byte-equals the default constant.
+    expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
+      DEFAULT_BRAIN_CONFIG_YAML,
+    );
+
+    // _BRAIN.md carries a recognisable headline so the test catches a
+    // wrong-template / no-substitution regression cheaply.
+    const manual = readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8");
+    expect(manual).toContain("# Brain — operating manual");
+
+    // Legacy overview carries the Brain-first heading and mentions the
+    // two writable surfaces.
+    const overview = readFileSync(
+      join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"),
+      "utf8",
+    );
+    expect(overview).toContain("Open Second Brain");
+    expect(overview).toContain("Brain/");
+  });
+});
+
+describe("bootstrapBrain — idempotent rerun", () => {
+  test("second invocation without force skips Brain/ files and overwrites the legacy overview", () => {
+    // First run sets the baseline.
+    bootstrapBrain(vault, { configPath });
+
+    // Mutate _brain.yaml and _BRAIN.md to detect any accidental
+    // overwrite on the second pass.
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), "user: edited\n", "utf8");
+    writeFileSync(join(vault, "Brain", "_BRAIN.md"), "user manual edits\n", "utf8");
+
+    const second = bootstrapBrain(vault, { configPath });
+
+    // Brain-side: both files skipped, content intact.
+    expect(second.skipped).toContain(join("Brain", "_brain.yaml"));
+    expect(second.skipped).toContain(join("Brain", "_BRAIN.md"));
+    expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
+      "user: edited\n",
+    );
+    expect(readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8")).toBe(
+      "user manual edits\n",
+    );
+
+    // Legacy overview is ALWAYS overwritten by design (zero-active-users
+    // trade-off; see §12.1 of the design doc and the init.ts comment).
+    expect(second.overwritten).toContain(
+      join("AI Wiki", "_OPEN_SECOND_BRAIN.md"),
+    );
+    const overview = readFileSync(
+      join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"),
+      "utf8",
+    );
+    expect(overview).toContain("Open Second Brain");
+
+    // Nothing newly created on the second run.
+    expect(second.created.length).toBe(0);
+  });
+
+  test("directories are recreated idempotently with no error", () => {
+    bootstrapBrain(vault, { configPath });
+    // Second pass must not throw even though every directory exists.
+    expect(() => bootstrapBrain(vault, { configPath })).not.toThrow();
+  });
+});
+
+describe("bootstrapBrain — force overwrite", () => {
+  test("force: true rewrites all three managed files", () => {
+    bootstrapBrain(vault, { configPath });
+
+    // Stomp on the canonical content so we can detect the rewrite.
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), "stale\n", "utf8");
+    writeFileSync(join(vault, "Brain", "_BRAIN.md"), "stale\n", "utf8");
+    writeFileSync(
+      join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"),
+      "stale\n",
+      "utf8",
+    );
+
+    const result = bootstrapBrain(vault, { configPath, force: true });
+
+    expect(result.overwritten).toContain(join("Brain", "_brain.yaml"));
+    expect(result.overwritten).toContain(join("Brain", "_BRAIN.md"));
+    expect(result.overwritten).toContain(
+      join("AI Wiki", "_OPEN_SECOND_BRAIN.md"),
+    );
+    expect(result.skipped.length).toBe(0);
+
+    expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
+      DEFAULT_BRAIN_CONFIG_YAML,
+    );
+    expect(
+      readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8"),
+    ).not.toBe("stale\n");
+    expect(
+      readFileSync(join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"), "utf8"),
+    ).not.toBe("stale\n");
+  });
+});
+
+describe("bootstrapBrain — missing machine config", () => {
+  test("throws an error naming `o2b init` when the plugin config does not exist", () => {
+    const missing = join(configHome, "does-not-exist.yaml");
+    expect(() => bootstrapBrain(vault, { configPath: missing })).toThrow(
+      /o2b init/,
+    );
+  });
+
+  test("error message includes the resolved config path", () => {
+    const missing = join(configHome, "phantom-cfg.yaml");
+    let captured: Error | null = null;
+    try {
+      bootstrapBrain(vault, { configPath: missing });
+    } catch (err) {
+      captured = err as Error;
+    }
+    expect(captured).not.toBeNull();
+    expect(captured?.message).toContain(missing);
+  });
+});
+
+describe("bootstrapBrain — _BRAIN.md compliance ceiling", () => {
+  test("rendered Brain manual is strictly under 200 lines", () => {
+    bootstrapBrain(vault, { configPath });
+    const manual = readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8");
+    // Count newline-terminated lines plus any trailing fragment. A file
+    // ending in `\n` and one ending without it should both report the
+    // user-visible line count.
+    const lines = manual.split("\n");
+    const lineCount =
+      manual.endsWith("\n") && lines.length > 0
+        ? lines.length - 1
+        : lines.length;
+    expect(lineCount).toBeLessThan(200);
+  });
+});
