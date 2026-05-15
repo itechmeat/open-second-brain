@@ -154,6 +154,24 @@ describe("queryByPreference", () => {
     expect(() => queryByPreference(tmp, "")).toThrow(BrainNotFoundError);
   });
 
+  test("rejects path-traversal style ids before forming a filesystem path", () => {
+    // Without slug-shape validation, `pref-../../etc/passwd` would form
+    // `<dirs.preferences>/pref-../../etc/passwd.md` and `existsSync`
+    // could resolve outside the vault on a permissive filesystem. We
+    // surface this as `BrainNotFoundError` so the caller sees the same
+    // shape as any other unknown id.
+    expect(() => queryByPreference(tmp, "pref-../escape")).toThrow(
+      BrainNotFoundError,
+    );
+    expect(() => queryByPreference(tmp, "pref-..")).toThrow(BrainNotFoundError);
+    expect(() => queryByPreference(tmp, "pref-with/slash")).toThrow(
+      BrainNotFoundError,
+    );
+    expect(() => queryByPreference(tmp, "ret-../escape")).toThrow(
+      BrainNotFoundError,
+    );
+  });
+
   test("preference without any applied evidence still resolves with empty `evidence` array", () => {
     writePreference(tmp, basePref("gamma"));
     const res = queryByPreference(tmp, "pref-gamma");
@@ -232,6 +250,24 @@ describe("queryByTopic", () => {
     const res = queryByTopic(tmp, "orphan");
     expect(res.preference?.id).toBe("ret-orphan");
     expect(res.signals).toEqual([]);
+  });
+
+  test("multiple preferences with the same topic resolve deterministically (sorted by filename)", () => {
+    // Two active preferences sharing the same topic — pathological but
+    // not impossible (e.g. mid-rename, conflict-merge). The query must
+    // return the same one every call regardless of readdir order, so
+    // tooling that pins on the result stays stable. We pick the
+    // lexicographically-smallest filename as the canonical winner.
+    writePreference(tmp, { ...basePref("zebra"), slug: "zebra", topic: "shared-topic" });
+    writePreference(tmp, { ...basePref("alpha"), slug: "alpha", topic: "shared-topic" });
+    writePreference(tmp, { ...basePref("middle"), slug: "middle", topic: "shared-topic" });
+
+    const r1 = queryByTopic(tmp, "shared-topic");
+    const r2 = queryByTopic(tmp, "shared-topic");
+    const r3 = queryByTopic(tmp, "shared-topic");
+    expect(r1.preference?.id).toBe("pref-alpha");
+    expect(r2.preference?.id).toBe("pref-alpha");
+    expect(r3.preference?.id).toBe("pref-alpha");
   });
 
   test("unknown topic returns null preference and empty signals/events", () => {

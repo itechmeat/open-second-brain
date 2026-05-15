@@ -32,7 +32,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 
 import { resolveAgentName } from "../core/config.ts";
 import {
@@ -612,17 +612,27 @@ function serializeLogEntry(e: BrainLogEntry): Record<string, unknown> {
 
 /**
  * Produce a vault-relative path, swallowing errors (Pay Memory uses the
- * same defensive pattern for output rendering).
+ * same defensive pattern for output rendering). Exported for unit tests
+ * — internal callers stay inside this module.
+ *
+ * @internal
  */
-function vaultRelativeSafe(vault: string, target: string): string {
+export function vaultRelativeSafe(vault: string, target: string): string {
   const absVault = resolve(vault);
   const absTarget = resolve(target);
-  if (absTarget === absVault) return "";
-  const prefix = absVault.endsWith("/") ? absVault : `${absVault}/`;
-  if (absTarget.startsWith(prefix)) {
-    return absTarget.slice(prefix.length);
-  }
-  return target;
+  // Use Node's path.relative so the separator handling matches the host
+  // OS (forward-slashes on POSIX, back-slashes on Windows). The prior
+  // implementation hard-coded `"/"` and silently broke on Windows when
+  // the vault sat under e.g. `C:\Users\...`.
+  const rel = relative(absVault, absTarget);
+  if (rel === "") return "";
+  // `relative()` returns a path starting with `..` (or, in rare drive-
+  // mismatch cases on Windows, an absolute path) when the target sits
+  // outside the vault. In both situations we return the original target
+  // unchanged — callers treat that as "not under vault" and render it
+  // as-is.
+  if (rel.startsWith("..") || isAbsolute(rel)) return target;
+  return rel;
 }
 
 // Reference to satisfy "may need to look up pref path in MCP handler"
@@ -690,7 +700,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         force_confirmed: {
           type: "boolean",
           description:
-            "When true, create a `pref-*` directly with `status: confirmed` instead of an inbox signal.",
+            "When true, additionally creates a `pref-*` resource with `status: confirmed` alongside the inbox signal. The signal is always written to `Brain/inbox/`; this flag only adds an immediately-active preference (skipping the usual dream-pass promotion step).",
         },
       },
       required: ["topic", "signal", "principle"],

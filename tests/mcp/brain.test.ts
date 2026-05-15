@@ -43,6 +43,7 @@ import {
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { vaultRelativeSafe } from "../../src/mcp/brain-tools.ts";
 
 let tmp: string;
 let vault: string;
@@ -117,6 +118,55 @@ function makeServer(): MCPServer {
 // ---------------------------------------------------------------------------
 // brain_feedback
 // ---------------------------------------------------------------------------
+
+describe("vaultRelativeSafe", () => {
+  test("returns the original target unchanged when target is outside the vault", () => {
+    // Cross-platform regression: the prior implementation used a
+    // hard-coded `/` separator and a prefix-match. On Windows it would
+    // misbehave for `C:\Users\...`-style absolute paths. Using
+    // `path.relative` / `path.isAbsolute` is the correct shape.
+    const outOfVault = "/tmp/somewhere-else/file.md";
+    expect(vaultRelativeSafe(vault, outOfVault)).toBe(outOfVault);
+  });
+
+  test("returns vault-relative path for an in-vault target", () => {
+    const inVault = join(vault, "Brain", "inbox", "sig-x.md");
+    const rel = vaultRelativeSafe(vault, inVault);
+    expect(rel).toBe(join("Brain", "inbox", "sig-x.md"));
+    // The returned path must NOT be absolute — that's the property
+    // every downstream consumer (digest, JSON output) relies on.
+    expect(rel.startsWith("/")).toBe(false);
+  });
+
+  test("returns empty string when target equals the vault root", () => {
+    expect(vaultRelativeSafe(vault, vault)).toBe("");
+  });
+});
+
+describe("brain_feedback tool schema", () => {
+  test("force_confirmed description reflects the alongside-signal behaviour", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 50,
+      method: "tools/list",
+    });
+    const tools = (r as any).result.tools as ReadonlyArray<{
+      name: string;
+      inputSchema: { properties?: Record<string, { description?: string }> };
+    }>;
+    const feedback = tools.find((t) => t.name === "brain_feedback");
+    expect(feedback).toBeDefined();
+    const fcDesc =
+      feedback!.inputSchema.properties?.["force_confirmed"]?.description ?? "";
+    // The handler ALWAYS writes the inbox signal; with force_confirmed
+    // it additionally materialises a confirmed preference. The earlier
+    // "instead of an inbox signal" wording was incorrect.
+    expect(fcDesc).toContain("alongside");
+    expect(fcDesc).not.toMatch(/instead of an inbox signal/i);
+  });
+});
 
 describe("brain_feedback", () => {
   test("writes a signal under Brain/inbox/ and returns path + id", async () => {

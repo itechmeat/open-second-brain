@@ -23,7 +23,7 @@ The document is **trigger-based**, not schedule-based. Each item has an explicit
 |---|---|---|
 | [BRAIN-FUT-001](#brain-fut-001--workflow-auto-detection) | Workflow auto-detection | Engine |
 | [BRAIN-FUT-002](#brain-fut-002--cross-topic-contradiction-detection) | Cross-topic contradiction detection | Engine |
-| [BRAIN-FUT-003](#brain-fut-003--soft-stop-hook-reminder-for-brain-feedback) | Soft Stop-hook reminder for `brain_feedback` | Capture |
+| [BRAIN-FUT-003](#brain-fut-003--soft-stop-hook-reminder-for-brain_feedback) | Soft Stop-hook reminder for `brain_feedback` | Capture |
 | [BRAIN-FUT-004](#brain-fut-004--external-research-as-signal-source) | External research as signal source | Capture |
 | [BRAIN-FUT-005](#brain-fut-005--portable-subgraph-export) | Portable subgraph export | Surface |
 | [BRAIN-FUT-006](#brain-fut-006--active-preference-injection-via-per-turn-hook) | Active-preference injection via per-turn hook | Surface |

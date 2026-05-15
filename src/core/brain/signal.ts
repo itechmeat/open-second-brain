@@ -209,6 +209,13 @@ export function parseSignal(path: string): BrainSignal {
     if (!Array.isArray(meta["source"])) {
       throw new Error(`signal field 'source' must be an array (${path})`);
     }
+    for (const item of meta["source"]) {
+      if (typeof item !== "string") {
+        throw new Error(
+          `signal field 'source' must be an array of strings (${path})`,
+        );
+      }
+    }
     source = [...(meta["source"] as ReadonlyArray<string>)];
   }
 
@@ -280,7 +287,12 @@ function extractRawSection(body: string): string | undefined {
   // The signal body is exactly one "## Raw" section. Capture everything
   // after it until EOF (no further headings in this schema). Returning
   // `undefined` for the placeholder keeps the type shape clean.
-  const match = /^##\s+Raw\s*\n+([\s\S]*?)\s*$/m.exec(body);
+  //
+  // No `m` flag: with multiline mode `$` matches end-of-line, which
+  // truncates the lazy `[\s\S]*?` capture at the first newline instead
+  // of running to EOF. We anchor the heading at start-of-string with an
+  // explicit `(?:^|\n)` and let `$` mean end-of-string only.
+  const match = /(?:^|\n)##\s+Raw\s*\n+([\s\S]*?)\s*$/.exec(body);
   if (!match) return undefined;
   const raw = match[1]?.trim();
   if (!raw || raw === "_(not provided)_") return undefined;
@@ -313,6 +325,13 @@ function requireStringArray(
   const v = meta[field];
   if (!Array.isArray(v)) {
     throw new Error(`signal field '${field}' must be an array`);
+  }
+  for (const item of v) {
+    if (typeof item !== "string") {
+      throw new Error(
+        `signal field '${field}' must be an array of strings`,
+      );
+    }
   }
   return [...(v as ReadonlyArray<string>)];
 }

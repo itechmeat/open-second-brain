@@ -159,6 +159,38 @@ describe("writeSignal — wikilink preservation", () => {
   });
 });
 
+describe("extractRawSection (via parseSignal)", () => {
+  test("multi-line raw block survives the roundtrip in full (regression on m-flag $)", () => {
+    // With the regex `/^##\s+Raw\s*\n+([\s\S]*?)\s*$/m`, the `m` flag
+    // makes `$` match end-of-line — the lazy `[\s\S]*?` capture was
+    // truncated at the first newline. The fix drops the `m` flag so
+    // `$` only matches end-of-string, letting the full multi-line raw
+    // block flow into the capture group.
+    const multiLine = [
+      "First line of the raw quote.",
+      "Second line continues the thought.",
+      "",
+      "Third line after a blank gap.",
+    ].join("\n");
+    const result = writeSignal(tmp, baseInput({
+      slug: "multi-line-raw",
+      raw: multiLine,
+    }));
+    const parsed = parseSignal(result.path);
+    expect(parsed.raw).toBe(multiLine);
+  });
+
+  test("missing or placeholder raw returns undefined", () => {
+    // The "## Raw\n\n_(not provided)_" placeholder should always parse
+    // back to `undefined` so the schema shape stays clean.
+    const noRawInput = baseInput({ slug: "no-raw" });
+    delete (noRawInput as { raw?: string }).raw;
+    const result = writeSignal(tmp, noRawInput);
+    const parsed = parseSignal(result.path);
+    expect(parsed.raw).toBeUndefined();
+  });
+});
+
 describe("writeSignal — slug collision allocator", () => {
   test("second write with the same slug receives a `-2` suffix", () => {
     const a = writeSignal(tmp, baseInput());

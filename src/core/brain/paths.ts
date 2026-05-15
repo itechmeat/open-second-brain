@@ -156,6 +156,16 @@ export function validateSlug(slug: string): string {
   if (trimmed.includes("/") || trimmed.includes("\\")) {
     throw new Error(`slug must not contain path separators: ${slug}`);
   }
+  // Reject Windows-invalid filename characters (`:*?"<>|`) and ASCII
+  // control characters (0x00-0x1F). On NTFS these are forbidden in a
+  // filename; on POSIX a NUL byte is illegal in a path and the rest are
+  // ambiguous when round-tripped through cross-platform tooling (zip
+  // archives, syncthing, git on Windows).
+  if (/[:*?"<>|\x00-\x1F]/.test(trimmed)) {
+    throw new Error(
+      `slug contains invalid character: ${JSON.stringify(slug)}`,
+    );
+  }
   if (
     trimmed === ".." ||
     trimmed === "." ||

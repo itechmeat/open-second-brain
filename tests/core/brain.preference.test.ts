@@ -285,3 +285,43 @@ describe("status-vs-folder mismatch", () => {
     expect(() => parseRetired(path)).toThrow(/kind must be 'brain-retired'/);
   });
 });
+
+describe("status enum validation", () => {
+  test("parsePreference rejects an unknown status value", () => {
+    // A typo / hand-edit should never coerce into BrainPreferenceStatus
+    // (`unconfirmed | confirmed`). "retired" remains tolerated because
+    // it triggers the dedicated status-folder-mismatch error path.
+    const dirs = brainDirs(tmp);
+    mkdirSync(dirs.preferences, { recursive: true });
+    const path = preferencePath(tmp, "invalid-status");
+    const content = [
+      "---",
+      "kind: brain-preference",
+      "id: pref-invalid-status",
+      "created_at: 2026-05-14T10:42:00Z",
+      "confirmed_at: null",
+      "unconfirmed_until: 2026-05-28T10:42:00Z",
+      "tags: [brain, brain/preference]",
+      "topic: invalid-status",
+      "status: hilarious",
+      "principle: Hand-crafted invalid status",
+      "evidenced_by: []",
+      "applied_count: 0",
+      "violated_count: 0",
+      "last_evidence_at: null",
+      "confidence: low",
+      "pinned: false",
+      "---",
+      "",
+      "## Principle",
+      "",
+      "Invalid",
+      "",
+    ].join("\n");
+    writeFileSync(path, content, "utf8");
+
+    expect(() => parsePreference(path)).toThrow(
+      /preference status must be one of/,
+    );
+  });
+});

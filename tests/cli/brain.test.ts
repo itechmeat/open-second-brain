@@ -81,6 +81,21 @@ describe("brain --help", () => {
     expect(r.returncode).toBe(2);
     expect(r.stderr).toContain("unknown brain verb");
   });
+
+  test("unknown verb requesting --help falls back to generic help with exit 2", async () => {
+    const r = await runCli(["brain", "no-such-verb", "--help"]);
+    expect(r.returncode).toBe(2);
+    // Should print the generic Brain help (lists known verbs), not a
+    // bare placeholder line.
+    expect(r.stdout).toContain("usage: o2b brain");
+    expect(r.stdout).toContain("feedback");
+  });
+
+  test("known verb --help exits 0 with verb-specific help", async () => {
+    const r = await runCli(["brain", "feedback", "--help"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("brain feedback");
+  });
 });
 
 describe("brain init", () => {
@@ -243,6 +258,29 @@ describe("brain dream", () => {
     await bootstrap();
     const r = await runCli(
       ["brain", "dream", "--vault", vault, "--now", "not-a-date"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("--now");
+  });
+
+  test("--now rejects permissive partial dates like a bare year", async () => {
+    // `new Date("2026")` happily returns 2026-01-01T00:00:00Z, which
+    // would silently let an under-specified `--now` value through. The
+    // strict ISO-8601 pattern rejects it.
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "dream", "--vault", vault, "--now", "2026"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("--now");
+  });
+
+  test("--now rejects date-only strings without time/timezone", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "dream", "--vault", vault, "--now", "2026-05-15"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(1);
@@ -667,6 +705,22 @@ describe("brain rollback", () => {
     );
     expect(r.returncode).toBe(2);
     expect(r.stderr.toLowerCase()).toContain("snapshot not found");
+  });
+
+  test("--json without --yes fails fast (never hangs on a prompt)", async () => {
+    await bootstrap();
+    // Even on a fake run_id the dispatcher must refuse to prompt under
+    // --json — otherwise scripted callers deadlock waiting for stdin.
+    // The new non-interactive guard short-circuits before the snapshot
+    // existence probe; we treat that as the contract under test.
+    const r = await runCli(
+      ["brain", "rollback", "--vault", vault, "any-run", "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    // Either 1 (non-interactive guard) or 2 (snapshot-not-found) is
+    // acceptable as long as the call returns without hanging. The
+    // crucial bit is no timeout.
+    expect([1, 2]).toContain(r.returncode);
   });
 
   test("--yes restores byte-for-byte", async () => {

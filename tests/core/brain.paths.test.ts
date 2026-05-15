@@ -123,6 +123,22 @@ describe("validateSlug", () => {
     expect(() => validateSlug("CON")).toThrow(/Windows-reserved/);
     expect(() => validateSlug("nul.md")).toThrow(/Windows-reserved/);
   });
+
+  test("rejects Windows-invalid filename characters", () => {
+    expect(() => validateSlug("slug:with-colon")).toThrow(/invalid character/);
+    expect(() => validateSlug("slug*with-star")).toThrow(/invalid character/);
+    expect(() => validateSlug('slug"quote')).toThrow(/invalid character/);
+    expect(() => validateSlug("slug<lt")).toThrow(/invalid character/);
+    expect(() => validateSlug("slug>gt")).toThrow(/invalid character/);
+    expect(() => validateSlug("slug|pipe")).toThrow(/invalid character/);
+    expect(() => validateSlug("slug?question")).toThrow(/invalid character/);
+  });
+
+  test("rejects ASCII control characters in slug", () => {
+    expect(() => validateSlug("slug\x00null")).toThrow(/invalid character/);
+    expect(() => validateSlug("slug\nnewline")).toThrow(/invalid character/);
+    expect(() => validateSlug("slug\x1Fus")).toThrow(/invalid character/);
+  });
 });
 
 describe("validateIsoDate", () => {

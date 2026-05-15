@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0] - YYYY-MM-DD
+## [0.9.0] - 2026-05-15
 
 Brain: a new top-level vault layer for observing, accreting memory.
 Agents record taste signals from conversation and per-artifact

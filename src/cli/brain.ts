@@ -98,6 +98,16 @@ function info(message: string): void {
   process.stdout.write(message + (message.endsWith("\n") ? "" : "\n"));
 }
 
+/**
+ * Strict ISO-8601 timestamp matcher used by `--now / --since / --until`.
+ * The plain `new Date(s)` constructor is far too permissive (it happily
+ * parses `"2026"`, `"hello world"` via some locales, year-only strings,
+ * etc.). We require a full date-time including offset (`Z` or `±HH:MM`),
+ * which is the shape `isoSecond()` emits and what scripted callers send.
+ */
+const ISO_8601_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
+
 // ── Common parse helpers ────────────────────────────────────────────────────
 
 /**
@@ -332,6 +342,9 @@ async function cmdBrainDream(argv: string[]): Promise<number> {
   let now: Date | undefined;
   const nowStr = flags["now"] as string | undefined;
   if (nowStr) {
+    if (!ISO_8601_RE.test(nowStr)) {
+      return fail(`--now must be a valid ISO-8601 timestamp; got ${nowStr}`);
+    }
     const parsed = new Date(nowStr);
     if (!Number.isFinite(parsed.getTime())) {
       return fail(`--now must be a valid ISO-8601 timestamp; got ${nowStr}`);
@@ -436,20 +449,30 @@ async function cmdBrainDigest(argv: string[]): Promise<number> {
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
 
   // Validate inputs before building the options literal so we never
-  // materialise an `opts` object with NaN-time `Date`s.
+  // materialise an `opts` object with NaN-time `Date`s. Strict ISO-8601
+  // pattern check first so `--since 2026` / `--since "hello"` are rejected
+  // before `new Date()` happily silently coerces them.
   let sinceDate: Date | undefined;
   if (flags["since"]) {
-    const d = new Date(String(flags["since"]));
+    const raw = String(flags["since"]);
+    if (!ISO_8601_RE.test(raw)) {
+      return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
+    }
+    const d = new Date(raw);
     if (!Number.isFinite(d.getTime())) {
-      return fail(`--since must be a valid ISO-8601 timestamp; got ${flags["since"]}`);
+      return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
     }
     sinceDate = d;
   }
   let untilDate: Date | undefined;
   if (flags["until"]) {
-    const d = new Date(String(flags["until"]));
+    const raw = String(flags["until"]);
+    if (!ISO_8601_RE.test(raw)) {
+      return fail(`--until must be a valid ISO-8601 timestamp; got ${raw}`);
+    }
+    const d = new Date(raw);
     if (!Number.isFinite(d.getTime())) {
-      return fail(`--until must be a valid ISO-8601 timestamp; got ${flags["until"]}`);
+      return fail(`--until must be a valid ISO-8601 timestamp; got ${raw}`);
     }
     untilDate = d;
   }
@@ -522,9 +545,13 @@ async function cmdBrainQuery(argv: string[]): Promise<number> {
       return 0;
     }
     if (flags["since"]) {
-      const d = new Date(String(flags["since"]));
+      const raw = String(flags["since"]);
+      if (!ISO_8601_RE.test(raw)) {
+        return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
+      }
+      const d = new Date(raw);
       if (!Number.isFinite(d.getTime())) {
-        return fail(`--since must be a valid ISO-8601 timestamp; got ${flags["since"]}`);
+        return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
       }
       const entries = queryByLogSince(vault, d);
       if (flags["json"]) {
@@ -726,8 +753,16 @@ async function cmdBrainRollback(argv: string[]): Promise<number> {
   // extracting first; the headline is intentionally lightweight — "you
   // are about to overwrite N files").
   if (!flags["yes"]) {
+    // Non-interactive guard: --json output or non-TTY stdin (CI, pipes)
+    // would silently hang waiting for input. Fail fast and demand --yes
+    // so automation never blocks on a dropped prompt.
+    if (flags["json"] || !process.stdin.isTTY) {
+      return fail(
+        "rollback requires --yes in non-interactive mode (--json or non-TTY stdin)",
+      );
+    }
     const summary = diffSummary(vault);
-    process.stdout.write(
+    process.stderr.write(
       `About to restore snapshot '${runId}' over Brain/.\n` +
         `Current state: ${summary.preferences} preferences, ${summary.retired} retired, ${summary.signals} signals.\n` +
         `This will OVERWRITE the live Brain/ tree (.snapshots/ is preserved).\n` +
@@ -905,10 +940,13 @@ export async function handleBrainSubcommand(
     const text = VERB_HELP[verb];
     if (text) {
       process.stdout.write(text);
-    } else {
-      process.stdout.write(`brain ${verb}: see https://github.com/itechmeat/open-second-brain\n`);
+      return 0;
     }
-    return 0;
+    // Unknown verb requesting --help: fall back to generic brain help
+    // and return 2 (same exit code as the unknown-verb branch in the
+    // dispatcher below).
+    process.stdout.write(BRAIN_HELP);
+    return 2;
   }
 
   try {

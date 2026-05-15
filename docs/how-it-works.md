@@ -36,7 +36,7 @@ its own.
 │   ├── preferences/                # active rules
 │   │   └── pref-<slug>.md          # status: unconfirmed | confirmed
 │   ├── retired/                    # archived rules
-│   │   └── ret-<slug>.md           # retired_reason: stale | expired | rebutted | user-rejected
+│   │   └── ret-<slug>.md           # retired_reason: stale-no-evidence | expired-unconfirmed | rebutted | user-rejected
 │   ├── log/                        # daily event log
 │   │   └── YYYY-MM-DD.md           # append-only, typed events
 │   └── .snapshots/                 # pre-dream snapshots

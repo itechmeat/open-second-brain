@@ -123,22 +123,35 @@ export function queryByPreference(
   if (!id) {
     throw new BrainNotFoundError(pref_id);
   }
+  // Slug shape is the same alphabet validateSlug() enforces; rejecting
+  // here before forming any filesystem path closes a path-traversal
+  // vector (`pref-../../etc/passwd`) — even though `validateSlug` would
+  // catch it later, we never want `join(dirs.preferences, ...)` to
+  // resolve outside the intended directory under any operator error.
+  const SLUG_RE = /^[A-Za-z0-9._-]+$/;
   const dirs = brainDirs(vault);
   let preference: BrainPreference | BrainRetired | null = null;
 
   if (id.startsWith("pref-")) {
+    const slug = id.slice("pref-".length);
+    if (!SLUG_RE.test(slug)) {
+      throw new BrainNotFoundError(pref_id);
+    }
     const activePath = join(dirs.preferences, `${id}.md`);
     if (existsSync(activePath)) {
       preference = parsePreference(activePath);
     } else {
       // Fallback to the retired version with the same slug stem.
-      const slug = id.slice("pref-".length);
       const retiredPathCandidate = join(dirs.retired, `ret-${slug}.md`);
       if (existsSync(retiredPathCandidate)) {
         preference = parseRetired(retiredPathCandidate);
       }
     }
   } else if (id.startsWith("ret-")) {
+    const slug = id.slice("ret-".length);
+    if (!SLUG_RE.test(slug)) {
+      throw new BrainNotFoundError(pref_id);
+    }
     const retiredPathCandidate = join(dirs.retired, `${id}.md`);
     if (existsSync(retiredPathCandidate)) {
       preference = parseRetired(retiredPathCandidate);
@@ -309,7 +322,15 @@ function findPreferenceForTopic(
 ): BrainPreference | BrainRetired | null {
   if (!existsSync(dir)) return null;
   const prefix = kind === "preference" ? "pref-" : "ret-";
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  // Sort by filename so the "first match" is deterministic across runs
+  // and filesystems. `readdirSync` order is platform-dependent (it is
+  // explicitly unspecified by POSIX and by Node) — without an explicit
+  // sort, two preferences with the same topic could be returned in
+  // different orders on different machines.
+  const entries = readdirSync(dir, { withFileTypes: true })
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!entry.name.startsWith(prefix) || !entry.name.endsWith(".md")) {
       continue;

@@ -279,6 +279,18 @@ export function parsePreference(path: string): BrainPreference {
   }
 
   const status = requireString(meta, "status", path);
+  // Reject unknown status values BEFORE the folder invariant: a malformed
+  // file should never coerce into a typed `BrainPreference.status`
+  // downstream, regardless of which folder it sits in. We tolerate
+  // `status: "retired"` here because that case is the dedicated
+  // status-folder-mismatch the parser surfaces below as a typed error
+  // (doctor downgrades it to a warning) — see §4 of the design doc.
+  const statusValues = Object.values(BRAIN_PREFERENCE_STATUS) as ReadonlyArray<string>;
+  if (!statusValues.includes(status) && status !== "retired") {
+    throw new Error(
+      `preference status must be one of ${statusValues.join(", ")}; got ${JSON.stringify(status)} (${path})`,
+    );
+  }
   enforceStatusFolderInvariant(path, status, "preferences");
 
   const id = requireString(meta, "id", path);
@@ -603,6 +615,13 @@ function requireStringArray(
   if (!Array.isArray(v)) {
     throw new Error(`preference field '${field}' must be an array (${path})`);
   }
+  for (const item of v) {
+    if (typeof item !== "string") {
+      throw new Error(
+        `preference field '${field}' must be an array of strings (${path})`,
+      );
+    }
+  }
   return [...(v as ReadonlyArray<string>)];
 }
 
@@ -614,6 +633,13 @@ function optionalStringArray(
   if (v === undefined || v === null) return [];
   if (!Array.isArray(v)) {
     throw new Error(`preference field '${field}' must be an array`);
+  }
+  for (const item of v) {
+    if (typeof item !== "string") {
+      throw new Error(
+        `preference field '${field}' must be an array of strings`,
+      );
+    }
   }
   return [...(v as ReadonlyArray<string>)];
 }
