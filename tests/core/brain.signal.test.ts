@@ -1,0 +1,178 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import {
+  parseSignal,
+  writeSignal,
+  type WriteSignalInput,
+} from "../../src/core/brain/signal.ts";
+
+let tmp: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "o2b-brain-signal-"));
+});
+
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+function baseInput(overrides: Partial<WriteSignalInput> = {}): WriteSignalInput {
+  return {
+    topic: "no-internal-abbrev",
+    signal: "negative",
+    agent: "claude",
+    principle: "Do not use internal abbreviations in user-facing copy unless explained first",
+    created_at: "2026-05-14T10:15:00Z",
+    date: "2026-05-14",
+    slug: "no-internal-abbrev",
+    scope: "writing",
+    source: ["[[Daily/2026.05.14]]", "[[blog-header-draft]]"],
+    raw: "Sergey pointed out that OSB appeared as an abbreviation.",
+    ...overrides,
+  };
+}
+
+describe("writeSignal — required field validation", () => {
+  // Test each required field independently. The contract is
+  // `Error('signal missing field: <name>')` so a regression that
+  // changes the message format would be caught here.
+  const requiredFields: ReadonlyArray<keyof WriteSignalInput> = [
+    "topic",
+    "signal",
+    "agent",
+    "principle",
+    "created_at",
+    "date",
+    "slug",
+  ];
+  for (const field of requiredFields) {
+    test(`missing '${String(field)}' throws naming the field`, () => {
+      const input = baseInput();
+      // `as any`-equivalent without `any`: structurally remove the
+      // field by composing a fresh object that omits it.
+      const partial = { ...input } as Record<string, unknown>;
+      delete partial[field as string];
+      expect(() =>
+        writeSignal(tmp, partial as unknown as WriteSignalInput),
+      ).toThrow(new RegExp(`signal missing field: ${String(field)}`));
+    });
+  }
+
+  test("invalid signal value throws", () => {
+    expect(() =>
+      writeSignal(tmp, baseInput({ signal: "neutral" as unknown as "positive" })),
+    ).toThrow(/must be 'positive' or 'negative'/);
+  });
+});
+
+describe("writeSignal + parseSignal roundtrip", () => {
+  test("parses every field that was written", () => {
+    const result = writeSignal(tmp, baseInput());
+    expect(result.id).toBe("sig-2026-05-14-no-internal-abbrev");
+    const parsed = parseSignal(result.path);
+    expect(parsed.kind).toBe("brain-signal");
+    expect(parsed.id).toBe(result.id);
+    expect(parsed.created_at).toBe("2026-05-14T10:15:00Z");
+    expect(parsed.topic).toBe("no-internal-abbrev");
+    expect(parsed.signal).toBe("negative");
+    expect(parsed.agent).toBe("claude");
+    expect(parsed.scope).toBe("writing");
+    expect(parsed.principle).toContain("internal abbreviations");
+    expect(parsed.tags).toContain("brain");
+    expect(parsed.tags).toContain("brain/signal");
+    expect(parsed.tags).toContain("brain/topic/no-internal-abbrev");
+    expect(parsed.tags).toContain("brain/scope/writing");
+    expect(parsed.source).toEqual([
+      "[[Daily/2026.05.14]]",
+      "[[blog-header-draft]]",
+    ]);
+    expect(parsed.raw).toContain("Sergey pointed out");
+  });
+
+  test("byte-equal roundtrip: write → parse → write to a fresh slug → identical bytes", () => {
+    // Step 1: original write.
+    const first = writeSignal(tmp, baseInput());
+    const firstBytes = readFileSync(first.path, "utf8");
+
+    // Step 2: parse what we wrote.
+    const parsed = parseSignal(first.path);
+
+    // Step 3: write to a second slug; same input, different filename
+    // (so we can compare bytes without colliding on the first file).
+    const second = writeSignal(
+      tmp,
+      baseInput({
+        slug: "no-internal-abbrev-roundtrip",
+      }),
+    );
+    const secondBytes = readFileSync(second.path, "utf8");
+
+    // The two files differ only on the `id:` line and the filename
+    // baked into the id; everything else must be byte-identical.
+    const normalize = (s: string): string =>
+      s
+        .replace(/^id:.*$/m, "id: <ID>")
+        .replace(/\bno-internal-abbrev-roundtrip\b/g, "no-internal-abbrev");
+    expect(normalize(firstBytes)).toBe(normalize(secondBytes));
+
+    // And the parsed source array survives untouched.
+    expect(parsed.source).toEqual([
+      "[[Daily/2026.05.14]]",
+      "[[blog-header-draft]]",
+    ]);
+  });
+});
+
+describe("writeSignal — wikilink preservation", () => {
+  test("wikilink strings in source[] survive parse → write → parse unchanged", () => {
+    const input = baseInput({
+      source: ["[[Daily/2026.05.14]]", "[[blog-header-draft]]"],
+    });
+    const first = writeSignal(tmp, input);
+    const parsed = parseSignal(first.path);
+    expect(parsed.source).toEqual([
+      "[[Daily/2026.05.14]]",
+      "[[blog-header-draft]]",
+    ]);
+
+    // Write again to a different slug, then re-parse.
+    const second = writeSignal(tmp, {
+      ...input,
+      slug: "wiki-roundtrip",
+      source: [...parsed.source!],
+    });
+    const reparsed = parseSignal(second.path);
+    expect(reparsed.source).toEqual([
+      "[[Daily/2026.05.14]]",
+      "[[blog-header-draft]]",
+    ]);
+  });
+
+  test("file body actually contains the wikilink literally", () => {
+    const result = writeSignal(tmp, baseInput());
+    const bytes = readFileSync(result.path, "utf8");
+    expect(bytes).toContain("[[Daily/2026.05.14]]");
+    expect(bytes).toContain("[[blog-header-draft]]");
+  });
+});
+
+describe("writeSignal — slug collision allocator", () => {
+  test("second write with the same slug receives a `-2` suffix", () => {
+    const a = writeSignal(tmp, baseInput());
+    expect(a.id).toBe("sig-2026-05-14-no-internal-abbrev");
+
+    const b = writeSignal(tmp, baseInput());
+    expect(b.id).toBe("sig-2026-05-14-no-internal-abbrev-2");
+    expect(b.path).not.toBe(a.path);
+  });
+
+  test("third write with the same slug receives `-3`", () => {
+    writeSignal(tmp, baseInput());
+    writeSignal(tmp, baseInput());
+    const c = writeSignal(tmp, baseInput());
+    expect(c.id).toBe("sig-2026-05-14-no-internal-abbrev-3");
+  });
+});

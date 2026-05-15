@@ -53,7 +53,9 @@ describe("post-write-reminder hook", () => {
     expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
     expect(out.hookSpecificOutput.additionalContext).toContain("`Write`");
     expect(out.hookSpecificOutput.additionalContext).toContain("/tmp/foo.md");
-    expect(out.hookSpecificOutput.additionalContext).toContain("event_log_append");
+    expect(out.hookSpecificOutput.additionalContext).toContain("brain_feedback");
+    expect(out.hookSpecificOutput.additionalContext).toContain("brain_apply_evidence");
+    expect(out.hookSpecificOutput.additionalContext).not.toContain("event_log_append");
   });
 
   test("emits additionalContext for Codex apply_patch with patch body", async () => {

@@ -1,0 +1,1162 @@
+/**
+ * `dream` — the only mutating batch operation in the Brain layer.
+ *
+ * `dream` reads the current Brain state and decides which transitions
+ * to apply. It is deterministic given the inputs and the configured
+ * time (the `--now` parameter). The algorithm is anchored in design
+ * doc §7.3 and the per-rule clarifications in §7.4.
+ *
+ * Outputs (high level):
+ *
+ *   - Pre-run snapshot under `Brain/.snapshots/<run_id>.tar.zst`,
+ *     created BEFORE any state-changing write so a crash mid-run can
+ *     be rolled back atomically.
+ *   - New / updated files in `Brain/preferences/`.
+ *   - Moves into `Brain/retired/`.
+ *   - Moves from `Brain/inbox/` into `Brain/inbox/processed/`.
+ *   - One appended event in `Brain/log/<today>.md` summarising the
+ *     run — **only** if any state actually changed. Idempotent reruns
+ *     touch nothing.
+ *
+ * Invariants:
+ *
+ *   - Same-sign signals on an active preference are noted (moved to
+ *     `processed/`, log event `noted-redundant`) but do NOT create a
+ *     second preference and do NOT increment `applied_count`.
+ *   - Opposite-sign signals against an active preference accumulate
+ *     toward a rebuttal. Hitting `candidate_threshold` retires the
+ *     active preference (reason `rebutted`) UNLESS it is pinned, in
+ *     which case the rebut attempt is logged as a `retain-pinned`
+ *     event and the preference stays.
+ *   - Corrupted frontmatter on a single file produces a
+ *     `skip-corrupted-frontmatter` log event and is skipped. The run
+ *     continues for the rest of the tree.
+ *   - dryRun mode returns the planned summary but performs no writes.
+ */
+
+import { existsSync, readdirSync, renameSync } from "node:fs";
+import { basename, join } from "node:path";
+
+import { parseFrontmatter } from "../vault.ts";
+import {
+  appendLogEvent,
+  parseLogDay,
+  type BrainLogEntry,
+} from "./log.ts";
+import {
+  moveToRetired,
+  parsePreference,
+  writePreference,
+} from "./preference.ts";
+import { parseSignal } from "./signal.ts";
+import { isPinned } from "./pin.ts";
+import {
+  createSnapshot,
+  pruneSnapshots,
+} from "./snapshot.ts";
+import { loadBrainConfig } from "./policy.ts";
+import {
+  brainDirs,
+  preferencePath,
+  processedSignalPath,
+  retiredPath,
+  vaultRelative,
+} from "./paths.ts";
+import { isoDate, isoSecond } from "./time.ts";
+import { parseWikilink } from "./wikilink.ts";
+import {
+  BRAIN_APPLY_RESULT,
+  BRAIN_CONFIDENCE,
+  BRAIN_LOG_EVENT_KIND,
+  BRAIN_PREFERENCE_STATUS,
+  BRAIN_RETIRED_REASON,
+  BRAIN_SIGNAL_SIGN,
+  type BrainConfidence,
+  type BrainConfig,
+  type BrainPreference,
+  type BrainRetiredReason,
+  type BrainSignal,
+  type BrainSignalSign,
+} from "./types.ts";
+
+// ----- Public types --------------------------------------------------------
+
+export interface DreamRunSummary {
+  /** `dream-YYYY-MM-DD-HHMMSS`. */
+  readonly run_id: string;
+  /** False on a true no-op run (no signals, no transitions, no retires). */
+  readonly changed: boolean;
+  /** Preference ids newly created in `unconfirmed` state. */
+  readonly new_unconfirmed: ReadonlyArray<string>;
+  /** Preference ids transitioning `unconfirmed → confirmed`. */
+  readonly confirmed: ReadonlyArray<string>;
+  /** Preferences moved to `retired/` and the reason for each. */
+  readonly retired: ReadonlyArray<{ id: string; reason: BrainRetiredReason }>;
+  /** Topic slugs where opposite-sign signals are accumulating but no
+   *  state change happened yet (window not exceeded, or pinned). */
+  readonly contradictions: ReadonlyArray<string>;
+  /** Signal ids moved from inbox/ into inbox/processed/. */
+  readonly moved_to_processed: ReadonlyArray<string>;
+  /** Snapshot file (absent on a no-op run). */
+  readonly snapshot_path?: string;
+  /** Log file the run summary landed in (absent on a no-op run). */
+  readonly log_path?: string;
+  /** True iff the run was a dry-run (no on-disk mutations performed). */
+  readonly dry_run?: boolean;
+}
+
+export interface DreamOptions {
+  /** Wall clock for the run. Defaults to `new Date()`. */
+  readonly now?: Date;
+  /** When true, compute the plan but make no writes. */
+  readonly dryRun?: boolean;
+}
+
+// ----- Internal scan types ------------------------------------------------
+
+interface SignalRecord {
+  readonly path: string;
+  readonly signal: BrainSignal;
+  /** True iff the file lives in `inbox/` (not `processed/`). */
+  readonly active: boolean;
+}
+
+interface PreferenceRecord {
+  readonly path: string;
+  readonly pref: BrainPreference;
+}
+
+interface RetiredRecord {
+  readonly path: string;
+  readonly topic: string;
+  readonly id: string;
+}
+
+interface CorruptedEntry {
+  readonly path: string;
+}
+
+interface ScanResult {
+  readonly signals: SignalRecord[];
+  readonly preferences: PreferenceRecord[];
+  readonly retired: RetiredRecord[];
+  readonly corrupted: CorruptedEntry[];
+}
+
+// ----- Main entry ----------------------------------------------------------
+
+export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
+  const now = opts.now ?? new Date();
+  const dryRun = opts.dryRun === true;
+  const cfg = loadBrainConfig(vault);
+  const runId = formatRunId(now);
+  const wikilinkToRun = `[[Brain/log/${isoDate(now)}]]`;
+
+  // 0. Scan the whole Brain/ tree. Corrupted files (frontmatter
+  //    parse-errors) are surfaced separately so the planning phase
+  //    can emit `skip-corrupted-frontmatter` log entries without
+  //    aborting.
+  const scan = scanBrain(vault);
+
+  // 1-2. Plan per-topic transitions: new unconfirmed preferences,
+  //      same-sign noted-redundant moves, rebuttal accumulation.
+  const plan = planTopics(scan, cfg, now, wikilinkToRun);
+
+  // 3. Plan refresh: applied / violated / last_evidence / confidence,
+  //    and unconfirmed → confirmed promotion. We need the log of all
+  //    apply-evidence entries up to `now` — we read every day file
+  //    referenced by `last_evidence_at` plus today's file. Since the
+  //    plan doesn't yet know dates, we scan the entire log/ directory.
+  const evidence = scanApplyEvidence(vault);
+  const refresh = planRefresh(scan, evidence, cfg, now, plan);
+
+  // 4. Plan retires (expired-unconfirmed, stale-no-evidence). Pinned
+  //    preferences get a `retain-pinned` log event instead of a real
+  //    retire.
+  planAutoRetires(scan, cfg, now, plan, refresh);
+
+  // 5. Plan signal moves (inbox/ → processed/).
+  planSignalMoves(scan, plan);
+
+  // Decide if anything is going to change. We treat any of the
+  // following as a state change:
+  //   - a new unconfirmed pref
+  //   - a refreshed pref (counters/confidence/status changed)
+  //   - a retire
+  //   - a same-sign signal noted on an active pref (move + log)
+  //   - a corrupted frontmatter (we want the skip event recorded)
+  //   - any pinned-rebut-attempt warning
+  const changed =
+    plan.newUnconfirmed.length > 0 ||
+    refresh.confirmed.size > 0 ||
+    refresh.updated.size > 0 ||
+    plan.retires.length > 0 ||
+    plan.notedRedundant.length > 0 ||
+    plan.signalsToMove.size > 0 ||
+    plan.retainPinned.length > 0 ||
+    scan.corrupted.length > 0;
+
+  if (!changed) {
+    return Object.freeze({
+      run_id: runId,
+      changed: false,
+      new_unconfirmed: [],
+      confirmed: [],
+      retired: [],
+      contradictions: [...plan.contradictionTopics],
+      moved_to_processed: [],
+      ...(dryRun ? { dry_run: true } : {}),
+    } satisfies DreamRunSummary);
+  }
+
+  // ---- Execute --------------------------------------------------------
+
+  // Snapshot must succeed before any mutation. If it fails, the
+  // function throws and nothing changes on disk.
+  let snapshotPathStr: string | undefined;
+  if (!dryRun) {
+    const snap = createSnapshot(vault, runId);
+    snapshotPathStr = snap.path;
+  }
+
+  // Order of operations matters for the on-disk invariants:
+  //   1. Write new unconfirmed preferences (so signal moves can find
+  //      them).
+  //   2. Apply refresh (counters, confidence, promotion) to existing
+  //      preferences.
+  //   3. Move retiring preferences out (after the refresh has had a
+  //      chance to surface the most recent counters in the retired
+  //      file). NOTE: refresh skips entries that will retire.
+  //   4. Move consumed signals into `processed/`.
+  //   5. Emit log entries (noted-redundant, retain-pinned,
+  //      skip-corrupted-frontmatter, dream summary).
+  const moved: string[] = [];
+
+  if (!dryRun) {
+    for (const np of plan.newUnconfirmed) {
+      writePreference(
+        vault,
+        {
+          slug: np.slug,
+          topic: np.topic,
+          principle: np.principle,
+          created_at: isoSecond(now),
+          unconfirmed_until: isoSecond(
+            addDays(now, cfg.dream.unconfirmed_window_days),
+          ),
+          status: BRAIN_PREFERENCE_STATUS.unconfirmed,
+          evidenced_by: np.evidencedBy,
+          ...(np.scope ? { scope: np.scope } : {}),
+          ...(np.supersedes ? { supersedes: np.supersedes } : {}),
+        },
+        { overwrite: false },
+      );
+    }
+
+    for (const update of refresh.updated.values()) {
+      writePreference(
+        vault,
+        {
+          slug: update.slug,
+          topic: update.topic,
+          principle: update.principle,
+          created_at: update.created_at,
+          unconfirmed_until: update.unconfirmed_until,
+          status: update.status,
+          evidenced_by: update.evidenced_by,
+          confirmed_at: update.confirmed_at,
+          applied_count: update.applied_count,
+          violated_count: update.violated_count,
+          last_evidence_at: update.last_evidence_at,
+          confidence: update.confidence,
+          pinned: update.pinned,
+          ...(update.scope ? { scope: update.scope } : {}),
+        },
+        { overwrite: true },
+      );
+    }
+
+    for (const r of plan.retires) {
+      const fromPath = preferencePath(vault, r.slug);
+      if (!existsSync(fromPath)) continue;
+      try {
+        moveToRetired(vault, fromPath, r.reason, {
+          now,
+          retired_by: wikilinkToRun,
+          ...(r.supersededBy ? { superseded_by: r.supersededBy } : {}),
+        });
+      } catch (err) {
+        // A retire failure is logged via the `skip-corrupted-frontmatter`
+        // pathway only if it stemmed from a parse error during the
+        // plan; here the file may have been moved already (rare race).
+        // Surface the cause so an operator chasing a missing retire can
+        // see which slug tripped.
+        process.stderr.write(
+          `warning: retire stale pref ${r.slug} failed: ${(err as Error).message}\n`,
+        );
+      }
+    }
+
+    for (const sig of plan.signalsToMove.values()) {
+      const dest = processedSignalPath(vault, sig.date, sig.slug);
+      try {
+        renameSync(sig.path, dest);
+        moved.push(sig.id);
+      } catch (err) {
+        // Best-effort: a missing source signal (already moved) is
+        // benign on rerun. Still surface so a real I/O issue is visible.
+        process.stderr.write(
+          `warning: move signal ${sig.id} to processed/ failed: ${(err as Error).message}\n`,
+        );
+      }
+    }
+  } else {
+    // Dry-run still reports the move list so the caller's summary is
+    // accurate, but it does not touch disk.
+    for (const sig of plan.signalsToMove.values()) moved.push(sig.id);
+  }
+
+  // Emit log entries: skip-corrupted-frontmatter first (chronological
+  // sense: corruption was detected during planning), then per-topic
+  // events (noted-redundant), then run summary last.
+  if (!dryRun) {
+    let logCursorMs = now.getTime();
+    const nextStamp = (): string => {
+      const ts = new Date(logCursorMs);
+      logCursorMs += 1000; // increment per emission so headings stay distinct
+      return isoSecond(ts);
+    };
+
+    for (const corrupt of scan.corrupted) {
+      writeEvent(vault, {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.skipCorruptedFrontmatter,
+        body: {
+          path: vaultRelative(corrupt.path, vault),
+        },
+      });
+    }
+
+    for (const noted of plan.notedRedundant) {
+      writeEvent(vault, {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.notedRedundant,
+        body: {
+          preference: noted.preference,
+          signal: noted.signal,
+        },
+      });
+    }
+
+    for (const retain of plan.retainPinned) {
+      // `retain-pinned` is not in the strict BrainLogEventKind enum
+      // (the design doc names a generic `retire` event with an
+      // attempted-but-blocked reason). We log it as a `retire` event
+      // with a `blocked: pinned` payload field so the parser
+      // round-trips cleanly and the doctor command can flag it.
+      writeEvent(vault, {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.retire,
+        body: {
+          preference: retain.preference,
+          reason: retain.reason,
+          blocked: "pinned",
+        },
+      });
+    }
+
+    // Summary event last.
+    const newUnconfirmedIds = plan.newUnconfirmed.map((p) => `[[pref-${p.slug}]]`);
+    const confirmedIds = Array.from(refresh.confirmed.values()).map(
+      (slug) => `[[pref-${slug}]]`,
+    );
+    const retiredEntries = plan.retires.map(
+      (r) => `[[ret-${r.slug}]] (${r.reason})`,
+    );
+    const summaryBody: Record<string, string | ReadonlyArray<string>> = {
+      run_id: runId,
+    };
+    if (newUnconfirmedIds.length > 0) summaryBody["new_unconfirmed"] = newUnconfirmedIds;
+    if (confirmedIds.length > 0) summaryBody["confirmed"] = confirmedIds;
+    if (retiredEntries.length > 0) summaryBody["retired"] = retiredEntries;
+    if (moved.length > 0) summaryBody["moved_to_processed"] = moved;
+    if (plan.contradictionTopics.size > 0) {
+      summaryBody["contradictions"] = Array.from(plan.contradictionTopics);
+    }
+
+    writeEvent(vault, {
+      timestamp: nextStamp(),
+      eventType: BRAIN_LOG_EVENT_KIND.dream,
+      body: summaryBody,
+    });
+  }
+
+  // Prune snapshots after the run so the new archive itself counts
+  // toward retention.
+  if (!dryRun) {
+    try {
+      pruneSnapshots(vault, cfg.snapshots.retention_count);
+    } catch (err) {
+      // Pruning is a hygiene step; failure should not turn a
+      // successful dream run into an error. The next run will retry.
+      // Surface so an operator can spot a recurring disk/permission
+      // issue instead of wondering why retention stopped.
+      process.stderr.write(
+        `warning: prune snapshots failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  return Object.freeze({
+    run_id: runId,
+    changed: true,
+    new_unconfirmed: plan.newUnconfirmed.map((p) => `pref-${p.slug}`),
+    confirmed: Array.from(refresh.confirmed.values()).map((s) => `pref-${s}`),
+    retired: plan.retires.map((r) => ({ id: `ret-${r.slug}`, reason: r.reason })),
+    contradictions: Array.from(plan.contradictionTopics),
+    moved_to_processed: moved,
+    ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
+    ...(dryRun
+      ? { dry_run: true }
+      : { log_path: join(brainDirs(vault).log, `${isoDate(now)}.md`) }),
+  } satisfies DreamRunSummary);
+}
+
+// ----- Scan ---------------------------------------------------------------
+
+function scanBrain(vault: string): ScanResult {
+  const dirs = brainDirs(vault);
+  const signals: SignalRecord[] = [];
+  const preferences: PreferenceRecord[] = [];
+  const retired: RetiredRecord[] = [];
+  const corrupted: CorruptedEntry[] = [];
+
+  if (existsSync(dirs.inbox)) {
+    for (const name of readdirSync(dirs.inbox)) {
+      if (!name.endsWith(".md")) continue;
+      const full = join(dirs.inbox, name);
+      try {
+        const sig = parseSignal(full);
+        signals.push({ path: full, signal: sig, active: true });
+      } catch {
+        corrupted.push({ path: full });
+      }
+    }
+  }
+  if (existsSync(dirs.processed)) {
+    for (const name of readdirSync(dirs.processed)) {
+      if (!name.endsWith(".md")) continue;
+      const full = join(dirs.processed, name);
+      try {
+        const sig = parseSignal(full);
+        signals.push({ path: full, signal: sig, active: false });
+      } catch {
+        corrupted.push({ path: full });
+      }
+    }
+  }
+  if (existsSync(dirs.preferences)) {
+    for (const name of readdirSync(dirs.preferences)) {
+      if (!name.endsWith(".md")) continue;
+      const full = join(dirs.preferences, name);
+      try {
+        const pref = parsePreference(full);
+        preferences.push({ path: full, pref });
+      } catch {
+        corrupted.push({ path: full });
+      }
+    }
+  }
+  if (existsSync(dirs.retired)) {
+    for (const name of readdirSync(dirs.retired)) {
+      if (!name.endsWith(".md")) continue;
+      const full = join(dirs.retired, name);
+      // Retired files we only need for topic + id (for supersede
+      // bookkeeping). We do a lightweight frontmatter parse to avoid
+      // the strict folder invariant check failing on permissive setups.
+      try {
+        const [meta] = parseFrontmatter(full);
+        const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
+        const id = typeof meta["id"] === "string" ? meta["id"] : "";
+        if (topic && id) {
+          retired.push({ path: full, topic, id });
+        }
+      } catch {
+        corrupted.push({ path: full });
+      }
+    }
+  }
+  return { signals, preferences, retired, corrupted };
+}
+
+// ----- Planning -----------------------------------------------------------
+
+interface PlanState {
+  /** Topic slug → planned new unconfirmed preference. */
+  readonly newUnconfirmed: NewUnconfirmedPlan[];
+  /** Preferences to retire (after refresh). */
+  readonly retires: RetirePlan[];
+  /** Same-sign signals on active prefs → moved + log event. */
+  readonly notedRedundant: NotedRedundantPlan[];
+  /** Pinned prefs that would have retired but stay because pinned. */
+  readonly retainPinned: RetainPinnedPlan[];
+  /** Signal id → record to move out of inbox/. */
+  readonly signalsToMove: Map<string, SignalMovePlan>;
+  /** Topic slugs flagged contradicted but no transition this run. */
+  readonly contradictionTopics: Set<string>;
+}
+
+interface NewUnconfirmedPlan {
+  readonly slug: string;
+  readonly topic: string;
+  readonly scope: string | undefined;
+  readonly principle: string;
+  readonly evidencedBy: ReadonlyArray<string>;
+  readonly sign: BrainSignalSign;
+  /**
+   * Wikilink string (`[[ret-<slug>]]` or `[[pref-<slug>]]`) to the
+   * preference this new entry supersedes, if any. Threaded through to
+   * `writePreference` so the resulting frontmatter carries
+   * `supersedes:` for audit-trail continuity across rebuttals.
+   */
+  readonly supersedes?: string;
+}
+
+interface RetirePlan {
+  readonly slug: string;
+  readonly reason: BrainRetiredReason;
+  readonly supersededBy?: string;
+}
+
+interface NotedRedundantPlan {
+  readonly preference: string;
+  readonly signal: string;
+}
+
+interface RetainPinnedPlan {
+  readonly preference: string;
+  readonly reason: BrainRetiredReason;
+}
+
+interface SignalMovePlan {
+  readonly id: string;
+  readonly date: string;
+  readonly slug: string;
+  readonly path: string;
+}
+
+function emptyPlan(): PlanState {
+  return {
+    newUnconfirmed: [],
+    retires: [],
+    notedRedundant: [],
+    retainPinned: [],
+    signalsToMove: new Map(),
+    contradictionTopics: new Set(),
+  };
+}
+
+function planTopics(
+  scan: ScanResult,
+  cfg: BrainConfig,
+  now: Date,
+  _wikilinkToRun: string,
+): PlanState {
+  void _wikilinkToRun;
+  const plan = emptyPlan();
+  const reservedSlugs = collectReservedPreferenceSlugs(scan);
+
+  // Group active signals by topic. We only consider active signals for
+  // the create/rebut decisions; processed signals stay in the global
+  // log via `evidenced_by` already.
+  const byTopic = new Map<string, SignalRecord[]>();
+  for (const rec of scan.signals) {
+    if (!rec.active) continue;
+    const topic = rec.signal.topic;
+    const arr = byTopic.get(topic);
+    if (arr) arr.push(rec);
+    else byTopic.set(topic, [rec]);
+  }
+
+  // Index existing active preferences by topic.
+  const prefByTopic = new Map<string, PreferenceRecord>();
+  for (const p of scan.preferences) {
+    // The first wins; design doc §7.4 invariant says "one preference per
+    // topic", so a duplicate would be a doctor-level issue, not a dream
+    // concern.
+    if (!prefByTopic.has(p.pref.topic)) prefByTopic.set(p.pref.topic, p);
+  }
+
+  // Index retired by topic for supersede bookkeeping.
+  const retiredByTopic = new Map<string, RetiredRecord[]>();
+  for (const r of scan.retired) {
+    const arr = retiredByTopic.get(r.topic);
+    if (arr) arr.push(r);
+    else retiredByTopic.set(r.topic, [r]);
+  }
+
+  for (const [topic, sigs] of byTopic) {
+    const active = prefByTopic.get(topic);
+    if (active) {
+      handleSignalsOnActivePref(
+        active,
+        sigs,
+        plan,
+        cfg,
+        now,
+        scan.signals,
+        reservedSlugs,
+      );
+      continue;
+    }
+    // No active pref for this topic → either promote or note
+    // contradiction.
+    const windowedSigs = filterWithinWindow(sigs, cfg.dream.contradiction_window_days, now);
+    const positives = windowedSigs.filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.positive);
+    const negatives = windowedSigs.filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.negative);
+    const dominant = positives.length >= negatives.length ? positives : negatives;
+    const minoritySize = Math.min(positives.length, negatives.length);
+    const dominantSize = dominant.length - minoritySize; // cancellation
+    if (dominantSize >= cfg.dream.candidate_threshold) {
+      // Decide supersede: if a retired pref for the same topic exists,
+      // wire it through.
+      const retiredForTopic = retiredByTopic.get(topic);
+      const supersedes = retiredForTopic && retiredForTopic.length > 0
+        ? retiredForTopic[0]!.id
+        : undefined;
+      const sign = dominant[0]!.signal.signal;
+      // Slug from topic for the canonical filename, but reserve slugs
+      // already present in retired/. Otherwise a superseding preference
+      // can be created as `pref-topic` while `ret-topic` already exists;
+      // its later retirement would fail trying to overwrite that retired
+      // file.
+      const slug = allocatePreferencePlanSlug(topic, reservedSlugs);
+      const principle = dominant[0]!.signal.principle;
+      const scope = dominant[0]!.signal.scope;
+      // evidencedBy = wikilinks to ALL active signals (dominant + minority)
+      // that contributed to this topic in the window. We deliberately
+      // include the minority signals so the audit trail preserves the
+      // contradiction story even after the file moves to processed/.
+      const evidencedBy = windowedSigs.map((s) => `[[${s.signal.id}]]`);
+      plan.newUnconfirmed.push({
+        slug,
+        topic,
+        scope,
+        principle,
+        evidencedBy,
+        sign,
+        ...(supersedes ? { supersedes: `[[${supersedes}]]` } : {}),
+      });
+      // Every contributing signal in the window gets moved.
+      for (const s of windowedSigs) {
+        recordSignalMove(plan, s);
+      }
+    } else if (positives.length > 0 && negatives.length > 0) {
+      plan.contradictionTopics.add(topic);
+    }
+  }
+  return plan;
+}
+
+function handleSignalsOnActivePref(
+  active: PreferenceRecord,
+  sigs: SignalRecord[],
+  plan: PlanState,
+  cfg: BrainConfig,
+  now: Date,
+  allSignals: ReadonlyArray<SignalRecord>,
+  reservedSlugs: Set<string>,
+): void {
+  // Determine the active preference's sign. Order of preference:
+  //
+  //   1. Walk `evidenced_by` wikilinks and look up each referenced
+  //      signal in the global scan; the dominant sign among them is
+  //      the pref's "sign of record". This is the design-correct
+  //      derivation since the writer baked those evidence pointers in.
+  //
+  //   2. If no `evidenced_by` resolves (e.g. a hand-crafted pref or a
+  //      pref whose source signals were manually pruned), look at all
+  //      historical signals on the same topic in the global scan.
+  //
+  //   3. If still nothing, assume the active pref is on the OPPOSITE
+  //      sign of the incoming dominant sign. This makes a unanimous
+  //      flood of new signals always count as rebuttal — which is the
+  //      conservative, fail-loud choice: the operator gets a clear
+  //      rebut/retire signal and can manually intervene if the system
+  //      misread their intent.
+  const signCounts = (records: ReadonlyArray<SignalRecord>): { pos: number; neg: number } => {
+    let pos = 0;
+    let neg = 0;
+    for (const r of records) {
+      if (r.signal.signal === BRAIN_SIGNAL_SIGN.positive) pos++;
+      else if (r.signal.signal === BRAIN_SIGNAL_SIGN.negative) neg++;
+    }
+    return { pos, neg };
+  };
+
+  const evidenceIds = new Set(
+    active.pref.evidenced_by
+      .map((wl) => parseWikilink(wl))
+      .filter((s): s is string => !!s),
+  );
+  const evidenceRecords = allSignals.filter((r) => evidenceIds.has(r.signal.id));
+  const topicRecords = allSignals.filter((r) => r.signal.topic === active.pref.topic);
+
+  let activeSign: BrainSignalSign;
+  if (evidenceRecords.length > 0) {
+    const c = signCounts(evidenceRecords);
+    activeSign = c.pos >= c.neg ? BRAIN_SIGNAL_SIGN.positive : BRAIN_SIGNAL_SIGN.negative;
+  } else if (topicRecords.length > sigs.length) {
+    // There are processed signals for this topic that are NOT among
+    // the active inbox set — use them.
+    const historical = topicRecords.filter((r) => !sigs.includes(r));
+    const c = signCounts(historical);
+    activeSign = c.pos >= c.neg ? BRAIN_SIGNAL_SIGN.positive : BRAIN_SIGNAL_SIGN.negative;
+  } else {
+    // Fallback: assume the active pref is OPPOSITE to the incoming
+    // dominant sign. A unanimous flood thus reads as rebuttal.
+    const c = signCounts(sigs);
+    activeSign =
+      c.pos > c.neg ? BRAIN_SIGNAL_SIGN.negative : BRAIN_SIGNAL_SIGN.positive;
+  }
+
+  const oppositeSign: BrainSignalSign =
+    activeSign === BRAIN_SIGNAL_SIGN.positive
+      ? BRAIN_SIGNAL_SIGN.negative
+      : BRAIN_SIGNAL_SIGN.positive;
+
+  const windowed = filterWithinWindow(sigs, cfg.dream.contradiction_window_days, now);
+  const sameSign = windowed.filter((s) => s.signal.signal === activeSign);
+  const opposing = windowed.filter((s) => s.signal.signal === oppositeSign);
+
+  // Same-sign → note redundant + move to processed.
+  for (const s of sameSign) {
+    plan.notedRedundant.push({
+      preference: `[[${active.pref.id}]]`,
+      signal: `[[${s.signal.id}]]`,
+    });
+    recordSignalMove(plan, s);
+  }
+
+  // Opposite-sign → accumulate toward rebuttal.
+  if (opposing.length >= cfg.dream.candidate_threshold) {
+    const slug = active.pref.id.startsWith("pref-")
+      ? active.pref.id.slice("pref-".length)
+      : active.pref.id;
+    if (isPinned(active.pref)) {
+      plan.retainPinned.push({
+        preference: `[[${active.pref.id}]]`,
+        reason: BRAIN_RETIRED_REASON.rebutted,
+      });
+      // Rebuttal signals on a pinned pref still get moved out — they
+      // were addressed (the system saw them) and clogging the inbox
+      // doesn't help.
+      for (const s of opposing) recordSignalMove(plan, s);
+    } else {
+      plan.retires.push({
+        slug,
+        reason: BRAIN_RETIRED_REASON.rebutted,
+      });
+      for (const s of opposing) recordSignalMove(plan, s);
+      // Create a new unconfirmed pref for the new direction.
+      // Build a fresh slug to avoid filename collision with the
+      // retiring pref (which lives under preferences/<slug>.md and
+      // will move to retired/<slug>.md). The simplest scheme: the
+      // same slug, since `moveToRetired` unlinks the source first.
+      // For safety against a half-completed move, we suffix with
+      // `-rebut`.
+      const newSlug = allocatePreferencePlanSlug(`${slug}-rebut`, reservedSlugs);
+      const principle = opposing[0]!.signal.principle;
+      const scope = opposing[0]!.signal.scope;
+      const evidencedBy = opposing.map((s) => `[[${s.signal.id}]]`);
+      plan.newUnconfirmed.push({
+        slug: newSlug,
+        topic: active.pref.topic,
+        scope,
+        principle,
+        evidencedBy,
+        sign: oppositeSign,
+        supersedes: `[[${active.pref.id}]]`,
+      });
+    }
+  } else if (opposing.length > 0) {
+    plan.contradictionTopics.add(active.pref.topic);
+  }
+}
+
+function collectReservedPreferenceSlugs(scan: ScanResult): Set<string> {
+  const out = new Set<string>();
+  for (const p of scan.preferences) {
+    const slug = preferenceSlugFromId(p.pref.id, "pref-");
+    if (slug) out.add(slug);
+  }
+  for (const r of scan.retired) {
+    const slug = preferenceSlugFromId(r.id, "ret-");
+    if (slug) out.add(slug);
+  }
+  return out;
+}
+
+function preferenceSlugFromId(id: string, prefix: "pref-" | "ret-"): string | null {
+  return id.startsWith(prefix) && id.length > prefix.length
+    ? id.slice(prefix.length)
+    : null;
+}
+
+function allocatePreferencePlanSlug(base: string, reserved: Set<string>): string {
+  let candidate = base;
+  let suffix = 2;
+  while (reserved.has(candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix++;
+  }
+  reserved.add(candidate);
+  return candidate;
+}
+
+function recordSignalMove(plan: PlanState, rec: SignalRecord): void {
+  if (!rec.active) return;
+  const id = rec.signal.id;
+  if (plan.signalsToMove.has(id)) return;
+  // Derive date + slug from the id (`sig-YYYY-MM-DD-<slug>`).
+  const m = /^sig-(\d{4}-\d{2}-\d{2})-(.+)$/.exec(id);
+  if (!m) return;
+  plan.signalsToMove.set(id, {
+    id,
+    date: m[1]!,
+    slug: m[2]!,
+    path: rec.path,
+  });
+}
+
+function filterWithinWindow(
+  sigs: SignalRecord[],
+  windowDays: number,
+  now: Date,
+): SignalRecord[] {
+  const minTime = now.getTime() - windowDays * 24 * 3600 * 1000;
+  return sigs.filter((s) => {
+    const t = Date.parse(s.signal.created_at);
+    return Number.isFinite(t) && t >= minTime;
+  });
+}
+
+// ----- Refresh + promote --------------------------------------------------
+
+interface RefreshUpdate {
+  readonly slug: string;
+  readonly topic: string;
+  readonly scope?: string;
+  readonly principle: string;
+  readonly created_at: string;
+  readonly unconfirmed_until: string;
+  readonly status: typeof BRAIN_PREFERENCE_STATUS[keyof typeof BRAIN_PREFERENCE_STATUS];
+  readonly evidenced_by: ReadonlyArray<string>;
+  readonly confirmed_at: string | null;
+  readonly applied_count: number;
+  readonly violated_count: number;
+  readonly last_evidence_at: string | null;
+  readonly confidence: BrainConfidence;
+  readonly pinned: boolean;
+}
+
+interface RefreshResult {
+  /** Slugs transitioning unconfirmed → confirmed in THIS run. */
+  readonly confirmed: Set<string>;
+  /** Slug → full updated frontmatter to write. */
+  readonly updated: Map<string, RefreshUpdate>;
+}
+
+interface ApplyEvidenceEntry {
+  readonly pref_slug: string;
+  readonly timestamp: string;
+  readonly result: typeof BRAIN_APPLY_RESULT[keyof typeof BRAIN_APPLY_RESULT];
+}
+
+function scanApplyEvidence(vault: string): ApplyEvidenceEntry[] {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.log)) return [];
+  const out: ApplyEvidenceEntry[] = [];
+  for (const name of readdirSync(dirs.log)) {
+    if (!name.endsWith(".md")) continue;
+    const date = name.slice(0, -3);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const { entries } = parseLogDay(vault, date);
+    for (const e of entries) {
+      if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
+      const prefRaw = e.body["preference"];
+      const result = e.body["result"];
+      if (typeof prefRaw !== "string" || typeof result !== "string") continue;
+      if (result !== BRAIN_APPLY_RESULT.applied && result !== BRAIN_APPLY_RESULT.violated) continue;
+      // Parse `[[pref-slug]]` → slug.
+      const target = parseWikilink(prefRaw);
+      if (!target || !target.startsWith("pref-")) continue;
+      out.push({
+        pref_slug: target.slice("pref-".length),
+        timestamp: e.timestamp,
+        result: result as ApplyEvidenceEntry["result"],
+      });
+    }
+  }
+  // Stable order: by timestamp ascending. Multiple entries at the same
+  // second keep their parse order (parseLogDay returns insertion order).
+  out.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  return out;
+}
+
+function planRefresh(
+  scan: ScanResult,
+  evidence: ApplyEvidenceEntry[],
+  cfg: BrainConfig,
+  now: Date,
+  plan: PlanState,
+): RefreshResult {
+  const confirmed = new Set<string>();
+  const updated = new Map<string, RefreshUpdate>();
+
+  // Index evidence by slug.
+  const bySlug = new Map<string, ApplyEvidenceEntry[]>();
+  for (const e of evidence) {
+    const arr = bySlug.get(e.pref_slug);
+    if (arr) arr.push(e);
+    else bySlug.set(e.pref_slug, [e]);
+  }
+
+  // Slugs that will retire this run — we skip refresh for those so the
+  // retired/ snapshot reflects the pre-refresh counters (which is the
+  // existing test expectation in moveToRetired).
+  const retiringSlugs = new Set(plan.retires.map((r) => r.slug));
+
+  for (const rec of scan.preferences) {
+    const slug = rec.pref.id.startsWith("pref-")
+      ? rec.pref.id.slice("pref-".length)
+      : rec.pref.id;
+    if (retiringSlugs.has(slug)) continue;
+
+    const ev = bySlug.get(slug) ?? [];
+    const applied = ev.filter((e) => e.result === BRAIN_APPLY_RESULT.applied).length;
+    const violated = ev.filter((e) => e.result === BRAIN_APPLY_RESULT.violated).length;
+    const lastEvidence = ev.length > 0 ? ev[ev.length - 1]!.timestamp : null;
+    const firstApplied = ev.find((e) => e.result === BRAIN_APPLY_RESULT.applied);
+
+    let status = rec.pref.status;
+    let confirmedAt = rec.pref.confirmed_at;
+    if (status === BRAIN_PREFERENCE_STATUS.unconfirmed && firstApplied) {
+      status = BRAIN_PREFERENCE_STATUS.confirmed;
+      confirmedAt = firstApplied.timestamp;
+      confirmed.add(slug);
+    }
+
+    const confidenceValue = computeConfidence(
+      applied,
+      violated,
+      lastEvidence,
+      cfg,
+      now,
+    );
+
+    // Only emit an update if something actually changed. This matters
+    // for the idempotency invariant: a no-op rerun on the same fixture
+    // must not rewrite preference files (the file mtime would change
+    // but byte content would be identical; writing anyway is wasted
+    // I/O and triggers an unnecessary log entry).
+    const changed =
+      applied !== rec.pref.applied_count ||
+      violated !== rec.pref.violated_count ||
+      lastEvidence !== rec.pref.last_evidence_at ||
+      status !== rec.pref.status ||
+      confirmedAt !== rec.pref.confirmed_at ||
+      confidenceValue !== rec.pref.confidence;
+    if (!changed) continue;
+
+    updated.set(slug, {
+      slug,
+      topic: rec.pref.topic,
+      ...(rec.pref.scope ? { scope: rec.pref.scope } : {}),
+      principle: rec.pref.principle,
+      created_at: rec.pref.created_at,
+      unconfirmed_until: rec.pref.unconfirmed_until,
+      status,
+      evidenced_by: rec.pref.evidenced_by,
+      confirmed_at: confirmedAt,
+      applied_count: applied,
+      violated_count: violated,
+      last_evidence_at: lastEvidence,
+      confidence: confidenceValue,
+      pinned: rec.pref.pinned,
+    });
+  }
+
+  return { confirmed, updated };
+}
+
+function computeConfidence(
+  applied: number,
+  violated: number,
+  lastEvidenceAt: string | null,
+  cfg: BrainConfig,
+  now: Date,
+): BrainConfidence {
+  // From §7.4:
+  //   if applied <= low_max_applied or (applied > 0 and violated >= applied):
+  //       confidence = low
+  //   elif applied >= high_min_applied and violated == 0 and fresh:
+  //       confidence = high
+  //   else:
+  //       confidence = medium
+  if (applied <= cfg.confidence.low_max_applied) return BRAIN_CONFIDENCE.low;
+  if (applied > 0 && violated >= applied) return BRAIN_CONFIDENCE.low;
+  let fresh = false;
+  if (lastEvidenceAt) {
+    const ageMs = now.getTime() - Date.parse(lastEvidenceAt);
+    const freshLimitMs =
+      cfg.retire.stale_evidence_days *
+      cfg.confidence.high_freshness_factor *
+      24 *
+      3600 *
+      1000;
+    fresh = Number.isFinite(ageMs) && ageMs < freshLimitMs;
+  }
+  if (applied >= cfg.confidence.high_min_applied && violated === 0 && fresh) {
+    return BRAIN_CONFIDENCE.high;
+  }
+  return BRAIN_CONFIDENCE.medium;
+}
+
+// ----- Auto-retires (expired-unconfirmed, stale-no-evidence) --------------
+
+function planAutoRetires(
+  scan: ScanResult,
+  cfg: BrainConfig,
+  now: Date,
+  plan: PlanState,
+  refresh: RefreshResult,
+): void {
+  for (const rec of scan.preferences) {
+    const slug = rec.pref.id.startsWith("pref-")
+      ? rec.pref.id.slice("pref-".length)
+      : rec.pref.id;
+    // Already planned to retire (rebutted)? Skip.
+    if (plan.retires.some((r) => r.slug === slug)) continue;
+
+    // Use the refreshed status/confirmed_at if available — a pref
+    // promoted to confirmed in THIS run should be eligible for stale
+    // retire only if its (yet-to-be-refreshed) last_evidence_at is
+    // actually old. We branch on the post-refresh shape.
+    const refreshed = refresh.updated.get(slug);
+    const effectiveStatus = refreshed ? refreshed.status : rec.pref.status;
+    const effectiveLastEvidence = refreshed
+      ? refreshed.last_evidence_at
+      : rec.pref.last_evidence_at;
+
+    if (effectiveStatus === BRAIN_PREFERENCE_STATUS.unconfirmed) {
+      const deadline = Date.parse(rec.pref.unconfirmed_until);
+      if (Number.isFinite(deadline) && now.getTime() > deadline) {
+        if (isPinned(rec.pref)) {
+          plan.retainPinned.push({
+            preference: `[[${rec.pref.id}]]`,
+            reason: BRAIN_RETIRED_REASON.expiredUnconfirmed,
+          });
+        } else {
+          plan.retires.push({
+            slug,
+            reason: BRAIN_RETIRED_REASON.expiredUnconfirmed,
+          });
+          // Remove the refresh update — no point writing immediately
+          // before moving to retired/.
+          refresh.updated.delete(slug);
+        }
+      }
+      continue;
+    }
+
+    // Confirmed → stale-no-evidence check.
+    if (effectiveStatus === BRAIN_PREFERENCE_STATUS.confirmed) {
+      if (!effectiveLastEvidence) {
+        // Confirmed with no evidence at all? Shouldn't happen, but
+        // gate on the same staleness rule using `confirmed_at`. We
+        // measure from confirmation in that case (cheaper than a
+        // hand-crafted invariant check).
+        const confirmedAt = refreshed
+          ? refreshed.confirmed_at
+          : rec.pref.confirmed_at;
+        if (!confirmedAt) continue;
+        const days = daysBetween(Date.parse(confirmedAt), now.getTime());
+        if (days > cfg.retire.stale_evidence_days) {
+          if (isPinned(rec.pref)) {
+            plan.retainPinned.push({
+              preference: `[[${rec.pref.id}]]`,
+              reason: BRAIN_RETIRED_REASON.staleNoEvidence,
+            });
+          } else {
+            plan.retires.push({
+              slug,
+              reason: BRAIN_RETIRED_REASON.staleNoEvidence,
+            });
+            refresh.updated.delete(slug);
+          }
+        }
+        continue;
+      }
+      const days = daysBetween(Date.parse(effectiveLastEvidence), now.getTime());
+      if (days > cfg.retire.stale_evidence_days) {
+        if (isPinned(rec.pref)) {
+          plan.retainPinned.push({
+            preference: `[[${rec.pref.id}]]`,
+            reason: BRAIN_RETIRED_REASON.staleNoEvidence,
+          });
+        } else {
+          plan.retires.push({
+            slug,
+            reason: BRAIN_RETIRED_REASON.staleNoEvidence,
+          });
+          refresh.updated.delete(slug);
+        }
+      }
+    }
+  }
+}
+
+// ----- Signal moves -------------------------------------------------------
+
+function planSignalMoves(scan: ScanResult, plan: PlanState): void {
+  // All active signals whose topic now corresponds to a planned new
+  // pref or an active pref were already enqueued by the topic-loop /
+  // active-pref handler. This function exists for the §7.3 step that
+  // says "Move consumed signals out of inbox/": we cover the case
+  // where a signal references a preference that already exists (the
+  // active-pref path), and the case where a signal is part of a fresh
+  // new_unconfirmed (the topic-loop path). Both already populated
+  // `plan.signalsToMove`. Nothing additional needed here today.
+  void scan;
+  void plan;
+}
+
+// ----- Helpers ------------------------------------------------------------
+
+function writeEvent(vault: string, event: BrainLogEntry): void {
+  appendLogEvent(vault, event);
+}
+
+function addDays(d: Date, days: number): Date {
+  return new Date(d.getTime() + days * 24 * 3600 * 1000);
+}
+
+function daysBetween(thenMs: number, nowMs: number): number {
+  if (!Number.isFinite(thenMs)) return 0;
+  return (nowMs - thenMs) / (24 * 3600 * 1000);
+}
+
+function formatRunId(d: Date): string {
+  // dream-YYYY-MM-DD-HHMMSS
+  const yyyy = d.getUTCFullYear().toString().padStart(4, "0");
+  const mm = (d.getUTCMonth() + 1).toString().padStart(2, "0");
+  const dd = d.getUTCDate().toString().padStart(2, "0");
+  const hh = d.getUTCHours().toString().padStart(2, "0");
+  const mi = d.getUTCMinutes().toString().padStart(2, "0");
+  const ss = d.getUTCSeconds().toString().padStart(2, "0");
+  return `dream-${yyyy}-${mm}-${dd}-${hh}${mi}${ss}`;
+}
+
+// Silence "unused" warnings for symbols exported only via barrel.
+void basename;

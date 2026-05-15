@@ -200,6 +200,42 @@ AI Wiki/
 
 This layout is intentionally agent-owned. The project should not mix agent-generated wiki pages into a user's personal notes without clear boundaries.
 
+`AI Wiki/` holds the static agent-facing wiki: identity, index, hot list, and the Pay Memory subtree (`payments/`, `assets/`, `drafts/`, `reports/`, `policies/`). Agents read it through `second_brain_query` and write into Pay Memory subdirectories via the `payment_*` tools. Durable observing memory — taste signals, accreted preferences, evidence, snapshots — lives in a separate top-level `Brain/` directory described in the next section.
+
+## Brain layer
+
+`Brain/` is a top-level directory parallel to `AI Wiki/` and `Daily/`. It is the observing-memory layer: where agents record taste signals, the `dream` pass accretes them into rules, and pre-run snapshots provide reversibility.
+
+```text
+Brain/
+  _brain.yaml              # schema + thresholds (validated by o2b brain doctor)
+  _BRAIN.md                # operating manual for agents (rendered by o2b brain init)
+  inbox/                   # raw taste signals, sig-<date>-<slug>.md
+    processed/            # signals already folded into a preference
+  preferences/             # active rules: pref-<slug>.md, status unconfirmed | confirmed
+  retired/                 # ret-<slug>.md with retired_reason
+  log/                     # YYYY-MM-DD.md, append-only event log (dream / apply-evidence / etc.)
+  .snapshots/              # <run_id>.tar.zst, pre-run snapshots for o2b brain rollback
+```
+
+Three architectural invariants:
+
+- **Filesystem-first.** No database, no daemon. Every artifact is plain Markdown with YAML frontmatter; backup is `cp -r` or `tar`.
+- **Deterministic core.** The `dream` algorithm is a pure function of inputs (signals, preferences, log, configuration, current time). No LLM calls inside the core. Semantic merging, if needed, is delegated to external agents via the same CLI / MCP surface.
+- **Pre-run snapshot + atomic per-file writes.** Each `dream` run takes a `.snapshots/<run_id>.tar.zst` before any state change; per-file writes go through `fs-atomic` (temp + rename). Combined with retention of the most-recent N snapshots, this gives reversible, audit-friendly mutation.
+
+The layered diagram from the top of this document still holds — `Brain/` sits at the same level as the vault files in the bottom layer:
+
+```text
+Agent runtime
+  -> runtime adapter/plugin
+    -> skills and commands (brain-memory skill, open-second-brain skill)
+      -> CLI/core library (src/core/brain/*)
+        -> vault files: Brain/ (observing memory), AI Wiki/ + Daily/ (wiki + event log), Pay Memory (paid-action audit)
+```
+
+Full design: [`docs/plans/2026-05-15-brain-observing-memory.md`](plans/2026-05-15-brain-observing-memory.md).
+
 ## Event log
 
 The event log is append-only. It records operational events, not polished knowledge.

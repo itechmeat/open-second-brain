@@ -43,6 +43,7 @@ import {
 import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
+import { handleBrainSubcommand } from "./brain.ts";
 import {
   installCli,
   renderInstallResult,
@@ -1179,6 +1180,19 @@ Pay Memory:
   consume-payment-request   Link an approved request to its resulting receipt
   list-pending-payments     List pending/approved/etc. requests
   payment-digest            Render a Telegram-friendly 4-line summary for a date (Hermes cron-friendly)
+
+Brain (observing memory):
+  brain init                Bootstrap <vault>/Brain/ skeleton (idempotent)
+  brain feedback            Record a taste signal into Brain/inbox/
+  brain dream               Run the deterministic dreaming pass (idempotent)
+  brain apply-evidence      Log a real-work application of a preference
+  brain digest              Render the recent-changes digest (markdown or --json)
+  brain query               Read by --preference, --topic, or --since
+  brain reject              Move a preference to retired/ (user-rejected)
+  brain pin                 Mark a preference exempt from automatic retire
+  brain unpin               Clear the pinned flag
+  brain rollback            Restore Brain/ from a snapshot (--list / <run_id>)
+  brain doctor              Validate Brain invariants (--strict promotes warnings)
 `;
 
 function sortedReplacer(_key: string, value: unknown): unknown {
@@ -1197,7 +1211,9 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
   const rest = argv.slice(1);
 
   // Per-command --help support: print the dedicated help line plus generic.
-  if (rest.length === 1 && (rest[0] === "-h" || rest[0] === "--help")) {
+  // The `brain` subcommand has its own dispatcher with per-verb help, so we
+  // skip the generic shortcut and hand control over directly.
+  if (rest.length === 1 && (rest[0] === "-h" || rest[0] === "--help") && command !== "brain") {
     process.stdout.write(`${command}: see https://github.com/itechmeat/open-second-brain\n`);
     if (command === "uninstall") {
       process.stdout.write(
@@ -1256,6 +1272,8 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         return await cmdListPendingPayments(rest);
       case "payment-digest":
         return await cmdPaymentDigest(rest);
+      case "brain":
+        return await handleBrainSubcommand(rest);
       default:
         process.stderr.write(`error: unknown command: ${command}\n`);
         process.stderr.write(HELP);

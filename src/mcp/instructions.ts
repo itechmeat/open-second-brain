@@ -1,44 +1,48 @@
 /**
  * Server-supplied instructions returned in `initialize.instructions`.
  *
- * Mirrors `_build_instructions` from the legacy Python implementation.
- * Keep the wording identical — the same string is read by Hermes, Claude
- * Code, Codex, and OpenClaw, and is referenced verbatim in test fixtures.
+ * In v0.9.0 the wording shifts from a single event-log-centric flow to
+ * the Brain observing-memory layer. Six new `brain_*` tools are the
+ * canonical writable surface; `event_log_append` and
+ * `second_brain_capture` are no longer advertised to agents (their
+ * handlers remain on disk for shell-side use).
  */
 
 export function buildInstructions(defaultAgent: string): string {
   return (
     `You are @${defaultAgent} on this Open Second Brain vault. ` +
     "Always log under this identity; do not invent or change the name.\n\n" +
-    "When to call event_log_append:\n" +
-    "  - immediately after producing a durable artifact, including:\n" +
-    "    * code shipped, bug fixed, refactor merged\n" +
-    "    * config / deployment / infrastructure change\n" +
-    "    * instruction-file edit (CLAUDE.md, SOUL.md, plugin docs, " +
-    "system prompts, similar)\n" +
-    "    * content artifact created (post, draft, documentation, " +
-    "marketing copy, release notes)\n" +
-    "    * research, investigation, or analysis that produced a " +
-    "concrete finding, design, or decision worth recalling later\n" +
-    "    * discovery of an external fact (CLI behaviour change, " +
-    "API quirk, undocumented edge case) that future sessions should " +
-    "know\n" +
-    "  - skip for: pure discussion or brainstorming without " +
-    "conclusion, read-only queries, or planning that hasn't yet " +
-    "produced an artifact\n\n" +
-    'If unsure, ask: "would future-me want to find this in the log ' +
-    'by searching for it later?". If yes, log it.\n\n' +
-    "How to format the `message` argument:\n" +
-    "  - plain prose describing what was done / found / decided and " +
-    "why it matters\n" +
-    "  - DO NOT prepend `HH:MM —` or `@<name> —` to the message; " +
-    "the server adds these automatically\n" +
-    "  - terse, append-only, factual; never edit historical lines\n\n" +
-    "Identity is resolved server-side. Do not pass the `agent` argument " +
-    "unless deliberately logging on another agent's behalf.\n\n" +
+    "Brain tools are the agent-facing writable surface (design doc §9).\n" +
+    "  - brain_feedback — call once per taste signal the user (or a " +
+    "teammate agent) expresses: corrections (\"don't do X\"), stated " +
+    "preferences (\"use A instead of B\"), or process rules that " +
+    "should outlast the current turn. With `force_confirmed: true` " +
+    "the preference is created directly (skipping the dream trial " +
+    "window).\n" +
+    "  - brain_apply_evidence — call right after you produce a " +
+    "durable artifact (code shipped, config / instruction edited, " +
+    "content drafted) and at least one preference in " +
+    "`Brain/preferences/` scopes to that artifact. Record " +
+    "`result: applied | violated` per (preference, artifact) pair.\n" +
+    "  - brain_dream — runs the deterministic learning pass " +
+    "(clusters signals, promotes preferences, retires stale rules). " +
+    "Usually scheduled via cron, not invoked interactively.\n" +
+    "  - brain_digest — read-only summary of the last activity " +
+    "window. Default format is Markdown; pass `format: \"json\"` for " +
+    "programmatic use.\n" +
+    "  - brain_query — read-only lookup by `preference`, `topic`, " +
+    "or `since` (exactly one). Use this to discover applicable rules " +
+    "before calling `brain_apply_evidence`.\n" +
+    "  - brain_doctor — invariant / schema health check. With " +
+    "`strict: true`, warnings demote the `ok` flag.\n\n" +
+    "Skip Brain calls for casual chat, exploration without a stated " +
+    "rule, read-only inspection, and trivial edits. A misrecorded " +
+    "signal is worse than a missed one — the dream pass surfaces " +
+    "real patterns from repeat events, so prefer precision over " +
+    "coverage.\n\n" +
     "Other tools: second_brain_status (config status), " +
-    "vault_health (verify vault), second_brain_query (look up notes), " +
-    "second_brain_capture (add wiki pages).\n\n" +
+    "vault_health (verify vault), second_brain_query (look up legacy " +
+    "AI Wiki / Daily notes — read-only).\n\n" +
     "Pay Memory tools record paid agent actions as inspectable Markdown:\n" +
     "  - payment_memory_init bootstraps the layout and writes the " +
     "spending policy template (run once per vault).\n" +
@@ -54,11 +58,9 @@ export function buildInstructions(defaultAgent: string): string {
     "  - payment_report_generate aggregates a date's receipts into a " +
     "Markdown report.\n" +
     "These tools never execute payments — they only persist memory. " +
-    "After a successful paid call also append a daily event with " +
-    "event_log_append so the receipt is discoverable in `Daily/`. When " +
-    "an approval workflow is in use, the recommended sequence is: " +
-    "payment_policy_check → payment_request_approval → poll " +
+    "When an approval workflow is in use, the recommended sequence " +
+    "is: payment_policy_check → payment_request_approval → poll " +
     "payment_request_status → run `pay` → payment_receipt_append → " +
-    "asset_capture → payment_request_consume → event_log_append."
+    "asset_capture → payment_request_consume."
   );
 }

@@ -1,0 +1,602 @@
+/**
+ * Brain digest (design doc §8).
+ *
+ * Read-only renderer over Brain/log/ + Brain/preferences/ +
+ * Brain/retired/. Default window: the last 24 hours, ending at
+ * `opts.until ?? now`. Both Markdown and JSON outputs are supported;
+ * the JSON form follows §8.2 verbatim so downstream consumers (Hermes
+ * cron, CI scripts) can parse it without surprises.
+ *
+ * Sections, each rendered only when non-empty:
+ *
+ *   1. **New (unconfirmed, in trial)** — preferences with `status:
+ *      unconfirmed` and `created_at` inside the window.
+ *   2. **Confirmed** — preferences with `confirmed_at` inside the
+ *      window.
+ *   3. **Retired** — retired entries with `retired_at` inside the
+ *      window.
+ *   4. **Confidence shifts** — preferences whose confidence changed
+ *      inside the window. The current Brain state does not carry an
+ *      explicit `confidence_history`; the design accepts a graceful
+ *      degradation here. We read `dream` log events: when their
+ *      payload exposes a `confidence_shifts` (singular bullet) or
+ *      `confidence_changes` sub-list, we parse those. If the payload
+ *      is absent, the section is empty.
+ *   5. **Contradictions** — events of kind `contradicted` or `dream`
+ *      events emitting a `contradictions` sub-list. Same graceful
+ *      degradation: empty when the payload is not produced.
+ *
+ * Empty window → one-line Markdown `Brain digest — <date>: no changes`
+ * (or JSON with `summary.empty: true`). The function returns both the
+ * rendered string and an `empty` flag so the CLI can implement
+ * `--silent-if-empty` (exit 2) without re-parsing.
+ *
+ * The function is pure read. It does not mutate signals, preferences,
+ * retired entries, the log, or the snapshots.
+ */
+
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
+import { brainDirs, vaultRelative } from "./paths.ts";
+import { normaliseWikilinkTarget } from "./wikilink.ts";
+import { parsePreference, parseRetired } from "./preference.ts";
+import { parseLogDay, type BrainLogEntry } from "./log.ts";
+import {
+  BRAIN_APPLY_RESULT,
+  BRAIN_LOG_EVENT_KIND,
+  BRAIN_RETIRED_REASON,
+} from "./types.ts";
+import type {
+  BrainConfidence,
+  BrainPreference,
+  BrainRetired,
+} from "./types.ts";
+
+// ----- Public types ---------------------------------------------------------
+
+export type DigestFormat = "markdown" | "json";
+
+export interface RenderDigestOptions {
+  /** Inclusive lower bound. Defaults to `until - 24h`. */
+  readonly since?: Date;
+  /** Exclusive upper bound. Defaults to `new Date()`. */
+  readonly until?: Date;
+  /** Output format. Defaults to `markdown`. */
+  readonly format?: DigestFormat;
+  /**
+   * Injection seam for deterministic tests: defaults the generated_at
+   * timestamp. Production callers do not pass this — the renderer
+   * picks `new Date()` itself.
+   */
+  readonly now?: Date;
+}
+
+export interface RenderDigestResult {
+  /** Rendered Markdown (default) or JSON body. */
+  readonly content: string;
+  /** True when every section is empty (single-line output / `summary.empty`). */
+  readonly empty: boolean;
+}
+
+// ----- JSON shape (mirrors §8.2) -------------------------------------------
+
+export interface DigestJsonNewUnconfirmed {
+  readonly id: string;
+  readonly topic: string;
+  readonly scope: string | null;
+  readonly signal_count: number;
+  readonly unconfirmed_until: string;
+  readonly path: string;
+}
+
+export interface DigestJsonConfirmed {
+  readonly id: string;
+  readonly topic: string;
+  readonly scope: string | null;
+  readonly confirmed_at: string;
+  readonly first_applied_artifact: string | null;
+}
+
+export interface DigestJsonRetired {
+  readonly id: string;
+  readonly topic: string;
+  readonly scope: string | null;
+  readonly retired_at: string;
+  readonly reason: string;
+  readonly days_stale: number | null;
+}
+
+export interface DigestJsonConfidenceShift {
+  readonly id: string;
+  readonly from: BrainConfidence | string;
+  readonly to: BrainConfidence | string;
+  readonly applied_count: number | null;
+  readonly violated_count: number | null;
+}
+
+export interface DigestJsonContradiction {
+  readonly id: string;
+  readonly topic: string | null;
+  readonly description: string;
+}
+
+export interface DigestJson {
+  readonly schema_version: 1;
+  readonly generated_at: string;
+  readonly window: { readonly since: string; readonly until: string };
+  readonly summary: {
+    readonly new_unconfirmed_count: number;
+    readonly confirmed_count: number;
+    readonly retired_count: number;
+    readonly confidence_shift_count: number;
+    readonly contradiction_count: number;
+    readonly empty: boolean;
+  };
+  readonly new_unconfirmed: ReadonlyArray<DigestJsonNewUnconfirmed>;
+  readonly confirmed: ReadonlyArray<DigestJsonConfirmed>;
+  readonly retired: ReadonlyArray<DigestJsonRetired>;
+  readonly confidence_shifts: ReadonlyArray<DigestJsonConfidenceShift>;
+  readonly contradictions: ReadonlyArray<DigestJsonContradiction>;
+}
+
+// ----- Entry point ----------------------------------------------------------
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+export function renderDigest(
+  vault: string,
+  opts: RenderDigestOptions = {},
+): RenderDigestResult {
+  const format = opts.format ?? "markdown";
+  const now = opts.now ?? new Date();
+  const until = opts.until ?? now;
+  const since = opts.since ?? new Date(until.getTime() - ONE_DAY_MS);
+  if (Number.isNaN(since.getTime()) || Number.isNaN(until.getTime())) {
+    throw new TypeError("renderDigest: `since` and `until` must be valid Dates");
+  }
+  if (since.getTime() > until.getTime()) {
+    throw new RangeError(
+      `renderDigest: since (${since.toISOString()}) is after until (${until.toISOString()})`,
+    );
+  }
+
+  const data = collectDigestData(vault, since, until);
+  const empty = isEmpty(data);
+
+  if (format === "json") {
+    const payload: DigestJson = {
+      schema_version: 1,
+      generated_at: now.toISOString(),
+      window: { since: since.toISOString(), until: until.toISOString() },
+      summary: {
+        new_unconfirmed_count: data.new_unconfirmed.length,
+        confirmed_count: data.confirmed.length,
+        retired_count: data.retired.length,
+        confidence_shift_count: data.confidence_shifts.length,
+        contradiction_count: data.contradictions.length,
+        empty,
+      },
+      new_unconfirmed: data.new_unconfirmed,
+      confirmed: data.confirmed,
+      retired: data.retired,
+      confidence_shifts: data.confidence_shifts,
+      contradictions: data.contradictions,
+    };
+    return Object.freeze({
+      content: JSON.stringify(payload, null, 2) + "\n",
+      empty,
+    });
+  }
+
+  // Markdown.
+  const content = empty
+    ? renderEmptyMarkdown(until)
+    : renderMarkdown(data, since, until);
+  return Object.freeze({ content, empty });
+}
+
+// ----- Data collection ------------------------------------------------------
+
+interface DigestData {
+  readonly new_unconfirmed: ReadonlyArray<DigestJsonNewUnconfirmed>;
+  readonly confirmed: ReadonlyArray<DigestJsonConfirmed>;
+  readonly retired: ReadonlyArray<DigestJsonRetired>;
+  readonly confidence_shifts: ReadonlyArray<DigestJsonConfidenceShift>;
+  readonly contradictions: ReadonlyArray<DigestJsonContradiction>;
+}
+
+function collectDigestData(
+  vault: string,
+  since: Date,
+  until: Date,
+): DigestData {
+  const sinceMs = since.getTime();
+  const untilMs = until.getTime();
+  const inWindow = (iso: string | null): boolean => {
+    if (!iso) return false;
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return false;
+    return t >= sinceMs && t < untilMs;
+  };
+
+  // 1. Iterate preferences/ for unconfirmed (created_at in window) and
+  //    confirmed (confirmed_at in window).
+  const preferences = readAllPreferences(vault);
+  const new_unconfirmed: DigestJsonNewUnconfirmed[] = [];
+  const confirmed: DigestJsonConfirmed[] = [];
+
+  for (const { pref, path } of preferences) {
+    if (pref.status === "unconfirmed" && inWindow(pref.created_at)) {
+      new_unconfirmed.push({
+        id: pref.id,
+        topic: pref.topic,
+        scope: pref.scope ?? null,
+        signal_count: pref.evidenced_by.length,
+        unconfirmed_until: pref.unconfirmed_until,
+        path: vaultRelative(path, vault),
+      });
+    }
+    if (pref.status === "confirmed" && inWindow(pref.confirmed_at)) {
+      confirmed.push({
+        id: pref.id,
+        topic: pref.topic,
+        scope: pref.scope ?? null,
+        confirmed_at: pref.confirmed_at!,
+        first_applied_artifact: findFirstAppliedArtifact(vault, pref.id),
+      });
+    }
+  }
+
+  // 2. Iterate retired/ for entries retired in window.
+  const retiredEntries: DigestJsonRetired[] = [];
+  for (const { ret, path } of readAllRetired(vault)) {
+    void path;
+    if (inWindow(ret.retired_at)) {
+      const daysStale = daysStaleFor(ret);
+      retiredEntries.push({
+        id: ret.id,
+        topic: ret.topic,
+        scope: ret.scope ?? null,
+        retired_at: ret.retired_at,
+        reason: ret.retired_reason,
+        days_stale: daysStale,
+      });
+    }
+  }
+
+  // 3 & 4. Confidence shifts and contradictions — degraded gracefully
+  // when payload data is missing.
+  const logEntries = readLogsInWindow(vault, since, until);
+  const confidenceShifts = extractConfidenceShifts(logEntries);
+  const contradictions = extractContradictions(logEntries);
+
+  // Stable ordering — id ascending so two runs on the same fixture
+  // produce byte-identical output.
+  new_unconfirmed.sort((a, b) => a.id.localeCompare(b.id));
+  confirmed.sort((a, b) => a.id.localeCompare(b.id));
+  retiredEntries.sort((a, b) => a.id.localeCompare(b.id));
+
+  return {
+    new_unconfirmed,
+    confirmed,
+    retired: retiredEntries,
+    confidence_shifts: confidenceShifts,
+    contradictions,
+  };
+}
+
+function isEmpty(data: DigestData): boolean {
+  return (
+    data.new_unconfirmed.length === 0 &&
+    data.confirmed.length === 0 &&
+    data.retired.length === 0 &&
+    data.confidence_shifts.length === 0 &&
+    data.contradictions.length === 0
+  );
+}
+
+// ----- Filesystem scan helpers ---------------------------------------------
+
+interface PreferenceWithPath {
+  readonly pref: BrainPreference;
+  readonly path: string;
+}
+
+function readAllPreferences(vault: string): ReadonlyArray<PreferenceWithPath> {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.preferences)) return [];
+  const out: PreferenceWithPath[] = [];
+  for (const entry of readdirSync(dirs.preferences, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    if (!entry.name.startsWith("pref-")) continue;
+    const path = join(dirs.preferences, entry.name);
+    try {
+      out.push({ pref: parsePreference(path), path });
+    } catch {
+      // The doctor reports corruption; digest skips silently.
+    }
+  }
+  return out;
+}
+
+interface RetiredWithPath {
+  readonly ret: BrainRetired;
+  readonly path: string;
+}
+
+function readAllRetired(vault: string): ReadonlyArray<RetiredWithPath> {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.retired)) return [];
+  const out: RetiredWithPath[] = [];
+  for (const entry of readdirSync(dirs.retired, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    if (!entry.name.startsWith("ret-")) continue;
+    const path = join(dirs.retired, entry.name);
+    try {
+      out.push({ ret: parseRetired(path), path });
+    } catch {
+      // ditto
+    }
+  }
+  return out;
+}
+
+function readLogsInWindow(
+  vault: string,
+  since: Date,
+  until: Date,
+): ReadonlyArray<BrainLogEntry> {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.log)) return [];
+  const sinceIso = since.toISOString();
+  const untilIso = until.toISOString();
+  // Restrict scans to dates intersecting the window — but we err
+  // permissive (one day before / after) to avoid TZ off-by-ones.
+  const sinceDay = sinceIso.slice(0, 10);
+  const untilDay = untilIso.slice(0, 10);
+  const out: BrainLogEntry[] = [];
+  const dates = readdirSync(dirs.log, { withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.endsWith(".md"))
+    .map((d) => d.name.slice(0, -".md".length))
+    .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n))
+    .sort();
+  for (const date of dates) {
+    if (date < addDays(sinceDay, -1)) continue;
+    if (date > addDays(untilDay, 1)) continue;
+    const { entries } = parseLogDay(vault, date);
+    for (const e of entries) {
+      if (e.timestamp >= sinceIso && e.timestamp < untilIso) {
+        out.push(e);
+      }
+    }
+  }
+  out.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  return out;
+}
+
+function addDays(day: string, delta: number): string {
+  const t = Date.parse(`${day}T00:00:00Z`);
+  if (!Number.isFinite(t)) return day;
+  return new Date(t + delta * ONE_DAY_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * Best-effort lookup of the artifact wikilink for the first `applied`
+ * apply-evidence event against a preference id. Returns null if no
+ * applied evidence is found — e.g. a preference that was force-confirmed
+ * without ever being applied. This matches design doc §8.2 example.
+ */
+function findFirstAppliedArtifact(
+  vault: string,
+  prefId: string,
+): string | null {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.log)) return null;
+  const dates = readdirSync(dirs.log, { withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.endsWith(".md"))
+    .map((d) => d.name.slice(0, -".md".length))
+    .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n))
+    .sort();
+  for (const date of dates) {
+    const { entries } = parseLogDay(vault, date);
+    for (const e of entries) {
+      if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
+      if (e.body["result"] !== BRAIN_APPLY_RESULT.applied) continue;
+      const prefPayload = e.body["preference"];
+      if (typeof prefPayload === "string" && refersTo(prefPayload, prefId)) {
+        const artifact = e.body["artifact"];
+        if (typeof artifact === "string") return artifact;
+      }
+    }
+  }
+  return null;
+}
+
+function refersTo(payload: string, prefId: string): boolean {
+  return normaliseWikilinkTarget(payload) === prefId;
+}
+
+function daysStaleFor(ret: BrainRetired): number | null {
+  // For `stale-no-evidence`, the "days stale" is the gap between
+  // `retired_at` and `last_evidence_at` (or `created_at` if there is
+  // no evidence at all). Other reasons get null — the field is only
+  // meaningful under stale-no-evidence per §8.2 example. We still
+  // emit non-null for completeness on rebutted / expired-unconfirmed
+  // when computable, but only for stale-no-evidence is it the canonical
+  // metric the digest's "(91 days)" parenthetical refers to.
+  if (ret.retired_reason !== BRAIN_RETIRED_REASON.staleNoEvidence) return null;
+  const start = ret.last_evidence_at ?? ret.created_at;
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(ret.retired_at);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+  return Math.max(0, Math.floor((endMs - startMs) / ONE_DAY_MS));
+}
+
+// ----- Confidence shifts & contradictions ----------------------------------
+//
+// Task 3 (`dream.ts`) is in progress as we ship this. It is the only
+// component that can authoritatively emit confidence transitions and
+// contradictions; without its payload data we cannot reconstruct
+// transitions from filesystem state alone (the current `confidence`
+// field has no `from` value to compare against). Per the §15 Task 4
+// spec, the digest tolerates the absent payload as a graceful empty.
+//
+// When dream eventually emits these in its run summary, the parsers
+// below will pick them up because we look in flexible payload shapes
+// (the `dream` event's bullet list).
+
+function extractConfidenceShifts(
+  entries: ReadonlyArray<BrainLogEntry>,
+): ReadonlyArray<DigestJsonConfidenceShift> {
+  const out: DigestJsonConfidenceShift[] = [];
+  for (const e of entries) {
+    if (e.eventType !== BRAIN_LOG_EVENT_KIND.dream) continue;
+    // Pattern A: a `confidence_shifts` array, each item like
+    // `[[pref-foo]] medium -> high (applied: 11, violated: 0)`.
+    const shifts = e.body["confidence_shifts"];
+    if (Array.isArray(shifts)) {
+      for (const raw of shifts) {
+        const parsed = parseShiftLine(raw);
+        if (parsed) out.push(parsed);
+      }
+    }
+  }
+  return out;
+}
+
+function parseShiftLine(raw: string): DigestJsonConfidenceShift | null {
+  // Tolerant parser: accept `[[pref-x]] medium -> high (applied: N, violated: M)`
+  // and variations (en-dash / em-dash for arrow, missing parens).
+  const m = /^\s*(?:\[\[([^\]]+)\]\]|(\S+))\s+(\w+)\s*(?:->|→)\s*(\w+)(?:\s*\(([^)]*)\))?/.exec(
+    raw,
+  );
+  if (!m) return null;
+  const idRaw = (m[1] ?? m[2])!.split(/[|#]/)[0]!.trim();
+  if (!idRaw) return null;
+  const from = m[3]!;
+  const to = m[4]!;
+  let applied: number | null = null;
+  let violated: number | null = null;
+  if (m[5]) {
+    const appMatch = /applied\s*[:=]?\s*(\d+)/i.exec(m[5]);
+    if (appMatch) applied = parseInt(appMatch[1]!, 10);
+    const violMatch = /violated\s*[:=]?\s*(\d+)/i.exec(m[5]);
+    if (violMatch) violated = parseInt(violMatch[1]!, 10);
+  }
+  return { id: idRaw, from, to, applied_count: applied, violated_count: violated };
+}
+
+function extractContradictions(
+  entries: ReadonlyArray<BrainLogEntry>,
+): ReadonlyArray<DigestJsonContradiction> {
+  const out: DigestJsonContradiction[] = [];
+  for (const e of entries) {
+    if (e.eventType !== BRAIN_LOG_EVENT_KIND.dream) continue;
+    const list = e.body["contradictions"];
+    if (Array.isArray(list)) {
+      for (const raw of list) {
+        const parsed = parseContradictionLine(raw);
+        if (parsed) out.push(parsed);
+      }
+    }
+  }
+  return out;
+}
+
+function parseContradictionLine(raw: string): DigestJsonContradiction | null {
+  // Best-effort: extract a wikilink as id and treat the rest as topic
+  // or description. A missing wikilink means we cannot anchor the
+  // contradiction to a preference; skip rather than fabricate.
+  const wm = /\[\[([^\]]+)\]\]/.exec(raw);
+  if (!wm) return null;
+  const id = wm[1]!.split(/[|#]/)[0]!.trim();
+  const description = raw.replace(wm[0], "").trim() || raw.trim();
+  // The line may carry `(topic: foo)` — pull it out if present.
+  let topic: string | null = null;
+  const tm = /topic\s*[:=]\s*([A-Za-z0-9_-]+)/.exec(description);
+  if (tm) topic = tm[1]!;
+  return { id, topic, description };
+}
+
+// ----- Markdown rendering --------------------------------------------------
+
+function renderEmptyMarkdown(until: Date): string {
+  // Single-line collapse per §8 paragraph above the listing.
+  const ymd = until.toISOString().slice(0, 10);
+  return `Brain digest — ${ymd}: no changes\n`;
+}
+
+function renderMarkdown(
+  data: DigestData,
+  since: Date,
+  until: Date,
+): string {
+  const sinceIso = since.toISOString();
+  const untilIso = until.toISOString();
+  const windowHours = Math.round(
+    (until.getTime() - since.getTime()) / (60 * 60 * 1000),
+  );
+  const lines: string[] = [];
+  lines.push(
+    `# Brain digest — ${untilIso.slice(0, 16)}Z (${windowHours}h)`,
+    "",
+    `Window: ${sinceIso} — ${untilIso}`,
+    "",
+  );
+
+  if (data.new_unconfirmed.length > 0) {
+    lines.push("## New (unconfirmed, in trial)", "");
+    for (const item of data.new_unconfirmed) {
+      const scope = item.scope ?? "—";
+      const trialDay = item.unconfirmed_until.slice(0, 10);
+      lines.push(
+        `- [[${item.id}]] — ${scope}, ${item.signal_count} signals, trial ends ${trialDay}`,
+      );
+    }
+    lines.push("");
+  }
+  if (data.confirmed.length > 0) {
+    lines.push("## Confirmed", "");
+    for (const item of data.confirmed) {
+      const scope = item.scope ?? "—";
+      const artifact = item.first_applied_artifact ?? "_(none)_";
+      lines.push(`- [[${item.id}]] — ${scope}, first applied in ${artifact}`);
+    }
+    lines.push("");
+  }
+  if (data.retired.length > 0) {
+    lines.push("## Retired", "");
+    for (const item of data.retired) {
+      const scope = item.scope ?? "—";
+      const detail =
+        item.reason === BRAIN_RETIRED_REASON.staleNoEvidence && item.days_stale !== null
+          ? `${item.reason} (${item.days_stale} days)`
+          : item.reason;
+      lines.push(`- [[${item.id}]] — ${scope}, ${detail}`);
+    }
+    lines.push("");
+  }
+  if (data.confidence_shifts.length > 0) {
+    lines.push("## Confidence shifts", "");
+    for (const item of data.confidence_shifts) {
+      const stats =
+        item.applied_count !== null && item.violated_count !== null
+          ? ` (applied: ${item.applied_count}, violated: ${item.violated_count})`
+          : "";
+      lines.push(`- [[${item.id}]] ${item.from} → ${item.to}${stats}`);
+    }
+    lines.push("");
+  }
+  if (data.contradictions.length > 0) {
+    lines.push("## Contradictions", "");
+    for (const item of data.contradictions) {
+      const topic = item.topic ? ` (topic: ${item.topic})` : "";
+      lines.push(`- [[${item.id}]] — ${item.description}${topic}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n").replace(/\n+$/, "\n");
+}
+

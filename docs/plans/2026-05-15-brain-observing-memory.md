@@ -63,7 +63,7 @@ These are constraints the implementation must respect, not aspirational goals.
     ├── _BRAIN.md                operating manual rendered for agents
     ├── inbox/
     │   ├── sig-2026-05-14-no-internal-abbrev.md
-    │   └── .processed/
+    │   └── processed/
     │       └── sig-2026-05-13-no-internal-abbrev.md
     ├── preferences/
     │   └── pref-no-internal-abbrev.md
@@ -77,7 +77,7 @@ These are constraints the implementation must respect, not aspirational goals.
 
 The directory a file lives in encodes its current lifecycle state. The frontmatter `status` field duplicates this for convenience. `o2b brain doctor` reports any mismatch.
 
-`inbox/.processed/` is a holding area for signals that have already contributed to a preference (or have been folded into an existing one). Files there remain valid wikilink targets — Obsidian resolves by basename regardless of folder.
+`inbox/processed/` is a holding area for signals that have already contributed to a preference (or have been folded into an existing one). Files there remain valid wikilink targets — Obsidian resolves by basename regardless of folder.
 
 ## 5. File Formats
 
@@ -93,7 +93,7 @@ The directory a file lives in encodes its current lifecycle state. The frontmatt
 
 A raw taste signal. Immutable after creation.
 
-Location: `Brain/inbox/sig-<date>-<slug>.md` (or `Brain/inbox/.processed/...` after dreaming).
+Location: `Brain/inbox/sig-<date>-<slug>.md` (or `Brain/inbox/processed/...` after dreaming).
 
 ```yaml
 ---
@@ -258,7 +258,7 @@ The transitions are driven entirely by `dream` plus `apply-evidence` log entries
 ### 7.1 Inputs
 
 - `Brain/inbox/sig-*.md` (active)
-- `Brain/inbox/.processed/sig-*.md` (historical, contributes to signal counts where referenced)
+- `Brain/inbox/processed/sig-*.md` (historical, contributes to signal counts where referenced)
 - `Brain/preferences/pref-*.md`
 - `Brain/retired/ret-*.md` (for supersede checks)
 - `Brain/log/*.md` (for `applied`/`violated`/`last_evidence_at`)
@@ -269,7 +269,7 @@ The transitions are driven entirely by `dream` plus `apply-evidence` log entries
 
 - New or updated files in `preferences/`
 - Moves into `retired/`
-- Moves from `inbox/` into `inbox/.processed/`
+- Moves from `inbox/` into `inbox/processed/`
 - One appended event in `Brain/log/<today>.md` summarising the run, but only if any state actually changed
 
 ### 7.3 Pseudocode
@@ -277,8 +277,8 @@ The transitions are driven entirely by `dream` plus `apply-evidence` log entries
 ```text
 dream(now):
     cfg              = load(_brain.yaml)
-    active_signals   = scan(inbox/, not .processed/)
-    processed        = scan(inbox/.processed/)
+    active_signals   = scan(inbox/, not processed/)
+    processed        = scan(inbox/processed/)
     preferences      = scan(preferences/)
     retired          = scan(retired/)
     log_entries      = scan(log/)
@@ -322,7 +322,7 @@ dream(now):
     # 5. Move consumed signals out of inbox
     for sig in active_signals:
         if is_referenced_by_pref_or_retired(sig):
-            move(sig.path, inbox/.processed/sig-...)
+            move(sig.path, inbox/processed/sig-...)
 
     # 6. Append a log entry only if anything changed
     if changes:
@@ -362,7 +362,7 @@ else:
 
 **No semantic merging.** Two topics with different slugs (`no-internal-abbrev` and `avoid-abbreviations`) are different counters. Merging is a human decision or an external agent's call, performed by manually editing frontmatter or by submitting new signals with the canonical topic and a `supersedes:` field on the resulting preference. The dream algorithm never guesses.
 
-**Same-sign signals on an active preference.** When a signal arrives on a topic that already has an active preference (unconfirmed or confirmed) and the signal's sign matches the preference, the signal is noted by `dream` (moved to `.processed/` with a log entry of type `noted-redundant`) but does not generate a new preference and does not increment `applied_count`. The latter is reserved for `apply-evidence` log entries from real work. Same-sign signals are user reiteration; their value is the reassurance that the topic is still relevant, not a counted application.
+**Same-sign signals on an active preference.** When a signal arrives on a topic that already has an active preference (unconfirmed or confirmed) and the signal's sign matches the preference, the signal is noted by `dream` (moved to `processed/` with a log entry of type `noted-redundant`) but does not generate a new preference and does not increment `applied_count`. The latter is reserved for `apply-evidence` log entries from real work. Same-sign signals are user reiteration; their value is the reassurance that the topic is still relevant, not a counted application.
 
 **Corrupted frontmatter.** A signal, preference, or retired file whose YAML cannot be parsed is skipped with a warning entry in the run log (`event: skip-corrupted-frontmatter`, `path: <relative path>`). The remaining files are processed normally. Corruption never aborts a run; `o2b brain doctor` is the right tool to surface and resolve it.
 
@@ -477,7 +477,7 @@ Exit codes: `0` normal, `1` error, `2` empty and `--silent-if-empty` is set.
 |---|---|---|---|---|
 | `o2b brain init` | Brain/ skeleton | no | yes | no |
 | `o2b brain feedback` | inbox/sig-* | yes | no | no |
-| `o2b brain dream` | preferences/, retired/, log/, inbox/.processed/, .snapshots/ | yes | yes (no-op on rerun) | no |
+| `o2b brain dream` | preferences/, retired/, log/, inbox/processed/, .snapshots/ | yes | yes (no-op on rerun) | no |
 | `o2b brain apply-evidence` | log/<day>.md (append) | yes | no | no |
 | `o2b brain digest` | — | yes | yes | yes |
 | `o2b brain query` | — | yes | yes | yes |
@@ -628,7 +628,7 @@ All four runtime manifests (Hermes `plugin.yaml`, Claude `.claude-plugin/plugin.
 A single entry under existing version headers, following the project's "no Unreleased section" convention:
 
 ```markdown
-## 0.5.0 — 2026-MM-DD
+## 0.9.0 — YYYY-MM-DD
 
 ### Added
 - Brain: observing memory layer at `Brain/` with deterministic dream.
@@ -804,7 +804,7 @@ This is the golden snapshot. Any dream regression fails it.
 - `README.md` — new `## Brain (observing memory)` section with CLI usage and a link to this plan.
 - `docs/architecture.md` — new "Brain layer" subsection; update the layer diagram.
 - `docs/hermes-cron.md` — ready-to-paste `hermes cron create` recipe for daily digest delivery.
-- `CHANGELOG.md` — `## 0.5.0 — 2026-MM-DD` entry per section 12.3.
+- `CHANGELOG.md` — `## 0.9.0 — YYYY-MM-DD` entry per section 12.3.
 
 **Moved files:**
 
@@ -853,7 +853,7 @@ Types in `types.ts` include the `pinned: boolean` field on `BrainPreference` (de
 - [ ] **Step 11: extend with step group B — refresh `applied_count`/`violated_count` from log, promote unconfirmed→confirmed on first `applied` evidence, compute `confidence`. Tests cover the full confidence formula by boundary cases.**
 - [ ] **Step 12: extend with step group C — retire `expired-unconfirmed`, `stale-no-evidence`, and `rebutted` paths, each gated by `isPinned(pref)` (pinned preferences are exempt from all three automatic reasons). Tests cover all four retirement reasons (incl. `user-rejected` exercised via `reject` CLI in Task 6) and the pin-skip path for each automatic reason.**
 - [ ] **Step 12a: integrate `createSnapshot` as the first state-changing step inside `dream` (after computing the planned changes, before writing any file). Snapshot failure aborts the run with exit 1 and no state changes. After successful run, `pruneSnapshots` enforces retention. Tests assert snapshot presence before any mutation and snapshot absence on a no-op run.**
-- [ ] **Step 13: implement signal-move to `.processed/` and `noted-redundant` log events for same-sign signals on active prefs; `skip-corrupted-frontmatter` warning entries. Tests cover same-sign-on-active-pref and corrupted YAML tolerance.**
+- [ ] **Step 13: implement signal-move to `processed/` and `noted-redundant` log events for same-sign signals on active prefs; `skip-corrupted-frontmatter` warning entries. Tests cover same-sign-on-active-pref and corrupted YAML tolerance.**
 - [ ] **Step 14: determinism test — fixture with frozen `--now` produces byte-identical filesystem output across two runs.**
 
 ### Task 4: Read helpers (digest, query, doctor)
@@ -874,7 +874,7 @@ Types in `types.ts` include the `pinned: boolean` field on `BrainPreference` (de
 
 - [ ] **Step 18: write `_BRAIN.md.tpl` — operating manual covering folder roles, signal/preference lifecycle, escape hatches; reviewed for clarity since this is what agents read every session. Hard constraint: under 200 lines (empirical compliance ceiling for agent-facing manuals). A test asserts the line count.**
 - [ ] **Step 19: write `_OPEN_SECOND_BRAIN.md.tpl` — Brain-first replacement; legacy `AI Wiki/` noted as read-only.**
-- [ ] **Step 20: implement `bootstrapBrain(vault, opts)` — creates `Brain/{inbox/,inbox/.processed/,preferences/,retired/,log/}`, writes `_brain.yaml` from default constant, renders both templates. Idempotent without `--force`; `--force` re-renders templates and resets `_brain.yaml`. Overwrites `AI Wiki/_OPEN_SECOND_BRAIN.md` to Brain-first version.**
+- [ ] **Step 20: implement `bootstrapBrain(vault, opts)` — creates `Brain/{inbox/,inbox/processed/,preferences/,retired/,log/}`, writes `_brain.yaml` from default constant, renders both templates. Idempotent without `--force`; `--force` re-renders templates and resets `_brain.yaml`. Overwrites `AI Wiki/_OPEN_SECOND_BRAIN.md` to Brain-first version.**
 - [ ] **Step 21: tests cover empty-vault bootstrap, idempotent rerun, `--force` overwrite, prior-config-missing error case (`o2b init` not run yet).**
 
 ### Task 6: CLI dispatcher
