@@ -39,6 +39,7 @@ import { basename, join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { regenerateActiveQuiet } from "./active.ts";
+import { collectEvidenceForSlug } from "./evidence.ts";
 import {
   appendLogEvent,
   parseLogDay,
@@ -47,6 +48,7 @@ import {
 import {
   moveToRetired,
   parsePreference,
+  wouldRewritePreference,
   writePreference,
 } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
@@ -98,6 +100,13 @@ export interface DreamRunSummary {
   readonly contradictions: ReadonlyArray<string>;
   /** Signal ids moved from inbox/ into inbox/processed/. */
   readonly moved_to_processed: ReadonlyArray<string>;
+  /**
+   * Signal ids dropped by §6 signal-suppression — a user-rejected
+   * retired pref with the same topic blocked them from re-promotion.
+   * Each entry is just the signal id (the retired wikilink + reason
+   * land in the `signal-suppressed` log event).
+   */
+  readonly suppressed: ReadonlyArray<string>;
   /** Snapshot file (absent on a no-op run). */
   readonly snapshot_path?: string;
   /** Log file the run summary landed in (absent on a no-op run). */
@@ -131,6 +140,13 @@ interface RetiredRecord {
   readonly path: string;
   readonly topic: string;
   readonly id: string;
+  readonly scope?: string;
+  /**
+   * The free-form user reason passed to `o2b brain reject --reason`.
+   * Presence triggers signal-suppression for future signals on the
+   * same (topic, scope) — see §6 of the OSB features summary.
+   */
+  readonly user_rejected_reason?: string;
 }
 
 interface CorruptedEntry {
@@ -169,7 +185,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   //    referenced by `last_evidence_at` plus today's file. Since the
   //    plan doesn't yet know dates, we scan the entire log/ directory.
   const evidence = scanApplyEvidence(vault);
-  const refresh = planRefresh(scan, evidence, cfg, now, plan);
+  const refresh = planRefresh(vault, scan, evidence, cfg, now, plan);
 
   // 4. Plan retires (expired-unconfirmed, stale-no-evidence). Pinned
   //    preferences get a `retain-pinned` log event instead of a real
@@ -195,6 +211,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     plan.notedRedundant.length > 0 ||
     plan.signalsToMove.size > 0 ||
     plan.retainPinned.length > 0 ||
+    plan.signalsSuppressed.length > 0 ||
     scan.corrupted.length > 0;
 
   if (!changed) {
@@ -207,6 +224,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       retired: [],
       contradictions: [...plan.contradictionTopics],
       moved_to_processed: [],
+      suppressed: [],
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -236,6 +254,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
 
   if (!dryRun) {
     for (const np of plan.newUnconfirmed) {
+      // Fresh pref has no apply-evidence yet; recentApplied/recentViolated
+      // start empty and stay so until the next dream pass after the
+      // first `brain_apply_evidence` event.
       writePreference(
         vault,
         {
@@ -248,6 +269,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           ),
           status: BRAIN_PREFERENCE_STATUS.unconfirmed,
           evidenced_by: np.evidencedBy,
+          recentApplied: [],
+          recentViolated: [],
           ...(np.scope ? { scope: np.scope } : {}),
           ...(np.supersedes ? { supersedes: np.supersedes } : {}),
         },
@@ -256,6 +279,13 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     }
 
     for (const update of refresh.updated.values()) {
+      // Rebuild the evidence slice from the log on every pass so the
+      // pref body stays in sync with the counters even when the
+      // counters themselves stayed put (e.g. dropping the
+      // v0.9.x placeholder body during a no-counter-change run).
+      const ev = collectEvidenceForSlug(vault, update.slug, {
+        sinceIso: update.created_at,
+      });
       writePreference(
         vault,
         {
@@ -272,6 +302,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           last_evidence_at: update.last_evidence_at,
           confidence: update.confidence,
           pinned: update.pinned,
+          recentApplied: ev.applied,
+          recentViolated: ev.violated,
           ...(update.scope ? { scope: update.scope } : {}),
         },
         { overwrite: true },
@@ -350,6 +382,19 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       });
     }
 
+    for (const suppressed of plan.signalsSuppressed) {
+      writeEvent(vault, {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.signalSuppressed,
+        body: {
+          signal: suppressed.signal,
+          retired: suppressed.retired,
+          topic: suppressed.topic,
+          reason: suppressed.reason,
+        },
+      });
+    }
+
     for (const retain of plan.retainPinned) {
       // `retain-pinned` is not in the strict BrainLogEventKind enum
       // (the design doc names a generic `retire` event with an
@@ -385,6 +430,11 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     if (plan.contradictionTopics.size > 0) {
       summaryBody["contradictions"] = Array.from(plan.contradictionTopics);
     }
+    if (plan.signalsSuppressed.length > 0) {
+      summaryBody["suppressed"] = plan.signalsSuppressed.map(
+        (s) => `${s.signal} ← ${s.retired}`,
+      );
+    }
 
     writeEvent(vault, {
       timestamp: nextStamp(),
@@ -418,6 +468,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     retired: plan.retires.map((r) => ({ id: `ret-${r.slug}`, reason: r.reason })),
     contradictions: Array.from(plan.contradictionTopics),
     moved_to_processed: moved,
+    suppressed: plan.signalsSuppressed.map((s) =>
+      s.signal.replace(/^\[\[/, "").replace(/\]\]$/, ""),
+    ),
     ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
     ...(dryRun
       ? { dry_run: true }
@@ -475,14 +528,27 @@ function scanBrain(vault: string): ScanResult {
       if (!name.endsWith(".md")) continue;
       const full = join(dirs.retired, name);
       // Retired files we only need for topic + id (for supersede
-      // bookkeeping). We do a lightweight frontmatter parse to avoid
-      // the strict folder invariant check failing on permissive setups.
+      // bookkeeping) plus the optional `user_rejected_reason` that
+      // drives signal-suppression (v0.10.1, _summary §6). We do a
+      // lightweight frontmatter parse to avoid the strict folder
+      // invariant check failing on permissive setups.
       try {
         const [meta] = parseFrontmatter(full);
         const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
         const id = typeof meta["id"] === "string" ? meta["id"] : "";
+        const scope = typeof meta["scope"] === "string" ? meta["scope"] : undefined;
+        const userReason =
+          typeof meta["user_rejected_reason"] === "string"
+            ? (meta["user_rejected_reason"] as string).trim()
+            : "";
         if (topic && id) {
-          retired.push({ path: full, topic, id });
+          retired.push({
+            path: full,
+            topic,
+            id,
+            ...(scope ? { scope } : {}),
+            ...(userReason ? { user_rejected_reason: userReason } : {}),
+          });
         }
       } catch {
         corrupted.push({ path: full });
@@ -507,6 +573,20 @@ interface PlanState {
   readonly signalsToMove: Map<string, SignalMovePlan>;
   /** Topic slugs flagged contradicted but no transition this run. */
   readonly contradictionTopics: Set<string>;
+  /**
+   * Signals dropped because their (topic, scope) matches a user-rejected
+   * retired pref carrying a `user_rejected_reason`. Each entry produces
+   * one `signal-suppressed` log event AND a move into `processed/` so
+   * the inbox does not accumulate.
+   */
+  readonly signalsSuppressed: SignalSuppressedPlan[];
+}
+
+interface SignalSuppressedPlan {
+  readonly signal: string;
+  readonly retired: string;
+  readonly reason: string;
+  readonly topic: string;
 }
 
 interface NewUnconfirmedPlan {
@@ -556,6 +636,7 @@ function emptyPlan(): PlanState {
     retainPinned: [],
     signalsToMove: new Map(),
     contradictionTopics: new Set(),
+    signalsSuppressed: [],
   };
 }
 
@@ -612,9 +693,54 @@ function planTopics(
       );
       continue;
     }
+    // v0.10.1 _summary §6: when a retired pref for this topic carries
+    // a `user_rejected_reason`, the user explicitly rejected the rule
+    // — re-growing it from fresh signals is exactly what they were
+    // asking us not to do. Suppress every matching signal, emit one
+    // `signal-suppressed` event per signal pointing at the retired
+    // pref + the reason, and move them straight to processed.
+    //
+    // Per-signal scope match: an unscoped suppressor swallows every
+    // signal on the topic; a scoped suppressor only swallows signals
+    // sharing its scope (a signal without scope still matches an
+    // unscoped suppressor but never a scoped one). Multiple retired
+    // prefs on the same topic are tried in order — the first matching
+    // suppressor wins. Non-matching signals fall through and remain
+    // eligible for candidate-pref planning below.
+    const suppressors = (retiredByTopic.get(topic) ?? []).filter(
+      (r) => !!r.user_rejected_reason,
+    );
+    let candidateSigs: SignalRecord[] = sigs;
+    if (suppressors.length > 0) {
+      const remaining: SignalRecord[] = [];
+      for (const sig of sigs) {
+        const suppressor = suppressors.find((r) => {
+          if (!r.scope) return true;
+          if (!sig.signal.scope) return false;
+          return r.scope === sig.signal.scope;
+        });
+        if (!suppressor) {
+          remaining.push(sig);
+          continue;
+        }
+        plan.signalsSuppressed.push({
+          signal: `[[${sig.signal.id}]]`,
+          retired: `[[${suppressor.id}]]`,
+          reason: suppressor.user_rejected_reason!,
+          topic,
+        });
+        recordSignalMove(plan, sig);
+      }
+      if (remaining.length === 0) continue;
+      candidateSigs = remaining;
+    }
     // No active pref for this topic → either promote or note
     // contradiction.
-    const windowedSigs = filterWithinWindow(sigs, cfg.dream.contradiction_window_days, now);
+    const windowedSigs = filterWithinWindow(
+      candidateSigs,
+      cfg.dream.contradiction_window_days,
+      now,
+    );
     const positives = windowedSigs.filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.positive);
     const negatives = windowedSigs.filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.negative);
     const dominant = positives.length >= negatives.length ? positives : negatives;
@@ -912,6 +1038,7 @@ function scanApplyEvidence(vault: string): ApplyEvidenceEntry[] {
 }
 
 function planRefresh(
+  vault: string,
   scan: ScanResult,
   evidence: ApplyEvidenceEntry[],
   cfg: BrainConfig,
@@ -1014,21 +1141,22 @@ function planRefresh(
       now,
     );
 
-    // Only emit an update if something actually changed. This matters
-    // for the idempotency invariant: a no-op rerun on the same fixture
-    // must not rewrite preference files (the file mtime would change
-    // but byte content would be identical; writing anyway is wasted
-    // I/O and triggers an unnecessary log entry).
-    const changed =
+    // Idempotency on a no-op rerun: skip refresh for prefs where
+    // counters AND status are unchanged AND the on-disk body already
+    // matches what we would render with current evidence. The second
+    // half (body comparison) is what carries the v0.10.1 migration
+    // forward — a pref whose counters are stable but whose body
+    // still has the v0.9.x placeholder will fail the body check and
+    // get rewritten on the next pass.
+    const countersChanged =
       applied !== rec.pref.applied_count ||
       violated !== rec.pref.violated_count ||
       lastEvidence !== rec.pref.last_evidence_at ||
       status !== rec.pref.status ||
       confirmedAt !== rec.pref.confirmed_at ||
       confidenceValue !== rec.pref.confidence;
-    if (!changed) continue;
 
-    updated.set(slug, {
+    const prospective = {
       slug,
       topic: rec.pref.topic,
       ...(rec.pref.scope ? { scope: rec.pref.scope } : {}),
@@ -1043,7 +1171,25 @@ function planRefresh(
       last_evidence_at: lastEvidence,
       confidence: confidenceValue,
       pinned: rec.pref.pinned,
-    });
+    };
+
+    if (!countersChanged) {
+      const ev2 = collectEvidenceForSlug(vault, slug, {
+        sinceIso: rec.pref.created_at,
+      });
+      if (
+        !wouldRewritePreference(vault, {
+          ...prospective,
+          recentApplied: ev2.applied,
+          recentViolated: ev2.violated,
+        })
+      ) {
+        // Counters and body both unchanged — true no-op for this pref.
+        continue;
+      }
+    }
+
+    updated.set(slug, prospective);
   }
 
   return { confirmed, updated };

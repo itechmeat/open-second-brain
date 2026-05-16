@@ -23,6 +23,16 @@ Parameters:
 - `principle`: one-line, imperative-voice agent-readable formulation. "Do not use internal abbreviations in user-facing copy unless explained first."
 - `agent`: your runtime identity (`claude`, `codex`, `hermes`, OpenClaw plugin name, or the human's name if you are recording on their behalf).
 
+Optional but **strongly recommended**:
+
+- `raw`: the verbatim quote that triggered the signal. Without it the
+  signal file lands without a `## Raw` body — counters keep working,
+  but the audit trail loses the original phrasing. Pass the exact
+  sentence the user said (or the exact line of the artifact the
+  signal is about). v0.10.1 dropped the `_(not provided)_` placeholder
+  precisely so an absent `raw` is now visible: the file simply has no
+  body, which should be the rare case, not the norm.
+
 Optional:
 
 - `scope`: soft category for later application-scope matching — `writing`, `coding`, `process`, `design`, `infra`, `docs`. Pick the narrowest accurate one.
@@ -101,3 +111,4 @@ o2b brain apply-evidence \
 - Never include secrets, tokens, API keys, or credentials in `principle`, `note`, or `source`.
 - Do not edit historical signals, preferences, or log entries by hand — the `dream` pass is the only writer for transitions.
 - Do not write into `Brain/.snapshots/` or `Brain/retired/` directly — those are managed by `dream` and `o2b brain reject` only.
+- `o2b brain reject` requires `--reason <text>` from v0.10.1 onward. The reason is persisted on the retired file as `user_rejected_reason`. The next dream pass will mark any future signal on the same `(topic, scope)` as `signal-suppressed` and move it straight to `processed/` — do not re-record the same signal hoping it will re-grow into a preference. If you genuinely disagree with a past reject, raise it with the user; do not route around it via `brain_feedback`.

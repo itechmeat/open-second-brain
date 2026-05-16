@@ -64,6 +64,7 @@ describe("BRAIN_* const enums", () => {
       "promote",
       "retire",
       "noted-redundant",
+      "signal-suppressed",
       "skip-corrupted-frontmatter",
       "pin",
       "unpin",

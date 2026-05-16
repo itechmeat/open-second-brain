@@ -5,6 +5,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-05-16
+
+Closes the "preference body is dead weight" gap. Every active and
+quarantined preference file now mirrors its log activity instead of
+shipping a fixed placeholder body; signal files stop emitting the
+`_(not provided)_` placeholder when no verbatim quote was passed; and
+`o2b brain reject` requires a `--reason` so the next dream pass can
+suppress new signals on the same topic. Tier-A item §6 of
+`Projects/OpenSecondBrain/Features/_summary` (`reject --reason` +
+signal suppression) is implemented in this patch.
+
+No vault migration is required — the first post-upgrade dream pass
+detects v0.9.x placeholder bodies and rewrites them to the new shape
+in place.
+
+### Added
+
+- **`## Recent applications` / `## Recent violations`** sections on
+  every preference and retired file. Dream collects the last 5
+  applied + last 3 violated rows from `Brain/log/` on every pass and
+  writes them as bulleted `[[artifact:lines]] — timestamp (agent)
+  [result] — note` entries. The data was already on disk in the
+  daily log; v0.10.1 joins it back to the rule.
+- **`src/core/brain/evidence.ts`** — read-only log scanner used by
+  dream and `moveToRetired`. Returns newest-first slices for a given
+  pref slug; sorts by timestamp; stops at `pref.created_at` so older
+  log days are never opened in vain.
+- **`o2b brain reject --reason "<text>"`** — `--reason` is now
+  mandatory. The text is persisted on the retired file as
+  `user_rejected_reason` and rendered in the `## Retired` body. CLI
+  exits 1 when `--reason` is missing.
+- **`signal-suppressed` log event + `signalSuppressed` event kind.**
+  When a fresh signal lands on a topic that has a retired pref with
+  `user_rejected_reason` set, dream drops the signal from the
+  candidate-pref planner, moves it to `processed/`, and emits one
+  audit row per signal linking back to the retired pref + the
+  original user reason.
+- **`wouldRewritePreference(vault, input)`** exported predicate —
+  twin of `writePreference`'s content-equality short-circuit. Lets
+  the dream pass decide whether a refresh entry is needed without
+  doing the write twice.
+- **`BrainEvidenceSummary`** type and `BrainSignalSuppressedLogEvent`
+  variant added to the discriminated union of log events.
+- Test file `tests/core/brain.body-hygiene.test.ts` — coverage for
+  Raw-section omission, preference-body shape, retired re-render,
+  signal suppression, and the v0.9.x → v0.10.1 body migration.
+
+### Changed
+
+- **`renderPreferenceBody`** drops the redundant `## Principle`
+  duplicate and the `_(no evidence yet)_` / `_(not provided)_`
+  placeholder lines. Sections are emitted only when they have real
+  content; a brand-new pref with no log evidence yet has an empty
+  body, which is the honest representation.
+- **`renderSignalBody`** omits the `## Raw` section entirely when
+  no verbatim quote was passed instead of shipping the
+  `_(not provided)_` placeholder. Parsers stay tolerant of both
+  shapes (old placeholder, new absent section).
+- **`writePreference`** is now content-aware: when overwriting, it
+  reads the existing file, compares to the would-be rendered bytes,
+  and skips the rename if they match. Preserves the dream
+  "no rewrite on a no-op rerun" invariant even though dream now
+  recomputes the body on every pass.
+- **`moveToRetired`** re-renders the body from scratch (current
+  frontmatter + freshly collected log evidence) before appending
+  the `## Retired` block. The source file's body shape no longer
+  bleeds into the retired snapshot — a v0.9.x preference being
+  retired produces a v0.10.1 retired file.
+- **`dream`** plumbs the evidence slice through to every
+  `writePreference` and `moveToRetired` call. A pref whose
+  counters did not change is still considered for refresh if its
+  on-disk body differs from the rendered output (this is what
+  carries the v0.9.x body migration forward without a separate
+  migrate command).
+- **`brain-memory` skill** explicitly recommends passing `raw` with
+  the verbatim user quote and documents the `--reason` requirement
+  on `o2b brain reject`, with the warning that re-recording signals
+  on a user-rejected topic will be suppressed by the next dream.
+
+### Notes
+
+- The schema version on `Brain/_brain.yaml` stays unchanged. All
+  changes are additive at the data layer (`user_rejected_reason` is
+  an optional frontmatter field; `BrainEvidenceSummary` is a derived
+  render-time view, never persisted as its own file).
+- The §6 implementation in this release covers suppression only.
+  The follow-up "after 5 rejects of the same topic, auto-block" mode
+  from the _summary doc is deliberately out of scope — suppression
+  + the explicit `--reason` audit trail is enough to break the
+  reject → re-grow loop the user observed.
+
 ## [0.10.0] - 2026-05-16
 
 Full-text search over the vault as a deterministic, filesystem-first
@@ -1151,6 +1242,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.10.1]: https://github.com/itechmeat/open-second-brain/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/itechmeat/open-second-brain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/itechmeat/open-second-brain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/itechmeat/open-second-brain/compare/v0.8.1...v0.9.0

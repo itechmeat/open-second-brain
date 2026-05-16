@@ -501,10 +501,29 @@ describe("brain reject", () => {
     expect(r.stderr).toContain("--id");
   });
 
-  test("unknown pref exits 2", async () => {
+  test("missing --reason exits 1 (mandatory from v0.10.1)", async () => {
     await bootstrap();
     const r = await runCli(
       ["brain", "reject", "--vault", vault, "--id", "pref-ghost"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("--reason");
+  });
+
+  test("unknown pref exits 2", async () => {
+    await bootstrap();
+    const r = await runCli(
+      [
+        "brain",
+        "reject",
+        "--vault",
+        vault,
+        "--id",
+        "pref-ghost",
+        "--reason",
+        "ghost",
+      ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(2);
@@ -538,7 +557,16 @@ describe("brain reject", () => {
     expect(pin.returncode).toBe(0);
 
     const r = await runCli(
-      ["brain", "reject", "--vault", vault, "--id", "pref-important"],
+      [
+        "brain",
+        "reject",
+        "--vault",
+        vault,
+        "--id",
+        "pref-important",
+        "--reason",
+        "no longer relevant",
+      ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(1);
@@ -581,11 +609,19 @@ describe("brain reject", () => {
         "--id",
         "pref-important",
         "--yes",
+        "--reason",
+        "no longer the right call",
       ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
     expect(existsSync(join(vault, "Brain", "retired", "ret-important.md"))).toBe(true);
+    // §6: the user reason must land on the retired file's frontmatter.
+    const ret = readFileSync(
+      join(vault, "Brain", "retired", "ret-important.md"),
+      "utf8",
+    );
+    expect(ret).toContain("user_rejected_reason: no longer the right call");
   });
 });
 

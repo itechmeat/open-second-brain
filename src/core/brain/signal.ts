@@ -313,20 +313,20 @@ function composeSignalTags(input: WriteSignalInput): string[] {
 }
 
 /**
- * Render the body. The "## Raw" section is always present so the file
- * shape is identical regardless of whether `raw` was provided —
- * deterministic write is part of the contract.
+ * Render the body. The "## Raw" section is emitted **only** when the
+ * caller actually provided a verbatim quote. A signal recorded without
+ * `raw` (the common case for tests and corner runs) used to ship a
+ * `_(not provided)_` placeholder; v0.10.1 drops that placeholder so
+ * the file is honest about its contents — no body at all when there is
+ * none. Parsers stay tolerant of both shapes (old placeholder and new
+ * absent section).
  */
 function renderSignalBody(input: WriteSignalInput): string {
-  const lines: string[] = ["## Raw", ""];
-  if (input.raw && input.raw.trim()) {
-    // Normalise line endings and trailing whitespace so two callers
-    // passing semantically-equal text produce byte-identical output.
-    lines.push(input.raw.replace(/\r\n?/g, "\n").replace(/\s+$/g, ""));
-  } else {
-    lines.push("_(not provided)_");
-  }
-  return lines.join("\n");
+  if (!input.raw || !input.raw.trim()) return "";
+  // Normalise line endings and trailing whitespace so two callers
+  // passing semantically-equal text produce byte-identical output.
+  const body = input.raw.replace(/\r\n?/g, "\n").replace(/\s+$/g, "");
+  return ["## Raw", "", body].join("\n");
 }
 
 function extractRawSection(body: string): string | undefined {
