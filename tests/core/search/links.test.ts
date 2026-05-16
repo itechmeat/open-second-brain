@@ -18,6 +18,15 @@ test("extracts relative markdown links and skips external URLs", () => {
   expect(md[0]?.linkText).toBe("the spec");
 });
 
+test("image embeds (`![alt](url)`) are not captured as markdown links", () => {
+  const text = "![cover](assets/cover.png) and a real [Spec](./design.md)";
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  expect(md.length).toBe(1);
+  expect(md[0]?.targetPath).toBe("./design.md");
+  expect(md.find((l) => l.targetPath === "assets/cover.png")).toBeUndefined();
+});
+
 test("strips anchor fragments from markdown link targets", () => {
   const links = extractLinks("[Anchor](notes/x.md#section)");
   const md = links.filter((l) => l.linkType === "markdown_link");

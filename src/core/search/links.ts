@@ -23,7 +23,9 @@ export interface ExtractedLink {
 const CODE_FENCE_RE = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n(?:```|~~~)[^\n]*|$)/g;
 const INLINE_CODE_RE = /`[^`\n]*`/g;
 const WIKILINK_RE = /\[\[([^\]\n|]+?)(?:\|([^\]\n]+))?\]\]/g;
-const MD_LINK_RE = /!?\[([^\]\n]*)\]\(([^)\n\s]+)(?:\s+"[^"\n]*")?\)/g;
+// Negative lookbehind so `![alt](url)` image embeds are NOT captured as
+// markdown_link. CodeRabbit caught this regression on PR #15.
+const MD_LINK_RE = /(?<!!)\[([^\]\n]*)\]\(([^)\n\s]+)(?:\s+"[^"\n]*")?\)/g;
 // Obsidian-style tag: #word where word starts with a letter/_ and may contain
 // letters, digits, dashes, underscores, and '/' for hierarchy.
 const TAG_RE = /(^|[^\w\/])#([A-Za-z_][\w\-/]*)/g;

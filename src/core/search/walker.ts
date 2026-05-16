@@ -71,6 +71,11 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
     }
   })();
   const { names, relPaths } = parseIgnore(config.ignorePaths);
+  // Track real (canonical) paths of visited directories so a symlink
+  // pointing back at an ancestor (or sibling) cannot send the walker
+  // into an infinite loop. `isInsideVault` covers escape outside the
+  // vault but is not acyclic on its own.
+  const seenDirs = new Set<string>([vaultReal]);
 
   function* walk(dir: string): Generator<WalkedFile> {
     let entries: Dirent[];
@@ -79,6 +84,10 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
     } catch {
       return;
     }
+    // Sort by name so two identical vaults produce the same traversal
+    // order across filesystems and platforms — important for the
+    // deterministic-indexing contract and for stable Syncthing peers.
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
       const absPath = join(dir, entry.name);
       const relPathRaw = relative(vaultReal, absPath);
@@ -97,7 +106,15 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
       if (stat.isDirectory()) {
         if (names.has(entry.name)) continue;
         if (relPaths.has(relPath)) continue;
-        if (isLinkHint && !isInsideVault(absPath, vaultReal)) continue;
+        let dirReal: string;
+        try {
+          dirReal = realpathSync(absPath);
+        } catch {
+          continue;
+        }
+        if (dirReal !== vaultReal && !dirReal.startsWith(vaultReal + sep)) continue;
+        if (seenDirs.has(dirReal)) continue;
+        seenDirs.add(dirReal);
         yield* walk(absPath);
         continue;
       }

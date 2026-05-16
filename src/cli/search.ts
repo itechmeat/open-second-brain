@@ -122,6 +122,9 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
   if (positional.length === 0) {
     throw new CliError("query string is required");
   }
+  if (flags["semantic"] === true && flags["keyword-only"] === true) {
+    throw new CliError("--semantic and --keyword-only are mutually exclusive");
+  }
   const query = positional.join(" ");
   const limitNum = Number(flags["limit"] ?? "10");
   if (!Number.isInteger(limitNum) || limitNum < 1 || limitNum > 100) {
@@ -268,7 +271,7 @@ function renderStatsHuman(stats: IndexStats, cfg: ResolvedSearchConfig): string 
   lines.push(`  deleted:  ${stats.deleted} files`);
   if (stats.embeddingsComputed > 0 || stats.embeddingsRetries > 0) {
     lines.push(
-      `  embeddings: ${stats.embeddingsComputed}/${stats.embeddingsComputed} OK (${stats.embeddingsRetries} retries)`,
+      `  embeddings: ${stats.embeddingsComputed} computed (${stats.embeddingsRetries} retries)`,
     );
   }
   if (stats.errors.length > 0) {

@@ -11,7 +11,16 @@ export function withTimeout<T>(
   rejectionFactory: (ms: number) => unknown = (n) => new Error(`timeout after ${n}ms`),
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(rejectionFactory(ms)), ms);
+    const timer = setTimeout(() => {
+      // If a buggy factory throws while building the timeout error, the
+      // promise would otherwise hang forever — settle with whatever the
+      // factory threw instead.
+      try {
+        reject(rejectionFactory(ms));
+      } catch (e) {
+        reject(e);
+      }
+    }, ms);
     p.then(
       (v) => {
         clearTimeout(timer);

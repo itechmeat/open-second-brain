@@ -315,6 +315,13 @@ export class OpenAICompatProvider implements EmbeddingProvider {
 
   private classifyError(e: unknown): { retriable: boolean; error: SearchError } {
     if (e instanceof SearchError) {
+      // Parent-cancelled batches surface as a synthetic
+      // EMBEDDING_PROVIDER_HTTP "embed cancelled". Retrying them would
+      // race against the abort and re-spend budget on a batch the
+      // outer Promise already gave up on.
+      if (e.message.includes("embed cancelled")) {
+        return { retriable: false, error: e };
+      }
       if (e.code === "EMBEDDING_PROVIDER_TIMEOUT") return { retriable: true, error: e };
       if (e.code === "EMBEDDING_PROVIDER_HTTP") {
         // Parse status from message if present.

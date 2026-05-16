@@ -177,7 +177,17 @@ async function runSemanticPhase(
     const vectors = await provider.embed([query]);
     queryVec = vectors[0] ?? [];
   } catch (e) {
-    if (opts.explicit) throw e;
+    if (opts.explicit) {
+      // Defensive: provider methods are expected to throw SearchError,
+      // but wrap anything else (e.g. an unexpected runtime failure)
+      // so callers always see a typed code rather than a bare Error.
+      if (e instanceof SearchError) throw e;
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new SearchError(
+        "EMBEDDING_PROVIDER_HTTP",
+        `embedding provider failure: ${msg}`,
+      );
+    }
     const msg = e instanceof Error ? e.message : String(e);
     warnings.push(`embedding provider unavailable: ${msg}`);
     return { attempted: false, hits: [], warnings };

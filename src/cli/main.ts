@@ -242,9 +242,17 @@ function writeSearchInitBlock(configPath: string): void {
   process.stdout.write("  next: o2b search index   # build the vault search index\n");
 
   const data = discoverConfig(configPath).data;
+  // Accept "true" / "True" / "TRUE" / "1" from both the config file
+  // and the env override — matches the parseBool helper inside
+  // resolveSearchConfig so the init banner does not lie about state.
+  const truthy = (v: unknown): boolean => {
+    if (typeof v !== "string") return false;
+    const s = v.trim().toLowerCase();
+    return s === "true" || s === "1";
+  };
   const enabled =
-    data["search_semantic_enabled"] === "true" ||
-    process.env["OPEN_SECOND_BRAIN_SEARCH_SEMANTIC"] === "true";
+    truthy(data["search_semantic_enabled"]) ||
+    truthy(process.env["OPEN_SECOND_BRAIN_SEARCH_SEMANTIC"]);
   const keyPresent = !!(
     (data["embedding_api_key"] && data["embedding_api_key"] !== "") ||
     process.env["OPEN_SECOND_BRAIN_EMBEDDING_KEY"]

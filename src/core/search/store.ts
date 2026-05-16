@@ -232,7 +232,21 @@ export class Store {
       try {
         applyPragmas(db);
         ensureFts5(db);
-        const version = readSchemaVersion(db);
+        let version: number;
+        try {
+          version = readSchemaVersion(db);
+        } catch (e) {
+          // A corrupt or non-OSB sqlite file at the index path can make
+          // readSchemaVersion throw raw SQLITE errors (e.g. "no such
+          // table: index_state"). Surface those as a typed
+          // INDEX_UNREADABLE so callers see a code, not a stray Error.
+          if (e instanceof SearchError) throw e;
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new SearchError(
+            "INDEX_UNREADABLE",
+            `cannot read schema_version from ${config.dbPath}: ${msg}`,
+          );
+        }
         if (version !== LATEST_SCHEMA_VERSION) {
           throw new SearchError(
             "SCHEMA_MISMATCH",

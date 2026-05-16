@@ -135,12 +135,16 @@ async function indexInto(
     const seen = new Set<string>();
 
     for (const file of walkVault(config)) {
+      // Mark seen FIRST. If anything downstream throws (read fault,
+      // chunker bug, transient FS error), the file must not look
+      // "missing" to the deletion sweep below — that would wipe a
+      // present file from the index just because a single read failed.
+      seen.add(file.relPath);
       try {
         const content = readUtf8(file.absPath);
         const contentHash = sha256(content);
         const mtimeSec = Math.floor(file.stat.mtimeMs / 1000);
         const prev = existing.get(file.relPath);
-        seen.add(file.relPath);
 
         if (!opts?.force && prev && prev.contentHash === contentHash && prev.mtime === mtimeSec) {
           stats.unchanged++;
@@ -433,7 +437,11 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
 
   let vaultReadable = false;
   try {
-    if (statSync(config.vault).isDirectory()) vaultReadable = true;
+    if (statSync(config.vault).isDirectory()) {
+      vaultReadable = true;
+    } else {
+      fatal.push(`vault path exists but is not a directory: ${config.vault}`);
+    }
   } catch {
     fatal.push(`vault not readable: ${config.vault}`);
   }
