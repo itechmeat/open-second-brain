@@ -1,0 +1,5 @@
+{"role": "session_meta", "tools": [{"type": "function", "function": {"name": "brain_feedback", "description": "Record a Brain taste signal"}}], "profile": "product-tech-lead"}
+{"role": "user", "content": "How should I handle DB mocking?\n@osb feedback negative topic=mocking principle=\"don't mock DB in integration tests\" scope=testing", "timestamp": "2026-05-16T10:00:00.200000"}
+{"role": "assistant", "content": "I'll record that as a preference.", "reasoning": null, "finish_reason": "stop", "timestamp": "2026-05-16T10:00:01.000000"}
+{"role": "assistant", "content": "", "reasoning": null, "finish_reason": "tool_calls", "tool_calls": [{"id": "call_hermes_1", "call_id": "call_hermes_1", "type": "function", "function": {"name": "brain_feedback", "arguments": "{\"topic\":\"mocking\",\"signal\":\"negative\",\"principle\":\"avoid mocking the database in integration tests\",\"scope\":\"testing\"}"}}], "timestamp": "2026-05-16T10:00:01.500000"}
+{"role": "tool", "content": "{\"ok\": true}", "timestamp": "2026-05-16T10:00:02.000000"}

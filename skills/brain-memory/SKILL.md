@@ -112,3 +112,37 @@ o2b brain apply-evidence \
 - Do not edit historical signals, preferences, or log entries by hand — the `dream` pass is the only writer for transitions.
 - Do not write into `Brain/.snapshots/` or `Brain/retired/` directly — those are managed by `dream` and `o2b brain reject` only.
 - `o2b brain reject` requires `--reason <text>` from v0.10.1 onward. The reason is persisted on the retired file as `user_rejected_reason`. The next dream pass will mark any future signal on the same `(topic, scope)` as `signal-suppressed` and move it straight to `processed/` — do not re-record the same signal hoping it will re-grow into a preference. If you genuinely disagree with a past reject, raise it with the user; do not route around it via `brain_feedback`.
+
+## Fallback capture surfaces
+
+When no agent is in the loop at the moment the rule is formed, the
+user can write an `@osb` marker directly into any vault markdown
+file — a Daily note, a project plan, a self-chat scratchpad. The
+operator runs `o2b brain scan-inline` later to capture every marker
+into `Brain/inbox/`. Two shapes are recognised:
+
+```
+@osb feedback negative topic=mocking principle="don't mock DB in integration tests" scope=testing
+```
+
+````
+```osb
+kind: feedback
+signal: negative
+topic: mocking
+principle: don't mock DB in integration tests
+scope: testing
+```
+````
+
+This is a fallback path, not the default. When you (the agent) hear
+a preference live, call `brain_feedback` directly — the inline
+marker exists for situations where MCP is unavailable. After scan,
+the source line becomes `@osb✓ [[sig-...]]` so a second run is
+idempotent.
+
+For session JSONLs (Claude / Codex / Hermes exports) the equivalent
+operator command is `o2b brain import-session <path>` — it replays
+both `@osb` markers in message text and live `brain_feedback`
+tool_use calls. Useful for back-filling sessions where the agent
+didn't make the call.

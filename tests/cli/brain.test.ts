@@ -909,6 +909,158 @@ describe("brain doctor", () => {
   });
 });
 
+// ── §9 scan-inline CLI ──────────────────────────────────────────────────────
+
+describe("brain scan-inline", () => {
+  test("finds inline marker, creates signal, rewrites source file", async () => {
+    await bootstrap();
+    const notePath = join(vault, "Daily", "2026-05-16.md");
+    mkdirSync(join(vault, "Daily"), { recursive: true });
+    writeFileSync(
+      notePath,
+      "@osb feedback negative topic=cli-test principle=p\n",
+      "utf8",
+    );
+
+    const r = await runCli(["brain", "scan-inline", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toMatch(/created: 1/);
+
+    const after = readFileSync(notePath, "utf8");
+    expect(after).toMatch(/@osb✓ \[\[sig-/);
+
+    const inbox = join(vault, "Brain", "inbox");
+    const sigs = readdirSync(inbox).filter((n) => n.startsWith("sig-"));
+    expect(sigs.length).toBe(1);
+  });
+
+  test("--dry-run does not write signals or rewrite files", async () => {
+    await bootstrap();
+    const notePath = join(vault, "Daily", "2026-05-16.md");
+    mkdirSync(join(vault, "Daily"), { recursive: true });
+    writeFileSync(
+      notePath,
+      "@osb feedback negative topic=dry principle=p\n",
+      "utf8",
+    );
+    const before = readFileSync(notePath, "utf8");
+
+    const r = await runCli(
+      ["brain", "scan-inline", "--vault", vault, "--dry-run"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(readFileSync(notePath, "utf8")).toBe(before);
+    const inbox = join(vault, "Brain", "inbox");
+    expect(readdirSync(inbox).filter((n) => n.startsWith("sig-")).length).toBe(0);
+  });
+
+  test("--json emits machine-readable summary", async () => {
+    await bootstrap();
+    mkdirSync(join(vault, "Daily"), { recursive: true });
+    writeFileSync(
+      join(vault, "Daily", "x.md"),
+      "@osb feedback negative topic=jt principle=p\n",
+      "utf8",
+    );
+    const r = await runCli(
+      ["brain", "scan-inline", "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.created).toBe(1);
+    expect(parsed.found).toBe(1);
+  });
+
+  test("--strict exits 2 when malformed marker attempts are present", async () => {
+    await bootstrap();
+    mkdirSync(join(vault, "Daily"), { recursive: true });
+    writeFileSync(
+      join(vault, "Daily", "bad.md"),
+      "@osb feedback negative topic=missing-principle\n",
+      "utf8",
+    );
+    const r = await runCli(
+      ["brain", "scan-inline", "--vault", vault, "--strict"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(2);
+    expect(r.stdout).toMatch(/malformed: 1/);
+  });
+});
+
+// ── §16 import-session CLI ──────────────────────────────────────────────────
+
+describe("brain import-session", () => {
+  test("imports a single .jsonl file and creates signals", async () => {
+    await bootstrap();
+    const fixture = join(
+      process.cwd(),
+      "tests/fixtures/sessions/claude-minimal.jsonl",
+    );
+    const r = await runCli(
+      ["brain", "import-session", fixture, "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toMatch(/signals_created: [1-9]/);
+
+    const inbox = join(vault, "Brain", "inbox");
+    const sigs = readdirSync(inbox).filter((n) => n.startsWith("sig-"));
+    expect(sigs.length).toBeGreaterThan(0);
+  });
+
+  test("--dry-run does not create signals", async () => {
+    await bootstrap();
+    const fixture = join(
+      process.cwd(),
+      "tests/fixtures/sessions/claude-minimal.jsonl",
+    );
+    const r = await runCli(
+      ["brain", "import-session", fixture, "--vault", vault, "--dry-run"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const inbox = join(vault, "Brain", "inbox");
+    expect(
+      readdirSync(inbox).filter((n) => n.startsWith("sig-")).length,
+    ).toBe(0);
+  });
+
+  test("--json structured output", async () => {
+    await bootstrap();
+    const fixture = join(
+      process.cwd(),
+      "tests/fixtures/sessions/codex-minimal.jsonl",
+    );
+    const r = await runCli(
+      ["brain", "import-session", fixture, "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.files.length).toBe(1);
+    expect(parsed.files[0].format).toBe("codex");
+  });
+
+  test("exit 2 on unknown format without --format flag", async () => {
+    await bootstrap();
+    const junk = join(tmp, "junk.jsonl");
+    writeFileSync(junk, '{"foo":"bar"}\n', "utf8");
+    const r = await runCli(
+      ["brain", "import-session", junk, "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(2);
+    expect(r.stderr.toLowerCase()).toMatch(/autodetect|format/);
+  });
+});
+
 describe("brain vault resolution", () => {
   test("no vault flag and no machine config exits 1 with hint", async () => {
     const cfg = join(tmp, "non-existent-config.yaml");
@@ -917,5 +1069,129 @@ describe("brain vault resolution", () => {
     });
     expect(r.returncode).toBe(1);
     expect(r.stderr.toLowerCase()).toContain("vault");
+  });
+});
+
+// ── §24 migrate-frontmatter CLI ─────────────────────────────────────────────
+
+describe("brain migrate-frontmatter", () => {
+  /** Write a legacy-shape pref file under the bootstrapped vault. */
+  function writeLegacyPref(slug: string): string {
+    const path = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+    writeFileSync(
+      path,
+      [
+        "---",
+        "kind: brain-preference",
+        `id: pref-${slug}`,
+        "created_at: 2026-05-14T10:42:00Z",
+        "unconfirmed_until: 2026-05-28T10:42:00Z",
+        `tags: [brain, brain/preference, brain/topic/${slug}]`,
+        `topic: ${slug}`,
+        "principle: Some rule",
+        "pinned: false",
+        "status: confirmed",
+        "confirmed_at: 2026-05-15T10:00:00Z",
+        "evidenced_by: []",
+        "applied_count: 1",
+        "violated_count: 0",
+        "last_evidence_at: null",
+        "confidence: low",
+        "---",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    return path;
+  }
+
+  test("--dry-run (default) prints plan and modifies no files", async () => {
+    await bootstrap();
+    const prefPath = writeLegacyPref("dry-rule");
+    const before = readFileSync(prefPath, "utf8");
+
+    const r = await runCli(
+      ["brain", "migrate-frontmatter", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toMatch(/files_to_migrate: 1/);
+    expect(readFileSync(prefPath, "utf8")).toBe(before);
+  });
+
+  test("--apply --yes rewrites files and takes a snapshot", async () => {
+    await bootstrap();
+    const prefPath = writeLegacyPref("apply-rule");
+
+    const r = await runCli(
+      ["brain", "migrate-frontmatter", "--vault", vault, "--apply", "--yes"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+
+    const raw = readFileSync(prefPath, "utf8");
+    expect(raw).toMatch(/^_status: confirmed$/m);
+    expect(raw).not.toMatch(/^status: /m);
+
+    const snapDir = join(vault, "Brain", ".snapshots");
+    const snaps = readdirSync(snapDir).filter((n) => n.startsWith("migrate-"));
+    expect(snaps.length).toBeGreaterThan(0);
+  });
+
+  test("--apply without --yes in non-interactive mode exits 1", async () => {
+    await bootstrap();
+    writeLegacyPref("no-yes");
+    const r = await runCli(
+      ["brain", "migrate-frontmatter", "--vault", vault, "--apply"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr.toLowerCase()).toMatch(/--yes/);
+  });
+
+  test("--json emits machine-readable summary", async () => {
+    await bootstrap();
+    writeLegacyPref("json-rule");
+    const r = await runCli(
+      ["brain", "migrate-frontmatter", "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.files_scanned).toBe(1);
+    expect(parsed.files_to_migrate).toBe(1);
+  });
+
+  test("--apply on collision file aborts with exit 1", async () => {
+    await bootstrap();
+    // Write a file with both shapes
+    const path = join(vault, "Brain", "preferences", "pref-collision.md");
+    writeFileSync(
+      path,
+      [
+        "---",
+        "kind: brain-preference",
+        "id: pref-collision",
+        "created_at: 2026-05-14T10:42:00Z",
+        "unconfirmed_until: 2026-05-28T10:42:00Z",
+        "tags: [brain, brain/preference, brain/topic/collision]",
+        "topic: collision",
+        "principle: Some rule",
+        "pinned: false",
+        "status: confirmed",
+        "_status: confirmed",
+        "evidenced_by: []",
+        "---",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const r = await runCli(
+      ["brain", "migrate-frontmatter", "--vault", vault, "--apply", "--yes"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toMatch(/collision/i);
   });
 });

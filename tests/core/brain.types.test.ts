@@ -54,7 +54,7 @@ describe("BRAIN_* const enums", () => {
     expect(BRAIN_APPLY_RESULT.outdated).toBe("outdated");
   });
 
-  test("BRAIN_LOG_EVENT_KIND covers every event type listed in §5.5 / §7.4", () => {
+  test("BRAIN_LOG_EVENT_KIND covers every event type listed in §5.5 / §7.4 + capture-extensions §9/§16/§24", () => {
     const expected = new Set<string>([
       "dream",
       "feedback",
@@ -69,6 +69,10 @@ describe("BRAIN_* const enums", () => {
       "pin",
       "unpin",
       "rollback",
+      // capture extensions + frontmatter migration
+      "scan-inline",
+      "import-session",
+      "migrate-frontmatter",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

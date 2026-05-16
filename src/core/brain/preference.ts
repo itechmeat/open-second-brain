@@ -63,6 +63,26 @@ import {
 // ----- Errors ---------------------------------------------------------------
 
 /**
+ * Raised when a preference / retired file carries the same Group C
+ * field in both legacy (`status:`) and `_`-prefixed (`_status:`)
+ * shapes. The doctor downgrades this to a `frontmatter-double-shape`
+ * warning; `o2b brain migrate-frontmatter` aborts on it. Doing the
+ * dispatch by typed class (rather than regex-matching the message)
+ * keeps the contract stable across error-text rewording.
+ */
+export class BrainDoubleShapeError extends Error {
+  readonly field: string;
+  constructor(field: string) {
+    super(
+      `preference field collision: both '_${field}' and legacy '${field}' present; ` +
+        `pick one (run \`o2b brain migrate-frontmatter --apply\` or hand-edit)`,
+    );
+    this.name = "BrainDoubleShapeError";
+    this.field = field;
+  }
+}
+
+/**
  * Raised when a preference / retired file disagrees with the folder
  * it lives in. Surfaces both pieces of information so the caller (and
  * `o2b brain doctor`) can render an actionable message.
@@ -273,6 +293,12 @@ function preferenceFrontmatter(
   const applied = input.applied_count ?? 0;
   const violated = input.violated_count ?? 0;
 
+  // §24: Group C derived fields gain `_` prefix so the visual
+  // boundary between "what dream owns" and "what the user owns"
+  // becomes obvious in Obsidian. Identity (`kind`, `id`, `created_at`,
+  // `unconfirmed_until`, `topic`, `principle`, `scope`, `tags`,
+  // `aliases`, `supersedes`) and user-editable (`pinned`) stay
+  // unprefixed. Parser accepts both shapes; writer only emits the new.
   const metadata: FrontmatterMap = {
     kind: "brain-preference",
     id,
@@ -281,17 +307,17 @@ function preferenceFrontmatter(
     // an empty string and the loader coerces back to `null`. We store
     // the literal text "null" rather than an empty value to keep the
     // emitted YAML one-token per line and the field always present.
-    confirmed_at: input.confirmed_at ?? "null",
+    _confirmed_at: input.confirmed_at ?? "null",
     unconfirmed_until: input.unconfirmed_until,
     tags: [...tags],
     topic: input.topic.trim(),
-    status: input.status,
+    _status: input.status,
     principle: input.principle.trim(),
-    evidenced_by: [...input.evidenced_by],
-    applied_count: applied,
-    violated_count: violated,
-    last_evidence_at: input.last_evidence_at ?? "null",
-    confidence,
+    _evidenced_by: [...input.evidenced_by],
+    _applied_count: applied,
+    _violated_count: violated,
+    _last_evidence_at: input.last_evidence_at ?? "null",
+    _confidence: confidence,
     pinned,
   };
   if (input.scope?.trim()) metadata["scope"] = input.scope.trim();
@@ -389,13 +415,66 @@ function renderEvidenceSection(
 // ----- Parsers --------------------------------------------------------------
 
 /**
+ * Group C — derived fields that get a `_` prefix in the on-disk
+ * shape (dream-rewritten state, see §24). Parser accepts both
+ * `name` and `_name`; writer always emits `_name`. Listed once so
+ * both `parsePreference`, `parseRetired`, and the migration helper
+ * share the same list — a follow-up adding a derived field updates
+ * exactly this constant.
+ */
+export const DERIVED_FIELDS: ReadonlyArray<string> = Object.freeze([
+  "status",
+  "confirmed_at",
+  "last_evidence_at",
+  "applied_count",
+  "violated_count",
+  "confidence",
+  "evidenced_by",
+  "contradicted_by",
+]);
+
+/**
+ * Resolve dual-shape Group C keys to their canonical (un-prefixed)
+ * form so every downstream `meta[name]` call site keeps working. When
+ * both `name` and `_name` are present in the same file, throws
+ * {@link BrainDoubleShapeError} — the manual-edit corruption case
+ * `brain_doctor` surfaces as `frontmatter-double-shape`.
+ *
+ * Returns a shallow copy of `meta`; original is untouched. Exported
+ * because the backlink index and other raw-frontmatter consumers
+ * need the same normalisation rules.
+ */
+export function normalizeDerivedKeys(meta: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...meta };
+  for (const name of DERIVED_FIELDS) {
+    const prefixed = `_${name}`;
+    const hasLegacy = name in out && out[name] !== undefined;
+    const hasModern = prefixed in out && out[prefixed] !== undefined;
+    if (hasLegacy && hasModern) {
+      throw new BrainDoubleShapeError(name);
+    }
+    if (hasModern) {
+      out[name] = out[prefixed];
+      delete out[prefixed];
+    }
+  }
+  return out;
+}
+
+/**
  * Parse a preference file. Defaults `pinned` to `false` when the field
  * is absent (§5.3). Throws {@link BrainStatusFolderMismatchError} when
  * the file lives in `preferences/` but its `status` reads `retired`
  * (or any other state outside `unconfirmed` / `confirmed`).
+ *
+ * Accepts both the legacy frontmatter shape (`status:`,
+ * `applied_count:`, …) and the new `_`-prefixed shape (`_status:`,
+ * `_applied_count:`, …). Presence of both forms for the same field
+ * is a hard error — see {@link normalizeDerivedKeys}.
  */
 export function parsePreference(path: string): BrainPreference {
-  const [meta, _body] = parseFrontmatter(path);
+  const [rawMeta, _body] = parseFrontmatter(path);
+  const meta = normalizeDerivedKeys(rawMeta);
   // `_body` is unused for preferences — the body is purely human prose;
   // every machine-actionable field lives in the frontmatter.
   void _body;
@@ -466,9 +545,13 @@ export function parsePreference(path: string): BrainPreference {
  * Parse a retired-preference file. Mirrors {@link parsePreference} but
  * enforces the `retired/` folder invariant and validates the
  * `retired_reason` enum.
+ *
+ * Shares {@link normalizeDerivedKeys} with `parsePreference` so
+ * both forms of Group C frontmatter parse identically.
  */
 export function parseRetired(path: string): BrainRetired {
-  const [meta] = parseFrontmatter(path);
+  const [rawMeta] = parseFrontmatter(path);
+  const meta = normalizeDerivedKeys(rawMeta);
 
   requireField(meta, "kind", path);
   if (meta["kind"] !== "brain-retired") {
@@ -600,8 +683,11 @@ export function moveToRetired(
   // `confirmed_at`), and stamp the retire metadata on top.
   const newMeta: FrontmatterMap = {};
   for (const [k, v] of Object.entries(meta)) {
-    if (k === "kind" || k === "id" || k === "status") continue;
-    if (k === "unconfirmed_until" || k === "confirmed_at") continue;
+    // Identity keys overwritten below.
+    if (k === "kind" || k === "id" || k === "status" || k === "_status") continue;
+    // Fields that don't apply to retired (drop both shapes per §24).
+    if (k === "unconfirmed_until") continue;
+    if (k === "confirmed_at" || k === "_confirmed_at") continue;
     if (k === "tags") {
       // Replace the `brain/preference` tag with `brain/retired`.
       const arr = Array.isArray(v) ? [...v] : [];

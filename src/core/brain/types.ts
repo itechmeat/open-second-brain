@@ -25,6 +25,34 @@ export const BRAIN_SIGNAL_SIGN = {
 export type BrainSignalSign =
   (typeof BRAIN_SIGNAL_SIGN)[keyof typeof BRAIN_SIGNAL_SIGN];
 
+/**
+ * Where the signal came from (§9 / §16 capture extensions). Absent
+ * on signals written by older OSB versions; the reader treats absence
+ * as `live` but never injects a default into the parsed object.
+ *
+ *   - `live`    — written by live `brain_feedback` (CLI or MCP).
+ *   - `inline`  — captured by `o2b brain scan-inline` from an
+ *                 `@osb` marker in a vault file.
+ *   - `session` — replayed from a session JSONL by
+ *                 `o2b brain import-session`.
+ */
+export const BRAIN_SIGNAL_SOURCE_TYPE = {
+  live: "live",
+  inline: "inline",
+  session: "session",
+} as const;
+export type BrainSignalSourceType =
+  (typeof BRAIN_SIGNAL_SOURCE_TYPE)[keyof typeof BRAIN_SIGNAL_SOURCE_TYPE];
+
+const BRAIN_SIGNAL_SOURCE_TYPE_VALUES: ReadonlyArray<BrainSignalSourceType> =
+  Object.values(BRAIN_SIGNAL_SOURCE_TYPE);
+
+/** Type-guard for the enum union — used by writer + parser. */
+export function isBrainSignalSourceType(v: unknown): v is BrainSignalSourceType {
+  return typeof v === "string"
+    && (BRAIN_SIGNAL_SOURCE_TYPE_VALUES as ReadonlyArray<string>).includes(v);
+}
+
 export const BRAIN_PREFERENCE_STATUS = {
   unconfirmed: "unconfirmed",
   confirmed: "confirmed",
@@ -115,6 +143,24 @@ export const BRAIN_LOG_EVENT_KIND = {
    * suppression decision is recoverable.
    */
   signalSuppressed: "signal-suppressed",
+  /**
+   * `scan-inline` (§9) — operator ran `o2b brain scan-inline`.
+   * Payload: counters (`scanned`, `created`, `deduped`, `malformed`).
+   */
+  scanInline: "scan-inline",
+  /**
+   * `import-session` (§16) — operator ran
+   * `o2b brain import-session <path>`. One log block per session
+   * file; payload references the file and adapter id.
+   */
+  importSession: "import-session",
+  /**
+   * `migrate-frontmatter` (§24) — operator ran
+   * `o2b brain migrate-frontmatter --apply` to rewrite legacy
+   * frontmatter to the `_`-prefixed shape. Payload carries the run
+   * id, snapshot path, and counters.
+   */
+  migrateFrontmatter: "migrate-frontmatter",
 } as const;
 export type BrainLogEventKind =
   (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
@@ -157,6 +203,24 @@ export interface BrainSignal {
   readonly principle: string;
   /** Optional free-form raw body following the frontmatter. */
   readonly raw?: string;
+  /**
+   * Origin of the signal (§9 / §16). Absent on signals written by
+   * older OSB versions — downstream code must treat undefined as
+   * semantically equivalent to `live`, never inject a default.
+   */
+  readonly source_type?: BrainSignalSourceType;
+  /**
+   * Normalised payload hash anchored to (topic, signal, principle,
+   * scope). Idempotency anchor for `scan-inline` (§9) and
+   * `import-session` (§16). Absent on signals written by older OSB
+   * versions.
+   */
+  readonly dedup_hash?: string;
+  /**
+   * Source coordinates for session-imported signals (§16):
+   * `<path>#<turn-id>`. Empty / absent for inline / live signals.
+   */
+  readonly session_ref?: string;
 }
 
 /**

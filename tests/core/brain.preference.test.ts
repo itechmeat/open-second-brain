@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -323,5 +330,268 @@ describe("status enum validation", () => {
     expect(() => parsePreference(path)).toThrow(
       /preference status must be one of/,
     );
+  });
+});
+
+// ── §24 dual-shape frontmatter ──────────────────────────────────────────────
+
+/**
+ * Write a hand-crafted preference file under `<tmp>/Brain/preferences/`
+ * with the given frontmatter lines. Used by the dual-shape tests to
+ * insert legacy / new-form / both-form Group C keys verbatim, since
+ * `writePreference` always emits one canonical shape.
+ */
+function writeRawPref(tmp: string, slug: string, fmLines: ReadonlyArray<string>): string {
+  const dirs = brainDirs(tmp);
+  mkdirSync(dirs.preferences, { recursive: true });
+  const path = preferencePath(tmp, slug);
+  const content = ["---", ...fmLines, "---", "", "## Principle", "", "Some rule", ""].join("\n");
+  writeFileSync(path, content, "utf8");
+  return path;
+}
+
+function writeRawRetired(tmp: string, slug: string, fmLines: ReadonlyArray<string>): string {
+  const dirs = brainDirs(tmp);
+  mkdirSync(dirs.retired, { recursive: true });
+  const path = retiredPath(tmp, slug);
+  const content = ["---", ...fmLines, "---", "", "## Retired", "", "Reason: stale-no-evidence", ""].join("\n");
+  writeFileSync(path, content, "utf8");
+  return path;
+}
+
+const PREF_BASE_FM = (slug: string): string[] => [
+  "kind: brain-preference",
+  `id: pref-${slug}`,
+  "created_at: 2026-05-14T10:42:00Z",
+  "unconfirmed_until: 2026-05-28T10:42:00Z",
+  `tags: [brain, brain/preference, brain/topic/${slug}]`,
+  `topic: ${slug}`,
+  "principle: Some rule",
+  "pinned: false",
+];
+
+const RET_BASE_FM = (slug: string): string[] => [
+  "kind: brain-retired",
+  `id: ret-${slug}`,
+  "created_at: 2026-05-14T10:42:00Z",
+  "retired_at: 2026-08-12T05:00:00Z",
+  "retired_reason: stale-no-evidence",
+  "retired_by: '[[Brain/log/2026-08-12]]'",
+  `tags: [brain, brain/retired, brain/topic/${slug}]`,
+  `topic: ${slug}`,
+  "principle: Some rule",
+  "status: retired",
+  "pinned: false",
+];
+
+describe("parsePreference accepts both legacy and _-prefixed shapes (§24)", () => {
+  test("reads legacy 'status:' form", () => {
+    const path = writeRawPref(tmp, "legacy-status", [
+      ...PREF_BASE_FM("legacy-status"),
+      "status: confirmed",
+      "confirmed_at: 2026-05-15T10:00:00Z",
+      "evidenced_by: []",
+      "applied_count: 1",
+      "violated_count: 0",
+      "last_evidence_at: 2026-05-20T10:00:00Z",
+      "confidence: low",
+    ]);
+    const parsed = parsePreference(path);
+    expect(parsed.status).toBe("confirmed");
+    expect(parsed.confirmed_at).toBe("2026-05-15T10:00:00Z");
+    expect(parsed.applied_count).toBe(1);
+    expect(parsed.confidence).toBe("low");
+    expect(parsed.last_evidence_at).toBe("2026-05-20T10:00:00Z");
+  });
+
+  test("reads new '_status:' form", () => {
+    const path = writeRawPref(tmp, "new-status", [
+      ...PREF_BASE_FM("new-status"),
+      "_status: confirmed",
+      "_confirmed_at: 2026-05-15T10:00:00Z",
+      "_evidenced_by: []",
+      "_applied_count: 1",
+      "_violated_count: 0",
+      "_last_evidence_at: 2026-05-20T10:00:00Z",
+      "_confidence: low",
+    ]);
+    const parsed = parsePreference(path);
+    expect(parsed.status).toBe("confirmed");
+    expect(parsed.confirmed_at).toBe("2026-05-15T10:00:00Z");
+    expect(parsed.applied_count).toBe(1);
+    expect(parsed.confidence).toBe("low");
+    expect(parsed.last_evidence_at).toBe("2026-05-20T10:00:00Z");
+  });
+
+  test("throws when both 'status' and '_status' are present", () => {
+    const path = writeRawPref(tmp, "collision", [
+      ...PREF_BASE_FM("collision"),
+      "status: confirmed",
+      "_status: confirmed",
+      "evidenced_by: []",
+    ]);
+    expect(() => parsePreference(path)).toThrow(
+      /both '_status' and legacy 'status' present/,
+    );
+  });
+
+  test("throws when both 'applied_count' and '_applied_count' are present", () => {
+    const path = writeRawPref(tmp, "applied-collision", [
+      ...PREF_BASE_FM("applied-collision"),
+      "_status: confirmed",
+      "applied_count: 3",
+      "_applied_count: 3",
+      "evidenced_by: []",
+    ]);
+    expect(() => parsePreference(path)).toThrow(
+      /both '_applied_count' and legacy 'applied_count' present/,
+    );
+  });
+
+  test("reads mixed (some legacy, some new) shape without collision", () => {
+    const path = writeRawPref(tmp, "mixed", [
+      ...PREF_BASE_FM("mixed"),
+      "_status: confirmed", // new form
+      "confirmed_at: 2026-05-15T10:00:00Z", // legacy form
+      "evidenced_by: []", // legacy form
+      "_applied_count: 2", // new form
+    ]);
+    const parsed = parsePreference(path);
+    expect(parsed.status).toBe("confirmed");
+    expect(parsed.confirmed_at).toBe("2026-05-15T10:00:00Z");
+    expect(parsed.applied_count).toBe(2);
+  });
+});
+
+describe("parseRetired accepts both legacy and _-prefixed shapes (§24)", () => {
+  test("reads legacy form", () => {
+    const path = writeRawRetired(tmp, "legacy-ret", [
+      ...RET_BASE_FM("legacy-ret"),
+      "evidenced_by: ['[[sig-x]]']",
+      "applied_count: 5",
+      "violated_count: 1",
+      "last_evidence_at: 2026-05-20T10:00:00Z",
+      "confidence: medium",
+    ]);
+    const parsed = parseRetired(path);
+    expect(parsed.applied_count).toBe(5);
+    expect(parsed.confidence).toBe("medium");
+    expect(parsed.evidenced_by).toEqual(["[[sig-x]]"]);
+  });
+
+  test("reads new '_'-prefixed form", () => {
+    const path = writeRawRetired(tmp, "new-ret", [
+      ...RET_BASE_FM("new-ret"),
+      "_evidenced_by: ['[[sig-x]]']",
+      "_applied_count: 5",
+      "_violated_count: 1",
+      "_last_evidence_at: 2026-05-20T10:00:00Z",
+      "_confidence: medium",
+    ]);
+    const parsed = parseRetired(path);
+    expect(parsed.applied_count).toBe(5);
+    expect(parsed.confidence).toBe("medium");
+    expect(parsed.evidenced_by).toEqual(["[[sig-x]]"]);
+  });
+
+  test("throws on legacy+new collision", () => {
+    const path = writeRawRetired(tmp, "ret-collision", [
+      ...RET_BASE_FM("ret-collision"),
+      "applied_count: 3",
+      "_applied_count: 3",
+    ]);
+    expect(() => parseRetired(path)).toThrow(
+      /both '_applied_count' and legacy 'applied_count' present/,
+    );
+  });
+});
+
+describe("writePreference emits _-prefixed Group C fields (§24)", () => {
+  test("emits '_status:' instead of 'status:'", () => {
+    const res = writePreference(tmp, basePrefInput());
+    const raw = readFileSync(res.path, "utf8");
+    expect(raw).toMatch(/^_status: unconfirmed$/m);
+    expect(raw).not.toMatch(/^status: /m);
+  });
+
+  test("emits '_applied_count:' / '_violated_count:'", () => {
+    const res = writePreference(
+      tmp,
+      basePrefInput({ status: "confirmed", applied_count: 4, violated_count: 1 }),
+    );
+    const raw = readFileSync(res.path, "utf8");
+    expect(raw).toMatch(/^_applied_count: 4$/m);
+    expect(raw).toMatch(/^_violated_count: 1$/m);
+    expect(raw).not.toMatch(/^applied_count: /m);
+    expect(raw).not.toMatch(/^violated_count: /m);
+  });
+
+  test("emits '_confirmed_at:' / '_last_evidence_at:' / '_confidence:'", () => {
+    const res = writePreference(
+      tmp,
+      basePrefInput({
+        status: "confirmed",
+        confirmed_at: "2026-05-15T10:00:00Z",
+        last_evidence_at: "2026-05-20T10:00:00Z",
+        confidence: "medium",
+      }),
+    );
+    const raw = readFileSync(res.path, "utf8");
+    expect(raw).toMatch(/^_confirmed_at: "?2026-05-15T10:00:00Z"?$/m);
+    expect(raw).toMatch(/^_last_evidence_at: "?2026-05-20T10:00:00Z"?$/m);
+    expect(raw).toMatch(/^_confidence: medium$/m);
+  });
+
+  test("emits '_evidenced_by:' instead of 'evidenced_by:'", () => {
+    const res = writePreference(tmp, basePrefInput());
+    const raw = readFileSync(res.path, "utf8");
+    expect(raw).toMatch(/^_evidenced_by: \[/m);
+    expect(raw).not.toMatch(/^evidenced_by: /m);
+  });
+
+  test("writePreference + parsePreference round-trip via new shape", () => {
+    const res = writePreference(
+      tmp,
+      basePrefInput({
+        status: "confirmed",
+        confirmed_at: "2026-05-15T10:00:00Z",
+        applied_count: 7,
+      }),
+    );
+    const parsed = parsePreference(res.path);
+    expect(parsed.status).toBe("confirmed");
+    expect(parsed.confirmed_at).toBe("2026-05-15T10:00:00Z");
+    expect(parsed.applied_count).toBe(7);
+  });
+
+  test("identity fields ('topic', 'principle', 'pinned', 'tags') stay un-prefixed", () => {
+    const res = writePreference(tmp, basePrefInput({ pinned: true }));
+    const raw = readFileSync(res.path, "utf8");
+    expect(raw).toMatch(/^topic: /m);
+    expect(raw).toMatch(/^principle: /m);
+    expect(raw).toMatch(/^pinned: true$/m);
+    expect(raw).toMatch(/^tags: \[/m);
+    expect(raw).toMatch(/^kind: brain-preference$/m);
+    expect(raw).toMatch(/^id: pref-/m);
+    expect(raw).toMatch(/^created_at: /m);
+    expect(raw).toMatch(/^unconfirmed_until: /m);
+  });
+});
+
+describe("moveToRetired carries _-prefixed shape forward (§24)", () => {
+  test("retired file uses new shape for Group C fields", () => {
+    const written = writePreference(
+      tmp,
+      basePrefInput({ status: "confirmed", applied_count: 3 }),
+    );
+    const result = moveToRetired(tmp, written.path, "stale-no-evidence", {
+      now: new Date("2026-08-12T05:00:00Z"),
+      retired_by: "[[Brain/log/2026-08-12]]",
+    });
+    const raw = readFileSync(result.path, "utf8");
+    expect(raw).toMatch(/^_applied_count: 3$/m);
+    expect(raw).not.toMatch(/^applied_count: /m);
+    // 'status:' on the retired file is identity (always 'retired'), not derived.
+    expect(raw).toMatch(/^status: retired$/m);
   });
 });

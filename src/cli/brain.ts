@@ -38,6 +38,17 @@ import {
   BrainPreferenceNotFoundError,
 } from "../core/brain/apply-evidence.ts";
 import { dream } from "../core/brain/dream.ts";
+import {
+  applyMigration,
+  MigrationError,
+  planMigration,
+} from "../core/brain/migrate-frontmatter.ts";
+import { scanInline } from "../core/brain/inline-scan.ts";
+import {
+  importSession,
+  importSessionPath,
+} from "../core/brain/sessions/import.ts";
+import { SessionImportError } from "../core/brain/sessions/types.ts";
 import { moveToRetired, parsePreference, writePreference } from "../core/brain/preference.ts";
 import { preferencePath } from "../core/brain/paths.ts";
 import { isoDate, isoSecond } from "../core/brain/time.ts";
@@ -864,6 +875,345 @@ async function cmdBrainBacklinks(argv: string[]): Promise<number> {
   return 0;
 }
 
+async function cmdBrainImportSession(argv: string[]): Promise<number> {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    format: { type: "string" },
+    since: { type: "string" },
+    "dry-run": { type: "boolean" },
+    agent: { type: "string" },
+    json: { type: "boolean" },
+  });
+  if (positional.length < 1) {
+    return fail("brain import-session requires a <path> argument");
+  }
+  const sessionPath = positional[0]!;
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+
+  // --format validation: only adapter ids registered in the registry.
+  const formatRaw = flags["format"] as string | undefined;
+  let format: "claude" | "codex" | "hermes" | undefined;
+  if (formatRaw !== undefined && formatRaw !== "auto") {
+    if (formatRaw !== "claude" && formatRaw !== "codex" && formatRaw !== "hermes") {
+      return fail(
+        `--format must be one of auto|claude|codex|hermes; got ${formatRaw}`,
+      );
+    }
+    format = formatRaw;
+  }
+
+  // Parse --since.
+  let since: Date | undefined;
+  if (flags["since"]) {
+    const raw = String(flags["since"]);
+    const d = new Date(raw);
+    if (!Number.isFinite(d.getTime())) {
+      return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
+    }
+    since = d;
+  }
+
+  // Decide single-file vs directory based on stat.
+  let stat;
+  try {
+    stat = statSync(sessionPath);
+  } catch (err) {
+    return fail(`cannot stat ${sessionPath}: ${(err as Error).message ?? err}`);
+  }
+
+  try {
+    const result = stat.isDirectory()
+      ? await importSessionPath(vault, sessionPath, {
+          agent,
+          ...(format ? { format } : {}),
+          ...(since ? { since } : {}),
+          dryRun: Boolean(flags["dry-run"]),
+        })
+      : {
+          files: [
+            await importSession(vault, sessionPath, {
+              agent,
+              ...(format ? { format } : {}),
+              ...(since ? { since } : {}),
+              dryRun: Boolean(flags["dry-run"]),
+            }),
+          ],
+          warnings: [],
+        };
+
+    // Log one event per file processed (skip dry-run).
+    if (!flags["dry-run"]) {
+      for (const f of result.files) {
+        try {
+          appendLogEvent(vault, {
+            timestamp: isoSecond(new Date()),
+            eventType: BRAIN_LOG_EVENT_KIND.importSession,
+            body: {
+              agent,
+              file: `[[${f.file}]]`,
+              format: f.format,
+              turns_scanned: String(f.turns_scanned),
+              signals_created: String(f.signals_created),
+              signals_deduped: String(f.signals_deduped),
+              tool_replays: String(f.tool_replays),
+              malformed: String(f.malformed),
+            },
+          });
+        } catch (err) {
+          process.stderr.write(
+            `warning: append import-session log failed: ${(err as Error).message}\n`,
+          );
+        }
+      }
+    }
+
+    if (flags["json"]) {
+      okJson({
+        files: result.files.map((f) => ({
+          file: f.file,
+          format: f.format,
+          turns_scanned: f.turns_scanned,
+          signals_created: f.signals_created,
+          signals_deduped: f.signals_deduped,
+          tool_replays: f.tool_replays,
+          malformed: f.malformed,
+          errors: f.errors,
+        })),
+        warnings: result.warnings,
+      });
+    } else {
+      for (const f of result.files) {
+        ok(`file: ${f.file}`);
+        ok(`  format: ${f.format}`);
+        ok(`  turns_scanned: ${f.turns_scanned}`);
+        ok(`  signals_created: ${f.signals_created}`);
+        ok(`  signals_deduped: ${f.signals_deduped}`);
+        ok(`  tool_replays: ${f.tool_replays}`);
+        if (f.malformed > 0) ok(`  malformed: ${f.malformed}`);
+        for (const e of f.errors) {
+          info(`  error: ${e.path}: ${e.message}`);
+        }
+      }
+      for (const w of result.warnings) {
+        info(`  warning: ${w.path}: ${w.message}`);
+      }
+    }
+    return 0;
+  } catch (exc) {
+    if (exc instanceof SessionImportError) {
+      process.stderr.write(`error: ${exc.message}\n`);
+      // DETECT_FAIL / UNKNOWN_FORMAT → exit 2 (operator picks --format).
+      if (exc.code === "DETECT_FAIL" || exc.code === "UNKNOWN_FORMAT") return 2;
+      return 1;
+    }
+    return fail(`import-session failed: ${(exc as Error).message ?? exc}`);
+  }
+}
+
+async function cmdBrainScanInline(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    "dry-run": { type: "boolean" },
+    strict: { type: "boolean" },
+    path: { type: "string-array" },
+    exclude: { type: "string-array" },
+    agent: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+
+  let result;
+  try {
+    result = await scanInline(vault, {
+      agent,
+      dryRun: Boolean(flags["dry-run"]),
+      paths: (flags["path"] as string[] | undefined) ?? [],
+      exclude: (flags["exclude"] as string[] | undefined) ?? [],
+    });
+  } catch (exc) {
+    return fail(`scan-inline failed: ${(exc as Error).message ?? exc}`);
+  }
+
+  // Log event (skip on --dry-run so audit trail only reflects actual writes).
+  if (!flags["dry-run"]) {
+    try {
+      appendLogEvent(vault, {
+        timestamp: isoSecond(new Date()),
+        eventType: BRAIN_LOG_EVENT_KIND.scanInline,
+        body: {
+          agent,
+          scanned: String(result.scanned),
+          found: String(result.found),
+          created: String(result.created),
+          deduped: String(result.deduped),
+          malformed: String(result.malformed),
+          errors: String(result.errors.length),
+        },
+      });
+    } catch (err) {
+      process.stderr.write(
+        `warning: append scan-inline log failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  if (flags["json"]) {
+    okJson({
+      scanned: result.scanned,
+      found: result.found,
+      created: result.created,
+      deduped: result.deduped,
+      malformed: result.malformed,
+      errors: result.errors.map((e) => ({ path: e.path, message: e.message })),
+      files_with_markers: result.filesWithMarkers.map((f) => ({
+        path: f.path,
+        markers: f.markers,
+      })),
+    });
+  } else {
+    ok(`scanned: ${result.scanned}`);
+    ok(`found: ${result.found}`);
+    ok(`created: ${result.created}`);
+    ok(`deduped: ${result.deduped}`);
+    if (result.malformed > 0) ok(`malformed: ${result.malformed}`);
+    for (const e of result.errors) {
+      info(`  error: ${e.path}: ${e.message}`);
+    }
+  }
+  if (flags["strict"] && result.malformed > 0) return 2;
+  return 0;
+}
+
+async function cmdBrainMigrateFrontmatter(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    "dry-run": { type: "boolean" },
+    apply: { type: "boolean" },
+    yes: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const agent = resolveAgentName(config);
+
+  // Mutually exclusive: --dry-run and --apply both set is operator
+  // confusion; default is dry-run.
+  if (flags["dry-run"] && flags["apply"]) {
+    return fail(
+      "brain migrate-frontmatter: --dry-run and --apply are mutually exclusive",
+    );
+  }
+  const apply = Boolean(flags["apply"]);
+
+  // Non-interactive guard mirrors `o2b brain rollback`: --json output
+  // or non-TTY stdin must pass --yes, otherwise a missed prompt would
+  // hang or silently misbehave.
+  if (apply && !flags["yes"]) {
+    if (flags["json"] || !process.stdin.isTTY) {
+      return fail(
+        "brain migrate-frontmatter --apply requires --yes in non-interactive mode (--json or non-TTY stdin)",
+      );
+    }
+  }
+
+  if (!apply) {
+    // Dry-run path.
+    let plan;
+    try {
+      plan = planMigration(vault);
+    } catch (exc) {
+      return fail(
+        `migrate-frontmatter plan failed: ${(exc as Error).message ?? exc}`,
+      );
+    }
+    if (flags["json"]) {
+      okJson({
+        files_scanned: plan.files_scanned,
+        files_to_migrate: plan.files_to_migrate.length,
+        files_already_new: plan.files_already_new.length,
+        collisions: plan.collisions.length,
+        collision_files: plan.collisions.map((c) => ({
+          path: c.path,
+          field: c.field,
+        })),
+      });
+      return 0;
+    }
+    ok(`files_scanned: ${plan.files_scanned}`);
+    ok(`files_to_migrate: ${plan.files_to_migrate.length}`);
+    ok(`files_already_new: ${plan.files_already_new.length}`);
+    ok(`collisions: ${plan.collisions.length}`);
+    if (plan.collisions.length > 0) {
+      info("Collisions (both legacy and '_'-prefixed shape present):");
+      for (const c of plan.collisions) {
+        info(`  - ${c.path} (field: ${c.field})`);
+      }
+    }
+    if (plan.files_to_migrate.length === 0) {
+      ok("nothing to migrate; re-run with --apply --yes when there is.");
+    } else {
+      ok("re-run with --apply --yes to rewrite these files.");
+    }
+    return 0;
+  }
+
+  // Apply path.
+  let result;
+  try {
+    result = await applyMigration(vault, { snapshot: true, now: new Date() });
+  } catch (exc) {
+    if (exc instanceof MigrationError) {
+      // Surface the collision / parse / io error with the structured
+      // message exactly as the core returns it.
+      process.stderr.write(`error: ${exc.message}\n`);
+      return 1;
+    }
+    return fail(`migrate-frontmatter failed: ${(exc as Error).message ?? exc}`);
+  }
+
+  // Emit a log event so the audit trail records the rewrite.
+  try {
+    appendLogEvent(vault, {
+      timestamp: isoSecond(new Date()),
+      eventType: BRAIN_LOG_EVENT_KIND.migrateFrontmatter,
+      body: {
+        run_id: result.run_id,
+        agent,
+        snapshot: result.snapshot_path ?? "(none)",
+        files_scanned: String(result.plan.files_scanned),
+        files_migrated: String(result.files_migrated.length),
+        files_already_new: String(result.plan.files_already_new.length),
+        collisions: String(result.plan.collisions.length),
+      },
+    });
+  } catch (err) {
+    process.stderr.write(
+      `warning: append migrate-frontmatter log failed: ${(err as Error).message}\n`,
+    );
+  }
+
+  if (flags["json"]) {
+    okJson({
+      run_id: result.run_id,
+      snapshot_path: result.snapshot_path,
+      files_scanned: result.plan.files_scanned,
+      files_migrated: result.files_migrated.length,
+      files_already_new: result.plan.files_already_new.length,
+      collisions: result.plan.collisions.length,
+    });
+    return 0;
+  }
+  ok(`run_id: ${result.run_id}`);
+  ok(`snapshot: ${result.snapshot_path ?? "(none)"}`);
+  ok(`files_migrated: ${result.files_migrated.length}`);
+  ok(`files_already_new: ${result.plan.files_already_new.length}`);
+  return 0;
+}
+
 async function cmdBrainDoctor(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
@@ -926,8 +1276,11 @@ Brain verbs (observing memory):
   pin              Mark a preference exempt from automatic retire (idempotent)
   unpin            Clear the pinned flag (idempotent)
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes)
-  doctor           Validate Brain invariants (--strict promotes warnings to exit 2)
-  backlinks        List inbound references to a Brain artifact id
+  doctor              Validate Brain invariants (--strict promotes warnings to exit 2)
+  backlinks           List inbound references to a Brain artifact id
+  migrate-frontmatter Rewrite legacy 'status:' / 'applied_count:' keys to '_status:' / '_applied_count:'
+  scan-inline         Capture @osb markers from vault markdown files (Daily/, project notes, etc.)
+  import-session      Replay signals from a Claude/Codex/Hermes session .jsonl (or directory)
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -976,6 +1329,28 @@ const VERB_HELP: Record<string, string> = {
   backlinks:
     "usage: o2b brain backlinks <id> [--vault <path>] [--json]\n" +
     "List inbound references to the given Brain artifact id (preference, retired, signal).\n",
+  "migrate-frontmatter":
+    "usage: o2b brain migrate-frontmatter [--vault <path>] [--apply] [--yes] [--json]\n" +
+    "Rewrite legacy Group C frontmatter keys ('status:', 'applied_count:', ...)\n" +
+    "to the '_'-prefixed shape across Brain/preferences/ and Brain/retired/.\n" +
+    "Default is --dry-run; --apply takes a pre-run snapshot (rollback via run_id).\n" +
+    "--apply requires --yes in non-interactive mode (--json or non-TTY stdin).\n",
+  "scan-inline":
+    "usage: o2b brain scan-inline [--vault <path>] [--path <subdir>...] [--exclude <subdir>...]\n" +
+    "                              [--dry-run] [--strict] [--json] [--agent <name>]\n" +
+    "Walk the vault for @osb markers (inline form and fenced 'osb' blocks),\n" +
+    "create signals in Brain/inbox/, and annotate the source files with\n" +
+    "@osb✓ [[sig-...]]. Brain/, .git, node_modules, and similar directories\n" +
+    "are always skipped. Idempotent on re-run.\n",
+  "import-session":
+    "usage: o2b brain import-session <path> [--vault <vault>]\n" +
+    "                                [--format auto|claude|codex|hermes]\n" +
+    "                                [--since <ISO>] [--dry-run] [--json]\n" +
+    "Extract signals from a Claude / Codex / Hermes session .jsonl file (or\n" +
+    "directory of .jsonl files). Two extraction paths run in parallel:\n" +
+    "@osb markers in user/assistant messages, and replay of brain_feedback\n" +
+    "tool_use calls. Dedup against the inbox by normalised payload hash.\n" +
+    "Autodetect failure exits 2 — pass --format to override.\n",
 };
 
 // ── Public entry point ──────────────────────────────────────────────────────
@@ -1035,6 +1410,12 @@ export async function handleBrainSubcommand(
         return await cmdBrainDoctor(rest);
       case "backlinks":
         return await cmdBrainBacklinks(rest);
+      case "migrate-frontmatter":
+        return await cmdBrainMigrateFrontmatter(rest);
+      case "scan-inline":
+        return await cmdBrainScanInline(rest);
+      case "import-session":
+        return await cmdBrainImportSession(rest);
       default:
         process.stderr.write(`error: unknown brain verb: ${verb}\n`);
         process.stdout.write(BRAIN_HELP);

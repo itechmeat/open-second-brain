@@ -31,6 +31,7 @@ import { join } from "node:path";
 import { extractWikilinks, parseFrontmatter } from "../vault.ts";
 import { parseLogDay } from "./log.ts";
 import { brainDirs } from "./paths.ts";
+import { normalizeDerivedKeys } from "./preference.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
 
 // ----- Public types --------------------------------------------------------
@@ -126,7 +127,14 @@ function collectPreferences(
     let meta: Record<string, unknown>;
     let body: string;
     try {
-      [meta, body] = parseFrontmatter(full);
+      const [rawMeta, rawBody] = parseFrontmatter(full);
+      // Collapse legacy / `_`-prefixed Group C keys so this
+      // collector reads the same shape regardless of which the file
+      // was written in. Collision aborts the row (caller's job to
+      // flag via `brain_doctor`), but the rest of the index keeps
+      // building.
+      meta = normalizeDerivedKeys(rawMeta);
+      body = rawBody;
     } catch {
       continue;
     }

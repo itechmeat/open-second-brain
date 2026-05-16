@@ -165,10 +165,19 @@ function readFrontmatterStatus(path: string): string {
   // quoted values (`status: "confirmed"`) and other legal YAML
   // shapes round-trip correctly. Files we can't parse bucket under
   // `unknown` — doctor surfaces them as schema errors elsewhere.
+  //
+  // Read both legacy `status:` and the `_status:` shape (§24).
+  // When both shapes are present we treat the file as `unknown` —
+  // same collision policy as `normalizeDerivedKeys` (doctor flags
+  // it as `frontmatter-double-shape`). Counting it as the modern
+  // value here would silently mask the corruption.
   try {
     const [meta] = parseFrontmatter(path);
-    const status = meta["status"];
-    return typeof status === "string" && status.length > 0 ? status : "unknown";
+    const hasLegacy = typeof meta["status"] === "string" && (meta["status"] as string).length > 0;
+    const hasModern = typeof meta["_status"] === "string" && (meta["_status"] as string).length > 0;
+    if (hasLegacy && hasModern) return "unknown";
+    const value = hasModern ? meta["_status"] : meta["status"];
+    return typeof value === "string" && value.length > 0 ? value : "unknown";
   } catch {
     return "unknown";
   }
