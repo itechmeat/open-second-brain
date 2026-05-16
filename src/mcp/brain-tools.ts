@@ -57,6 +57,7 @@ import {
 import { writeSignal } from "../core/brain/signal.ts";
 import { writePreference } from "../core/brain/preference.ts";
 import { preferencePath } from "../core/brain/paths.ts";
+import { validateBrainFeedbackInput } from "../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../core/brain/time.ts";
 import { loadBrainConfig } from "../core/brain/policy.ts";
 import { slugify } from "../core/vault.ts";
@@ -191,26 +192,24 @@ async function toolBrainFeedback(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const topic = coerceStr(args, "topic", true)!;
-  const signalRaw = coerceStr(args, "signal", true)!;
-  if (
-    signalRaw !== BRAIN_SIGNAL_SIGN.positive &&
-    signalRaw !== BRAIN_SIGNAL_SIGN.negative
-  ) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `argument 'signal' must be 'positive' or 'negative'`,
-    );
+  // Single source of truth for the brain_feedback payload contract —
+  // session-replay (sessions/import.ts) and the MCP live path now go
+  // through the same validator so rule shape cannot drift between the
+  // two surfaces.
+  const validated = validateBrainFeedbackInput(args);
+  if (!validated.ok) {
+    throw new MCPError(INVALID_PARAMS, validated.reason);
   }
-  const principle = coerceStr(args, "principle", true)!;
-  const scope = coerceStr(args, "scope", false);
-  const source = coerceStrList(args, "source");
-  const agentArg = coerceStr(args, "agent", false);
-  const raw = coerceStr(args, "raw", false);
-  const forceConfirmed = coerceBool(args, "force_confirmed");
+  const { topic, signal: signalRaw, principle, scope, raw, source, force_confirmed } =
+    validated.value;
+  const forceConfirmed = force_confirmed ?? false;
 
+  // Agent-fallback stays MCP-side: validator just hands back the user-
+  // supplied value (or undefined); the live path resolves via config
+  // when absent.
   const agent =
-    normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+    normalizeAgentArgument(validated.value.agent ?? null) ??
+    resolveAgentName(ctx.configPath ?? undefined);
   const now = new Date();
   const date = isoDate(now);
   const createdAt = isoSecond(now);
@@ -221,15 +220,15 @@ async function toolBrainFeedback(
   //    across CLI and MCP entry points. `--force-confirmed` ADDITIONALLY
   //    creates a confirmed pref below.
   const sigResult = writeSignal(ctx.vault, {
-    topic: topic.trim(),
+    topic,
     signal: signalRaw as BrainSignalSign,
     agent,
-    principle: principle.trim(),
+    principle,
     created_at: createdAt,
     date,
     slug,
     ...(scope ? { scope } : {}),
-    ...(source && source.length > 0 ? { source } : {}),
+    ...(source && source.length > 0 ? { source: [...source] } : {}),
     ...(raw ? { raw } : {}),
   });
 

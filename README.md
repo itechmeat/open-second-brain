@@ -116,7 +116,7 @@ o2b mcp                       Run the MCP tool server (stdio)
 o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
 
-# Brain (observing memory — 11 verbs)
+# Brain (observing memory — 14 verbs)
 o2b brain init                Bootstrap Brain/{inbox,preferences,retired,log,.snapshots}/ + _brain.yaml + _BRAIN.md
 o2b brain feedback            Record one taste signal (--topic, --signal, --principle, ...)
 o2b brain dream               Run the deterministic consolidation pass (idempotent; usually cron'd)
@@ -127,6 +127,10 @@ o2b brain reject              (CLI-only) Move a preference to retired/ with reas
 o2b brain pin / unpin         (CLI-only) Toggle pinned: true on a preference (exempt from auto-retire)
 o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, …)
+o2b brain backlinks           List inbound references to a Brain artifact id
+o2b brain scan-inline         Capture `@osb` markers from vault markdown files (Daily/, project notes, …)
+o2b brain import-session      Replay signals from a Claude/Codex/Hermes session .jsonl (or directory)
+o2b brain migrate-frontmatter (CLI-only) Rewrite legacy `status:` keys to `_status:`
 
 # Pay Memory
 o2b init-pay-memory           Bootstrap AI Wiki/{policies,payments,assets,drafts,reports}/
@@ -155,9 +159,9 @@ exposes the same deterministic operations as MCP tools:
 
 - **Core (3):** `second_brain_status`, `second_brain_query`,
   `vault_health`.
-- **Brain (6):** `brain_feedback`, `brain_dream`,
+- **Brain (7):** `brain_feedback`, `brain_dream`,
   `brain_apply_evidence`, `brain_digest`, `brain_query`,
-  `brain_doctor`. See the [Brain section](#brain-observing-memory)
+  `brain_doctor`, `brain_backlinks`. See the [Brain section](#brain-observing-memory)
   below.
 - **Pay Memory (8):** `payment_memory_init`,
   `payment_receipt_append`, `asset_capture`,
@@ -222,12 +226,34 @@ o2b brain dream --vault /path/to/vault
 o2b brain digest --vault /path/to/vault --silent-if-empty
 ```
 
-Eleven CLI verbs in total: `init`, `feedback`, `dream`,
+Fourteen CLI verbs in total: `init`, `feedback`, `dream`,
 `apply-evidence`, `digest`, `query`, `reject`, `pin`, `unpin`,
-`rollback`, `doctor`. Six are mirrored as MCP tools (`brain_*`);
-`init`, `reject`, `pin`, `unpin`, `rollback` are intentionally
-CLI-only because they change the protected set or overwrite vault
-state. Pre-run snapshots of `Brain/` go to `Brain/.snapshots/` and
+`rollback`, `doctor`, `backlinks`, `scan-inline`, `import-session`,
+`migrate-frontmatter`. Seven are mirrored as MCP tools (`brain_*`);
+the rest are intentionally CLI-only because they change the
+protected set, overwrite vault state, or are operator-only
+maintenance commands.
+
+### Capture surfaces
+
+Three independent paths land a signal in `Brain/inbox/`:
+
+- **Live** — the agent calls `brain_feedback` (MCP) or `o2b brain
+  feedback` (CLI) the moment the rule is formulated.
+- **Inline** — the user (or agent) writes an `@osb` marker into any
+  vault markdown file. `o2b brain scan-inline` finds every marker,
+  creates the corresponding signal, and annotates the source file
+  with `@osb✓ [[sig-...]]` so a re-run is a no-op. Two marker
+  shapes: a single line `@osb feedback negative topic=... principle="..."`
+  or a fenced ` ```osb` block with YAML inside.
+- **Session import** — `o2b brain import-session <path>` reads a
+  Claude Code / Codex CLI / Hermes session JSONL and extracts both
+  `@osb` markers from message text and replays of `brain_feedback`
+  tool-use calls. Useful when MCP wasn't available at recording time
+  or the agent didn't make the call live.
+
+All three paths share a normalised payload hash so the same rule
+captured twice from different surfaces dedups automatically. Pre-run snapshots of `Brain/` go to `Brain/.snapshots/` and
 support `o2b brain rollback <run_id>`. Pinned preferences are exempt
 from automatic retire (`stale-no-evidence`, `expired-unconfirmed`,
 `rebutted`); only `o2b brain reject` can retire them.

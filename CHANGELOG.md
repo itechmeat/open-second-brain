@@ -5,6 +5,139 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-05-16
+
+Adds three Tier-A capture and hygiene items from
+`Projects/OpenSecondBrain/Features/_summary`: §9 inline `@osb`
+markers, §16 session-import, and §24 `_field` prefix convention
+for derived frontmatter keys. The Brain layer now has three
+capture surfaces (live, inline, session-import) and a derived /
+identity split in the preference / retired schema.
+
+No vault migration is required — the new schema parser accepts
+both legacy (`status:`) and `_`-prefixed (`_status:`) shapes for
+the entire v0.10.x line. The writer always emits the new shape;
+existing files migrate lazily on the next dream rewrite, or
+eagerly via `o2b brain migrate-frontmatter --apply --yes`.
+
+### Added
+
+- **`o2b brain scan-inline`** — capture `@osb` markers from any
+  vault markdown file. Two shapes are recognised: a single line
+  (`@osb feedback negative topic=... principle="..."`) and a
+  fenced ``` ```osb ``` block with YAML body. Markers create a
+  signal in `Brain/inbox/` via the same writer as `brain_feedback`,
+  with `source_type: inline`, the source-file wikilink in `source`,
+  and a `dedup_hash` over the normalised payload. After capture
+  the source line is annotated `@osb✓ [[sig-...]]` (inline form)
+  or the info-string flips to `osb-checked` with a `<!-- @osb✓
+  [[sig-...]] -->` comment line (block form), making re-runs
+  idempotent. Default ignore set covers `Brain/`, `.git`,
+  `node_modules`, `.obsidian`, `.trash`, `.stversions`,
+  `.open-second-brain`; additional excludes via `--exclude`,
+  scope narrowing via `--path`, dry-run via `--dry-run`.
+- **`o2b brain import-session <path>`** — extract signals from a
+  Claude Code / Codex CLI / Hermes session JSONL (or a directory
+  of session files). Two extraction paths run in parallel:
+  `@osb` markers in user / assistant message text (same parser
+  as `scan-inline`), and replay of `brain_feedback` tool_use
+  calls captured in the transcript. Each emitted signal carries
+  `source_type: session` and a `session_ref: <path>#<turn-id>`
+  for traceability. Autodetect runs on the first line; if it
+  fails, exit 2 with a request to pass `--format`. The shared
+  `dedup_hash` cross-deduplicates against signals already in the
+  inbox (including those captured by `scan-inline`).
+- **`o2b brain migrate-frontmatter`** — opt-in helper that walks
+  `Brain/preferences/` and `Brain/retired/` and rewrites legacy
+  Group C frontmatter keys (`status`, `applied_count`,
+  `confirmed_at`, `last_evidence_at`, `violated_count`,
+  `confidence`, `evidenced_by`, `contradicted_by`) to the
+  `_`-prefixed form. Default is `--dry-run`; `--apply --yes`
+  takes a pre-run snapshot under `Brain/.snapshots/migrate-...`,
+  so rollback by run-id is the standard recovery path. Files
+  carrying both shapes for the same field abort the migration
+  with an actionable error.
+- **`BrainSignal`** gains three optional frontmatter fields:
+  `source_type` (`live` / `inline` / `session`; absent on
+  legacy signals), `dedup_hash`, and `session_ref`. Non-live
+  signals also get a `brain/source/<type>` tag for Obsidian
+  filtering. Absence of `source_type` is interpreted as
+  `live`; the parser never injects a default into the parsed
+  object.
+- **`src/core/brain/dedup-hash.ts`** — pure `computeDedupHash`
+  shared between `scan-inline` and `import-session`. NFC
+  normalisation + whitespace collapse on `principle`; `scope`
+  defaults to empty string; SHA-256 over NUL-separated parts.
+- **`src/core/brain/inline.ts`** — `discoverMarkers`,
+  `parseInlineMarker`, `parseBlockMarker`. Single source of
+  truth for `@osb` grammar.
+- **`src/core/brain/sessions/`** — adapter registry plus three
+  concrete adapters (`claude.ts`, `codex.ts`, `hermes.ts`) and
+  the orchestrator (`import.ts`). Adding a fourth runtime is a
+  new adapter file plus a registry entry, no other change.
+- **`src/core/brain/sessions/validate-feedback.ts`** — extracted
+  pure validator for the `brain_feedback` tool-use payload.
+  Re-used by the MCP layer (`toolBrainFeedback`) and the
+  session importer, so the contract cannot drift between
+  surfaces.
+- **Doctor `frontmatter-double-shape` warning** — surfaces a
+  preference or retired file that carries both legacy and
+  `_`-prefixed forms of the same Group C field (manual-edit
+  corruption indicator).
+- **Three new log-event kinds:** `scan-inline`, `import-session`,
+  `migrate-frontmatter`. Each `o2b brain *` invocation appends
+  one row to `Brain/log/<today>.md` (skipped on `--dry-run`).
+- Test fixtures: `tests/fixtures/sessions/{claude,codex,hermes}-minimal.jsonl`.
+  Anonymised five-line transcripts that lock the adapter
+  detection + iteration contract.
+- E2E scenario `tests/e2e/brain-capture-and-fields.test.ts`
+  exercises the full chain: init → scan-inline → import-session
+  → migrate-frontmatter → rollback.
+
+### Changed
+
+- **`parsePreference` / `parseRetired`** accept both the legacy
+  (`status:`) and the new (`_status:`) shape for every Group C
+  field. Files carrying both shapes for the same field raise a
+  hard parse error (`frontmatter-double-shape` for doctor).
+  Identity fields (`kind`, `id`, `created_at`,
+  `unconfirmed_until`, `topic`, `principle`, `scope`, `tags`,
+  `aliases`, `supersedes`, `pinned`) are not affected.
+- **`writePreference`** emits Group C keys with the `_` prefix
+  (`_status`, `_applied_count`, …). `moveToRetired` keeps
+  `status: retired` un-prefixed on retired files (identity, not
+  derived) and drops legacy keys from the inherited frontmatter
+  before stamping retire metadata.
+- **`writeSignal`** accepts the new optional fields and adds the
+  `brain/source/<type>` tag when `source_type` is non-default.
+  `parseSignal` round-trips them.
+- **Backlinks collector** (`src/core/brain/backlinks.ts`) reads
+  `evidenced_by` through the shared `normalizeDerivedKeys`
+  helper so the index continues to resolve regardless of
+  frontmatter shape.
+- **`brain_doctor`** picks up the new `frontmatter-double-shape`
+  warning. No existing lint codes change.
+- **README** documents the three capture surfaces and lists the
+  three new CLI verbs.
+- **`skills/brain-memory/SKILL.md`** notes inline markers as the
+  no-agent fallback path and points to `import-session` for
+  back-filling sessions.
+
+### Notes
+
+- Hard removal of the legacy frontmatter shape is planned for
+  a future minor release. The cutover is dependency-driven, not
+  calendar-driven.
+- `_brain.yaml: scan_inline.exclude:` is not yet honoured (the
+  existing minimal YAML parser does not support inline arrays).
+  Additional excludes go through the `--exclude` CLI flag in this
+  release; YAML-config support is a follow-up.
+- Three operator-only commands (`scan-inline`,
+  `import-session`, `migrate-frontmatter`) are intentionally
+  CLI-only — they don't appear in the MCP surface, consistent
+  with how `init`, `reject`, `pin`, `unpin`, and `rollback` are
+  kept off the agent loop.
+
 ## [0.10.1] - 2026-05-16
 
 Closes the "preference body is dead weight" gap. Every active and
@@ -1242,6 +1375,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.10.2]: https://github.com/itechmeat/open-second-brain/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/itechmeat/open-second-brain/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/itechmeat/open-second-brain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/itechmeat/open-second-brain/compare/v0.9.0...v0.9.1

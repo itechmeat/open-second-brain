@@ -257,3 +257,83 @@ describe("writeSignal — sanitisation (§7)", () => {
     ).toThrow(/signal missing field: principle/);
   });
 });
+
+// ── §9 / §16: source_type / dedup_hash / session_ref ─────────────────────────
+
+describe("writeSignal — capture-extension fields (§9/§16)", () => {
+  test("records source_type / dedup_hash / session_ref when provided", () => {
+    const r = writeSignal(
+      tmp,
+      baseInput({
+        slug: "ext-fields",
+        source_type: "inline",
+        dedup_hash: "deadbeef".repeat(8),
+        session_ref: "Daily/2026-05-14.md#turn-7",
+      }),
+    );
+    const raw = readFileSync(r.path, "utf8");
+    expect(raw).toMatch(/^source_type: inline$/m);
+    expect(raw).toMatch(/^dedup_hash: deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef$/m);
+    expect(raw).toMatch(/^session_ref: /m);
+  });
+
+  test("adds brain/source/<type> tag when source_type is 'inline'", () => {
+    const r = writeSignal(
+      tmp,
+      baseInput({ slug: "inline-tag", source_type: "inline" }),
+    );
+    const raw = readFileSync(r.path, "utf8");
+    expect(raw).toMatch(/brain\/source\/inline/);
+  });
+
+  test("adds brain/source/<type> tag when source_type is 'session'", () => {
+    const r = writeSignal(
+      tmp,
+      baseInput({ slug: "session-tag", source_type: "session" }),
+    );
+    const raw = readFileSync(r.path, "utf8");
+    expect(raw).toMatch(/brain\/source\/session/);
+  });
+
+  test("omits brain/source/* tag when source_type is 'live' (default)", () => {
+    const r = writeSignal(tmp, baseInput({ slug: "live-default" }));
+    const raw = readFileSync(r.path, "utf8");
+    expect(raw).not.toMatch(/brain\/source\//);
+  });
+
+  test("parseSignal round-trips source_type / dedup_hash / session_ref", () => {
+    const r = writeSignal(
+      tmp,
+      baseInput({
+        slug: "roundtrip",
+        source_type: "session",
+        dedup_hash: "abc123",
+        session_ref: "claude.jsonl#abc",
+      }),
+    );
+    const parsed = parseSignal(r.path);
+    expect(parsed.source_type).toBe("session");
+    expect(parsed.dedup_hash).toBe("abc123");
+    expect(parsed.session_ref).toBe("claude.jsonl#abc");
+  });
+
+  test("parseSignal returns undefined for capture-extension fields when absent (legacy file)", () => {
+    const r = writeSignal(tmp, baseInput({ slug: "no-ext-fields" }));
+    const parsed = parseSignal(r.path);
+    expect(parsed.source_type).toBeUndefined();
+    expect(parsed.dedup_hash).toBeUndefined();
+    expect(parsed.session_ref).toBeUndefined();
+  });
+
+  test("rejects unknown source_type values", () => {
+    expect(() =>
+      writeSignal(
+        tmp,
+        baseInput({
+          slug: "bad-source-type",
+          source_type: "bogus" as unknown as "live",
+        }),
+      ),
+    ).toThrow(/source_type/);
+  });
+});

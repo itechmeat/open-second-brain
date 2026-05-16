@@ -49,6 +49,7 @@ import {
 } from "./policy.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
 import {
+  BrainDoubleShapeError,
   BrainStatusFolderMismatchError,
   parsePreference,
   parseRetired,
@@ -342,6 +343,17 @@ function checkPreferences(
           path,
           message: err.message,
         });
+      } else if (err instanceof BrainDoubleShapeError) {
+        // §24 dual-shape parser collision is operator-actionable
+        // (run `o2b brain migrate-frontmatter --apply` or hand-edit
+        // the file). Surface as warning, not error, so the dream
+        // loop still proceeds for the rest of the vault.
+        issues.push({
+          severity: "warning",
+          code: "frontmatter-double-shape",
+          path,
+          message: err.message,
+        });
       } else {
         // Distinguish field-missing errors (write-time contract) from
         // unexpected throws so the CLI report stays useful.
@@ -413,6 +425,13 @@ function checkRetired(
         issues.push({
           severity: "warning",
           code: "status-folder-mismatch",
+          path,
+          message: err.message,
+        });
+      } else if (err instanceof BrainDoubleShapeError) {
+        issues.push({
+          severity: "warning",
+          code: "frontmatter-double-shape",
           path,
           message: err.message,
         });

@@ -30,8 +30,11 @@ import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
 import { allocateSlug, brainDirs, validateIsoDate } from "./paths.ts";
 import {
   BRAIN_SIGNAL_SIGN,
+  BRAIN_SIGNAL_SOURCE_TYPE,
+  isBrainSignalSourceType,
   type BrainSignal,
   type BrainSignalSign,
+  type BrainSignalSourceType,
 } from "./types.ts";
 
 /** Filename prefix without the trailing dash, e.g. `sig-2026-05-14`. */
@@ -63,6 +66,17 @@ export interface WriteSignalInput {
   readonly raw?: string;
   /** Optional extra tags merged after the canonical set. */
   readonly extraTags?: ReadonlyArray<string>;
+  /**
+   * Capture-extension fields (§9 / §16). When `source_type` is omitted
+   * on the input side, the writer treats the signal as `live` and
+   * emits NO `source_type` / `brain/source/*` key — the absence of the
+   * field carries the meaning.
+   */
+  readonly source_type?: BrainSignalSourceType;
+  /** Normalised payload hash for idempotency (§9 / §16). */
+  readonly dedup_hash?: string;
+  /** Session coordinates `<path>#<turn-id>` (§16). */
+  readonly session_ref?: string;
 }
 
 export interface WriteSignalOptions {
@@ -121,6 +135,14 @@ export function writeSignal(
       `signal field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(sanitised.signal)}`,
     );
   }
+  if (
+    sanitised.source_type !== undefined &&
+    !isBrainSignalSourceType(sanitised.source_type)
+  ) {
+    throw new Error(
+      `signal field 'source_type' must be 'live', 'inline', or 'session'; got ${JSON.stringify(sanitised.source_type)}`,
+    );
+  }
 
   const dirs = brainDirs(vault);
   const allocated = allocateSlug({
@@ -155,6 +177,22 @@ export function writeSignal(
   }
   if (sanitised.source && sanitised.source.length > 0) {
     metadata["source"] = [...sanitised.source];
+  }
+  // Capture-extension fields. `source_type: 'live'` is the implicit
+  // default — we skip writing it so files written by older OSB
+  // versions and freshly-written live signals stay byte-stable. Only
+  // `inline` / `session` get surfaced explicitly.
+  if (
+    sanitised.source_type !== undefined &&
+    sanitised.source_type !== BRAIN_SIGNAL_SOURCE_TYPE.live
+  ) {
+    metadata["source_type"] = sanitised.source_type;
+  }
+  if (sanitised.dedup_hash && sanitised.dedup_hash.trim()) {
+    metadata["dedup_hash"] = sanitised.dedup_hash.trim();
+  }
+  if (sanitised.session_ref && sanitised.session_ref.trim()) {
+    metadata["session_ref"] = sanitised.session_ref.trim();
   }
 
   const body = renderSignalBody(sanitised);
@@ -267,6 +305,47 @@ export function parseSignal(path: string): BrainSignal {
 
   const raw = extractRawSection(body);
 
+  // Capture-extension optional fields. Absence stays as `undefined`
+  // on the returned object — never coerced to a default, so callers
+  // can distinguish files written by older OSB versions from
+  // explicit values.
+  let source_type: BrainSignalSourceType | undefined;
+  if (meta["source_type"] !== undefined) {
+    const v = meta["source_type"];
+    if (typeof v !== "string") {
+      throw new Error(`signal field 'source_type' must be a string (${path})`);
+    }
+    const trimmed = v.trim();
+    if (trimmed) {
+      if (!isBrainSignalSourceType(trimmed)) {
+        throw new Error(
+          `signal field 'source_type' must be 'live', 'inline', or 'session'; got ${JSON.stringify(trimmed)} (${path})`,
+        );
+      }
+      source_type = trimmed;
+    }
+  }
+
+  let dedup_hash: string | undefined;
+  if (meta["dedup_hash"] !== undefined) {
+    const v = meta["dedup_hash"];
+    if (typeof v !== "string") {
+      throw new Error(`signal field 'dedup_hash' must be a string (${path})`);
+    }
+    const trimmed = v.trim();
+    if (trimmed) dedup_hash = trimmed;
+  }
+
+  let session_ref: string | undefined;
+  if (meta["session_ref"] !== undefined) {
+    const v = meta["session_ref"];
+    if (typeof v !== "string") {
+      throw new Error(`signal field 'session_ref' must be a string (${path})`);
+    }
+    const trimmed = v.trim();
+    if (trimmed) session_ref = trimmed;
+  }
+
   const result: BrainSignal = {
     kind: "brain-signal",
     id,
@@ -279,6 +358,9 @@ export function parseSignal(path: string): BrainSignal {
     ...(scope !== undefined ? { scope } : {}),
     ...(source !== undefined ? { source } : {}),
     ...(raw !== undefined ? { raw } : {}),
+    ...(source_type !== undefined ? { source_type } : {}),
+    ...(dedup_hash !== undefined ? { dedup_hash } : {}),
+    ...(session_ref !== undefined ? { session_ref } : {}),
   };
   return Object.freeze(result);
 }
@@ -305,6 +387,15 @@ function composeSignalTags(input: WriteSignalInput): string[] {
   push(`brain/topic/${input.topic.trim()}`);
   if (input.scope && input.scope.trim()) {
     push(`brain/scope/${input.scope.trim()}`);
+  }
+  // Non-default source_type gets its own tag so Obsidian users can
+  // filter `tag:brain/source/inline` etc. `live` is the implicit
+  // default and stays tag-less.
+  if (
+    input.source_type !== undefined &&
+    input.source_type !== BRAIN_SIGNAL_SOURCE_TYPE.live
+  ) {
+    push(`brain/source/${input.source_type}`);
   }
   for (const t of input.extraTags ?? []) {
     if (t.trim()) push(t.trim());
