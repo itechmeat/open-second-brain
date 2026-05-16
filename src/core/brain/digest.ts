@@ -38,6 +38,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { backlinkCount, buildBacklinkIndex } from "./backlinks.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
@@ -45,6 +46,7 @@ import { parseLogDay, type BrainLogEntry } from "./log.ts";
 import {
   BRAIN_APPLY_RESULT,
   BRAIN_LOG_EVENT_KIND,
+  BRAIN_PREFERENCE_STATUS,
   BRAIN_RETIRED_REASON,
 } from "./types.ts";
 import type {
@@ -121,6 +123,34 @@ export interface DigestJsonContradiction {
   readonly description: string;
 }
 
+/**
+ * "Hot" preference by lifetime evidence-application count. Reflects
+ * the rules carrying real weight right now, regardless of whether
+ * anything about them changed in the window. Source: current state
+ * of `Brain/preferences/` (confirmed + quarantine).
+ */
+export interface DigestJsonTopApplied {
+  readonly id: string;
+  readonly topic: string;
+  readonly scope: string | null;
+  readonly applied_count: number;
+  readonly violated_count: number;
+  readonly confidence: BrainConfidence | string;
+  readonly status: string;
+}
+
+/**
+ * Preference with the most inbound wikilink references in the vault.
+ * Source: the lifetime backlink index over preferences/retired/log.
+ * Higher count → the rule is mentioned in more contexts.
+ */
+export interface DigestJsonTopReferenced {
+  readonly id: string;
+  readonly topic: string;
+  readonly scope: string | null;
+  readonly backlink_count: number;
+}
+
 export interface DigestJson {
   readonly schema_version: 1;
   readonly generated_at: string;
@@ -138,7 +168,15 @@ export interface DigestJson {
   readonly retired: ReadonlyArray<DigestJsonRetired>;
   readonly confidence_shifts: ReadonlyArray<DigestJsonConfidenceShift>;
   readonly contradictions: ReadonlyArray<DigestJsonContradiction>;
+  readonly top_applied: ReadonlyArray<DigestJsonTopApplied>;
+  readonly top_referenced: ReadonlyArray<DigestJsonTopReferenced>;
 }
+
+/**
+ * How many entries to keep in each "hot" digest section. Small fixed
+ * value — the digest is meant to be skimmable, not exhaustive.
+ */
+const HOT_SECTION_LIMIT = 5;
 
 // ----- Entry point ----------------------------------------------------------
 
@@ -182,6 +220,8 @@ export function renderDigest(
       retired: data.retired,
       confidence_shifts: data.confidence_shifts,
       contradictions: data.contradictions,
+      top_applied: data.top_applied,
+      top_referenced: data.top_referenced,
     };
     return Object.freeze({
       content: JSON.stringify(payload, null, 2) + "\n",
@@ -204,6 +244,8 @@ interface DigestData {
   readonly retired: ReadonlyArray<DigestJsonRetired>;
   readonly confidence_shifts: ReadonlyArray<DigestJsonConfidenceShift>;
   readonly contradictions: ReadonlyArray<DigestJsonContradiction>;
+  readonly top_applied: ReadonlyArray<DigestJsonTopApplied>;
+  readonly top_referenced: ReadonlyArray<DigestJsonTopReferenced>;
 }
 
 function collectDigestData(
@@ -277,13 +319,69 @@ function collectDigestData(
   confirmed.sort((a, b) => a.id.localeCompare(b.id));
   retiredEntries.sort((a, b) => a.id.localeCompare(b.id));
 
+  const top_applied = pickTopApplied(preferences);
+  const top_referenced = pickTopReferenced(vault, preferences);
+
   return {
     new_unconfirmed,
     confirmed,
     retired: retiredEntries,
     confidence_shifts: confidenceShifts,
     contradictions,
+    top_applied,
+    top_referenced,
   };
+}
+
+function pickTopApplied(
+  preferences: ReadonlyArray<PreferenceWithPath>,
+): ReadonlyArray<DigestJsonTopApplied> {
+  const active = preferences.filter(
+    ({ pref }) =>
+      (pref.status === BRAIN_PREFERENCE_STATUS.confirmed ||
+        pref.status === BRAIN_PREFERENCE_STATUS.quarantine) &&
+      pref.applied_count > 0,
+  );
+  active.sort((a, b) => {
+    const diff = b.pref.applied_count - a.pref.applied_count;
+    if (diff !== 0) return diff;
+    // Stable secondary key: id ascending. Without it the same input on
+    // two filesystems (different readdir order) could swap ties.
+    return a.pref.id.localeCompare(b.pref.id);
+  });
+  return active.slice(0, HOT_SECTION_LIMIT).map(({ pref }) => ({
+    id: pref.id,
+    topic: pref.topic,
+    scope: pref.scope ?? null,
+    applied_count: pref.applied_count,
+    violated_count: pref.violated_count,
+    confidence: pref.confidence,
+    status: pref.status,
+  }));
+}
+
+function pickTopReferenced(
+  vault: string,
+  preferences: ReadonlyArray<PreferenceWithPath>,
+): ReadonlyArray<DigestJsonTopReferenced> {
+  const index = buildBacklinkIndex(vault);
+  const scored = preferences
+    .map(({ pref }) => ({
+      pref,
+      count: backlinkCount(index, pref.id),
+    }))
+    .filter((x) => x.count > 0);
+  scored.sort((a, b) => {
+    const diff = b.count - a.count;
+    if (diff !== 0) return diff;
+    return a.pref.id.localeCompare(b.pref.id);
+  });
+  return scored.slice(0, HOT_SECTION_LIMIT).map(({ pref, count }) => ({
+    id: pref.id,
+    topic: pref.topic,
+    scope: pref.scope ?? null,
+    backlink_count: count,
+  }));
 }
 
 function isEmpty(data: DigestData): boolean {
@@ -574,6 +672,24 @@ function renderMarkdown(
           ? `${item.reason} (${item.days_stale} days)`
           : item.reason;
       lines.push(`- [[${item.id}]] — ${scope}, ${detail}`);
+    }
+    lines.push("");
+  }
+  if (data.top_applied.length > 0) {
+    lines.push(`## Top applied (${data.top_applied.length})`, "");
+    for (const item of data.top_applied) {
+      const scope = item.scope ?? "—";
+      const stats = `applied: ${item.applied_count}, violated: ${item.violated_count}`;
+      const tags = item.status === "quarantine" ? " [quarantine]" : "";
+      lines.push(`- [[${item.id}]] — ${scope}, ${stats}${tags}`);
+    }
+    lines.push("");
+  }
+  if (data.top_referenced.length > 0) {
+    lines.push(`## Top referenced (${data.top_referenced.length})`, "");
+    for (const item of data.top_referenced) {
+      const scope = item.scope ?? "—";
+      lines.push(`- [[${item.id}]] — ${scope}, ${item.backlink_count} inbound`);
     }
     lines.push("");
   }

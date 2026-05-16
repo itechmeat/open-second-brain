@@ -30,6 +30,7 @@
 import { existsSync } from "node:fs";
 
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
+import { regenerateActiveQuiet } from "./active.ts";
 import { appendLogEvent, type BrainLogEntry } from "./log.ts";
 import { parsePreference } from "./preference.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
@@ -127,6 +128,7 @@ export function setPinned(
     },
   };
   appendLogEvent(vault, entry);
+  regenerateActiveQuiet(vault, { now });
 
   return { path, changed: true };
 }

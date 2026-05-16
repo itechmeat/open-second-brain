@@ -52,6 +52,7 @@ export {
   brainDirs,
   brainConfigPath,
   brainManualPath,
+  brainActivePath,
   signalPath,
   processedSignalPath,
   preferencePath,
@@ -67,6 +68,26 @@ export {
   ensureInsideVault,
   vaultRelative,
 } from "./paths.ts";
+
+// ----- Active-preferences digest --------------------------------------------
+export { regenerateActive, regenerateActiveQuiet } from "./active.ts";
+export type { RegenerateActiveOptions, RegenerateActiveResult } from "./active.ts";
+
+// ----- Backlink index -------------------------------------------------------
+export { buildBacklinkIndex, backlinkCount } from "./backlinks.ts";
+export type {
+  BacklinkIndex,
+  BacklinkRef,
+  BacklinkSourceKind,
+} from "./backlinks.ts";
+
+// ----- Operational status ---------------------------------------------------
+export { computeBrainStatus } from "./status.ts";
+export type {
+  BrainStatusSnapshot,
+  BrainStatusCounts,
+  ComputeBrainStatusOptions,
+} from "./status.ts";
 
 export type {
   BrainDirs,
@@ -97,4 +118,9 @@ export type {
 export { isoSecond, isoDate } from "./time.ts";
 
 // ----- Wikilink helpers -----------------------------------------------------
-export { normaliseWikilinkTarget, parseWikilink } from "./wikilink.ts";
+export {
+  normaliseWikilinkTarget,
+  parseWikilink,
+  parseArtifactRef,
+} from "./wikilink.ts";
+export type { ArtifactRange, ArtifactRefParse } from "./wikilink.ts";

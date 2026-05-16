@@ -12,6 +12,32 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "o2b-hook active-inject",
+            "timeout": 10,
+            "statusMessage": "OSB: injecting active preferences"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "o2b-hook active-inject",
+            "timeout": 10,
+            "statusMessage": "OSB: re-injecting active preferences after compact"
+          }
+        ]
+      }
     ]
   }
 }

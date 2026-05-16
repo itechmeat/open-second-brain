@@ -28,6 +28,15 @@ export type BrainSignalSign =
 export const BRAIN_PREFERENCE_STATUS = {
   unconfirmed: "unconfirmed",
   confirmed: "confirmed",
+  // Probation state for a previously-confirmed preference whose recent
+  // evidence is dominantly negative (violated_count ≥ applied_count AND
+  // applied_count > low_max_applied). The rule is still active and is
+  // listed in `Brain/active.md`, but the digest surfaces it in a
+  // separate section. A single additional `violated` evidence event
+  // retires the preference with `retired_reason: quarantine-violated`;
+  // an `applied` event that restores `applied_count > violated_count`
+  // sends it back to `confirmed`.
+  quarantine: "quarantine",
 } as const;
 export type BrainPreferenceStatus =
   (typeof BRAIN_PREFERENCE_STATUS)[keyof typeof BRAIN_PREFERENCE_STATUS];
@@ -45,6 +54,17 @@ export const BRAIN_RETIRED_REASON = {
   expiredUnconfirmed: "expired-unconfirmed",
   rebutted: "rebutted",
   userRejected: "user-rejected",
+  // Quarantined preference (see BRAIN_PREFERENCE_STATUS.quarantine) that
+  // received at least one further `violated` evidence event. Distinct
+  // from `rebutted`, which fires when opposite-sign *signals* (not
+  // evidence) accumulate above the candidate threshold.
+  quarantineViolated: "quarantine-violated",
+  // Preference retired because an apply-evidence event marked it
+  // `outdated` — the rule's scope still matches but the artifact
+  // shows that the rule itself is obsolete (framework migration,
+  // convention change). Single `outdated` event is enough; the
+  // evidence is interpreted as a definitive contextual rebuttal.
+  supersededByContext: "superseded-by-context",
 } as const;
 export type BrainRetiredReason =
   (typeof BRAIN_RETIRED_REASON)[keyof typeof BRAIN_RETIRED_REASON];
@@ -52,6 +72,13 @@ export type BrainRetiredReason =
 export const BRAIN_APPLY_RESULT = {
   applied: "applied",
   violated: "violated",
+  // The rule matched the artifact's scope but is no longer current —
+  // a framework migration, convention change, or upstream rewrite
+  // makes the preference obsolete in this specific application.
+  // Dream interprets any `outdated` evidence as a retire trigger
+  // (reason `superseded-by-context`); pinned prefs emit a
+  // `retain-pinned` log entry instead.
+  outdated: "outdated",
 } as const;
 export type BrainApplyResult =
   (typeof BRAIN_APPLY_RESULT)[keyof typeof BRAIN_APPLY_RESULT];

@@ -38,6 +38,7 @@ import { existsSync, readdirSync, renameSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import { regenerateActiveQuiet } from "./active.ts";
 import {
   appendLogEvent,
   parseLogDay,
@@ -197,6 +198,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     scan.corrupted.length > 0;
 
   if (!changed) {
+    if (!dryRun) regenerateActiveQuiet(vault, { now });
     return Object.freeze({
       run_id: runId,
       changed: false,
@@ -405,6 +407,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
         `warning: prune snapshots failed: ${(err as Error).message}\n`,
       );
     }
+    regenerateActiveQuiet(vault, { now });
   }
 
   return Object.freeze({
@@ -887,7 +890,11 @@ function scanApplyEvidence(vault: string): ApplyEvidenceEntry[] {
       const prefRaw = e.body["preference"];
       const result = e.body["result"];
       if (typeof prefRaw !== "string" || typeof result !== "string") continue;
-      if (result !== BRAIN_APPLY_RESULT.applied && result !== BRAIN_APPLY_RESULT.violated) continue;
+      if (
+        result !== BRAIN_APPLY_RESULT.applied &&
+        result !== BRAIN_APPLY_RESULT.violated &&
+        result !== BRAIN_APPLY_RESULT.outdated
+      ) continue;
       // Parse `[[pref-slug]]` → slug.
       const target = parseWikilink(prefRaw);
       if (!target || !target.startsWith("pref-")) continue;
@@ -936,8 +943,27 @@ function planRefresh(
     const ev = bySlug.get(slug) ?? [];
     const applied = ev.filter((e) => e.result === BRAIN_APPLY_RESULT.applied).length;
     const violated = ev.filter((e) => e.result === BRAIN_APPLY_RESULT.violated).length;
+    const outdatedCount = ev.filter((e) => e.result === BRAIN_APPLY_RESULT.outdated).length;
     const lastEvidence = ev.length > 0 ? ev[ev.length - 1]!.timestamp : null;
     const firstApplied = ev.find((e) => e.result === BRAIN_APPLY_RESULT.applied);
+
+    // `outdated` is a context-driven retire signal: a single event
+    // means the rule's scope still matches but the artifact shows
+    // the rule itself is obsolete (framework migration, convention
+    // change). Pin protects against decay-based retires but NOT
+    // against context-driven ones — pinning means "I want this
+    // rule"; an `outdated` event means "context says this rule no
+    // longer applies anywhere." Honour the explicit signal.
+    //
+    // Idempotency: once retired, the pref moves to `retired/` and
+    // future dream passes don't re-process it from `preferences/`.
+    if (outdatedCount > 0) {
+      plan.retires.push({
+        slug,
+        reason: BRAIN_RETIRED_REASON.supersededByContext,
+      });
+      continue;
+    }
 
     let status = rec.pref.status;
     let confirmedAt = rec.pref.confirmed_at;
@@ -945,6 +971,39 @@ function planRefresh(
       status = BRAIN_PREFERENCE_STATUS.confirmed;
       confirmedAt = firstApplied.timestamp;
       confirmed.add(slug);
+    }
+
+    // Quarantine transitions — only applicable to already-confirmed
+    // and already-quarantined preferences. An unconfirmed pref still
+    // promotes via the firstApplied branch above; quarantine entry is
+    // measured against `confirmed` counts. Detailed semantics live on
+    // `BRAIN_PREFERENCE_STATUS.quarantine` in `types.ts`.
+    if (
+      status === BRAIN_PREFERENCE_STATUS.confirmed &&
+      violated >= applied &&
+      applied > cfg.confidence.low_max_applied
+    ) {
+      status = BRAIN_PREFERENCE_STATUS.quarantine;
+    } else if (status === BRAIN_PREFERENCE_STATUS.quarantine) {
+      const newViolated = violated > rec.pref.violated_count;
+      if (newViolated) {
+        if (isPinned(rec.pref)) {
+          plan.retainPinned.push({
+            preference: `[[${rec.pref.id}]]`,
+            reason: BRAIN_RETIRED_REASON.quarantineViolated,
+          });
+        } else {
+          plan.retires.push({
+            slug,
+            reason: BRAIN_RETIRED_REASON.quarantineViolated,
+          });
+          // Skip refresh — moveToRetired will read the on-disk
+          // counters when it builds the retired snapshot.
+          continue;
+        }
+      } else if (applied > violated) {
+        status = BRAIN_PREFERENCE_STATUS.confirmed;
+      }
     }
 
     const confidenceValue = computeConfidence(
@@ -1070,8 +1129,15 @@ function planAutoRetires(
       continue;
     }
 
-    // Confirmed → stale-no-evidence check.
-    if (effectiveStatus === BRAIN_PREFERENCE_STATUS.confirmed) {
+    // Confirmed/quarantine → stale-no-evidence check. Quarantine
+    // is "still active" (design summary §20) so the time-based decay
+    // applies to it identically — a pref sitting idle with no
+    // evidence eventually retires whether confidence was healthy or
+    // probationary at the time the clock ran out.
+    if (
+      effectiveStatus === BRAIN_PREFERENCE_STATUS.confirmed ||
+      effectiveStatus === BRAIN_PREFERENCE_STATUS.quarantine
+    ) {
       if (!effectiveLastEvidence) {
         // Confirmed with no evidence at all? Shouldn't happen, but
         // gate on the same staleness rule using `confirmed_at`. We

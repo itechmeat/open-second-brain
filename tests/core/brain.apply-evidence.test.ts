@@ -163,7 +163,7 @@ describe("appendApplyEvidence — log file creation on first event", () => {
         result: "neutral" as unknown as "applied",
         agent: "claude",
       }),
-    ).toThrow(/must be 'applied' or 'violated'/);
+    ).toThrow(/must be 'applied', 'violated', or 'outdated'/);
   });
 
   test("missing required input fields throw naming the field", () => {
@@ -192,5 +192,63 @@ describe("appendApplyEvidence — log file creation on first event", () => {
         agent: "",
       }),
     ).toThrow(/missing field: agent/);
+  });
+});
+
+describe("appendApplyEvidence — sanitisation (§7)", () => {
+  test("redacts secrets in artifact and note", () => {
+    prefFixture("redact-target");
+    appendApplyEvidence(
+      vault,
+      {
+        pref_id: "redact-target",
+        artifact: "[[file]] token: abcdef",
+        result: "applied",
+        agent: "claude",
+        note: 'logged with api_key=hunter2 here',
+      },
+      { now: new Date("2026-05-15T10:00:00Z") },
+    );
+    const { entries } = parseLogDay(vault, "2026-05-15");
+    const ev = entries.find((e) => e.eventType === "apply-evidence");
+    expect(ev).toBeDefined();
+    const artifact = String(ev!.body["artifact"] ?? "");
+    expect(artifact).toContain("***REDACTED***");
+    expect(artifact).not.toContain("abcdef");
+    const note = String(ev!.body["note"] ?? "");
+    expect(note).toContain("***REDACTED***");
+    expect(note).not.toContain("hunter2");
+  });
+
+  test("strips C0 controls in artifact and caps note length", () => {
+    prefFixture("cap-target");
+    appendApplyEvidence(
+      vault,
+      {
+        pref_id: "cap-target",
+        artifact: "[[fi\x07le]]",
+        result: "applied",
+        agent: "claude",
+        note: "x".repeat(8000),
+      },
+      { now: new Date("2026-05-15T11:00:00Z") },
+    );
+    const { entries } = parseLogDay(vault, "2026-05-15");
+    const ev = entries.find((e) => e.eventType === "apply-evidence");
+    expect(ev).toBeDefined();
+    expect(String(ev!.body["artifact"])).not.toContain("\x07");
+    expect(String(ev!.body["note"]).length).toBeLessThanOrEqual(4096);
+  });
+
+  test("rejects when sanitisation strips artifact down to empty", () => {
+    prefFixture("empty-artifact");
+    expect(() =>
+      appendApplyEvidence(vault, {
+        pref_id: "empty-artifact",
+        artifact: "\x00\x07",
+        result: "applied",
+        agent: "claude",
+      }),
+    ).toThrow(/missing field: artifact/);
   });
 });

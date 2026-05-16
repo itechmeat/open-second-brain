@@ -208,3 +208,52 @@ describe("writeSignal — slug collision allocator", () => {
     expect(c.id).toBe("sig-2026-05-14-no-internal-abbrev-3");
   });
 });
+
+describe("writeSignal — sanitisation (§7)", () => {
+  test("redacts secrets in principle / scope / raw", () => {
+    const r = writeSignal(
+      tmp,
+      baseInput({
+        slug: "sec",
+        principle: "do not put api_key=hunter2 anywhere",
+        scope: "writing token: abcd",
+        raw: 'config = {"client_secret": "shhh"}',
+      }),
+    );
+    const round = parseSignal(r.path);
+    expect(round.principle).toContain("***REDACTED***");
+    expect(round.principle).not.toContain("hunter2");
+    expect(round.scope).toContain("***REDACTED***");
+    expect(round.scope).not.toContain("abcd");
+    expect(round.raw).toContain("***REDACTED***");
+    expect(round.raw).not.toContain("shhh");
+  });
+
+  test("strips C0 controls and folds U+2028/U+2029 in principle", () => {
+    // U+2028 = line separator. C0 byte 0x07 (BEL) should be stripped.
+    const r = writeSignal(
+      tmp,
+      baseInput({
+        slug: "ctrl",
+        principle: "be\x07tidy line2",
+      }),
+    );
+    const round = parseSignal(r.path);
+    expect(round.principle).not.toContain("\x07");
+    // singleLine collapses the folded LF to space.
+    expect(round.principle).toBe("betidy line2");
+  });
+
+  test("caps principle at 512 chars", () => {
+    const huge = "a".repeat(2000);
+    const r = writeSignal(tmp, baseInput({ slug: "big", principle: huge }));
+    const round = parseSignal(r.path);
+    expect(round.principle.length).toBeLessThanOrEqual(512);
+  });
+
+  test("rejects when sanitisation strips principle down to empty", () => {
+    expect(() =>
+      writeSignal(tmp, baseInput({ slug: "empty", principle: "\x00\x01\x07" })),
+    ).toThrow(/signal missing field: principle/);
+  });
+});

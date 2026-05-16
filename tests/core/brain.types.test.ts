@@ -30,6 +30,7 @@ describe("BRAIN_* const enums", () => {
   test("BRAIN_PREFERENCE_STATUS values", () => {
     expect(BRAIN_PREFERENCE_STATUS.unconfirmed).toBe("unconfirmed");
     expect(BRAIN_PREFERENCE_STATUS.confirmed).toBe("confirmed");
+    expect(BRAIN_PREFERENCE_STATUS.quarantine).toBe("quarantine");
   });
 
   test("BRAIN_CONFIDENCE values", () => {
@@ -38,16 +39,19 @@ describe("BRAIN_* const enums", () => {
     expect(BRAIN_CONFIDENCE.high).toBe("high");
   });
 
-  test("BRAIN_RETIRED_REASON covers all four reasons from §7.4", () => {
+  test("BRAIN_RETIRED_REASON covers every reason emitted by dream / CLI", () => {
     expect(BRAIN_RETIRED_REASON.staleNoEvidence).toBe("stale-no-evidence");
     expect(BRAIN_RETIRED_REASON.expiredUnconfirmed).toBe("expired-unconfirmed");
     expect(BRAIN_RETIRED_REASON.rebutted).toBe("rebutted");
     expect(BRAIN_RETIRED_REASON.userRejected).toBe("user-rejected");
+    expect(BRAIN_RETIRED_REASON.quarantineViolated).toBe("quarantine-violated");
+    expect(BRAIN_RETIRED_REASON.supersededByContext).toBe("superseded-by-context");
   });
 
   test("BRAIN_APPLY_RESULT values", () => {
     expect(BRAIN_APPLY_RESULT.applied).toBe("applied");
     expect(BRAIN_APPLY_RESULT.violated).toBe("violated");
+    expect(BRAIN_APPLY_RESULT.outdated).toBe("outdated");
   });
 
   test("BRAIN_LOG_EVENT_KIND covers every event type listed in §5.5 / §7.4", () => {

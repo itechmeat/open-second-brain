@@ -78,6 +78,44 @@ All tool results contain both an unstructured `content` text block (a JSON
 serialization of the structured payload) and a `structuredContent` object so
 clients that prefer typed results can use it directly.
 
+## Resources
+
+The server also exposes a `resources` capability for hosts that prefer
+pull-style access (no tool call, no arguments). Three concrete URIs
+come back from `resources/list`:
+
+- `osb://preferences/active` — body of `Brain/active.md`, the auto-
+  generated digest of confirmed + quarantined preferences plus the
+  last three retired entries. Auto-regenerated on first read if the
+  file does not exist yet.
+- `osb://digest/latest` — same body as the `brain_digest` tool's
+  default (24h) Markdown window.
+- `osb://status` — Brain operational snapshot: counts (inbox /
+  preferences by status / retired / log_days / snapshots), last
+  `dream` and `apply-evidence` timestamps, and a sanity flag for
+  signals awaiting `dream`. Same data the `second_brain_status`
+  tool returns under its `brain` field, rendered as markdown.
+
+Four templated URIs come back from `resources/templates/list`:
+
+- `osb://preference/{id}` — body of `pref-{id}.md`, with fallback to
+  `ret-{id}.md` when the active copy is gone. Accepts the bare slug
+  (`my-rule`) or the prefixed form (`pref-my-rule` / `ret-my-rule`).
+- `osb://topic/{slug}` — synthesised markdown of every signal, the
+  current preference (or retired), and the most recent log entries
+  for the topic.
+- `osb://log/{date}` — body of `Brain/log/<date>.md` (date is
+  `YYYY-MM-DD`).
+- `osb://backlinks/{id}` — inbound references to the given Brain
+  artifact id, rendered as a count plus a list grouped by source
+  kind. Same data as the `brain_backlinks` tool.
+
+`resources/read` accepts both shapes uniformly and returns
+`text/markdown` content. Malformed slug/date arguments produce
+`INVALID_PARAMS`; missing files produce a tool-level error envelope
+with a `not found` message — same shape as `brain_query`'s
+`BrainNotFoundError`.
+
 ## Run from the CLI
 
 ```bash

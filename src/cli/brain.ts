@@ -30,6 +30,8 @@ import {
   resolveAgentName,
   resolveVault,
 } from "../core/config.ts";
+import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
+import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { bootstrapBrain } from "../core/brain/init.ts";
 import {
   appendApplyEvidence,
@@ -408,8 +410,14 @@ async function cmdBrainApplyEvidence(argv: string[]): Promise<number> {
   const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
 
   const resultStr = String(flags["result"]);
-  if (resultStr !== "applied" && resultStr !== "violated") {
-    return fail(`--result must be 'applied' or 'violated'; got ${resultStr}`);
+  if (
+    resultStr !== "applied" &&
+    resultStr !== "violated" &&
+    resultStr !== "outdated"
+  ) {
+    return fail(
+      `--result must be 'applied', 'violated', or 'outdated'; got ${resultStr}`,
+    );
   }
 
   try {
@@ -808,6 +816,42 @@ async function cmdBrainRollback(argv: string[]): Promise<number> {
   return 0;
 }
 
+async function cmdBrainBacklinks(argv: string[]): Promise<number> {
+  const { positional, flags } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+
+  const id = positional[0];
+  if (!id) {
+    return fail("brain backlinks requires a target id (e.g. pref-foo, ret-bar, sig-...)");
+  }
+  // Run the input through the same normaliser the index uses so a
+  // wikilink-shaped argument (`[[pref-foo]]`, `pref-foo.md`) resolves.
+  const target = normaliseWikilinkTarget(id);
+  const index = buildBacklinkIndex(vault);
+  const refs = index.get(target) ?? [];
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify({ id: target, count: refs.length, refs }, null, 2) + "\n",
+    );
+    return 0;
+  }
+
+  process.stdout.write(`Backlinks to ${target}: ${refs.length}\n`);
+  if (refs.length === 0) return 0;
+  for (const r of refs) {
+    const ts = r.timestamp ? ` @ ${r.timestamp}` : "";
+    process.stdout.write(
+      `  ${r.source} (${r.sourceKind}, field: ${r.field})${ts}\n`,
+    );
+  }
+  return 0;
+}
+
 async function cmdBrainDoctor(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
@@ -871,6 +915,7 @@ Brain verbs (observing memory):
   unpin            Clear the pinned flag (idempotent)
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes)
   doctor           Validate Brain invariants (--strict promotes warnings to exit 2)
+  backlinks        List inbound references to a Brain artifact id
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -891,7 +936,7 @@ const VERB_HELP: Record<string, string> = {
     "usage: o2b brain dream [--vault <path>] [--dry-run] [--now <ISO-8601>] [--json]\n" +
     "Runs the deterministic dreaming algorithm. Idempotent on rerun.\n",
   "apply-evidence":
-    "usage: o2b brain apply-evidence --pref <id> --artifact <wikilink> --result applied|violated\n" +
+    "usage: o2b brain apply-evidence --pref <id> --artifact <wikilink> --result applied|violated|outdated\n" +
     "  [--agent <name>] [--note <text>] [--vault <path>] [--json]\n" +
     "Appends a single event to today's log. Missing preference exits 2.\n",
   digest:
@@ -916,6 +961,9 @@ const VERB_HELP: Record<string, string> = {
   doctor:
     "usage: o2b brain doctor [--vault <path>] [--json] [--strict]\n" +
     "Validate invariants. Warnings exit 0 (or 2 with --strict). Errors always exit 1.\n",
+  backlinks:
+    "usage: o2b brain backlinks <id> [--vault <path>] [--json]\n" +
+    "List inbound references to the given Brain artifact id (preference, retired, signal).\n",
 };
 
 // ── Public entry point ──────────────────────────────────────────────────────
@@ -973,6 +1021,8 @@ export async function handleBrainSubcommand(
         return await cmdBrainRollback(rest);
       case "doctor":
         return await cmdBrainDoctor(rest);
+      case "backlinks":
+        return await cmdBrainBacklinks(rest);
       default:
         process.stderr.write(`error: unknown brain verb: ${verb}\n`);
         process.stdout.write(BRAIN_HELP);

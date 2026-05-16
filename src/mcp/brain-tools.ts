@@ -40,6 +40,8 @@ import {
   BrainPreferenceNotFoundError,
   type AppendApplyEvidenceInput,
 } from "../core/brain/apply-evidence.ts";
+import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
+import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import {
   renderDigest,
   type DigestFormat,
@@ -356,11 +358,12 @@ async function toolBrainApplyEvidence(
   const resultRaw = coerceStr(args, "result", true)!;
   if (
     resultRaw !== BRAIN_APPLY_RESULT.applied &&
-    resultRaw !== BRAIN_APPLY_RESULT.violated
+    resultRaw !== BRAIN_APPLY_RESULT.violated &&
+    resultRaw !== BRAIN_APPLY_RESULT.outdated
   ) {
     throw new MCPError(
       INVALID_PARAMS,
-      `argument 'result' must be 'applied' or 'violated'`,
+      `argument 'result' must be 'applied', 'violated', or 'outdated'`,
     );
   }
   const agentArg = coerceStr(args, "agent", false);
@@ -485,6 +488,32 @@ async function toolBrainQuery(
     mode: "since",
     since: since!.toISOString(),
     events: res.map(serializeLogEntry),
+  };
+}
+
+// ----- brain_backlinks -----------------------------------------------------
+
+async function toolBrainBacklinks(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const id = coerceStr(args, "id", true)!;
+  // The index is keyed by normalised wikilink targets. Run callers'
+  // input through the same normaliser so `pref-foo`, `[[pref-foo]]`,
+  // `[[pref-foo|Alias]]`, and `Brain/preferences/pref-foo.md` all
+  // resolve to the same lookup.
+  const target = normaliseWikilinkTarget(id);
+  const index = buildBacklinkIndex(ctx.vault);
+  const refs = index.get(target) ?? [];
+  return {
+    id: target,
+    count: refs.length,
+    refs: refs.map((r) => ({
+      source: r.source,
+      source_kind: r.sourceKind,
+      field: r.field,
+      ...(r.timestamp !== undefined ? { timestamp: r.timestamp } : {}),
+    })),
   };
 }
 
@@ -733,7 +762,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_apply_evidence",
     description:
-      "Record whether an active preference was applied or violated against a freshly-produced durable artifact. Appends one event to `Brain/log/<today>.md`.",
+      "Record whether an active preference was applied, violated, or marked outdated against a freshly-produced durable artifact. Appends one event to `Brain/log/<today>.md`. A single `outdated` event triggers retire on the next dream pass.",
     inputSchema: {
       type: "object",
       properties: {
@@ -745,13 +774,13 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         artifact: {
           type: "string",
           description:
-            "Wikilink identifying the artifact, e.g. `[[Daily/2026.05.14#section]]` or `[[src/cli/main.ts]]`.",
+            "Wikilink identifying the artifact. Accepts an optional inclusive line-range suffix for claim-level provenance, e.g. `[[src/cli/main.ts:120-145]]` or `[[src/cli/main.ts:42]]`.",
         },
         result: {
           type: "string",
-          enum: ["applied", "violated"],
+          enum: ["applied", "violated", "outdated"],
           description:
-            "`applied` if the rule held in this artifact, `violated` if it was broken.",
+            "`applied` if the rule held in this artifact, `violated` if it was broken, `outdated` if the rule's scope still matches but the artifact shows the rule itself is obsolete (e.g. framework migration).",
         },
         agent: {
           type: "string",
@@ -850,5 +879,23 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainDoctor,
+  },
+  {
+    name: "brain_backlinks",
+    description:
+      "List inbound references to a Brain artifact id (preference, retired, or signal). Returns every source that points at the id via wikilink, in any preference/retired frontmatter field, body prose, signal source, or log payload. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "Target id (e.g. `pref-foo`, `ret-bar`, `sig-2026-05-14-baz`). Wikilink decoration is stripped if present.",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainBacklinks,
   },
 ]);

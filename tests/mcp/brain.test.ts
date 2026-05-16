@@ -612,7 +612,7 @@ describe("deprecated MCP tools — advertised list", () => {
     expect(names.has("second_brain_capture")).toBe(false);
   });
 
-  test("all six Brain tools are advertised", () => {
+  test("all Brain tools are advertised", () => {
     const names = new Set(buildToolTable().map((t) => t.name));
     for (const expected of [
       "brain_feedback",
@@ -621,8 +621,68 @@ describe("deprecated MCP tools — advertised list", () => {
       "brain_digest",
       "brain_query",
       "brain_doctor",
+      "brain_backlinks",
     ]) {
       expect(names.has(expected)).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// brain_backlinks
+// ---------------------------------------------------------------------------
+
+describe("brain_backlinks", () => {
+  test("returns inbound refs for a referenced preference", async () => {
+    const server = makeServer();
+    await initialize(server);
+    writePreference(vault, {
+      slug: "tgt",
+      topic: "t",
+      principle: "target rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: [],
+    });
+    writePreference(vault, {
+      slug: "src",
+      topic: "s",
+      principle: "source rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: ["[[pref-tgt]]"],
+    });
+
+    const r = (await call(server, "brain_backlinks", { id: "pref-tgt" })) as any;
+    const s = r.result.structuredContent;
+    expect(s.id).toBe("pref-tgt");
+    // pref-src references pref-tgt once (evidenced_by). The pref body
+    // mirrors evidenced_by under `## Origin`, but the index dedupes
+    // by (source, target) so the count is exactly 1.
+    expect(s.count).toBe(1);
+    const sources = s.refs.map((x: any) => x.source);
+    expect(sources).toContain("pref-src");
+  });
+
+  test("count is zero when nobody references the id", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = (await call(server, "brain_backlinks", { id: "pref-orphan" })) as any;
+    const s = r.result.structuredContent;
+    expect(s.id).toBe("pref-orphan");
+    expect(s.count).toBe(0);
+    expect(s.refs).toEqual([]);
+  });
+
+  test("missing id raises an INVALID_PARAMS error envelope", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = (await call(server, "brain_backlinks", {})) as any;
+    // Missing required arg is INVALID_PARAMS at the JSON-RPC layer
+    // (the handler throws MCPError before producing a tool result).
+    expect(r.error).toBeDefined();
+    expect(r.error.message).toContain("id");
   });
 });

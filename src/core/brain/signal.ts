@@ -25,6 +25,7 @@
  */
 
 import type { FrontmatterMap } from "../types.ts";
+import { sanitiseTextField } from "../redactor.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
 import { allocateSlug, brainDirs, validateIsoDate } from "./paths.ts";
 import {
@@ -98,18 +99,26 @@ export function writeSignal(
   input: WriteSignalInput,
   options: WriteSignalOptions = {},
 ): WriteSignalResult {
+  // Sanitise free-form fields BEFORE the required-field check so an
+  // input that is purely C0-control characters lands in the
+  // "missing-field" branch rather than smuggling itself into YAML.
+  // `topic`, `slug`, `agent`, `date`, `signal` are constrained by
+  // their own validators (slug rules / ISO date / enum) and are
+  // already rejected if they carry junk — don't double-process them.
+  const sanitised = sanitiseSignalInput(input);
+
   for (const field of REQUIRED_INPUT_FIELDS) {
-    const value = input[field];
+    const value = sanitised[field];
     if (value === undefined || value === null || String(value).trim() === "") {
       throw new Error(`signal missing field: ${String(field)}`);
     }
   }
   if (
-    input.signal !== BRAIN_SIGNAL_SIGN.positive &&
-    input.signal !== BRAIN_SIGNAL_SIGN.negative
+    sanitised.signal !== BRAIN_SIGNAL_SIGN.positive &&
+    sanitised.signal !== BRAIN_SIGNAL_SIGN.negative
   ) {
     throw new Error(
-      `signal field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(input.signal)}`,
+      `signal field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(sanitised.signal)}`,
     );
   }
 
@@ -117,38 +126,38 @@ export function writeSignal(
   const allocated = allocateSlug({
     vault,
     targetDir: dirs.inbox,
-    prefix: signalPrefix(input.date),
-    slug: input.slug,
+    prefix: signalPrefix(sanitised.date),
+    slug: sanitised.slug,
     maxAttempts: options.maxSlugAttempts,
   });
 
   // The on-disk id always equals the filename basename, including any
   // `-2`/`-3` collision suffix. We surface that as the canonical id and
   // duplicate it inside the frontmatter so manual `mv` keeps the link.
-  const id = `${signalPrefix(input.date)}-${allocated.slug}`;
+  const id = `${signalPrefix(sanitised.date)}-${allocated.slug}`;
 
-  const tags = composeSignalTags(input);
+  const tags = composeSignalTags(sanitised);
   const metadata: FrontmatterMap = {
     kind: "brain-signal",
     id,
-    created_at: input.created_at,
+    created_at: sanitised.created_at,
     tags: [...tags],
-    topic: input.topic.trim(),
-    signal: input.signal,
-    agent: input.agent.trim(),
-    principle: input.principle.trim(),
+    topic: sanitised.topic.trim(),
+    signal: sanitised.signal,
+    agent: sanitised.agent.trim(),
+    principle: sanitised.principle.trim(),
   };
   // Optional fields: keep the file lean. The parser tolerates absence and
   // returns `undefined` on the interface — no `_(not provided)_` for
   // metadata.
-  if (input.scope && input.scope.trim()) {
-    metadata["scope"] = input.scope.trim();
+  if (sanitised.scope && sanitised.scope.trim()) {
+    metadata["scope"] = sanitised.scope.trim();
   }
-  if (input.source && input.source.length > 0) {
-    metadata["source"] = [...input.source];
+  if (sanitised.source && sanitised.source.length > 0) {
+    metadata["source"] = [...sanitised.source];
   }
 
-  const body = renderSignalBody(input);
+  const body = renderSignalBody(sanitised);
   writeFrontmatterAtomic(allocated.path, metadata, body, {
     overwrite: false,
     existsErrorKind: "signal",
@@ -156,6 +165,43 @@ export function writeSignal(
   });
 
   return { path: allocated.path, id };
+}
+
+// ----- Sanitisation --------------------------------------------------------
+
+/**
+ * Hard caps for free-form fields. `principle` is rendered as a
+ * single-line YAML scalar in frontmatter; `note`/`raw` shapes can
+ * carry paragraphs. `scope` is a short slug-adjacent tag.
+ */
+const PRINCIPLE_MAX_LEN = 512;
+const SCOPE_MAX_LEN = 128;
+const RAW_MAX_LEN = 4096;
+const SOURCE_ITEM_MAX_LEN = 512;
+
+function sanitiseSignalInput(input: WriteSignalInput): WriteSignalInput {
+  const principle = sanitiseTextField(input.principle, {
+    maxLen: PRINCIPLE_MAX_LEN,
+    singleLine: true,
+  });
+  const scope = input.scope
+    ? sanitiseTextField(input.scope, { maxLen: SCOPE_MAX_LEN, singleLine: true })
+    : input.scope;
+  const raw = input.raw
+    ? sanitiseTextField(input.raw, { maxLen: RAW_MAX_LEN })
+    : input.raw;
+  const source = input.source
+    ? input.source.map((s) =>
+        sanitiseTextField(s, { maxLen: SOURCE_ITEM_MAX_LEN, singleLine: true }),
+      )
+    : input.source;
+  return {
+    ...input,
+    principle,
+    ...(scope !== undefined ? { scope } : {}),
+    ...(raw !== undefined ? { raw } : {}),
+    ...(source !== undefined ? { source } : {}),
+  };
 }
 
 /**

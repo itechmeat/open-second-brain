@@ -39,21 +39,27 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 
-import { extractWikilinks, parseFrontmatter } from "../vault.ts";
+import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
+import { buildBacklinkIndex } from "./backlinks.ts";
+import { parseLogDay } from "./log.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
   BrainConfigError,
   loadBrainConfigDetailed,
 } from "./policy.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
-import { parseLogDay } from "./log.ts";
 import {
   BrainStatusFolderMismatchError,
   parsePreference,
   parseRetired,
 } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
-import { normaliseWikilinkTarget } from "./wikilink.ts";
+import {
+  BRAIN_LOG_EVENT_KIND,
+  BRAIN_PREFERENCE_STATUS,
+  type BrainConfig,
+} from "./types.ts";
+import { normaliseWikilinkTarget, parseArtifactRef } from "./wikilink.ts";
 
 // ----- Public types ---------------------------------------------------------
 
@@ -79,6 +85,12 @@ export interface RunDoctorOptions {
    * not the contents of the report.
    */
   readonly strict?: boolean;
+  /**
+   * Wall clock used by age-based lints (`low-evidence-confirmed`,
+   * `pinned-without-recent-evidence`). Defaults to `new Date()`.
+   * Tests pin this for determinism.
+   */
+  readonly now?: Date;
 }
 
 export interface RunDoctorResult {
@@ -92,8 +104,6 @@ export function runDoctor(
   vault: string,
   opts: RunDoctorOptions = {},
 ): RunDoctorResult {
-  void opts; // `strict` is a CLI exit-code concern, not a content one.
-
   const issues: DoctorIssue[] = [];
 
   const dirs = brainDirs(vault);
@@ -131,6 +141,49 @@ export function runDoctor(
 
   // 7. Log header parsing — surface warnings from `parseLogDay`.
   checkLogs(vault, issues);
+
+  // 8. Broken-backlinks lint — any preference / retired / log entry
+  //    that wikilinks to a Brain artifact id (`pref-...`, `ret-...`,
+  //    `sig-...`) whose file no longer exists. Surfaces at warning
+  //    severity: a dangling reference is a real data-hygiene problem
+  //    but doesn't block the dream loop, so the digest / cron want
+  //    to see it without failing the run.
+  checkBrokenBacklinks(vault, issues, knownBasenames);
+
+  // 9. Hygiene lints — duplicate prefs, low-evidence confirmed, pinned
+  //    without recent evidence, malformed apply-evidence ranges,
+  //    orphan apply-evidence artifacts. Each is non-blocking (warning
+  //    severity) and config/clock dependent. We swallow per-lint
+  //    failures so one broken scan doesn't mask the others.
+  const now = opts.now ?? new Date();
+  let cfg;
+  try {
+    cfg = loadBrainConfigDetailed(vault).config;
+  } catch {
+    cfg = undefined;
+  }
+  // Build snapshots once and feed every new lint that needs them.
+  // Each `try` boundary is per-lint so one broken read doesn't mask
+  // others, but we don't re-parse the same files five times anymore.
+  const prefRecords = readAllPreferenceRecords(vault);
+  const logRecords = readAllLogRecords(vault);
+  if (cfg) {
+    try {
+      checkDuplicatePreferences(prefRecords, issues);
+    } catch { /* doctor never throws */ }
+    try {
+      checkLowEvidenceConfirmed(prefRecords, issues, cfg, now);
+    } catch { /* doctor never throws */ }
+    try {
+      checkPinnedWithoutRecentEvidence(prefRecords, issues, cfg, now);
+    } catch { /* doctor never throws */ }
+  }
+  try {
+    checkMalformedEvidenceRange(logRecords, issues);
+  } catch { /* doctor never throws */ }
+  try {
+    checkOrphanEvidence(vault, logRecords, issues);
+  } catch { /* doctor never throws */ }
 
   // Partition by severity. Stable sort preserves discovery order which
   // is convenient for tests asserting on `path`+`code`.
@@ -491,6 +544,313 @@ function checkWikilinks(
  * inside `Brain/`. The set is keyed by basename (without `.md`) so
  * Obsidian's basename match works.
  */
+function checkBrokenBacklinks(
+  vault: string,
+  issues: DoctorIssue[],
+  knownBasenames: ReadonlySet<string>,
+): void {
+  // Only attempt the check when there's something to scan — an empty
+  // Brain layer naturally has no backlinks, and `buildBacklinkIndex`
+  // would already return an empty map, but we save the parse pass.
+  if (knownBasenames.size === 0) return;
+  const index = buildBacklinkIndex(vault);
+  for (const [target, refs] of index) {
+    // We only flag references whose target *should* live in this
+    // Brain (i.e. an artifact id we manage). Wikilinks pointing
+    // outside the Brain layer are user prose and not our concern.
+    if (!/^(pref|ret|sig)-/.test(target)) continue;
+    if (knownBasenames.has(target)) continue;
+    const sources = Array.from(new Set(refs.map((r) => r.source))).sort();
+    issues.push({
+      severity: "warning",
+      code: "broken-backlinks",
+      message:
+        `[[${target}]] is referenced by ${sources.length} source(s) but no file with that ` +
+        `basename exists under Brain/: ${sources.join(", ")}`,
+    });
+  }
+}
+
+// ----- Hygiene lints (§11) -------------------------------------------------
+
+const JACCARD_DUPLICATE_THRESHOLD = 0.7;
+
+interface PreferenceRecord {
+  readonly path: string;
+  readonly pref: import("./types.ts").BrainPreference;
+}
+
+interface LogRecord {
+  readonly date: string;
+  readonly entries: ReadonlyArray<import("./log.ts").BrainLogEntry>;
+}
+
+/**
+ * Build a single pre-parsed snapshot of `Brain/preferences/` so the
+ * three pref-walking lints don't each re-parse the directory.
+ * Files that fail to parse are silently omitted — schema errors are
+ * already reported by {@link checkPreferences}.
+ */
+function readAllPreferenceRecords(vault: string): ReadonlyArray<PreferenceRecord> {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.preferences)) return [];
+  const out: PreferenceRecord[] = [];
+  for (const name of readdirSync(dirs.preferences)) {
+    if (!name.endsWith(".md") || !name.startsWith("pref-")) continue;
+    const path = join(dirs.preferences, name);
+    try {
+      out.push({ path, pref: parsePreference(path) });
+    } catch {
+      // schema error — reported by checkPreferences
+    }
+  }
+  return out;
+}
+
+/**
+ * Build a single pre-parsed snapshot of `Brain/log/` so the two
+ * log-walking lints don't each re-parse the directory.
+ */
+function readAllLogRecords(vault: string): ReadonlyArray<LogRecord> {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.log)) return [];
+  const out: LogRecord[] = [];
+  for (const name of readdirSync(dirs.log)) {
+    if (!name.endsWith(".md")) continue;
+    const date = name.slice(0, -".md".length);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    try {
+      out.push({ date, entries: parseLogDay(vault, date).entries });
+    } catch {
+      // parse error — surfaced separately by checkLogs
+    }
+  }
+  return out;
+}
+
+const TOKEN_STOPWORDS: ReadonlySet<string> = new Set();
+
+/**
+ * `duplicate-preferences`: pairwise jaccard similarity of `principle`
+ * tokens within each `(topic, scope)` bucket of confirmed/quarantine
+ * prefs. Pairs with similarity ≥ `JACCARD_DUPLICATE_THRESHOLD` are
+ * flagged. Unconfirmed and retired prefs are excluded — they're
+ * meant to be replaced or already are.
+ */
+function checkDuplicatePreferences(
+  records: ReadonlyArray<PreferenceRecord>,
+  issues: DoctorIssue[],
+): void {
+  interface PrefEntry {
+    readonly id: string;
+    readonly topic: string;
+    readonly scope: string | undefined;
+    readonly tokens: ReadonlySet<string>;
+  }
+  const entries: PrefEntry[] = [];
+  for (const { pref } of records) {
+    if (
+      pref.status !== BRAIN_PREFERENCE_STATUS.confirmed &&
+      pref.status !== BRAIN_PREFERENCE_STATUS.quarantine
+    ) continue;
+    entries.push({
+      id: pref.id,
+      topic: pref.topic,
+      scope: pref.scope,
+      tokens: tokenise(pref.principle),
+    });
+  }
+  // Group by (topic, scope). Same scope-undefined falls in its own bucket.
+  const buckets = new Map<string, PrefEntry[]>();
+  for (const e of entries) {
+    const key = `${e.topic}\x00${e.scope ?? ""}`;
+    const arr = buckets.get(key) ?? [];
+    arr.push(e);
+    buckets.set(key, arr);
+  }
+  for (const [, bucket] of buckets) {
+    if (bucket.length < 2) continue;
+    for (let i = 0; i < bucket.length; i++) {
+      for (let j = i + 1; j < bucket.length; j++) {
+        const a = bucket[i]!;
+        const b = bucket[j]!;
+        const sim = jaccard(a.tokens, b.tokens);
+        if (sim >= JACCARD_DUPLICATE_THRESHOLD) {
+          issues.push({
+            severity: "warning",
+            code: "duplicate-preferences",
+            message:
+              `[[${a.id}]] and [[${b.id}]] in topic '${a.topic}'` +
+              `${a.scope ? ` (scope: ${a.scope})` : ""}` +
+              ` look like duplicates (jaccard ${sim.toFixed(2)} of principle tokens).` +
+              " Consider merging.",
+          });
+        }
+      }
+    }
+  }
+}
+
+/**
+ * `low-evidence-confirmed`: a confirmed pref whose `applied_count` is
+ * still at or below `low_max_applied` long after its trial window
+ * (`unconfirmed_window_days`). Catches prefs that promoted on the
+ * minimum evidence but never saw real use — candidates for review.
+ */
+function checkLowEvidenceConfirmed(
+  records: ReadonlyArray<PreferenceRecord>,
+  issues: DoctorIssue[],
+  cfg: BrainConfig,
+  now: Date,
+): void {
+  const cutoffMs = now.getTime() - cfg.dream.unconfirmed_window_days * 24 * 3600 * 1000;
+  for (const { pref } of records) {
+    if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
+    if (pref.applied_count > cfg.confidence.low_max_applied) continue;
+    if (!pref.confirmed_at) continue;
+    const confirmedMs = Date.parse(pref.confirmed_at);
+    if (!Number.isFinite(confirmedMs)) continue;
+    if (confirmedMs >= cutoffMs) continue;
+    issues.push({
+      severity: "warning",
+      code: "low-evidence-confirmed",
+      message:
+        `[[${pref.id}]] is confirmed but applied_count=${pref.applied_count} ≤ ` +
+        `low_max_applied=${cfg.confidence.low_max_applied} after ${cfg.dream.unconfirmed_window_days}+ days.` +
+        " The rule hasn't seen real use — review or retire.",
+    });
+  }
+}
+
+/**
+ * `pinned-without-recent-evidence`: a pinned pref whose
+ * `last_evidence_at` is null or older than `stale_evidence_days`. The
+ * pin protects the rule from automatic retire, but the data shows it
+ * isn't actively backed — alert the user.
+ */
+function checkPinnedWithoutRecentEvidence(
+  records: ReadonlyArray<PreferenceRecord>,
+  issues: DoctorIssue[],
+  cfg: BrainConfig,
+  now: Date,
+): void {
+  const cutoffMs = now.getTime() - cfg.retire.stale_evidence_days * 24 * 3600 * 1000;
+  for (const { pref } of records) {
+    if (!pref.pinned) continue;
+    if (!pref.last_evidence_at) {
+      issues.push({
+        severity: "warning",
+        code: "pinned-without-recent-evidence",
+        message:
+          `[[${pref.id}]] is pinned but has never received apply-evidence.` +
+          " Confirm the pin is intentional.",
+      });
+      continue;
+    }
+    const lastMs = Date.parse(pref.last_evidence_at);
+    if (!Number.isFinite(lastMs)) continue;
+    if (lastMs >= cutoffMs) continue;
+    issues.push({
+      severity: "warning",
+      code: "pinned-without-recent-evidence",
+      message:
+        `[[${pref.id}]] is pinned but last_evidence_at=${pref.last_evidence_at} is older than ` +
+        `stale_evidence_days=${cfg.retire.stale_evidence_days}. Pin may be outdated.`,
+    });
+  }
+}
+
+/**
+ * `malformed-evidence-range`: walks every `apply-evidence` event,
+ * runs the artifact wikilink through {@link parseArtifactRef}, and
+ * flags any malformed range suffix (`:abc-def`, `:120-100`, etc.).
+ * The event itself remains valid — only the range is malformed.
+ */
+function checkMalformedEvidenceRange(
+  records: ReadonlyArray<LogRecord>,
+  issues: DoctorIssue[],
+): void {
+  for (const { entries } of records) {
+    for (const e of entries) {
+      if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
+      const artifact = e.body["artifact"];
+      if (typeof artifact !== "string") continue;
+      const parsed = parseArtifactRef(artifact);
+      if (parsed.malformedRange) {
+        issues.push({
+          severity: "warning",
+          code: "malformed-evidence-range",
+          message:
+            `apply-evidence at ${e.timestamp} references artifact ${parsed.raw}` +
+            ` with malformed range '${parsed.rangeText}'.` +
+            " Use `[[file:N-N]]` (inclusive, 1-based) or `[[file:N]]`.",
+        });
+      }
+    }
+  }
+}
+
+/**
+ * `orphan-evidence`: walks every `apply-evidence` event and verifies
+ * the artifact wikilink resolves to some file in the vault. Obsidian
+ * wikilinks resolve by basename; we use the cheap basename-only
+ * walker from `vault.ts` (no frontmatter parse).
+ *
+ * This is the only doctor lint that walks the entire vault (not just
+ * `Brain/`). It's an on-demand check; doctor isn't called per-turn.
+ */
+function checkOrphanEvidence(
+  vault: string,
+  records: ReadonlyArray<LogRecord>,
+  issues: DoctorIssue[],
+): void {
+  let basenames: ReadonlySet<string>;
+  try {
+    basenames = listVaultBasenames(vault);
+  } catch {
+    return;
+  }
+  for (const { entries } of records) {
+    for (const e of entries) {
+      if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
+      const artifact = e.body["artifact"];
+      if (typeof artifact !== "string") continue;
+      const target = parseArtifactRef(artifact).target;
+      if (!target) continue;
+      if (basenames.has(target)) continue;
+      issues.push({
+        severity: "warning",
+        code: "orphan-evidence",
+        message:
+          `apply-evidence at ${e.timestamp} references artifact [[${target}]]` +
+          " but no file with that basename exists in the vault.",
+      });
+    }
+  }
+}
+
+function tokenise(text: string): ReadonlySet<string> {
+  // Lowercase + split on whitespace + punctuation; no language-
+  // specific stopwords (Brain principles in this project are
+  // routinely multilingual and an English-only list would either
+  // under-filter or skew the similarity score on non-English text).
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}_-]+/u)
+      .filter((t) => t.length > 1 && !TOKEN_STOPWORDS.has(t)),
+  );
+}
+
+function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let intersection = 0;
+  for (const t of a) if (b.has(t)) intersection++;
+  const union = a.size + b.size - intersection;
+  if (union === 0) return 0;
+  return intersection / union;
+}
+
 function collectAllBasenames(vault: string): ReadonlySet<string> {
   const out = new Set<string>();
   const dirs = brainDirs(vault);

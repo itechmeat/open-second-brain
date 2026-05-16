@@ -148,13 +148,14 @@ describe("tool listing", () => {
         "second_brain_status",
         "second_brain_query",
         "vault_health",
-        // Brain (v0.9.0).
+        // Brain (v0.9.0; brain_backlinks added in v0.9.1).
         "brain_feedback",
         "brain_dream",
         "brain_apply_evidence",
         "brain_digest",
         "brain_query",
         "brain_doctor",
+        "brain_backlinks",
         // Pay Memory (unchanged).
         "payment_memory_init",
         "payment_receipt_append",
@@ -189,6 +190,23 @@ describe("tool calls", () => {
     expect(s.vault_exists).toBe(true);
     expect(s.config.api_key).toBe("[REDACTED]");
     expect(s.config_keys).toContain("vault_path");
+  });
+
+  test("second_brain_status includes a `brain` section with counts and activity", async () => {
+    const vault = join(tmp, "vault");
+    mkdirSync(vault);
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, "vault_path: /tmp/vault\n");
+    // Brain layer absent → `brain.present` is `false` with zero counts.
+    const server = new MCPServer({ vault, configPath: config });
+    await initialize(server);
+    const r = (await callTool(server, "second_brain_status"))! as any;
+    const s = r.result.structuredContent;
+    expect(s.brain).toBeDefined();
+    expect(s.brain.present).toBe(false);
+    expect(s.brain.counts.preferences).toBe(0);
+    expect(s.brain.last_dream_at).toBeNull();
+    expect(s.brain.sanity.signals_awaiting_dream).toBe(0);
   });
 
   test("second_brain_query filters and limits", async () => {
@@ -268,7 +286,7 @@ describe("stdio loop", () => {
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
     // v0.9.0: 3 core (status/query/health) + 6 Brain + 8 Pay Memory = 17.
-    expect(list.result.tools.length).toBe(17);
+    expect(list.result.tools.length).toBe(18);
   });
 
   test("returns parse error for invalid JSON", async () => {
