@@ -13,6 +13,36 @@ and **not** an LLM-driven knowledge store — the `dream` consolidation
 pass is pure deterministic counters. The plugin never writes hidden
 state outside the configured vault and config directory.
 
+## How it works
+
+Three loops cooperate over plain Markdown:
+
+- **Capture.** Agents call `brain_feedback` to drop taste signals into
+  `Brain/inbox/`.
+- **Accretion.** A deterministic `dream` pass clusters repeat signals
+  into rules — counters and atomic file moves, no LLM.
+- **Application.** Agents log whether each rule was `applied` /
+  `violated` / `outdated`. `Brain/active.md` is auto-regenerated and
+  injected at session start; `brain_search` exposes full-text search
+  across the whole vault.
+
+```mermaid
+flowchart LR
+    Agent[Agent / human]
+    Agent -- brain_feedback --> Inbox[(Brain/inbox/)]
+    Inbox -. dream .-> Pref[(Brain/preferences/)]
+    Agent -- brain_apply_evidence --> Log[(Brain/log/)]
+    Log -. dream .-> Pref
+    Pref -. regenerate .-> Active[Brain/active.md]
+    Active -- SessionStart hook --> Agent
+    Vault[Vault Markdown] -- o2b search index --> FTS[(SQLite + FTS5<br/>brain_search)]
+    FTS --> Agent
+```
+
+Mechanics, dream pipeline, state diagram, snapshot model, hygiene
+lints, MCP resources, the v0.10.0 search layer, and the full set of
+safety invariants are in [`docs/how-it-works.md`](docs/how-it-works.md).
+
 ## Supported runtimes
 
 | Runtime         | Integration                                              | Notes                                                                                            |

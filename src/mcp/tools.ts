@@ -29,6 +29,7 @@ import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { appendEvent, validateEventTime } from "../core/event-log.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
+import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import {
   checkPolicy,
   consumePendingRequest,
@@ -170,6 +171,8 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
   // Safe to call on a vault that has no Brain layer yet — returns
   // `present: false` with zero counts.
   const brain = vaultExists ? computeBrainStatus(ctx.vault) : null;
+  const searchDisabled = discovery.data["search_enabled"] === "false";
+  const search = vaultExists && !searchDisabled ? await buildSearchStatusBlock(ctx) : null;
   return {
     config_path: String(discovery.path),
     config_exists: discovery.exists,
@@ -178,6 +181,7 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     vault_path: ctx.vault,
     vault_exists: vaultExists,
     ...(brain ? { brain } : {}),
+    ...(search ? { search } : {}),
   };
 }
 
@@ -636,6 +640,7 @@ export function buildToolTable(): ToolDefinition[] {
     // use (`o2b append-event`); only the entries in the exported tool
     // array are removed — see §11.1 of the v0.9.0 design doc.
     ...BRAIN_TOOLS,
+    ...SEARCH_TOOLS,
     {
       name: "vault_health",
       description: "Run vault, config, and plugin manifest health checks.",

@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-05-16
+
+Full-text search over the vault as a deterministic, filesystem-first
+layer. Index lives at `<vault>/.open-second-brain/brain.sqlite`
+(SQLite + FTS5, schema versioned). Optional semantic layer via
+`sqlite-vec` plus any OpenAI-compatible `/v1/embeddings` provider
+(OpenRouter, OpenAI, Together, Google's OpenAI-compat endpoint,
+local Ollama, Hermes proxy). Closes design plan
+`docs/plans/2026-05-16-brain-search-design.md`.
+
+### Added
+
+- **Core module `src/core/search/`** with isolated walker, chunker,
+  store (the only SQL boundary), FTS query, links, ranker, indexer,
+  search, and embedding providers (`null-provider`, `openai-compat`).
+  Public surface: `resolveSearchConfig`, `indexVault`, `reindexVault`,
+  `indexStatus`, `indexCheck`, `search`, plus typed `SearchError`
+  codes.
+- **CLI** namespace `o2b search` with verbs `query` (default),
+  `index`, `reindex`, `status`, `check`. Human and `--json` output;
+  `--auto-refresh` for read-time incremental indexing.
+- **MCP tool** `brain_search` (read-only, agent-facing). Diagnostic
+  score components (`keywordScore`, `semanticScore`, `linkBoost`,
+  `recencyBoost`) are intentionally absent from the MCP shape; they
+  live in CLI `--verbose` only. Content per chunk is truncated to
+  600 characters. Index-management verbs are NOT exposed over MCP
+  (operator business, never agent business — design §3 principle 5).
+- **`second_brain_status`** gains a `search.*` block: index path,
+  schema version, document/chunk/embedding counts, embedding model
+  and dimension, sqlite-vec status, key presence (redacted),
+  `last_indexed_at`, `last_full_index_at`. Reports
+  `{ exists: false, hint }` when the index has not been built yet.
+- **Ranking** combines min-max-normalised BM25, cosine similarity
+  on unit-normalised vectors, in-result wikilink boost (capped at
+  0.03), shared-tag boost (capped at 0.02), and recency steps
+  (≤7d → 0.05, ≤30d → 0.025, ≤90d → 0.01). Tie-break on equal
+  final score: keyword desc, mtime desc, chunk id asc.
+- **Atomic reindex** via `brain.sqlite.new` + same-directory rename
+  swap with `brain.sqlite.bak` retention. Auto-restore from `.bak`
+  on open if the main file is missing.
+- **Embedding-model fingerprint** stored in `index_state`. Changing
+  `embedding_model` or `embedding_dimension` drops `embeddings`,
+  `chunk_vec`, and `chunk_vec_map` on next open, logs one line, and
+  preserves `chunks` + `chunk_fts`. The next
+  `o2b search index --embeddings` repopulates vectors.
+- **Concurrency guard** via `proper-lockfile` on the index path:
+  three attempts, 1s backoff, then `INDEX_LOCKED`. Readers do not
+  take the lock; WAL handles concurrent reads safely.
+- **Semantic-unavailable policy** (design §7): implicit semantic
+  (config default) warns and falls back to keyword-only; explicit
+  `--semantic` / `semantic: true` throws a typed `SearchError` so
+  the failure cannot hide. Data-state cases (no embeddings yet)
+  warn and skip even when explicit — running
+  `o2b search index --embeddings` is the right answer there, not a
+  panic.
+
+### Changed
+
+- **`sqlite-vec`** added to `optionalDependencies`. The runtime
+  detects whether the loadable extension is present on disk and
+  records availability in `index_state.vec_extension_available`;
+  no failure if the platform package is missing.
+
+### Notes
+
+- v0.10.0 ships schema version 1 only. Future migrations follow the
+  same `MIGRATIONS[]` pattern in `src/core/search/schema.ts`.
+- `o2b index` (the Markdown index generator at `AI Wiki/index.md`)
+  is unchanged. The new system is `o2b search index`.
+
 ## [0.9.1] - 2026-05-15
 
 Active-preferences digest, MCP Resources, and a visibility expansion

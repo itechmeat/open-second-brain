@@ -23,24 +23,28 @@ no surprise, no hallucinated memory.
 ## Vault layout
 
 The vault holds three top-level agent-facing directories. Brain owns
-its own.
+its own, plus a sibling derived-index directory.
 
 ```text
 <vault>/
 ├── Brain/                          # observing memory (agent-writable)
 │   ├── _brain.yaml                 # schema, thresholds, retention
 │   ├── _BRAIN.md                   # operating manual for agents
+│   ├── active.md                   # derived: confirmed + quarantine + recently retired
 │   ├── inbox/                      # raw taste signals
 │   │   ├── sig-<date>-<slug>.md
-│   │   └── processed/             # signals already folded into rules
+│   │   └── processed/              # signals already folded into rules
 │   ├── preferences/                # active rules
-│   │   └── pref-<slug>.md          # status: unconfirmed | confirmed
+│   │   └── pref-<slug>.md          # status: unconfirmed | confirmed | quarantine
 │   ├── retired/                    # archived rules
-│   │   └── ret-<slug>.md           # retired_reason: stale-no-evidence | expired-unconfirmed | rebutted | user-rejected
+│   │   └── ret-<slug>.md           # retired_reason: stale-no-evidence | expired-unconfirmed | rebutted | user-rejected | quarantine-violated | superseded-by-context
 │   ├── log/                        # daily event log
 │   │   └── YYYY-MM-DD.md           # append-only, typed events
 │   └── .snapshots/                 # pre-dream snapshots
 │       └── dream-<run-id>.tar.zst
+│
+├── .open-second-brain/             # derived search index (rebuildable)
+│   └── brain.sqlite                # SQLite + FTS5 + optional sqlite-vec
 │
 ├── AI Wiki/                        # curated knowledge surface
 │   ├── identity/                   # user.md, agents.md
@@ -51,6 +55,11 @@ its own.
 └── Daily/                          # chronological event log + human narrative
     └── YYYY.MM.DD.md
 ```
+
+`Brain/active.md` and `.open-second-brain/brain.sqlite` are **derived** —
+both can be deleted and rebuilt at any time (`o2b brain dream` and
+`o2b search reindex` respectively). They are excluded from the agent's
+write contract.
 
 ```mermaid
 flowchart LR
@@ -75,7 +84,7 @@ there through the `payment_*` tools).
 
 ## A preference's lifecycle
 
-A preference moves between four states from first signal to retirement:
+A preference moves between five states from first signal to retirement:
 
 ```mermaid
 stateDiagram-v2
@@ -83,27 +92,48 @@ stateDiagram-v2
     Inbox --> Unconfirmed: dream (≥candidate_threshold<br/>same-sign signals on topic)
     Unconfirmed --> Confirmed: brain_apply_evidence applied<br/>(first such event)
     Unconfirmed --> Retired_Expired: dream (now > unconfirmed_until,<br/>no applied evidence)
+    Confirmed --> Quarantine: dream (violated_count ≥ applied_count<br/>AND applied_count > low_max_applied)
+    Quarantine --> Confirmed: dream (applied_count > violated_count)
+    Quarantine --> Retired_Quarantine: dream (one further violated)
     Confirmed --> Retired_Stale: dream (last_evidence_at<br/>older than stale_evidence_days)
     Confirmed --> Retired_Rebutted: dream (≥candidate_threshold<br/>opposite-sign signals collected)
+    Confirmed --> Retired_Superseded: dream (one apply-evidence with<br/>result: outdated)
+    Quarantine --> Retired_Superseded: dream (one apply-evidence with<br/>result: outdated)
     Confirmed --> Retired_UserRejected: o2b brain reject
+    Quarantine --> Retired_UserRejected: o2b brain reject
     Unconfirmed --> Retired_UserRejected: o2b brain reject
     Retired_Expired --> [*]
     Retired_Stale --> [*]
     Retired_Rebutted --> [*]
+    Retired_Quarantine --> [*]
+    Retired_Superseded --> [*]
     Retired_UserRejected --> [*]
 
     note right of Confirmed
         Pinned preferences (pinned: true)
-        skip all three automatic retire
-        transitions. Only o2b brain reject
-        can retire them.
+        skip the three "natural decay"
+        retire transitions (stale,
+        expired, rebutted) and the
+        quarantine downgrade — dream
+        emits retain-pinned instead.
+        A context-driven outdated still
+        retires a pinned pref; only
+        o2b brain reject and outdated
+        evidence can move it.
     end note
 ```
 
-`Inbox` is not really a state of the preference — it's the staging
+`Inbox` is not really a state of the preference — it is the staging
 area for the signals that will eventually create one. The first real
 state is `Unconfirmed`: the rule exists but has not yet been applied
 in real work.
+
+`Quarantine` (added in v0.9.1) is a probation state for confirmed rules
+whose recent evidence has turned dominantly negative without yet
+crossing the rebuttal threshold. A quarantined rule is still active —
+the agent reads it — but one further `violated` retires it with
+`quarantine-violated`, and recovery happens automatically when `applied`
+events overtake the violated count.
 
 ## End-to-end signal → rule flow
 
@@ -168,9 +198,9 @@ A single dream invocation is a deterministic pipeline:
 flowchart TD
     Start([o2b brain dream]) --> Load[Load _brain.yaml]
     Load --> Scan[Scan inbox/, preferences/, retired/, log/]
-    Scan --> Plan[Plan transitions:<br/>new unconfirmed, promotions,<br/>retires, signal moves]
+    Scan --> Plan[Plan transitions:<br/>new unconfirmed, promotions,<br/>quarantine in/out, retires, signal moves]
     Plan --> Changed{Any changes planned?}
-    Changed -- no --> NoOp([return changed: false<br/>no snapshot, no log])
+    Changed -- no --> NoOp([regenerate active.md<br/>return changed: false])
     Changed -- yes --> Snap["createSnapshot to<br/>.snapshots/dream-RUNID.tar.zst"]
     Snap --> SnapErr{Snapshot OK?}
     SnapErr -- fail --> Abort([throw; no state changed])
@@ -184,23 +214,34 @@ flowchart TD
         A3 -- yes --> A4[Promote to confirmed,<br/>stamp confirmed_at]
         A3 -- no --> A5
         A4 --> A5[Recompute confidence]
-        A5 --> A6{Pinned?}
-        A6 -- yes --> A7[Skip auto-retire,<br/>log retain-pinned]
-        A6 -- no --> A8{Retire conditions?}
-        A8 -- stale --> A9[Move to retired/<br/>reason: stale-no-evidence]
-        A8 -- expired --> A10[Move to retired/<br/>reason: expired-unconfirmed]
-        A8 -- rebutted --> A11[Move to retired/<br/>reason: rebutted]
-        A8 -- none --> A12[Leave in preferences/]
-        A9 --> A13
-        A10 --> A13
-        A11 --> A13
-        A12 --> A13
-        A7 --> A13
-        A13[Move consumed signals to processed/]
+        A5 --> A6{outdated evidence?}
+        A6 -- yes --> A6r[Move to retired/<br/>reason: superseded-by-context]
+        A6 -- no --> A7{Pinned?}
+        A7 -- yes --> A7l[Skip auto-retire + quarantine,<br/>log retain-pinned]
+        A7 -- no --> A8{Quarantine conditions?}
+        A8 -- enter --> A8q[status: quarantine]
+        A8 -- exit --> A8c[status: confirmed]
+        A8 -- already-quarantine + violated --> A8r[Move to retired/<br/>reason: quarantine-violated]
+        A8 -- none --> A9{Retire conditions?}
+        A9 -- stale --> A10[Move to retired/<br/>reason: stale-no-evidence]
+        A9 -- expired --> A11[Move to retired/<br/>reason: expired-unconfirmed]
+        A9 -- rebutted --> A12[Move to retired/<br/>reason: rebutted]
+        A9 -- none --> A13[Leave in preferences/]
+        A6r --> A14
+        A7l --> A14
+        A8q --> A14
+        A8c --> A14
+        A8r --> A14
+        A10 --> A14
+        A11 --> A14
+        A12 --> A14
+        A13 --> A14
+        A14[Move consumed signals to processed/]
     end
 
     Apply --> LogEvent["Append dream event to log/today.md"]
-    LogEvent --> Prune[pruneSnapshots to retention_count]
+    LogEvent --> ActMd[regenerate Brain/active.md]
+    ActMd --> Prune[pruneSnapshots to retention_count]
     Prune --> Done([return changed: true with summary])
 ```
 
@@ -244,6 +285,42 @@ Defaults from `_brain.yaml`:
 
 All four are tunable per vault in `Brain/_brain.yaml`.
 
+## Active preferences injection
+
+A confirmed rule is useless if the agent does not see it during work.
+v0.9.1 closes that gap with three cooperating surfaces, all derived
+from the same source of truth (`Brain/preferences/`):
+
+```mermaid
+flowchart LR
+    Dream[dream pass] -- regenerate --> Active[Brain/active.md]
+    Pin[o2b brain pin / unpin] -- regenerate --> Active
+    Active -- SessionStart hook --> ClaudeStart["Claude Code / Codex<br/>session start"]
+    Active -- PostCompact hook --> ClaudeCompact["Claude Code / Codex<br/>after /compact"]
+    Active -- "osb://preferences/active" --> MCPHost["MCP host (Hermes, others)"]
+```
+
+- **`Brain/active.md`** is a derived Markdown digest: confirmed
+  preferences (id, scope, confidence, principle), quarantined
+  preferences with their applied / violated counters, and the three
+  most recently retired entries. The writer is idempotent — if the
+  rendered body matches the file on disk, no I/O happens.
+- **SessionStart hook** (`startup | resume | clear`) and
+  **PostCompact hook** (`manual | auto`) inject the body as
+  `additionalContext` so the agent sees current rules at the start of
+  every session and again after `/compact` (otherwise the
+  hook-injected context is dropped from long sessions). Both fail
+  closed — any error path exits 0 with no output so the runtime
+  proceeds unaffected.
+- **MCP Resources** expose the same content for hosts that prefer
+  pull access (`osb://preferences/active` and friends in the table
+  above). The MCP `initialize` reply advertises the `resources`
+  capability so clients know to enumerate them.
+
+`active.md` is **not** edited by hand — `o2b brain dream` and pin /
+unpin re-derive it from `preferences/` and `retired/`. Deleting the
+file is harmless: the next dream regenerates it.
+
 ## CLI / MCP surface
 
 The same operations are reachable through two channels. Read columns
@@ -252,20 +329,41 @@ are mirrored in MCP; destructive operations are CLI-only by design.
 | Operation                | CLI verb                   | MCP tool              | Side effect            |
 |--------------------------|----------------------------|-----------------------|------------------------|
 | Bootstrap layer          | `o2b brain init`           | —                     | creates `Brain/` skeleton |
-| Record taste signal      | `o2b brain feedback`       | `brain_feedback`      | writes signal + log event |
-| Consolidation pass       | `o2b brain dream`          | `brain_dream`         | mutates preferences/retired, atomic snapshot |
-| Record application       | `o2b brain apply-evidence` | `brain_apply_evidence`| appends log event      |
-| Render summary           | `o2b brain digest`         | `brain_digest`        | read-only              |
+| Record taste signal      | `o2b brain feedback`       | `brain_feedback`      | writes signal + log event (sanitised) |
+| Consolidation pass       | `o2b brain dream`          | `brain_dream`         | mutates preferences/retired, atomic snapshot, regenerates `Brain/active.md` |
+| Record application       | `o2b brain apply-evidence` | `brain_apply_evidence`| appends log event; `result ∈ {applied, violated, outdated}`; artifact supports `[[file:120-145]]` ranges |
+| Render summary           | `o2b brain digest`         | `brain_digest`        | read-only; includes `top_applied` and `top_referenced` sections |
 | Inspect state            | `o2b brain query`          | `brain_query`         | read-only              |
-| Validate invariants      | `o2b brain doctor`         | `brain_doctor`        | read-only              |
+| Computed backlinks       | `o2b brain backlinks <id>` | `brain_backlinks`     | read-only; inverted reference map across `preferences/`, `retired/`, `log/` |
+| Validate invariants      | `o2b brain doctor`         | `brain_doctor`        | read-only; six lint rules |
+| Full-text search         | `o2b search "<query>"`     | `brain_search`        | read-only; FTS5 + optional semantic |
+| Manage search index      | `o2b search index \| reindex \| status \| check` | — (CLI-only) | builds / inspects `<vault>/.open-second-brain/brain.sqlite` |
+| Operational snapshot     | `o2b status`               | `second_brain_status` | read-only; `brain.*` + `search.*` blocks |
 | Retire manually          | `o2b brain reject`         | — (CLI-only)          | moves pref → retired/  |
-| Toggle pin               | `o2b brain pin / unpin`    | — (CLI-only)          | flips `pinned` field   |
+| Toggle pin               | `o2b brain pin / unpin`    | — (CLI-only)          | flips `pinned` field; regenerates `Brain/active.md` |
 | Restore snapshot         | `o2b brain rollback`       | — (CLI-only)          | overwrites Brain/ from snapshot |
 
 Operations that change the **protected set** (`pin`, `unpin`,
-`reject`, `rollback`) are kept off the MCP surface so an autonomous
-agent cannot quietly alter what is shielded from automatic retire or
-roll back state.
+`reject`, `rollback`) and the **index lifecycle** (`search index`,
+`reindex`, `check`) are kept off the MCP surface — protected-set
+moves so an autonomous agent cannot quietly alter what is shielded
+from automatic retire, and index management because it is operator
+business, never agent business.
+
+In addition to the tools above, MCP hosts can pull structured Brain
+content as **resources** (added in v0.9.1):
+
+| Resource URI                      | Body                                              |
+|-----------------------------------|---------------------------------------------------|
+| `osb://preferences/active`        | `Brain/active.md` (auto-regenerated on first read if missing) |
+| `osb://digest/latest`             | most recent `brain_digest` rendering              |
+| `osb://status`                    | Markdown form of the `second_brain_status.brain` block |
+| `osb://preference/{id}`           | one `pref-` / `ret-` file                         |
+| `osb://topic/{slug}`              | every signal + active/retired pref for a topic    |
+| `osb://log/{date}`                | one day's `Brain/log/YYYY-MM-DD.md`               |
+| `osb://backlinks/{id}`            | inverted reference map for `<id>`                 |
+
+Resources are pure read; mutating verbs stay on `tools/call`.
 
 ## Snapshots and rollback
 
@@ -288,6 +386,45 @@ flowchart TD
 A snapshot captures every file under `Brain/` **except** `.snapshots/`
 itself — otherwise rollback would erase any snapshots taken after
 this one. Retention defaults to ten newest archives.
+
+## Hygiene: sanitisation and lints
+
+Two cheap, deterministic layers keep the data clean.
+
+**Input sanitisation** (v0.9.1). Every Brain writer routes text fields
+through `src/core/redactor.ts` (promoted from Pay Memory) plus a
+`normaliseTextField` / `sanitiseTextField` pair:
+
+- C0 control characters are stripped (except `\t` and `\n`); `U+2028`
+  and `U+2029` collapse to `\n`; text is NFC-normalised.
+- Length caps per field: `principle` ≤ 512 (single-line), `scope` ≤
+  128, `raw` ≤ 4096, `source[]` items ≤ 512, `artifact` ≤ 512
+  (single-line), `note` ≤ 4096.
+- Secret-shaped substrings (`api_key=…`, `token: …`, `bearer …`,
+  `authorization: …`, `password=…`, `private_key=…`, etc.) are masked
+  with `***REDACTED***`. The `raw` field is the only verbatim-quote
+  surface and is intentionally **not** redacted — it carries the
+  original user phrasing.
+- Inputs that sanitise down to empty fall into the existing "missing
+  field" error branch, so the writer never persists a placeholder
+  signal.
+
+**Doctor lints** (`o2b brain doctor`, `brain_doctor` MCP). All six are
+pure functions over the on-disk Brain state — no LLM, no network:
+
+| Code | Triggers when |
+|---|---|
+| `broken-backlinks` | a `[[pref-…]]` / `[[ret-…]]` / `[[sig-…]]` reference exists in `preferences/`, `retired/`, `inbox/`, or `log/`, but the target file does not |
+| `duplicate-preferences` | pairwise Jaccard ≥ 0.7 on principle tokens within the same `(topic, scope)` bucket |
+| `low-evidence-confirmed` | `status: confirmed` with `applied_count ≤ low_max_applied` AND `confirmed_at` older than `unconfirmed_window_days` |
+| `pinned-without-recent-evidence` | `pinned: true` with no evidence or evidence older than `stale_evidence_days` |
+| `malformed-evidence-range` | `apply-evidence` `artifact` uses `[[file:…]]` range syntax but fails validation (`:abc-def`, `:120-100`, bare `:`) |
+| `orphan-evidence` | `apply-evidence` `artifact` wikilink does not resolve to any file in the vault |
+
+With `--strict`, warnings demote `ok` to `false` so CI can gate on
+hygiene. The lints are read-only — `brain_doctor --fix` is explicitly
+out of scope because auto-modifying state runs against the
+"explicit-driven" invariant.
 
 ```mermaid
 flowchart LR
@@ -334,6 +471,89 @@ graph LR
   skill bundle is loaded automatically.
 - **OpenClaw** runs tools natively in the plugin's Node.js process
   (no subprocess, by security-scanner requirement).
+
+## Full-text search
+
+v0.10.0 adds a deterministic search layer over the entire vault — not
+just `Brain/`. The index lives at `<vault>/.open-second-brain/brain.sqlite`
+(SQLite + FTS5) and is fully rebuildable from the Markdown files.
+Semantic search is optional and pluggable: `sqlite-vec` + any
+OpenAI-compatible `/v1/embeddings` endpoint when configured.
+
+```mermaid
+flowchart LR
+    subgraph Build [o2b search index]
+        direction LR
+        Walker[walker<br/>vault-relative paths] --> Chunker[chunker<br/>structural split + token packer]
+        Chunker --> Store[(SQLite store<br/>documents / chunks / links / embeddings)]
+        Chunker --> Links[extract wikilinks /<br/>markdown links / tags]
+        Links --> Store
+        Store --> FTS[(chunk_fts<br/>FTS5 BM25)]
+        Store -.optional.-> Vec[(chunk_vec<br/>sqlite-vec)]
+        Texts[chunk content] -. on --embeddings .-> Provider[OpenAI-compat<br/>embeddings provider]
+        Provider --> Vec
+    end
+
+    subgraph Query [search]
+        direction LR
+        Q["o2b search '<q>'<br/>brain_search"] --> KW[FTS5 keyword<br/>limit × 3 candidates]
+        Q -. semantic on .-> SemQ[provider.embed query]
+        SemQ --> SemS[vec_search<br/>limit × 5 candidates]
+        KW --> Ranker[ranker<br/>min-max BM25 + cosine<br/>+ link boost + recency boost]
+        SemS --> Ranker
+        Ranker --> Results[ranked results]
+    end
+```
+
+Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
+`embedding_*` config keys:
+
+- **Chunker.** Two passes: a structural split (headings, fenced code,
+  lists, tables, frontmatter), then a token-budget packer with
+  overlap. YAML frontmatter becomes synthetic `chunk_index: 0` so
+  `tags:` and other front-matter fields are searchable through FTS5
+  alongside the body.
+- **Store boundary.** `src/core/search/store.ts` is the single SQL
+  home; every other module talks to it through a typed surface. WAL
+  mode for concurrent reads, `proper-lockfile` on the index path for
+  writer exclusivity (three attempts, 1 s backoff, then
+  `INDEX_LOCKED`).
+- **Ranking.** `final_score = clamp01(keyword_weight·norm_BM25 +
+  semantic_weight·cosine + link_boost + recency_boost)`. BM25 is
+  min-max-normalised within the candidate set; cosine is
+  `1 - L2² / 2` on unit-normalised vectors; link boost rewards
+  candidates that other candidates reference via `[[wikilink]]` /
+  markdown link (capped at 0.03) or share a tag with (capped at
+  0.02); recency is a step function on `mtime`.
+- **Semantic policy.** Implicit semantic (config default) warns and
+  falls back to keyword-only when sqlite-vec is unavailable, the key
+  is missing, the provider is down, or no embeddings exist yet.
+  Explicit `--semantic` / `semantic: true` on infrastructure failure
+  throws a typed `SearchError` so a misconfigured run cannot hide.
+  The data-state case (zero embeddings) always warns and skips —
+  running `o2b search index --embeddings` is the right answer there.
+- **Atomic reindex.** `o2b search reindex` writes to
+  `brain.sqlite.new`, renames to `brain.sqlite`, and keeps the
+  previous file as `brain.sqlite.bak`. If the main file is missing on
+  open and a `.bak` exists, it is auto-restored with a stderr notice.
+- **Embedding model fingerprint.** Model + dimension are recorded in
+  the index. Changing either drops the `embeddings` and `chunk_vec`
+  tables on next open, logs one line, and preserves `chunks` and
+  `chunk_fts`; the next `o2b search index --embeddings` repopulates
+  vectors.
+
+The MCP `brain_search` tool returns at most 50 results with each
+chunk's `content` truncated to 600 characters; diagnostic score
+components (`keywordScore`, `semanticScore`, `linkBoost`,
+`recencyBoost`) are intentionally absent from the MCP shape — they
+live in the CLI's `--verbose` output only, to keep the agent context
+small. Index-management verbs (`index`, `reindex`, `check`) are
+CLI-only.
+
+Full design and migration notes:
+[`docs/plans/2026-05-16-brain-search-design.md`](plans/2026-05-16-brain-search-design.md)
+and the matching implementation plan
+[`docs/plans/2026-05-16-brain-search-impl.md`](plans/2026-05-16-brain-search-impl.md).
 
 ## Safety properties
 
@@ -433,9 +653,15 @@ re-renders it from the current template.
 
 - **`docs/architecture.md`** — layered system architecture beyond
   Brain (vault model, runtime adapters, configuration model).
-- **`docs/plans/2026-05-15-brain-observing-memory.md`** — the design
-  document, including the full file-format specs and test strategy.
+- **`docs/plans/2026-05-15-brain-observing-memory.md`** — the Brain
+  design document, including the full file-format specs and test
+  strategy.
 - **`docs/plans/2026-05-15-brain-roadmap.md`** — trigger-based roadmap
   of future capabilities (`BRAIN-FUT-NNN` entries).
+- **`docs/plans/2026-05-16-brain-search-design.md`** and
+  **`docs/plans/2026-05-16-brain-search-impl.md`** — design and
+  implementation plan for the v0.10.0 full-text search layer.
+- **`docs/mcp.md`** — protocol, schemas, lifecycle, and resource
+  surface of the MCP server.
 - **`Brain/_BRAIN.md`** (in any initialised vault) — the operating
   manual for agents working with that specific vault.

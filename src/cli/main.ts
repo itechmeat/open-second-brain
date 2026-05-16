@@ -44,6 +44,7 @@ import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { handleBrainSubcommand } from "./brain.ts";
+import { handleSearchSubcommand } from "./search.ts";
 import {
   installCli,
   renderInstallResult,
@@ -223,7 +224,57 @@ async function cmdInit(argv: string[]): Promise<number> {
     process.stdout.write(`timezone registered: ${timezone}\n`);
     process.stdout.write(`timezone persisted to: ${configPath}\n`);
   }
+  writeSearchInitBlock(configPath);
   return 0;
+}
+
+/**
+ * Print the post-init search-onboarding block (design §10).
+ *
+ * Always advertises `o2b search index`. When the user has already
+ * flipped `search_semantic_enabled` to true but no embedding key is
+ * resolvable, the detailed configuration template is appended. The
+ * block prints once, only during `o2b init` — no nagging on other
+ * CLI invocations (the dedicated diagnostic is `o2b search check`).
+ */
+function writeSearchInitBlock(configPath: string): void {
+  process.stdout.write("\nSearch:\n");
+  process.stdout.write("  next: o2b search index   # build the vault search index\n");
+
+  const data = discoverConfig(configPath).data;
+  const enabled =
+    data["search_semantic_enabled"] === "true" ||
+    process.env["OPEN_SECOND_BRAIN_SEARCH_SEMANTIC"] === "true";
+  const keyPresent = !!(
+    (data["embedding_api_key"] && data["embedding_api_key"] !== "") ||
+    process.env["OPEN_SECOND_BRAIN_EMBEDDING_KEY"]
+  );
+  if (!enabled || keyPresent) return;
+
+  process.stdout.write(
+    [
+      "",
+      "Semantic search is enabled but no embedding key is configured.",
+      "",
+      "Either set in the config file (printed above), or via env vars:",
+      "",
+      `  search_semantic_enabled: "true"`,
+      `  embedding_base_url:      "https://openrouter.ai/api/v1"`,
+      `  embedding_model:         "google/gemini-embedding-2-preview"`,
+      `  embedding_api_key:       "<your key>"`,
+      "",
+      "Env equivalents:",
+      "  OPEN_SECOND_BRAIN_SEARCH_SEMANTIC=true",
+      "  OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL=...",
+      "  OPEN_SECOND_BRAIN_EMBEDDING_MODEL=...",
+      "  OPEN_SECOND_BRAIN_EMBEDDING_KEY=...",
+      "",
+      "Then:",
+      "  o2b search check",
+      "  o2b search index --embeddings",
+      "",
+    ].join("\n"),
+  );
 }
 
 async function cmdDoctor(argv: string[]): Promise<number> {
@@ -1193,6 +1244,13 @@ Brain (observing memory):
   brain unpin               Clear the pinned flag
   brain rollback            Restore Brain/ from a snapshot (--list / <run_id>)
   brain doctor              Validate Brain invariants (--strict promotes warnings)
+
+Search:
+  search "<query>"          Search the vault index (default verb is 'query')
+  search index              Incrementally update the index from the vault
+  search reindex            Rebuild the index atomically (.new -> rename -> .bak)
+  search status             Print index summary (counts, model, vec extension)
+  search check              Pre-flight diagnostics (SQLite, FTS5, vec, provider)
 `;
 
 function sortedReplacer(_key: string, value: unknown): unknown {
@@ -1274,6 +1332,8 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         return await cmdPaymentDigest(rest);
       case "brain":
         return await handleBrainSubcommand(rest);
+      case "search":
+        return await handleSearchSubcommand(rest);
       default:
         process.stderr.write(`error: unknown command: ${command}\n`);
         process.stderr.write(HELP);

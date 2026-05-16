@@ -1,6 +1,6 @@
 {
   "name": "open-second-brain",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "type": "module",
   "private": false,
   "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw.",
@@ -47,5 +47,8 @@
   },
   "openclaw": {
     "extensions": ["./openclaw/index.js"]
+  },
+  "optionalDependencies": {
+    "sqlite-vec": "^0.1.9"
   }
 }
