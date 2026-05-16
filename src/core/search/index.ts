@@ -1,0 +1,293 @@
+/**
+ * Public surface for `src/core/search/*`: config resolution plus the
+ * index/search/status/check entry points used by CLI and MCP layers.
+ */
+
+import { discoverConfig } from "../config.ts";
+import { resolveIndexPath } from "./paths.ts";
+import { SearchError } from "./types.ts";
+import type { ResolvedSearchConfig, ResolvedEmbeddingConfig } from "./types.ts";
+
+type SearchConfigOverrides = Partial<Omit<ResolvedSearchConfig, "ignorePaths" | "semantic">> & {
+  readonly ignorePaths?: ReadonlyArray<string>;
+  readonly semantic?: Partial<ResolvedEmbeddingConfig>;
+};
+
+export type {
+  BrainSearchResult,
+  IndexCheckReport,
+  IndexStats,
+  IndexStatusSnapshot,
+  ResolvedEmbeddingConfig,
+  ResolvedSearchConfig,
+  SearchErrorCode,
+  SearchOptions,
+  SearchOutcome,
+} from "./types.ts";
+export { SearchError, SEARCH_ERROR_CODES } from "./types.ts";
+
+export { resolveIndexPath } from "./paths.ts";
+export {
+  indexVault,
+  reindexVault,
+  indexStatus,
+  indexCheck,
+  type IndexVaultOptions,
+  type IndexProgressEvent,
+} from "./indexer.ts";
+export { search } from "./search.ts";
+
+const DEFAULT_IGNORE_PATHS = [
+  ".git",
+  "node_modules",
+  ".open-second-brain",
+  ".obsidian/cache",
+  ".trash",
+  ".stversions",
+];
+
+const DEFAULTS = {
+  chunkSize: 800,
+  chunkOverlap: 100,
+  keywordWeight: 0.6,
+  semanticWeight: 0.4,
+  provider: "openai-compat" as const,
+  timeoutMs: 10_000,
+  concurrency: 4,
+  batchSize: 32,
+};
+
+function envOrConfig(
+  env: NodeJS.ProcessEnv,
+  config: Readonly<Record<string, string>>,
+  envKey: string,
+  configKey: string,
+): string | null {
+  const e = env[envKey];
+  if (e !== undefined && e !== "") return e;
+  const c = config[configKey];
+  if (c !== undefined && c !== "") return c;
+  return null;
+}
+
+function parseInteger(
+  raw: string | null,
+  fallback: number,
+  fieldName: string,
+  opts?: { readonly min?: number; readonly max?: number },
+): number {
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be an integer, got '${raw}'`);
+  }
+  validateIntegerRange(n, fieldName, opts);
+  return n;
+}
+
+function validateIntegerRange(
+  n: number,
+  fieldName: string,
+  opts?: { readonly min?: number; readonly max?: number },
+): void {
+  if (opts?.min !== undefined && n < opts.min) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be >= ${opts.min}, got ${n}`);
+  }
+  if (opts?.max !== undefined && n > opts.max) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be <= ${opts.max}, got ${n}`);
+  }
+}
+
+function parseFloat01(raw: string | null, fallback: number, fieldName: string): number {
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 1) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `${fieldName} must be a number in [0, 1], got '${raw}'`,
+    );
+  }
+  return n;
+}
+
+function validateWeight(n: number, fieldName: string): void {
+  if (!Number.isFinite(n) || n < 0 || n > 1) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be a number in [0, 1], got '${n}'`);
+  }
+}
+
+function validateResolvedConfig(config: ResolvedSearchConfig): void {
+  validateIntegerRange(config.chunkSize, "search_chunk_size", { min: 1 });
+  validateIntegerRange(config.chunkOverlap, "search_chunk_overlap", { min: 0 });
+  if (config.chunkOverlap >= config.chunkSize) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `search_chunk_overlap must be smaller than search_chunk_size, got ${config.chunkOverlap} >= ${config.chunkSize}`,
+    );
+  }
+  validateWeight(config.keywordWeight, "search_keyword_weight");
+  validateWeight(config.semanticWeight, "search_semantic_weight");
+  if (config.keywordWeight + config.semanticWeight > 1.0 + 1e-9) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `keyword_weight + semantic_weight must sum to <= 1, got ${config.keywordWeight} + ${config.semanticWeight}`,
+    );
+  }
+  if (config.semantic.dimension !== null) {
+    validateIntegerRange(config.semantic.dimension, "embedding_dimension", { min: 1 });
+  }
+  validateIntegerRange(config.semantic.timeoutMs, "embedding_timeout_ms", { min: 1 });
+  validateIntegerRange(config.semantic.concurrency, "embedding_concurrency", { min: 1 });
+  validateIntegerRange(config.semantic.batchSize, "embedding_batch_size", { min: 1 });
+}
+
+function parseBool(raw: string | null, fallback: boolean, fieldName: string): boolean {
+  if (raw === null) return fallback;
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0") return false;
+  throw new SearchError(
+    "INVALID_INPUT",
+    `${fieldName} must be 'true' or 'false', got '${raw}'`,
+  );
+}
+
+function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {
+  if (raw === null) return DEFAULTS.provider;
+  if (raw === "openai-compat" || raw === "disabled") return raw;
+  throw new SearchError(
+    "INVALID_INPUT",
+    `embedding_provider must be 'openai-compat' or 'disabled', got '${raw}'`,
+  );
+}
+
+function parseIgnorePaths(raw: string | null): string[] {
+  if (raw === null) return [...DEFAULT_IGNORE_PATHS];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+export function resolveSearchConfig(opts: {
+  vault: string;
+  configPath?: string;
+  overrides?: SearchConfigOverrides;
+}): ResolvedSearchConfig {
+  const env = process.env;
+  const config: Readonly<Record<string, string>> = opts.configPath
+    ? discoverConfig(opts.configPath).data
+    : {};
+
+  const dbPath = resolveIndexPath(
+    opts.vault,
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_DB", "search_db_path"),
+  );
+
+  const chunkSize = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_CHUNK_SIZE", "search_chunk_size"),
+    DEFAULTS.chunkSize,
+    "search_chunk_size",
+    { min: 1 },
+  );
+  const chunkOverlap = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_CHUNK_OVERLAP", "search_chunk_overlap"),
+    DEFAULTS.chunkOverlap,
+    "search_chunk_overlap",
+    { min: 0 },
+  );
+  const keywordWeight = parseFloat01(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_KW_WEIGHT", "search_keyword_weight"),
+    DEFAULTS.keywordWeight,
+    "search_keyword_weight",
+  );
+  const semanticWeight = parseFloat01(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_SEM_WEIGHT", "search_semantic_weight"),
+    DEFAULTS.semanticWeight,
+    "search_semantic_weight",
+  );
+  if (keywordWeight + semanticWeight > 1.0 + 1e-9) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `keyword_weight + semantic_weight must sum to <= 1, got ${keywordWeight} + ${semanticWeight}`,
+    );
+  }
+
+  const ignorePaths = parseIgnorePaths(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_IGNORE", "search_ignore_paths"),
+  );
+
+  const semanticEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_SEMANTIC", "search_semantic_enabled"),
+    false,
+    "search_semantic_enabled",
+  );
+  const provider = parseProvider(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER", "embedding_provider"),
+  );
+  const baseUrl = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL",
+    "embedding_base_url",
+  );
+  const model = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_MODEL", "embedding_model");
+  const apiKey = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_KEY", "embedding_api_key");
+  const dimRaw = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_DIM", "embedding_dimension");
+  const dimension =
+    dimRaw === null ? null : parseInteger(dimRaw, 0, "embedding_dimension", { min: 1 });
+  const timeoutMs = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_TIMEOUT", "embedding_timeout_ms"),
+    DEFAULTS.timeoutMs,
+    "embedding_timeout_ms",
+    { min: 1 },
+  );
+  const concurrency = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_CONCURRENCY", "embedding_concurrency"),
+    DEFAULTS.concurrency,
+    "embedding_concurrency",
+    { min: 1 },
+  );
+  const batchSize = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_BATCH", "embedding_batch_size"),
+    DEFAULTS.batchSize,
+    "embedding_batch_size",
+    { min: 1 },
+  );
+
+  const semantic: ResolvedEmbeddingConfig = Object.freeze({
+    enabled: semanticEnabled,
+    provider,
+    baseUrl,
+    model,
+    apiKey,
+    dimension,
+    timeoutMs,
+    concurrency,
+    batchSize,
+  });
+
+  const base: ResolvedSearchConfig = Object.freeze({
+    vault: opts.vault,
+    dbPath,
+    ignorePaths: Object.freeze([...ignorePaths]),
+    chunkSize,
+    chunkOverlap,
+    keywordWeight,
+    semanticWeight,
+    semantic,
+  });
+
+  validateResolvedConfig(base);
+
+  if (!opts.overrides) return base;
+  const merged = Object.freeze({
+    ...base,
+    ...opts.overrides,
+    semantic: Object.freeze({ ...base.semantic, ...(opts.overrides.semantic ?? {}) }),
+    ignorePaths: opts.overrides.ignorePaths
+      ? Object.freeze([...opts.overrides.ignorePaths])
+      : base.ignorePaths,
+  });
+  validateResolvedConfig(merged);
+  return merged;
+}

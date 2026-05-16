@@ -165,6 +165,8 @@ describe("tool listing", () => {
         "payment_request_approval",
         "payment_request_status",
         "payment_request_consume",
+        // Search (added in v0.10.0).
+        "brain_search",
       ]),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -285,8 +287,8 @@ describe("stdio loop", () => {
     const list = JSON.parse(lines[1]!);
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
-    // v0.9.0: 3 core (status/query/health) + 6 Brain + 8 Pay Memory = 17.
-    expect(list.result.tools.length).toBe(18);
+    // v0.10.0: 3 core (status/query/health) + 7 Brain + 8 Pay Memory + 1 Search = 19.
+    expect(list.result.tools.length).toBe(19);
   });
 
   test("returns parse error for invalid JSON", async () => {
