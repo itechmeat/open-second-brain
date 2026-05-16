@@ -17,6 +17,11 @@ import {
   SERVER_NAME,
   SERVER_VERSION,
 } from "./protocol.ts";
+import {
+  listResources,
+  listResourceTemplates,
+  readResource,
+} from "./resources.ts";
 import { buildToolTable, findTool, type ServerContext, type ToolDefinition } from "./tools.ts";
 
 export interface MCPServerOptions {
@@ -109,6 +114,12 @@ export class MCPServer {
         result = this.handleToolsList();
       } else if (method === "tools/call") {
         result = await this.handleToolsCall(params);
+      } else if (method === "resources/list") {
+        result = this.handleResourcesList();
+      } else if (method === "resources/templates/list") {
+        result = this.handleResourcesTemplatesList();
+      } else if (method === "resources/read") {
+        result = this.handleResourcesRead(params);
       } else if (method.startsWith("notifications/")) {
         return null;
       } else {
@@ -133,7 +144,10 @@ export class MCPServer {
     const defaultAgent = resolveAgentName(this.configPath ?? undefined);
     return {
       protocolVersion: negotiated,
-      capabilities: { tools: { listChanged: false } },
+      capabilities: {
+        tools: { listChanged: false },
+        resources: { listChanged: false, subscribe: false },
+      },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       instructions: buildInstructions(defaultAgent),
     };
@@ -147,6 +161,23 @@ export class MCPServer {
         inputSchema: t.inputSchema,
       })),
     };
+  }
+
+  private handleResourcesList(): Record<string, unknown> {
+    return { resources: listResources() };
+  }
+
+  private handleResourcesTemplatesList(): Record<string, unknown> {
+    return { resourceTemplates: listResourceTemplates() };
+  }
+
+  private handleResourcesRead(params: Record<string, unknown>): Record<string, unknown> {
+    const uri = params["uri"];
+    if (typeof uri !== "string") {
+      throw new MCPError(INVALID_PARAMS, "resources/read requires a string `uri`");
+    }
+    const content = readResource({ vault: this.vault }, uri);
+    return { contents: [content] };
   }
 
   private async handleToolsCall(params: Record<string, unknown>): Promise<Record<string, unknown>> {

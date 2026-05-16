@@ -25,6 +25,7 @@ import {
   resolveAgentName,
   resolveTimezone,
 } from "../core/config.ts";
+import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { appendEvent, validateEventTime } from "../core/event-log.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
@@ -166,6 +167,9 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
   const discovery = discoverConfig(ctx.configPath ?? undefined);
   const vaultExists = isDir(ctx.vault);
   const configKeys = Object.keys(discovery.data).sort();
+  // Safe to call on a vault that has no Brain layer yet — returns
+  // `present: false` with zero counts.
+  const brain = vaultExists ? computeBrainStatus(ctx.vault) : null;
   return {
     config_path: String(discovery.path),
     config_exists: discovery.exists,
@@ -173,6 +177,7 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     config: redactMapping(discovery.data),
     vault_path: ctx.vault,
     vault_exists: vaultExists,
+    ...(brain ? { brain } : {}),
   };
 }
 

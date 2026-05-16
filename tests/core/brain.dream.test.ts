@@ -533,3 +533,296 @@ describe("dream — empty Brain (no signals, no prefs)", () => {
     expect(existsSync(brainConfigPath(vault))).toBe(true);
   });
 });
+
+// ----- Quarantine ---------------------------------------------------------
+//
+// Default brain config (`policy.ts`): low_max_applied = 2. The entry
+// condition is `violated_count ≥ applied_count AND applied_count >
+// low_max_applied`, so the smallest fixture needs applied ≥ 3 with
+// violated ≥ applied. We seed evidence directly through the log.
+
+describe("dream — quarantine entry", () => {
+  test("confirmed pref crosses violated≥applied with applied>low_max → quarantine", () => {
+    writePreference(vault, {
+      slug: "quarantine-target",
+      topic: "quarantine-target",
+      principle: "Trial rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 0,
+      violated_count: 0,
+      last_evidence_at: null,
+      confidence: "low",
+    });
+    // 3 applied + 3 violated → entry condition met (applied=3 > 2 and violated=3 ≥ applied=3).
+    for (let i = 0; i < 3; i++) {
+      appendApplyEvidence(
+        vault,
+        { pref_id: "quarantine-target", artifact: "[[a]]", result: "applied", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 3}T10:00:00Z`) },
+      );
+    }
+    for (let i = 0; i < 3; i++) {
+      appendApplyEvidence(
+        vault,
+        { pref_id: "quarantine-target", artifact: "[[b]]", result: "violated", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 6}T10:00:00Z`) },
+      );
+    }
+
+    const res = dream(vault, { now: new Date("2026-05-10T00:00:00Z") });
+    expect(res.changed).toBe(true);
+
+    const pref = parsePreference(preferencePath(vault, "quarantine-target"));
+    expect(pref.status).toBe("quarantine");
+    expect(pref.applied_count).toBe(3);
+    expect(pref.violated_count).toBe(3);
+    // The pref stays in preferences/, NOT retired.
+    expect(listPreferences()).toContain("pref-quarantine-target.md");
+    expect(listRetired()).not.toContain("ret-quarantine-target.md");
+  });
+
+  test("low_max_applied gating — applied=2 with violated=2 stays confirmed", () => {
+    writePreference(vault, {
+      slug: "below-threshold",
+      topic: "below-threshold",
+      principle: "Trial rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 0,
+      violated_count: 0,
+      last_evidence_at: null,
+      confidence: "low",
+    });
+    for (let i = 0; i < 2; i++) {
+      appendApplyEvidence(
+        vault,
+        { pref_id: "below-threshold", artifact: "[[a]]", result: "applied", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 3}T10:00:00Z`) },
+      );
+      appendApplyEvidence(
+        vault,
+        { pref_id: "below-threshold", artifact: "[[b]]", result: "violated", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 5}T10:00:00Z`) },
+      );
+    }
+
+    dream(vault, { now: new Date("2026-05-10T00:00:00Z") });
+    const pref = parsePreference(preferencePath(vault, "below-threshold"));
+    expect(pref.status).toBe("confirmed");
+  });
+});
+
+describe("dream — quarantine → retired (quarantine-violated)", () => {
+  test("new violated event on quarantine pref retires it", () => {
+    // Seed an already-quarantined pref directly: writePreference
+    // accepts the new status. applied=3, violated=3 is the persisted
+    // snapshot. Then add one more violated event in the log so
+    // dream sees violated > rec.pref.violated_count.
+    writePreference(vault, {
+      slug: "to-retire",
+      topic: "to-retire",
+      principle: "Probationary rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "quarantine",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 3,
+      violated_count: 3,
+      last_evidence_at: "2026-05-08T00:00:00Z",
+      confidence: "low",
+    });
+    // Mirror those counters in the log so the recompute matches the
+    // persisted snapshot, then add the trigger event.
+    for (let i = 0; i < 3; i++) {
+      appendApplyEvidence(
+        vault,
+        { pref_id: "to-retire", artifact: "[[a]]", result: "applied", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 3}T10:00:00Z`) },
+      );
+      appendApplyEvidence(
+        vault,
+        { pref_id: "to-retire", artifact: "[[b]]", result: "violated", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 6}T10:00:00Z`) },
+      );
+    }
+    appendApplyEvidence(
+      vault,
+      { pref_id: "to-retire", artifact: "[[c]]", result: "violated", agent: "claude" },
+      { now: new Date("2026-05-09T10:00:00Z") },
+    );
+
+    const res = dream(vault, { now: new Date("2026-05-10T00:00:00Z") });
+    expect(res.changed).toBe(true);
+    expect(listPreferences()).not.toContain("pref-to-retire.md");
+    expect(listRetired()).toContain("ret-to-retire.md");
+
+    const retired = parseRetired(retiredPath(vault, "to-retire"));
+    expect(retired.retired_reason).toBe("quarantine-violated");
+    expect(res.retired.map((r) => r.reason)).toContain("quarantine-violated");
+  });
+
+  test("pinned quarantine pref logs retain-pinned instead of retiring", () => {
+    writePreference(vault, {
+      slug: "pinned-quar",
+      topic: "pinned-quar",
+      principle: "Pinned rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "quarantine",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 3,
+      violated_count: 3,
+      last_evidence_at: "2026-05-08T00:00:00Z",
+      confidence: "low",
+      pinned: true,
+    });
+    for (let i = 0; i < 3; i++) {
+      appendApplyEvidence(
+        vault,
+        { pref_id: "pinned-quar", artifact: "[[a]]", result: "applied", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 3}T10:00:00Z`) },
+      );
+      appendApplyEvidence(
+        vault,
+        { pref_id: "pinned-quar", artifact: "[[b]]", result: "violated", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 6}T10:00:00Z`) },
+      );
+    }
+    appendApplyEvidence(
+      vault,
+      { pref_id: "pinned-quar", artifact: "[[c]]", result: "violated", agent: "claude" },
+      { now: new Date("2026-05-09T10:00:00Z") },
+    );
+
+    dream(vault, { now: new Date("2026-05-10T00:00:00Z") });
+    expect(listPreferences()).toContain("pref-pinned-quar.md");
+    expect(listRetired()).not.toContain("ret-pinned-quar.md");
+    const log = parseLogDay(vault, "2026-05-10");
+    const blocked = log.entries.find(
+      (e) =>
+        e.eventType === "retire" &&
+        e.body["preference"] === "[[pref-pinned-quar]]" &&
+        e.body["blocked"] === "pinned",
+    );
+    expect(blocked).toBeDefined();
+    expect(blocked!.body["reason"]).toBe("quarantine-violated");
+  });
+});
+
+describe("dream — outdated evidence retires with superseded-by-context", () => {
+  test("single outdated event retires a confirmed pref", () => {
+    writePreference(vault, {
+      slug: "context-shift",
+      topic: "context-shift",
+      principle: "Recoverable rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 4,
+      violated_count: 0,
+      last_evidence_at: "2026-05-08T00:00:00Z",
+      confidence: "medium",
+    });
+    appendApplyEvidence(
+      vault,
+      { pref_id: "context-shift", artifact: "[[x]]", result: "outdated", agent: "claude" },
+      { now: new Date("2026-05-09T10:00:00Z") },
+    );
+
+    const res = dream(vault, { now: new Date("2026-05-10T00:00:00Z") });
+    expect(res.changed).toBe(true);
+    expect(listPreferences()).not.toContain("pref-context-shift.md");
+    expect(listRetired()).toContain("ret-context-shift.md");
+    const retired = parseRetired(retiredPath(vault, "context-shift"));
+    expect(retired.retired_reason).toBe("superseded-by-context");
+    expect(res.retired.map((r) => r.reason)).toContain("superseded-by-context");
+  });
+
+  test("pinned pref also retires on outdated — pin doesn't protect against context shifts", () => {
+    writePreference(vault, {
+      slug: "pinned-outdated",
+      topic: "pinned-outdated",
+      principle: "Pinned rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 3,
+      violated_count: 0,
+      last_evidence_at: "2026-05-08T00:00:00Z",
+      confidence: "medium",
+      pinned: true,
+    });
+    appendApplyEvidence(
+      vault,
+      { pref_id: "pinned-outdated", artifact: "[[x]]", result: "outdated", agent: "claude" },
+      { now: new Date("2026-05-09T10:00:00Z") },
+    );
+
+    const res = dream(vault, { now: new Date("2026-05-10T00:00:00Z") });
+    expect(res.changed).toBe(true);
+    expect(listPreferences()).not.toContain("pref-pinned-outdated.md");
+    expect(listRetired()).toContain("ret-pinned-outdated.md");
+  });
+});
+
+describe("dream — quarantine → confirmed (recovery)", () => {
+  test("applied > violated returns quarantine pref to confirmed", () => {
+    writePreference(vault, {
+      slug: "recover",
+      topic: "recover",
+      principle: "Recoverable rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "quarantine",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 3,
+      violated_count: 3,
+      last_evidence_at: "2026-05-08T00:00:00Z",
+      confidence: "low",
+    });
+    for (let i = 0; i < 3; i++) {
+      appendApplyEvidence(
+        vault,
+        { pref_id: "recover", artifact: "[[a]]", result: "applied", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 3}T10:00:00Z`) },
+      );
+      appendApplyEvidence(
+        vault,
+        { pref_id: "recover", artifact: "[[b]]", result: "violated", agent: "claude" },
+        { now: new Date(`2026-05-0${i + 6}T10:00:00Z`) },
+      );
+    }
+    // Two fresh applied events flip the balance: applied=5 > violated=3.
+    appendApplyEvidence(
+      vault,
+      { pref_id: "recover", artifact: "[[c]]", result: "applied", agent: "claude" },
+      { now: new Date("2026-05-09T10:00:00Z") },
+    );
+    appendApplyEvidence(
+      vault,
+      { pref_id: "recover", artifact: "[[d]]", result: "applied", agent: "claude" },
+      { now: new Date("2026-05-09T11:00:00Z") },
+    );
+
+    dream(vault, { now: new Date("2026-05-10T00:00:00Z") });
+    const pref = parsePreference(preferencePath(vault, "recover"));
+    expect(pref.status).toBe("confirmed");
+    expect(pref.applied_count).toBe(5);
+    expect(pref.violated_count).toBe(3);
+    expect(listRetired()).not.toContain("ret-recover.md");
+  });
+});

@@ -156,10 +156,11 @@ export function writePreference(
   }
   if (
     input.status !== BRAIN_PREFERENCE_STATUS.unconfirmed &&
-    input.status !== BRAIN_PREFERENCE_STATUS.confirmed
+    input.status !== BRAIN_PREFERENCE_STATUS.confirmed &&
+    input.status !== BRAIN_PREFERENCE_STATUS.quarantine
   ) {
     throw new Error(
-      `preference field 'status' must be 'unconfirmed' or 'confirmed'; got ${JSON.stringify(input.status)}`,
+      `preference field 'status' must be 'unconfirmed', 'confirmed', or 'quarantine'; got ${JSON.stringify(input.status)}`,
     );
   }
 
@@ -559,7 +560,12 @@ function enforceStatusFolderInvariant(
   if (expectedFolder === "preferences") {
     // We accept `preferences` as the canonical folder. A status of
     // `retired` here is the mismatch case the design doc §4 calls out.
-    if (parent === "preferences" && status !== BRAIN_PREFERENCE_STATUS.unconfirmed && status !== BRAIN_PREFERENCE_STATUS.confirmed) {
+    if (
+      parent === "preferences" &&
+      status !== BRAIN_PREFERENCE_STATUS.unconfirmed &&
+      status !== BRAIN_PREFERENCE_STATUS.confirmed &&
+      status !== BRAIN_PREFERENCE_STATUS.quarantine
+    ) {
       throw new BrainStatusFolderMismatchError(
         "preference file frontmatter status does not match preferences/ folder",
         path,

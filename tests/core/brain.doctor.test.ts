@@ -408,3 +408,326 @@ describe("missing config", () => {
     expect(res.errors.some((e) => e.code === "config-missing")).toBe(true);
   });
 });
+
+describe("duplicate-preferences lint", () => {
+  test("flags two confirmed prefs in the same (topic, scope) bucket with similar principles", () => {
+    writePreference(tmp, {
+      slug: "a",
+      topic: "tidy",
+      principle: "Be tidy and consistent in writing",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 3,
+      scope: "writing",
+    });
+    writePreference(tmp, {
+      slug: "b",
+      topic: "tidy",
+      principle: "Be tidy and consistent when writing",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 3,
+      scope: "writing",
+    });
+    const res = runDoctor(tmp);
+    const dup = res.warnings.find((w) => w.code === "duplicate-preferences");
+    expect(dup).toBeDefined();
+    expect(dup!.message).toContain("pref-a");
+    expect(dup!.message).toContain("pref-b");
+  });
+
+  test("does NOT flag prefs in different topics even with identical principles", () => {
+    writePreference(tmp, {
+      slug: "x",
+      topic: "alpha",
+      principle: "Identical principle text here",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 3,
+    });
+    writePreference(tmp, {
+      slug: "y",
+      topic: "beta",
+      principle: "Identical principle text here",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 3,
+    });
+    const res = runDoctor(tmp);
+    expect(
+      res.warnings.find((w) => w.code === "duplicate-preferences"),
+    ).toBeUndefined();
+  });
+});
+
+describe("low-evidence-confirmed lint", () => {
+  test("flags confirmed pref with applied_count ≤ low_max_applied past trial window", () => {
+    // Default config: low_max_applied=2, unconfirmed_window_days=14.
+    writePreference(tmp, {
+      slug: "stagnant",
+      topic: "stagnant",
+      principle: "Got promoted but never applied",
+      created_at: "2026-04-01T00:00:00Z",
+      unconfirmed_until: "2026-04-15T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-04-05T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 1, // ≤ low_max_applied (2)
+    });
+    const now = new Date("2026-05-15T00:00:00Z"); // 40 days past confirmed_at
+    const res = runDoctor(tmp, { now });
+    const low = res.warnings.find((w) => w.code === "low-evidence-confirmed");
+    expect(low).toBeDefined();
+    expect(low!.message).toContain("pref-stagnant");
+  });
+
+  test("does NOT flag prefs still within the trial window", () => {
+    writePreference(tmp, {
+      slug: "fresh",
+      topic: "fresh",
+      principle: "Just promoted",
+      created_at: "2026-05-10T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-10T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 1,
+    });
+    const now = new Date("2026-05-12T00:00:00Z"); // 2 days past confirmed
+    const res = runDoctor(tmp, { now });
+    expect(
+      res.warnings.find((w) => w.code === "low-evidence-confirmed"),
+    ).toBeUndefined();
+  });
+});
+
+describe("pinned-without-recent-evidence lint", () => {
+  test("flags pinned pref with no evidence", () => {
+    writePreference(tmp, {
+      slug: "pinned-empty",
+      topic: "pinned-empty",
+      principle: "Pinned but never applied",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 0,
+      last_evidence_at: null,
+      pinned: true,
+    });
+    const res = runDoctor(tmp);
+    const w = res.warnings.find((x) => x.code === "pinned-without-recent-evidence");
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("pref-pinned-empty");
+  });
+
+  test("flags pinned pref with stale evidence past stale_evidence_days", () => {
+    // Default config: stale_evidence_days=30.
+    writePreference(tmp, {
+      slug: "pinned-stale",
+      topic: "pinned-stale",
+      principle: "Pinned but stale",
+      created_at: "2026-01-01T00:00:00Z",
+      unconfirmed_until: "2026-01-15T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-01-05T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 5,
+      last_evidence_at: "2026-01-10T00:00:00Z",
+      pinned: true,
+    });
+    const now = new Date("2026-05-15T00:00:00Z"); // 125 days past last evidence
+    const res = runDoctor(tmp, { now });
+    expect(
+      res.warnings.find((w) => w.code === "pinned-without-recent-evidence"),
+    ).toBeDefined();
+  });
+
+  test("does NOT flag unpinned prefs", () => {
+    writePreference(tmp, {
+      slug: "unpinned-stale",
+      topic: "unpinned-stale",
+      principle: "Stale but not pinned",
+      created_at: "2026-01-01T00:00:00Z",
+      unconfirmed_until: "2026-01-15T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-01-05T00:00:00Z",
+      evidenced_by: [],
+      applied_count: 5,
+      last_evidence_at: "2026-01-10T00:00:00Z",
+      pinned: false,
+    });
+    const now = new Date("2026-05-15T00:00:00Z");
+    const res = runDoctor(tmp, { now });
+    expect(
+      res.warnings.find((w) => w.code === "pinned-without-recent-evidence"),
+    ).toBeUndefined();
+  });
+});
+
+describe("malformed-evidence-range lint", () => {
+  test("flags an apply-evidence with reversed start-end", () => {
+    // Hand-craft a log entry; we don't need a real pref file because
+    // doctor's lint walks log entries directly.
+    writeFileSync(
+      logPath(tmp, "2026-05-14"),
+      `---
+kind: brain-log
+date: 2026-05-14
+tags: [brain, brain/log]
+---
+
+# Brain Log — 2026-05-14
+
+## 10:00:00Z — apply-evidence
+
+- preference: [[pref-foo]]
+- artifact: [[file:120-100]]
+- agent: claude
+- result: applied
+`,
+      "utf8",
+    );
+    const res = runDoctor(tmp);
+    const w = res.warnings.find((x) => x.code === "malformed-evidence-range");
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("120-100");
+  });
+
+  test("does NOT flag well-formed ranges or bare wikilinks", () => {
+    writeFileSync(
+      logPath(tmp, "2026-05-14"),
+      `---
+kind: brain-log
+date: 2026-05-14
+tags: [brain, brain/log]
+---
+
+# Brain Log — 2026-05-14
+
+## 10:00:00Z — apply-evidence
+
+- preference: [[pref-foo]]
+- artifact: [[file:120-145]]
+- agent: claude
+- result: applied
+
+## 11:00:00Z — apply-evidence
+
+- preference: [[pref-bar]]
+- artifact: [[other]]
+- agent: claude
+- result: applied
+`,
+      "utf8",
+    );
+    const res = runDoctor(tmp);
+    expect(
+      res.warnings.find((w) => w.code === "malformed-evidence-range"),
+    ).toBeUndefined();
+  });
+});
+
+describe("orphan-evidence lint", () => {
+  test("flags an apply-evidence whose artifact wikilink doesn't resolve", () => {
+    writeFileSync(
+      logPath(tmp, "2026-05-14"),
+      `---
+kind: brain-log
+date: 2026-05-14
+tags: [brain, brain/log]
+---
+
+# Brain Log — 2026-05-14
+
+## 10:00:00Z — apply-evidence
+
+- preference: [[pref-foo]]
+- artifact: [[missing-vault-page]]
+- agent: claude
+- result: applied
+`,
+      "utf8",
+    );
+    const res = runDoctor(tmp);
+    const w = res.warnings.find((x) => x.code === "orphan-evidence");
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("missing-vault-page");
+  });
+});
+
+describe("broken backlinks", () => {
+  test("flags a wikilink target that no longer exists as a file", () => {
+    // pref-alive references sig-missing, but no such signal file exists.
+    writePreference(tmp, {
+      slug: "alive",
+      topic: "alive",
+      principle: "Live rule",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: ["[[sig-missing]]"],
+    });
+
+    const res = runDoctor(tmp);
+    const broken = res.warnings.filter((w) => w.code === "broken-backlinks");
+    expect(broken.length).toBeGreaterThan(0);
+    const sigMissing = broken.find((w) => w.message.includes("[[sig-missing]]"));
+    expect(sigMissing).toBeDefined();
+    expect(sigMissing!.message).toContain("pref-alive");
+  });
+
+  test("does not flag references whose targets exist", () => {
+    writeSignal(tmp, {
+      topic: "real",
+      signal: "negative",
+      agent: "claude",
+      principle: "test",
+      created_at: "2026-05-01T10:00:00Z",
+      date: "2026-05-01",
+      slug: "present",
+    });
+    writePreference(tmp, {
+      slug: "real",
+      topic: "real",
+      principle: "test",
+      created_at: "2026-05-01T11:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: ["[[sig-2026-05-01-present]]"],
+    });
+    const res = runDoctor(tmp);
+    expect(res.warnings.filter((w) => w.code === "broken-backlinks")).toHaveLength(0);
+  });
+
+  test("ignores wikilinks pointing outside the Brain namespace", () => {
+    // Writing a preference whose principle mentions a Daily/-style
+    // wikilink that doesn't match the pref-/ret-/sig- prefix policy.
+    // The body wikilink resolves to a non-Brain id and we must NOT
+    // flag it — Daily and AI Wiki references are user prose.
+    writePreference(tmp, {
+      slug: "with-prose",
+      topic: "with-prose",
+      principle: "Refer to [[Some Wiki Page]] for details",
+      created_at: "2026-05-01T11:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: [],
+    });
+    const res = runDoctor(tmp);
+    expect(res.warnings.filter((w) => w.code === "broken-backlinks")).toHaveLength(0);
+  });
+});

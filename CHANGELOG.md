@@ -5,6 +5,172 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-05-15
+
+Active-preferences digest, MCP Resources, and a visibility expansion
+across status, digest, and backlinks. Closes `BRAIN-FUT-006`
+(active-preference injection per turn) and ships the read-only
+"visibility family" from the project's feature summary (§3 status,
+§8 backlinks, §13 hot preferences). Adds a `quarantine` preference
+status that catches rules whose recent evidence has turned dominantly
+negative without yet crossing the rebuttal threshold.
+
+### Added
+
+- **`Brain/active.md`** — an auto-generated digest of every confirmed
+  preference, every quarantined preference (with applied/violated
+  counters), and the three most recently retired entries. Pure
+  derivation, no LLM. Regenerated at the tail of every `dream` run
+  and after `o2b brain pin`/`unpin`. The writer is idempotent: when
+  the rendered body matches the existing file, no I/O happens.
+- **SessionStart hook** (`hooks/active-inject.ts`) with matcher
+  `startup|resume|clear`. Reads `Brain/active.md` and emits it as
+  `additionalContext` so the agent sees current rules at the start
+  of every session. Fails closed: any error path exits 0 with no
+  output so the runtime proceeds unaffected.
+- **PostCompact hook** with matcher `manual|auto`. Re-injects the
+  same `Brain/active.md` body after `/compact` (manual or
+  background), so the agent does not lose its preferences view
+  partway through long sessions. Same script as SessionStart — the
+  hook event name is taken from the payload so one script covers
+  both surfaces.
+- **MCP Resources** capability on the MCP server. Two concrete URIs:
+  - `osb://preferences/active` — body of `Brain/active.md`. Auto-
+    generated on first read if the file does not exist yet (fresh
+    vault with prefs but no dream).
+  - `osb://digest/latest` — `renderDigest({format: "markdown"})`
+    output, same as the `brain_digest` tool's default window.
+
+  Three URI templates:
+  - `osb://preference/{id}` — body of `pref-{id}.md`, with fallback
+    to `ret-{id}.md` when the active copy is gone. Accepts the bare
+    slug or the prefixed id.
+  - `osb://topic/{slug}` — synthesised markdown of every signal,
+    the current preference (or retired), and the most recent log
+    entries for the topic.
+  - `osb://log/{date}` — body of `Brain/log/<date>.md`.
+
+  The MCP initialize response advertises
+  `capabilities.resources = { listChanged: false, subscribe: false }`.
+- **`quarantine` preference status** (closes design summary §20).
+  Entry: a `confirmed` preference whose recomputed counters satisfy
+  `violated_count ≥ applied_count AND applied_count >
+  confidence.low_max_applied` transitions to `quarantine`. The rule
+  is still listed in `Brain/active.md` (under its own section), but
+  the digest surfaces it separately. Exit: a new `violated`
+  evidence event since the last `dream` snapshot retires the rule
+  with `retired_reason: quarantine-violated`; or a fresh
+  `applied_count > violated_count` returns it to `confirmed`. Pinned
+  quarantine preferences emit `retain-pinned` instead of retiring,
+  consistent with other automatic retires.
+- New `BRAIN_RETIRED_REASON.quarantineViolated = "quarantine-violated"`
+  enum value distinct from `rebutted` (which counts opposite-sign
+  signals, not evidence events).
+- **Backlink index** (`src/core/brain/backlinks.ts`). A single read
+  pass over `preferences/`, `retired/`, `inbox/`, `inbox/processed/`,
+  and `log/` produces an inverted reference map: target id → list of
+  sources that wikilink to it, with `field` and (for log entries) the
+  event timestamp. Self-references and duplicate (source, target)
+  pairs are deduplicated. Powers digest §13 and the `brain_backlinks`
+  surfaces.
+- **`brain_backlinks` MCP tool** + `o2b brain backlinks <id>` CLI verb.
+  Returns the count plus a list of `{source, source_kind, field,
+  timestamp?}` records for any Brain artifact id (preference,
+  retired, or signal).
+- **`osb://backlinks/{id}` MCP resource template** — markdown render
+  of inbound references grouped by source kind. Same data as the
+  tool; the resource surface is for MCP hosts that prefer pull-style
+  access.
+- **Hot sections in `brain_digest`** (closes §13). Two new sections
+  in both Markdown and JSON outputs:
+  - **Top applied** — top-5 confirmed/quarantine preferences by
+    `applied_count` desc (zero-applied excluded). JSON field:
+    `top_applied`.
+  - **Top referenced** — top-5 preferences by inbound backlink
+    count (using the index above). JSON field: `top_referenced`.
+
+  The sections render only on non-empty windows so `--silent-if-empty`
+  exit semantics are preserved; JSON always emits the arrays so
+  programmatic consumers can read them regardless of window state.
+- **`broken-backlinks` lint** in `brain_doctor`. Walks the backlink
+  index and reports any source that still references a `pref-*`,
+  `ret-*`, or `sig-*` target whose file no longer exists. Warning
+  severity (not error), since the underlying state isn't corrupted
+  — the source artifact's pointer just went stale.
+- **`brain` section in `second_brain_status`**. The existing MCP
+  tool now includes a `brain: { present, counts, last_dream_at,
+  last_apply_evidence_at, sanity }` field. Counts cover
+  inbox/preferences (split by status)/retired/log_days/snapshots.
+  `sanity.signals_awaiting_dream` is non-zero when inbox signals
+  predate the `unconfirmed_window_days` cutoff — a one-glance "you
+  need to run `dream`" signal.
+- **`osb://status` concrete MCP resource** — the same snapshot
+  rendered as markdown for direct pull by MCP hosts.
+
+### Changed
+
+- `regenerateActive(vault)` is now called at the tail of every
+  `dream` invocation (both `changed: false` and `changed: true`
+  paths), gated on `dryRun: false`. Failure is logged to stderr and
+  swallowed — the rest of `dream`'s work is independent.
+- `setPinned` calls `regenerateActive` after a successful flip so
+  the `pinned` flag visible in the digest matches the new state
+  immediately. Same swallow-and-warn fallback as in `dream`.
+- `renderDigest` JSON shape gains `top_applied` and `top_referenced`
+  arrays. `schema_version` stays at `1` — both fields default to
+  empty arrays, so existing readers that ignore unknown fields
+  remain compatible.
+- **Input sanitisation** for Brain writers. The Pay Memory redactor
+  is promoted to `src/core/redactor.ts` (Pay Memory keeps the import
+  path) and joined by a new `normaliseTextField` helper that strips
+  C0 control characters (except `\t` / `\n`), folds `U+2028` /
+  `U+2029` line separators to `\n`, NFC-normalises, and caps length.
+  `writeSignal` runs `principle` (cap 512, single-line), `scope`
+  (cap 128, single-line), `raw` (cap 4096), and `source[]` items
+  (cap 512) through redact + normalise. `appendApplyEvidence`
+  applies the same to `artifact` (cap 512, single-line) and `note`
+  (cap 4096). Inputs that sanitise down to empty (e.g. pure C0
+  bytes) raise the existing `missing field` error rather than
+  smuggling into YAML.
+- **`outdated` apply-evidence result** (`BRAIN_APPLY_RESULT.outdated`).
+  Records that a preference's scope still matched the artifact but
+  the rule itself is obsolete in this context (framework migration,
+  convention change). Dream interprets any `outdated` event as a
+  retire trigger with new reason
+  `BRAIN_RETIRED_REASON.supersededByContext` =
+  `"superseded-by-context"`. Pin protects against decay-driven
+  retires only; an `outdated` event is an explicit context shift
+  and bypasses the pin. CLI and MCP tool schema accept the new
+  enum value.
+- **Claim-level provenance in apply-evidence artifacts**. The
+  `artifact` wikilink optionally carries an inclusive 1-based line
+  range: `[[src/cli/main.ts:120-145]]` (range) or
+  `[[src/cli/main.ts:42]]` (single line). New
+  `parseArtifactRef(value)` helper in
+  `src/core/brain/wikilink.ts` extracts `{target, range?,
+  malformedRange?}`. The writer accepts the syntax verbatim; the
+  parser is used by downstream readers (lint, future fragment
+  display).
+- **`brain_doctor` hygiene lints** (closes the remaining §11 items
+  from the project's feature summary):
+  - `duplicate-preferences` — pairwise jaccard ≥ 0.7 on principle
+    tokens within each `(topic, scope)` bucket of confirmed /
+    quarantine preferences.
+  - `low-evidence-confirmed` — confirmed pref with
+    `applied_count ≤ low_max_applied` and `confirmed_at` older
+    than `unconfirmed_window_days`.
+  - `pinned-without-recent-evidence` — pinned pref with no
+    `last_evidence_at` or with evidence older than
+    `stale_evidence_days`.
+  - `malformed-evidence-range` — apply-evidence artifact uses
+    range syntax but the range fails validation (non-numeric,
+    reversed, zero-based, dangling dash).
+  - `orphan-evidence` — apply-evidence artifact wikilink doesn't
+    resolve to any file in the vault (basename match via
+    `listVaultPages`).
+- `runDoctor` accepts an `opts.now` for deterministic age-based
+  testing. CLI `--strict` semantics unchanged.
+
 ## [0.9.0] - 2026-05-15
 
 Brain: a new top-level vault layer for observing, accreting memory.

@@ -31,6 +31,7 @@
 
 import { existsSync } from "node:fs";
 
+import { sanitiseTextField } from "../redactor.ts";
 import { appendLogEvent, type AppendLogEventResult, type BrainLogEntry } from "./log.ts";
 import { parsePreference } from "./preference.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
@@ -40,6 +41,9 @@ import {
   BRAIN_LOG_EVENT_KIND,
   type BrainApplyResult,
 } from "./types.ts";
+
+const ARTIFACT_MAX_LEN = 512;
+const NOTE_MAX_LEN = 4096;
 
 /**
  * Thrown by {@link appendApplyEvidence} when the targeted preference
@@ -114,7 +118,17 @@ export function appendApplyEvidence(
   if (!input.pref_id || !input.pref_id.trim()) {
     throw new Error("apply-evidence missing field: pref_id");
   }
-  if (!input.artifact || !input.artifact.trim()) {
+  // Sanitise free-form fields up-front so a pure-control-char input
+  // falls into the "missing-field" branch instead of into YAML.
+  const artifact = sanitiseTextField(input.artifact, {
+    maxLen: ARTIFACT_MAX_LEN,
+    singleLine: true,
+  });
+  const note =
+    input.note !== undefined
+      ? sanitiseTextField(input.note, { maxLen: NOTE_MAX_LEN })
+      : undefined;
+  if (!artifact || !artifact.trim()) {
     throw new Error("apply-evidence missing field: artifact");
   }
   if (!input.agent || !input.agent.trim()) {
@@ -122,10 +136,11 @@ export function appendApplyEvidence(
   }
   if (
     input.result !== BRAIN_APPLY_RESULT.applied &&
-    input.result !== BRAIN_APPLY_RESULT.violated
+    input.result !== BRAIN_APPLY_RESULT.violated &&
+    input.result !== BRAIN_APPLY_RESULT.outdated
   ) {
     throw new Error(
-      `apply-evidence field 'result' must be 'applied' or 'violated'; got ${JSON.stringify(input.result)}`,
+      `apply-evidence field 'result' must be 'applied', 'violated', or 'outdated'; got ${JSON.stringify(input.result)}`,
     );
   }
 
@@ -157,12 +172,12 @@ export function appendApplyEvidence(
   // input are omitted so the file stays as small as possible.
   const body: Record<string, string> = {
     preference: wikilink,
-    artifact: input.artifact.trim(),
+    artifact: artifact.trim(),
     agent: input.agent.trim(),
     result: input.result,
   };
-  const note = input.note?.trim();
-  if (note) body["note"] = note;
+  const trimmedNote = note?.trim();
+  if (trimmedNote) body["note"] = trimmedNote;
 
   const entry: BrainLogEntry = {
     timestamp,

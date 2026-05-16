@@ -113,18 +113,20 @@ The document is **trigger-based**, not schedule-based. Each item has an explicit
 
 ### BRAIN-FUT-006 — Active-preference injection via per-turn hook
 
-**Trigger to pull forward:**
-- ≥10 confirmed preferences in `Brain/preferences/`, AND
-- Observed cases where the agent did not apply a relevant active preference in a task despite the `brain-memory` skill being loaded.
+**Status: shipped in v0.9.1.** Implemented via a file-based pattern
+rather than the per-turn token-budgeted injection sketched below: the
+deterministic `dream` pass regenerates `Brain/active.md` (a derived
+view of confirmed + quarantined preferences plus the last three
+retired entries) and the SessionStart + PostCompact hook injects that
+file's body as `additionalContext` on every session boundary and
+after `/compact`. MCP hosts can pull the same body on demand via
+`osb://preferences/active`. See the v0.9.1 CHANGELOG entry for the
+full surface and `docs/mcp.md` for the resource URIs.
 
-**Dependencies:** v0.9 ships. Reuses existing Hermes `pre_llm_call` channel, Claude Code system-prompt prepend, and Codex pre-message hook.
-
-**Scope sketch:**
-- A shared module (per-runtime plugin, e.g. `~/.hermes/plugins/brain-preference-injector/`) reads `Brain/preferences/` filtered to `status: confirmed` and to scopes matching the current task topic; injects a compact summary into the per-turn system prompt.
-- Hard token budget on the injection (e.g. 500 tokens) to avoid context-window bloat.
-- Pinned preferences ordered first; high-confidence next; remainder may be elided if over budget.
-
-**Why deferred:** with zero confirmed preferences the injection is empty. Even with a few, the noise-to-signal ratio is unfavourable. The trigger waits until the injection actually carries useful content.
+The token-budgeted per-turn variant is no longer planned — the
+session-boundary cadence is cheap and sufficient. If a future
+profile shows the per-turn budget is necessary, it can be reopened
+under a new ID with the actual measured data.
 
 ## Integration
 

@@ -352,3 +352,123 @@ describe("validation", () => {
     ).toThrow(RangeError);
   });
 });
+
+describe("top_applied / top_referenced sections", () => {
+  test("top_applied includes confirmed/quarantine prefs sorted by applied_count desc", () => {
+    writePreference(
+      tmp,
+      basePref("hot-a", {
+        status: "confirmed",
+        confirmed_at: "2026-05-01T00:00:00Z",
+        applied_count: 10,
+        violated_count: 1,
+        confidence: "high",
+      }),
+    );
+    writePreference(
+      tmp,
+      basePref("hot-b", {
+        status: "confirmed",
+        confirmed_at: "2026-05-01T00:00:00Z",
+        applied_count: 5,
+        confidence: "medium",
+      }),
+    );
+    writePreference(
+      tmp,
+      basePref("quarantine-c", {
+        status: "quarantine",
+        confirmed_at: "2026-05-01T00:00:00Z",
+        applied_count: 3,
+        violated_count: 4,
+        confidence: "low",
+      }),
+    );
+    writePreference(
+      tmp,
+      basePref("never-applied", {
+        status: "confirmed",
+        confirmed_at: "2026-05-01T00:00:00Z",
+        applied_count: 0,
+      }),
+    );
+
+    // Trigger a non-empty window so the markdown path renders (Top
+    // sections only render when there were window-changes — confirmed
+    // earlier in this same window provides that.).
+    const r = renderDigest(tmp, {
+      since: new Date("2026-04-30T00:00:00Z"),
+      until: new Date("2026-05-05T00:00:00Z"),
+      format: "json",
+    });
+    const json = JSON.parse(r.content) as DigestJson;
+    expect(json.top_applied.map((x) => x.id)).toEqual([
+      "pref-hot-a",
+      "pref-hot-b",
+      "pref-quarantine-c",
+    ]);
+    expect(json.top_applied[0]!.applied_count).toBe(10);
+    expect(json.top_applied[2]!.status).toBe("quarantine");
+    // applied_count: 0 prefs are excluded.
+    expect(json.top_applied.find((x) => x.id === "pref-never-applied")).toBeUndefined();
+  });
+
+  test("Markdown renders Top applied with the quarantine tag", () => {
+    writePreference(
+      tmp,
+      basePref("hot", {
+        status: "confirmed",
+        confirmed_at: SINCE.toISOString(),
+        applied_count: 7,
+      }),
+    );
+    writePreference(
+      tmp,
+      basePref("quar", {
+        status: "quarantine",
+        confirmed_at: SINCE.toISOString(),
+        applied_count: 3,
+        violated_count: 4,
+      }),
+    );
+    const r = renderDigest(tmp, { since: SINCE, until: UNTIL, format: "markdown" });
+    expect(r.content).toContain("## Top applied (2)");
+    expect(r.content).toContain("[[pref-hot]]");
+    expect(r.content).toContain("[[pref-quar]]");
+    expect(r.content).toContain("[quarantine]");
+  });
+
+  test("top_referenced counts inbound wikilinks per pref", () => {
+    writePreference(
+      tmp,
+      basePref("target", {
+        status: "confirmed",
+        confirmed_at: SINCE.toISOString(),
+        applied_count: 1,
+      }),
+    );
+    writePreference(
+      tmp,
+      basePref("source-1", {
+        status: "confirmed",
+        confirmed_at: SINCE.toISOString(),
+        applied_count: 1,
+        evidenced_by: ["[[pref-target]]"],
+      }),
+    );
+    writePreference(
+      tmp,
+      basePref("source-2", {
+        status: "confirmed",
+        confirmed_at: SINCE.toISOString(),
+        applied_count: 1,
+        evidenced_by: ["[[pref-target]]"],
+      }),
+    );
+    const r = renderDigest(tmp, { since: SINCE, until: UNTIL, format: "json" });
+    const json = JSON.parse(r.content) as DigestJson;
+    const targetEntry = json.top_referenced.find((x) => x.id === "pref-target");
+    expect(targetEntry).toBeDefined();
+    expect(targetEntry!.backlink_count).toBeGreaterThanOrEqual(2);
+  });
+});

@@ -230,6 +230,55 @@ export function listVaultPages(vaultDir: string, opts: ListVaultPagesOptions = {
   return pages;
 }
 
+/**
+ * Cheap basename-only walker over a vault directory. Returns the set
+ * of `.md` basenames (without extension) — no frontmatter parsing.
+ *
+ * Used where callers only need existence-by-basename (Obsidian
+ * wikilink resolution semantics) and the YAML parse cost of
+ * {@link listVaultPages} is unwarranted.
+ */
+export function listVaultBasenames(
+  vaultDir: string,
+  opts: ListVaultPagesOptions = {},
+): Set<string> {
+  const skipDirs = new Set(opts.skipDirs ?? DEFAULT_SKIP_DIRS);
+  const skipFiles = new Set((opts.skipFiles ?? DEFAULT_SKIP_FILES).map((f) => f.toLowerCase()));
+  const out = new Set<string>();
+  walkBasenames(vaultDir, vaultDir, skipDirs, skipFiles, out);
+  return out;
+}
+
+function walkBasenames(
+  root: string,
+  dir: string,
+  skipDirs: Set<string>,
+  skipFiles: Set<string>,
+  out: Set<string>,
+): void {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (skipDirs.has(entry.name)) continue;
+      walkBasenames(root, full, skipDirs, skipFiles, out);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (!entry.name.toLowerCase().endsWith(".md")) continue;
+    if (skipFiles.has(entry.name.toLowerCase())) continue;
+    const rel = relative(root, full);
+    const parts = rel.split(/[\\/]/);
+    if (parts.some((p) => skipDirs.has(p))) continue;
+    out.add(stem(entry.name));
+  }
+}
+
 function walk(
   root: string,
   dir: string,

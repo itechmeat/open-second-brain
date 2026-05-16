@@ -81,6 +81,16 @@ export function brainManualPath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, "_BRAIN.md"), vault);
 }
 
+/**
+ * Path of the auto-generated active-preferences digest written by
+ * `dream` and CLI verbs that mutate preference state. Read by the
+ * `SessionStart` / `PostCompact` hook and exposed as the MCP resource
+ * `osb://preferences/active`.
+ */
+export function brainActivePath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, "active.md"), vault);
+}
+
 /** Active-signal path: `Brain/inbox/sig-<date>-<slug>.md`. */
 export function signalPath(vault: string, date: string, slug: string): string {
   const d = validateIsoDate(date);
