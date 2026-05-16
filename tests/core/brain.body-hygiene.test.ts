@@ -268,6 +268,64 @@ describe("§6 signal suppression", () => {
     expect(log).toContain("[[ret-noisy]]");
     expect(log).toContain("rule was wrong");
   });
+
+  test("scoped suppressor does NOT swallow signals on a different scope", () => {
+    // Retired pref scoped to `writing`.
+    const dirs = brainDirs(vault);
+    mkdirSync(dirs.retired, { recursive: true });
+    writeFileSync(
+      retiredPath(vault, "scoped"),
+      [
+        "---",
+        "kind: brain-retired",
+        "id: ret-scoped",
+        "status: retired",
+        "retired_at: 2026-05-10T00:00:00Z",
+        "retired_reason: user-rejected",
+        "retired_by: '[[Brain/log/2026-05-10]]'",
+        "created_at: 2026-05-09T00:00:00Z",
+        "tags: [brain, brain/retired, brain/topic/scoped, brain/scope/writing]",
+        "topic: scoped",
+        "scope: writing",
+        "principle: writing-scoped rule",
+        "evidenced_by: []",
+        "applied_count: 0",
+        "violated_count: 0",
+        "last_evidence_at: null",
+        "confidence: low",
+        "pinned: false",
+        "user_rejected_reason: writing-scope was the issue",
+        "---",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    // Three fresh signals on the SAME topic but a DIFFERENT scope.
+    for (let i = 1; i <= 3; i++) {
+      writeSignal(vault, {
+        topic: "scoped",
+        slug: `scoped-${i}`,
+        date: "2026-05-16",
+        created_at: `2026-05-16T10:0${i}:00Z`,
+        signal: "negative",
+        agent: "claude",
+        principle: "different-scope rule",
+        scope: "coding",
+      });
+    }
+
+    const summary = dream(vault, { now: new Date("2026-05-16T12:00:00Z") });
+    expect(summary.suppressed.length).toBe(0);
+    // A new pref is created (slug is suffixed because ret-scoped reserves
+    // the bare slug, hence pref-scoped-2).
+    expect(summary.new_unconfirmed.some((id) => id.startsWith("pref-scoped"))).toBe(
+      true,
+    );
+    const logPath = join(vault, "Brain", "log", "2026-05-16.md");
+    const log = readFileSync(logPath, "utf8");
+    expect(log).not.toContain("signal-suppressed");
+  });
 });
 
 describe("dream — body migration of v0.9.x preferences", () => {

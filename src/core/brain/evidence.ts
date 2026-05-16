@@ -58,11 +58,14 @@ export interface CollectEvidenceOptions {
   /** Maximum `violated`/`outdated` rows to return. Default 3. */
   readonly maxViolated?: number;
   /**
-   * Stop scanning at this ISO date (inclusive). Defaults to the
-   * preference's `created_at` — older log entries by definition cannot
-   * be about a preference that did not yet exist.
+   * Stop scanning at this ISO timestamp (inclusive). **Required** —
+   * the caller MUST pass the preference's `created_at` so we never
+   * harvest log rows that predate the pref's existence (which would
+   * be a different rule under the same slug history). Pass an empty
+   * string to opt out and scan every available log day (only useful
+   * for vault-wide ad-hoc tooling).
    */
-  readonly sinceIso?: string | null;
+  readonly sinceIso: string;
 }
 
 export interface CollectedEvidence {
@@ -81,11 +84,12 @@ export interface CollectedEvidence {
 export function collectEvidenceForSlug(
   vault: string,
   slug: string,
-  opts: CollectEvidenceOptions = {},
+  opts: CollectEvidenceOptions,
 ): CollectedEvidence {
   const maxApplied = opts.maxApplied ?? 5;
   const maxViolated = opts.maxViolated ?? 3;
-  const cutoff = opts.sinceIso ? opts.sinceIso : null;
+  // Empty string is the documented "no cutoff" escape hatch.
+  const cutoff = opts.sinceIso.length > 0 ? opts.sinceIso : null;
 
   const applied: BrainEvidenceSummary[] = [];
   const violated: BrainEvidenceSummary[] = [];

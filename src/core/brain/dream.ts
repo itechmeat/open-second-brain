@@ -696,18 +696,31 @@ function planTopics(
     // v0.10.1 _summary §6: when a retired pref for this topic carries
     // a `user_rejected_reason`, the user explicitly rejected the rule
     // — re-growing it from fresh signals is exactly what they were
-    // asking us not to do. Suppress every signal in this topic group,
-    // emit one `signal-suppressed` event per signal pointing at the
-    // retired pref + the reason, and move them straight to processed.
+    // asking us not to do. Suppress every matching signal, emit one
+    // `signal-suppressed` event per signal pointing at the retired
+    // pref + the reason, and move them straight to processed.
+    //
+    // Per-signal scope match: an unscoped suppressor swallows every
+    // signal on the topic; a scoped suppressor only swallows signals
+    // sharing its scope (a signal without scope still matches an
+    // unscoped suppressor but never a scoped one). Multiple retired
+    // prefs on the same topic are tried in order — the first matching
+    // suppressor wins. Non-matching signals fall through and remain
+    // eligible for candidate-pref planning below.
     const suppressors = (retiredByTopic.get(topic) ?? []).filter(
       (r) => !!r.user_rejected_reason,
     );
+    let candidateSigs: SignalRecord[] = sigs;
     if (suppressors.length > 0) {
-      const suppressor = suppressors[0]!;
+      const remaining: SignalRecord[] = [];
       for (const sig of sigs) {
-        // Scope filter — if the suppressor has a scope, the signal must
-        // match it (or be unscoped) for the rejection to apply.
-        if (suppressor.scope && sig.signal.scope && suppressor.scope !== sig.signal.scope) {
+        const suppressor = suppressors.find((r) => {
+          if (!r.scope) return true;
+          if (!sig.signal.scope) return false;
+          return r.scope === sig.signal.scope;
+        });
+        if (!suppressor) {
+          remaining.push(sig);
           continue;
         }
         plan.signalsSuppressed.push({
@@ -718,11 +731,16 @@ function planTopics(
         });
         recordSignalMove(plan, sig);
       }
-      continue;
+      if (remaining.length === 0) continue;
+      candidateSigs = remaining;
     }
     // No active pref for this topic → either promote or note
     // contradiction.
-    const windowedSigs = filterWithinWindow(sigs, cfg.dream.contradiction_window_days, now);
+    const windowedSigs = filterWithinWindow(
+      candidateSigs,
+      cfg.dream.contradiction_window_days,
+      now,
+    );
     const positives = windowedSigs.filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.positive);
     const negatives = windowedSigs.filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.negative);
     const dominant = positives.length >= negatives.length ? positives : negatives;
