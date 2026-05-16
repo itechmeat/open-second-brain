@@ -33,11 +33,15 @@
  *      complete before the old one disappears.
  */
 
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
-import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
+import {
+  formatFrontmatter,
+  parseFrontmatter,
+  writeFrontmatterAtomic,
+} from "../vault.ts";
 import {
   brainDirs,
   preferencePath,
@@ -49,6 +53,7 @@ import {
   BRAIN_PREFERENCE_STATUS,
   BRAIN_RETIRED_REASON,
   type BrainConfidence,
+  type BrainEvidenceSummary,
   type BrainPreference,
   type BrainPreferenceStatus,
   type BrainRetired,
@@ -105,6 +110,17 @@ export interface WritePreferenceInput {
   readonly extraTags?: ReadonlyArray<string>;
   /** Free-form "How to apply" prose (rendered as a section). */
   readonly howToApply?: string;
+  /**
+   * Recent `apply-evidence applied` rows for this pref, derived from
+   * `Brain/log/`. Newest first. Used by {@link renderPreferenceBody}
+   * to render `## Recent applications` so the file mirrors what the
+   * counters say.
+   */
+  readonly recentApplied?: ReadonlyArray<BrainEvidenceSummary>;
+  /**
+   * Recent `apply-evidence violated` / `outdated` rows. Newest first.
+   */
+  readonly recentViolated?: ReadonlyArray<BrainEvidenceSummary>;
 }
 
 export interface WritePreferenceOptions {
@@ -121,6 +137,22 @@ export interface MoveToRetiredOptions {
   readonly now: Date;
   readonly retired_by: string;
   readonly superseded_by?: string;
+  /**
+   * Free-form reason supplied by `o2b brain reject --reason <text>`.
+   * Persisted to the retired frontmatter as `user_rejected_reason`
+   * and rendered in the `## Retired` body block. Required by the CLI
+   * for `user-rejected` retires; left undefined for automatic
+   * retire-reasons emitted by dream.
+   */
+  readonly user_rejected_reason?: string;
+  /**
+   * Pre-collected evidence slice to render into the retired snapshot.
+   * Dream passes this to avoid re-scanning the log when it already
+   * computed evidence during the refresh phase; the CLI reject path
+   * leaves it undefined and {@link moveToRetired} collects internally.
+   */
+  readonly evidenceApplied?: ReadonlyArray<BrainEvidenceSummary>;
+  readonly evidenceViolated?: ReadonlyArray<BrainEvidenceSummary>;
 }
 
 export interface MoveToRetiredResult {
@@ -171,6 +203,23 @@ export function writePreference(
   const metadata = preferenceFrontmatter(input, id);
   const body = renderPreferenceBody(input);
 
+  // Content-level idempotency: skip the rename when the file would be
+  // byte-identical. Keeps the dream invariant "a no-op rerun must not
+  // rewrite preference files" even after v0.10.1 expanded what dream
+  // recomputes per pass (evidence slices), and it spares Syncthing
+  // peers from spurious sync events.
+  if (options.overwrite && existsSync(path)) {
+    try {
+      const next = formatFrontmatter(metadata, body);
+      const prev = readFileSync(path, "utf8");
+      if (next === prev) return { path, id };
+    } catch {
+      // Fall through to the atomic write — a read failure should not
+      // prevent a legitimate update.
+    }
+  }
+
+
   writeFrontmatterAtomic(path, metadata, body, {
     overwrite: options.overwrite ?? false,
     existsErrorKind: "preference",
@@ -178,6 +227,40 @@ export function writePreference(
   });
 
   return { path, id };
+}
+
+/**
+ * Predicate twin of {@link writePreference}'s content-equality
+ * short-circuit. Returns `true` iff calling `writePreference(vault,
+ * input, { overwrite: true })` would change the on-disk bytes
+ * (file missing, or file present with different content). The dream
+ * pass uses this to decide whether a pref needs to land in the
+ * refresh set — emitting a refresh entry triggers a snapshot + log
+ * event, so we must not emit one if the rewrite would be a no-op.
+ *
+ * Cheap: one stat + one readFileSync + one render of frontmatter +
+ * body. Caller-side cost is negligible compared with the writePref
+ * + log overhead avoided when the body is up to date.
+ */
+export function wouldRewritePreference(
+  vault: string,
+  input: WritePreferenceInput,
+): boolean {
+  const slug = validateSlug(input.slug);
+  const path = preferencePath(vault, slug);
+  if (!existsSync(path)) return true;
+  try {
+    const id = `pref-${slug}`;
+    const metadata = preferenceFrontmatter(input, id);
+    const body = renderPreferenceBody(input);
+    const next = formatFrontmatter(metadata, body);
+    const prev = readFileSync(path, "utf8");
+    return next !== prev;
+  } catch {
+    // Conservative: a read or render failure should not silently
+    // mark the file as up-to-date.
+    return true;
+  }
 }
 
 function preferenceFrontmatter(
@@ -238,22 +321,67 @@ function composePreferenceTags(input: WritePreferenceInput): string[] {
   return out;
 }
 
+/**
+ * Render the preference body. Sections are emitted **only when they
+ * have real content** — v0.10.1 removes the always-empty placeholder
+ * blocks (`_(no evidence yet)_`, `_(not provided)_`) that the v0.9.x
+ * shape used to ship. Principle text is intentionally NOT duplicated:
+ * frontmatter is the single source for that field.
+ *
+ * Sections, in order:
+ *
+ *   - `## Origin` — wikilinks from `evidenced_by` (one bullet each).
+ *     Omitted when the array is empty (e.g. `--force-confirmed`).
+ *   - `## Recent applications` — last N `apply-evidence applied` rows,
+ *     newest first. Each bullet: `[[artifact]] — ts (agent) — note`.
+ *     Omitted when zero.
+ *   - `## Recent violations` — same shape for `violated` / `outdated`.
+ *     Omitted when zero.
+ *   - `## How to apply` — only when `howToApply` is non-empty prose
+ *     supplied by the caller; never auto-filled.
+ *
+ * If all sections are skipped, the body is empty and {@link
+ * writeFrontmatterAtomic} writes a frontmatter-only file.
+ */
 function renderPreferenceBody(input: WritePreferenceInput): string {
-  const lines: string[] = [];
-  lines.push("## Principle", "", input.principle.trim(), "");
-  lines.push("## Origin", "");
+  const sections: string[] = [];
+
   if (input.evidenced_by.length > 0) {
-    for (const ev of input.evidenced_by) lines.push(`- ${ev}`);
-  } else {
-    lines.push("_(no evidence yet)_");
+    const block: string[] = ["## Origin", ""];
+    for (const ev of input.evidenced_by) block.push(`- ${ev}`);
+    sections.push(block.join("\n"));
   }
-  lines.push("");
-  lines.push("## How to apply", "");
+
+  if (input.recentApplied && input.recentApplied.length > 0) {
+    sections.push(renderEvidenceSection("Recent applications", input.recentApplied));
+  }
+
+  if (input.recentViolated && input.recentViolated.length > 0) {
+    sections.push(renderEvidenceSection("Recent violations", input.recentViolated));
+  }
+
   const guidance = input.howToApply?.trim();
   if (guidance) {
-    lines.push(guidance.replace(/\r\n?/g, "\n").replace(/\s+$/g, ""));
-  } else {
-    lines.push("_(not provided)_");
+    const normalised = guidance.replace(/\r\n?/g, "\n").replace(/\s+$/g, "");
+    sections.push(["## How to apply", "", normalised].join("\n"));
+  }
+
+  return sections.join("\n\n");
+}
+
+function renderEvidenceSection(
+  heading: string,
+  rows: ReadonlyArray<BrainEvidenceSummary>,
+): string {
+  const lines: string[] = [`## ${heading}`, ""];
+  for (const ev of rows) {
+    const parts: string[] = [`- ${ev.artifact}`, `— ${ev.timestamp}`];
+    if (ev.agent) parts.push(`(${ev.agent})`);
+    if (ev.result === "violated" || ev.result === "outdated") {
+      parts.push(`[${ev.result}]`);
+    }
+    if (ev.note) parts.push(`— ${ev.note.replace(/\s+/g, " ").trim()}`);
+    lines.push(parts.join(" "));
   }
   return lines.join("\n");
 }
@@ -401,6 +529,9 @@ export function parseRetired(path: string): BrainRetired {
     ...(meta["aliases"] !== undefined && Array.isArray(meta["aliases"])
       ? { aliases: [...(meta["aliases"] as ReadonlyArray<string>)] }
       : {}),
+    ...(optionalScalarString(meta, "user_rejected_reason") !== undefined
+      ? { user_rejected_reason: optionalScalarString(meta, "user_rejected_reason") }
+      : {}),
   };
   return Object.freeze(result);
 }
@@ -490,6 +621,9 @@ export function moveToRetired(
   if (opts.superseded_by?.trim()) {
     newMeta["superseded_by"] = opts.superseded_by.trim();
   }
+  if (opts.user_rejected_reason?.trim()) {
+    newMeta["user_rejected_reason"] = opts.user_rejected_reason.trim();
+  }
 
   // Add the prior `pref-<slug>` basename as an Obsidian alias on the
   // retired file. Wikilinks in append-only logs and signal frontmatter
@@ -505,7 +639,48 @@ export function moveToRetired(
     newMeta["aliases"] = [oldId, ...existingAliases];
   }
 
-  const newBody = appendRetiredSection(body, reason, opts);
+  // Re-render the body from scratch so the retired file carries the
+  // v0.10.1 shape (only sections with content), even if the source
+  // pref was last written in the v0.9.x placeholder format. Evidence
+  // is collected from the live log so the snapshot reflects how the
+  // rule was actually used right up to retirement.
+  const renderInput: WritePreferenceInput = {
+    slug,
+    topic: requireString(meta, "topic", prefPath),
+    principle: requireString(meta, "principle", prefPath),
+    created_at: requireString(meta, "created_at", prefPath),
+    unconfirmed_until: requireString(meta, "unconfirmed_until", prefPath),
+    status: BRAIN_PREFERENCE_STATUS.confirmed, // body render is status-agnostic
+    evidenced_by: optionalStringArray(meta, "evidenced_by"),
+    ...(opts.evidenceApplied !== undefined
+      ? { recentApplied: opts.evidenceApplied }
+      : {}),
+    ...(opts.evidenceViolated !== undefined
+      ? { recentViolated: opts.evidenceViolated }
+      : {}),
+  };
+  // moveToRetired is also called outside dream (CLI reject) — when the
+  // caller did not pre-fetch evidence, we collect it here so the
+  // retired file is the canonical historical snapshot in both paths.
+  let renderInputWithEvidence: WritePreferenceInput = renderInput;
+  if (renderInput.recentApplied === undefined && renderInput.recentViolated === undefined) {
+    // Late-bound import to avoid a cyclic dependency: evidence.ts
+    // imports nothing from preference.ts at module load time.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const ev = (require("./evidence.ts") as typeof import("./evidence.ts")).collectEvidenceForSlug(
+      vault,
+      slug,
+      { sinceIso: renderInput.created_at },
+    );
+    renderInputWithEvidence = {
+      ...renderInput,
+      recentApplied: ev.applied,
+      recentViolated: ev.violated,
+    };
+  }
+  const renderedBody = renderPreferenceBody(renderInputWithEvidence);
+  const newBody = appendRetiredSection(renderedBody, reason, opts);
+  void body; // original source body is intentionally discarded — see above.
 
   writeFrontmatterAtomic(newPath, newMeta, newBody, {
     overwrite: false,
@@ -541,6 +716,13 @@ function appendRetiredSection(
   ];
   if (opts.superseded_by?.trim()) {
     block.push(`Superseded by: ${opts.superseded_by.trim()}`);
+  }
+  if (opts.user_rejected_reason?.trim()) {
+    // Multi-line user prose: collapse internal newlines so the rendered
+    // block stays a flat bullet list. Long-form context belongs in the
+    // log entry, not in the retired body.
+    const reasonLine = opts.user_rejected_reason.trim().replace(/\s+/g, " ");
+    block.push(`User reason: ${reasonLine}`);
   }
   return trimmed + block.join("\n") + "\n";
 }

@@ -591,6 +591,16 @@ async function cmdBrainReject(argv: string[]): Promise<number> {
   if (typeof flags["id"] !== "string" || (flags["id"] as string).trim() === "") {
     return fail("brain reject missing required flag: --id");
   }
+  // v0.10.1: `--reason` is now mandatory. The text is persisted on the
+  // retired file (`user_rejected_reason`) and used by dream to mark
+  // future signals on the same topic as `signal-suppressed`. Without
+  // it the suppression chain breaks and the reject is just a quiet
+  // delete — exactly the failure mode §6 of _summary calls out.
+  if (typeof flags["reason"] !== "string" || (flags["reason"] as string).trim() === "") {
+    return fail(
+      "brain reject missing required flag: --reason (free-form text; persisted on the retired file)",
+    );
+  }
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
   const agent = resolveAgentName(config);
@@ -625,10 +635,12 @@ async function cmdBrainReject(argv: string[]): Promise<number> {
   const todayDate = isoDate(now);
   const retiredBy = `[[Brain/log/${todayDate}]]`;
 
+  const reasonText = String(flags["reason"]).trim();
   try {
     moveToRetired(vault, path, "user-rejected", {
       now,
       retired_by: retiredBy,
+      user_rejected_reason: reasonText,
     });
   } catch (exc) {
     return fail(`failed to retire preference: ${(exc as Error).message ?? exc}`);
@@ -946,7 +958,7 @@ const VERB_HELP: Record<string, string> = {
     "usage: o2b brain query --preference <id> | --topic <slug> | --since <ISO> [--vault <path>] [--json]\n" +
     "Read-only lookup. One of --preference / --topic / --since is required.\n",
   reject:
-    "usage: o2b brain reject --id <pref-id> [--reason <text>] [--yes] [--vault <path>] [--json]\n" +
+    "usage: o2b brain reject --id <pref-id> --reason <text> [--yes] [--vault <path>] [--json]\n" +
     "Move a preference to retired/ with reason 'user-rejected'. --yes required when pinned.\n",
   pin:
     "usage: o2b brain pin --id <pref-id> [--vault <path>] [--json]\n" +

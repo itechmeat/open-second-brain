@@ -106,6 +106,15 @@ export const BRAIN_LOG_EVENT_KIND = {
   pin: "pin",
   unpin: "unpin",
   rollback: "rollback",
+  /**
+   * `signal-suppressed` — a fresh signal landed on a topic that the
+   * user explicitly retired via `o2b brain reject <pref> --reason`.
+   * Dream emits one event per suppressed signal and does NOT count it
+   * toward a new candidate preference. The audit row carries the
+   * original retired-pref wikilink + the user's reason so the
+   * suppression decision is recoverable.
+   */
+  signalSuppressed: "signal-suppressed",
 } as const;
 export type BrainLogEventKind =
   (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
@@ -226,6 +235,28 @@ export interface BrainRetired {
   readonly confidence: BrainConfidence;
   readonly pinned: boolean;
   readonly aliases?: ReadonlyArray<string>;
+  /**
+   * When the retire transition was driven by `o2b brain reject`, the
+   * operator-supplied free-form reason is mirrored here so future dream
+   * passes can render it in `## Why retired` and so signal-suppression
+   * can quote the original objection. `null` for non-`user-rejected`
+   * retires.
+   */
+  readonly user_rejected_reason?: string | null;
+}
+
+/**
+ * One row of evidence (applied / violated / outdated) extracted from
+ * `Brain/log/<date>.md` for a specific preference. Pure derived view —
+ * `dream` reconstructs the recent slice on every run from the canonical
+ * log, never persisted as its own file.
+ */
+export interface BrainEvidenceSummary {
+  readonly timestamp: string;
+  readonly artifact: string;
+  readonly result: BrainApplyResult;
+  readonly agent?: string;
+  readonly note?: string;
 }
 
 // ----- Log events -----------------------------------------------------------
@@ -304,6 +335,22 @@ export interface BrainNotedRedundantLogEvent extends BrainLogEventBase {
   readonly signal: string;
 }
 
+/**
+ * `signal-suppressed` entry — fresh signal landed on a topic that
+ * the user previously rejected via `o2b brain reject --reason`. The
+ * dream pass dropped it from the candidate-pref planner and moved
+ * the file to `processed/`. Persisted with a wikilink to the
+ * retired pref + the original user-supplied reason so the audit
+ * trail is complete.
+ */
+export interface BrainSignalSuppressedLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.signalSuppressed;
+  readonly signal: string;
+  readonly retired: string;
+  readonly topic: string;
+  readonly reason: string;
+}
+
 /** `skip-corrupted-frontmatter` — a file dream couldn't parse. */
 export interface BrainSkipCorruptedLogEvent extends BrainLogEventBase {
   readonly kind: typeof BRAIN_LOG_EVENT_KIND.skipCorruptedFrontmatter;
@@ -333,6 +380,7 @@ export type BrainLogEvent =
   | BrainPromoteLogEvent
   | BrainRetireLogEvent
   | BrainNotedRedundantLogEvent
+  | BrainSignalSuppressedLogEvent
   | BrainSkipCorruptedLogEvent
   | BrainPinLogEvent
   | BrainRollbackLogEvent;
