@@ -121,11 +121,11 @@ file — a Daily note, a project plan, a self-chat scratchpad. The
 operator runs `o2b brain scan-inline` later to capture every marker
 into `Brain/inbox/`. Two shapes are recognised:
 
-```
+```text
 @osb feedback negative topic=mocking principle="don't mock DB in integration tests" scope=testing
 ```
 
-````
+````markdown
 ```osb
 kind: feedback
 signal: negative

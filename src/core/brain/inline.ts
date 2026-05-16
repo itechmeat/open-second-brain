@@ -159,12 +159,14 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
     return line.slice(start, i);
   }
   function readKey(): string | null {
+    // Identifier head must be alpha or underscore; subsequent chars
+    // also allow digits and `-`. Testing the per-char class explicitly
+    // (rather than the full-key regex per-char) avoids terminating
+    // parsing at the first hyphen or digit after position 0.
     const start = i;
-    while (i < n && /[A-Za-z_][A-Za-z0-9_-]*/.test(line[i]!)) {
-      // Step through identifier chars only.
-      i++;
-    }
-    if (i === start) return null;
+    if (i >= n || !/[A-Za-z_]/.test(line[i]!)) return null;
+    i++;
+    while (i < n && /[A-Za-z0-9_-]/.test(line[i]!)) i++;
     return line.slice(start, i);
   }
   function readValue(): string | null {
@@ -332,17 +334,25 @@ export function discoverMarkersDetailed(content: string): MarkerDiscoveryResult 
       const fenceStartLineNumber = i + 1; // 1-based
       // Collect body up to the next ``` line.
       const bodyLines: string[] = [];
+      let closed = false;
       i++;
       while (i < lines.length) {
         const inner = lines[i]!;
         if (inner.trim().startsWith("```")) {
           i++; // consume closing fence
+          closed = true;
           break;
         }
         bodyLines.push(inner);
         i++;
       }
       if (infoString === "osb") {
+        if (!closed) {
+          // Unterminated `osb` fence — treat as malformed so trailing
+          // document content isn't accidentally parsed as a marker.
+          malformed++;
+          continue;
+        }
         const parsed = parseBlockMarker(
           bodyLines.join("\n"),
           fenceStartLineNumber,

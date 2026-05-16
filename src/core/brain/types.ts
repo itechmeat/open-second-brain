@@ -434,6 +434,34 @@ export interface BrainRollbackLogEvent extends BrainLogEventBase {
   readonly run_id: string;
 }
 
+/**
+ * `scan-inline` entry — operator ran `o2b brain scan-inline`. Payload
+ * keys are counters: `scanned`, `found`, `created`, `deduped`,
+ * `malformed`, `errors`, plus the agent identity.
+ */
+export interface BrainScanInlineLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.scanInline;
+}
+
+/**
+ * `import-session` entry — one block per session file imported by
+ * `o2b brain import-session`. Payload carries the file wikilink,
+ * adapter id, and counters.
+ */
+export interface BrainImportSessionLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.importSession;
+}
+
+/**
+ * `migrate-frontmatter` entry — operator ran
+ * `o2b brain migrate-frontmatter --apply`. Payload carries the run
+ * id, snapshot path, and per-bucket counters.
+ */
+export interface BrainMigrateFrontmatterLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.migrateFrontmatter;
+  readonly run_id: string;
+}
+
 /** Discriminated union of every concrete log event type. */
 export type BrainLogEvent =
   | BrainDreamLogEvent
@@ -447,7 +475,10 @@ export type BrainLogEvent =
   | BrainSignalSuppressedLogEvent
   | BrainSkipCorruptedLogEvent
   | BrainPinLogEvent
-  | BrainRollbackLogEvent;
+  | BrainRollbackLogEvent
+  | BrainScanInlineLogEvent
+  | BrainImportSessionLogEvent
+  | BrainMigrateFrontmatterLogEvent;
 
 // ----- Configuration (`Brain/_brain.yaml`) ----------------------------------
 

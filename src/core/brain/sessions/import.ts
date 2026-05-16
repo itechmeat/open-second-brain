@@ -25,7 +25,13 @@
  * second run on the same file finds every hash already present.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
@@ -299,10 +305,15 @@ export async function importSessionPath(
       const full = join(dir, name);
       let st;
       try {
-        st = statSync(full);
+        // lstat (not stat) so symlink cycles can't drive the walker
+        // into infinite recursion. Symlink-following session-exports
+        // are atypical; if real demand surfaces we can switch to a
+        // visited-inode set instead.
+        st = lstatSync(full);
       } catch {
         continue;
       }
+      if (st.isSymbolicLink()) continue;
       if (st.isDirectory()) {
         collect(full);
         continue;

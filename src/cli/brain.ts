@@ -904,10 +904,15 @@ async function cmdBrainImportSession(argv: string[]): Promise<number> {
     format = formatRaw;
   }
 
-  // Parse --since.
+  // Parse --since. Strict ISO-8601 first — `new Date(raw)` alone is
+  // too permissive (year-only strings, locale-specific shapes). Same
+  // contract as cmdBrainDigest / cmdBrainQuery / cmdBrainDream.
   let since: Date | undefined;
   if (flags["since"]) {
     const raw = String(flags["since"]);
+    if (!ISO_8601_RE.test(raw)) {
+      return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
+    }
     const d = new Date(raw);
     if (!Number.isFinite(d.getTime())) {
       return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);

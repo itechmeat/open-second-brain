@@ -245,8 +245,8 @@ function* walkVault(
       // Hard skip: name-based at any depth.
       if (entry.isDirectory() && HARD_SKIP_DIRS.includes(entry.name)) continue;
 
-      // User excludes: prefix match.
-      if (entry.isDirectory() && userExcludes.some((p) => rel === p || rel.startsWith(p + sep))) {
+      // User excludes: prefix match for both dirs and files.
+      if (userExcludes.some((p) => rel === p || rel.startsWith(p + sep))) {
         continue;
       }
 

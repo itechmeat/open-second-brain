@@ -173,11 +173,16 @@ function readFrontmatterStatus(path: string): string {
   // value here would silently mask the corruption.
   try {
     const [meta] = parseFrontmatter(path);
-    const hasLegacy = typeof meta["status"] === "string" && (meta["status"] as string).length > 0;
-    const hasModern = typeof meta["_status"] === "string" && (meta["_status"] as string).length > 0;
+    // Presence-based collision detection so an empty `_status:`
+    // alongside a populated `status:` (or vice versa) is still flagged
+    // as a double-shape file — matches `normalizeDerivedKeys`.
+    const hasLegacy = "status" in meta && meta["status"] !== undefined;
+    const hasModern = "_status" in meta && meta["_status"] !== undefined;
     if (hasLegacy && hasModern) return "unknown";
     const value = hasModern ? meta["_status"] : meta["status"];
-    return typeof value === "string" && value.length > 0 ? value : "unknown";
+    if (typeof value !== "string") return "unknown";
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : "unknown";
   } catch {
     return "unknown";
   }

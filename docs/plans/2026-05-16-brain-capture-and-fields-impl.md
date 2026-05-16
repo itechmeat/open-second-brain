@@ -81,9 +81,9 @@ tests/cli/brain.test.ts             — 3 new verb test sections
 README.md                           — CLI table extension + capture-surfaces paragraph
 docs/how-it-works.md                — capture-surfaces subsection + Mermaid extension
 skills/brain-memory/SKILL.md        — @osb marker mention paragraph
-CHANGELOG.md                        — ## [0.11.0] entry under Added / Changed
-package.json                        — version 0.10.1 → 0.11.0 via `bun run sync-version`
-pyproject.toml                      — version 0.10.1 → 0.11.0 via sync
+CHANGELOG.md                        — ## [0.10.2] entry under Added / Changed
+package.json                        — version 0.10.1 → 0.10.2 via `bun run sync-version`
+pyproject.toml                      — version 0.10.1 → 0.10.2 via sync
 ```
 
 ---
@@ -1415,20 +1415,20 @@ One paragraph after the existing `brain_feedback` guidance: when the agent is no
 ### Task 28: CHANGELOG + version bump
 
 **Files:**
-- Modify: `package.json` (version 0.10.1 → 0.11.0)
-- Modify: `CHANGELOG.md` (new `## [0.11.0]` block)
+- Modify: `package.json` (version 0.10.1 → 0.10.2)
+- Modify: `CHANGELOG.md` (new `## [0.10.2]` block)
 - Modify: `pyproject.toml` (via `bun run sync-version`)
 
 - [ ] **Step 1: Bump package.json version**
 
-Manually edit `version: "0.11.0"` in `package.json`. Run `bun run sync-version` to mirror to `pyproject.toml`.
+Manually edit `version: "0.10.2"` in `package.json`. Run `bun run sync-version` to mirror to `pyproject.toml`.
 
 - [ ] **Step 2: Add CHANGELOG entry**
 
 Append a new block directly under the changelog header, before `## [0.10.1]`:
 
 ```markdown
-## [0.11.0] - <release-date>
+## [0.10.2] - <release-date>
 
 Implements Tier-A items §9 (inline @osb markers), §16 (session-import),
 and §24 (`_field` prefix convention) from
@@ -1459,7 +1459,7 @@ Expected: all green; versions aligned.
 - [ ] `bun run typecheck` — green.
 - [ ] `o2b brain scan-inline --help`, `o2b brain import-session --help`, `o2b brain migrate-frontmatter --help` — render correctly.
 - [ ] `o2b brain doctor` — reports `frontmatter-double-shape` warning shape on a hand-crafted collision file.
-- [ ] CHANGELOG `## [0.11.0]` entry filled.
+- [ ] CHANGELOG `## [0.10.2]` entry filled.
 - [ ] Spec doc cross-referenced from CHANGELOG and README capture-surfaces paragraph.
 
 PR is ready for user review. No git operations performed by the agent; the user runs `git status`, `git add`, `git commit`, `git push`, and `gh pr create` themselves.

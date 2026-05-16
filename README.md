@@ -159,9 +159,9 @@ exposes the same deterministic operations as MCP tools:
 
 - **Core (3):** `second_brain_status`, `second_brain_query`,
   `vault_health`.
-- **Brain (6):** `brain_feedback`, `brain_dream`,
+- **Brain (7):** `brain_feedback`, `brain_dream`,
   `brain_apply_evidence`, `brain_digest`, `brain_query`,
-  `brain_doctor`. See the [Brain section](#brain-observing-memory)
+  `brain_doctor`, `brain_backlinks`. See the [Brain section](#brain-observing-memory)
   below.
 - **Pay Memory (8):** `payment_memory_init`,
   `payment_receipt_append`, `asset_capture`,

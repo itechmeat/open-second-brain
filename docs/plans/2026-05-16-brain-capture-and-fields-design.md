@@ -983,7 +983,7 @@ parsed shape against golden expectations.
   `@osb` markers in Daily / project notes are an alternative path
   when no agent is in the loop. The skill stays principle-level;
   procedural detail belongs in README / how-it-works.
-- **CHANGELOG.md:** new `## [0.11.0]` block with `### Added` /
+- **CHANGELOG.md:** new `## [0.10.2]` block with `### Added` /
   `### Changed` subsections. Release date filled at release time;
   no calendar dates in the PR commit.
 - **`docs/plans/2026-05-15-brain-roadmap.md`:** mark BRAIN-FUT-003

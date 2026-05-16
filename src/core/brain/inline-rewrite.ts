@@ -89,10 +89,11 @@ export async function rewriteMarkers(
         );
         lines[idx] = replaced;
       } else {
-        // Block form: idx points at the opening ```osb line.
+        // Block form: idx points at the opening ```osb line. Use an
+        // exact-match check so an already-rewritten `\`\`\`osb-checked`
+        // fence (from a stale op replay) cannot be re-annotated.
         const fenceLine = lines[idx]!;
-        if (!fenceLine.trim().startsWith("```osb")) {
-          // Don't risk a wrong rewrite if the file diverged.
+        if (!/^\s*```osb\s*$/.test(fenceLine)) {
           continue;
         }
         // Preserve any leading whitespace before the fence (CommonMark
