@@ -253,7 +253,22 @@ export interface BrainPreference {
   readonly violated_count: number;
   /** ISO-8601 UTC of most recent `apply-evidence` entry. */
   readonly last_evidence_at: string | null;
+  /**
+   * Categorical band — `low | medium | high`. Derived from
+   * {@link confidence_value} after the count-based hard floors
+   * (`applied <= low_max_applied`, `violated >= applied`, etc.) are
+   * applied. Stays on the public type so MCP / digest consumers that
+   * predate the numeric field keep working unchanged.
+   */
   readonly confidence: BrainConfidence;
+  /**
+   * Continuous Wilson-95% lower bound on `applied / (applied +
+   * violated)`, modulated by freshness decay over
+   * `retire.stale_evidence_days`. `null` on legacy files written by
+   * pre-v0.10.3 dream passes; downstream code that needs a numeric
+   * value must tolerate the `null` and fall back to the band.
+   */
+  readonly confidence_value: number | null;
   /**
    * If `true`, exempt from automatic retire reasons (`stale-no-evidence`,
    * `expired-unconfirmed`, `rebutted`). Defaults to `false` when a parsed
@@ -297,6 +312,12 @@ export interface BrainRetired {
   readonly violated_count: number;
   readonly last_evidence_at: string | null;
   readonly confidence: BrainConfidence;
+  /**
+   * Snapshot of the numeric `confidence_value` at retire time.
+   * `null` on retired files produced by pre-v0.10.3 dream passes;
+   * downstream code must tolerate the `null`.
+   */
+  readonly confidence_value: number | null;
   readonly pinned: boolean;
   readonly aliases?: ReadonlyArray<string>;
   /**
@@ -506,6 +527,19 @@ export interface BrainConfidenceConfig {
    * stale_evidence_days * high_freshness_factor`. Must be in `(0, 1]`.
    */
   readonly high_freshness_factor: number;
+  /**
+   * Lower threshold on the numeric `confidence_value` for the
+   * derived `medium` band. Anything below this lands as `low` after
+   * the legacy count-based hard floors. Must be in `[0, 1]` and
+   * strictly less than {@link high_min}.
+   */
+  readonly medium_min: number;
+  /**
+   * Lower threshold on the numeric `confidence_value` for the
+   * derived `high` band. Must be in `[0, 1]` and strictly greater
+   * than {@link medium_min}.
+   */
+  readonly high_min: number;
 }
 
 export interface BrainSnapshotsConfig {
@@ -517,9 +551,19 @@ export interface BrainSnapshotsConfig {
  * Root of `Brain/_brain.yaml`. `schema_version` is mandatory; unknown
  * top-level keys are tolerated as forward-compat (logged as a warning by
  * the validator, not an error).
+ *
+ * `primary_agent` declares which runtime owns the `dream` consolidation
+ * pass for this vault. Multi-device setups (e.g. Syncthing-shared
+ * vaults) benefit from a single dream-running host so signal
+ * processing stays serialised. `null` (the default) means "no primary
+ * declared" — every dream invocation runs without an identity check.
+ * When set, dream runs from a different `agent_name` emit a stderr
+ * warning and a `non_primary_agent` log-payload row but still
+ * complete: enforcement is observability, not access control.
  */
 export interface BrainConfig {
   readonly schema_version: number;
+  readonly primary_agent: string | null;
   readonly dream: BrainDreamConfig;
   readonly retire: BrainRetireConfig;
   readonly confidence: BrainConfidenceConfig;

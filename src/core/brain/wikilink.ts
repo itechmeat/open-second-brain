@@ -181,6 +181,75 @@ export function parseArtifactRef(value: string): ArtifactRefParse {
   return { raw, target, rangeText, range };
 }
 
+/**
+ * Maximum length of the wikilink title rendered by {@link renderPrefLink}
+ * before truncation kicks in. Chosen so a `[[pref-…|title]]` link fits on
+ * one Obsidian list-row at typical viewport widths.
+ */
+export const MAX_PREF_LINK_TITLE_LEN = 80;
+
+/**
+ * Render a wikilink to a Brain preference or retired artifact with a
+ * human-readable title sourced from the `principle` field.
+ *
+ * The title is NFC-normalised, whitespace-collapsed, sanitised of
+ * wikilink-breaking characters (`[`, `]`, `|`), and truncated to
+ * {@link MAX_PREF_LINK_TITLE_LEN} at a word boundary (ellipsised when
+ * cut). When the principle is missing or becomes empty after
+ * sanitisation, the helper falls back to the bare `[[id]]` form so the
+ * link remains resolvable through {@link normaliseWikilinkTarget} and
+ * {@link parseWikilink} (both of which already strip `|alias`).
+ *
+ * Used by every Brain writer that emits a pref / retired reference;
+ * signal and external-artifact wikilinks stay bare-id because they have
+ * no useful title source.
+ */
+export function renderPrefLink(input: {
+  readonly id: string;
+  readonly principle?: string;
+}): string {
+  const raw = input.principle ?? "";
+  // Sanitisation pipeline, in order:
+  //   1. NFC normalise so visually-equal inputs hash to the same bytes.
+  //   2. Strip C0/C1 control chars except tab/newline (the whitespace
+  //      collapse below handles those), zero-width joiners, BiDi
+  //      overrides — these can spoof or break Obsidian rendering.
+  //   3. Replace wikilink-breaking glyphs (`[`, `]`, `|`) with spaces.
+  //   4. Collapse all whitespace runs to a single space, trim.
+  const title = raw
+    .normalize("NFC")
+    .replace(/\r\n?/g, "\n")
+    // C0 controls (00-1F) except \t \n; DEL (7F); C1 controls (80-9F).
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, " ")
+    // Format / BiDi-override characters that can cause visual spoofing
+    // in Obsidian: zero-width space/joiner, LRM/RLM, BiDi embedding +
+    // override + isolates, soft hyphen, BOM.
+    .replace(/[​-‏‪-‮⁦-⁩­﻿]/g, " ")
+    .replace(/[\[\]|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (title.length === 0) return `[[${input.id}]]`;
+  // Measure the cap against code-point count (Array.from yields one
+  // entry per Unicode scalar) rather than UTF-16 code units so a
+  // string of 50 astral glyphs (100 code units, 50 code points) is
+  // not forced into the truncation path when the cap is 80.
+  const codepoints = Array.from(title);
+  if (codepoints.length <= MAX_PREF_LINK_TITLE_LEN) {
+    return `[[${input.id}|${title}]]`;
+  }
+  // Truncate to the cap, then back off to the previous word boundary —
+  // but only when one exists inside the window. A single oversized token
+  // (no space inside the cap) gets a hard cut so we still produce a link
+  // rather than dropping back to the bare-id fallback. Slicing happens
+  // on code points so an emoji or astral glyph never gets bisected
+  // into a lone surrogate before the ellipsis.
+  let cutPoints = codepoints.slice(0, MAX_PREF_LINK_TITLE_LEN);
+  const lastSpace = cutPoints.lastIndexOf(" ");
+  if (lastSpace > 0) cutPoints = cutPoints.slice(0, lastSpace);
+  return `[[${input.id}|${cutPoints.join("")}…]]`;
+}
+
 function validateRangeText(text: string): ArtifactRange | null {
   // Accepts `N` or `N-N`, both with 1-based positive integers and
   // `end >= start`. Anything else fails (zero, negative numbers,

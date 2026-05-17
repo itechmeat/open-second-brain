@@ -8,6 +8,7 @@ import {
   BrainConfigError,
   DEFAULT_BRAIN_CONFIG,
   DEFAULT_BRAIN_CONFIG_YAML,
+  formatPrimaryAgentYamlValue,
   loadBrainConfig,
   loadBrainConfigDetailed,
   parseBrainYaml,
@@ -36,6 +37,7 @@ function writeBrainYaml(vault: string, body: string): string {
 describe("DEFAULT_BRAIN_CONFIG", () => {
   test("matches the values listed in §10 of the design doc", () => {
     expect(DEFAULT_BRAIN_CONFIG.schema_version).toBe(1);
+    expect(DEFAULT_BRAIN_CONFIG.primary_agent).toBeNull();
     expect(DEFAULT_BRAIN_CONFIG.dream.candidate_threshold).toBe(3);
     expect(DEFAULT_BRAIN_CONFIG.dream.unconfirmed_window_days).toBe(14);
     expect(DEFAULT_BRAIN_CONFIG.dream.contradiction_window_days).toBe(14);
@@ -44,6 +46,12 @@ describe("DEFAULT_BRAIN_CONFIG", () => {
     expect(DEFAULT_BRAIN_CONFIG.confidence.high_min_applied).toBe(10);
     expect(DEFAULT_BRAIN_CONFIG.confidence.high_freshness_factor).toBe(0.8);
     expect(DEFAULT_BRAIN_CONFIG.snapshots.retention_count).toBe(10);
+  });
+
+  test("primary_agent default is null and YAML round-trips", () => {
+    const parsed = parseBrainYaml(DEFAULT_BRAIN_CONFIG_YAML);
+    const config = validateBrainConfig(parsed, "<default>");
+    expect(config.primary_agent).toBeNull();
   });
 
   test("BRAIN_CONFIG_SUPPORTED_VERSIONS includes 1", () => {
@@ -86,6 +94,86 @@ describe("validateBrainConfig — happy path", () => {
     expect(config.dream.candidate_threshold).toBe(5);
     // Untouched fields fall back to defaults.
     expect(config.dream.unconfirmed_window_days).toBe(14);
+  });
+});
+
+describe("validateBrainConfig — primary_agent", () => {
+  test("absent → null (default)", () => {
+    const cfg = validateBrainConfig({ schema_version: 1 }, "<test>");
+    expect(cfg.primary_agent).toBeNull();
+  });
+
+  test("explicit null is accepted", () => {
+    const cfg = validateBrainConfig(
+      { schema_version: 1, primary_agent: null },
+      "<test>",
+    );
+    expect(cfg.primary_agent).toBeNull();
+  });
+
+  test("non-empty string is preserved and trimmed", () => {
+    const cfg = validateBrainConfig(
+      { schema_version: 1, primary_agent: "  hermes-vps  " },
+      "<test>",
+    );
+    expect(cfg.primary_agent).toBe("hermes-vps");
+  });
+
+  test("empty string rejected with named field", () => {
+    try {
+      validateBrainConfig(
+        { schema_version: 1, primary_agent: "" },
+        "<test>",
+      );
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(BrainConfigError);
+      expect((err as BrainConfigError).field).toBe("primary_agent");
+    }
+  });
+
+  test("whitespace-only string rejected", () => {
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, primary_agent: "   " },
+        "<test>",
+      ),
+    ).toThrow(/primary_agent/);
+  });
+
+  test("non-string non-null rejected", () => {
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, primary_agent: 42 },
+        "<test>",
+      ),
+    ).toThrow(/primary_agent/);
+  });
+});
+
+describe("formatPrimaryAgentYamlValue", () => {
+  test("quotes strings so comment-like content round-trips", () => {
+    const scalar = formatPrimaryAgentYamlValue("hermes lead # primary");
+    expect(scalar).toBe("\"hermes lead # primary\"");
+    const cfg = validateBrainConfig(
+      parseBrainYaml(`schema_version: 1\nprimary_agent: ${scalar}\n`),
+    );
+    expect(cfg.primary_agent).toBe("hermes lead # primary");
+  });
+
+  test("rejects values that would need escaping in the tiny YAML parser", () => {
+    expect(() => formatPrimaryAgentYamlValue("agent\nnext")).toThrow(
+      /disallowed character/,
+    );
+    expect(() => formatPrimaryAgentYamlValue("agent\rnext")).toThrow(
+      /disallowed character/,
+    );
+    expect(() => formatPrimaryAgentYamlValue("agent\\path")).toThrow(
+      /disallowed character/,
+    );
+    expect(() => formatPrimaryAgentYamlValue('agent "quoted"')).toThrow(
+      /disallowed character/,
+    );
   });
 });
 

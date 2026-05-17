@@ -36,6 +36,7 @@ import { appendLogEvent, type AppendLogEventResult, type BrainLogEntry } from ".
 import { parsePreference } from "./preference.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import { isoSecond } from "./time.ts";
+import { renderPrefLink } from "./wikilink.ts";
 import {
   BRAIN_APPLY_RESULT,
   BRAIN_LOG_EVENT_KIND,
@@ -158,12 +159,13 @@ export function appendApplyEvidence(
   }
   // Parse so a corrupted target produces a meaningful error rather
   // than silently appending an evidence row that points at garbage.
-  // Pollutes the typecheck only — we don't use the return value.
-  parsePreference(prefFilePath);
+  // The parsed pref also supplies the principle used to title the
+  // wikilink we emit below.
+  const target = parsePreference(prefFilePath);
 
   const now = opts.now ?? new Date();
   const timestamp = isoSecond(now);
-  const wikilink = `[[pref-${slug}]]`;
+  const wikilink = renderPrefLink({ id: target.id, principle: target.principle });
 
   // Render the canonical payload. Ordering is deliberate: the wikilink
   // to the preference comes first so a human scrolling the log finds

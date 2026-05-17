@@ -140,6 +140,97 @@ describe("brain init", () => {
     expect(r.returncode).toBe(1);
     expect(r.stderr.toLowerCase()).toContain("o2b init");
   });
+
+  test("--primary-agent threads value into _brain.yaml", async () => {
+    const init = await runCli(["init", "--vault", vault, "--name", "Test"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(init.returncode).toBe(0);
+    const r = await runCli(
+      ["brain", "init", "--vault", vault, "--primary-agent", "hermes-vps"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const yaml = readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
+    expect(yaml).toMatch(/^primary_agent: "hermes-vps"$/m);
+  });
+
+  test("--primary-agent empty value exits 1", async () => {
+    const init = await runCli(["init", "--vault", vault, "--name", "Test"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(init.returncode).toBe(0);
+    const r = await runCli(
+      ["brain", "init", "--vault", vault, "--primary-agent", "   "],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr.toLowerCase()).toContain("primary-agent");
+  });
+});
+
+describe("brain set-primary", () => {
+  test("writes the agent name into _brain.yaml", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "set-primary", "hermes-vps", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("primary_agent: null → hermes-vps");
+    const yaml = readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
+    expect(yaml).toMatch(/^primary_agent: "hermes-vps"$/m);
+  });
+
+  test("repeat call is a no-op", async () => {
+    await bootstrap();
+    await runCli(
+      ["brain", "set-primary", "hermes-vps", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const r = await runCli(
+      ["brain", "set-primary", "hermes-vps", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("already set to hermes-vps");
+  });
+
+  test("--clear restores null", async () => {
+    await bootstrap();
+    await runCli(
+      ["brain", "set-primary", "hermes-vps", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const r = await runCli(
+      ["brain", "set-primary", "--clear", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("hermes-vps → null");
+  });
+
+  test("missing positional and missing --clear exits 1", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "set-primary", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+  });
+
+  test("--json emits structured output", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "set-primary", "hermes-vps", "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.previous).toBeNull();
+    expect(parsed.next).toBe("hermes-vps");
+    expect(parsed.changed).toBe(true);
+  });
 });
 
 describe("brain feedback", () => {
@@ -286,6 +377,16 @@ describe("brain dream", () => {
     expect(r.returncode).toBe(1);
     expect(r.stderr).toContain("--now");
   });
+
+  test("blank --agent exits 1 instead of falling back to the resolved default", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "dream", "--vault", vault, "--agent", "   "],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("--agent");
+  });
 });
 
 describe("brain apply-evidence", () => {
@@ -371,7 +472,7 @@ describe("brain apply-evidence", () => {
     expect(logs.length).toBe(1);
     const body = readFileSync(join(vault, "Brain", "log", logs[0]!), "utf8");
     expect(body).toContain("apply-evidence");
-    expect(body).toContain("[[pref-fast]]");
+    expect(body).toContain("[[pref-fast|");
   });
 });
 

@@ -40,7 +40,10 @@ import {
   brainManualPath,
   vaultRelative,
 } from "./paths.ts";
-import { DEFAULT_BRAIN_CONFIG_YAML } from "./policy.ts";
+import {
+  DEFAULT_BRAIN_CONFIG_YAML,
+  formatPrimaryAgentYamlValue,
+} from "./policy.ts";
 import type { BrainConfig } from "./types.ts";
 import { DEFAULT_BRAIN_CONFIG } from "./policy.ts";
 
@@ -76,6 +79,15 @@ export interface BootstrapBrainOptions {
    * (`OPEN_SECOND_BRAIN_CONFIG` env → XDG → `~/.config`).
    */
   readonly configPath?: string;
+  /**
+   * Optional primary-agent declaration for the vault. When provided on
+   * a fresh init (or with `force`), the value is written into
+   * `_brain.yaml.primary_agent`. On a re-run against an already
+   * initialised `_brain.yaml` the value is ignored — use
+   * `o2b brain set-primary` to mutate an existing config (it is
+   * idempotent and won't disturb the rest of the file).
+   */
+  readonly primaryAgent?: string;
 }
 
 export interface BootstrapBrainResult {
@@ -133,18 +145,22 @@ export function bootstrapBrain(
     mkdirSync(dir, { recursive: true });
   }
 
-  // 2. `_brain.yaml` — default config.
+  // 2. `_brain.yaml` — default config (with optional primary_agent).
   const brainYamlPath = brainConfigPath(vault);
   const brainYamlRel = vaultRelative(brainYamlPath, vault);
+  const initialYaml = applyPrimaryAgentToYaml(
+    DEFAULT_BRAIN_CONFIG_YAML,
+    opts.primaryAgent,
+  );
   if (existsSync(brainYamlPath)) {
     if (force) {
-      atomicWriteFileSync(brainYamlPath, DEFAULT_BRAIN_CONFIG_YAML);
+      atomicWriteFileSync(brainYamlPath, initialYaml);
       overwritten.push(brainYamlRel);
     } else {
       skipped.push(brainYamlRel);
     }
   } else {
-    atomicWriteFileSync(brainYamlPath, DEFAULT_BRAIN_CONFIG_YAML);
+    atomicWriteFileSync(brainYamlPath, initialYaml);
     created.push(brainYamlRel);
   }
 
@@ -249,6 +265,26 @@ function escapeRegex(text: string): string {
 }
 
 /**
+ * Replace the `primary_agent: null` line in the default `_brain.yaml`
+ * body with the operator-supplied value, when provided. Trimmed,
+ * empty-string-rejecting (the validator would catch that at load time,
+ * but we fail loud here so an init that intended to declare a primary
+ * does not silently fall back to `null`).
+ *
+ * The substitution is anchored on the literal `^primary_agent:` line
+ * so re-running the helper against an already-customised YAML stays
+ * idempotent for the relevant slot.
+ */
+function applyPrimaryAgentToYaml(
+  yamlBody: string,
+  primaryAgent: string | undefined,
+): string {
+  if (primaryAgent === undefined) return yamlBody;
+  const line = `primary_agent: ${formatPrimaryAgentYamlValue(primaryAgent)}`;
+  return yamlBody.replace(/^primary_agent:.*$/m, line);
+}
+
+/**
  * Best-effort display name for the vault: the trailing directory name
  * with separators stripped. Falls back to the literal `Second Brain`
  * if the vault path has no usable basename.
@@ -258,4 +294,3 @@ function vaultDisplayName(vault: string): string {
   const last = parts.length > 0 ? parts[parts.length - 1]! : "";
   return last !== "" ? last : "Second Brain";
 }
-

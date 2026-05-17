@@ -168,6 +168,56 @@ describe("bootstrapBrain — force overwrite", () => {
   });
 });
 
+describe("bootstrapBrain — primary_agent option", () => {
+  test("fresh init writes the supplied primary_agent into _brain.yaml", () => {
+    bootstrapBrain(vault, { configPath, primaryAgent: "hermes-vps" });
+    const yaml = readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
+    expect(yaml).toMatch(/^primary_agent: "hermes-vps"$/m);
+    expect(yaml).not.toMatch(/^primary_agent: null$/m);
+  });
+
+  test("fresh init preserves comment-like primary_agent values by quoting", () => {
+    bootstrapBrain(vault, {
+      configPath,
+      primaryAgent: "hermes lead # primary",
+    });
+    const yaml = readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
+    expect(yaml).toMatch(/^primary_agent: "hermes lead # primary"$/m);
+  });
+
+  test("default keeps primary_agent: null", () => {
+    bootstrapBrain(vault, { configPath });
+    const yaml = readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
+    expect(yaml).toMatch(/^primary_agent: null$/m);
+  });
+
+  test("re-run without primaryAgent preserves the existing line", () => {
+    bootstrapBrain(vault, { configPath, primaryAgent: "hermes-vps" });
+    bootstrapBrain(vault, { configPath });
+    const yaml = readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
+    expect(yaml).toMatch(/^primary_agent: "hermes-vps"$/m);
+  });
+
+  test("force rewrite with primaryAgent overrides the file", () => {
+    bootstrapBrain(vault, { configPath });
+    bootstrapBrain(vault, { configPath, force: true, primaryAgent: "claude-vps" });
+    const yaml = readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
+    expect(yaml).toMatch(/^primary_agent: "claude-vps"$/m);
+  });
+
+  test("empty-string primaryAgent throws (fail loud, not silent fallback)", () => {
+    expect(() =>
+      bootstrapBrain(vault, { configPath, primaryAgent: "   " }),
+    ).toThrow(/primary_agent/);
+  });
+
+  test("primaryAgent with a line break is rejected instead of corrupting YAML", () => {
+    expect(() =>
+      bootstrapBrain(vault, { configPath, primaryAgent: "agent\nsnapshots:" }),
+    ).toThrow(/disallowed character/);
+  });
+});
+
 describe("bootstrapBrain — missing machine config", () => {
   test("throws an error naming `o2b init` when the plugin config does not exist", () => {
     const missing = join(configHome, "does-not-exist.yaml");

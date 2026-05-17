@@ -40,7 +40,7 @@ import { join } from "node:path";
 
 import { backlinkCount, buildBacklinkIndex } from "./backlinks.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
-import { normaliseWikilinkTarget } from "./wikilink.ts";
+import { normaliseWikilinkTarget, renderPrefLink } from "./wikilink.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import { parseLogDay, type BrainLogEntry } from "./log.ts";
 import {
@@ -86,6 +86,7 @@ export interface RenderDigestResult {
 export interface DigestJsonNewUnconfirmed {
   readonly id: string;
   readonly topic: string;
+  readonly principle: string;
   readonly scope: string | null;
   readonly signal_count: number;
   readonly unconfirmed_until: string;
@@ -95,6 +96,7 @@ export interface DigestJsonNewUnconfirmed {
 export interface DigestJsonConfirmed {
   readonly id: string;
   readonly topic: string;
+  readonly principle: string;
   readonly scope: string | null;
   readonly confirmed_at: string;
   readonly first_applied_artifact: string | null;
@@ -103,6 +105,7 @@ export interface DigestJsonConfirmed {
 export interface DigestJsonRetired {
   readonly id: string;
   readonly topic: string;
+  readonly principle: string;
   readonly scope: string | null;
   readonly retired_at: string;
   readonly reason: string;
@@ -111,6 +114,12 @@ export interface DigestJsonRetired {
 
 export interface DigestJsonConfidenceShift {
   readonly id: string;
+  /**
+   * Human-readable title sourced from the referenced pref or retired's
+   * `principle` field. Empty string when the id does not resolve to a
+   * known artifact (the markdown renderer falls back to bare `[[id]]`).
+   */
+  readonly principle: string;
   readonly from: BrainConfidence | string;
   readonly to: BrainConfidence | string;
   readonly applied_count: number | null;
@@ -119,6 +128,8 @@ export interface DigestJsonConfidenceShift {
 
 export interface DigestJsonContradiction {
   readonly id: string;
+  /** See {@link DigestJsonConfidenceShift.principle}. */
+  readonly principle: string;
   readonly topic: string | null;
   readonly description: string;
 }
@@ -132,6 +143,7 @@ export interface DigestJsonContradiction {
 export interface DigestJsonTopApplied {
   readonly id: string;
   readonly topic: string;
+  readonly principle: string;
   readonly scope: string | null;
   readonly applied_count: number;
   readonly violated_count: number;
@@ -147,6 +159,7 @@ export interface DigestJsonTopApplied {
 export interface DigestJsonTopReferenced {
   readonly id: string;
   readonly topic: string;
+  readonly principle: string;
   readonly scope: string | null;
   readonly backlink_count: number;
 }
@@ -273,6 +286,7 @@ function collectDigestData(
       new_unconfirmed.push({
         id: pref.id,
         topic: pref.topic,
+        principle: pref.principle,
         scope: pref.scope ?? null,
         signal_count: pref.evidenced_by.length,
         unconfirmed_until: pref.unconfirmed_until,
@@ -283,6 +297,7 @@ function collectDigestData(
       confirmed.push({
         id: pref.id,
         topic: pref.topic,
+        principle: pref.principle,
         scope: pref.scope ?? null,
         confirmed_at: pref.confirmed_at!,
         first_applied_artifact: findFirstAppliedArtifact(vault, pref.id),
@@ -292,13 +307,15 @@ function collectDigestData(
 
   // 2. Iterate retired/ for entries retired in window.
   const retiredEntries: DigestJsonRetired[] = [];
-  for (const { ret, path } of readAllRetired(vault)) {
+  const retiredAll = readAllRetired(vault);
+  for (const { ret, path } of retiredAll) {
     void path;
     if (inWindow(ret.retired_at)) {
       const daysStale = daysStaleFor(ret);
       retiredEntries.push({
         id: ret.id,
         topic: ret.topic,
+        principle: ret.principle,
         scope: ret.scope ?? null,
         retired_at: ret.retired_at,
         reason: ret.retired_reason,
@@ -308,10 +325,16 @@ function collectDigestData(
   }
 
   // 3 & 4. Confidence shifts and contradictions — degraded gracefully
-  // when payload data is missing.
+  // when payload data is missing. The extractors look principles up
+  // against the combined pref + retired index so the markdown renderer
+  // can emit titled wikilinks; ids that resolve to neither map fall
+  // back to an empty principle (and a bare `[[id]]` link).
+  const idToPrinciple = new Map<string, string>();
+  for (const { pref } of preferences) idToPrinciple.set(pref.id, pref.principle);
+  for (const { ret } of retiredAll) idToPrinciple.set(ret.id, ret.principle);
   const logEntries = readLogsInWindow(vault, since, until);
-  const confidenceShifts = extractConfidenceShifts(logEntries);
-  const contradictions = extractContradictions(logEntries);
+  const confidenceShifts = extractConfidenceShifts(logEntries, idToPrinciple);
+  const contradictions = extractContradictions(logEntries, idToPrinciple);
 
   // Stable ordering — id ascending so two runs on the same fixture
   // produce byte-identical output.
@@ -352,6 +375,7 @@ function pickTopApplied(
   return active.slice(0, HOT_SECTION_LIMIT).map(({ pref }) => ({
     id: pref.id,
     topic: pref.topic,
+    principle: pref.principle,
     scope: pref.scope ?? null,
     applied_count: pref.applied_count,
     violated_count: pref.violated_count,
@@ -379,6 +403,7 @@ function pickTopReferenced(
   return scored.slice(0, HOT_SECTION_LIMIT).map(({ pref, count }) => ({
     id: pref.id,
     topic: pref.topic,
+    principle: pref.principle,
     scope: pref.scope ?? null,
     backlink_count: count,
   }));
@@ -546,6 +571,7 @@ function daysStaleFor(ret: BrainRetired): number | null {
 
 function extractConfidenceShifts(
   entries: ReadonlyArray<BrainLogEntry>,
+  idToPrinciple: ReadonlyMap<string, string>,
 ): ReadonlyArray<DigestJsonConfidenceShift> {
   const out: DigestJsonConfidenceShift[] = [];
   for (const e of entries) {
@@ -555,7 +581,7 @@ function extractConfidenceShifts(
     const shifts = e.body["confidence_shifts"];
     if (Array.isArray(shifts)) {
       for (const raw of shifts) {
-        const parsed = parseShiftLine(raw);
+        const parsed = parseShiftLine(raw, idToPrinciple);
         if (parsed) out.push(parsed);
       }
     }
@@ -563,7 +589,10 @@ function extractConfidenceShifts(
   return out;
 }
 
-function parseShiftLine(raw: string): DigestJsonConfidenceShift | null {
+function parseShiftLine(
+  raw: string,
+  idToPrinciple: ReadonlyMap<string, string>,
+): DigestJsonConfidenceShift | null {
   // Tolerant parser: accept `[[pref-x]] medium -> high (applied: N, violated: M)`
   // and variations (en-dash / em-dash for arrow, missing parens).
   const m = /^\s*(?:\[\[([^\]]+)\]\]|(\S+))\s+(\w+)\s*(?:->|→)\s*(\w+)(?:\s*\(([^)]*)\))?/.exec(
@@ -582,11 +611,19 @@ function parseShiftLine(raw: string): DigestJsonConfidenceShift | null {
     const violMatch = /violated\s*[:=]?\s*(\d+)/i.exec(m[5]);
     if (violMatch) violated = parseInt(violMatch[1]!, 10);
   }
-  return { id: idRaw, from, to, applied_count: applied, violated_count: violated };
+  return {
+    id: idRaw,
+    principle: idToPrinciple.get(idRaw) ?? "",
+    from,
+    to,
+    applied_count: applied,
+    violated_count: violated,
+  };
 }
 
 function extractContradictions(
   entries: ReadonlyArray<BrainLogEntry>,
+  idToPrinciple: ReadonlyMap<string, string>,
 ): ReadonlyArray<DigestJsonContradiction> {
   const out: DigestJsonContradiction[] = [];
   for (const e of entries) {
@@ -594,7 +631,7 @@ function extractContradictions(
     const list = e.body["contradictions"];
     if (Array.isArray(list)) {
       for (const raw of list) {
-        const parsed = parseContradictionLine(raw);
+        const parsed = parseContradictionLine(raw, idToPrinciple);
         if (parsed) out.push(parsed);
       }
     }
@@ -602,7 +639,10 @@ function extractContradictions(
   return out;
 }
 
-function parseContradictionLine(raw: string): DigestJsonContradiction | null {
+function parseContradictionLine(
+  raw: string,
+  idToPrinciple: ReadonlyMap<string, string>,
+): DigestJsonContradiction | null {
   // Best-effort: extract a wikilink as id and treat the rest as topic
   // or description. A missing wikilink means we cannot anchor the
   // contradiction to a preference; skip rather than fabricate.
@@ -614,7 +654,12 @@ function parseContradictionLine(raw: string): DigestJsonContradiction | null {
   let topic: string | null = null;
   const tm = /topic\s*[:=]\s*([A-Za-z0-9_-]+)/.exec(description);
   if (tm) topic = tm[1]!;
-  return { id, topic, description };
+  return {
+    id,
+    principle: idToPrinciple.get(id) ?? "",
+    topic,
+    description,
+  };
 }
 
 // ----- Markdown rendering --------------------------------------------------
@@ -649,7 +694,7 @@ function renderMarkdown(
       const scope = item.scope ?? "—";
       const trialDay = item.unconfirmed_until.slice(0, 10);
       lines.push(
-        `- [[${item.id}]] — ${scope}, ${item.signal_count} signals, trial ends ${trialDay}`,
+        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${item.signal_count} signals, trial ends ${trialDay}`,
       );
     }
     lines.push("");
@@ -659,7 +704,9 @@ function renderMarkdown(
     for (const item of data.confirmed) {
       const scope = item.scope ?? "—";
       const artifact = item.first_applied_artifact ?? "_(none)_";
-      lines.push(`- [[${item.id}]] — ${scope}, first applied in ${artifact}`);
+      lines.push(
+        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, first applied in ${artifact}`,
+      );
     }
     lines.push("");
   }
@@ -671,7 +718,9 @@ function renderMarkdown(
         item.reason === BRAIN_RETIRED_REASON.staleNoEvidence && item.days_stale !== null
           ? `${item.reason} (${item.days_stale} days)`
           : item.reason;
-      lines.push(`- [[${item.id}]] — ${scope}, ${detail}`);
+      lines.push(
+        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${detail}`,
+      );
     }
     lines.push("");
   }
@@ -681,7 +730,9 @@ function renderMarkdown(
       const scope = item.scope ?? "—";
       const stats = `applied: ${item.applied_count}, violated: ${item.violated_count}`;
       const tags = item.status === "quarantine" ? " [quarantine]" : "";
-      lines.push(`- [[${item.id}]] — ${scope}, ${stats}${tags}`);
+      lines.push(
+        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${stats}${tags}`,
+      );
     }
     lines.push("");
   }
@@ -689,7 +740,9 @@ function renderMarkdown(
     lines.push(`## Top referenced (${data.top_referenced.length})`, "");
     for (const item of data.top_referenced) {
       const scope = item.scope ?? "—";
-      lines.push(`- [[${item.id}]] — ${scope}, ${item.backlink_count} inbound`);
+      lines.push(
+        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${item.backlink_count} inbound`,
+      );
     }
     lines.push("");
   }
@@ -700,7 +753,9 @@ function renderMarkdown(
         item.applied_count !== null && item.violated_count !== null
           ? ` (applied: ${item.applied_count}, violated: ${item.violated_count})`
           : "";
-      lines.push(`- [[${item.id}]] ${item.from} → ${item.to}${stats}`);
+      lines.push(
+        `- ${renderPrefLink({ id: item.id, principle: item.principle })} ${item.from} → ${item.to}${stats}`,
+      );
     }
     lines.push("");
   }
@@ -708,7 +763,9 @@ function renderMarkdown(
     lines.push("## Contradictions", "");
     for (const item of data.contradictions) {
       const topic = item.topic ? ` (topic: ${item.topic})` : "";
-      lines.push(`- [[${item.id}]] — ${item.description}${topic}`);
+      lines.push(
+        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${item.description}${topic}`,
+      );
     }
     lines.push("");
   }

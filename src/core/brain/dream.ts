@@ -66,7 +66,7 @@ import {
   vaultRelative,
 } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";
-import { parseWikilink } from "./wikilink.ts";
+import { parseWikilink, renderPrefLink } from "./wikilink.ts";
 import {
   BRAIN_APPLY_RESULT,
   BRAIN_CONFIDENCE,
@@ -83,6 +83,16 @@ import {
 } from "./types.ts";
 
 // ----- Public types --------------------------------------------------------
+
+/**
+ * Structured non-fatal warning emitted alongside a dream summary. The
+ * dream pass still completes when warnings are present; callers
+ * (CLI / MCP) decide whether to surface them.
+ */
+export interface DreamWarning {
+  readonly code: string;
+  readonly message: string;
+}
 
 export interface DreamRunSummary {
   /** `dream-YYYY-MM-DD-HHMMSS`. */
@@ -107,6 +117,13 @@ export interface DreamRunSummary {
    * land in the `signal-suppressed` log event).
    */
   readonly suppressed: ReadonlyArray<string>;
+  /**
+   * Non-fatal warnings raised during the run. Currently emitted only
+   * for `non-primary-dream-run` (the runtime running dream differs
+   * from `Brain/_brain.yaml.primary_agent`); the list is the
+   * extension point for future advisory checks.
+   */
+  readonly warnings: ReadonlyArray<DreamWarning>;
   /** Snapshot file (absent on a no-op run). */
   readonly snapshot_path?: string;
   /** Log file the run summary landed in (absent on a no-op run). */
@@ -120,6 +137,15 @@ export interface DreamOptions {
   readonly now?: Date;
   /** When true, compute the plan but make no writes. */
   readonly dryRun?: boolean;
+  /**
+   * Identity of the agent invoking dream. Compared against
+   * `Brain/_brain.yaml.primary_agent`; mismatch emits a
+   * `non-primary-dream-run` warning and tags the dream summary log
+   * event with `non_primary_agent: <name>`. When unset, the warning
+   * never fires (back-compat with callers that have not been
+   * threaded yet); the CLI always provides the value.
+   */
+  readonly agentName?: string;
 }
 
 // ----- Internal scan types ------------------------------------------------
@@ -140,6 +166,7 @@ interface RetiredRecord {
   readonly path: string;
   readonly topic: string;
   readonly id: string;
+  readonly principle: string;
   readonly scope?: string;
   /**
    * The free-form user reason passed to `o2b brain reject --reason`.
@@ -168,6 +195,26 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   const cfg = loadBrainConfig(vault);
   const runId = formatRunId(now);
   const wikilinkToRun = `[[Brain/log/${isoDate(now)}]]`;
+
+  // Collect non-fatal warnings raised during the run. The
+  // non-primary-dream-run check is the first one: when the caller
+  // declares an agent name and it differs from the vault's declared
+  // primary, surface a structured warning. We do NOT abort — the
+  // declaration is observability, not access control.
+  const warnings: DreamWarning[] = [];
+  const callerAgent = opts.agentName?.trim() ?? "";
+  const isNonPrimary =
+    cfg.primary_agent !== null
+    && callerAgent.length > 0
+    && callerAgent !== cfg.primary_agent;
+  if (isNonPrimary) {
+    warnings.push({
+      code: "non-primary-dream-run",
+      message:
+        `dream run from agent '${callerAgent}', but primary is `
+        + `'${cfg.primary_agent}'. Convention violation, run proceeds.`,
+    });
+  }
 
   // 0. Scan the whole Brain/ tree. Corrupted files (frontmatter
   //    parse-errors) are surfaced separately so the planning phase
@@ -225,6 +272,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       contradictions: [...plan.contradictionTopics],
       moved_to_processed: [],
       suppressed: [],
+      warnings: Object.freeze([...warnings]),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -269,6 +317,11 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           ),
           status: BRAIN_PREFERENCE_STATUS.unconfirmed,
           evidenced_by: np.evidencedBy,
+          // No evidence yet → Wilson lower bound on (0, 0) is 0. Pre-
+          // seed the field so refresh on the next pass does not have
+          // to treat `null` as "needs update" (which would lift
+          // `changed: false` no-ops into spurious rewrites).
+          confidence_value: 0,
           recentApplied: [],
           recentViolated: [],
           ...(np.scope ? { scope: np.scope } : {}),
@@ -301,6 +354,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           violated_count: update.violated_count,
           last_evidence_at: update.last_evidence_at,
           confidence: update.confidence,
+          confidence_value: update.confidence_value,
           pinned: update.pinned,
           recentApplied: ev.applied,
           recentViolated: ev.violated,
@@ -412,13 +466,31 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       });
     }
 
-    // Summary event last.
-    const newUnconfirmedIds = plan.newUnconfirmed.map((p) => `[[pref-${p.slug}]]`);
-    const confirmedIds = Array.from(refresh.confirmed.values()).map(
-      (slug) => `[[pref-${slug}]]`,
+    // Summary event last. Link rendering threads the in-memory
+    // principle alongside the id so the digest / Obsidian view can
+    // hover-preview the rule without an extra file open.
+    const slugToPrefPrinciple = new Map<string, string>();
+    for (const rec of scan.preferences) {
+      const recSlug = rec.pref.id.startsWith("pref-")
+        ? rec.pref.id.slice("pref-".length)
+        : rec.pref.id;
+      slugToPrefPrinciple.set(recSlug, rec.pref.principle);
+    }
+    const newUnconfirmedIds = plan.newUnconfirmed.map((p) =>
+      renderPrefLink({ id: `pref-${p.slug}`, principle: p.principle }),
+    );
+    const confirmedIds = Array.from(refresh.confirmed.values()).map((slug) =>
+      renderPrefLink({
+        id: `pref-${slug}`,
+        principle:
+          refresh.updated.get(slug)?.principle
+          ?? slugToPrefPrinciple.get(slug)
+          ?? "",
+      }),
     );
     const retiredEntries = plan.retires.map(
-      (r) => `[[ret-${r.slug}]] (${r.reason})`,
+      (r) =>
+        `${renderPrefLink({ id: `ret-${r.slug}`, principle: r.principle })} (${r.reason})`,
     );
     const summaryBody: Record<string, string | ReadonlyArray<string>> = {
       run_id: runId,
@@ -434,6 +506,25 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       summaryBody["suppressed"] = plan.signalsSuppressed.map(
         (s) => `${s.signal} ← ${s.retired}`,
       );
+    }
+    if (refresh.bandDrops.length > 0) {
+      // Format matches the digest's tolerant `parseShiftLine` parser:
+      // `[[pref-…|principle]] <from> -> <to> (applied: N, violated: M)`.
+      summaryBody["confidence_shifts"] = refresh.bandDrops.map((d) =>
+        [
+          renderPrefLink({ id: d.id, principle: d.principle }),
+          d.previous,
+          "->",
+          d.next,
+          `(applied: ${d.applied}, violated: ${d.violated})`,
+        ].join(" "),
+      );
+    }
+    if (isNonPrimary) {
+      // Audit-trail row matching the structured warning. Stored
+      // alongside `run_id` so a non-primary dream pass is greppable in
+      // the log without parsing the structured warnings array.
+      summaryBody["non_primary_agent"] = callerAgent;
     }
 
     writeEvent(vault, {
@@ -471,6 +562,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     suppressed: plan.signalsSuppressed.map((s) =>
       s.signal.replace(/^\[\[/, "").replace(/\]\]$/, ""),
     ),
+    warnings: Object.freeze([...warnings]),
     ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
     ...(dryRun
       ? { dry_run: true }
@@ -536,6 +628,8 @@ function scanBrain(vault: string): ScanResult {
         const [meta] = parseFrontmatter(full);
         const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
         const id = typeof meta["id"] === "string" ? meta["id"] : "";
+        const principle =
+          typeof meta["principle"] === "string" ? meta["principle"] : "";
         const scope = typeof meta["scope"] === "string" ? meta["scope"] : undefined;
         const userReason =
           typeof meta["user_rejected_reason"] === "string"
@@ -546,6 +640,7 @@ function scanBrain(vault: string): ScanResult {
             path: full,
             topic,
             id,
+            principle,
             ...(scope ? { scope } : {}),
             ...(userReason ? { user_rejected_reason: userReason } : {}),
           });
@@ -584,6 +679,7 @@ interface PlanState {
 
 interface SignalSuppressedPlan {
   readonly signal: string;
+  /** Pre-rendered `[[ret-slug|principle]]` wikilink for the suppressor. */
   readonly retired: string;
   readonly reason: string;
   readonly topic: string;
@@ -607,16 +703,24 @@ interface NewUnconfirmedPlan {
 
 interface RetirePlan {
   readonly slug: string;
+  /**
+   * Principle of the preference being retired, captured at plan time
+   * so the dream summary log payload can render a titled wikilink
+   * (`[[ret-slug|principle]]`) without re-reading the file after move.
+   */
+  readonly principle: string;
   readonly reason: BrainRetiredReason;
   readonly supersededBy?: string;
 }
 
 interface NotedRedundantPlan {
+  /** Pre-rendered `[[pref-id|principle]]` wikilink for the active pref. */
   readonly preference: string;
   readonly signal: string;
 }
 
 interface RetainPinnedPlan {
+  /** Pre-rendered `[[pref-id|principle]]` wikilink for the pinned pref. */
   readonly preference: string;
   readonly reason: BrainRetiredReason;
 }
@@ -725,7 +829,10 @@ function planTopics(
         }
         plan.signalsSuppressed.push({
           signal: `[[${sig.signal.id}]]`,
-          retired: `[[${suppressor.id}]]`,
+          retired: renderPrefLink({
+            id: suppressor.id,
+            principle: suppressor.principle,
+          }),
           reason: suppressor.user_rejected_reason!,
           topic,
         });
@@ -767,6 +874,9 @@ function planTopics(
       // include the minority signals so the audit trail preserves the
       // contradiction story even after the file moves to processed/.
       const evidencedBy = windowedSigs.map((s) => `[[${s.signal.id}]]`);
+      const supersedesRecord = supersedes
+        ? retiredForTopic!.find((r) => r.id === supersedes)
+        : undefined;
       plan.newUnconfirmed.push({
         slug,
         topic,
@@ -774,7 +884,14 @@ function planTopics(
         principle,
         evidencedBy,
         sign,
-        ...(supersedes ? { supersedes: `[[${supersedes}]]` } : {}),
+        ...(supersedesRecord
+          ? {
+              supersedes: renderPrefLink({
+                id: supersedesRecord.id,
+                principle: supersedesRecord.principle,
+              }),
+            }
+          : {}),
       });
       // Every contributing signal in the window gets moved.
       for (const s of windowedSigs) {
@@ -861,7 +978,10 @@ function handleSignalsOnActivePref(
   // Same-sign → note redundant + move to processed.
   for (const s of sameSign) {
     plan.notedRedundant.push({
-      preference: `[[${active.pref.id}]]`,
+      preference: renderPrefLink({
+        id: active.pref.id,
+        principle: active.pref.principle,
+      }),
       signal: `[[${s.signal.id}]]`,
     });
     recordSignalMove(plan, s);
@@ -874,7 +994,10 @@ function handleSignalsOnActivePref(
       : active.pref.id;
     if (isPinned(active.pref)) {
       plan.retainPinned.push({
-        preference: `[[${active.pref.id}]]`,
+        preference: renderPrefLink({
+          id: active.pref.id,
+          principle: active.pref.principle,
+        }),
         reason: BRAIN_RETIRED_REASON.rebutted,
       });
       // Rebuttal signals on a pinned pref still get moved out — they
@@ -884,6 +1007,7 @@ function handleSignalsOnActivePref(
     } else {
       plan.retires.push({
         slug,
+        principle: active.pref.principle,
         reason: BRAIN_RETIRED_REASON.rebutted,
       });
       for (const s of opposing) recordSignalMove(plan, s);
@@ -905,7 +1029,10 @@ function handleSignalsOnActivePref(
         principle,
         evidencedBy,
         sign: oppositeSign,
-        supersedes: `[[${active.pref.id}]]`,
+        supersedes: renderPrefLink({
+          id: active.pref.id,
+          principle: active.pref.principle,
+        }),
       });
     }
   } else if (opposing.length > 0) {
@@ -986,7 +1113,24 @@ interface RefreshUpdate {
   readonly violated_count: number;
   readonly last_evidence_at: string | null;
   readonly confidence: BrainConfidence;
+  readonly confidence_value: number;
   readonly pinned: boolean;
+}
+
+/**
+ * Pref → recorded band drop within the current dream pass. Captured
+ * during refresh so the digest can render a `## Confidence drops`
+ * section without re-deriving transitions from the log.
+ */
+export interface RefreshBandDrop {
+  readonly id: string;
+  readonly principle: string;
+  readonly previous: BrainConfidence;
+  readonly next: BrainConfidence;
+  readonly applied: number;
+  readonly violated: number;
+  readonly previous_value: number | null;
+  readonly next_value: number;
 }
 
 interface RefreshResult {
@@ -994,6 +1138,12 @@ interface RefreshResult {
   readonly confirmed: Set<string>;
   /** Slug → full updated frontmatter to write. */
   readonly updated: Map<string, RefreshUpdate>;
+  /**
+   * Preferences whose `confidence` band dropped (e.g. `high → medium`)
+   * during the refresh phase. Newest-first stable order (insertion
+   * order at construction).
+   */
+  readonly bandDrops: RefreshBandDrop[];
 }
 
 interface ApplyEvidenceEntry {
@@ -1047,6 +1197,7 @@ function planRefresh(
 ): RefreshResult {
   const confirmed = new Set<string>();
   const updated = new Map<string, RefreshUpdate>();
+  const bandDrops: RefreshBandDrop[] = [];
 
   // Index evidence by slug.
   const bySlug = new Map<string, ApplyEvidenceEntry[]>();
@@ -1087,6 +1238,7 @@ function planRefresh(
     if (outdatedCount > 0) {
       plan.retires.push({
         slug,
+        principle: rec.pref.principle,
         reason: BRAIN_RETIRED_REASON.supersededByContext,
       });
       continue;
@@ -1116,12 +1268,16 @@ function planRefresh(
       if (newViolated) {
         if (isPinned(rec.pref)) {
           plan.retainPinned.push({
-            preference: `[[${rec.pref.id}]]`,
+            preference: renderPrefLink({
+              id: rec.pref.id,
+              principle: rec.pref.principle,
+            }),
             reason: BRAIN_RETIRED_REASON.quarantineViolated,
           });
         } else {
           plan.retires.push({
             slug,
+            principle: rec.pref.principle,
             reason: BRAIN_RETIRED_REASON.quarantineViolated,
           });
           // Skip refresh — moveToRetired will read the on-disk
@@ -1133,7 +1289,7 @@ function planRefresh(
       }
     }
 
-    const confidenceValue = computeConfidence(
+    const confidence = computeConfidence(
       applied,
       violated,
       lastEvidence,
@@ -1148,13 +1304,24 @@ function planRefresh(
     // forward — a pref whose counters are stable but whose body
     // still has the v0.9.x placeholder will fail the body check and
     // get rewritten on the next pass.
+    const previousValue = rec.pref.confidence_value;
+    // For numeric drift, `null` on disk (legacy pre-v0.10.3 file) is
+    // treated as "matches whatever we just computed" so a no-op
+    // rerun stays a no-op. The body-bytes check in
+    // `wouldRewritePreference` below still triggers the one-off
+    // migration write because the legacy frontmatter shape will not
+    // match the new one byte-for-byte.
+    const valueDifferent =
+      previousValue !== null
+      && Math.abs(previousValue - confidence.value) > 1e-6;
     const countersChanged =
       applied !== rec.pref.applied_count ||
       violated !== rec.pref.violated_count ||
       lastEvidence !== rec.pref.last_evidence_at ||
       status !== rec.pref.status ||
       confirmedAt !== rec.pref.confirmed_at ||
-      confidenceValue !== rec.pref.confidence;
+      confidence.band !== rec.pref.confidence ||
+      valueDifferent;
 
     const prospective = {
       slug,
@@ -1169,7 +1336,8 @@ function planRefresh(
       applied_count: applied,
       violated_count: violated,
       last_evidence_at: lastEvidence,
-      confidence: confidenceValue,
+      confidence: confidence.band,
+      confidence_value: confidence.value,
       pinned: rec.pref.pinned,
     };
 
@@ -1190,42 +1358,147 @@ function planRefresh(
     }
 
     updated.set(slug, prospective);
+
+    // Capture band drops for the digest. A drop is any transition
+    // where the new band ranks lower than the previous (high →
+    // medium, medium → low, high → low). Stable across re-runs as
+    // long as the underlying counters do — the digest only renders
+    // it when a real transition occurred in this pass.
+    if (BAND_RANK[confidence.band] < BAND_RANK[rec.pref.confidence]) {
+      bandDrops.push(
+        Object.freeze({
+          id: rec.pref.id,
+          principle: rec.pref.principle,
+          previous: rec.pref.confidence,
+          next: confidence.band,
+          applied,
+          violated,
+          previous_value: rec.pref.confidence_value,
+          next_value: confidence.value,
+        }),
+      );
+    }
   }
 
-  return { confirmed, updated };
+  return { confirmed, updated, bandDrops };
 }
 
-function computeConfidence(
+/**
+ * Confidence computation. Returns both the categorical band (the
+ * existing agent-visible contract) and the numeric value behind it
+ * (§10 Tier-A addition).
+ *
+ * The numeric value is `Wilson 95% lower bound × freshness decay`:
+ *
+ *   - `wilson_low(applied, n)` where `n = applied + violated` —
+ *     a conservative lower bound on the application rate. `n == 0`
+ *     yields `0`.
+ *   - `freshness` linearly decays from `1.0` at age 0 to `0.0` at
+ *     `retire.stale_evidence_days`. `null` last_evidence_at → `0`.
+ *
+ * Band derivation is the **max** of two views:
+ *
+ *   1. The legacy step-function (kept verbatim) — preserves every
+ *      published boundary so existing tests and agent contracts stay
+ *      intact: `applied <= low_max_applied` ⇒ `low`,
+ *      `violated >= applied` ⇒ `low`, `applied >= high_min_applied ∧
+ *      violated == 0 ∧ fresh` ⇒ `high`, else `medium`.
+ *   2. The numeric thresholds (`medium_min`, `high_min`) applied to
+ *      `value` — gives a `low | medium | high` view that can only
+ *      lift the legacy band, never lower it.
+ *
+ * Taking the max means a future operator can lower `high_min` to
+ * promote `medium` prefs to `high` based on observed performance,
+ * without ever demoting a pref that the legacy view already calls
+ * `high` (because the legacy floor sticks). The numeric value is
+ * always returned and is what the digest's drop tracker compares
+ * across runs.
+ */
+export interface ConfidenceComputeResult {
+  readonly value: number;
+  readonly band: BrainConfidence;
+}
+
+const BAND_RANK: Readonly<Record<BrainConfidence, number>> = Object.freeze({
+  low: 0,
+  medium: 1,
+  high: 2,
+});
+
+export function computeConfidence(
   applied: number,
   violated: number,
   lastEvidenceAt: string | null,
   cfg: BrainConfig,
   now: Date,
-): BrainConfidence {
-  // From §7.4:
-  //   if applied <= low_max_applied or (applied > 0 and violated >= applied):
-  //       confidence = low
-  //   elif applied >= high_min_applied and violated == 0 and fresh:
-  //       confidence = high
-  //   else:
-  //       confidence = medium
-  if (applied <= cfg.confidence.low_max_applied) return BRAIN_CONFIDENCE.low;
-  if (applied > 0 && violated >= applied) return BRAIN_CONFIDENCE.low;
-  let fresh = false;
+): ConfidenceComputeResult {
+  const n = applied + violated;
+  let wilsonLow = 0;
+  if (n > 0) {
+    const z = 1.96;
+    const z2 = z * z;
+    const pHat = applied / n;
+    const denom = 1 + z2 / n;
+    const centre = (pHat + z2 / (2 * n)) / denom;
+    const margin =
+      (z * Math.sqrt((pHat * (1 - pHat)) / n + z2 / (4 * n * n))) / denom;
+    wilsonLow = Math.max(0, centre - margin);
+  }
+  let freshness = 0;
   if (lastEvidenceAt) {
     const ageMs = now.getTime() - Date.parse(lastEvidenceAt);
-    const freshLimitMs =
-      cfg.retire.stale_evidence_days *
-      cfg.confidence.high_freshness_factor *
-      24 *
-      3600 *
-      1000;
-    fresh = Number.isFinite(ageMs) && ageMs < freshLimitMs;
+    if (Number.isFinite(ageMs)) {
+      const limitMs = cfg.retire.stale_evidence_days * 24 * 3600 * 1000;
+      if (limitMs > 0) {
+        freshness = Math.max(0, Math.min(1, 1 - ageMs / limitMs));
+      }
+    }
   }
-  if (applied >= cfg.confidence.high_min_applied && violated === 0 && fresh) {
-    return BRAIN_CONFIDENCE.high;
+  const rawValue = wilsonLow * freshness;
+  const value = Math.round(rawValue * 10000) / 10000;
+
+  // Legacy step-function band (the published contract).
+  let legacyBand: BrainConfidence = BRAIN_CONFIDENCE.medium;
+  if (applied <= cfg.confidence.low_max_applied) {
+    legacyBand = BRAIN_CONFIDENCE.low;
+  } else if (applied > 0 && violated >= applied) {
+    legacyBand = BRAIN_CONFIDENCE.low;
+  } else {
+    let highEligibleFresh = false;
+    if (lastEvidenceAt) {
+      const ageMs = now.getTime() - Date.parse(lastEvidenceAt);
+      const freshLimitMs =
+        cfg.retire.stale_evidence_days *
+        cfg.confidence.high_freshness_factor *
+        24 *
+        3600 *
+        1000;
+      highEligibleFresh = Number.isFinite(ageMs) && ageMs < freshLimitMs;
+    }
+    if (
+      applied >= cfg.confidence.high_min_applied
+      && violated === 0
+      && highEligibleFresh
+    ) {
+      legacyBand = BRAIN_CONFIDENCE.high;
+    } else {
+      legacyBand = BRAIN_CONFIDENCE.medium;
+    }
   }
-  return BRAIN_CONFIDENCE.medium;
+
+  // Numeric-threshold band (can only lift legacy when paired via max).
+  let numericBand: BrainConfidence;
+  if (value >= cfg.confidence.high_min) {
+    numericBand = BRAIN_CONFIDENCE.high;
+  } else if (value >= cfg.confidence.medium_min) {
+    numericBand = BRAIN_CONFIDENCE.medium;
+  } else {
+    numericBand = BRAIN_CONFIDENCE.low;
+  }
+
+  const band =
+    BAND_RANK[numericBand] > BAND_RANK[legacyBand] ? numericBand : legacyBand;
+  return Object.freeze({ value, band });
 }
 
 // ----- Auto-retires (expired-unconfirmed, stale-no-evidence) --------------
@@ -1259,12 +1532,16 @@ function planAutoRetires(
       if (Number.isFinite(deadline) && now.getTime() > deadline) {
         if (isPinned(rec.pref)) {
           plan.retainPinned.push({
-            preference: `[[${rec.pref.id}]]`,
+            preference: renderPrefLink({
+              id: rec.pref.id,
+              principle: rec.pref.principle,
+            }),
             reason: BRAIN_RETIRED_REASON.expiredUnconfirmed,
           });
         } else {
           plan.retires.push({
             slug,
+            principle: rec.pref.principle,
             reason: BRAIN_RETIRED_REASON.expiredUnconfirmed,
           });
           // Remove the refresh update — no point writing immediately
@@ -1297,12 +1574,16 @@ function planAutoRetires(
         if (days > cfg.retire.stale_evidence_days) {
           if (isPinned(rec.pref)) {
             plan.retainPinned.push({
-              preference: `[[${rec.pref.id}]]`,
+              preference: renderPrefLink({
+                id: rec.pref.id,
+                principle: rec.pref.principle,
+              }),
               reason: BRAIN_RETIRED_REASON.staleNoEvidence,
             });
           } else {
             plan.retires.push({
               slug,
+              principle: rec.pref.principle,
               reason: BRAIN_RETIRED_REASON.staleNoEvidence,
             });
             refresh.updated.delete(slug);
@@ -1314,12 +1595,16 @@ function planAutoRetires(
       if (days > cfg.retire.stale_evidence_days) {
         if (isPinned(rec.pref)) {
           plan.retainPinned.push({
-            preference: `[[${rec.pref.id}]]`,
+            preference: renderPrefLink({
+              id: rec.pref.id,
+              principle: rec.pref.principle,
+            }),
             reason: BRAIN_RETIRED_REASON.staleNoEvidence,
           });
         } else {
           plan.retires.push({
             slug,
+            principle: rec.pref.principle,
             reason: BRAIN_RETIRED_REASON.staleNoEvidence,
           });
           refresh.updated.delete(slug);

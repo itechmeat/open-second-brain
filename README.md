@@ -125,7 +125,9 @@ o2b brain digest              Render a Markdown or JSON summary of recent Brain 
 o2b brain query               Read helper: by preference, by topic, or by log timestamp
 o2b brain reject              (CLI-only) Move a preference to retired/ with reason: user-rejected
 o2b brain pin / unpin         (CLI-only) Toggle pinned: true on a preference (exempt from auto-retire)
-o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot
+o2b brain set-primary         (CLI-only) Declare or clear primary_agent in Brain/_brain.yaml (--clear)
+o2b brain snapshot diff       (CLI-only) Read-only diff between two snapshots, or snapshot vs live Brain/
+o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot (--dry-run previews)
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, …)
 o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain scan-inline         Capture `@osb` markers from vault markdown files (Daily/, project notes, …)
@@ -226,13 +228,28 @@ o2b brain dream --vault /path/to/vault
 o2b brain digest --vault /path/to/vault --silent-if-empty
 ```
 
-Fourteen CLI verbs in total: `init`, `feedback`, `dream`,
+The Brain verbs in full: `init`, `feedback`, `dream`,
 `apply-evidence`, `digest`, `query`, `reject`, `pin`, `unpin`,
-`rollback`, `doctor`, `backlinks`, `scan-inline`, `import-session`,
-`migrate-frontmatter`. Seven are mirrored as MCP tools (`brain_*`);
-the rest are intentionally CLI-only because they change the
-protected set, overwrite vault state, or are operator-only
-maintenance commands.
+`set-primary`, `snapshot diff`, `rollback`, `doctor`, `backlinks`,
+`scan-inline`, `import-session`, `migrate-frontmatter`. Seven are
+mirrored as MCP tools (`brain_*`); the rest are intentionally
+CLI-only because they change the protected set, overwrite vault
+state, or are operator-only maintenance commands.
+
+### Cross-project setup
+
+When your coding work happens in a project directory that is not the
+vault itself, add a pointer snippet to your project's `CLAUDE.md` or
+`AGENTS.md` so the agent knows where to read preferences from. The
+canonical snippet, the rules for multi-device Syncthing setups, and
+the `o2b brain set-primary` invocation are in
+[`docs/cross-project-pointer.md`](docs/cross-project-pointer.md).
+
+A vault shared across hosts should declare a single
+`primary_agent` in `Brain/_brain.yaml` — the runtime that owns the
+dream cron. Dream runs from a different agent emit a non-fatal
+warning (stderr for CLI, `warnings` array for MCP) and tag the dream
+summary log with `non_primary_agent: <caller>`.
 
 ### Capture surfaces
 
