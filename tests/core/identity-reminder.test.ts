@@ -1,11 +1,26 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   __TEMPLATE_PATH_FOR_TESTS,
+  __resetEnvWarnedOnceForTests,
   buildReminder,
+  KNOWN_RUNTIME_TARGETS,
   loadReminderTemplate,
 } from "../../src/core/identity-reminder.ts";
+
+const FIXTURE_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "fixtures",
+  "identity-reminder",
+);
+
+function readFixture(target: string): string {
+  return readFileSync(resolve(FIXTURE_DIR, `${target}.txt`), "utf8").trimEnd();
+}
 
 describe("template", () => {
   test("template file exists at the resolved path", () => {
@@ -46,5 +61,70 @@ describe("Python parity", () => {
     const raw = readFileSync(__TEMPLATE_PATH_FOR_TESTS, "utf8");
     expect(raw).toMatch(/\{agent\}/);
     expect(__TEMPLATE_PATH_FOR_TESTS).toContain("templates/identity-reminder.txt");
+  });
+});
+
+describe("buildReminder per-target resolution", () => {
+  test("explicit target=hermes returns hermes template body", () => {
+    const out = buildReminder("test-agent", "hermes");
+    expect(out).toContain("Identity: @test-agent");
+    expect(out).toContain("Hermes turns are short");
+  });
+
+  test("explicit target=openclaw returns openclaw template body", () => {
+    const out = buildReminder("test-agent", "openclaw");
+    expect(out).toContain("OpenClaw has no session boundary");
+  });
+
+  test("no target falls back to common template", () => {
+    const out = buildReminder("test-agent");
+    expect(out).toContain("Identity: @test-agent");
+    expect(out).not.toContain("Hermes turns are short");
+    expect(out).not.toContain("OpenClaw has no session boundary");
+  });
+});
+
+describe("buildReminder fixture parity", () => {
+  for (const target of KNOWN_RUNTIME_TARGETS) {
+    test(`agent=test-agent target=${target} matches fixture`, () => {
+      const expected = readFixture(target);
+      const actual = buildReminder("test-agent", target);
+      expect(actual).toBe(expected);
+    });
+  }
+});
+
+describe("buildReminder env-based resolution", () => {
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env.O2B_TARGET;
+    __resetEnvWarnedOnceForTests();
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.O2B_TARGET;
+    else process.env.O2B_TARGET = savedEnv;
+  });
+
+  test("env O2B_TARGET=openclaw resolves to openclaw template", () => {
+    process.env.O2B_TARGET = "openclaw";
+    expect(buildReminder("test-agent")).toContain(
+      "OpenClaw has no session boundary",
+    );
+  });
+
+  test("explicit target beats env", () => {
+    process.env.O2B_TARGET = "openclaw";
+    expect(buildReminder("test-agent", "hermes")).toContain(
+      "Hermes turns are short",
+    );
+  });
+
+  test("unknown env value falls back to common template", () => {
+    process.env.O2B_TARGET = "nonsense";
+    const out = buildReminder("test-agent");
+    expect(out).not.toContain("Hermes turns are short");
+    expect(out).not.toContain("OpenClaw has no session boundary");
   });
 });
