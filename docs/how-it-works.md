@@ -356,8 +356,9 @@ are mirrored in MCP; destructive operations are CLI-only by design.
 | Full-text search         | `o2b search "<query>"`     | `brain_search`        | read-only; FTS5 + optional semantic |
 | Manage search index      | `o2b search index \| reindex \| status \| check` | — (CLI-only) | builds / inspects `<vault>/.open-second-brain/brain.sqlite` |
 | Operational snapshot     | `o2b status`               | `second_brain_status` | read-only; `brain.*` + `search.*` blocks |
-| Retire manually          | `o2b brain reject`         | — (CLI-only)          | moves pref → retired/  |
+| Retire manually          | `o2b brain reject`         | — (CLI-only)          | requires `--reason "<text>"`; subsequent signals on the same topic are suppressed |
 | Toggle pin               | `o2b brain pin / unpin`    | — (CLI-only)          | flips `pinned` field; regenerates `Brain/active.md` |
+| Protect Brain/           | `o2b brain protect / unprotect` | — (CLI-only)     | machine-enforced deny rules for `claudecode` / `codex` runtimes; sidecar manifest at `.open-second-brain/protect.lock.json` |
 | Restore snapshot         | `o2b brain rollback`       | — (CLI-only)          | overwrites Brain/ from snapshot |
 
 Operations that change the **protected set** (`pin`, `unpin`,

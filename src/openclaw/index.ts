@@ -140,7 +140,7 @@ export default definePluginEntry({
         process.env["VAULT_AGENT_NAME"] ??
         resolveAgentName();
       if (agent === "agent") return undefined;
-      return { prependContext: buildReminder(agent) };
+      return { prependContext: buildReminder(agent, "openclaw") };
     });
 
     api.registerTool(

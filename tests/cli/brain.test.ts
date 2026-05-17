@@ -1296,3 +1296,106 @@ describe("brain migrate-frontmatter", () => {
     expect(r.stderr).toMatch(/collision/i);
   });
 });
+
+describe("brain protect", () => {
+  test("--target claudecode --print returns the JSON shape, exit 0", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "protect", "--target", "claudecode", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("Write(");
+    expect(r.stdout).toContain("preview only");
+    expect(existsSync(join(vault, ".claude", "settings.json"))).toBe(false);
+  });
+
+  test("--target codex --print includes the managed fence", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "protect", "--target", "codex", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("# >>> open-second-brain managed >>>");
+  });
+
+  test("unknown --target exits 1 with a clear message", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "protect", "--target", "vim", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("unknown");
+    expect(r.stderr).toContain("claudecode");
+  });
+
+  test("--apply writes settings.json and is idempotent", async () => {
+    await bootstrap();
+    const first = await runCli(
+      [
+        "brain",
+        "protect",
+        "--target",
+        "claudecode",
+        "--vault",
+        vault,
+        "--apply",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(first.returncode).toBe(0);
+    expect(first.stdout).toContain("applied to");
+    const settingsPath = join(vault, ".claude", "settings.json");
+    const bytesAfterFirst = readFileSync(settingsPath, "utf8");
+    expect(bytesAfterFirst).toContain("Write(");
+
+    const second = await runCli(
+      [
+        "brain",
+        "protect",
+        "--target",
+        "claudecode",
+        "--vault",
+        vault,
+        "--apply",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(second.returncode).toBe(0);
+    expect(second.stdout).toContain("no changes");
+    expect(readFileSync(settingsPath, "utf8")).toBe(bytesAfterFirst);
+  });
+
+  test("apply + unprotect round-trip leaves no managed entries", async () => {
+    await bootstrap();
+    await runCli(
+      [
+        "brain",
+        "protect",
+        "--target",
+        "claudecode",
+        "--vault",
+        vault,
+        "--apply",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const r = await runCli(
+      ["brain", "unprotect", "--target", "claudecode", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("removed");
+    const parsed = JSON.parse(
+      readFileSync(join(vault, ".claude", "settings.json"), "utf8"),
+    );
+    // After unprotect, OSB-owned deny entries are gone. The keys may
+    // remain empty (user could have other rules) — assert via filter.
+    const ownedLeft = (parsed.permissions?.deny ?? []).filter((e: string) =>
+      e.includes("Brain/preferences"),
+    );
+    expect(ownedLeft).toEqual([]);
+  });
+});

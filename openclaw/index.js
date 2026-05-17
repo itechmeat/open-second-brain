@@ -2158,15 +2158,64 @@ import { readFileSync as readFileSync4 } from "node:fs";
 import { dirname as dirname3, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 var TEMPLATE_PATH = resolve(dirname3(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
+var KNOWN_RUNTIME_TARGETS = ["hermes", "openclaw"];
+function isRuntimeTarget(value) {
+  return typeof value === "string" && KNOWN_RUNTIME_TARGETS.includes(value);
+}
+var commonTemplateCache;
 function loadReminderTemplate() {
+  if (commonTemplateCache !== undefined)
+    return commonTemplateCache;
   try {
-    return readFileSync4(TEMPLATE_PATH, "utf8").trimEnd();
+    commonTemplateCache = readFileSync4(TEMPLATE_PATH, "utf8").trimEnd();
+    return commonTemplateCache;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to load identity reminder template from ${TEMPLATE_PATH}: ${message}`);
   }
 }
-function buildReminder(agent) {
+var TEMPLATES_DIR = resolve(dirname3(fileURLToPath(import.meta.url)), "..", "..", "templates");
+var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [
+  t,
+  resolve(TEMPLATES_DIR, `identity-reminder.${t}.txt`)
+])));
+var TEMPLATE_CACHE = new Map;
+function tryReadTargetTemplate(target) {
+  const cached = TEMPLATE_CACHE.get(target);
+  if (cached !== undefined)
+    return cached;
+  let body;
+  try {
+    body = readFileSync4(PER_TARGET_PATHS[target], "utf8").trimEnd();
+  } catch (err) {
+    if (err.code !== "ENOENT")
+      throw err;
+    body = null;
+  }
+  TEMPLATE_CACHE.set(target, body);
+  return body;
+}
+var envWarnedOnce = false;
+function resolveTargetFromEnv() {
+  const raw = process.env.O2B_TARGET;
+  if (raw === undefined || raw === "")
+    return;
+  if (isRuntimeTarget(raw))
+    return raw;
+  if (!envWarnedOnce) {
+    envWarnedOnce = true;
+    process.stderr.write(`open-second-brain: unknown O2B_TARGET='${raw}', using common identity template
+`);
+  }
+  return;
+}
+function buildReminder(agent, target) {
+  const effective = target ?? resolveTargetFromEnv();
+  if (effective !== undefined) {
+    const tpl = tryReadTargetTemplate(effective);
+    if (tpl !== null)
+      return tpl.replace(/\{agent\}/g, agent);
+  }
   return loadReminderTemplate().replace(/\{agent\}/g, agent);
 }
 
@@ -2342,12 +2391,12 @@ function tzOffsetMinutes(instantMs, tz) {
   const localUtcMs = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
   return Math.round((localUtcMs - instantMs) / 60000);
 }
-// src/core/pay-memory/redactor.ts
+// src/core/redactor.ts
 var PLACEHOLDER = "***REDACTED***";
 var MAX_REDACTOR_INPUT = 256 * 1024;
 var TRUNCATION_MARKER = `
 
-[…truncated for size; original exceeded 256 KB. Inspect \`pay\` raw output before sharing.]
+[…truncated for size; original exceeded 256 KB. Inspect raw output before sharing.]
 `;
 var SECRET_KEYS = [
   "api_key",
@@ -3580,7 +3629,7 @@ var openclaw_default = definePluginEntry({
       const agent = normalizeAgentArgument(cfg.agentName ?? null) ?? process.env["VAULT_AGENT_NAME"] ?? resolveAgentName();
       if (agent === "agent")
         return;
-      return { prependContext: buildReminder(agent) };
+      return { prependContext: buildReminder(agent, "openclaw") };
     });
     api.registerTool({
       name: "second_brain_status",

@@ -116,16 +116,18 @@ o2b mcp                       Run the MCP tool server (stdio)
 o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
 
-# Brain (observing memory — 14 verbs)
-o2b brain init                Bootstrap Brain/{inbox,preferences,retired,log,.snapshots}/ + _brain.yaml + _BRAIN.md
+# Brain (observing memory)
+o2b brain init                Bootstrap Brain/{inbox,preferences,retired,log,.snapshots}/ + _brain.yaml + _BRAIN.md; --starter drops the bundled example set
 o2b brain feedback            Record one taste signal (--topic, --signal, --principle, ...)
 o2b brain dream               Run the deterministic consolidation pass (idempotent; usually cron'd)
 o2b brain apply-evidence      Record applied / violated against a preference for a durable artifact
 o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions
 o2b brain query               Read helper: by preference, by topic, or by log timestamp
-o2b brain reject              (CLI-only) Move a preference to retired/ with reason: user-rejected
+o2b brain reject              (CLI-only) Retire a preference; requires --reason "<text>". Subsequent signals on the same topic are suppressed.
 o2b brain pin / unpin         (CLI-only) Toggle pinned: true on a preference (exempt from auto-retire)
 o2b brain set-primary         (CLI-only) Declare or clear primary_agent in Brain/_brain.yaml (--clear)
+o2b brain protect             (CLI-only) Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
+o2b brain unprotect           (CLI-only) Remove the OSB-managed deny rules for the chosen target
 o2b brain snapshot diff       (CLI-only) Read-only diff between two snapshots, or snapshot vs live Brain/
 o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot (--dry-run previews)
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, …)

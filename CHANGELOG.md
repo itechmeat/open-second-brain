@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] - 2026-05-17
+
+Brings the v0.10.4 "Brain onboarding quality" cluster from
+`Projects/OpenSecondBrain/Features/_summary`: §18 machine-enforced
+write protection for `Brain/`, §4 partial (per-runtime identity
+reminder templates for the two runtimes that actually call
+`buildReminder` per-turn / per-action), and §15 partial (bundled
+starter set behind `o2b brain init --starter`).
+
+No vault migration is required. Existing vaults are unaffected
+until the operator opts in by running `o2b brain protect`,
+appending `--starter` to a fresh `o2b brain init`, or setting
+`O2B_TARGET=hermes` or `O2B_TARGET=openclaw` in the MCP server's
+env block. The common identity reminder template is unchanged.
+
+### Added
+
+- §18 — `o2b brain protect --target {claudecode|codex}` writes a
+  managed, idempotent block into the runtime's native permissions
+  config that denies writes to `Brain/preferences/`, `retired/`,
+  `log/`, `.snapshots/`, and `_brain.yaml` while leaving
+  `Brain/inbox/` writable. `--print` (default) emits the snippet
+  to stdout; `--apply` writes the file and saves a `.bak.<ts>`
+  beside it. Pair `o2b brain unprotect` removes only the OSB-owned
+  entries (tracked via the sidecar manifest
+  `<vault>/.open-second-brain/protect.lock.json`).
+- §4 (partial) — per-runtime identity reminder templates at
+  `templates/identity-reminder.{hermes,openclaw}.txt`. The resolver
+  in `buildReminder` accepts an explicit `target`, falls back to
+  `O2B_TARGET`, and finally to the common template. Hermes Python
+  shim has byte-level parity with the TypeScript resolver through
+  a shared fixture. The common `identity-reminder.txt` is
+  unchanged. Claude Code and Codex steer through
+  `hooks/lib/messages.ts`, which is a different mechanism not
+  addressed here — tracked under design doc D5.
+- §15 (partial) — `o2b brain init --starter` drops a bundled
+  example set (8 preferences, 3 retired, 1 inbox signal, 6 log
+  days) into a fresh Brain. The bundle is regenerated through the
+  canonical writers (`writePreference`, `appendApplyEvidence`,
+  `moveToRetired`, `dream`) so its shape never drifts from real
+  vault output. Doctor-clean and a no-op under
+  `o2b brain dream`. Refuses to run on a non-empty Brain.
+
+### Deferred
+
+Full multi-runtime `o2b install` orchestrator (§4 second half),
+interactive `o2b init --interactive` wizard (§15 second half),
+per-runtime steering text for Claude Code / Codex in
+`hooks/lib/messages.ts`, and the `brain-memory` SKILL "good-vs-bad"
+examples section. Triggers to revisit are recorded in the vault
+summary's "Deferred work" section
+(`Projects/OpenSecondBrain/Features/_summary.md`).
+
 ## [0.10.3] - 2026-05-17
 
 Brings four Tier-A items from
@@ -1521,6 +1574,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.10.4]: https://github.com/itechmeat/open-second-brain/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/itechmeat/open-second-brain/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/itechmeat/open-second-brain/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/itechmeat/open-second-brain/compare/v0.10.0...v0.10.1

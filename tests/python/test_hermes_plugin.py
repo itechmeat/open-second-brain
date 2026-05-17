@@ -24,7 +24,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from plugins.hermes import check_health, health, on_pre_llm_call, register  # noqa: E402
+from plugins.hermes import (  # noqa: E402
+    _load_reminder_template,
+    check_health,
+    health,
+    on_pre_llm_call,
+    register,
+)
 
 PLUGIN_NAME = "open-second-brain"
 
@@ -186,6 +192,26 @@ class TemplateSourceOfTruthTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIn("@parity-agent", result["context"])
         self.assertNotIn("{agent}", result["context"])
+
+
+class PerTargetParityTests(unittest.TestCase):
+    """Python and TypeScript must produce the same bytes for the Hermes
+    target. The shared fixture at
+    ``tests/fixtures/identity-reminder/hermes.txt`` is asserted by the
+    TS resolver test; this test asserts the Python shim against the same
+    bytes. If the two drift, both languages' CI fails.
+    """
+
+    def test_hermes_template_matches_shared_fixture(self):
+        fixture = (
+            ROOT / "tests" / "fixtures" / "identity-reminder" / "hermes.txt"
+        ).read_text(encoding="utf-8").rstrip()
+        rendered = _load_reminder_template().replace("{agent}", "test-agent")
+        self.assertEqual(rendered, fixture)
+
+    def test_hermes_template_prefers_per_target_over_common(self):
+        body = _load_reminder_template()
+        self.assertIn("Hermes turns are short", body)
 
 
 if __name__ == "__main__":

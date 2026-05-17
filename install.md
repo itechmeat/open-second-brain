@@ -186,6 +186,14 @@ o2b brain init --vault /path/to/vault \
     --primary-agent "<chosen-agent-name>"
 ```
 
+**Optional — append `--starter` to bootstrap with a worked example
+set.** `o2b brain init --vault /path/to/vault --starter` drops a curated
+bundle (8 preferences, 3 retired entries, 1 inbox signal, 6 log days)
+into the fresh `Brain/`. The bundle is byte-stable, passes
+`o2b brain doctor` cleanly, and is a no-op under `o2b brain dream`
+at install time. The starter refuses to run on a non-empty Brain —
+it is for the first-init experience only.
+
 `--agent-name` writes the chosen name into `AI Wiki/identity/agents.md`
 and persists `agent_name` into the plugin config
 (`~/.config/open-second-brain/config.yaml`). `--timezone` validates the
@@ -458,6 +466,12 @@ o2b init --vault /path/to/vault --name "My Second Brain" \
 o2b brain init --vault /path/to/vault
 ```
 
+Append `--starter` to drop the bundled example set (8 preferences,
+3 retired entries, 1 inbox signal, 6 log days) into the fresh
+`Brain/`. The bundle passes `o2b brain doctor` cleanly and is a
+no-op under `o2b brain dream` at install time; it refuses to run
+on a non-empty Brain.
+
 `--agent-name` writes the chosen name into `AI Wiki/identity/agents.md`
 and persists `agent_name` into the plugin config
 (`~/.config/open-second-brain/config.yaml`). `--timezone` validates the
@@ -702,6 +716,12 @@ o2b init --vault /path/to/vault --name "My Second Brain" \
 o2b brain init --vault /path/to/vault
 ```
 
+Append `--starter` to drop the bundled example set (8 preferences,
+3 retired entries, 1 inbox signal, 6 log days) into the fresh
+`Brain/`. The bundle passes `o2b brain doctor` cleanly and is a
+no-op under `o2b brain dream` at install time; it refuses to run
+on a non-empty Brain.
+
 `--timezone` validates the IANA name via stdlib `zoneinfo` and persists
 it to the plugin config. From this moment on, every Daily entry is
 stamped in that timezone regardless of the host's clock.
@@ -765,6 +785,33 @@ The hook invokes `o2b-hook` from PATH. That CLI was symlinked into
 `~/.local/bin` by step 3, so no extra wiring is needed. If
 `o2b-hook` is missing from PATH the hook fails closed (turn proceeds
 normally with a stderr trace) — re-run step 3 to fix.
+
+### 6c. Optional — machine-enforce write protection on `Brain/`
+
+OSB defends `Brain/preferences/`, `retired/`, `log/`, `.snapshots/`,
+and `Brain/_brain.yaml` against accidental writes by the agent
+through Codex's native `[permissions.osb_protected.filesystem]`
+table. `Brain/inbox/` stays writable — that is where
+`brain_feedback` legitimately drops signals.
+
+Preview the snippet without touching disk:
+
+```bash
+o2b brain protect --target codex --vault /path/to/vault
+```
+
+Apply when satisfied:
+
+```bash
+o2b brain protect --target codex --vault /path/to/vault --apply
+```
+
+`o2b brain unprotect --target codex --vault /path/to/vault` removes
+the OSB-managed block (a `# >>> open-second-brain managed >>>`
+fence in `~/.codex/config.toml`). A sidecar manifest at
+`<vault>/.open-second-brain/protect.lock.json` records what was
+added, so `unprotect` removes exactly the OSB rules and never
+touches user-authored config.
 
 ### 7. Update
 
@@ -937,6 +984,12 @@ o2b init --vault /path/to/vault --name "My Second Brain" \
 o2b brain init --vault /path/to/vault
 ```
 
+Append `--starter` to drop the bundled example set (8 preferences,
+3 retired entries, 1 inbox signal, 6 log days) into the fresh
+`Brain/`. The bundle passes `o2b brain doctor` cleanly and is a
+no-op under `o2b brain dream` at install time; it refuses to run
+on a non-empty Brain.
+
 `o2b init` persists all three values (`vault`, `agent_name`, `timezone`)
 into `~/.config/open-second-brain/config.yaml`. The `.mcp.json` that
 Claude auto-registered is intentionally minimal — it points only at
@@ -982,6 +1035,34 @@ The hook invokes `o2b-hook` from PATH. That CLI was symlinked into
 hook fire end-to-end use `--output-format=stream-json --verbose
 --include-hook-events`; you should see `hook_started` /
 `hook_response` events around each `Write` / `Edit`.
+
+### 6c. Optional — machine-enforce write protection on `Brain/`
+
+OSB defends `Brain/preferences/`, `retired/`, `log/`, `.snapshots/`,
+and `Brain/_brain.yaml` against accidental writes by the agent
+through Claude Code's native `permissions.deny` list. `Brain/inbox/`
+stays writable — that is where `brain_feedback` legitimately drops
+signals.
+
+Preview the snippet without touching disk:
+
+```bash
+o2b brain protect --target claudecode --vault /path/to/vault
+```
+
+Apply when satisfied:
+
+```bash
+o2b brain protect --target claudecode --vault /path/to/vault --apply
+```
+
+`o2b brain unprotect --target claudecode --vault /path/to/vault`
+removes the OSB-managed entries from `<vault>/.claude/settings.json`.
+A sidecar manifest at
+`<vault>/.open-second-brain/protect.lock.json` records exactly which
+`permissions.deny` / `permissions.allow` strings OSB owns, so
+`unprotect` removes only those and never touches user-authored
+rules.
 
 ### 7. Update
 
@@ -1083,6 +1164,12 @@ o2b init --vault /path/to/vault --name "My Second Brain" \
 # user explicitly opts out of Brain.
 o2b brain init --vault /path/to/vault
 ```
+
+Append `--starter` to drop the bundled example set (8 preferences,
+3 retired entries, 1 inbox signal, 6 log days) into the fresh
+`Brain/`. The bundle passes `o2b brain doctor` cleanly and is a
+no-op under `o2b brain dream` at install time; it refuses to run
+on a non-empty Brain.
 
 This is identical across runtimes — the values are persisted into
 `~/.config/open-second-brain/config.yaml` and read back by the MCP

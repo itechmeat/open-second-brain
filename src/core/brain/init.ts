@@ -28,12 +28,20 @@
  *     never a torn hybrid.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defaultConfigPath } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { escapeRegex } from "../strings.ts";
 import {
   brainConfigPath,
   brainDirs,
@@ -46,6 +54,121 @@ import {
 } from "./policy.ts";
 import type { BrainConfig } from "./types.ts";
 import { DEFAULT_BRAIN_CONFIG } from "./policy.ts";
+
+const STARTER_TARGETS = ["preferences", "retired", "inbox", "log"] as const;
+
+const DEFAULT_STARTER_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  "templates",
+  "brain-starter",
+);
+
+export class BrainStarterError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BrainStarterError";
+  }
+}
+
+export interface CopyStarterOptions {
+  /** Override the source directory; defaults to the bundled `templates/brain-starter/`. */
+  readonly starterPath?: string;
+}
+
+export interface StarterBundleResult {
+  /** Vault-relative paths newly written. */
+  readonly copied: ReadonlyArray<string>;
+}
+
+/**
+ * Copy the bundled starter set into `<vault>/Brain/`. Refuses when any
+ * of `preferences/`, `retired/`, `inbox/`, `log/` already contains a
+ * non-dotfile entry — the starter is for fresh vaults.
+ *
+ * Hidden files (those whose name starts with `.`) are ignored when
+ * checking emptiness so a `.gitkeep`-style placeholder does not block
+ * the copy.
+ */
+export function copyStarterBundle(
+  vault: string,
+  opts: CopyStarterOptions = {},
+): StarterBundleResult {
+  const src = opts.starterPath ?? DEFAULT_STARTER_DIR;
+  try {
+    if (!statSync(src).isDirectory()) {
+      throw new BrainStarterError(
+        `starter source is not a directory: ${src}`,
+      );
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new BrainStarterError(`starter source does not exist: ${src}`);
+    }
+    throw err;
+  }
+  for (const sub of STARTER_TARGETS) {
+    const dir = join(vault, "Brain", sub);
+    let entries;
+    try {
+      // `withFileTypes` returns Dirent objects so we avoid a `statSync`
+      // per child entry — one syscall per directory instead of N+1.
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new BrainStarterError(
+          `Brain/${sub} does not exist — run \`o2b brain init\` (without --starter) first`,
+        );
+      }
+      throw err;
+    }
+    // "Non-empty" means anything the user (or a prior dream pass)
+    // could have left here. The only acceptable non-dotfile entry
+    // bootstrap places under a starter target is `inbox/processed/` —
+    // we whitelist that one explicitly so a freshly initialised vault
+    // does not trip the guard, but any other subdirectory (e.g. a
+    // user-created `preferences/custom/`) counts as content and
+    // refuses the starter.
+    const hasUserContent = entries.some((e) => {
+      if (e.name.startsWith(".")) return false;
+      if (sub === "inbox" && e.isDirectory() && e.name === "processed") {
+        return false;
+      }
+      return true;
+    });
+    if (hasUserContent) {
+      throw new BrainStarterError(
+        `Brain/${sub} already has content — \`--starter\` is intended for fresh vaults. `
+          + `Inspect the bundle at ${src} and copy individual files manually if needed.`,
+      );
+    }
+  }
+  const copied: string[] = [];
+  for (const sub of STARTER_TARGETS) {
+    const srcDir = join(src, sub);
+    if (!existsSync(srcDir)) continue;
+    const destDir = join(vault, "Brain", sub);
+    // Single recursive copy per subdir — orders of magnitude fewer
+    // syscalls than file-by-file. The filter rejects dotfiles
+    // (`.gitkeep`, `.DS_Store`) so the bundle stays focused on
+    // Brain content. The pre-check above already guarantees the
+    // destination is empty, so collisions are impossible.
+    cpSync(srcDir, destDir, {
+      recursive: true,
+      filter: (p) => !basename(p).startsWith("."),
+    });
+    // Report from the source listing — bootstrapBrain may have left
+    // sibling subdirs in the destination (e.g. `inbox/processed/`)
+    // that we did not copy and should not surface as starter entries.
+    for (const name of readdirSync(srcDir)) {
+      if (name.startsWith(".")) continue;
+      copied.push(join("Brain", sub, name));
+    }
+  }
+  return Object.freeze({ copied });
+}
 
 // Resolve template paths relative to this source file. `import.meta.url`
 // is stable under both `bun run` (TS source) and any future build that
@@ -88,6 +211,15 @@ export interface BootstrapBrainOptions {
    * idempotent and won't disturb the rest of the file).
    */
   readonly primaryAgent?: string;
+  /**
+   * Drop the bundled starter set (8 preferences, 3 retired, 1 inbox
+   * signal, 2 log days) into the freshly initialised `Brain/`.
+   * Refuses to run if any of those subdirectories is non-empty;
+   * `--starter` is for first-init only.
+   */
+  readonly starter?: boolean;
+  /** Override the starter source path (defaults to bundled). */
+  readonly starterPath?: string;
 }
 
 export interface BootstrapBrainResult {
@@ -204,6 +336,13 @@ export function bootstrapBrain(
     created.push(overviewRel);
   }
 
+  if (opts.starter === true) {
+    const starterResult = copyStarterBundle(vault, {
+      starterPath: opts.starterPath,
+    });
+    created.push(...starterResult.copied);
+  }
+
   return { created, overwritten, skipped };
 }
 
@@ -258,10 +397,6 @@ function renderTemplate(
     out = out.replace(pattern, value);
   }
   return out;
-}
-
-function escapeRegex(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

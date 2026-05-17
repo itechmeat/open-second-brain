@@ -26,19 +26,48 @@ from typing import Any
 PLUGIN_NAME = "open-second-brain"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_TEMPLATE_PATH = _REPO_ROOT / "templates" / "identity-reminder.txt"
+_TEMPLATES_DIR = _REPO_ROOT / "templates"
+_COMMON_TEMPLATE_PATH = _TEMPLATES_DIR / "identity-reminder.txt"
+# This shim runs inside Hermes, so the target is fixed at the call site
+# rather than threaded through an env var — mirrors the TypeScript
+# behaviour where the OpenClaw plugin passes its own target literal.
+_TARGET = "hermes"
+_TARGET_TEMPLATE_PATH = _TEMPLATES_DIR / f"identity-reminder.{_TARGET}.txt"
 
 _AGENT_LINE_RE = re.compile(r"^\s*(agent_name|agentName)\s*:\s*['\"]?([^'\"\n]+?)['\"]?\s*$", re.MULTILINE)
 
+_template_cache: str | None = None
+
 
 def _load_reminder_template() -> str:
-    """Read the shared reminder template.
+    """Read the Hermes reminder template, falling back to the common file.
 
-    The TypeScript core (`src/core/identity-reminder.ts`) reads the same
-    file. Keeping one source on disk avoids manual mirroring of the wording
-    between Python and TS. CI fails the build if the file is missing.
+    This shim is hermes-only — it does not honour ``O2B_TARGET``. The
+    TypeScript ``buildReminder`` has a three-step resolver (explicit
+    target -> env -> common); the Python equivalent collapses to
+    ``hermes`` -> common because Hermes always runs the Hermes target.
+    Both languages read the same templates on disk and a fixture-pinned
+    test catches text drift.
+
+    The body is cached after the first call. Hermes' ``pre_llm_call``
+    hook fires every turn; templates are installation-time artifacts
+    that do not change at runtime, so a single read per process is
+    enough. A gateway restart (every plugin update) flushes the cache.
     """
-    return _TEMPLATE_PATH.read_text(encoding="utf-8").rstrip()
+    global _template_cache
+    if _template_cache is not None:
+        return _template_cache
+    if _TARGET_TEMPLATE_PATH.is_file():
+        _template_cache = _TARGET_TEMPLATE_PATH.read_text(encoding="utf-8").rstrip()
+    else:
+        _template_cache = _COMMON_TEMPLATE_PATH.read_text(encoding="utf-8").rstrip()
+    return _template_cache
+
+
+def _reset_template_cache_for_tests() -> None:
+    """Test-only: drop the cached body so a fixture rewrite is visible."""
+    global _template_cache
+    _template_cache = None
 
 
 def _config_path() -> Path:

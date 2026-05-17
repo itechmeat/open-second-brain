@@ -61,6 +61,14 @@ import {
 import { renderDigest, type RenderDigestOptions } from "../core/brain/digest.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
 import { setPinned } from "../core/brain/pin.ts";
+import {
+  applyProtect,
+  BrainProtectError,
+  isProtectTarget,
+  printSnippet,
+  PROTECT_TARGETS,
+  unprotect,
+} from "../core/brain/protect.ts";
 import { setPrimaryAgent } from "../core/brain/set-primary.ts";
 import { writeSignal } from "../core/brain/signal.ts";
 import {
@@ -156,6 +164,8 @@ async function cmdBrainInit(argv: string[]): Promise<number> {
     config: { type: "string" },
     force: { type: "boolean" },
     "primary-agent": { type: "string" },
+    starter: { type: "boolean" },
+    "starter-path": { type: "string" },
     json: { type: "boolean" },
   });
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
@@ -176,12 +186,25 @@ async function cmdBrainInit(argv: string[]): Promise<number> {
     primaryAgent = trimmed;
   }
 
+  const starterPathFlag = flags["starter-path"];
+  let starterPath: string | undefined;
+  if (typeof starterPathFlag === "string") {
+    starterPath = starterPathFlag.trim();
+    if (starterPath.length === 0) {
+      return fail(
+        "brain init: --starter-path must be a non-empty path when provided",
+      );
+    }
+  }
+
   let result;
   try {
     result = bootstrapBrain(vault, {
       force: Boolean(flags["force"]),
       configPath: config,
+      starter: Boolean(flags["starter"]),
       ...(primaryAgent !== undefined ? { primaryAgent } : {}),
+      ...(starterPath !== undefined ? { starterPath } : {}),
     });
   } catch (exc) {
     return fail(`failed to initialize Brain: ${(exc as Error).message ?? exc}`);
@@ -874,6 +897,103 @@ async function cmdBrainSetPrimary(argv: string[]): Promise<number> {
   return 0;
 }
 
+async function cmdBrainProtect(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    target: { type: "string", required: true },
+    vault: { type: "string" },
+    apply: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const rawTarget = typeof flags["target"] === "string" ? flags["target"] : undefined;
+  if (!isProtectTarget(rawTarget)) {
+    return fail(
+      `brain protect --target='${flags["target"]}' is unknown; `
+        + `supported targets: ${PROTECT_TARGETS.join(", ")}`,
+    );
+  }
+  const target = rawTarget;
+  const vault = resolveBrainVault(
+    flags["vault"] as string | undefined,
+    defaultConfigPath(),
+  );
+
+  try {
+    if (flags["apply"]) {
+      const result = applyProtect({ target, vault });
+      if (flags["json"]) {
+        okJson({
+          target: result.target,
+          destination: result.destination,
+          changed: result.changed,
+          backup: result.backupPath || null,
+        });
+        return 0;
+      }
+      const head = result.changed
+        ? `brain protect: applied to ${result.destination}`
+        : `brain protect: no changes (${result.destination} already current)`;
+      ok(head);
+      if (result.backupPath) ok(`  backup: ${result.backupPath}`);
+      return 0;
+    }
+    // --print (default): emit the snippet body, no writes.
+    const snippet = printSnippet({ target, vault });
+    if (flags["json"]) {
+      okJson({
+        target: snippet.target,
+        destination: snippet.destination,
+        body: snippet.body,
+      });
+      return 0;
+    }
+    info(`# o2b brain protect --target ${target}`);
+    info(`# destination: ${snippet.destination}`);
+    info(`# preview only; re-run with --apply to write the file`);
+    process.stdout.write(snippet.body);
+    return 0;
+  } catch (exc) {
+    if (exc instanceof BrainProtectError) {
+      return fail(`brain protect failed: ${exc.message}`);
+    }
+    throw exc;
+  }
+}
+
+async function cmdBrainUnprotect(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    target: { type: "string", required: true },
+    vault: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const rawTarget = typeof flags["target"] === "string" ? flags["target"] : undefined;
+  if (!isProtectTarget(rawTarget)) {
+    return fail(
+      `brain unprotect --target='${flags["target"]}' is unknown; `
+        + `supported targets: ${PROTECT_TARGETS.join(", ")}`,
+    );
+  }
+  const target = rawTarget;
+  const vault = resolveBrainVault(
+    flags["vault"] as string | undefined,
+    defaultConfigPath(),
+  );
+
+  try {
+    unprotect({ target, vault });
+  } catch (exc) {
+    if (exc instanceof BrainProtectError) {
+      return fail(`brain unprotect failed: ${exc.message}`);
+    }
+    throw exc;
+  }
+  if (flags["json"]) {
+    okJson({ target, vault });
+  } else {
+    ok(`brain unprotect: removed OSB-managed rules for target=${target}`);
+  }
+  return 0;
+}
+
 async function cmdBrainPin(argv: string[]): Promise<number> {
   return await pinOrUnpin(argv, true);
 }
@@ -1497,6 +1617,8 @@ Brain verbs (observing memory):
   pin              Mark a preference exempt from automatic retire (idempotent)
   unpin            Clear the pinned flag (idempotent)
   set-primary      Declare or clear primary_agent in _brain.yaml (--clear)
+  protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
+  unprotect        Remove OSB-managed deny rules for the chosen target (--target)
   snapshot diff    Read-only diff between two snapshots, or snapshot vs live
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
@@ -1647,6 +1769,10 @@ export async function handleBrainSubcommand(
         return await cmdBrainUnpin(rest);
       case "set-primary":
         return await cmdBrainSetPrimary(rest);
+      case "protect":
+        return await cmdBrainProtect(rest);
+      case "unprotect":
+        return await cmdBrainUnprotect(rest);
       case "snapshot":
         return await handleBrainSnapshotSubcommand(rest);
       case "rollback":
