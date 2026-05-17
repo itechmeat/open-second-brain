@@ -269,6 +269,16 @@ interface ManifestRecordCodex {
   readonly schema_version: number;
   readonly target: "codex";
   readonly vault: string;
+  /**
+   * Vault-relative POSIX paths OSB owns inside the Codex fence. Kept
+   * separately from {@link buildProtectRules} so `unprotect` (and the
+   * apply-time stale-purge step) can remove exactly what a prior
+   * version added, even if the rule set drifts between releases. A
+   * v0.10.4 vault that upgrades to v0.10.5 with renamed sub-paths
+   * still finds its old entries via this list instead of leaking
+   * stale OSB permissions.
+   */
+  readonly owned_paths: ReadonlyArray<string>;
 }
 
 export type ManifestRecord = ManifestRecordClaudeCode | ManifestRecordCodex;
@@ -610,8 +620,14 @@ function applyCodex(vault: string, homeOverride?: string): ApplyResult {
   const rules = buildProtectRules(vault);
   const currentEntries = codexEntriesFromRules(rules);
   const currentPaths = new Set(currentEntries.map((e) => e.path));
+  // Drop prior OSB-owned paths so an upgrade that renames or removes
+  // a protected glob does not leak stale managed entries. Falls back
+  // to current rules when no manifest exists yet (first apply, or a
+  // pre-v0.10.4 install bootstrapped without the `owned_paths` field).
+  const prev = readManifest(vault, "codex") as ManifestRecordCodex | null;
+  const ownedByPrior = new Set<string>(prev?.owned_paths ?? currentPaths);
   const keptEntries = parseCodexFence(before).filter(
-    (e) => !currentPaths.has(e.path),
+    (e) => !ownedByPrior.has(e.path) && !currentPaths.has(e.path),
   );
   const fence = renderCodexEntries([...keptEntries, ...currentEntries]).body;
   const after = replaceCodexFence(before, fence);
@@ -626,6 +642,7 @@ function applyCodex(vault: string, homeOverride?: string): ApplyResult {
     schema_version: PROTECT_SCHEMA_VERSION,
     target: "codex",
     vault,
+    owned_paths: currentEntries.map((e) => e.path),
   });
   return Object.freeze({
     target: "codex" as const,
@@ -639,11 +656,16 @@ function unprotectCodex(vault: string, homeOverride?: string): void {
   const dest = codexConfigPath(homeOverride);
   if (existsSync(dest)) {
     const raw = readFileSync(dest, "utf8");
-    const currentPaths = new Set(
-      codexEntriesFromRules(buildProtectRules(vault)).map((e) => e.path),
+    // Prefer the manifest's record of OSB-owned paths. Fall back to
+    // current rules only when no manifest is on disk — that handles
+    // a hand-edited fence whose manifest was deleted out-of-band.
+    const prev = readManifest(vault, "codex") as ManifestRecordCodex | null;
+    const ownedPaths = new Set<string>(
+      prev?.owned_paths
+        ?? codexEntriesFromRules(buildProtectRules(vault)).map((e) => e.path),
     );
     const remaining = parseCodexFence(raw).filter(
-      (e) => !currentPaths.has(e.path),
+      (e) => !ownedPaths.has(e.path),
     );
     const after = replaceCodexFence(
       raw,

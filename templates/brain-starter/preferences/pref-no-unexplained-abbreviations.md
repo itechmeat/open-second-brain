@@ -11,16 +11,16 @@ principle: Do not use internal abbreviations in user-facing copy without expandi
 _evidenced_by: []
 _applied_count: 4
 _violated_count: 0
-_last_evidence_at: "2026-05-15T13:00:00Z"
+_last_evidence_at: "2026-05-15T10:05:00Z"
 _confidence: medium
-_confidence_value: 0.499
+_confidence_value: 0.4983
 pinned: true
 scope: writing
 ---
 
 ## Recent applications
 
-- [[Brain/_BRAIN.md]] — 2026-05-15T13:00:00Z (starter-author)
-- [[Brain/_BRAIN.md]] — 2026-05-14T12:00:00Z (starter-author)
-- [[Brain/_BRAIN.md]] — 2026-05-13T11:00:00Z (starter-author)
+- [[Brain/_BRAIN.md]] — 2026-05-15T10:05:00Z (starter-author)
+- [[Brain/_BRAIN.md]] — 2026-05-14T10:05:00Z (starter-author)
+- [[Brain/_BRAIN.md]] — 2026-05-13T10:05:00Z (starter-author)
 - [[Brain/_BRAIN.md]] — 2026-05-12T10:00:00Z (starter-author)

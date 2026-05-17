@@ -124,14 +124,20 @@ export function copyStarterBundle(
       }
       throw err;
     }
-    // "Non-empty" means at least one regular file (or symlink) that
-    // is not a dotfile. Subdirectories created by bootstrapBrain
-    // itself (e.g. `Brain/inbox/processed/`) and `.gitkeep`-style
-    // placeholders do not count — otherwise a freshly bootstrapped
-    // vault would already trip this check.
-    const hasUserContent = entries.some(
-      (e) => !e.name.startsWith(".") && !e.isDirectory(),
-    );
+    // "Non-empty" means anything the user (or a prior dream pass)
+    // could have left here. The only acceptable non-dotfile entry
+    // bootstrap places under a starter target is `inbox/processed/` —
+    // we whitelist that one explicitly so a freshly initialised vault
+    // does not trip the guard, but any other subdirectory (e.g. a
+    // user-created `preferences/custom/`) counts as content and
+    // refuses the starter.
+    const hasUserContent = entries.some((e) => {
+      if (e.name.startsWith(".")) return false;
+      if (sub === "inbox" && e.isDirectory() && e.name === "processed") {
+        return false;
+      }
+      return true;
+    });
     if (hasUserContent) {
       throw new BrainStarterError(
         `Brain/${sub} already has content — \`--starter\` is intended for fresh vaults. `

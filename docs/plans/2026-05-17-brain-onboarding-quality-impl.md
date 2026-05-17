@@ -28,7 +28,7 @@ being green, which means every prior change must be settled.
   plus a CLI surface in `src/cli/brain.ts`. The manifest file
   (`<vault>/.open-second-brain/protect.lock.json`) is owned by this
   module and never touched by any other writer.
-- **§15** drops a `templates/brain-starter/` tree (14 files), adds a
+- **§15** drops a `templates/brain-starter/` tree (18 files — 8 prefs, 3 retired, 1 inbox signal, 6 log days), adds a
   `copyStarterBundle` helper to `src/core/brain/init.ts`, and surfaces
   two new flags on `o2b brain init`.
 
@@ -2187,7 +2187,7 @@ Add to an existing CLI test file (or new `tests/cli/brain-init-starter.test.ts`)
 import { test, expect } from "bun:test";
 // ... setup ...
 
-test("o2b brain init --starter copies 14 files", () => {
+test("o2b brain init --starter copies 18 files", () => {
   // construct config + vault, run cmdBrainInit with ["--starter"],
   // assert the four Brain/ subdirs have the expected counts.
 });
@@ -2363,7 +2363,7 @@ Use the draft from the design doc:
   through `hooks/lib/messages.ts`, which is a separate mechanism not
   touched here.
 - §15 (partial) — `o2b brain init --starter` drops a curated bundle
-  of 8 confirmed preferences, 3 retired, 1 inbox signal, and 2 log
+  of 8 confirmed preferences, 3 retired, 1 inbox signal, and 6 log
   days into a fresh Brain. The bundle passes `o2b brain doctor`
   cleanly and is a no-op under `o2b brain dream` at install time.
   Refuses to run on a non-empty Brain.

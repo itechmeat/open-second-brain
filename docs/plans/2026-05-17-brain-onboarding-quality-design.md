@@ -192,13 +192,19 @@ templates/
     inbox/
       sig-2026-05-10-strict-types.md         # one pending signal
     log/
-      2026-05-15.md                          # day with apply-evidence events
-      2026-05-16.md                          # day with one retire event
+      2026-05-12.md                          # apply-evidence events (multiple)
+      2026-05-13.md                          # apply-evidence events
+      2026-05-14.md                          # apply-evidence events
+      2026-05-15.md                          # apply-evidence events + retire events
+      2026-05-16.md                          # apply-evidence events + retire event
+      2026-05-17.md                          # dream summary at the bundle's fixed `now`
 ```
 
-Each file is hand-authored Markdown with the exact frontmatter schema the dream pass writes (v0.10.x). Files reference each other through stable wikilinks (signals → preferences, retired → preferences via `supersedes:`, log entries → preferences); the doctor lint pass on the assembled bundle must be clean.
+Each file is produced through the canonical writers (`writePreference`, `appendApplyEvidence`, `moveToRetired`, `dream`) by a one-off generator run, then committed verbatim. The bundle ships in the post-dream steady state at a fixed `now = 2026-05-17T12:00:00Z`, so a second `dream` run at the same `now` is a byte-identical no-op. Files reference each other through stable wikilinks (signals → preferences, retired → preferences via `supersedes:`, log entries → preferences); the doctor lint pass on the assembled bundle must be clean.
 
-Frontmatter dates are baked at template-author time — they do not move forward, because the bundle is a *demonstration*, not a *live state*. The unconfirmed preference is dated so its `unconfirmed_until` is in the past relative to typical install time; the user will see `unconfirmed_until: 2026-05-25` and understand the trial window concept by inspection.
+Apply-evidence headings within one log day are spaced 5 minutes apart through a shared per-day counter, so each `## HH:MM:SSZ — apply-evidence` heading is unique (markdownlint MD024).
+
+Frontmatter dates are baked at template-author time — they do not move forward, because the bundle is a *demonstration*, not a *live state*. The unconfirmed preference is dated so its `unconfirmed_until` is in the future relative to the fixed `now`; the user will see `unconfirmed_until: 2026-05-25` and understand the trial window concept by inspection.
 
 ### CLI
 
@@ -231,7 +237,7 @@ The check is symmetric across all four subdirs: a non-empty `log/` is as much a 
 
 ### Files touched
 
-- New: `templates/brain-starter/**` (the 14 bundled Markdown files).
+- New: `templates/brain-starter/**` (18 bundled Markdown files — 8 preferences, 3 retired, 1 inbox signal, 6 log days produced by an authentic dream-pass over the seed data).
 - Modify: `src/core/brain/init.ts` — add `starter: boolean` and `starterPath?: string` options; new helper `copyStarterBundle`.
 - Modify: `src/cli/brain.ts` — surface the two flags.
 - New: `tests/core/brain/starter.test.ts`.

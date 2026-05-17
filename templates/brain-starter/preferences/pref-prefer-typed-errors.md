@@ -11,15 +11,15 @@ principle: Throw typed error classes for distinct failure modes instead of bare 
 _evidenced_by: []
 _applied_count: 3
 _violated_count: 0
-_last_evidence_at: "2026-05-16T12:00:00Z"
+_last_evidence_at: "2026-05-16T10:05:00Z"
 _confidence: medium
-_confidence_value: 0.4336
+_confidence_value: 0.4332
 pinned: false
 scope: coding
 ---
 
 ## Recent applications
 
-- [[Brain/_BRAIN.md]] — 2026-05-16T12:00:00Z (starter-author)
-- [[Brain/_BRAIN.md]] — 2026-05-15T11:00:00Z (starter-author)
-- [[Brain/_BRAIN.md]] — 2026-05-14T10:00:00Z (starter-author)
+- [[Brain/_BRAIN.md]] — 2026-05-16T10:05:00Z (starter-author)
+- [[Brain/_BRAIN.md]] — 2026-05-15T10:10:00Z (starter-author)
+- [[Brain/_BRAIN.md]] — 2026-05-14T10:10:00Z (starter-author)

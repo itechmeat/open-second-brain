@@ -116,7 +116,7 @@ o2b mcp                       Run the MCP tool server (stdio)
 o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
 
-# Brain (observing memory — 16 verbs)
+# Brain (observing memory)
 o2b brain init                Bootstrap Brain/{inbox,preferences,retired,log,.snapshots}/ + _brain.yaml + _BRAIN.md; --starter drops the bundled example set
 o2b brain feedback            Record one taste signal (--topic, --signal, --principle, ...)
 o2b brain dream               Run the deterministic consolidation pass (idempotent; usually cron'd)
