@@ -34,6 +34,7 @@ export const BRAIN_CONFIG_SUPPORTED_VERSIONS: ReadonlyArray<number> = [1];
  */
 export const DEFAULT_BRAIN_CONFIG: BrainConfig = Object.freeze({
   schema_version: 1,
+  primary_agent: null,
   dream: Object.freeze({
     candidate_threshold: 3,
     unconfirmed_window_days: 14,
@@ -46,6 +47,8 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = Object.freeze({
     low_max_applied: 2,
     high_min_applied: 10,
     high_freshness_factor: 0.8,
+    medium_min: 0.40,
+    high_min: 0.75,
   }),
   snapshots: Object.freeze({
     retention_count: 10,
@@ -59,6 +62,12 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = Object.freeze({
  */
 export const DEFAULT_BRAIN_CONFIG_YAML = `schema_version: 1
 
+# Optional. When set, dream runs from a different agent emit a stderr
+# warning and a non_primary_agent payload row. The vault should have a
+# single dream-running runtime even when it is shared across devices
+# via Syncthing.
+primary_agent: null
+
 dream:
   candidate_threshold: 3
   unconfirmed_window_days: 14
@@ -71,10 +80,54 @@ confidence:
   low_max_applied: 2
   high_min_applied: 10
   high_freshness_factor: 0.8
+  # Derived-band thresholds on the numeric confidence_value (Wilson
+  # lower bound × freshness decay). The count-based hard floors
+  # above still take precedence: low_max_applied / violated >=
+  # applied / missing-fresh keep a rule at low / medium regardless
+  # of the numeric value.
+  medium_min: 0.40
+  high_min: 0.75
 
 snapshots:
   retention_count: 10
 `;
+
+const YAML_STRING_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
+
+/**
+ * Format a `primary_agent` value for the small `_brain.yaml` subset.
+ *
+ * We quote non-null values so spaces / `#` / `:` round-trip as data
+ * instead of being interpreted as comments or YAML structure. Since the
+ * parser intentionally does not implement escape sequences, reject bytes
+ * that would require escaping rather than writing a value that cannot
+ * be read back exactly.
+ */
+export function formatPrimaryAgentYamlValue(
+  value: string | null,
+  source: string | null = null,
+): string {
+  if (value === null) return "null";
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new BrainConfigError(
+      "must be either null or a non-empty string",
+      "primary_agent",
+      source,
+    );
+  }
+  for (const bad of YAML_STRING_REJECTED_CHARS) {
+    if (trimmed.includes(bad)) {
+      throw new BrainConfigError(
+        `contains a disallowed character ${JSON.stringify(bad)}; ` +
+          "use a simple one-line agent id",
+        "primary_agent",
+        source,
+      );
+    }
+  }
+  return `"${trimmed}"`;
+}
 
 /**
  * Warnings collected during validation. Forward-compat tolerates unknown
@@ -219,6 +272,32 @@ export function validateBrainConfigDetailed(
     );
   }
 
+  // `primary_agent` — optional scalar (null or non-empty string).
+  // Defaults to null when absent so existing vaults are unaffected.
+  let primaryAgent: string | null = DEFAULT_BRAIN_CONFIG.primary_agent;
+  if ("primary_agent" in obj) {
+    const v = obj["primary_agent"];
+    if (v === null || v === undefined) {
+      primaryAgent = null;
+    } else if (typeof v === "string") {
+      const trimmed = v.trim();
+      if (trimmed.length === 0) {
+        throw new BrainConfigError(
+          "must be either null or a non-empty string",
+          "primary_agent",
+          source,
+        );
+      }
+      primaryAgent = trimmed;
+    } else {
+      throw new BrainConfigError(
+        `must be either null or a non-empty string; got ${describe(v)}`,
+        "primary_agent",
+        source,
+      );
+    }
+  }
+
   // Each block is optional; missing blocks inherit the default. We
   // merge field-by-field so a user can override one threshold without
   // having to re-state the rest.
@@ -268,6 +347,26 @@ export function validateBrainConfigDetailed(
       source,
     );
   }
+  requireUnitInterval(
+    "confidence.medium_min",
+    confidence.medium_min,
+    source,
+  );
+  requireUnitInterval(
+    "confidence.high_min",
+    confidence.high_min,
+    source,
+  );
+  if (
+    (confidence.medium_min as number) >= (confidence.high_min as number)
+  ) {
+    throw new BrainConfigError(
+      `medium_min must be strictly less than high_min; got ` +
+        `medium_min=${confidence.medium_min}, high_min=${confidence.high_min}`,
+      "confidence.medium_min",
+      source,
+    );
+  }
 
   const snapshots = mergeBlock(
     "snapshots",
@@ -280,6 +379,7 @@ export function validateBrainConfigDetailed(
   // Forward-compat: unknown top-level keys → warning, not error.
   const known = new Set([
     "schema_version",
+    "primary_agent",
     "dream",
     "retire",
     "confidence",
@@ -296,6 +396,7 @@ export function validateBrainConfigDetailed(
 
   const config: BrainConfig = {
     schema_version: schemaVersion,
+    primary_agent: primaryAgent,
     dream: {
       candidate_threshold: dream.candidate_threshold as number,
       unconfirmed_window_days: dream.unconfirmed_window_days as number,
@@ -308,6 +409,8 @@ export function validateBrainConfigDetailed(
       low_max_applied: confidence.low_max_applied as number,
       high_min_applied: confidence.high_min_applied as number,
       high_freshness_factor: confidence.high_freshness_factor as number,
+      medium_min: confidence.medium_min as number,
+      high_min: confidence.high_min as number,
     },
     snapshots: {
       retention_count: snapshots.retention_count as number,
@@ -370,6 +473,25 @@ function requireNonNegativeInteger(
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new BrainConfigError(
       `must be a non-negative integer; got ${describe(value)}`,
+      field,
+      source,
+    );
+  }
+}
+
+function requireUnitInterval(
+  field: string,
+  value: unknown,
+  source: string | null,
+): void {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > 1
+  ) {
+    throw new BrainConfigError(
+      `must be a number in [0, 1]; got ${describe(value)}`,
       field,
       source,
     );

@@ -282,8 +282,25 @@ Defaults from `_brain.yaml`:
 - `high_freshness_factor: 0.8` — "fresh" means
   `now - last_evidence_at < stale_evidence_days * 0.8`.
 - `stale_evidence_days: 90` — the boundary for fresh / stale.
+- `medium_min: 0.40`, `high_min: 0.75` — derived-band thresholds on
+  the numeric `confidence_value` (see below).
 
-All four are tunable per vault in `Brain/_brain.yaml`.
+All six are tunable per vault in `Brain/_brain.yaml`.
+
+### Numeric `confidence_value`
+
+Each preference also carries a continuous
+`_confidence_value: 0.0–1.0` field, computed alongside the band on
+every dream refresh. The value is the **Wilson 95% lower bound** on
+`applied / (applied + violated)` modulated by **freshness decay**
+that runs linearly from `1.0` at age 0 to `0.0` at
+`stale_evidence_days`. The band is the **maximum** of the legacy
+step-function and a numeric-threshold view (`medium_min`,
+`high_min`) — so legacy boundaries stay intact and numeric tuning
+can only lift bands, never demote them. The digest's
+`## Confidence shifts` section uses the value to spot drops between
+runs; the MCP `brain_query` response and `Brain/active.md` both
+expose the number alongside the band for inspection.
 
 ## Active preferences injection
 
@@ -386,6 +403,46 @@ flowchart TD
 A snapshot captures every file under `Brain/` **except** `.snapshots/`
 itself — otherwise rollback would erase any snapshots taken after
 this one. Retention defaults to ten newest archives.
+
+### Read-only inspectors over the snapshot family
+
+Two CLI surfaces share the same diff renderer over the snapshot
+extraction primitive (`extractSnapshotToTemp`), so previewing and
+auditing stay byte-equal:
+
+- **`o2b brain rollback <run_id> --dry-run`** — extract the archive
+  into a sibling tmp dir, compute the live → snapshot diff, print it,
+  drop the tmp dir. Mutually exclusive with `--yes` since
+  preview-vs-execute is contradictory. No live writes; no log entry.
+- **`o2b brain snapshot diff <run_id_a> [<run_id_b>]`** — same
+  renderer, but compares snapshot ↔ snapshot when both ids are
+  supplied (and snapshot ↔ live when only one is). `--json` yields
+  the structured `BrainTreeDiff` payload for scripting.
+
+The diff classifies every file under each root into six artifact
+kinds (preference, retired, signal, log, config, other). Preference
+and retired files receive a typed field-level diff for the derived
+counters (`_status`, `_applied_count`, `_violated_count`,
+`_confidence`, `_confidence_value`, `pinned`, and a few identity
+adjuncts); other kinds compare by byte equality and surface as
+`(body changed)`.
+
+## Primary agent declaration
+
+`Brain/_brain.yaml` carries an optional `primary_agent: <name> | null`
+key. When set, dream runs invoked from a different agent emit:
+
+- a stderr warning of the form `warning: non-primary-dream-run: …`,
+- a `warnings` array entry on the MCP `brain_dream` response,
+- a `non_primary_agent: <caller>` payload row in the dream summary
+  log event.
+
+The dream pass still completes — the declaration is observability,
+not access control. Set / clear via `o2b brain set-primary <name>`
+or `o2b brain set-primary --clear`. A vault initialised with
+`o2b brain init --primary-agent <name>` writes the value into the
+fresh `_brain.yaml`. The full multi-device walkthrough is in
+[`docs/cross-project-pointer.md`](./cross-project-pointer.md).
 
 ## Hygiene: sanitisation and lints
 

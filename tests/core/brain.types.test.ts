@@ -113,6 +113,7 @@ describe("interface shape smoke (compile-time)", () => {
       violated_count: 0,
       last_evidence_at: null,
       confidence: BRAIN_CONFIDENCE.low,
+      confidence_value: null,
       pinned: false,
     } as const satisfies BrainPreference;
     expect(unconfirmed.confirmed_at).toBeNull();
@@ -148,6 +149,7 @@ describe("interface shape smoke (compile-time)", () => {
       violated_count: 0,
       last_evidence_at: "2026-05-14T10:42:00Z",
       confidence: BRAIN_CONFIDENCE.low,
+      confidence_value: null,
       pinned: false,
     } as const satisfies BrainRetired;
     expect(retired.status).toBe("retired");
@@ -172,6 +174,7 @@ describe("interface shape smoke (compile-time)", () => {
   test("BrainConfig with defaults compiles", () => {
     const cfg = {
       schema_version: 1,
+      primary_agent: null,
       dream: {
         candidate_threshold: 3,
         unconfirmed_window_days: 14,
@@ -182,10 +185,13 @@ describe("interface shape smoke (compile-time)", () => {
         low_max_applied: 2,
         high_min_applied: 10,
         high_freshness_factor: 0.8,
+        medium_min: 0.40,
+        high_min: 0.75,
       },
       snapshots: { retention_count: 10 },
     } as const satisfies BrainConfig;
     expect(cfg.schema_version).toBe(1);
+    expect(cfg.primary_agent).toBeNull();
     expect(cfg.snapshots.retention_count).toBe(10);
   });
 });

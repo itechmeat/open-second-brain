@@ -31,7 +31,7 @@ import {
   resolveVault,
 } from "../core/config.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
-import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
+import { normaliseWikilinkTarget, renderPrefLink } from "../core/brain/wikilink.ts";
 import { bootstrapBrain } from "../core/brain/init.ts";
 import {
   appendApplyEvidence,
@@ -50,7 +50,7 @@ import {
 } from "../core/brain/sessions/import.ts";
 import { SessionImportError } from "../core/brain/sessions/types.ts";
 import { moveToRetired, parsePreference, writePreference } from "../core/brain/preference.ts";
-import { preferencePath } from "../core/brain/paths.ts";
+import { brainDirs, preferencePath } from "../core/brain/paths.ts";
 import { isoDate, isoSecond } from "../core/brain/time.ts";
 import {
   queryByLogSince,
@@ -61,8 +61,19 @@ import {
 import { renderDigest, type RenderDigestOptions } from "../core/brain/digest.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
 import { setPinned } from "../core/brain/pin.ts";
+import { setPrimaryAgent } from "../core/brain/set-primary.ts";
 import { writeSignal } from "../core/brain/signal.ts";
-import { listSnapshots, restoreSnapshot } from "../core/brain/snapshot.ts";
+import {
+  extractSnapshotToTemp,
+  listSnapshots,
+  restoreSnapshot,
+  type ExtractSnapshotResult,
+} from "../core/brain/snapshot.ts";
+import { diffBrainTrees } from "../core/brain/snapshot-diff.ts";
+import {
+  renderDiffJson,
+  renderDiffMarkdown,
+} from "../core/brain/snapshot-diff-render.ts";
 import { appendLogEvent, type BrainLogEntry } from "../core/brain/log.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
@@ -144,6 +155,7 @@ async function cmdBrainInit(argv: string[]): Promise<number> {
     vault: { type: "string" },
     config: { type: "string" },
     force: { type: "boolean" },
+    "primary-agent": { type: "string" },
     json: { type: "boolean" },
   });
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
@@ -152,11 +164,24 @@ async function cmdBrainInit(argv: string[]): Promise<number> {
   // can run `o2b brain init` without restating `--vault`.
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
 
+  const primaryAgentFlag = flags["primary-agent"];
+  let primaryAgent: string | undefined;
+  if (typeof primaryAgentFlag === "string") {
+    const trimmed = primaryAgentFlag.trim();
+    if (trimmed.length === 0) {
+      return fail(
+        "brain init: --primary-agent must be a non-empty string when provided",
+      );
+    }
+    primaryAgent = trimmed;
+  }
+
   let result;
   try {
     result = bootstrapBrain(vault, {
       force: Boolean(flags["force"]),
       configPath: config,
+      ...(primaryAgent !== undefined ? { primaryAgent } : {}),
     });
   } catch (exc) {
     return fail(`failed to initialize Brain: ${(exc as Error).message ?? exc}`);
@@ -310,7 +335,10 @@ async function cmdBrainFeedback(argv: string[]): Promise<number> {
         timestamp: isoSecond(new Date(now.getTime() + 1000)),
         eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
         body: {
-          preference: `[[${prefResult.id}]]`,
+          preference: renderPrefLink({
+            id: prefResult.id,
+            principle: String(flags["principle"]),
+          }),
           agent,
         },
       });
@@ -347,10 +375,13 @@ async function cmdBrainDream(argv: string[]): Promise<number> {
     vault: { type: "string" },
     "dry-run": { type: "boolean" },
     now: { type: "string" },
+    agent: { type: "string" },
     json: { type: "boolean" },
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const agent =
+    (flags["agent"] as string | undefined)?.trim() ?? resolveAgentName(config);
 
   let now: Date | undefined;
   const nowStr = flags["now"] as string | undefined;
@@ -370,9 +401,18 @@ async function cmdBrainDream(argv: string[]): Promise<number> {
     summary = dream(vault, {
       ...(now !== undefined ? { now } : {}),
       dryRun: Boolean(flags["dry-run"]),
+      ...(agent ? { agentName: agent } : {}),
     });
   } catch (exc) {
     return fail(`dream failed: ${(exc as Error).message ?? exc}`);
+  }
+
+  // Surface non-fatal warnings (§21 non-primary check, future advisory
+  // codes) on stderr regardless of output mode. The run already
+  // completed successfully; stdout stays reserved for the structured
+  // summary / human-readable status lines.
+  for (const w of summary.warnings ?? []) {
+    process.stderr.write(`warning: ${w.code}: ${w.message}\n`);
   }
 
   if (flags["json"]) {
@@ -660,7 +700,10 @@ async function cmdBrainReject(argv: string[]): Promise<number> {
   // Log a `reject` event so the audit trail stays complete.
   try {
     const body: Record<string, string> = {
-      preference: `[[ret-${slug}]]`,
+      preference: renderPrefLink({
+        id: `ret-${slug}`,
+        principle: pref.principle,
+      }),
       agent,
     };
     if (flags["reason"]) body["reason"] = String(flags["reason"]);
@@ -682,6 +725,136 @@ async function cmdBrainReject(argv: string[]): Promise<number> {
     okJson({ id: `ret-${slug}`, reason: "user-rejected" });
   } else {
     ok(`retired: ret-${slug} (user-rejected)`);
+  }
+  return 0;
+}
+
+async function cmdBrainSnapshotDiff(argv: string[]): Promise<number> {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+
+  if (positional.length < 1 || positional.length > 2) {
+    return fail(
+      "brain snapshot diff requires <run_id_a> [<run_id_b>] (with one arg, the live tree is compared as B)",
+    );
+  }
+  const [a, b] = positional;
+  const snaps = listSnapshots(vault);
+  if (!snaps.some((s) => s.run_id === a)) {
+    process.stderr.write(
+      `snapshot not found: ${a}; run \`o2b brain rollback --list\` to enumerate.\n`,
+    );
+    return 2;
+  }
+  if (b !== undefined && !snaps.some((s) => s.run_id === b)) {
+    process.stderr.write(
+      `snapshot not found: ${b}; run \`o2b brain rollback --list\` to enumerate.\n`,
+    );
+    return 2;
+  }
+
+  let extA: ExtractSnapshotResult | null = null;
+  let extB: ExtractSnapshotResult | null = null;
+  try {
+    extA = extractSnapshotToTemp(vault, a!);
+    const bRoot = b !== undefined
+      ? (extB = extractSnapshotToTemp(vault, b)).brainRoot
+      : brainDirs(vault).brain;
+    const diff = diffBrainTrees(extA.brainRoot, bRoot);
+    const out = flags["json"]
+      ? JSON.stringify(renderDiffJson(diff), null, 2) + "\n"
+      : renderDiffMarkdown(diff, { aLabel: a!, bLabel: b ?? "live" });
+    process.stdout.write(out + (out.endsWith("\n") ? "" : "\n"));
+    return 0;
+  } catch (exc) {
+    return fail(`snapshot diff failed: ${(exc as Error).message ?? exc}`);
+  } finally {
+    extA?.cleanup();
+    extB?.cleanup();
+  }
+}
+
+async function handleBrainSnapshotSubcommand(
+  argv: ReadonlyArray<string>,
+): Promise<number> {
+  if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
+    process.stdout.write(
+      "usage: o2b brain snapshot <verb> [args...]\n" +
+        "Verbs:\n" +
+        "  diff <run_id_a> [<run_id_b>]   Read-only diff between two snapshots,\n" +
+        "                                  or between a snapshot and live Brain/.\n",
+    );
+    return argv.length === 0 ? 2 : 0;
+  }
+  const sub = argv[0]!;
+  const rest = argv.slice(1);
+  switch (sub) {
+    case "diff":
+      return await cmdBrainSnapshotDiff([...rest]);
+    default:
+      process.stderr.write(
+        `unknown brain snapshot verb: ${sub}; supported: diff\n`,
+      );
+      return 2;
+  }
+}
+
+async function cmdBrainSetPrimary(argv: string[]): Promise<number> {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    clear: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+
+  let name: string | null;
+  if (flags["clear"]) {
+    if (positional.length > 0) {
+      return fail("brain set-primary --clear takes no positional argument");
+    }
+    name = null;
+  } else {
+    if (positional.length < 1) {
+      return fail(
+        "brain set-primary requires <name> or --clear; see `o2b brain help set-primary`",
+      );
+    }
+    if (positional.length > 1) {
+      return fail("brain set-primary accepts a single <name> argument");
+    }
+    const supplied = positional[0]!.trim();
+    if (supplied.length === 0) {
+      return fail("brain set-primary <name> must be non-empty");
+    }
+    name = supplied;
+  }
+
+  let result;
+  try {
+    result = setPrimaryAgent(vault, name);
+  } catch (exc) {
+    return fail(`set-primary failed: ${(exc as Error).message ?? exc}`);
+  }
+
+  if (flags["json"]) {
+    okJson({
+      previous: result.previous,
+      next: result.next,
+      changed: result.changed,
+    });
+    return 0;
+  }
+
+  const fmt = (v: string | null): string => v ?? "null";
+  if (!result.changed) {
+    ok(`primary_agent already set to ${fmt(result.next)}`);
+  } else {
+    ok(`primary_agent: ${fmt(result.previous)} → ${fmt(result.next)}`);
   }
   return 0;
 }
@@ -738,6 +911,7 @@ async function cmdBrainRollback(argv: string[]): Promise<number> {
     vault: { type: "string" },
     list: { type: "boolean" },
     yes: { type: "boolean" },
+    "dry-run": { type: "boolean" },
     json: { type: "boolean" },
   });
   const config = defaultConfigPath();
@@ -777,6 +951,33 @@ async function cmdBrainRollback(argv: string[]): Promise<number> {
       `snapshot not found: ${runId}; run \`o2b brain rollback --list\` to enumerate.\n`,
     );
     return 2;
+  }
+
+  // --dry-run prints the would-be restore plan without modifying
+  // Brain/. Mutually exclusive with --yes — combining "preview" and
+  // "execute non-interactively" is contradictory and would silently
+  // hide one of the two intents.
+  if (flags["dry-run"]) {
+    if (flags["yes"]) {
+      return fail("rollback: --dry-run and --yes are mutually exclusive");
+    }
+    let ext;
+    try {
+      ext = extractSnapshotToTemp(vault, runId);
+    } catch (exc) {
+      return fail(`rollback dry-run failed: ${(exc as Error).message ?? exc}`);
+    }
+    try {
+      const liveBrain = brainDirs(vault).brain;
+      const diff = diffBrainTrees(liveBrain, ext.brainRoot);
+      const out = flags["json"]
+        ? JSON.stringify(renderDiffJson(diff), null, 2) + "\n"
+        : renderDiffMarkdown(diff, { aLabel: "live", bLabel: runId });
+      process.stdout.write(out + (out.endsWith("\n") ? "" : "\n"));
+      return 0;
+    } finally {
+      ext.cleanup();
+    }
   }
 
   // Interactive confirm. We compute a minimal diff summary by counting
@@ -1280,7 +1481,10 @@ Brain verbs (observing memory):
   reject           Move a preference to retired (user-rejected); --yes if pinned
   pin              Mark a preference exempt from automatic retire (idempotent)
   unpin            Clear the pinned flag (idempotent)
-  rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes)
+  set-primary      Declare or clear primary_agent in _brain.yaml (--clear)
+  snapshot diff    Read-only diff between two snapshots, or snapshot vs live
+  rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
+                   --dry-run previews via the same diff renderer)
   doctor              Validate Brain invariants (--strict promotes warnings to exit 2)
   backlinks           List inbound references to a Brain artifact id
   migrate-frontmatter Rewrite legacy 'status:' / 'applied_count:' keys to '_status:' / '_applied_count:'
@@ -1295,8 +1499,10 @@ Common flags:
 
 const VERB_HELP: Record<string, string> = {
   init:
-    "usage: o2b brain init [--vault <path>] [--force] [--json]\n" +
-    "Bootstrap <vault>/Brain/. Requires `o2b init` to have run first.\n",
+    "usage: o2b brain init [--vault <path>] [--force] [--primary-agent <name>] [--json]\n" +
+    "Bootstrap <vault>/Brain/. Requires `o2b init` to have run first.\n" +
+    "--primary-agent <name> writes the value into _brain.yaml on first init;\n" +
+    "on re-run against an existing _brain.yaml use `o2b brain set-primary` instead.\n",
   feedback:
     "usage: o2b brain feedback --topic <slug> --signal positive|negative --principle <text>\n" +
     "  [--scope <slug>] [--source <wikilink>...] [--agent <name>] [--raw <text>|--raw-file <path>]\n" +
@@ -1326,8 +1532,16 @@ const VERB_HELP: Record<string, string> = {
     "Clear pinned: true. Idempotent.\n",
   rollback:
     "usage: o2b brain rollback <run_id> [--vault <path>] [--yes] [--json]\n" +
+    "       o2b brain rollback <run_id> --dry-run [--vault <path>] [--json]\n" +
     "       o2b brain rollback --list [--vault <path>] [--json]\n" +
-    "Restore Brain/ from a snapshot. Interactive prompt unless --yes.\n",
+    "Restore Brain/ from a snapshot. Interactive prompt unless --yes.\n" +
+    "--dry-run prints the would-be restore plan as live → snapshot\n" +
+    "diff and exits 0 without writing.\n",
+  snapshot:
+    "usage: o2b brain snapshot diff <run_id_a> [<run_id_b>]\n" +
+    "                              [--vault <path>] [--json]\n" +
+    "Read-only diff between two snapshots, or between a snapshot and\n" +
+    "the live Brain/ tree (when <run_id_b> is omitted).\n",
   doctor:
     "usage: o2b brain doctor [--vault <path>] [--json] [--strict]\n" +
     "Validate invariants. Warnings exit 0 (or 2 with --strict). Errors always exit 1.\n",
@@ -1340,6 +1554,13 @@ const VERB_HELP: Record<string, string> = {
     "to the '_'-prefixed shape across Brain/preferences/ and Brain/retired/.\n" +
     "Default is --dry-run; --apply takes a pre-run snapshot (rollback via run_id).\n" +
     "--apply requires --yes in non-interactive mode (--json or non-TTY stdin).\n",
+  "set-primary":
+    "usage: o2b brain set-primary <name> [--vault <path>] [--json]\n" +
+    "       o2b brain set-primary --clear [--vault <path>] [--json]\n" +
+    "Declare which agent owns the dream consolidation pass for this vault.\n" +
+    "Stored in Brain/_brain.yaml as `primary_agent:`. Dream runs from a\n" +
+    "different agent emit a warning but still proceed (observability, not\n" +
+    "access control). Use --clear to remove the declaration.\n",
   "scan-inline":
     "usage: o2b brain scan-inline [--vault <path>] [--path <subdir>...] [--exclude <subdir>...]\n" +
     "                              [--dry-run] [--strict] [--json] [--agent <name>]\n" +
@@ -1409,6 +1630,10 @@ export async function handleBrainSubcommand(
         return await cmdBrainPin(rest);
       case "unpin":
         return await cmdBrainUnpin(rest);
+      case "set-primary":
+        return await cmdBrainSetPrimary(rest);
+      case "snapshot":
+        return await handleBrainSnapshotSubcommand(rest);
       case "rollback":
         return await cmdBrainRollback(rest);
       case "doctor":

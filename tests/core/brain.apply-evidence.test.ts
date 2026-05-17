@@ -74,7 +74,7 @@ describe("appendApplyEvidence — happy path", () => {
     const e = entries[0]!;
     expect(e.eventType).toBe("apply-evidence");
     expect(e.timestamp).toBe("2026-05-14T14:22:00Z");
-    expect(e.body["preference"]).toBe("[[pref-no-internal-abbrev]]");
+    expect(e.body["preference"]).toBe("[[pref-no-internal-abbrev|Rule for no-internal-abbrev]]");
     expect(e.body["artifact"]).toBe("[[Daily/2026.05.14#section]]");
     expect(e.body["agent"]).toBe("claude");
     expect(e.body["result"]).toBe("applied");
@@ -94,7 +94,7 @@ describe("appendApplyEvidence — happy path", () => {
       { now: new Date("2026-05-14T10:00:00Z") },
     );
     const bytes = readFileSync(res.log_path, "utf8");
-    expect(bytes).toContain("preference: [[pref-foo-rule]]");
+    expect(bytes).toContain("preference: [[pref-foo-rule|Rule for foo-rule]]");
     expect(bytes).toContain("result: violated");
   });
 });

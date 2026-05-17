@@ -113,7 +113,7 @@ describe("New (unconfirmed, in trial) section", () => {
     expect(res.empty).toBe(false);
     expect(res.content).toContain("## New (unconfirmed, in trial)");
     expect(res.content).toContain(
-      "[[pref-no-internal-abbrev]] — writing, 3 signals, trial ends 2026-05-28",
+      "[[pref-no-internal-abbrev|Principle for no-internal-abbrev]] — writing, 3 signals, trial ends 2026-05-28",
     );
   });
 
@@ -124,7 +124,7 @@ describe("New (unconfirmed, in trial) section", () => {
     );
     const res = renderDigest(tmp, { since: SINCE, until: UNTIL });
     expect(res.empty).toBe(true);
-    expect(res.content).not.toContain("[[pref-old]]");
+    expect(res.content).not.toMatch(/\[\[pref-old[\]|]/);
   });
 });
 
@@ -152,7 +152,7 @@ describe("Confirmed section", () => {
     const res = renderDigest(tmp, { since: SINCE, until: UNTIL });
     expect(res.content).toContain("## Confirmed");
     expect(res.content).toContain(
-      "[[pref-prefer-typed-errors]] — writing, first applied in [[Daily/2026.05.14]]",
+      "[[pref-prefer-typed-errors|Principle for prefer-typed-errors]] — writing, first applied in [[Daily/2026.05.14]]",
     );
   });
 });
@@ -176,7 +176,7 @@ describe("Retired section", () => {
     expect(res.content).toContain("## Retired");
     // 2026-02-12 → 2026-05-14 = 91 days.
     expect(res.content).toMatch(
-      /\[\[ret-prefer-bullets-over-prose\]\] — writing, stale-no-evidence \(91 days\)/,
+      /\[\[ret-prefer-bullets-over-prose\|Principle for prefer-bullets-over-prose\]\] — writing, stale-no-evidence \(91 days\)/,
     );
   });
 
@@ -187,7 +187,7 @@ describe("Retired section", () => {
       retired_by: "[[Brain/log/2026-05-14]]",
     });
     const res = renderDigest(tmp, { since: SINCE, until: UNTIL });
-    expect(res.content).toContain("[[ret-rebut-me]] — writing, rebutted");
+    expect(res.content).toContain("[[ret-rebut-me|Principle for rebut-me]] — writing, rebutted");
     expect(res.content).not.toMatch(/rebutted\s*\(\d+ days\)/);
   });
 });
@@ -235,10 +235,10 @@ describe("Markdown ↔ JSON parity", () => {
     expect(parsed.new_unconfirmed.map((x) => x.id)).toEqual(["pref-aaa"]);
     expect(parsed.confirmed.map((x) => x.id)).toEqual(["pref-bbb"]);
     expect(parsed.retired.map((x) => x.id)).toEqual(["ret-ccc"]);
-    // Markdown contains every id too.
-    expect(md.content).toContain("[[pref-aaa]]");
-    expect(md.content).toContain("[[pref-bbb]]");
-    expect(md.content).toContain("[[ret-ccc]]");
+    // Markdown contains every id too — titled wikilink form.
+    expect(md.content).toContain("[[pref-aaa|");
+    expect(md.content).toContain("[[pref-bbb|");
+    expect(md.content).toContain("[[ret-ccc|");
   });
 });
 
@@ -250,8 +250,8 @@ describe("window filtering", () => {
     );
     writePreference(tmp, basePref("inside-window"));
     const res = renderDigest(tmp, { since: SINCE, until: UNTIL });
-    expect(res.content).toContain("[[pref-inside-window]]");
-    expect(res.content).not.toContain("[[pref-before-window]]");
+    expect(res.content).toContain("[[pref-inside-window|");
+    expect(res.content).not.toMatch(/\[\[pref-before-window[\]|]/);
   });
 
   test("the upper bound is exclusive — until timestamp itself is dropped", () => {
@@ -337,8 +337,8 @@ describe("`empty` flag semantics", () => {
       basePref("old", { created_at: "2026-04-01T00:00:00Z" }),
     );
     const res = renderDigest(tmp, { until: now });
-    expect(res.content).toContain("[[pref-recent]]");
-    expect(res.content).not.toContain("[[pref-old]]");
+    expect(res.content).toContain("[[pref-recent|");
+    expect(res.content).not.toMatch(/\[\[pref-old[\]|]/);
   });
 });
 
@@ -433,8 +433,8 @@ describe("top_applied / top_referenced sections", () => {
     );
     const r = renderDigest(tmp, { since: SINCE, until: UNTIL, format: "markdown" });
     expect(r.content).toContain("## Top applied (2)");
-    expect(r.content).toContain("[[pref-hot]]");
-    expect(r.content).toContain("[[pref-quar]]");
+    expect(r.content).toContain("[[pref-hot|");
+    expect(r.content).toContain("[[pref-quar|");
     expect(r.content).toContain("[quarantine]");
   });
 

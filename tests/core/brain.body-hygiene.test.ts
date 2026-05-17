@@ -265,7 +265,7 @@ describe("§6 signal suppression", () => {
     const logPath = join(vault, "Brain", "log", "2026-05-16.md");
     const log = readFileSync(logPath, "utf8");
     expect(log).toContain("signal-suppressed");
-    expect(log).toContain("[[ret-noisy]]");
+    expect(log).toContain("[[ret-noisy|stop spamming]]");
     expect(log).toContain("rule was wrong");
   });
 

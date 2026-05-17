@@ -367,7 +367,7 @@ describe("brain_apply_evidence", () => {
     expect(s.agent).toBe("claude");
     const file = join(vault, s.log_path);
     const text = readFileSync(file, "utf8");
-    expect(text).toContain("[[pref-no-internal-abbrev]]");
+    expect(text).toContain("[[pref-no-internal-abbrev|");
     expect(text).toContain("applied");
     expect(text).toContain("Expanded OSB on first use.");
   });

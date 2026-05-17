@@ -429,12 +429,39 @@ export function pruneSnapshots(
  *      extracted one into place.
  *   5. Clean up the temp dir.
  */
-export function restoreSnapshot(
+/**
+ * Result of {@link extractSnapshotToTemp}. `brainRoot` is the
+ * extracted `Brain/` directory (sibling to the live tree, inside a
+ * private tmp dir); `tmpRoot` is the parent directory the caller
+ * owns. {@link cleanup} removes the tmp dir best-effort.
+ */
+export interface ExtractSnapshotResult {
+  readonly tmpRoot: string;
+  readonly brainRoot: string;
+  readonly cleanup: () => void;
+}
+
+/**
+ * Extract a snapshot archive into a private tmp directory and return
+ * pointers to the materialised tree. The caller is responsible for
+ * invoking {@link ExtractSnapshotResult.cleanup} once the data is no
+ * longer needed.
+ *
+ * Used by:
+ *   - {@link restoreSnapshot} — actually replaces the live tree.
+ *   - `o2b brain rollback --dry-run` — previews the restore plan.
+ *   - `o2b brain snapshot diff` — read-only inspector across two
+ *     snapshots or a snapshot and the live tree.
+ *
+ * Shared so the tar / zstd / gzip decompression logic stays in one
+ * place. Throws {@link BrainSnapshotError} on archive corruption /
+ * missing root, {@link BrainSnapshotToolingMissingError} when the
+ * host lacks the required external tool.
+ */
+export function extractSnapshotToTemp(
   vault: string,
   runId: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- reserved for future log emission
-  _opts: { now?: Date } = {},
-): RestoreSnapshotResult {
+): ExtractSnapshotResult {
   validateRunId(runId);
   const archive = snapshotPath(vault, runId);
   if (!existsSync(archive)) {
@@ -448,8 +475,14 @@ export function restoreSnapshot(
     );
   }
 
-  const dirs = brainDirs(vault);
-  const tmp = mkdtempSync(join(tmpdir(), `o2b-brain-restore-${runId}-`));
+  const tmp = mkdtempSync(join(tmpdir(), `o2b-brain-extract-${runId}-`));
+  const cleanup = (): void => {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      // tmp cleanup is best-effort; the OS will reclaim it eventually.
+    }
+  };
   try {
     // Probe the magic bytes to decide how to decompress. zstd starts
     // with `28 B5 2F FD`; gzip with `1F 8B`. Anything else is rejected
@@ -469,8 +502,6 @@ export function restoreSnapshot(
     }
 
     if (decompressor === "zstd") {
-      // Use shell pipe-free composition: zstd writes tar bytes to
-      // stdout; we feed them into tar via stdin.
       const zstd = spawnSync("zstd", ["-d", "-c", archive], {
         maxBuffer: 256 * 1024 * 1024,
         stdio: ["ignore", "pipe", "pipe"],
@@ -494,7 +525,6 @@ export function restoreSnapshot(
         );
       }
     } else {
-      // gzip route — let tar do the decompression directly via `-z`.
       const tar = spawnSync("tar", ["-x", "-z", "-f", archive, "-C", tmp], {
         stdio: ["ignore", "inherit", "pipe"],
       });
@@ -507,10 +537,6 @@ export function restoreSnapshot(
       }
     }
 
-    // The extracted layout must contain a top-level `Brain/`. If the
-    // archive was written from outside the design (e.g. someone
-    // manually placed an unrelated `.tar.zst` in `.snapshots/`), we
-    // refuse to proceed rather than scattering files.
     const extractedBrain = join(tmp, "Brain");
     if (!existsSync(extractedBrain)) {
       throw new BrainSnapshotError(
@@ -518,23 +544,34 @@ export function restoreSnapshot(
         runId,
       );
     }
+    return Object.freeze({ tmpRoot: tmp, brainRoot: extractedBrain, cleanup });
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+}
 
+export function restoreSnapshot(
+  vault: string,
+  runId: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- reserved for future log emission
+  _opts: { now?: Date } = {},
+): RestoreSnapshotResult {
+  const dirs = brainDirs(vault);
+  const ext = extractSnapshotToTemp(vault, runId);
+  try {
     // Replace every top-level entry under Brain/, EXCEPT `.snapshots/`.
     // The exclusion is the load-bearing safety guarantee: rolling back
     // an older state must not erase newer snapshots, otherwise the
     // operator is one click away from losing their forward path.
-    const replacementEntries = readdirSync(extractedBrain).filter(
+    const replacementEntries = readdirSync(ext.brainRoot).filter(
       (e) => e !== ".snapshots",
     );
 
-    // First, remove top-level entries under live Brain/ that are NOT
-    // `.snapshots/` and ARE present in the snapshot. (We do not delete
-    // entries unique to the live tree — that would be a stronger
-    // semantic than "restore", since restore should converge the live
-    // tree to the snapshot.) Actually the correct semantics ARE
-    // "live tree == snapshot tree minus .snapshots/". So we delete
-    // every live top-level entry except `.snapshots/`, then copy in
-    // from the extracted Brain/. This makes restore deterministic.
+    // The correct semantics are "live tree == snapshot tree minus
+    // `.snapshots/`". Delete every live top-level entry except
+    // `.snapshots/`, then copy in from the extracted Brain/. This
+    // makes restore deterministic.
     const liveEntries = existsSync(dirs.brain)
       ? readdirSync(dirs.brain).filter((e) => e !== ".snapshots")
       : [];
@@ -554,18 +591,14 @@ export function restoreSnapshot(
     let restoredFiles = 0;
     mkdirSync(dirs.brain, { recursive: true });
     for (const name of replacementEntries) {
-      const from = join(extractedBrain, name);
+      const from = join(ext.brainRoot, name);
       const to = join(dirs.brain, name);
       cpSync(from, to, { recursive: true });
       restoredFiles += countFiles(to);
     }
     return { restored_files: restoredFiles };
   } finally {
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      // tmp cleanup is best-effort; the OS will reclaim it eventually.
-    }
+    ext.cleanup();
   }
 }
 

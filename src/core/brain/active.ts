@@ -238,7 +238,7 @@ function renderBody(input: RenderInput): string {
 function renderConfirmedLine(p: BrainPreference): string {
   const tags: string[] = [];
   if (p.scope) tags.push(`scope: ${p.scope}`);
-  tags.push(`confidence: ${p.confidence}`);
+  tags.push(`confidence: ${p.confidence}${formatConfidenceValueTail(p)}`);
   if (p.pinned) tags.push("pinned");
   return `- \`${p.id}\` (${tags.join(", ")}) — ${p.principle}`;
 }
@@ -247,8 +247,22 @@ function renderQuarantineLine(p: BrainPreference): string {
   const tags: string[] = [];
   if (p.scope) tags.push(`scope: ${p.scope}`);
   tags.push(`applied: ${p.applied_count} / violated: ${p.violated_count}`);
+  if (p.confidence_value !== null) {
+    tags.push(`conf: ${p.confidence_value.toFixed(2)}`);
+  }
   if (p.pinned) tags.push("pinned");
   return `- \`${p.id}\` (${tags.join(", ")}) — ${p.principle}`;
+}
+
+/**
+ * Numeric `confidence_value` tail rendered next to the band in the
+ * `confidence:` metadata. Empty when the field is `null` (legacy
+ * preference written before v0.10.3 — the next dream refresh lifts
+ * it to a real number).
+ */
+function formatConfidenceValueTail(p: BrainPreference): string {
+  if (p.confidence_value === null) return "";
+  return ` (${p.confidence_value.toFixed(2)})`;
 }
 
 function renderRetiredLine(r: BrainRetired): string {

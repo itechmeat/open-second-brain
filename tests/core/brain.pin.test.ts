@@ -64,7 +64,7 @@ describe("setPinned — happy paths", () => {
     const { entries } = parseLogDay(vault, "2026-05-14");
     expect(entries).toHaveLength(1);
     expect(entries[0]!.eventType).toBe("pin");
-    expect(entries[0]!.body["preference"]).toBe("[[pref-flippable]]");
+    expect(entries[0]!.body["preference"]).toBe("[[pref-flippable|Rule for flippable]]");
     expect(entries[0]!.body["agent"]).toBe("claude");
   });
 
@@ -170,6 +170,7 @@ describe("isPinned — accessor", () => {
       violated_count: 0,
       last_evidence_at: null,
       confidence: "low",
+      confidence_value: null,
       pinned: false,
     });
     expect(isPinned(fake)).toBe(false);

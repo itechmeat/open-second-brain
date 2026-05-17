@@ -319,10 +319,15 @@ async function toolBrainDream(
 ): Promise<Record<string, unknown>> {
   const dryRun = coerceBool(args, "dry_run");
   const nowDate = coerceIsoDate(args, "now");
+  const agentArg = coerceStr(args, "agent", false);
+  const agent =
+    normalizeAgentArgument(agentArg)
+    ?? resolveAgentName(ctx.configPath ?? undefined);
 
   const summary = dream(ctx.vault, {
     dryRun,
     ...(nowDate ? { now: nowDate } : {}),
+    ...(agent ? { agentName: agent } : {}),
   });
 
   // The summary is already a Plain Old Frozen Object — JSON-serialise
@@ -337,6 +342,7 @@ async function toolBrainDream(
     retired: summary.retired.map((r) => ({ id: r.id, reason: r.reason })),
     contradictions: [...summary.contradictions],
     moved_to_processed: [...summary.moved_to_processed],
+    warnings: summary.warnings.map((w) => ({ code: w.code, message: w.message })),
     snapshot_path: summary.snapshot_path
       ? vaultRelativeSafe(ctx.vault, summary.snapshot_path)
       : null,
@@ -591,6 +597,7 @@ function serializePreference(
       violated_count: p.violated_count,
       last_evidence_at: p.last_evidence_at,
       confidence: p.confidence,
+      confidence_value: p.confidence_value,
       pinned: p.pinned,
       tags: [...p.tags],
       ...(p.aliases !== undefined ? { aliases: [...p.aliases] } : {}),
@@ -611,6 +618,7 @@ function serializePreference(
     violated_count: p.violated_count,
     last_evidence_at: p.last_evidence_at,
     confidence: p.confidence,
+    confidence_value: p.confidence_value,
     pinned: p.pinned,
     tags: [...p.tags],
     ...(p.supersedes !== undefined ? { supersedes: p.supersedes } : {}),
@@ -752,6 +760,11 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description:
             "Optional ISO-8601 timestamp used as the wall clock for the run (testing / replay).",
+        },
+        agent: {
+          type: "string",
+          description:
+            "Optional caller identity. Compared against `Brain/_brain.yaml.primary_agent`; a mismatch emits a `non-primary-dream-run` warning in the response. Defaults to the server-resolved agent name.",
         },
       },
       additionalProperties: false,

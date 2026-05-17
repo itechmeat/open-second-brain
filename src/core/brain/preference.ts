@@ -123,6 +123,13 @@ export interface WritePreferenceInput {
   readonly violated_count?: number;
   readonly last_evidence_at?: string | null;
   readonly confidence?: BrainConfidence;
+  /**
+   * Numeric `confidence_value` (Wilson lower bound × freshness
+   * decay). `null` or absent leaves the on-disk field as `null`,
+   * signalling "not yet computed" to downstream readers. Dream's
+   * refresh pass always supplies a finite value.
+   */
+  readonly confidence_value?: number | null;
   readonly pinned?: boolean;
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
@@ -292,6 +299,15 @@ function preferenceFrontmatter(
   const pinned = input.pinned ?? false;
   const applied = input.applied_count ?? 0;
   const violated = input.violated_count ?? 0;
+  // Round numeric confidence to 4 decimals so a no-op rerun produces
+  // byte-identical YAML even if upstream callers pass a value with
+  // floating-point jitter. `null` sentinel mirrors the other Group C
+  // null-encoded fields so the simple parser keeps round-tripping.
+  const confidenceValueRaw = input.confidence_value;
+  const confidenceValueField =
+    confidenceValueRaw === undefined || confidenceValueRaw === null
+      ? "null"
+      : Math.round(confidenceValueRaw * 10000) / 10000;
 
   // §24: Group C derived fields gain `_` prefix so the visual
   // boundary between "what dream owns" and "what the user owns"
@@ -318,6 +334,7 @@ function preferenceFrontmatter(
     _violated_count: violated,
     _last_evidence_at: input.last_evidence_at ?? "null",
     _confidence: confidence,
+    _confidence_value: confidenceValueField,
     pinned,
   };
   if (input.scope?.trim()) metadata["scope"] = input.scope.trim();
@@ -429,6 +446,7 @@ export const DERIVED_FIELDS: ReadonlyArray<string> = Object.freeze([
   "applied_count",
   "violated_count",
   "confidence",
+  "confidence_value",
   "evidenced_by",
   "contradicted_by",
 ]);
@@ -527,6 +545,7 @@ export function parsePreference(path: string): BrainPreference {
     violated_count: optionalNumber(meta, "violated_count", 0),
     last_evidence_at,
     confidence: parseConfidence(meta, path),
+    confidence_value: parseConfidenceValue(meta, path),
     pinned: parsePinned(meta),
     ...(optionalScalarString(meta, "scope") !== undefined
       ? { scope: optionalScalarString(meta, "scope") }
@@ -602,6 +621,7 @@ export function parseRetired(path: string): BrainRetired {
     violated_count: optionalNumber(meta, "violated_count", 0),
     last_evidence_at: optionalNullableString(meta, "last_evidence_at"),
     confidence: parseConfidence(meta, path),
+    confidence_value: parseConfidenceValue(meta, path),
     pinned: parsePinned(meta),
     ...(optionalScalarString(meta, "scope") !== undefined
       ? { scope: optionalScalarString(meta, "scope") }
@@ -986,6 +1006,37 @@ function parseConfidence(
     );
   }
   return v as BrainConfidence;
+}
+
+/**
+ * Parse the numeric `confidence_value` field.
+ *
+ * Returns `null` when the field is absent, empty, or carries the
+ * literal sentinel `"null"` (the writer's null encoding for the
+ * simple YAML formatter). Otherwise must be a finite number in
+ * `[0, 1]`; out-of-range / non-finite / non-numeric values raise a
+ * hard parse error — drifting numeric confidence into `> 1` or
+ * `NaN` would corrupt every downstream comparison silently.
+ */
+function parseConfidenceValue(
+  meta: Record<string, unknown>,
+  path: string,
+): number | null {
+  const v = meta["confidence_value"];
+  if (v === undefined || v === null || v === "" || v === "null") return null;
+  let n: number | null = null;
+  if (typeof v === "number") {
+    n = v;
+  } else if (typeof v === "string") {
+    const candidate = Number(v.trim());
+    if (Number.isFinite(candidate)) n = candidate;
+  }
+  if (n === null || !Number.isFinite(n) || n < 0 || n > 1) {
+    throw new Error(
+      `preference field 'confidence_value' must be a number in [0, 1]; got ${JSON.stringify(v)} (${path})`,
+    );
+  }
+  return n;
 }
 
 /**

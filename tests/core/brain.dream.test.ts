@@ -710,7 +710,7 @@ describe("dream — quarantine → retired (quarantine-violated)", () => {
     const blocked = log.entries.find(
       (e) =>
         e.eventType === "retire" &&
-        e.body["preference"] === "[[pref-pinned-quar]]" &&
+        e.body["preference"] === "[[pref-pinned-quar|Pinned rule]]" &&
         e.body["blocked"] === "pinned",
     );
     expect(blocked).toBeDefined();

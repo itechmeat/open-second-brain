@@ -5,6 +5,152 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] - 2026-05-17
+
+Brings four Tier-A items from
+`Projects/OpenSecondBrain/Features/_summary`: §5 snapshot diff and
+rollback dry-run (without the deferred sha256-manifest drift abort),
+§10 numeric confidence with derived band, §21 cross-project pointer
+plus a `primary_agent` declaration, and §27 titled wikilinks for
+preferences and retired rules across every Brain writer.
+
+No vault migration is required. Existing preferences and retired
+files parse unchanged; the writer emits the new `_confidence_value`
+field on the first dream refresh that touches each file, and the
+`Brain/_brain.yaml.primary_agent` key defaults to `null` so vaults
+without an explicit declaration keep their current behaviour.
+
+### Added
+
+- **`o2b brain snapshot diff <run_id_a> [<run_id_b>]`** — read-only
+  artifact diff between two snapshots or between a snapshot and the
+  live `Brain/` tree. Output groups changes by artifact kind
+  (preference / retired / signal / log / config / other); `--json`
+  emits the structured `BrainTreeDiff` payload for scripting.
+- **`o2b brain rollback <run_id> --dry-run`** — previews the
+  would-be restore plan as a live → snapshot diff via the same
+  renderer. Mutually exclusive with `--yes` so preview and execute
+  never collide. Leaves the live tree untouched.
+- **`extractSnapshotToTemp(vault, runId)`** — shared snapshot
+  extraction primitive used by `restoreSnapshot`,
+  `rollback --dry-run`, and `snapshot diff`. The tar / zstd / gzip
+  decompression logic lives in one place.
+- **`src/core/brain/snapshot-diff.ts`** — pure `diffBrainTrees`
+  walker plus `BrainTreeEntry` / `BrainFieldChange` / `BrainTreeChange`
+  / `BrainTreeDiff` types. No I/O beyond `readFileSync` /
+  `readdirSync`; classifier maps every Brain file into one of six
+  artifact kinds.
+- **`src/core/brain/snapshot-diff-render.ts`** — pure renderers
+  (`renderDiffMarkdown`, `renderDiffJson`) split out so the differ
+  stays format-neutral.
+- **`_confidence_value` field** on every preference and retired
+  file. Wilson 95% lower bound on `applied / (applied + violated)`
+  modulated by linear freshness decay over
+  `retire.stale_evidence_days`. Stored alongside the existing
+  `_confidence` band, which becomes a derived view (band is the
+  max of the legacy step-function and a numeric-threshold view,
+  so it can only lift, never demote).
+- **`_brain.yaml.confidence.medium_min` (default 0.40) and
+  `high_min` (default 0.75)** — derived-band thresholds on the
+  numeric value. Validated to lie in `[0, 1]` with `medium_min <
+  high_min`.
+- **`Brain/_brain.yaml.primary_agent`** declarative field. When set,
+  dream runs invoked from a different agent emit a stderr warning,
+  a `warnings` array entry on the MCP `brain_dream` response, and a
+  `non_primary_agent: <caller>` row in the dream summary log.
+- **`o2b brain set-primary <name>` / `o2b brain set-primary --clear`** —
+  idempotent edit of the primary declaration without rewriting the
+  rest of `_brain.yaml`.
+- **`o2b brain init --primary-agent <name>`** — sets the value
+  during the fresh bootstrap; on re-runs the flag is a no-op (use
+  `set-primary` instead).
+- **`src/core/brain/set-primary.ts`** — `setPrimaryAgent(vault,
+  name | null): SetPrimaryAgentResult`. Validates the rewritten
+  YAML before persisting; surfaces a typed `BrainConfigError` when
+  the on-disk file is malformed.
+- **`renderPrefLink({ id, principle })`** in `src/core/brain/wikilink.ts`
+  with `MAX_PREF_LINK_TITLE_LEN = 80`. Sanitises wikilink-breaking
+  characters and truncates titles at a word boundary with an
+  ellipsis. Empty titles fall back to bare `[[id]]`.
+- **`docs/cross-project-pointer.md`** — agent-facing setup guide
+  for projects whose coding work happens outside the vault root.
+  Covers the canonical `CLAUDE.md` / `AGENTS.md` snippet, the
+  `primary_agent` workflow, and the Syncthing multi-device case.
+- **CLI tests:** `tests/cli/brain.snapshot-diff.test.ts`,
+  `tests/cli/brain.test.ts` (new `set-primary` and
+  `--primary-agent` sections).
+- **Core tests:** `tests/core/brain.snapshot-diff.test.ts`
+  (differ + renderer), `tests/core/brain.confidence-value.test.ts`
+  (Wilson + freshness + hard floors + max-lift band derivation),
+  `tests/core/brain.set-primary.test.ts`,
+  `tests/core/brain.dream.non-primary.test.ts`.
+
+### Changed
+
+- **`computeConfidence`** returns `{ value, band }`. The band is the
+  max of the legacy step-function (preserved verbatim) and a
+  numeric-threshold view. Dream's refresh phase writes both
+  `_confidence` and `_confidence_value` on every touched
+  preference; legacy files migrate lazily on the next refresh.
+- **`dream` summary log** carries a `confidence_shifts: [...]`
+  payload whenever a band drop is detected during refresh — the
+  digest's `## Confidence shifts` section picks them up through
+  the existing tolerant parser. `non_primary_agent: <name>` payload
+  row appears whenever the primary check triggers.
+- **`brain_query` MCP response** carries `confidence_value` next to
+  `confidence` on every preference and retired result row.
+- **`brain_dream` MCP response** carries a `warnings: [{code,
+  message}]` array. CLI `o2b brain dream` writes the same warnings
+  to `stderr`.
+- **`brain_dream` MCP schema** accepts an optional `agent` argument
+  for the primary-agent check.
+- **`active.md`** appends `(0.NN)` after the band on confirmed
+  bullets and `conf: 0.NN` to the Quarantine block when the file
+  carries a numeric value.
+- **Every Brain writer** that emits a preference or retired wikilink
+  now uses `renderPrefLink`. Affected surfaces: dream log payloads
+  (promote, retire, retain-pinned, noted-redundant,
+  signal-suppressed, summary), apply-evidence log entry, pin / unpin
+  log entries, digest sections (new-unconfirmed, confirmed,
+  retired, top-applied, top-referenced, confidence-shifts,
+  contradictions), reject log entry, force-confirmed log entry,
+  retired body's `superseded_by` reference. Signals and external
+  artifacts stay bare-id because they have no useful title source.
+- **`BrainConfig`** widens with `primary_agent: string | null`.
+  `BrainConfidenceConfig` gains `medium_min` and `high_min`.
+  `BrainPreference` and `BrainRetired` gain
+  `confidence_value: number | null` (`null` only on pre-v0.10.3
+  files that have not been refreshed yet).
+- **`Brain/log/<today>.md`** dream events optionally carry a
+  `confidence_shifts` array and a `non_primary_agent` scalar — both
+  forward-compat and surfaced through the digest renderer.
+- **`DigestJson*` shapes** gain `principle: string` on every entry
+  rendered with a wikilink, so the markdown renderer can build
+  titled links without re-parsing the artifact files.
+- **`scanBrain` retired record** carries `principle` so the dream
+  log payloads can render titled wikilinks for the retired side
+  without re-reading the file.
+- **README** lists the new CLI verbs (`set-primary`, `snapshot diff`)
+  and the `--dry-run` flag on `rollback`; documents the
+  Cross-project setup subsection.
+- **install.md branch A (Hermes)** recommends
+  `--primary-agent <agent-name>` during the `o2b brain init` step,
+  with guidance on the `set-primary` follow-up.
+- **`docs/how-it-works.md`** documents the numeric `confidence_value`,
+  the read-only snapshot inspectors, and the primary-agent
+  observability contract.
+
+### Notes
+
+- Snapshot diff and `rollback --dry-run` are CLI-only. The MCP
+  surface deliberately stays read-and-shape-only (`brain_query` +
+  the new `warnings` array); operator-only mutations stay outside
+  the agent loop, matching how `rollback`, `reject`, and
+  `migrate-frontmatter` are handled today.
+- The deferred §5 sub-features (sha256-manifest drift abort and
+  post-dream integrity drill hook) remain out of scope — see
+  `Projects/OpenSecondBrain/Features/_summary` for the rationale.
+
 ## [0.10.2] - 2026-05-16
 
 Adds three Tier-A capture and hygiene items from

@@ -36,6 +36,7 @@ import { parsePreference } from "./preference.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainPreference } from "./types.ts";
+import { renderPrefLink } from "./wikilink.ts";
 import { BrainPreferenceNotFoundError } from "./apply-evidence.ts";
 
 export interface SetPinnedOptions {
@@ -123,7 +124,10 @@ export function setPinned(
     timestamp: isoSecond(now),
     eventType: value ? BRAIN_LOG_EVENT_KIND.pin : BRAIN_LOG_EVENT_KIND.unpin,
     body: {
-      preference: `[[pref-${slug}]]`,
+      preference: renderPrefLink({
+        id: `pref-${slug}`,
+        principle: current.principle,
+      }),
       agent: (opts.agent ?? "cli").trim() || "cli",
     },
   };

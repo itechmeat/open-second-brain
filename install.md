@@ -182,7 +182,8 @@ o2b init --vault /path/to/vault --name "My Second Brain" \
 # Recommended on v0.9.0+: bootstrap the Brain observing-memory layer
 # next to AI Wiki/. Idempotent; safe to skip on first install if the
 # user explicitly opts out of Brain.
-o2b brain init --vault /path/to/vault
+o2b brain init --vault /path/to/vault \
+    --primary-agent "<chosen-agent-name>"
 ```
 
 `--agent-name` writes the chosen name into `AI Wiki/identity/agents.md`
@@ -191,6 +192,19 @@ and persists `agent_name` into the plugin config
 IANA name via stdlib `zoneinfo` and persists it to the same config; from
 that moment on, every `event_log_append` call stamps Daily entries in
 that timezone regardless of the host's clock.
+
+**Declare this Hermes install as the vault's primary dream-running
+agent.** When the vault is shared with other devices through
+Syncthing, exactly one runtime should run `hermes cron` for
+`o2b brain dream`; the typical choice is the Hermes install on the
+always-on host. Passing `--primary-agent <chosen-agent-name>` writes
+the value into `Brain/_brain.yaml`. Subsequent dream invocations from
+a different agent emit a stderr warning and tag the log entry with
+`non_primary_agent: <caller>`. You can change or clear the primary
+later with `o2b brain set-primary <name>` or
+`o2b brain set-primary --clear`. The flag is ignored on re-runs
+against an already-initialised `_brain.yaml`; use `set-primary`
+there.
 
 **Wire the `brain-memory` skill into the default Hermes profile.** The
 plugin ships `skills/brain-memory/SKILL.md`, which tells the agent when
