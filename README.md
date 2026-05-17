@@ -228,13 +228,13 @@ o2b brain dream --vault /path/to/vault
 o2b brain digest --vault /path/to/vault --silent-if-empty
 ```
 
-Fifteen Brain verbs plus the `snapshot` sub-namespace: `init`,
-`feedback`, `dream`, `apply-evidence`, `digest`, `query`, `reject`,
-`pin`, `unpin`, `set-primary`, `snapshot diff`, `rollback`, `doctor`,
-`backlinks`, `scan-inline`, `import-session`, `migrate-frontmatter`.
-Seven are mirrored as MCP tools (`brain_*`); the rest are
-intentionally CLI-only because they change the protected set,
-overwrite vault state, or are operator-only maintenance commands.
+The Brain verbs in full: `init`, `feedback`, `dream`,
+`apply-evidence`, `digest`, `query`, `reject`, `pin`, `unpin`,
+`set-primary`, `snapshot diff`, `rollback`, `doctor`, `backlinks`,
+`scan-inline`, `import-session`, `migrate-frontmatter`. Seven are
+mirrored as MCP tools (`brain_*`); the rest are intentionally
+CLI-only because they change the protected set, overwrite vault
+state, or are operator-only maintenance commands.
 
 ### Cross-project setup
 

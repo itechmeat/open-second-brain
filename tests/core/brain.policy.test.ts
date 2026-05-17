@@ -165,6 +165,12 @@ describe("formatPrimaryAgentYamlValue", () => {
     expect(() => formatPrimaryAgentYamlValue("agent\nnext")).toThrow(
       /disallowed character/,
     );
+    expect(() => formatPrimaryAgentYamlValue("agent\rnext")).toThrow(
+      /disallowed character/,
+    );
+    expect(() => formatPrimaryAgentYamlValue("agent\\path")).toThrow(
+      /disallowed character/,
+    );
     expect(() => formatPrimaryAgentYamlValue('agent "quoted"')).toThrow(
       /disallowed character/,
     );

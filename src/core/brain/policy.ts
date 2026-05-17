@@ -274,6 +274,10 @@ export function validateBrainConfigDetailed(
 
   // `primary_agent` — optional scalar (null or non-empty string).
   // Defaults to null when absent so existing vaults are unaffected.
+  // Loader enforces the same character constraints as the writer
+  // (`formatPrimaryAgentYamlValue`) so a hand-edited file that the
+  // writer would later refuse to emit fails fast at load time
+  // instead of round-tripping into a state we cannot persist.
   let primaryAgent: string | null = DEFAULT_BRAIN_CONFIG.primary_agent;
   if ("primary_agent" in obj) {
     const v = obj["primary_agent"];
@@ -287,6 +291,16 @@ export function validateBrainConfigDetailed(
           "primary_agent",
           source,
         );
+      }
+      for (const bad of YAML_STRING_REJECTED_CHARS) {
+        if (trimmed.includes(bad)) {
+          throw new BrainConfigError(
+            `contains a disallowed character ${JSON.stringify(bad)}; ` +
+              "use a simple one-line agent id",
+            "primary_agent",
+            source,
+          );
+        }
       }
       primaryAgent = trimmed;
     } else {

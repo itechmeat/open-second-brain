@@ -15,7 +15,7 @@ This bundle ships four mostly-orthogonal Brain layer increments:
 | 5 | Snapshot diff + rollback dry-run | `o2b brain snapshot diff` (read-only inspector) and `o2b brain rollback --dry-run` (preview restore). No sha256 manifest, no drift abort, no archive-format change. |
 | 10 | Numeric confidence | `_confidence_value: 0.0–1.0` as new primary field; existing `_confidence: low\|medium\|high` becomes derived (and is still emitted on disk for reader backwards compatibility). Wilson lower bound formula, freshness decay, new band thresholds in `_brain.yaml`. Lazy migration through the next dream refresh. |
 | 21 | Cross-project pointer + primary agent | `Brain/_brain.yaml.primary_agent` declarative field; `o2b brain set-primary` CLI; soft warning in dream when non-primary; `docs/cross-project-pointer.md` with the canonical CLAUDE.md / AGENTS.md snippet; install.md branch A recommendation. No managed-block CLI bootstrap (deferred until §4 installer ships together). |
-| 27 | Titled wikilinks for preferences | New `renderPrefLink({id, principle})` helper in `wikilink.ts`. All Brain writers that reference a preference or retired artifact emit `[[pref-slug|short-title]]`. Parsers already strip `|alias`; reading path unchanged. |
+| 27 | Titled wikilinks for preferences | New `renderPrefLink({id, principle})` helper in `wikilink.ts`. All Brain writers that reference a preference or retired artifact emit `[[pref-slug\|short-title]]`. Parsers already strip `\|alias`; reading path unchanged. |
 
 Out of scope (called out explicitly so writing-plans does not re-open them):
 

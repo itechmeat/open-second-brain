@@ -1521,6 +1521,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.10.3]: https://github.com/itechmeat/open-second-brain/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/itechmeat/open-second-brain/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/itechmeat/open-second-brain/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/itechmeat/open-second-brain/compare/v0.9.1...v0.10.0

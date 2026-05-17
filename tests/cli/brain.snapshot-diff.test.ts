@@ -207,7 +207,7 @@ pinned: false
     );
     expect(fb.returncode).toBe(0);
     for (const s of ["2", "3"]) {
-      await runCli(
+      const seed = await runCli(
         [
           "brain", "feedback",
           "--vault", vault,
@@ -218,6 +218,7 @@ pinned: false
         ],
         { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
       );
+      expect(seed.returncode).toBe(0);
     }
     const d2 = await runCli(["brain", "dream", "--vault", vault], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },

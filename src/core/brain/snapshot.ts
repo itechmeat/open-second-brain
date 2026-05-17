@@ -513,7 +513,10 @@ export function extractSnapshotToTemp(
           runId,
         );
       }
-      const tar = spawnSync("tar", ["-x", "-C", tmp], {
+      // `-f -` is explicit stdin: GNU tar defaults to stdin without
+      // it, but BSD tar and busybox tar do not, so passing the flag
+      // keeps the extraction portable across hosts.
+      const tar = spawnSync("tar", ["-x", "-f", "-", "-C", tmp], {
         input: zstd.stdout,
         stdio: ["pipe", "inherit", "pipe"],
       });

@@ -230,18 +230,20 @@ export function renderPrefLink(input: {
     .replace(/\s+/g, " ")
     .trim();
   if (title.length === 0) return `[[${input.id}]]`;
-  if (title.length <= MAX_PREF_LINK_TITLE_LEN) {
+  // Measure the cap against code-point count (Array.from yields one
+  // entry per Unicode scalar) rather than UTF-16 code units so a
+  // string of 50 astral glyphs (100 code units, 50 code points) is
+  // not forced into the truncation path when the cap is 80.
+  const codepoints = Array.from(title);
+  if (codepoints.length <= MAX_PREF_LINK_TITLE_LEN) {
     return `[[${input.id}|${title}]]`;
   }
   // Truncate to the cap, then back off to the previous word boundary —
   // but only when one exists inside the window. A single oversized token
   // (no space inside the cap) gets a hard cut so we still produce a link
-  // rather than dropping back to the bare-id fallback.
-  //
-  // Slice over code points (Array.from yields one element per Unicode
-  // scalar) rather than UTF-16 code units so an emoji or astral glyph
-  // never gets bisected into a lone surrogate before the ellipsis.
-  const codepoints = Array.from(title);
+  // rather than dropping back to the bare-id fallback. Slicing happens
+  // on code points so an emoji or astral glyph never gets bisected
+  // into a lone surrogate before the ellipsis.
   let cutPoints = codepoints.slice(0, MAX_PREF_LINK_TITLE_LEN);
   const lastSpace = cutPoints.lastIndexOf(" ");
   if (lastSpace > 0) cutPoints = cutPoints.slice(0, lastSpace);

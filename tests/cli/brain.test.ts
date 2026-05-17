@@ -377,6 +377,16 @@ describe("brain dream", () => {
     expect(r.returncode).toBe(1);
     expect(r.stderr).toContain("--now");
   });
+
+  test("blank --agent exits 1 instead of falling back to the resolved default", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "dream", "--vault", vault, "--agent", "   "],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("--agent");
+  });
 });
 
 describe("brain apply-evidence", () => {

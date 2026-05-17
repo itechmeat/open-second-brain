@@ -380,8 +380,23 @@ async function cmdBrainDream(argv: string[]): Promise<number> {
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const agent =
-    (flags["agent"] as string | undefined)?.trim() ?? resolveAgentName(config);
+  // Match `cmdBrainInit`'s --primary-agent contract: when the flag is
+  // supplied, reject blank input rather than silently fall through to
+  // the resolved default. A whitespace-only --agent would otherwise
+  // bypass the non-primary check entirely.
+  const agentFlag = flags["agent"];
+  let agent: string;
+  if (typeof agentFlag === "string") {
+    const trimmed = agentFlag.trim();
+    if (trimmed.length === 0) {
+      return fail(
+        "brain dream: --agent must be a non-empty string when provided",
+      );
+    }
+    agent = trimmed;
+  } else {
+    agent = resolveAgentName(config);
+  }
 
   let now: Date | undefined;
   const nowStr = flags["now"] as string | undefined;

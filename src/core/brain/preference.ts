@@ -1028,7 +1028,13 @@ function parseConfidenceValue(
   if (typeof v === "number") {
     n = v;
   } else if (typeof v === "string") {
-    const candidate = Number(v.trim());
+    const trimmed = v.trim();
+    // Whitespace-only string is the "null" sentinel in disguise.
+    // `Number("")` coerces to `0`, which would otherwise smuggle in a
+    // confident-zero band for a file the writer never produced a
+    // value for.
+    if (trimmed.length === 0 || trimmed === "null") return null;
+    const candidate = Number(trimmed);
     if (Number.isFinite(candidate)) n = candidate;
   }
   if (n === null || !Number.isFinite(n) || n < 0 || n > 1) {
