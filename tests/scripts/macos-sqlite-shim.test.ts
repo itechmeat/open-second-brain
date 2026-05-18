@@ -98,4 +98,19 @@ describe("_macos-sqlite.sh", () => {
     });
     expect(out).toBe(a);
   });
+
+  // §31.2 — covers the `${VAR+set}` branch added during the v0.10.5
+  // CR fix. A user who deliberately exports an empty
+  // `DYLD_LIBRARY_PATH` (some CI pipelines do this) must keep that
+  // exact value; the shim must not "helpfully" populate it.
+  test("Darwin + explicit empty DYLD_LIBRARY_PATH → preserved verbatim", async () => {
+    const fakePrefix = join(tmp, "homebrew-sqlite-lib");
+    mkdirSync(fakePrefix, { recursive: true });
+    const out = await runShim({
+      O2B_MACOS_FORCE_PLATFORM: "Darwin",
+      O2B_MACOS_SQLITE_PREFIXES_OVERRIDE: fakePrefix,
+      DYLD_LIBRARY_PATH: "",
+    });
+    expect(out).toBe("");
+  });
 });

@@ -5,6 +5,135 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.6] - 2026-05-18
+
+Five tracks from `Projects/OpenSecondBrain/Features/_summary` shipped
+under one release: §30 §A+§C (agent logging discipline), §22 + §5-tail
+(`o2b brain upgrade` and manifest-backed rollback drift detection),
+§14 polish (keyboard-accessible Brain Explorer listbox plus
+`localStorage` layout / filter persistence), §28
+(`o2b brain export`), and §31 CR cleanup from PR #20.
+
+No vault data migration is required. Snapshots taken before v0.10.6
+keep working — `rollback` emits a stderr warning and falls back to the
+legacy direct-restore path. New snapshots (taken by `dream`, `merge`,
+`migrate-frontmatter`, or `upgrade`) ship with a `<run-id>.manifest.json`
+sidecar that powers drift detection.
+
+### Added
+
+- §22 — `o2b brain upgrade [--dry-run] [--apply] [--yes] [--check]
+  [--json]` migrates the three release-owned files
+  (`Brain/_brain.yaml`, `Brain/_BRAIN.md`,
+  `AI Wiki/_OPEN_SECOND_BRAIN.md`) forward when the installed
+  open-second-brain version changes them. `_brain.yaml` merge is
+  purely additive — missing schema keys and sections are appended,
+  user values stay. `_BRAIN.md` and `_OPEN_SECOND_BRAIN.md` are
+  byte-compared against the rendered template and overwritten on
+  apply. `--apply` always takes a pre-apply snapshot named
+  `upgrade-<ts>` (rollback via run id). The new
+  `BRAIN_LOG_EVENT_KIND.upgrade` records the run.
+- §5-tail — `createSnapshot` writes a SHA-256 manifest sidecar
+  `<vault>/Brain/.snapshots/<run-id>.manifest.json` alongside every
+  archive. `o2b brain rollback` reads it back and exits 2 with a
+  drift diff when the live `Brain/` tree differs from the snapshot
+  moment. The new `--force-rollback` overrides the abort and the
+  rollback log entry then records `drift_overridden: true`.
+  Snapshots without a sidecar (legacy) skip the check with a stderr
+  warning. `pruneSnapshots` removes the sidecar alongside the
+  archive; `listSnapshots` surfaces `manifest_path`.
+- §28 — `o2b brain export --format json|llms-txt [--out <path>]
+  [--force]` produces a read-only dump of active preferences
+  (`confirmed | unconfirmed | quarantine`) from
+  `Brain/preferences/`. Retired and signal artifacts are not
+  included. Default sink is stdout; `--out` writes a file
+  (atomically), refusing to overwrite without `--force`. The
+  llms-txt output follows the [llmstxt.org](https://llmstxt.org)
+  H1 + summary + H2-section shape.
+- §14 polish — Brain Explorer template (`templates/brain-explorer.html`)
+  ships a keyboard-accessible `<ul role="listbox">` mirror of the
+  visible nodes alongside the canvas. ArrowUp / ArrowDown / Home /
+  End / Enter / Escape navigate; `aria-activedescendant` tracks
+  focus; pointer click on canvas keeps both surfaces in sync via a
+  single `selectNode(id)` unifier. Layout + filter state persists to
+  `localStorage` under `osb-explorer-layout:<vault_basename>` so
+  positions, status filters, and the search box survive reloads. A
+  "Reset layout" button clears the key.
+- New module `src/core/brain/manifest.ts` (`buildManifest`,
+  `diffManifests`, sidecar I/O, drift renderers).
+- New module `src/core/brain/upgrade.ts` (`planUpgrade`,
+  `applyUpgrade`, text-level `mergeBrainYaml`).
+- New module `src/core/brain/export.ts` (JSON + llms-txt
+  serialisers).
+- New module `src/core/brain/templates.ts` — `init.ts` no longer
+  owns template paths or rendering primitives; both `init` (first
+  install) and `upgrade` (subsequent migrations) consume the same
+  `renderBrainManual` / `renderLegacyOverview` helpers so the two
+  paths cannot drift.
+
+### Changed
+
+- §30 §A — `hooks/lib/detect.ts` broadens the brain-event detection
+  regex from `event_log_append` to any of `event_log_append`,
+  `brain_feedback`, `brain_apply_evidence` (both MCP names and CLI
+  bash invocations). `hooks/stop-log-guardrail.ts` now clears on any
+  of the three. `TurnSummary.hadLog` was renamed to
+  `hadBrainEvent`; `isLogToolName` was renamed to
+  `isBrainEventToolName`. The stop-guardrail reason text lists all
+  three tools explicitly.
+- §30 §C — `skills/brain-memory/SKILL.md` description and "When NOT
+  to call" section reformulate the trigger: when a preference
+  plausibly applies but you are unsure, record with `note:
+  "speculative; <reason>"` instead of skipping. The dream pass
+  filters single-event speculative entries that do not recur, so
+  coverage costs less than missing the signal.
+  `hooks/lib/messages.ts:postWriteReminder` mirrors the new wording.
+- `o2b brain rollback` gains `--force-rollback`, drift detection,
+  and updated help text. The rollback log payload optionally
+  records `drift_overridden`.
+- `_BRAIN.md` template (`src/core/brain/templates/_BRAIN.md.tpl`)
+  lists `o2b brain upgrade` and `o2b brain export` under the
+  Escape-hatches CLI surface, and mentions the v0.10.6 sidecar
+  manifest behaviour on rollback. This is the canonical v0.10.6
+  template change — pre-v0.10.6 vaults see the diff under
+  `o2b brain upgrade --dry-run`.
+
+### Internal
+
+- `SnapshotInfo` gains `manifest_path: string | null`.
+- `BRAIN_LOG_EVENT_KIND.upgrade = "upgrade"`,
+  `BrainUpgradeLogEvent` joins the `BrainLogEvent` union.
+- `init.ts` slimmed down — template rendering primitives moved to
+  the dedicated `templates.ts` module (DRY across init and
+  upgrade).
+
+### Tests
+
+- `tests/core/brain/manifest.test.ts`
+- `tests/core/brain/upgrade.test.ts`
+- `tests/core/brain/export.test.ts`
+- `tests/core/brain.snapshot.test.ts` (extended for sidecar +
+  legacy prune)
+- `tests/cli/brain-upgrade.test.ts`
+- `tests/cli/brain-export.test.ts`
+- `tests/cli/brain.test.ts` (extended with rollback drift +
+  legacy-snapshot scenarios)
+- `tests/hooks/detect.test.ts` (extended for `brain_feedback` /
+  `brain_apply_evidence` MCP names and bash needles)
+- `tests/core/brain/explorer.test.ts` (extended with listbox /
+  localStorage smoke checks)
+- `tests/scripts/macos-sqlite-shim.test.ts` (one new case for
+  `DYLD_LIBRARY_PATH=""`)
+
+### Docs
+
+- MD040 language tags added to
+  `docs/plans/2026-05-18-brain-maturity-design.md`,
+  `docs/plans/2026-05-18-brain-maturity-impl.md`,
+  `skills/embeddings-setup/SKILL.md`.
+- `docs/plans/2026-05-18-v0.10.6-design.md` and
+  `docs/plans/2026-05-18-v0.10.6-impl.md` document the release.
+
 ## [0.10.5] - 2026-05-18
 
 Brings the v0.10.5 "Brain maturity + embeddings activation"
@@ -1673,6 +1802,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.10.6]: https://github.com/itechmeat/open-second-brain/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/itechmeat/open-second-brain/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/itechmeat/open-second-brain/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/itechmeat/open-second-brain/compare/v0.10.2...v0.10.3

@@ -1,6 +1,6 @@
 ---
 name: brain-memory
-description: Record taste signals and apply-evidence events into the Brain observing-memory layer of Open Second Brain. INVOKE this skill (and call `brain_feedback`) the moment the user expresses a preference, dislike, correction, or rule in dialogue — "don't do X", "use A instead of B", "I prefer Y", "X is wrong here", or any explicit imperative that should outlive the current turn. SEPARATELY invoke (and call `brain_apply_evidence`) right after you produce a durable artifact (code shipped, file written, content drafted, config change) and at least one preference in `Brain/preferences/` has a `scope` that plausibly applies — record whether you `applied` or `violated` it. SKIP for casual chat, exploration without a stated rule, read-only inspection, trivial edits, and any case where you are not confident a preference applies. WRITE the `principle` and `note` fields in the same natural language the user has been speaking in this session; technical identifiers (`topic` slug, `pref_id`, `scope`) stay English. A misrecorded signal is worse than a missed one — the dream pass eventually surfaces real patterns from repeat events, so prefer precision over coverage.
+description: Record taste signals and apply-evidence events into the Brain observing-memory layer of Open Second Brain. INVOKE this skill (and call `brain_feedback`) the moment the user expresses a preference, dislike, correction, or rule in dialogue — "don't do X", "use A instead of B", "I prefer Y", "X is wrong here", or any explicit imperative that should outlive the current turn. SEPARATELY invoke (and call `brain_apply_evidence`) right after you produce a durable artifact (code shipped, file written, content drafted, config change) and at least one preference in `Brain/preferences/` has a `scope` that plausibly applies — record whether you `applied` or `violated` it. SKIP only for casual chat, exploration without a stated rule, read-only inspection, and trivial edits. When a preference plausibly applies but you are unsure, RECORD with `note: "speculative; <reason>"` rather than skipping — the dream pass discards single-event speculative entries that do not recur, so coverage costs less than missing the signal. WRITE the `principle` and `note` fields in the same natural language the user has been speaking in this session; technical identifiers (`topic` slug, `pref_id`, `scope`) stay English.
 ---
 
 # Brain Memory
@@ -60,6 +60,7 @@ Parameters:
 Optional:
 
 - `note`: one-line context if useful ("expanded 'OSB' to 'Open Second Brain' on first use", "README diff still contained unexplained 'FT'").
+- `note: "speculative; <reason>"` when the preference's `scope` plausibly applies but you are unsure (e.g. a `writing` rule against a docstring inside a source file). The dream pass filters single-event speculative records that do not recur — recording the uncertainty costs less than missing the signal.
 
 `applied_count` and `violated_count` on the preference are recomputed by `dream`; you write only the per-event evidence record.
 
@@ -69,9 +70,8 @@ Optional:
 - Brainstorming, idea exploration, design discussion that has not concluded in a rule.
 - Read-only inspection (running `git log`, `o2b status`, `vault_health`).
 - Trivial edits (typo, whitespace, formatting only).
-- Cases where a preference *might* apply but you are not confident — skip rather than fabricate a match.
 
-A false-positive signal eventually distorts the rule set; a missed signal is recovered on repeat. Prefer precision.
+When a preference *might* apply but you are unsure, do not skip — record the event with `note: "speculative; <reason>"` so the dream pass sees the signal. A one-off speculative entry that does not recur is filtered out by dream; the cost of writing is one MCP call, the cost of missing is a silent gap in the evidence trail. The "do not call" list above is exhaustive on purpose: outside those four bullets, record.
 
 ## Language
 

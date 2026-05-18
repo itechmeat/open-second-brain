@@ -173,6 +173,12 @@ export const BRAIN_LOG_EVENT_KIND = {
    * and the summed counters as raw integers for audit grepping.
    */
   merge: "merge",
+  /**
+   * `upgrade` (§22) — operator ran `o2b brain upgrade --apply`. Payload
+   * carries the pre-apply snapshot run id, agent identity, and the
+   * vault-relative paths of every managed file that was rewritten.
+   */
+  upgrade: "upgrade",
 } as const;
 export type BrainLogEventKind =
   (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
@@ -508,6 +514,17 @@ export interface BrainMergeLogEvent extends BrainLogEventBase {
   readonly agent: string;
 }
 
+/**
+ * `upgrade` entry — operator ran `o2b brain upgrade --apply`.
+ * Payload carries the upgrade run id (`upgrade-<ts>`), agent
+ * identity, the pre-apply snapshot path, and the vault-relative
+ * paths of every managed file the run rewrote.
+ */
+export interface BrainUpgradeLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.upgrade;
+  readonly run_id: string;
+}
+
 /** Discriminated union of every concrete log event type. */
 export type BrainLogEvent =
   | BrainDreamLogEvent
@@ -525,7 +542,8 @@ export type BrainLogEvent =
   | BrainScanInlineLogEvent
   | BrainImportSessionLogEvent
   | BrainMigrateFrontmatterLogEvent
-  | BrainMergeLogEvent;
+  | BrainMergeLogEvent
+  | BrainUpgradeLogEvent;
 
 // ----- Configuration (`Brain/_brain.yaml`) ----------------------------------
 

@@ -76,6 +76,8 @@ describe("BRAIN_* const enums", () => {
       "migrate-frontmatter",
       // §12 merge (v0.10.5)
       "merge",
+      // §22 upgrade (v0.10.6)
+      "upgrade",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

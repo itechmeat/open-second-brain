@@ -49,6 +49,11 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
+import {
+  buildManifest,
+  manifestSidecarPath,
+  writeManifestSidecar,
+} from "./manifest.ts";
 import { brainDirs, snapshotPath, validateRunId } from "./paths.ts";
 
 // ----- Errors ---------------------------------------------------------------
@@ -94,6 +99,12 @@ export interface SnapshotInfo {
   /** ISO-8601 UTC mtime of the archive file. */
   readonly created_at: string;
   readonly size_bytes: number;
+  /**
+   * Absolute path of the sidecar manifest, or `null` when the
+   * archive predates v0.10.6 (legacy snapshot without drift-check
+   * support). Rollback gracefully degrades on `null`.
+   */
+  readonly manifest_path: string | null;
 }
 
 export interface PruneSnapshotsResult {
@@ -220,6 +231,23 @@ export function createSnapshot(
     throw new BrainSnapshotError(
       `archive write reported success but ${outPath} is absent`,
       runId,
+    );
+  }
+
+  // Sidecar manifest (§22 + §5-tail). Failure is non-fatal: the
+  // archive is the load-bearing artifact, and a snapshot without a
+  // manifest just degrades rollback's drift detection to the
+  // pre-v0.10.6 silent-overwrite path (with a warning at rollback
+  // time). The alternative — failing the whole snapshot because the
+  // sidecar could not be written — would block dream from making any
+  // progress on a read-only `.snapshots/` directory.
+  try {
+    writeManifestSidecar(vault, runId, buildManifest(dirs.brain));
+  } catch (err) {
+    process.stderr.write(
+      `warning: manifest sidecar write failed for snapshot ` +
+        `'${runId}': ${(err as Error).message ?? String(err)}; ` +
+        `rollback drift detection will be skipped for this snapshot.\n`,
     );
   }
   return { path: outPath };
@@ -364,11 +392,13 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
     } catch {
       continue;
     }
+    const sidecar = manifestSidecarPath(vault, runId);
     infos.push({
       run_id: runId,
       path: full,
       created_at: new Date(st.mtimeMs).toISOString(),
       size_bytes: st.size,
+      manifest_path: existsSync(sidecar) ? sidecar : null,
     });
   }
   // Sort newest-first by mtime. We deliberately avoid lexicographic
@@ -406,6 +436,16 @@ export function pruneSnapshots(
     } catch {
       // Best-effort: a snapshot we can't delete (permission error)
       // stays put. The next dream run will try again.
+    }
+    // Remove the matching sidecar manifest if present. Independent
+    // try/catch: a missing sidecar (legacy snapshot from pre-v0.10.6)
+    // must not abort the prune of subsequent victims.
+    if (v.manifest_path !== null) {
+      try {
+        rmSync(v.manifest_path, { force: true });
+      } catch {
+        // Same rationale as above — best-effort.
+      }
     }
   }
   return { deleted };

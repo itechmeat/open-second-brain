@@ -71,8 +71,10 @@ export function postWriteReminder({
     "dream pass can update confidence and retire stale rules.",
     "",
     "Trivial edits (typo fix, pure formatting) don't need either call.",
-    "A misrecorded signal is worse than a missed one — skip when not",
-    "confident; the dream pass will pick up patterns from repeats.",
+    "When a preference plausibly applies but you are unsure, record",
+    "the event with `note: \"speculative; <reason>\"` instead of",
+    "skipping — the dream pass discards single-event speculative",
+    "entries that do not recur.",
   );
   return parts.join("\n");
 }
@@ -92,19 +94,26 @@ export function stopGuardrailReason(runtime: HookRuntime = "unknown"): string {
   const cadence = stopGuardrailCadenceLine(runtime);
   const parts: string[] = [
     "Open Second Brain hook: this turn touched files",
-    "(Write / Edit / MultiEdit / apply_patch) but did not call",
-    "`event_log_append`.",
+    "(Write / Edit / MultiEdit / apply_patch) but did not call any of:",
+    "",
+    "- `event_log_append` — durable session-summary line for the day log",
+    "- `brain_apply_evidence` — evidence trail when an active preference",
+    "  in `Brain/preferences/` scopes to the artifact you just produced",
+    "- `brain_feedback` — new taste correction the user expressed in this",
+    "  turn (one signal per file, see the `brain-memory` skill)",
     "",
   ];
   if (cadence !== "") parts.push(cadence, "");
   parts.push(
-    "If the change is a durable artifact you want future sessions to",
-    "be able to search for, call `event_log_append` with a one-line",
-    "message describing what landed, then finish.",
+    "Pick whichever fits this turn:",
+    "- a durable artifact future sessions need to find → `event_log_append`",
+    "- an active preference applied or violated by the change →",
+    "  `brain_apply_evidence` with `result: applied | violated`",
+    "- a new rule the user just stated → `brain_feedback`",
     "",
-    "If the change is trivial and not worth logging, just send your",
-    "reply again — this guardrail fires at most once per turn and",
-    "will let the second Stop through.",
+    "If the change is trivial and not worth recording, just send your",
+    "reply again — this guardrail fires at most once per turn and the",
+    "second Stop passes through silently.",
   );
   return parts.join("\n");
 }

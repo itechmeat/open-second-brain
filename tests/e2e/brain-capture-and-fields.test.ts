@@ -131,13 +131,25 @@ describe("capture + migration end-to-end", () => {
     expect(afterMigrate).not.toMatch(/^status: confirmed$/m);
 
     const snapDir = join(vault, "Brain", ".snapshots");
-    const snaps = readdirSync(snapDir).filter((n) => n.startsWith("migrate-"));
+    const snaps = readdirSync(snapDir).filter(
+      (n) => n.startsWith("migrate-") && n.endsWith(".tar.zst"),
+    );
     expect(snaps.length).toBe(1);
 
-    // Step 6: rollback restores the legacy shape.
+    // Step 6: rollback restores the legacy shape. The migration
+    // intentionally drifted the live tree from the snapshot moment,
+    // so v0.10.6 rollback requires `--force-rollback` to overwrite.
     const runId = snaps[0]!.replace(/\.tar\.zst$/, "");
     r = await runCli(
-      ["brain", "rollback", runId, "--vault", vault, "--yes"],
+      [
+        "brain",
+        "rollback",
+        runId,
+        "--vault",
+        vault,
+        "--yes",
+        "--force-rollback",
+      ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);

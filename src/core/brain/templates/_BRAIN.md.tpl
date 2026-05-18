@@ -133,8 +133,19 @@ them as part of normal agent work.
   preference requires `--yes` and prints a warning.
 - `o2b brain rollback <run_id>` — restore Brain from a snapshot.
   Interactive by default; `--list` enumerates available snapshots.
+  From v0.10.6 a snapshot ships with a sha256 sidecar manifest so
+  rollback aborts when the live tree drifted from the snapshot moment;
+  pass `--force-rollback` to override.
 - `o2b brain pin <pref-id>` / `unpin <pref-id>` — protect a preference
   from automatic retirement (still subject to explicit reject).
+- `o2b brain upgrade` — migrate the release-owned files (`_brain.yaml`,
+  `_BRAIN.md`, `_OPEN_SECOND_BRAIN.md`) forward when a new
+  open-second-brain version ships. `--dry-run` (default) prints a
+  per-file plan; `--apply` rewrites the files after taking a snapshot
+  named `upgrade-<ts>`.
+- `o2b brain export --format json|llms-txt` — read-only dump of active
+  preferences (`confirmed | unconfirmed | quarantine`) for backup,
+  prompt injection, or sharing.
 
 The full CLI surface is documented in `docs/plans/2026-05-15-brain-observing-memory.md`
 section 9; the MCP tool surface mirrors it for the most common verbs

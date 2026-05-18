@@ -361,8 +361,10 @@ are mirrored in MCP; destructive operations are CLI-only by design.
 | Merge near-duplicate prefs | `o2b brain merge <keep> <drop>` | — (CLI-only)   | folds `evidenced_by` and counters into `keep`; `drop` retires with reason `merged-into`; surfaced as candidates in `brain_digest` |
 | Toggle pin               | `o2b brain pin / unpin`    | — (CLI-only)          | flips `pinned` field; regenerates `Brain/active.md` |
 | Protect Brain/           | `o2b brain protect / unprotect` | — (CLI-only)     | machine-enforced deny rules for `claudecode` / `codex` runtimes; sidecar manifest at `.open-second-brain/protect.lock.json` |
-| Restore snapshot         | `o2b brain rollback`       | — (CLI-only)          | overwrites Brain/ from snapshot |
-| Force-directed explorer  | `o2b brain explorer [--port \| --export]` | — (CLI-only) | live HTTP on `127.0.0.1` (default `:7777`) or single-file HTML at `<path>`; renders preferences + retired as a graph; zero backend |
+| Restore snapshot         | `o2b brain rollback`       | — (CLI-only)          | overwrites Brain/ from snapshot; from v0.10.6 aborts on drift unless `--force-rollback`, see [Snapshots and rollback](#snapshots-and-rollback) |
+| Upgrade managed files    | `o2b brain upgrade`        | — (CLI-only)          | migrates the three release-owned files (`_brain.yaml`, `_BRAIN.md`, `_OPEN_SECOND_BRAIN.md`) forward. `_brain.yaml` is text-merged additively (user values, comments, and ordering preserved); the other two are byte-compared and overwritten. `--dry-run` prints a per-file plan; `--check` exits 2 on pending updates (CI-friendly); `--apply --yes` takes an `upgrade-<ts>` snapshot before rewriting. |
+| Export active prefs      | `o2b brain export --format json\|llms-txt` | — (CLI-only) | read-only dump of `confirmed \| unconfirmed \| quarantine` preferences from `Brain/preferences/`. `--out <path>` writes a file (refuses to overwrite without `--force`); default sink is stdout. Retired and signal artifacts are deliberately excluded. |
+| Force-directed explorer  | `o2b brain explorer [--port \| --export]` | — (CLI-only) | live HTTP on `127.0.0.1` (default `:7777`) or single-file HTML at `<path>`; renders preferences + retired as a graph; zero backend. Keyboard-accessible `<ul role="listbox">` mirror of visible nodes (ArrowUp/Down/Home/End/Enter/Escape); layout + filter state persisted to `localStorage` under `osb-explorer-layout:<vault_basename>`; "Reset layout" button clears the key. |
 
 Operations that change the **protected set** (`pin`, `unpin`,
 `reject`, `rollback`) and the **index lifecycle** (`search index`,
@@ -407,6 +409,23 @@ flowchart TD
 A snapshot captures every file under `Brain/` **except** `.snapshots/`
 itself — otherwise rollback would erase any snapshots taken after
 this one. Retention defaults to ten newest archives.
+
+From v0.10.6 every snapshot ships with a SHA-256 sidecar manifest
+(`Brain/.snapshots/<run_id>.manifest.json`) listing every regular
+file under `Brain/` and its hash. `o2b brain rollback` reads the
+sidecar back, rebuilds a fresh manifest from the live tree, and
+compares: any added / removed / changed entry aborts the rollback
+with exit code 2 and a compact drift report on stderr. The intent
+is to refuse silent overwrites of Syncthing-delivered edits made on
+another device between snapshot and rollback. Pass
+`--force-rollback` to override; the resulting rollback log row
+records `drift_overridden: true`. Snapshots predating v0.10.6 have
+no sidecar — rollback emits a stderr warning, skips the drift
+check, and falls through to the legacy direct-restore path so old
+archives still recover cleanly. The same sidecar primitive backs
+`o2b brain upgrade --dry-run`'s per-file diff: both features share
+`src/core/brain/manifest.ts` as the single source of truth for
+"what does `Brain/` look like right now".
 
 ### Read-only inspectors over the snapshot family
 

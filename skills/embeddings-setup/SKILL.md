@@ -14,7 +14,7 @@ rather than waiting for explicit instruction.
 
 ## Step 1 — Always start with `o2b search check`
 
-```
+```bash
 o2b search check
 ```
 
@@ -69,7 +69,7 @@ The `o2b` wrapper auto-detects Homebrew SQLite on Darwin and exports
 manual patching of the wrapper script is needed (the v0.10.5 shim
 `scripts/_macos-sqlite.sh` handles it). Verify with:
 
-```
+```bash
 o2b search check
 ```
 
@@ -93,7 +93,7 @@ unusual.
 
 ## Step 5 — Compute the first vectors
 
-```
+```bash
 o2b search reindex --embeddings
 ```
 
@@ -103,7 +103,7 @@ typically lands in a few seconds.
 
 Verify semantic search works:
 
-```
+```bash
 o2b search "preferences for code review"
 ```
 
@@ -116,7 +116,7 @@ The vault keeps changing — other agents add notes, the user edits
 existing ones. Without periodic refresh the embeddings drift behind
 the keyword index.
 
-```
+```bash
 o2b search reindex --cron-template
 ```
 

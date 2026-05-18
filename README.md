@@ -130,8 +130,10 @@ o2b brain set-primary         (CLI-only) Declare or clear primary_agent in Brain
 o2b brain protect             (CLI-only) Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
 o2b brain unprotect           (CLI-only) Remove the OSB-managed deny rules for the chosen target
 o2b brain snapshot diff       (CLI-only) Read-only diff between two snapshots, or snapshot vs live Brain/
-o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot (--dry-run previews)
-o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file
+o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot (--dry-run previews; drift abort vs --force-rollback)
+o2b brain upgrade             (CLI-only) Migrate release-owned files forward (_brain.yaml, _BRAIN.md, _OPEN_SECOND_BRAIN.md); --dry-run / --check / --apply --yes
+o2b brain export              Read-only dump of active preferences (--format json|llms-txt [--out <path>] [--force])
+o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence.
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, …)
 o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain scan-inline         Capture `@osb` markers from vault markdown files (Daily/, project notes, …)
@@ -235,11 +237,11 @@ o2b brain digest --vault /path/to/vault --silent-if-empty
 The Brain verbs in full: `init`, `feedback`, `dream`,
 `apply-evidence`, `digest`, `query`, `reject`, `merge`, `pin`,
 `unpin`, `set-primary`, `protect`, `unprotect`, `snapshot diff`,
-`rollback`, `doctor`, `backlinks`, `scan-inline`,
-`import-session`, `migrate-frontmatter`, `explorer`. Seven are
-mirrored as MCP tools (`brain_*`); the rest are intentionally
-CLI-only because they change the protected set, overwrite vault
-state, or are operator-only maintenance commands.
+`rollback`, `upgrade`, `export`, `doctor`, `backlinks`,
+`scan-inline`, `import-session`, `migrate-frontmatter`,
+`explorer`. Seven are mirrored as MCP tools (`brain_*`); the rest
+are intentionally CLI-only because they change the protected set,
+overwrite vault state, or are operator-only maintenance commands.
 
 ### Cross-project setup
 
@@ -499,10 +501,17 @@ you want to.
   context. They never write to the vault directly — every Brain
   entry goes through `brain_feedback` / `brain_apply_evidence`
   (MCP) or the equivalent CLI (`o2b brain *`).
-- Brain mutations (`o2b brain dream`) take an automatic pre-run
+- Brain mutations (`o2b brain dream`, `merge`,
+  `migrate-frontmatter`, `upgrade`) take an automatic pre-run
   snapshot (`Brain/.snapshots/<run_id>.tar.zst`) before any state
-  change. `o2b brain rollback <run_id>` restores from a snapshot;
-  retention is configurable in `_brain.yaml`.
+  change. From v0.10.6 the snapshot ships with a SHA-256 sidecar
+  manifest (`<run_id>.manifest.json`); `o2b brain rollback`
+  compares it against the live tree and aborts with exit 2 on
+  drift (typically a Syncthing-delivered edit on another device
+  between snapshot and rollback). Pass `--force-rollback` to
+  overwrite anyway. Legacy snapshots without sidecar fall back to
+  the pre-v0.10.6 direct-restore path with a stderr warning.
+  Retention is configurable in `_brain.yaml`.
 
 ## Repository
 

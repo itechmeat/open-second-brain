@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   detectHookRuntime,
   isArtifactToolName,
-  isLogToolName,
+  isBrainEventToolName,
   summarizeTurn,
 } from "../../hooks/lib/detect.ts";
 
@@ -23,9 +23,9 @@ describe("isArtifactToolName", () => {
   );
 });
 
-describe("isLogToolName", () => {
+describe("isBrainEventToolName", () => {
   test("recognises the bare name used in Codex transcripts", () => {
-    expect(isLogToolName("event_log_append")).toBe(true);
+    expect(isBrainEventToolName("event_log_append")).toBe(true);
   });
 
   test("recognises the Claude Code plugin-decorated MCP name", () => {
@@ -33,36 +33,67 @@ describe("isLogToolName", () => {
     // Claude prefixes plugin-supplied MCP tools with
     // `mcp__plugin_<plugin>_<server>__`.
     expect(
-      isLogToolName("mcp__plugin_open-second-brain_open-second-brain__event_log_append"),
+      isBrainEventToolName("mcp__plugin_open-second-brain_open-second-brain__event_log_append"),
     ).toBe(true);
   });
 
   test("recognises the legacy short MCP name", () => {
     // Older Claude builds (and some forks) used a shorter prefix.
-    expect(isLogToolName("mcp__open-second-brain__event_log_append")).toBe(true);
+    expect(isBrainEventToolName("mcp__open-second-brain__event_log_append")).toBe(true);
   });
 
   test("rejects unrelated names", () => {
-    expect(isLogToolName("second_brain_capture")).toBe(false);
-    expect(isLogToolName("Write")).toBe(false);
-    expect(isLogToolName("event_log_append_other")).toBe(false);
-    expect(isLogToolName("not_event_log_append")).toBe(false);
+    expect(isBrainEventToolName("second_brain_capture")).toBe(false);
+    expect(isBrainEventToolName("Write")).toBe(false);
+    expect(isBrainEventToolName("event_log_append_other")).toBe(false);
+    expect(isBrainEventToolName("not_event_log_append")).toBe(false);
   });
 
   test("rejects names that contain the suffix but not as a `__`-bounded token", () => {
-    expect(isLogToolName("xevent_log_append")).toBe(false);
+    expect(isBrainEventToolName("xevent_log_append")).toBe(false);
+  });
+
+  // §30 §A (v0.10.6) — `brain_feedback` and `brain_apply_evidence`
+  // are now equally valid brain-events from the guardrail's
+  // perspective. The same name-suffix / MCP-prefix coverage applies.
+  test("recognises `brain_feedback` (bare)", () => {
+    expect(isBrainEventToolName("brain_feedback")).toBe(true);
+  });
+
+  test("recognises `brain_feedback` under the Claude Code plugin prefix", () => {
+    expect(
+      isBrainEventToolName(
+        "mcp__plugin_open-second-brain_open-second-brain__brain_feedback",
+      ),
+    ).toBe(true);
+  });
+
+  test("recognises `brain_apply_evidence` (bare and prefixed)", () => {
+    expect(isBrainEventToolName("brain_apply_evidence")).toBe(true);
+    expect(
+      isBrainEventToolName(
+        "mcp__plugin_open-second-brain_open-second-brain__brain_apply_evidence",
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects nearby but non-matching brain_* names", () => {
+    expect(isBrainEventToolName("brain_query")).toBe(false);
+    expect(isBrainEventToolName("brain_doctor")).toBe(false);
+    expect(isBrainEventToolName("brain_digest")).toBe(false);
+    expect(isBrainEventToolName("xbrain_feedback")).toBe(false);
   });
 });
 
 describe("summarizeTurn", () => {
-  test("artifact without log → hadArtifact && !hadLog", () => {
+  test("artifact without log → hadArtifact && !hadBrainEvent", () => {
     const s = summarizeTurn([{ name: "Write" }, { name: "Bash" }]);
-    expect(s).toEqual({ hadArtifact: true, hadLog: false });
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 
-  test("artifact AND MCP log → hadLog wins", () => {
+  test("artifact AND MCP log → hadBrainEvent wins", () => {
     const s = summarizeTurn([{ name: "Write" }, { name: "event_log_append" }]);
-    expect(s).toEqual({ hadArtifact: true, hadLog: true });
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
   });
 
   test("artifact + bash that runs `o2b append-event` counts as log", () => {
@@ -70,7 +101,7 @@ describe("summarizeTurn", () => {
       [{ name: "apply_patch" }, { name: "Bash" }],
       ["o2b append-event 'fixed bug'"],
     );
-    expect(s).toEqual({ hadArtifact: true, hadLog: true });
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
   });
 
   test("artifact + bash that runs the legacy `vault-log` wrapper counts as log", () => {
@@ -78,7 +109,7 @@ describe("summarizeTurn", () => {
       [{ name: "Write" }, { name: "Bash" }],
       ["vault-log 'noted finding'"],
     );
-    expect(s).toEqual({ hadArtifact: true, hadLog: true });
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
   });
 
   test("the trailing space in the `vault-log ` needle prevents false matches on paths", () => {
@@ -89,7 +120,7 @@ describe("summarizeTurn", () => {
       [{ name: "Write" }, { name: "Bash" }],
       ["cat /srv/audit/vault-log.json"],
     );
-    expect(s).toEqual({ hadArtifact: true, hadLog: false });
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 
   test("starting the MCP server (`o2b mcp …`) does NOT count as log", () => {
@@ -101,17 +132,58 @@ describe("summarizeTurn", () => {
       [{ name: "Write" }, { name: "Bash" }],
       ["o2b mcp --vault /tmp/vault"],
     );
-    expect(s).toEqual({ hadArtifact: true, hadLog: false });
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 
   test("bash without an OSB log command does NOT count as log", () => {
     const s = summarizeTurn([{ name: "Write" }, { name: "Bash" }], ["echo hello"]);
-    expect(s).toEqual({ hadArtifact: true, hadLog: false });
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 
   test("read-only tools yield no artifact", () => {
     const s = summarizeTurn([{ name: "Read" }, { name: "Grep" }]);
-    expect(s).toEqual({ hadArtifact: false, hadLog: false });
+    expect(s).toEqual({ hadArtifact: false, hadBrainEvent: false });
+  });
+
+  // §30 §A (v0.10.6) coverage: every brain-event variant counts.
+  test("artifact + `brain_feedback` MCP call clears guardrail", () => {
+    const s = summarizeTurn([
+      { name: "Write" },
+      { name: "mcp__plugin_open-second-brain_open-second-brain__brain_feedback" },
+    ]);
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+  });
+
+  test("artifact + `brain_apply_evidence` MCP call clears guardrail", () => {
+    const s = summarizeTurn([
+      { name: "apply_patch" },
+      { name: "brain_apply_evidence" },
+    ]);
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+  });
+
+  test("artifact + bash `o2b brain feedback` clears guardrail", () => {
+    const s = summarizeTurn(
+      [{ name: "Edit" }, { name: "Bash" }],
+      ["o2b brain feedback --topic foo --signal positive --principle bar"],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+  });
+
+  test("artifact + bash `o2b brain apply-evidence` clears guardrail", () => {
+    const s = summarizeTurn(
+      [{ name: "MultiEdit" }, { name: "Bash" }],
+      ["o2b brain apply-evidence --pref pref-foo --artifact '[[a]]' --result applied"],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+  });
+
+  test("artifact + `o2b brain query` does NOT clear guardrail (read-only)", () => {
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ["o2b brain query --preference pref-foo"],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 });
 

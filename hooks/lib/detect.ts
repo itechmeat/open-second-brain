@@ -30,41 +30,58 @@ const NATIVE_ARTIFACT_NAMES = new Set<string>([
   "apply_patch",
 ]);
 
-// Tool-name suffixes that mean "the agent logged this turn", regardless
-// of any runtime-injected MCP prefix:
-//   Codex:        `event_log_append` (bare; verified live).
-//   Claude Code:  `mcp__plugin_open-second-brain_open-second-brain__event_log_append`
-//                 (the runtime decorates plugin-provided MCP tools with
-//                 `mcp__plugin_<plugin>_<server>__` — verified live in
-//                 `~/.claude/projects/-root/*.jsonl`).
+// Tool-name suffixes that count as "the agent logged this turn",
+// regardless of any runtime-injected MCP prefix.
 //
-// We match the trailing `event_log_append` token after either the start
-// of the name or a `__` separator so any future prefix change (Claude
-// has rebranded this twice in two months) keeps working without an
-// emergency patch.
-const LOG_NAME_SUFFIX = /(?:^|__)event_log_append$/;
+// §30 §A (v0.10.6) broadens the set from `event_log_append` only to
+// any of the three brain-event tools — `event_log_append` itself
+// (durable session summary), `brain_feedback` (new taste signal),
+// `brain_apply_evidence` (evidence trail against an active
+// preference). Either of these landing in a turn that produced a
+// durable artifact is enough to clear the stop guardrail.
+//
+// Names appear bare in Codex transcripts and decorated as
+// `mcp__plugin_<plugin>_<server>__<name>` or `mcp__<server>__<name>`
+// in Claude Code transcripts. The regex anchors on either string
+// start or a `__` separator so a future prefix change keeps working
+// without an emergency patch.
+const BRAIN_EVENT_NAME_SUFFIX =
+  /(?:^|__)(event_log_append|brain_feedback|brain_apply_evidence)$/;
 
-// Bash command substrings that indicate the agent called the CLI
-// equivalent of `event_log_append`. We deliberately keep this list
-// narrow: anything matched here suppresses the guardrail. Spawning
-// the MCP server (`o2b mcp …`) does NOT log on its own, so it is not
-// in the list — only the explicit append commands are.
-const LOG_BASH_NEEDLES = [
+// Bash command substrings that count as a brain-event call from the
+// CLI. We deliberately keep this list narrow: anything matched here
+// suppresses the guardrail. Spawning the MCP server (`o2b mcp …`)
+// does NOT log on its own, so it stays out of the list — only the
+// explicit event-emitting commands are in.
+const BRAIN_EVENT_BASH_NEEDLES = [
   "o2b append-event",
   "vault-log ", // trailing space distinguishes the CLI from a literal log path
+  "o2b brain feedback",
+  "o2b brain apply-evidence",
 ];
 
 export function isArtifactToolName(name: string): boolean {
   return NATIVE_ARTIFACT_NAMES.has(name);
 }
 
-export function isLogToolName(name: string): boolean {
-  return LOG_NAME_SUFFIX.test(name);
+/**
+ * True when `name` is one of the three brain-event tools (or a
+ * runtime-decorated form thereof). The renamed-from `isLogToolName`
+ * — kept tightly aligned with §30 §A's broadened semantics.
+ */
+export function isBrainEventToolName(name: string): boolean {
+  return BRAIN_EVENT_NAME_SUFFIX.test(name);
 }
 
 export interface TurnSummary {
   readonly hadArtifact: boolean;
-  readonly hadLog: boolean;
+  /**
+   * True when any of `event_log_append`, `brain_feedback`,
+   * `brain_apply_evidence` (MCP call or CLI invocation) landed in
+   * this turn. Renamed from `hadLog` in v0.10.6 §30 §A so the stop
+   * guardrail's correctness rests on the broader signal.
+   */
+  readonly hadBrainEvent: boolean;
 }
 
 export function summarizeTurn(
@@ -72,20 +89,20 @@ export function summarizeTurn(
   bashCommandsThisTurn: readonly string[] = [],
 ): TurnSummary {
   let hadArtifact = false;
-  let hadLog = false;
+  let hadBrainEvent = false;
   for (const tc of toolCalls) {
     if (isArtifactToolName(tc.name)) hadArtifact = true;
-    if (isLogToolName(tc.name)) hadLog = true;
+    if (isBrainEventToolName(tc.name)) hadBrainEvent = true;
   }
-  if (!hadLog) {
+  if (!hadBrainEvent) {
     for (const cmd of bashCommandsThisTurn) {
-      if (LOG_BASH_NEEDLES.some((n) => cmd.includes(n))) {
-        hadLog = true;
+      if (BRAIN_EVENT_BASH_NEEDLES.some((n) => cmd.includes(n))) {
+        hadBrainEvent = true;
         break;
       }
     }
   }
-  return { hadArtifact, hadLog };
+  return { hadArtifact, hadBrainEvent };
 }
 
 // ---- Runtime detection (§4-tail) ---------------------------------------
