@@ -98,7 +98,7 @@ same commit so it survives across planning sessions.
 
 ### Surface
 
-```
+```bash
 o2b brain explorer                            # live, default port 7777
 o2b brain explorer --port 8080                # live on a different port
 o2b brain explorer --export <path>            # static single-file HTML
@@ -119,7 +119,7 @@ existing `fs-atomic` helper.
 
 ### Modules
 
-```
+```ts
 src/core/brain/explorer.ts
   - collectExplorerData(vault: string): ExplorerGraph     // pure read
   - renderExportedHtml(graph: ExplorerGraph): string      // template + inline JSON
@@ -247,7 +247,7 @@ edge styles) and counts (N preferences, M retired, K edges).
 
 ### Surface
 
-```
+```bash
 o2b brain merge <keep-pref-id> <drop-pref-id> [--dry-run] [--force] [--vault <path>]
 ```
 
@@ -329,7 +329,7 @@ flow already sets — same convention as `o2b brain reject`.
 
 ### `merge-candidates` detector
 
-```
+```text
 src/core/brain/merge-candidates.ts
   - findMergeCandidates(vault: string, opts?: { threshold?: number }):
       ReadonlyArray<MergeCandidate>
@@ -443,7 +443,7 @@ Claude Code picks it up on the next `SessionStart` (the
 
 ### `detectHookRuntime`
 
-```
+```text
 hooks/lib/detect.ts
   - type HookRuntime = "claudecode" | "codex" | "unknown"
   - function detectHookRuntime(payload: unknown): HookRuntime
@@ -510,7 +510,7 @@ cadence block:
 
 ### Call-site updates
 
-```
+```text
 hooks/post-write-reminder.ts
   - import detectHookRuntime
   - const runtime = detectHookRuntime(payload)
@@ -607,7 +607,7 @@ expect the field are unaffected (additive).
 
 New flag on the existing `reindex` verb:
 
-```
+```bash
 o2b search reindex --cron-template [--interval <duration>] [--vault <path>]
 ```
 

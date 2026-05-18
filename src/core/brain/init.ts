@@ -32,7 +32,6 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
   statSync,
 } from "node:fs";
@@ -41,7 +40,6 @@ import { fileURLToPath } from "node:url";
 
 import { defaultConfigPath } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { escapeRegex } from "../strings.ts";
 import {
   brainConfigPath,
   brainDirs,
@@ -52,8 +50,11 @@ import {
   DEFAULT_BRAIN_CONFIG_YAML,
   formatPrimaryAgentYamlValue,
 } from "./policy.ts";
-import type { BrainConfig } from "./types.ts";
-import { DEFAULT_BRAIN_CONFIG } from "./policy.ts";
+import {
+  LEGACY_OVERVIEW_REL_PATH,
+  renderBrainManual,
+  renderLegacyOverview,
+} from "./templates.ts";
 
 const STARTER_TARGETS = ["preferences", "retired", "inbox", "log"] as const;
 
@@ -170,22 +171,6 @@ export function copyStarterBundle(
   return Object.freeze({ copied });
 }
 
-// Resolve template paths relative to this source file. `import.meta.url`
-// is stable under both `bun run` (TS source) and any future build that
-// keeps the template files alongside the bundled JS.
-const TEMPLATE_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "templates",
-);
-
-const BRAIN_MANUAL_TEMPLATE_PATH = join(TEMPLATE_DIR, "_BRAIN.md.tpl");
-const LEGACY_OVERVIEW_TEMPLATE_PATH = join(
-  TEMPLATE_DIR,
-  "_OPEN_SECOND_BRAIN.md.tpl",
-);
-
-/** Vault-relative target for the legacy-overview replacement. */
-const LEGACY_OVERVIEW_REL_PATH = join("AI Wiki", "_OPEN_SECOND_BRAIN.md");
 
 export interface BootstrapBrainOptions {
   /** Overwrite `_brain.yaml` and `_BRAIN.md` if they already exist. */
@@ -299,10 +284,7 @@ export function bootstrapBrain(
   // 3. `Brain/_BRAIN.md` — operating manual rendered from template.
   const manualPath = brainManualPath(vault);
   const manualRel = vaultRelative(manualPath, vault);
-  const manualBody = renderTemplate(
-    readTemplate(BRAIN_MANUAL_TEMPLATE_PATH),
-    buildSubstitutions(vault, DEFAULT_BRAIN_CONFIG),
-  );
+  const manualBody = renderBrainManual(vault);
   if (existsSync(manualPath)) {
     if (force) {
       atomicWriteFileSync(manualPath, manualBody);
@@ -324,10 +306,7 @@ export function bootstrapBrain(
   const overviewPath = join(vault, LEGACY_OVERVIEW_REL_PATH);
   const overviewRel = LEGACY_OVERVIEW_REL_PATH;
   mkdirSync(dirname(overviewPath), { recursive: true });
-  const overviewBody = renderTemplate(
-    readTemplate(LEGACY_OVERVIEW_TEMPLATE_PATH),
-    buildSubstitutions(vault, DEFAULT_BRAIN_CONFIG),
-  );
+  const overviewBody = renderLegacyOverview(vault);
   const overviewExisted = existsSync(overviewPath);
   atomicWriteFileSync(overviewPath, overviewBody);
   if (overviewExisted) {
@@ -344,59 +323,6 @@ export function bootstrapBrain(
   }
 
   return { created, overwritten, skipped };
-}
-
-/**
- * Read a template file from disk. Wrapped so a missing template (which
- * would indicate a broken build / packaging) surfaces with a clear
- * pointer rather than the bare `ENOENT` Node throws.
- */
-function readTemplate(path: string): string {
-  try {
-    return readFileSync(path, "utf8");
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Failed to load Brain template at ${path}: ${message}. ` +
-        "This indicates a broken open-second-brain install — the " +
-        "src/core/brain/templates/ directory must ship alongside init.ts.",
-    );
-  }
-}
-
-/**
- * Compute `{{key}}` substitutions for the current vault. Kept tiny on
- * purpose: the templates carry static prose and only need to thread a
- * couple of contextual values (vault name, schema version). Adding more
- * substitutions later is a one-line change here.
- */
-function buildSubstitutions(
-  vault: string,
-  config: BrainConfig,
-): ReadonlyMap<string, string> {
-  return new Map<string, string>([
-    ["vault_name", vaultDisplayName(vault)],
-    ["schema_version", String(config.schema_version)],
-  ]);
-}
-
-/**
- * Apply `{{key}}` substitutions to `template`. Unknown placeholders are
- * left intact so a typo surfaces in the rendered file (and in the
- * line-count test) rather than disappearing silently.
- */
-function renderTemplate(
-  template: string,
-  substitutions: ReadonlyMap<string, string>,
-): string {
-  let out = template;
-  for (const [key, value] of substitutions) {
-    // Escape regex metachars in the key in case future keys carry
-    // anything other than `[a-z_]`. Today they don't; defensive anyway.
-    const pattern = new RegExp(`\\{\\{\\s*${escapeRegex(key)}\\s*\\}\\}`, "g");
-    out = out.replace(pattern, value);
-  }
-  return out;
 }
 
 /**
@@ -417,15 +343,4 @@ function applyPrimaryAgentToYaml(
   if (primaryAgent === undefined) return yamlBody;
   const line = `primary_agent: ${formatPrimaryAgentYamlValue(primaryAgent)}`;
   return yamlBody.replace(/^primary_agent:.*$/m, line);
-}
-
-/**
- * Best-effort display name for the vault: the trailing directory name
- * with separators stripped. Falls back to the literal `Second Brain`
- * if the vault path has no usable basename.
- */
-function vaultDisplayName(vault: string): string {
-  const parts = vault.split(/[\\/]/).filter((p) => p.length > 0);
-  const last = parts.length > 0 ? parts[parts.length - 1]! : "";
-  return last !== "" ? last : "Second Brain";
 }

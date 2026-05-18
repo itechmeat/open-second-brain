@@ -21,6 +21,11 @@ import {
 import { brainDirs, snapshotPath } from "../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import {
+  BRAIN_MANIFEST_SCHEMA_VERSION,
+  manifestSidecarPath,
+  readManifestSidecar,
+} from "../../src/core/brain/manifest.ts";
 
 let vault: string;
 let configHome: string;
@@ -99,6 +104,23 @@ describe("createSnapshot", () => {
   test("rejects invalid run_id", () => {
     expect(() => createSnapshot(vault, "../escape")).toThrow();
   });
+
+  test("writes sidecar manifest alongside the archive (§22 + §5-tail)", () => {
+    createSnapshot(vault, "dream-with-manifest");
+    const sidecar = manifestSidecarPath(vault, "dream-with-manifest");
+    expect(existsSync(sidecar)).toBe(true);
+    const m = readManifestSidecar(vault, "dream-with-manifest");
+    expect(m).not.toBeNull();
+    expect(m!.schema_version).toBe(BRAIN_MANIFEST_SCHEMA_VERSION);
+    expect(m!.brain_root).toBe("Brain");
+    // The seed tree carries _brain.yaml, _BRAIN.md, the seed signal,
+    // pref, and log entry. All must appear in the manifest.
+    expect(m!.files["_brain.yaml"]).toBeDefined();
+    expect(m!.files["_BRAIN.md"]).toBeDefined();
+    expect(m!.files["inbox/sig-2026-05-14-foo.md"]).toBeDefined();
+    expect(m!.files["preferences/pref-foo.md"]).toBeDefined();
+    expect(m!.files["log/2026-05-14.md"]).toBeDefined();
+  });
 });
 
 describe("listSnapshots", () => {
@@ -133,6 +155,22 @@ describe("listSnapshots", () => {
 
   test("returns [] when .snapshots/ is empty", () => {
     expect(listSnapshots(vault)).toEqual([]);
+  });
+
+  test("manifest_path populated when sidecar present, null otherwise", () => {
+    createSnapshot(vault, "dream-with-sidecar");
+    // Simulate a legacy snapshot: drop the sidecar that
+    // createSnapshot just wrote so only the archive remains.
+    const sidecar = manifestSidecarPath(vault, "dream-with-sidecar");
+    expect(existsSync(sidecar)).toBe(true);
+
+    createSnapshot(vault, "dream-legacy");
+    rmSync(manifestSidecarPath(vault, "dream-legacy"), { force: true });
+
+    const list = listSnapshots(vault);
+    const byId = new Map(list.map((s) => [s.run_id, s]));
+    expect(byId.get("dream-with-sidecar")!.manifest_path).toBe(sidecar);
+    expect(byId.get("dream-legacy")!.manifest_path).toBeNull();
   });
 });
 
@@ -173,6 +211,46 @@ describe("pruneSnapshots", () => {
     const res = pruneSnapshots(vault, 10);
     expect(res.deleted).toEqual([]);
     expect(listSnapshots(vault)).toHaveLength(1);
+  });
+
+  test("removes sidecar manifest alongside the archive", () => {
+    const labels = ["a", "b", "c"];
+    const ts = [
+      "2026-05-10T00:00:00Z",
+      "2026-05-11T00:00:00Z",
+      "2026-05-12T00:00:00Z",
+    ];
+    for (let i = 0; i < labels.length; i++) {
+      const runId = `dream-prune-${labels[i]}`;
+      createSnapshot(vault, runId);
+      const p = snapshotPath(vault, runId);
+      const t = new Date(ts[i]!);
+      utimesSync(p, t, t);
+    }
+    // Sanity: all three sidecars present pre-prune.
+    for (const l of labels) {
+      expect(existsSync(manifestSidecarPath(vault, `dream-prune-${l}`))).toBe(true);
+    }
+
+    pruneSnapshots(vault, 1);
+    // 'c' is the newest by mtime, so 'a' and 'b' are deleted along with
+    // their sidecars; 'c' and its sidecar survive.
+    expect(existsSync(manifestSidecarPath(vault, "dream-prune-a"))).toBe(false);
+    expect(existsSync(manifestSidecarPath(vault, "dream-prune-b"))).toBe(false);
+    expect(existsSync(manifestSidecarPath(vault, "dream-prune-c"))).toBe(true);
+  });
+
+  test("legacy archive without sidecar still prunes cleanly", () => {
+    createSnapshot(vault, "dream-legacy-prune-old");
+    rmSync(manifestSidecarPath(vault, "dream-legacy-prune-old"), { force: true });
+    const old = snapshotPath(vault, "dream-legacy-prune-old");
+    const t = new Date("2026-05-09T00:00:00Z");
+    utimesSync(old, t, t);
+
+    createSnapshot(vault, "dream-legacy-prune-new");
+    const res = pruneSnapshots(vault, 1);
+    expect(res.deleted).toContain(old);
+    expect(existsSync(old)).toBe(false);
   });
 });
 

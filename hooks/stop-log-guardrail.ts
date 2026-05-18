@@ -51,7 +51,7 @@ async function main(): Promise<void> {
   }
 
   const summary = summarizeTurn(signal.toolCalls, signal.bashCommands);
-  if (!summary.hadArtifact || summary.hadLog) return;
+  if (!summary.hadArtifact || summary.hadBrainEvent) return;
 
   const runtime = detectHookRuntime(payload);
   const out = {

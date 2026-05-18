@@ -95,7 +95,7 @@ These apply to every task; do not re-state per step.
 
 New files (count: 12):
 
-```
+```text
 docs/plans/2026-05-18-brain-maturity-impl.md             # this file
 src/core/brain/similarity.ts                             # §12 lift
 src/core/brain/merge-candidates.ts                       # §12 detector
@@ -112,7 +112,7 @@ tests/cli/brain-explorer.test.ts                         # §14
 
 Modified files (count: 15):
 
-```
+```text
 src/core/brain/doctor.ts                                 # §12 import from similarity.ts
 src/core/brain/digest.ts                                 # §12 merge_suggestions section
 src/core/brain/types.ts                                  # §12 new reason + event kind
@@ -132,7 +132,7 @@ package.json                                             # Phase 5 only (version
 
 Version-mirror files (touched once in Phase 5 via `bun run sync-version`):
 
-```
+```text
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
 plugins/codex/.codex-plugin/plugin.json
@@ -211,7 +211,7 @@ describe("jaccard", () => {
 
 **Step 2: Run test to verify failure**
 
-```
+```bash
 bun test tests/core/brain/similarity.test.ts
 ```
 Expected: FAIL — module not found.
@@ -262,7 +262,7 @@ export function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number 
 
 **Step 5: Run tests to verify pass and no doctor regression**
 
-```
+```bash
 bun test tests/core/brain/similarity.test.ts
 bun test tests/core/brain/doctor.test.ts
 ```
@@ -307,7 +307,7 @@ In the existing const block (after `migrateFrontmatter`):
 
 **Step 3: Typecheck**
 
-```
+```bash
 bun run typecheck
 ```
 Expected: PASS.
@@ -429,7 +429,7 @@ describe("findMergeCandidates", () => {
 
 **Step 2: Run test to verify failure**
 
-```
+```bash
 bun test tests/core/brain/merge-candidates.test.ts
 ```
 Expected: FAIL — module not found.
@@ -553,7 +553,7 @@ export function findMergeCandidates(
 
 **Step 4: Run tests to verify pass**
 
-```
+```bash
 bun test tests/core/brain/merge-candidates.test.ts
 ```
 Expected: 3 passed.
@@ -665,7 +665,7 @@ Append two test cases in `tests/core/brain/digest.test.ts`:
 
 **Step 6: Run tests**
 
-```
+```bash
 bun test tests/core/brain/digest.test.ts
 ```
 Expected: all previous tests still green plus the two new ones.
@@ -787,7 +787,7 @@ required for `BrainPreference` parsing (`evidenced_by` array,
 
 **Step 3: Verify failure**
 
-```
+```bash
 bun test tests/core/brain/merge.test.ts
 ```
 Expected: FAIL — module not found.
@@ -829,7 +829,7 @@ Implementation outline (translate to TS, ~180 lines):
 
 **Step 5: Run tests**
 
-```
+```bash
 bun test tests/core/brain/merge.test.ts
 ```
 Expected: 8 passed (6 guards + 2 happy-path).
@@ -896,14 +896,14 @@ fixture vault, asserts exit code, stdout/stderr, and on-disk effect
 
 **Step 4: Verify**
 
-```
+```bash
 bun test tests/cli/brain-merge.test.ts
 ```
 Expected: 7 passed.
 
 **Step 5: Phase 1 typecheck and full test**
 
-```
+```bash
 bun run typecheck
 bun test
 ```
@@ -963,7 +963,7 @@ describe("collectExplorerData", () => {
 
 **Step 2: Verify failure**
 
-```
+```bash
 bun test tests/core/brain/explorer.test.ts
 ```
 Expected: FAIL.
@@ -1017,7 +1017,7 @@ function returns `Map<targetId, refs[]>` — count = `refs.length`).
 
 **Step 4: Verify**
 
-```
+```bash
 bun test tests/core/brain/explorer.test.ts
 ```
 Expected: 8 passed.
@@ -1145,7 +1145,7 @@ test("template carries the placeholder before substitution", () => {
 
 **Step 4: Verify**
 
-```
+```bash
 bun test tests/core/brain/explorer.test.ts
 ```
 Expected: all previous tests still green plus the two new ones.
@@ -1318,14 +1318,14 @@ For the live test, use a high random port (e.g. `30000 + Math.floor(Math.random(
 
 **Step 4: Verify**
 
-```
+```bash
 bun test tests/cli/brain-explorer.test.ts
 ```
 Expected: 6 passed.
 
 **Step 5: Phase 2 typecheck and full test**
 
-```
+```bash
 bun run typecheck
 bun test
 ```
@@ -1428,7 +1428,7 @@ export function detectHookRuntime(payload: unknown): HookRuntime {
 
 **Step 3: Verify**
 
-```
+```bash
 bun test tests/hooks/detect.test.ts
 ```
 Expected: existing tests still green plus 5 new.
@@ -1619,7 +1619,7 @@ Symmetric three tests in `tests/hooks/stop-log-guardrail.test.ts`.
 
 **Step 4: Verify**
 
-```
+```bash
 bun test tests/hooks/
 bun run typecheck
 ```
@@ -1673,7 +1673,7 @@ fits in ~25 lines. Comment header describes WHY (Apple's
 
 **Step 4: Run tests.**
 
-```
+```bash
 bun test tests/scripts/macos-sqlite-shim.test.ts
 ```
 
@@ -1771,7 +1771,7 @@ function renderCheckHuman(r: IndexCheckReport): string {
 
 **Step 5: Verify.**
 
-```
+```bash
 bun test tests/core/search/check-recommendations.test.ts
 bun test tests/cli/search.test.ts  # may surface a renderer regression
 ```
@@ -1828,7 +1828,7 @@ async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
 
 **Step 4: Verify.**
 
-```
+```bash
 bun test tests/cli/search-cron-template.test.ts
 ```
 
@@ -1853,7 +1853,7 @@ with explicit triggers (verbatim phrases the agent watches for).
 
 After Tasks 6.1–6.4:
 
-```
+```bash
 bun run typecheck
 bun test
 ```
@@ -2013,13 +2013,13 @@ the existing script.
 
 **Step 2: Run sync**
 
-```
+```bash
 bun run sync-version
 ```
 
 **Step 3: Verify drift gone**
 
-```
+```bash
 bun run sync-version:check
 ```
 Expected: exit 0.
@@ -2088,14 +2088,14 @@ vault.
 
 **Step 1: Typecheck**
 
-```
+```bash
 bun run typecheck
 ```
 Expected: PASS.
 
 **Step 2: Test**
 
-```
+```bash
 bun test
 ```
 Expected: all green. Note the new test counts:

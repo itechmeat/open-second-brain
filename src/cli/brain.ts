@@ -90,12 +90,31 @@ import {
   restoreSnapshot,
   type ExtractSnapshotResult,
 } from "../core/brain/snapshot.ts";
+import {
+  buildManifest,
+  diffManifests,
+  manifestDiffHasDrift,
+  readManifestSidecar,
+  renderManifestDriftJson,
+  renderManifestDriftMarkdown,
+} from "../core/brain/manifest.ts";
 import { diffBrainTrees } from "../core/brain/snapshot-diff.ts";
 import {
   renderDiffJson,
   renderDiffMarkdown,
 } from "../core/brain/snapshot-diff-render.ts";
 import { appendLogEvent, type BrainLogEntry } from "../core/brain/log.ts";
+import {
+  BrainUpgradeError,
+  applyUpgrade,
+  planUpgrade,
+  type UpgradeFilePlan,
+  type UpgradePlan,
+} from "../core/brain/upgrade.ts";
+import {
+  exportPreferencesJson,
+  exportPreferencesLlmsTxt,
+} from "../core/brain/export.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
   BRAIN_PREFERENCE_STATUS,
@@ -1232,10 +1251,12 @@ async function cmdBrainRollback(argv: string[]): Promise<number> {
     list: { type: "boolean" },
     yes: { type: "boolean" },
     "dry-run": { type: "boolean" },
+    "force-rollback": { type: "boolean" },
     json: { type: "boolean" },
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const forceRollback = Boolean(flags["force-rollback"]);
 
   // `--list` shows available snapshots in newest-first order, with size
   // for the operator's mental model. Idempotent and read-only.
@@ -1270,6 +1291,46 @@ async function cmdBrainRollback(argv: string[]): Promise<number> {
     process.stderr.write(
       `snapshot not found: ${runId}; run \`o2b brain rollback --list\` to enumerate.\n`,
     );
+    return 2;
+  }
+
+  // Drift detection (§5-tail). When a sidecar manifest accompanies
+  // the snapshot we compare it against a freshly-built manifest of
+  // the live Brain/ tree. If they differ and the operator did not
+  // pass --force-rollback, we abort with exit 2 so a Syncthing-
+  // delivered edit on another device is not silently clobbered. For
+  // legacy snapshots (no sidecar — produced before v0.10.6) we emit
+  // a stderr warning and fall through to the pre-v0.10.6 path.
+  // Skip the full sha-256 walk for `--dry-run` — that path already
+  // shows the operator everything via `diffBrainTrees` and never
+  // writes, so drift detection adds no signal.
+  const driftDiff = flags["dry-run"]
+    ? null
+    : (() => {
+        const stored = readManifestSidecar(vault, runId);
+        if (stored === null) {
+          process.stderr.write(
+            `warning: no manifest sidecar for snapshot '${runId}'; ` +
+              `drift detection skipped (snapshot predates v0.10.6).\n`,
+          );
+          return null;
+        }
+        const live = buildManifest(brainDirs(vault).brain);
+        return diffManifests(stored, live);
+      })();
+  const drift = driftDiff !== null && manifestDiffHasDrift(driftDiff);
+  if (drift && !forceRollback) {
+    // Abort path. --json emits the structured drift payload; the
+    // human path emits the markdown rendering. Either way the exit
+    // code is 2 and Brain/ stays untouched.
+    if (flags["json"]) {
+      process.stdout.write(
+        JSON.stringify(renderManifestDriftJson(driftDiff!, runId), null, 2) +
+          "\n",
+      );
+      return 2;
+    }
+    process.stderr.write(renderManifestDriftMarkdown(driftDiff!, runId) + "\n");
     return 2;
   }
 
@@ -1336,13 +1397,20 @@ async function cmdBrainRollback(argv: string[]): Promise<number> {
 
   // Log the rollback event so the audit trail shows the time-shift.
   try {
+    const body: Record<string, string> = {
+      run_id: runId,
+      restored_files: String(result.restored_files),
+    };
+    // Record `drift_overridden` only when --force-rollback actually
+    // bypassed a real drift — the absence of the key keeps the
+    // common-case shape minimal.
+    if (drift && forceRollback) {
+      body["drift_overridden"] = "true";
+    }
     appendLogEvent(vault, {
       timestamp: isoSecond(new Date()),
       eventType: BRAIN_LOG_EVENT_KIND.rollback,
-      body: {
-        run_id: runId,
-        restored_files: String(result.restored_files),
-      },
+      body,
     });
   } catch (err) {
     // Non-fatal: the snapshot was already restored on disk; surface so
@@ -1740,6 +1808,263 @@ async function cmdBrainMigrateFrontmatter(argv: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * `o2b brain upgrade` — migrate release-owned files (`_brain.yaml`,
+ * `_BRAIN.md`, `_OPEN_SECOND_BRAIN.md`) forward when a new
+ * open-second-brain version ships. Default is `--dry-run`; `--apply`
+ * (with `--yes` in non-interactive mode) rewrites the files after a
+ * pre-apply snapshot.
+ */
+async function cmdBrainUpgrade(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    "dry-run": { type: "boolean" },
+    apply: { type: "boolean" },
+    yes: { type: "boolean" },
+    check: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+
+  // Flag matrix. `--dry-run` + `--apply` is contradictory. `--check`
+  // is a CI shorthand for "dry-run with non-zero exit on pending";
+  // combining it with `--apply` is also contradictory.
+  if (flags["dry-run"] && flags["apply"]) {
+    return fail("brain upgrade: --dry-run and --apply are mutually exclusive");
+  }
+  if (flags["check"] && flags["apply"]) {
+    return fail("brain upgrade: --check and --apply are mutually exclusive");
+  }
+
+  let plan: UpgradePlan;
+  try {
+    plan = planUpgrade(vault);
+  } catch (exc) {
+    return fail(`upgrade plan failed: ${(exc as Error).message ?? exc}`);
+  }
+
+  // `--check` is the CI gate: print a one-line summary and exit 2
+  // when there is anything to do. Stays read-only.
+  if (flags["check"]) {
+    if (flags["json"]) {
+      okJson(renderUpgradePlanJson(plan));
+    } else {
+      printUpgradePlanText(plan);
+    }
+    return plan.pending > 0 || plan.errors > 0 ? 2 : 0;
+  }
+
+  // Default and `--dry-run` share the same output. Exit 0 either
+  // way — `--check` is the gate variant.
+  if (!flags["apply"]) {
+    if (flags["json"]) {
+      okJson(renderUpgradePlanJson(plan));
+    } else {
+      printUpgradePlanText(plan);
+    }
+    return 0;
+  }
+
+  // Apply path.
+  if (plan.errors > 0) {
+    return fail(
+      `upgrade aborted: ${plan.errors} file(s) failed to plan; ` +
+        `run with --dry-run to inspect the error.`,
+    );
+  }
+  if (plan.pending === 0) {
+    if (flags["json"]) {
+      okJson({ run_id: "", snapshot_path: "", files_updated: [] });
+    } else {
+      ok("upgrade: nothing to do; all managed files match the current release.");
+    }
+    return 0;
+  }
+  if (!flags["yes"]) {
+    if (flags["json"] || !process.stdin.isTTY) {
+      return fail(
+        "brain upgrade --apply requires --yes in non-interactive mode " +
+          "(--json or non-TTY stdin)",
+      );
+    }
+    process.stderr.write(
+      `About to rewrite ${plan.pending} managed file(s):\n` +
+        plan.files
+          .filter((f) => f.status === "update")
+          .map((f) => `  - ${f.path}\n`)
+          .join("") +
+        `A pre-apply snapshot will be taken (rollback via run id).\n` +
+        `Proceed? [y/N] `,
+    );
+    const ans = await readSingleLine();
+    if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
+      ok("upgrade cancelled");
+      return 0;
+    }
+  }
+
+  let result;
+  try {
+    result = applyUpgrade(vault, { now: new Date() });
+  } catch (exc) {
+    if (exc instanceof BrainUpgradeError) {
+      process.stderr.write(`error: ${exc.message}\n`);
+      return 1;
+    }
+    return fail(`upgrade failed: ${(exc as Error).message ?? exc}`);
+  }
+
+  if (flags["json"]) {
+    okJson({
+      run_id: result.run_id,
+      snapshot_path: result.snapshot_path,
+      files_updated: result.files_updated,
+    });
+  } else {
+    ok(`run_id: ${result.run_id}`);
+    ok(`snapshot: ${result.snapshot_path}`);
+    for (const p of result.files_updated) ok(`  updated: ${p}`);
+  }
+  return 0;
+}
+
+function renderUpgradePlanJson(plan: UpgradePlan): {
+  pending: number;
+  errors: number;
+  files: ReadonlyArray<{
+    path: string;
+    status: UpgradeFilePlan["status"];
+    before_size: number;
+    after_size: number;
+    error?: string;
+  }>;
+} {
+  return {
+    pending: plan.pending,
+    errors: plan.errors,
+    files: plan.files.map((f) => ({
+      path: f.path,
+      status: f.status,
+      before_size: f.before.length,
+      after_size: f.after.length,
+      ...(f.error ? { error: f.error } : {}),
+    })),
+  };
+}
+
+function printUpgradePlanText(plan: UpgradePlan): void {
+  for (const f of plan.files) {
+    if (f.status === "noop") {
+      ok(`  ${f.path}: up to date`);
+      continue;
+    }
+    if (f.status === "error") {
+      info(`  ${f.path}: ERROR ${f.error}`);
+      continue;
+    }
+    info(`  ${f.path}: update (${f.before.length} → ${f.after.length} bytes)`);
+    info(renderUnifiedDiff(f.before, f.after, f.path));
+  }
+  if (plan.pending === 0 && plan.errors === 0) {
+    ok("upgrade: all managed files match the current release.");
+  } else if (plan.pending > 0) {
+    ok(
+      `upgrade: ${plan.pending} pending update(s); ` +
+        `re-run with --apply --yes when ready.`,
+    );
+  }
+}
+
+/**
+ * Bare-bones unified diff renderer. Good enough for human-eye review
+ * inside the CLI. We intentionally avoid pulling a dependency for a
+ * cosmetic feature; the algorithm is line-by-line with a small
+ * sliding window so identical leading / trailing lines collapse
+ * naturally.
+ */
+function renderUnifiedDiff(before: string, after: string, label: string): string {
+  if (before === after) return "";
+  const a = before.split("\n");
+  const b = after.split("\n");
+  const lines: string[] = [`--- ${label} (live)`, `+++ ${label} (release)`];
+  // Skip the matching prefix to keep the diff tight.
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tailA = a.length;
+  let tailB = b.length;
+  while (
+    tailA > head &&
+    tailB > head &&
+    a[tailA - 1] === b[tailB - 1]
+  ) {
+    tailA--;
+    tailB--;
+  }
+  if (head > 0) {
+    lines.push(`@@ context: ${head} matching line(s) above @@`);
+  }
+  for (let i = head; i < tailA; i++) lines.push(`- ${a[i]}`);
+  for (let i = head; i < tailB; i++) lines.push(`+ ${b[i]}`);
+  if (tailA < a.length || tailB < b.length) {
+    const tailCount = Math.max(a.length - tailA, b.length - tailB);
+    lines.push(`@@ context: ${tailCount} matching line(s) below @@`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * `o2b brain export` (§28) — read-only dump of active preferences in
+ * either JSON or llms-txt format. Default sink is stdout; `--out`
+ * writes to a file (refusing to overwrite without `--force`).
+ */
+async function cmdBrainExport(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    format: { type: "string" },
+    out: { type: "string" },
+    force: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const format = flags["format"] as string | undefined;
+  if (format !== "json" && format !== "llms-txt") {
+    process.stderr.write(
+      "error: --format is required and must be one of json|llms-txt\n",
+    );
+    return 2;
+  }
+
+  let body: string;
+  try {
+    if (format === "json") {
+      body = JSON.stringify(exportPreferencesJson(vault)) + "\n";
+    } else {
+      body = exportPreferencesLlmsTxt(vault);
+    }
+  } catch (exc) {
+    return fail(`export failed: ${(exc as Error).message ?? exc}`);
+  }
+
+  const outPath = flags["out"] as string | undefined;
+  if (outPath === undefined) {
+    process.stdout.write(body);
+    return 0;
+  }
+  if (existsSync(outPath) && !flags["force"]) {
+    return fail(`${outPath} exists; pass --force to overwrite`);
+  }
+  try {
+    atomicWriteFileSync(outPath, body);
+  } catch (exc) {
+    return fail(
+      `failed to write ${outPath}: ${(exc as Error).message ?? exc}`,
+    );
+  }
+  ok(`wrote ${outPath}`);
+  return 0;
+}
+
 async function cmdBrainDoctor(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
@@ -1805,6 +2130,8 @@ Brain verbs (observing memory):
   protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
   unprotect        Remove OSB-managed deny rules for the chosen target (--target)
   merge            Merge two near-duplicate preferences (<keep> <drop>; --dry-run, --force)
+  upgrade          Migrate release-owned files forward (--dry-run by default; --apply --yes)
+  export           Dump active preferences (--format json|llms-txt [--out <path>])
   explorer         Launch the loopback HTML explorer; --export <path> writes a single offline file
   snapshot diff    Read-only diff between two snapshots, or snapshot vs live
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
@@ -1855,12 +2182,22 @@ const VERB_HELP: Record<string, string> = {
     "usage: o2b brain unpin --id <pref-id> [--vault <path>] [--json]\n" +
     "Clear pinned: true. Idempotent.\n",
   rollback:
-    "usage: o2b brain rollback <run_id> [--vault <path>] [--yes] [--json]\n" +
+    "usage: o2b brain rollback <run_id> [--vault <path>] [--yes]\n" +
+    "                          [--force-rollback] [--json]\n" +
     "       o2b brain rollback <run_id> --dry-run [--vault <path>] [--json]\n" +
     "       o2b brain rollback --list [--vault <path>] [--json]\n" +
     "Restore Brain/ from a snapshot. Interactive prompt unless --yes.\n" +
     "--dry-run prints the would-be restore plan as live → snapshot\n" +
-    "diff and exits 0 without writing.\n",
+    "diff and exits 0 without writing.\n" +
+    "From v0.10.6 each snapshot carries a sidecar sha256 manifest of\n" +
+    "the Brain/ tree captured at snapshot time. rollback compares it\n" +
+    "against the current Brain/ and aborts with exit 2 if they\n" +
+    "differ — typically because another device (Syncthing) edited the\n" +
+    "vault between snapshot and rollback. Pass --force-rollback to\n" +
+    "overwrite anyway; the log entry records `drift_overridden: true`.\n" +
+    "Snapshots produced before v0.10.6 have no sidecar; rollback emits\n" +
+    "a stderr warning and falls through to the legacy direct-restore\n" +
+    "path.\n",
   snapshot:
     "usage: o2b brain snapshot diff <run_id_a> [<run_id_b>]\n" +
     "                              [--vault <path>] [--json]\n" +
@@ -1914,6 +2251,34 @@ const VERB_HELP: Record<string, string> = {
     "--dry-run prints the plan and writes nothing.\n" +
     "--force skips the interactive prompt but does NOT bypass invariant\n" +
     "guards (topic/scope mismatch, pin parity).\n",
+  export:
+    "usage: o2b brain export --format json|llms-txt [--vault <path>]\n" +
+    "                         [--out <path>] [--force]\n" +
+    "Read-only dump of active preferences (confirmed | unconfirmed |\n" +
+    "quarantine) from Brain/preferences/. Retired and signal entries\n" +
+    "are not included. JSON is single-line; llms-txt follows the\n" +
+    "llmstxt.org H1 + summary + H2-section shape.\n" +
+    "Default sink is stdout; --out writes to <path> (refuses to\n" +
+    "overwrite without --force).\n",
+  upgrade:
+    "usage: o2b brain upgrade [--vault <path>] [--dry-run | --apply | --check]\n" +
+    "                          [--yes] [--json]\n" +
+    "Migrate the three release-owned files (`Brain/_brain.yaml`,\n" +
+    "`Brain/_BRAIN.md`, `AI Wiki/_OPEN_SECOND_BRAIN.md`) forward to the\n" +
+    "shape the installed open-second-brain release ships.\n" +
+    "User-owned content (preferences/, retired/, inbox/, log/) is\n" +
+    "never touched.\n" +
+    "--dry-run (default) prints a per-file plan with a unified diff\n" +
+    "for every pending update. Exit 0 regardless of pending count.\n" +
+    "--check is dry-run + exit 2 when anything is pending or in error\n" +
+    "(CI-friendly).\n" +
+    "--apply takes a pre-apply snapshot named upgrade-<ts> (rollback\n" +
+    "via run_id) and rewrites every pending file. Requires --yes in\n" +
+    "non-interactive mode (--json or non-TTY stdin).\n" +
+    "_brain.yaml merge is purely additive: missing schema-keys are\n" +
+    "appended, existing values stay. _BRAIN.md and\n" +
+    "_OPEN_SECOND_BRAIN.md are byte-compared against the rendered\n" +
+    "template and overwritten when they differ.\n",
   explorer:
     "usage: o2b brain explorer [--port <n>] [--vault <path>]\n" +
     "       o2b brain explorer --export <path> [--force] [--vault <path>]\n" +
@@ -1999,6 +2364,10 @@ export async function handleBrainSubcommand(
         return await cmdBrainImportSession(rest);
       case "merge":
         return await cmdBrainMerge(rest);
+      case "upgrade":
+        return await cmdBrainUpgrade(rest);
+      case "export":
+        return await cmdBrainExport(rest);
       case "explorer":
         return await cmdBrainExplorer(rest);
       default:

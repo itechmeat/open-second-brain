@@ -62,6 +62,17 @@
   ul.edge-list li { padding: 2px 0; }
   ul.edge-list .kind { color: var(--muted); font-size: 11px; }
   button.id-copy { font-size: 11px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); cursor: pointer; }
+  /* §14 polish: keyboard-accessible node listbox. The canvas remains
+     the visual surface; this listbox is the accessible source of
+     truth so screen readers and keyboard-only operators can
+     navigate the graph. */
+  #node-list { list-style: none; margin: 0 0 6px 0; padding: 0; max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+  #node-list li { padding: 4px 8px; cursor: pointer; font-size: 12px; border-bottom: 1px solid transparent; }
+  #node-list li .topic { color: var(--muted); font-size: 11px; margin-right: 4px; }
+  #node-list li[aria-selected="true"] { background: var(--accent); color: #fff; }
+  #node-list li[aria-selected="true"] .topic { color: rgba(255,255,255,0.85); }
+  #node-list:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #node-list-empty { padding: 6px 8px; color: var(--muted); font-style: italic; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -90,7 +101,19 @@
   <canvas id="canvas"></canvas>
 </main>
 <aside id="details" class="right">
-  <p class="panel-empty">Select a node to inspect.</p>
+  <h3>Nodes</h3>
+  <ul
+    id="node-list"
+    role="listbox"
+    tabindex="0"
+    aria-label="Brain preferences"
+    aria-activedescendant=""
+  ></ul>
+  <button id="reset-layout" type="button" class="id-copy">Reset layout</button>
+  <hr />
+  <div id="details-body">
+    <p class="panel-empty">Select a node to inspect.</p>
+  </div>
 </aside>
 
 <script type="application/json" id="brain-data">__GRAPH_JSON__</script>
@@ -103,7 +126,7 @@
   try {
     graph = JSON.parse(dataEl.textContent);
   } catch (e) {
-    document.getElementById("details").textContent = "Failed to parse graph data: " + e.message;
+    document.getElementById("details-body").textContent = "Failed to parse graph data: " + e.message;
     return;
   }
 
@@ -151,6 +174,35 @@
   const statusFilters = new Set(["confirmed", "unconfirmed", "quarantine", "retired"]);
   let searchTerm = "";
 
+  // §14 polish: layout + filter persistence (localStorage). Per-vault
+  // key so multiple explorer tabs against different vaults stay
+  // separate. Stored shape:
+  //   { schema: 1, positions: { id: [x, y] }, filters: { status: [...], search: string } }
+  // Failures (private mode, quota, malformed JSON) degrade silently
+  // to a non-persistent session.
+  const STORAGE_KEY =
+    "osb-explorer-layout:" + (graph.vault_basename || "default");
+  const STORAGE_SCHEMA = 1;
+  let storedLayout = null;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw !== null) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.schema === STORAGE_SCHEMA) storedLayout = parsed;
+    }
+  } catch (e) {
+    storedLayout = null;
+  }
+  if (storedLayout && storedLayout.filters) {
+    if (Array.isArray(storedLayout.filters.status)) {
+      statusFilters.clear();
+      for (const s of storedLayout.filters.status) statusFilters.add(s);
+    }
+    if (typeof storedLayout.filters.search === "string") {
+      searchTerm = storedLayout.filters.search;
+    }
+  }
+
   // ---- Layout -----------------------------------------------------------
   function placeInitial() {
     const w = canvas.width;
@@ -172,6 +224,54 @@
       n.x = t.x + (Math.random() - 0.5) * 80;
       n.y = t.y + (Math.random() - 0.5) * 80;
     }
+    // Overlay stored positions on top of the topic-based seed. New
+    // nodes (no entry in the stored map) keep their topic-anchored
+    // placement; previously-seen nodes warm-start to the last
+    // observed location so the layout no longer "jumps" between
+    // reloads. We zero velocity so the physics relaxes from rest.
+    if (storedLayout && storedLayout.positions) {
+      for (const n of nodes) {
+        const stored = storedLayout.positions[n.id];
+        if (Array.isArray(stored) && stored.length === 2
+            && Number.isFinite(stored[0]) && Number.isFinite(stored[1])) {
+          n.x = stored[0];
+          n.y = stored[1];
+          n.vx = 0;
+          n.vy = 0;
+        }
+      }
+    }
+  }
+
+  function saveLayout() {
+    try {
+      const positions = {};
+      for (const n of nodes) {
+        if (Number.isFinite(n.x) && Number.isFinite(n.y)) {
+          positions[n.id] = [Math.round(n.x * 10) / 10, Math.round(n.y * 10) / 10];
+        }
+      }
+      const payload = {
+        schema: STORAGE_SCHEMA,
+        positions,
+        filters: {
+          status: Array.from(statusFilters),
+          search: searchTerm,
+        },
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    } catch (e) {
+      // Quota or disabled storage — non-persistent session.
+    }
+  }
+
+  let saveTimer = null;
+  function scheduleSave(delayMs) {
+    if (saveTimer !== null) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      saveLayout();
+    }, delayMs);
   }
 
   const K_TOPIC = 0.006;
@@ -313,7 +413,7 @@
   }
 
   function renderPanel(n) {
-    const root = document.getElementById("details");
+    const root = document.getElementById("details-body");
     if (!n) {
       root.innerHTML = '<p class="panel-empty">Select a node to inspect.</p>';
       return;
@@ -358,6 +458,119 @@
         || n.id.toLowerCase().includes(term);
       n.visible = statusOk && textOk;
     }
+    rebuildVisibleSorted();
+    scheduleListRender();
+  }
+
+  // ---- Listbox (keyboard-accessible mirror of the canvas) --------------
+  // The visible nodes are also presented as a focusable <ul role="listbox">.
+  // Pointer users keep the canvas; keyboard and screen reader users get
+  // the listbox. Both surfaces call `selectNode(id)` so state stays in
+  // lockstep across input devices.
+  // `visibleSortedCache` is rebuilt by `applyFilters` and consumed by
+  // `renderNodeList` / `moveListboxFocus` — saves an O(N log N) sort
+  // on every Arrow key on large vaults.
+  let visibleSortedCache = [];
+  let renderNodeListPending = false;
+
+  function escHtml(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+    }[c]));
+  }
+
+  function rebuildVisibleSorted() {
+    visibleSortedCache = nodes
+      .filter((n) => n.visible)
+      .slice()
+      .sort((a, b) => {
+        const t = a.topic.localeCompare(b.topic);
+        return t !== 0 ? t : a.id.localeCompare(b.id);
+      });
+  }
+
+  function renderNodeList() {
+    const list = document.getElementById("node-list");
+    const visible = visibleSortedCache;
+    if (visible.length === 0) {
+      list.innerHTML = '<li id="node-list-empty">No matching nodes.</li>';
+      list.setAttribute("aria-activedescendant", "");
+      return;
+    }
+    list.innerHTML = visible
+      .map((n) => {
+        const selected = n.id === selectedId ? ' aria-selected="true"' : ' aria-selected="false"';
+        const title = n.principle.length > 80 ? n.principle.slice(0, 77) + "..." : n.principle;
+        return (
+          '<li role="option" id="node-opt-' + escHtml(n.id) + '"' + selected +
+          ' data-node-id="' + escHtml(n.id) + '">' +
+          '<span class="topic">' + escHtml(n.topic) + '</span>' +
+          escHtml(title) +
+          '</li>'
+        );
+      })
+      .join("");
+    list.setAttribute(
+      "aria-activedescendant",
+      selectedId ? "node-opt-" + selectedId : "",
+    );
+    // Bind per-item click handlers via event delegation (cheap and
+    // survives the full re-render above).
+    list.onclick = (ev) => {
+      const li = ev.target.closest("li[data-node-id]");
+      if (!li) return;
+      selectNode(li.getAttribute("data-node-id"));
+    };
+  }
+
+  // Defer the listbox rebuild to the next animation frame so a held-
+  // down filter key only re-renders the <ul> once per paint instead
+  // of per keystroke. The canvas-side render is on its own rAF loop
+  // and is unaffected.
+  function scheduleListRender() {
+    if (renderNodeListPending) return;
+    renderNodeListPending = true;
+    requestAnimationFrame(() => {
+      renderNodeListPending = false;
+      renderNodeList();
+    });
+  }
+
+  function selectNode(id) {
+    selectedId = id || null;
+    const n = id ? nodeById.get(id) : null;
+    renderPanel(n);
+    // Mirror selection into the listbox without rebuilding the full
+    // DOM (cheaper, preserves scroll position).
+    const list = document.getElementById("node-list");
+    for (const li of list.querySelectorAll('li[data-node-id]')) {
+      li.setAttribute("aria-selected", li.getAttribute("data-node-id") === id ? "true" : "false");
+    }
+    list.setAttribute("aria-activedescendant", id ? "node-opt-" + id : "");
+    if (id) {
+      const focused = list.querySelector('li[data-node-id="' + id + '"]');
+      if (focused && focused.scrollIntoView) {
+        focused.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }
+
+  function moveListboxFocus(delta) {
+    const visible = visibleSortedCache;
+    if (visible.length === 0) return;
+    const cur = selectedId
+      ? visible.findIndex((n) => n.id === selectedId)
+      : -1;
+    let next;
+    if (cur === -1) {
+      next = delta > 0 ? 0 : visible.length - 1;
+    } else {
+      next = (cur + delta + visible.length) % visible.length;
+    }
+    selectNode(visible[next].id);
   }
 
   // ---- Wire up DOM events ----------------------------------------------
@@ -380,13 +593,66 @@
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
     const n = findNode(x, y);
-    selectedId = n ? n.id : null;
-    renderPanel(n);
+    selectNode(n ? n.id : null);
   });
 
-  document.getElementById("search").addEventListener("input", (e) => {
+  // §14 polish: keyboard handlers on the listbox. The listbox is
+  // `tabindex="0"`, so it joins the natural tab order after the
+  // search input.
+  const nodeList = document.getElementById("node-list");
+  nodeList.addEventListener("keydown", (e) => {
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        moveListboxFocus(+1);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        moveListboxFocus(-1);
+        break;
+      case "Home":
+        e.preventDefault();
+        if (visibleSortedCache.length > 0) {
+          selectNode(visibleSortedCache[0].id);
+        }
+        break;
+      case "End":
+        e.preventDefault();
+        if (visibleSortedCache.length > 0) {
+          selectNode(visibleSortedCache[visibleSortedCache.length - 1].id);
+        }
+        break;
+      case "Enter":
+      case " ":
+        // Enter / Space commit on the currently focused option. The
+        // visual / panel state already follows focus, so this is a
+        // no-op when something is already selected — but we keep the
+        // explicit handler so screen-readers announce the commit.
+        e.preventDefault();
+        if (selectedId) selectNode(selectedId);
+        break;
+      case "Escape":
+        e.preventDefault();
+        selectNode(null);
+        break;
+      default:
+        break;
+    }
+  });
+
+  // Hydrate the search box and status checkboxes from stored filters
+  // before wiring listeners — otherwise the first reload still flashes
+  // the unchecked default.
+  const searchInput = document.getElementById("search");
+  searchInput.value = searchTerm;
+  for (const cb of document.querySelectorAll(".status-filter")) {
+    cb.checked = statusFilters.has(cb.value);
+  }
+
+  searchInput.addEventListener("input", (e) => {
     searchTerm = e.target.value;
     applyFilters();
+    scheduleSave(500);
   });
   for (const cb of document.querySelectorAll(".status-filter")) {
     cb.addEventListener("change", (e) => {
@@ -394,16 +660,56 @@
       if (e.target.checked) statusFilters.add(v);
       else statusFilters.delete(v);
       applyFilters();
+      scheduleSave(500);
     });
   }
+
+  // Reset layout button: clears the persisted state and reloads so
+  // physics seeds from `placeInitial` instead of the stored coords.
+  document.getElementById("reset-layout").addEventListener("click", () => {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (e) {
+      // No-op: nothing to clear in non-persistent mode.
+    }
+    location.reload();
+  });
+
+  // Flush on tab close / reload. `pagehide` is the cross-browser
+  // best-effort hook; `beforeunload` is intentionally avoided
+  // because it triggers the browser's "leave site?" prompt under
+  // some configurations.
+  window.addEventListener("pagehide", saveLayout);
 
   // ---- Boot ------------------------------------------------------------
   resizeCanvas();
   placeInitial();
+  applyFilters();
 
+  // Persist the layout once after each settle. `unsavedMotion`
+  // latches true whenever any visible node has non-trivial velocity
+  // and resets only after `saveLayout` runs; otherwise an idle graph
+  // would JSON.stringify-and-write every 250 ms forever.
+  let settleSavedAt = -Infinity;
+  let unsavedMotion = true;
   function frame() {
     step();
     render();
+    const now = performance.now();
+    if (now - settleSavedAt > 250) {
+      let totalV = 0;
+      for (const n of nodes) {
+        if (!n.visible) continue;
+        const v = Math.abs(n.vx) + Math.abs(n.vy);
+        if (v > 0.05) unsavedMotion = true;
+        totalV += v;
+      }
+      if (totalV < 0.5 && unsavedMotion) {
+        settleSavedAt = now;
+        unsavedMotion = false;
+        saveLayout();
+      }
+    }
     requestAnimationFrame(frame);
   }
   frame();

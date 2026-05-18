@@ -74,6 +74,7 @@ describe("brain --help", () => {
     expect(r.stdout).toContain("unpin");
     expect(r.stdout).toContain("rollback");
     expect(r.stdout).toContain("doctor");
+    expect(r.stdout).toContain("upgrade");
   });
 
   test("unknown verb exits 2 and lists known verbs", async () => {
@@ -919,7 +920,188 @@ describe("brain rollback", () => {
         n.endsWith(".md"),
       ).length,
     ).toBeGreaterThanOrEqual(1);
-    // 4. Rollback to the snapshot.
+    // 4. Rollback to the snapshot. State B drifted (a new signal
+    // landed after the snapshot), so v0.10.6 rollback requires
+    // --force-rollback to overwrite the live tree.
+    const r = await runCli(
+      [
+        "brain",
+        "rollback",
+        "--vault",
+        vault,
+        dpayload.run_id,
+        "--yes",
+        "--force-rollback",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("restored:");
+  });
+
+  test("aborts on drift without --force-rollback (§5-tail)", async () => {
+    await bootstrap();
+    // State A: one signal.
+    await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "drift-a",
+        "--signal",
+        "positive",
+        "--principle",
+        "p",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const dr = await runCli(
+      ["brain", "dream", "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const dpayload = JSON.parse(dr.stdout) as { run_id: string; changed: boolean };
+    if (!dpayload.changed) return;
+
+    // Drift: second signal lands after the snapshot.
+    await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "drift-b",
+        "--signal",
+        "positive",
+        "--principle",
+        "p",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const r = await runCli(
+      [
+        "brain",
+        "rollback",
+        "--vault",
+        vault,
+        dpayload.run_id,
+        "--yes",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("Drift detected");
+    expect(r.stderr).toContain("--force-rollback");
+  });
+
+  test("--json drift abort emits structured payload", async () => {
+    await bootstrap();
+    await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "drift-json-a",
+        "--signal",
+        "positive",
+        "--principle",
+        "p",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const dr = await runCli(
+      ["brain", "dream", "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const dpayload = JSON.parse(dr.stdout) as { run_id: string; changed: boolean };
+    if (!dpayload.changed) return;
+
+    await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "drift-json-b",
+        "--signal",
+        "positive",
+        "--principle",
+        "p",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const r = await runCli(
+      [
+        "brain",
+        "rollback",
+        "--vault",
+        vault,
+        dpayload.run_id,
+        "--yes",
+        "--json",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(2);
+    const payload = JSON.parse(r.stdout) as {
+      run_id: string;
+      drift: boolean;
+      added: string[];
+      removed: string[];
+      changed: string[];
+    };
+    expect(payload.run_id).toBe(dpayload.run_id);
+    expect(payload.drift).toBe(true);
+  });
+
+  test("legacy snapshot without sidecar warns and proceeds", async () => {
+    await bootstrap();
+    await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "legacy-a",
+        "--signal",
+        "positive",
+        "--principle",
+        "p",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const dr = await runCli(
+      ["brain", "dream", "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const dpayload = JSON.parse(dr.stdout) as { run_id: string; changed: boolean };
+    if (!dpayload.changed) return;
+
+    // Simulate a pre-v0.10.6 snapshot: archive with no manifest.
+    const sidecar = join(
+      vault,
+      "Brain",
+      ".snapshots",
+      `${dpayload.run_id}.manifest.json`,
+    );
+    rmSync(sidecar, { force: true });
+
     const r = await runCli(
       [
         "brain",
@@ -932,7 +1114,8 @@ describe("brain rollback", () => {
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
-    expect(r.stdout).toContain("restored:");
+    expect(r.stderr).toContain("no manifest sidecar");
+    expect(r.stderr).toContain("predates v0.10.6");
   });
 });
 

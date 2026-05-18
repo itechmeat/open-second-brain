@@ -308,4 +308,43 @@ describe("renderExportedHtml", () => {
     const node = parsed.nodes.find((n: { id: string }) => n.id === "pref-script-close");
     expect(node.principle).toBe("Never let </script><script>bad()</script> split the data block");
   });
+
+  // §14 polish (v0.10.6) — the keyboard-accessible listbox markup and
+  // localStorage hooks must travel with every exported HTML body.
+  // These tests guard against accidental DOM removal during future
+  // template edits.
+  test("template ships keyboard-accessible listbox markup", () => {
+    writePreference(vault, basePref("a11y"));
+    const html = renderExportedHtml(collectExplorerData(vault));
+    expect(html).toContain('id="node-list"');
+    expect(html).toContain('role="listbox"');
+    expect(html).toContain('aria-activedescendant=""');
+    expect(html).toContain('id="reset-layout"');
+    expect(html).toContain('id="details-body"');
+  });
+
+  test("template wires localStorage layout persistence", () => {
+    writePreference(vault, basePref("store"));
+    const html = renderExportedHtml(collectExplorerData(vault));
+    expect(html).toContain("osb-explorer-layout:");
+    expect(html).toContain("STORAGE_KEY");
+    expect(html).toContain("saveLayout");
+  });
+
+  // Smoke guard against the v0.10.6 regression where the simplify
+  // pass dropped `focusedNodeId` and `visibleNodesSorted()` but left
+  // the keyboard-handler callsites pointing at them (Home / End /
+  // Enter / Space threw ReferenceError at runtime). Without a JS
+  // execution test, this regex check is the cheapest way to keep
+  // the rename honest.
+  test("keyboard handlers reference only live identifiers", () => {
+    writePreference(vault, basePref("kb"));
+    const html = renderExportedHtml(collectExplorerData(vault));
+    expect(html).not.toContain("visibleNodesSorted(");
+    expect(html).not.toContain("focusedNodeId");
+    // The cache + canonical selection variable must both be present
+    // because the handlers consume them.
+    expect(html).toContain("visibleSortedCache");
+    expect(html).toContain("selectedId");
+  });
 });
