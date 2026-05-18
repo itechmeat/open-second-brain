@@ -211,8 +211,9 @@ describe("stop-log-guardrail hook", () => {
   });
 
   test("Claude Code transcript path adds the claudecode cadence line", async () => {
+    // Reuse the per-test `tmp` so afterEach cleans this up too.
     const transcript_path = join(
-      mkdtempSync(join(tmpdir(), "o2b-hook-stop-claude-")),
+      tmp,
       ".claude",
       "projects",
       "session.jsonl",
@@ -236,8 +237,9 @@ describe("stop-log-guardrail hook", () => {
   });
 
   test("Codex transcript path adds the codex cadence line", async () => {
+    // Reuse the per-test `tmp` so afterEach cleans this up too.
     const transcript_path = join(
-      mkdtempSync(join(tmpdir(), "o2b-hook-stop-codex-")),
+      tmp,
       ".codex",
       "sessions",
       "session.jsonl",

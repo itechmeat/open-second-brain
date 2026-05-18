@@ -209,6 +209,8 @@ export function mergePreferences(
       confidence_value: keep.confidence_value,
       pinned: keep.pinned,
       ...(keep.scope ? { scope: keep.scope } : {}),
+      ...(keep.supersedes ? { supersedes: keep.supersedes } : {}),
+      ...(keep.aliases ? { aliases: keep.aliases } : {}),
     },
     { overwrite: true },
   );

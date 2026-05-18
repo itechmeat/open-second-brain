@@ -157,6 +157,8 @@ describe("o2b brain explorer (live)", () => {
     seedOnePref();
     const port = pickPort();
     // Spawn the CLI manually so we can poll the server and send SIGINT.
+    // `cwd: process.cwd()` instead of a hard-coded path so the test
+    // works from any checkout (CI, local clone, contributor laptop).
     const isolatedConfig = config;
     const proc = Bun.spawn(
       [
@@ -166,42 +168,48 @@ describe("o2b brain explorer (live)", () => {
         "--port", String(port),
       ],
       {
-        cwd: "/srv/projects/open-second-brain",
+        cwd: process.cwd(),
         env: { ...process.env, OPEN_SECOND_BRAIN_CONFIG: isolatedConfig },
         stdout: "pipe",
         stderr: "pipe",
       },
     );
-    // Wait up to ~3s for the server to come up.
-    let up = false;
-    let mainBody = "";
-    let dataBody = "";
-    for (let i = 0; i < 30; i++) {
-      await new Promise((res) => setTimeout(res, 100));
-      try {
-        const r = await fetch(`http://127.0.0.1:${port}/`);
-        if (r.ok) {
-          mainBody = await r.text();
-          const d = await fetch(`http://127.0.0.1:${port}/data.json`);
-          dataBody = await d.text();
-          up = true;
-          break;
+    try {
+      // Wait up to ~3s for the server to come up.
+      let up = false;
+      let mainBody = "";
+      let dataBody = "";
+      for (let i = 0; i < 30; i++) {
+        await new Promise((res) => setTimeout(res, 100));
+        try {
+          const r = await fetch(`http://127.0.0.1:${port}/`);
+          if (r.ok) {
+            mainBody = await r.text();
+            const d = await fetch(`http://127.0.0.1:${port}/data.json`);
+            dataBody = await d.text();
+            up = true;
+            break;
+          }
+        } catch {
+          // ECONNREFUSED while booting — keep waiting.
         }
+      }
+      expect(up).toBe(true);
+      expect(mainBody).toContain("Brain Explorer");
+      expect(mainBody.includes("__GRAPH_JSON__")).toBe(false);
+      const parsed = JSON.parse(dataBody);
+      expect(parsed.nodes.length).toBe(1);
+    } finally {
+      // Always tear the spawned CLI down so a failing assertion does
+      // not leak the port into the next test on the same worker.
+      try {
+        proc.kill("SIGINT");
+        await proc.exited;
       } catch {
-        // ECONNREFUSED while booting — keep waiting.
+        // process may have already exited or be in a weird state;
+        // either way nothing else for us to do here.
       }
     }
-    expect(up).toBe(true);
-    expect(mainBody).toContain("Brain Explorer");
-    expect(mainBody.includes("__GRAPH_JSON__")).toBe(false);
-    const parsed = JSON.parse(dataBody);
-    expect(parsed.nodes.length).toBe(1);
-    // Shut down.
-    proc.kill("SIGINT");
-    const exit = await proc.exited;
-    // SIGINT exit codes vary across runtimes; what matters is the
-    // process terminated cleanly within the timeout above.
-    void exit;
   });
 
   test("port in use exits 1 with a friendly message", async () => {

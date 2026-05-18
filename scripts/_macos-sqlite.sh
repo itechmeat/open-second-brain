@@ -40,10 +40,11 @@ if [[ "${_o2b_macos_platform}" != "Darwin" ]]; then
   return 0 2>/dev/null || true
 fi
 
-# Honour caller-configured DYLD_LIBRARY_PATH verbatim. The user
-# may have a tuned path (e.g. testing a custom SQLite build);
-# clobbering would be surprising.
-if [[ -n "${DYLD_LIBRARY_PATH-}" ]]; then
+# Honour caller-configured DYLD_LIBRARY_PATH verbatim — including
+# an explicit empty string (the caller is signalling "leave the
+# loader at its defaults, do not prepend anything"). Use `+set`
+# so we distinguish "unset" from "set, possibly empty".
+if [[ -n "${DYLD_LIBRARY_PATH+set}" ]]; then
   unset _o2b_macos_platform
   return 0 2>/dev/null || true
 fi

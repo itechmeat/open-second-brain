@@ -120,10 +120,12 @@ the keyword index.
 o2b search reindex --cron-template
 ```
 
-Prints a watchdog script (auto-saves to
-`~/.local/bin/osb-reindex.sh`), a native crontab line, and a
-`hermes cron create` command. Pure stdout — pick the path that
-matches the host. Recommended cadence:
+Prints a watchdog script (a heredoc that, when the operator runs
+the printed block, lands at `~/.local/bin/osb-reindex.sh`), a
+native crontab line, and a `hermes cron create` command. Pure
+stdout — the verb writes nothing on its own; pick the path that
+matches the host and paste the relevant section into your
+shell / crontab. Recommended cadence:
 
 - 30 minutes when the vault sees active multi-agent work.
 - 6 hours when changes are sporadic.

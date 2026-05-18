@@ -177,34 +177,28 @@ describe("o2b brain merge — happy paths", () => {
     ).toBe(true);
   });
 
-  test("interactive 'y' commits", async () => {
+  test("non-TTY without --force exits 1 with the TTY guard message", async () => {
+    // Subprocess stdin (pipe or stdin: undefined) is never a TTY,
+    // so the interactive prompt cannot be answered. The verb
+    // refuses to fall through to a silent "merge cancelled" — that
+    // would let automation misread the no-op as success. Same
+    // shape as `brain rollback` / `brain migrate-frontmatter`.
     await bootstrap();
     makePref("keep");
     makePref("drop");
     const r = await runCli(
       ["brain", "merge", "pref-keep", "pref-drop", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config }, stdin: "y\n" },
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
-    expect(r.returncode).toBe(0);
-    expect(r.stdout).toContain("merged:");
-    expect(
-      existsSync(join(vault, "Brain", "retired", "ret-drop.md")),
-    ).toBe(true);
-  });
-
-  test("interactive default 'N' (empty input) cancels", async () => {
-    await bootstrap();
-    makePref("keep");
-    makePref("drop");
-    const r = await runCli(
-      ["brain", "merge", "pref-keep", "pref-drop", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config }, stdin: "\n" },
-    );
-    expect(r.returncode).toBe(0);
-    expect(r.stdout).toContain("merge cancelled");
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("--force required when stdin is not a TTY");
+    // No mutation: drop still in preferences/, no retired/ entry.
     expect(
       existsSync(join(vault, "Brain", "preferences", "pref-drop.md")),
     ).toBe(true);
+    expect(
+      existsSync(join(vault, "Brain", "retired", "ret-drop.md")),
+    ).toBe(false);
     expect(
       existsSync(join(vault, "Brain", "retired", "ret-drop.md")),
     ).toBe(false);

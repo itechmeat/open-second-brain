@@ -495,6 +495,19 @@ export interface BrainMigrateFrontmatterLogEvent extends BrainLogEventBase {
   readonly run_id: string;
 }
 
+/**
+ * `merge` entry — operator ran `o2b brain merge <keep> <drop>`.
+ * Payload carries the titled wikilinks to both prefs plus the
+ * union-size of `evidenced_by` and the summed counters as raw
+ * integers for audit grepping.
+ */
+export interface BrainMergeLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.merge;
+  readonly keep: string;
+  readonly drop: string;
+  readonly agent: string;
+}
+
 /** Discriminated union of every concrete log event type. */
 export type BrainLogEvent =
   | BrainDreamLogEvent
@@ -511,7 +524,8 @@ export type BrainLogEvent =
   | BrainRollbackLogEvent
   | BrainScanInlineLogEvent
   | BrainImportSessionLogEvent
-  | BrainMigrateFrontmatterLogEvent;
+  | BrainMigrateFrontmatterLogEvent
+  | BrainMergeLogEvent;
 
 // ----- Configuration (`Brain/_brain.yaml`) ----------------------------------
 

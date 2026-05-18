@@ -801,14 +801,16 @@ async function cmdBrainMerge(argv: string[]): Promise<number> {
   const dryRun = flags["dry-run"] === true;
   const force = flags["force"] === true;
   const wantJson = flags["json"] === true;
-  const now = new Date();
 
   // Plan first via dryRun so the prompt shows real numbers without
   // touching disk. A second call commits when the operator agrees.
+  // Each `mergePreferences` invocation takes its own fresh timestamp
+  // so the commit reflects when it ran (the operator may take a
+  // long time to confirm at the prompt below).
   let plan: MergePlan;
   try {
     plan = mergePreferences(vault, keepId, dropId, {
-      now,
+      now: new Date(),
       agentName: agent,
       dryRun: true,
     });
@@ -848,6 +850,16 @@ async function cmdBrainMerge(argv: string[]): Promise<number> {
         "brain merge: --json without --force is not supported (interactive prompt cannot render)",
       );
     }
+    // Non-TTY stdin can only "answer" the prompt with EOF, which we
+    // would interpret as N → exit 0 "merge cancelled". For
+    // automation that path is misleading (looks like an intentional
+    // no-op). Require `--force` instead, same shape as rollback /
+    // migrate-frontmatter guards.
+    if (!process.stdin.isTTY) {
+      return fail(
+        "brain merge: --force required when stdin is not a TTY (cannot prompt for confirmation)",
+      );
+    }
     for (const line of planLines) process.stderr.write(line + "\n");
     process.stderr.write("Proceed? [y/N] ");
     const ans = (await readSingleLine()).toLowerCase();
@@ -859,7 +871,7 @@ async function cmdBrainMerge(argv: string[]): Promise<number> {
 
   try {
     mergePreferences(vault, keepId, dropId, {
-      now,
+      now: new Date(),
       agentName: agent,
     });
   } catch (exc) {
@@ -1910,8 +1922,8 @@ const VERB_HELP: Record<string, string> = {
     "graph. Press Ctrl+C to stop.\n" +
     "Export mode: write the same view as a single offline HTML file at\n" +
     "<path>. Without --force, refuses to overwrite an existing file.\n" +
-    "Zero backend, no LLM, no network access. Markdown is parsed in the\n" +
-    "browser.\n",
+    "Zero backend, no LLM, no network access. The page consumes a\n" +
+    "prebuilt JSON graph; it does not parse vault Markdown client-side.\n",
 };
 
 // ── Public entry point ──────────────────────────────────────────────────────

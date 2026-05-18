@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   buildBacklinkIndex,
@@ -230,7 +230,7 @@ describe("collectExplorerData", () => {
 
   test("vault_basename equals the last path segment", () => {
     const g = collectExplorerData(vault);
-    expect(g.vault_basename).toBe(vault.split("/").pop()!);
+    expect(g.vault_basename).toBe(basename(vault));
   });
 
   test("stable ordering: nodes by (kind, id); edges by (source, target, kind)", () => {

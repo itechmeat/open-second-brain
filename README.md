@@ -233,9 +233,10 @@ o2b brain digest --vault /path/to/vault --silent-if-empty
 ```
 
 The Brain verbs in full: `init`, `feedback`, `dream`,
-`apply-evidence`, `digest`, `query`, `reject`, `pin`, `unpin`,
-`set-primary`, `snapshot diff`, `rollback`, `doctor`, `backlinks`,
-`scan-inline`, `import-session`, `migrate-frontmatter`. Seven are
+`apply-evidence`, `digest`, `query`, `reject`, `merge`, `pin`,
+`unpin`, `set-primary`, `protect`, `unprotect`, `snapshot diff`,
+`rollback`, `doctor`, `backlinks`, `scan-inline`,
+`import-session`, `migrate-frontmatter`, `explorer`. Seven are
 mirrored as MCP tools (`brain_*`); the rest are intentionally
 CLI-only because they change the protected set, overwrite vault
 state, or are operator-only maintenance commands.

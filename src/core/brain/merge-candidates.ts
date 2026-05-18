@@ -64,6 +64,16 @@ export function findMergeCandidates(
 ): ReadonlyArray<MergeCandidate> {
   const threshold = opts.threshold ?? JACCARD_MERGE_SUGGEST_THRESHOLD;
   const limit = opts.limit ?? MERGE_SUGGESTION_LIMIT;
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    throw new RangeError(
+      `findMergeCandidates: threshold must be a finite number in [0, 1]; got ${String(threshold)}`,
+    );
+  }
+  if (!Number.isInteger(limit) || limit < 0) {
+    throw new RangeError(
+      `findMergeCandidates: limit must be a non-negative integer; got ${String(limit)}`,
+    );
+  }
   const prefs = opts.preferences ?? readPreferences(vault);
 
   const entries = [];

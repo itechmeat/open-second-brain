@@ -93,7 +93,7 @@ These apply to every task; do not re-state per step.
 
 ## File map
 
-New files (count: 8):
+New files (count: 12):
 
 ```
 docs/plans/2026-05-18-brain-maturity-impl.md             # this file
@@ -110,7 +110,7 @@ tests/core/brain/explorer.test.ts                        # §14
 tests/cli/brain-explorer.test.ts                         # §14
 ```
 
-Modified files (count: 10):
+Modified files (count: 15):
 
 ```
 src/core/brain/doctor.ts                                 # §12 import from similarity.ts
