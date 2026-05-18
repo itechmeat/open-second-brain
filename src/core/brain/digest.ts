@@ -39,6 +39,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { backlinkCount, buildBacklinkIndex } from "./backlinks.ts";
+import { findMergeCandidates } from "./merge-candidates.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
 import { normaliseWikilinkTarget, renderPrefLink } from "./wikilink.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
@@ -164,6 +165,21 @@ export interface DigestJsonTopReferenced {
   readonly backlink_count: number;
 }
 
+/**
+ * Near-duplicate pair surfaced for operator review. Detected by
+ * `findMergeCandidates`. Reflects current vault state, not windowed
+ * change — does not gate the `isEmpty` predicate.
+ */
+export interface DigestJsonMergeSuggestion {
+  readonly a: string;
+  readonly b: string;
+  readonly principle_a: string;
+  readonly principle_b: string;
+  readonly topic: string;
+  readonly scope: string | null;
+  readonly jaccard: number;
+}
+
 export interface DigestJson {
   readonly schema_version: 1;
   readonly generated_at: string;
@@ -183,6 +199,7 @@ export interface DigestJson {
   readonly contradictions: ReadonlyArray<DigestJsonContradiction>;
   readonly top_applied: ReadonlyArray<DigestJsonTopApplied>;
   readonly top_referenced: ReadonlyArray<DigestJsonTopReferenced>;
+  readonly merge_suggestions: ReadonlyArray<DigestJsonMergeSuggestion>;
 }
 
 /**
@@ -235,6 +252,7 @@ export function renderDigest(
       contradictions: data.contradictions,
       top_applied: data.top_applied,
       top_referenced: data.top_referenced,
+      merge_suggestions: data.merge_suggestions,
     };
     return Object.freeze({
       content: JSON.stringify(payload, null, 2) + "\n",
@@ -259,6 +277,7 @@ interface DigestData {
   readonly contradictions: ReadonlyArray<DigestJsonContradiction>;
   readonly top_applied: ReadonlyArray<DigestJsonTopApplied>;
   readonly top_referenced: ReadonlyArray<DigestJsonTopReferenced>;
+  readonly merge_suggestions: ReadonlyArray<DigestJsonMergeSuggestion>;
 }
 
 function collectDigestData(
@@ -344,6 +363,25 @@ function collectDigestData(
 
   const top_applied = pickTopApplied(preferences);
   const top_referenced = pickTopReferenced(vault, preferences);
+  // `merge_suggestions` reflects current vault state, not windowed
+  // change. It is independent of `since`/`until` on purpose —
+  // operators should see pending duplicates regardless of the digest
+  // window. Excluded from `isEmpty` for the same reason.
+  // Reuse the already-parsed preferences from the digest scan
+  // instead of asking the detector to walk `Brain/preferences/`
+  // a second time. Same on-disk state, single read.
+  const preferenceObjects = preferences.map(({ pref }) => pref);
+  const merge_suggestions = findMergeCandidates(vault, {
+    preferences: preferenceObjects,
+  }).map((c) => ({
+    a: c.a,
+    b: c.b,
+    principle_a: c.principle_a,
+    principle_b: c.principle_b,
+    topic: c.topic,
+    scope: c.scope,
+    jaccard: c.jaccard,
+  }));
 
   return {
     new_unconfirmed,
@@ -353,6 +391,7 @@ function collectDigestData(
     contradictions,
     top_applied,
     top_referenced,
+    merge_suggestions,
   };
 }
 
@@ -742,6 +781,18 @@ function renderMarkdown(
       const scope = item.scope ?? "—";
       lines.push(
         `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${item.backlink_count} inbound`,
+      );
+    }
+    lines.push("");
+  }
+  if (data.merge_suggestions.length > 0) {
+    lines.push(`## Merge suggestions (${data.merge_suggestions.length})`, "");
+    for (const item of data.merge_suggestions) {
+      const scope = item.scope ?? "—";
+      lines.push(
+        `- ${renderPrefLink({ id: item.a, principle: item.principle_a })}`
+        + ` ≈ ${renderPrefLink({ id: item.b, principle: item.principle_b })}`
+        + ` — topic '${item.topic}', scope ${scope}, jaccard ${item.jaccard.toFixed(2)}`,
       );
     }
     lines.push("");

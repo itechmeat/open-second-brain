@@ -32,6 +32,10 @@ import type {
   SearchOutcome,
 } from "../core/search/index.ts";
 import { CliError, parseFlags } from "./argparse.ts";
+import {
+  CronTemplateError,
+  renderCronTemplate,
+} from "./search-cron-template.ts";
 
 const KNOWN_VERBS = new Set(["query", "index", "reindex", "status", "check"]);
 
@@ -293,7 +297,23 @@ async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
     concurrency: { type: "string" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
+    "cron-template": { type: "boolean" },
+    interval: { type: "string" },
   });
+  if (flags["cron-template"] === true) {
+    const intervalRaw = (flags["interval"] as string | undefined) ?? "30m";
+    try {
+      const body = renderCronTemplate(intervalRaw);
+      process.stdout.write(body);
+      return 0;
+    } catch (err) {
+      if (err instanceof CronTemplateError) {
+        process.stderr.write(`error: ${err.message}\n`);
+        return 1;
+      }
+      throw err;
+    }
+  }
   const cfg = resolveConfig(flags);
   const stats = await reindexVault(cfg, {
     embeddings: flags["embeddings"] === true,
@@ -400,6 +420,7 @@ function jsonForCheck(r: IndexCheckReport): unknown {
     provider_reason: r.providerReason,
     warnings: r.warnings,
     fatal: r.fatal,
+    recommendations: r.recommendations,
   };
 }
 
@@ -418,5 +439,10 @@ function renderCheckHuman(r: IndexCheckReport): string {
   }
   for (const w of r.warnings) lines.push(`warning: ${w}`);
   for (const f of r.fatal) lines.push(`fatal:   ${f}`);
+  if (r.recommendations.length > 0) {
+    lines.push("");
+    lines.push("recommendations:");
+    for (const rec of r.recommendations) lines.push(`  - ${rec}`);
+  }
   return lines.join("\n") + "\n";
 }

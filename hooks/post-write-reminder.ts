@@ -25,7 +25,7 @@
  */
 
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
-import { isArtifactToolName } from "./lib/detect.ts";
+import { detectHookRuntime, isArtifactToolName } from "./lib/detect.ts";
 import { postWriteReminder } from "./lib/messages.ts";
 
 async function main(): Promise<void> {
@@ -47,7 +47,8 @@ async function main(): Promise<void> {
   if (isToolResponseError(payload.tool_response)) return;
 
   const filePath = extractFilePath(payload.tool_input);
-  const text = postWriteReminder({ toolName, filePath });
+  const runtime = detectHookRuntime(payload);
+  const text = postWriteReminder({ toolName, filePath, runtime });
 
   const out = {
     hookSpecificOutput: {

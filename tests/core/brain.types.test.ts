@@ -46,6 +46,7 @@ describe("BRAIN_* const enums", () => {
     expect(BRAIN_RETIRED_REASON.userRejected).toBe("user-rejected");
     expect(BRAIN_RETIRED_REASON.quarantineViolated).toBe("quarantine-violated");
     expect(BRAIN_RETIRED_REASON.supersededByContext).toBe("superseded-by-context");
+    expect(BRAIN_RETIRED_REASON.mergedInto).toBe("merged-into");
   });
 
   test("BRAIN_APPLY_RESULT values", () => {
@@ -73,6 +74,8 @@ describe("BRAIN_* const enums", () => {
       "scan-inline",
       "import-session",
       "migrate-frontmatter",
+      // §12 merge (v0.10.5)
+      "merge",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

@@ -113,6 +113,28 @@ o2b brain apply-evidence \
 - Do not write into `Brain/.snapshots/` or `Brain/retired/` directly — those are managed by `dream` and `o2b brain reject` only.
 - `o2b brain reject` requires `--reason <text>` from v0.10.1 onward. The reason is persisted on the retired file as `user_rejected_reason`. The next dream pass will mark any future signal on the same `(topic, scope)` as `signal-suppressed` and move it straight to `processed/` — do not re-record the same signal hoping it will re-grow into a preference. If you genuinely disagree with a past reject, raise it with the user; do not route around it via `brain_feedback`.
 
+## Examples — good vs bad
+
+These four pairs calibrate what makes a recorded signal useful versus
+noise. The form of the entry matters as much as the timing — a vague
+`principle` clogs the dream pass; a precise one trains it.
+
+**Bad:** `principle: "Write good commits"`
+**Good:** `principle: "Use imperative voice in commit subjects; describe what the commit does, not what was done"`
+*Why:* the bad form is unenforceable — no future signal can reasonably mark an artifact as "applied" or "violated" against it. The good form names a checkable behaviour.
+
+**Bad:** `principle: "Be careful with secrets"`
+**Good:** `principle: "Do not commit .env, credentials, or API keys; route them through environment variables"`
+*Why:* the bad form is a vibe. The good form gives the agent a concrete list of patterns to spot in a diff.
+
+**Bad:** `topic: "stuff"`
+**Good:** `topic: "no-internal-abbrev"`
+*Why:* topic is the stable bucket future signals join. A generic slug collects unrelated rules; a precise one keeps the cluster meaningful and lets `brain_query --topic <slug>` return a focused slice.
+
+**Bad:** `note: "fixed it"`
+**Good:** `note: "expanded 'OSB' to 'Open Second Brain' on first use — README diff still carried the abbreviation, would have confused a new reader"`
+*Why:* notes survive the artifact. Without the "why" line you cannot tell in three months whether a violation was a regression or a deliberate change.
+
 ## Fallback capture surfaces
 
 When no agent is in the loop at the moment the rule is formed, the

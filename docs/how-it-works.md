@@ -354,12 +354,15 @@ are mirrored in MCP; destructive operations are CLI-only by design.
 | Computed backlinks       | `o2b brain backlinks <id>` | `brain_backlinks`     | read-only; inverted reference map across `preferences/`, `retired/`, `log/` |
 | Validate invariants      | `o2b brain doctor`         | `brain_doctor`        | read-only; six lint rules |
 | Full-text search         | `o2b search "<query>"`     | `brain_search`        | read-only; FTS5 + optional semantic |
-| Manage search index      | `o2b search index \| reindex \| status \| check` | — (CLI-only) | builds / inspects `<vault>/.open-second-brain/brain.sqlite` |
+| Manage search index      | `o2b search index \| reindex \| status \| check` | — (CLI-only) | builds / inspects `<vault>/.open-second-brain/brain.sqlite`. `search check` ends with a `recommendations:` block on missing pieces (key, sqlite-vec, first reindex) |
+| Cron template for reindex | `o2b search reindex --cron-template [--interval N]` | — (CLI-only) | prints a watchdog script, native crontab line, and `hermes cron create` recipe to stdout (writes nothing) |
 | Operational snapshot     | `o2b status`               | `second_brain_status` | read-only; `brain.*` + `search.*` blocks |
 | Retire manually          | `o2b brain reject`         | — (CLI-only)          | requires `--reason "<text>"`; subsequent signals on the same topic are suppressed |
+| Merge near-duplicate prefs | `o2b brain merge <keep> <drop>` | — (CLI-only)   | folds `evidenced_by` and counters into `keep`; `drop` retires with reason `merged-into`; surfaced as candidates in `brain_digest` |
 | Toggle pin               | `o2b brain pin / unpin`    | — (CLI-only)          | flips `pinned` field; regenerates `Brain/active.md` |
 | Protect Brain/           | `o2b brain protect / unprotect` | — (CLI-only)     | machine-enforced deny rules for `claudecode` / `codex` runtimes; sidecar manifest at `.open-second-brain/protect.lock.json` |
 | Restore snapshot         | `o2b brain rollback`       | — (CLI-only)          | overwrites Brain/ from snapshot |
+| Force-directed explorer  | `o2b brain explorer [--port \| --export]` | — (CLI-only) | live HTTP on `127.0.0.1` (default `:7777`) or single-file HTML at `<path>`; renders preferences + retired as a graph; zero backend |
 
 Operations that change the **protected set** (`pin`, `unpin`,
 `reject`, `rollback`) and the **index lifecycle** (`search index`,

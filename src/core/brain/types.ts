@@ -93,6 +93,12 @@ export const BRAIN_RETIRED_REASON = {
   // convention change). Single `outdated` event is enough; the
   // evidence is interpreted as a definitive contextual rebuttal.
   supersededByContext: "superseded-by-context",
+  // Preference retired through `o2b brain merge` — counters and
+  // evidence were folded into the retained pref pointed at by
+  // `superseded_by`. Distinct from `rebutted` (opposing signals)
+  // and `superseded-by-context` (outdated evidence): merge implies
+  // no contradiction, the two rules said the same thing.
+  mergedInto: "merged-into",
 } as const;
 export type BrainRetiredReason =
   (typeof BRAIN_RETIRED_REASON)[keyof typeof BRAIN_RETIRED_REASON];
@@ -161,6 +167,12 @@ export const BRAIN_LOG_EVENT_KIND = {
    * id, snapshot path, and counters.
    */
   migrateFrontmatter: "migrate-frontmatter",
+  /**
+   * `merge` (§12) — operator ran `o2b brain merge <keep> <drop>`.
+   * Payload carries both wikilinks plus union-size of `evidenced_by`
+   * and the summed counters as raw integers for audit grepping.
+   */
+  merge: "merge",
 } as const;
 export type BrainLogEventKind =
   (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
@@ -483,6 +495,19 @@ export interface BrainMigrateFrontmatterLogEvent extends BrainLogEventBase {
   readonly run_id: string;
 }
 
+/**
+ * `merge` entry — operator ran `o2b brain merge <keep> <drop>`.
+ * Payload carries the titled wikilinks to both prefs plus the
+ * union-size of `evidenced_by` and the summed counters as raw
+ * integers for audit grepping.
+ */
+export interface BrainMergeLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.merge;
+  readonly keep: string;
+  readonly drop: string;
+  readonly agent: string;
+}
+
 /** Discriminated union of every concrete log event type. */
 export type BrainLogEvent =
   | BrainDreamLogEvent
@@ -499,7 +524,8 @@ export type BrainLogEvent =
   | BrainRollbackLogEvent
   | BrainScanInlineLogEvent
   | BrainImportSessionLogEvent
-  | BrainMigrateFrontmatterLogEvent;
+  | BrainMigrateFrontmatterLogEvent
+  | BrainMergeLogEvent;
 
 // ----- Configuration (`Brain/_brain.yaml`) ----------------------------------
 

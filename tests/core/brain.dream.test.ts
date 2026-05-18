@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { appendApplyEvidence } from "../../src/core/brain/apply-evidence.ts";
 import { dream } from "../../src/core/brain/dream.ts";
 import { parseLogDay } from "../../src/core/brain/log.ts";
+import { mergePreferences } from "../../src/core/brain/merge.ts";
 import {
   brainConfigPath,
   brainDirs,
@@ -326,6 +327,61 @@ describe("dream — unconfirmed → confirmed promotion on first applied evidenc
     expect(pref.confirmed_at).toBe("2026-05-05T10:00:00Z");
     expect(pref.applied_count).toBe(1);
     expect(pref.violated_count).toBe(0);
+    expect(pref.last_evidence_at).toBe("2026-05-05T10:00:00Z");
+  });
+
+  test("preserves evidence counts folded by brain merge", () => {
+    writePreference(vault, {
+      slug: "keep",
+      topic: "merge-evidence",
+      principle: "Keep this merged preference",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: ["[[sig-keep]]"],
+    });
+    writePreference(vault, {
+      slug: "drop",
+      topic: "merge-evidence",
+      principle: "Drop this merged preference",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      evidenced_by: ["[[sig-drop]]"],
+    });
+    appendApplyEvidence(
+      vault,
+      { pref_id: "keep", artifact: "[[k1]]", result: "applied", agent: "claude" },
+      { now: new Date("2026-05-03T10:00:00Z") },
+    );
+    appendApplyEvidence(
+      vault,
+      { pref_id: "keep", artifact: "[[k2]]", result: "applied", agent: "claude" },
+      { now: new Date("2026-05-03T11:00:00Z") },
+    );
+    appendApplyEvidence(
+      vault,
+      { pref_id: "drop", artifact: "[[d1]]", result: "applied", agent: "claude" },
+      { now: new Date("2026-05-04T10:00:00Z") },
+    );
+    appendApplyEvidence(
+      vault,
+      { pref_id: "drop", artifact: "[[d2]]", result: "violated", agent: "claude" },
+      { now: new Date("2026-05-05T10:00:00Z") },
+    );
+
+    dream(vault, { now: new Date("2026-05-06T00:00:00Z") });
+    mergePreferences(vault, "pref-keep", "pref-drop", {
+      now: new Date("2026-05-07T00:00:00Z"),
+      agentName: "test-agent",
+    });
+
+    dream(vault, { now: new Date("2026-05-08T00:00:00Z") });
+    const pref = parsePreference(preferencePath(vault, "keep"));
+    expect(pref.applied_count).toBe(3);
+    expect(pref.violated_count).toBe(1);
     expect(pref.last_evidence_at).toBe("2026-05-05T10:00:00Z");
   });
 });

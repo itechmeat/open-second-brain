@@ -55,6 +55,7 @@ import {
   parseRetired,
 } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
+import { findSimilarPairs, tokenise } from "./similarity.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
   BRAIN_PREFERENCE_STATUS,
@@ -647,8 +648,6 @@ function readAllLogRecords(vault: string): ReadonlyArray<LogRecord> {
   return out;
 }
 
-const TOKEN_STOPWORDS: ReadonlySet<string> = new Set();
-
 /**
  * `duplicate-preferences`: pairwise jaccard similarity of `principle`
  * tokens within each `(topic, scope)` bucket of confirmed/quarantine
@@ -660,13 +659,7 @@ function checkDuplicatePreferences(
   records: ReadonlyArray<PreferenceRecord>,
   issues: DoctorIssue[],
 ): void {
-  interface PrefEntry {
-    readonly id: string;
-    readonly topic: string;
-    readonly scope: string | undefined;
-    readonly tokens: ReadonlySet<string>;
-  }
-  const entries: PrefEntry[] = [];
+  const entries = [];
   for (const { pref } of records) {
     if (
       pref.status !== BRAIN_PREFERENCE_STATUS.confirmed &&
@@ -674,39 +667,26 @@ function checkDuplicatePreferences(
     ) continue;
     entries.push({
       id: pref.id,
-      topic: pref.topic,
-      scope: pref.scope,
+      // Same-scope-undefined falls in its own bucket. Mirrors the
+      // §12 merge-candidate detector exactly — both surfaces stay
+      // in sync via the shared walker.
+      bucketKey: `${pref.topic}\x00${pref.scope ?? ""}`,
       tokens: tokenise(pref.principle),
+      source: pref,
     });
   }
-  // Group by (topic, scope). Same scope-undefined falls in its own bucket.
-  const buckets = new Map<string, PrefEntry[]>();
-  for (const e of entries) {
-    const key = `${e.topic}\x00${e.scope ?? ""}`;
-    const arr = buckets.get(key) ?? [];
-    arr.push(e);
-    buckets.set(key, arr);
-  }
-  for (const [, bucket] of buckets) {
-    if (bucket.length < 2) continue;
-    for (let i = 0; i < bucket.length; i++) {
-      for (let j = i + 1; j < bucket.length; j++) {
-        const a = bucket[i]!;
-        const b = bucket[j]!;
-        const sim = jaccard(a.tokens, b.tokens);
-        if (sim >= JACCARD_DUPLICATE_THRESHOLD) {
-          issues.push({
-            severity: "warning",
-            code: "duplicate-preferences",
-            message:
-              `[[${a.id}]] and [[${b.id}]] in topic '${a.topic}'` +
-              `${a.scope ? ` (scope: ${a.scope})` : ""}` +
-              ` look like duplicates (jaccard ${sim.toFixed(2)} of principle tokens).` +
-              " Consider merging.",
-          });
-        }
-      }
-    }
+  const pairs = findSimilarPairs(entries, { threshold: JACCARD_DUPLICATE_THRESHOLD });
+  for (const pair of pairs) {
+    const a = pair.a.source;
+    issues.push({
+      severity: "warning",
+      code: "duplicate-preferences",
+      message:
+        `[[${pair.a.id}]] and [[${pair.b.id}]] in topic '${a.topic}'` +
+        `${a.scope ? ` (scope: ${a.scope})` : ""}` +
+        ` look like duplicates (jaccard ${pair.jaccard.toFixed(2)} of principle tokens).` +
+        " Consider merging.",
+    });
   }
 }
 
@@ -846,28 +826,6 @@ function checkOrphanEvidence(
       });
     }
   }
-}
-
-function tokenise(text: string): ReadonlySet<string> {
-  // Lowercase + split on whitespace + punctuation; no language-
-  // specific stopwords (Brain principles in this project are
-  // routinely multilingual and an English-only list would either
-  // under-filter or skew the similarity score on non-English text).
-  return new Set(
-    text
-      .toLowerCase()
-      .split(/[^\p{L}\p{N}_-]+/u)
-      .filter((t) => t.length > 1 && !TOKEN_STOPWORDS.has(t)),
-  );
-}
-
-function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
-  if (a.size === 0 && b.size === 0) return 0;
-  let intersection = 0;
-  for (const t of a) if (b.has(t)) intersection++;
-  const union = a.size + b.size - intersection;
-  if (union === 0) return 0;
-  return intersection / union;
 }
 
 function collectAllBasenames(vault: string): ReadonlySet<string> {

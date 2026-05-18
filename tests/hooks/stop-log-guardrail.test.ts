@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -208,5 +208,90 @@ describe("stop-log-guardrail hook", () => {
     });
     const out = JSON.parse(r.stdout);
     expect(out.decision).toBe("block");
+  });
+
+  test("Claude Code transcript path adds the claudecode cadence line", async () => {
+    // Reuse the per-test `tmp` so afterEach cleans this up too.
+    const transcript_path = join(
+      tmp,
+      ".claude",
+      "projects",
+      "session.jsonl",
+    );
+    mkdirSync(dirname(transcript_path), { recursive: true });
+    writeFileSync(
+      transcript_path,
+      [
+        ccUser("write something"),
+        ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
+      ].join("\n") + "\n",
+    );
+    const r = await runHook({
+      hook_event_name: "Stop",
+      transcript_path,
+      stop_hook_active: false,
+    });
+    const out = JSON.parse(r.stdout);
+    expect(out.decision).toBe("block");
+    expect(out.reason as string).toContain("This guardrail fires");
+  });
+
+  test("Codex transcript path adds the codex cadence line", async () => {
+    // Reuse the per-test `tmp` so afterEach cleans this up too.
+    const transcript_path = join(
+      tmp,
+      ".codex",
+      "sessions",
+      "session.jsonl",
+    );
+    mkdirSync(dirname(transcript_path), { recursive: true });
+    writeFileSync(
+      transcript_path,
+      [
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "patch the file" }],
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            name: "apply_patch",
+            call_id: "c1",
+            input: "",
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    const r = await runHook({
+      hook_event_name: "Stop",
+      transcript_path,
+      stop_hook_active: false,
+    });
+    const out = JSON.parse(r.stdout);
+    expect(out.decision).toBe("block");
+    expect(out.reason as string).toContain("codex exec");
+  });
+
+  test("unknown runtime omits the cadence line (v0.10.4 baseline)", async () => {
+    const transcript_path = writeTranscript([
+      ccUser("please add a file"),
+      ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
+    ]);
+    const r = await runHook({
+      hook_event_name: "Stop",
+      transcript_path,
+      stop_hook_active: false,
+    });
+    const out = JSON.parse(r.stdout);
+    expect(out.decision).toBe("block");
+    const reason = out.reason as string;
+    expect(reason).not.toContain("This guardrail fires");
+    expect(reason).not.toContain("codex exec");
+    expect(reason).toContain("event_log_append");
   });
 });

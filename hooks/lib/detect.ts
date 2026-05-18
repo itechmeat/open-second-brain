@@ -87,3 +87,66 @@ export function summarizeTurn(
   }
   return { hadArtifact, hadLog };
 }
+
+// ---- Runtime detection (§4-tail) ---------------------------------------
+
+/**
+ * Which runtime is invoking the hook. `unknown` is the fail-safe and
+ * renders byte-identical reminder text to the v0.10.4 baseline, so
+ * a future runtime that breaks both signals never crashes the hook.
+ */
+export type HookRuntime = "claudecode" | "codex" | "unknown";
+
+const CLAUDE_TRANSCRIPT_NEEDLES = [
+  "/.claude/projects/",
+  "/.claude/sessions/",
+] as const;
+const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
+
+/**
+ * Infer the runtime from a hook payload by shape. First-hit wins,
+ * order matches the design doc:
+ *
+ *   1. `transcript_path` substring (`/.claude/projects/`, `/.claude/sessions/`).
+ *   2. `transcript_path` substring (`/.codex/sessions/`).
+ *   3. Claude Code distinctive triple (`session_id` + `cwd` + `tool_use_id`).
+ *   4. Codex apply_patch shape (`tool_name === "apply_patch"` with
+ *      a patch body in `tool_input.input`).
+ *   5. `"unknown"`.
+ *
+ * Malformed payloads (`null`, primitives, missing fields, wrong types)
+ * resolve to `"unknown"` without throwing — the hook never crashes on
+ * detection.
+ */
+export function detectHookRuntime(payload: unknown): HookRuntime {
+  if (payload === null || typeof payload !== "object") return "unknown";
+  const p = payload as Record<string, unknown>;
+
+  const tp = p["transcript_path"];
+  if (typeof tp === "string") {
+    if (CLAUDE_TRANSCRIPT_NEEDLES.some((n) => tp.includes(n))) {
+      return "claudecode";
+    }
+    if (tp.includes(CODEX_TRANSCRIPT_NEEDLE)) return "codex";
+  }
+
+  if (
+    typeof p["session_id"] === "string"
+    && typeof p["cwd"] === "string"
+    && typeof p["tool_use_id"] === "string"
+  ) {
+    return "claudecode";
+  }
+
+  if (p["tool_name"] === "apply_patch") {
+    const ti = p["tool_input"];
+    if (ti !== null && typeof ti === "object") {
+      const input = (ti as Record<string, unknown>)["input"];
+      if (typeof input === "string" && input.includes("*** Begin Patch")) {
+        return "codex";
+      }
+    }
+  }
+
+  return "unknown";
+}
