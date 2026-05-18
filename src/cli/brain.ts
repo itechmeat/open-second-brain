@@ -25,6 +25,8 @@
 import { existsSync, readFileSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { resolve } from "node:path";
 
+import { atomicWriteFileSync } from "../core/fs-atomic.ts";
+
 import {
   defaultConfigPath,
   resolveAgentName,
@@ -49,6 +51,17 @@ import {
   importSessionPath,
 } from "../core/brain/sessions/import.ts";
 import { SessionImportError } from "../core/brain/sessions/types.ts";
+import {
+  buildLiveServer,
+  collectExplorerData,
+  renderExportedHtml,
+  type LiveServerHandle,
+} from "../core/brain/explorer.ts";
+import {
+  BrainMergeError,
+  mergePreferences,
+  type MergePlan,
+} from "../core/brain/merge.ts";
 import { moveToRetired, parsePreference, writePreference } from "../core/brain/preference.ts";
 import { brainDirs, preferencePath } from "../core/brain/paths.ts";
 import { isoDate, isoSecond } from "../core/brain/time.ts";
@@ -764,6 +777,166 @@ async function cmdBrainReject(argv: string[]): Promise<number> {
   } else {
     ok(`retired: ret-${slug} (user-rejected)`);
   }
+  return 0;
+}
+
+async function cmdBrainMerge(argv: string[]): Promise<number> {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    "dry-run": { type: "boolean" },
+    force: { type: "boolean" },
+    agent: { type: "string" },
+    json: { type: "boolean" },
+  });
+  if (positional.length !== 2) {
+    return fail(
+      "brain merge requires exactly two positional ids: <keep-pref-id> <drop-pref-id>",
+    );
+  }
+  const [keepId, dropId] = positional as [string, string];
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const agent =
+    (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const dryRun = flags["dry-run"] === true;
+  const force = flags["force"] === true;
+  const wantJson = flags["json"] === true;
+  const now = new Date();
+
+  // Plan first via dryRun so the prompt shows real numbers without
+  // touching disk. A second call commits when the operator agrees.
+  let plan: MergePlan;
+  try {
+    plan = mergePreferences(vault, keepId, dropId, {
+      now,
+      agentName: agent,
+      dryRun: true,
+    });
+  } catch (exc) {
+    if (exc instanceof BrainMergeError) {
+      return fail(`brain merge: ${exc.message}`);
+    }
+    return fail(
+      `brain merge: failed to plan merge: ${(exc as Error).message ?? exc}`,
+    );
+  }
+
+  const planLines = [
+    `merge plan:`,
+    `  keep: ${plan.keep_id}`,
+    `  drop: ${plan.drop_id} → ${plan.retired_path}`,
+    `  topic: ${plan.topic}${plan.scope ? `, scope: ${plan.scope}` : ""}`,
+    `  evidenced_by union: ${plan.merged_evidenced_by.length}`,
+    `  applied_sum: ${plan.applied_sum}`,
+    `  violated_sum: ${plan.violated_sum}`,
+    `  last_evidence_at: ${plan.last_evidence_at ?? "—"}`,
+  ];
+
+  if (dryRun) {
+    if (wantJson) {
+      okJson({ dry_run: true, plan });
+    } else {
+      for (const line of planLines) ok(line);
+      ok("dry-run; no changes written");
+    }
+    return 0;
+  }
+
+  if (!force) {
+    if (wantJson) {
+      return fail(
+        "brain merge: --json without --force is not supported (interactive prompt cannot render)",
+      );
+    }
+    for (const line of planLines) process.stderr.write(line + "\n");
+    process.stderr.write("Proceed? [y/N] ");
+    const ans = (await readSingleLine()).toLowerCase();
+    if (ans !== "y" && ans !== "yes") {
+      ok("merge cancelled");
+      return 0;
+    }
+  }
+
+  try {
+    mergePreferences(vault, keepId, dropId, {
+      now,
+      agentName: agent,
+    });
+  } catch (exc) {
+    if (exc instanceof BrainMergeError) {
+      return fail(`brain merge: ${exc.message}`);
+    }
+    return fail(
+      `brain merge: failed to commit merge: ${(exc as Error).message ?? exc}`,
+    );
+  }
+
+  if (wantJson) {
+    okJson({ merged: true, plan });
+  } else {
+    ok(`merged: ${plan.drop_id} → ${plan.keep_id} (retired as merged-into)`);
+  }
+  return 0;
+}
+
+async function cmdBrainExplorer(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    port: { type: "string" },
+    export: { type: "string" },
+    force: { type: "boolean" },
+  });
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const exportPath = flags["export"] as string | undefined;
+  const force = flags["force"] === true;
+
+  if (exportPath !== undefined) {
+    if (existsSync(exportPath) && !force) {
+      return fail(
+        `${exportPath} exists; pass --force to overwrite`,
+      );
+    }
+    const graph = collectExplorerData(vault);
+    const html = renderExportedHtml(graph);
+    try {
+      atomicWriteFileSync(exportPath, html);
+    } catch (err) {
+      return fail(
+        `failed to write ${exportPath}: ${(err as Error).message ?? err}`,
+      );
+    }
+    ok(`exported ${graph.nodes.length} nodes to ${exportPath}`);
+    return 0;
+  }
+
+  const portRaw = (flags["port"] as string | undefined) ?? "7777";
+  const port = Number.parseInt(portRaw, 10);
+  if (!/^\d+$/.test(portRaw) || !Number.isFinite(port) || port < 1 || port > 65535) {
+    return fail(`invalid --port value: ${portRaw}`);
+  }
+
+  let server: LiveServerHandle;
+  try {
+    server = buildLiveServer(vault, port);
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    if (/EADDRINUSE|address already in use/i.test(msg)) {
+      return fail(`port ${port} already in use; try --port <other>`);
+    }
+    return fail(`failed to start explorer: ${msg}`);
+  }
+
+  ok(`Live explorer at ${server.url}`);
+  info("Press Ctrl+C to stop.");
+
+  await new Promise<void>((resolveStop) => {
+    const stop = (): void => {
+      void server.close().then(() => resolveStop());
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
   return 0;
 }
 
@@ -1619,6 +1792,8 @@ Brain verbs (observing memory):
   set-primary      Declare or clear primary_agent in _brain.yaml (--clear)
   protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
   unprotect        Remove OSB-managed deny rules for the chosen target (--target)
+  merge            Merge two near-duplicate preferences (<keep> <drop>; --dry-run, --force)
+  explorer         Launch the loopback HTML explorer; --export <path> writes a single offline file
   snapshot diff    Read-only diff between two snapshots, or snapshot vs live
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
@@ -1714,6 +1889,29 @@ const VERB_HELP: Record<string, string> = {
     "@osb markers in user/assistant messages, and replay of brain_feedback\n" +
     "tool_use calls. Dedup against the inbox by normalised payload hash.\n" +
     "Autodetect failure exits 2 — pass --format to override.\n",
+  merge:
+    "usage: o2b brain merge <keep-pref-id> <drop-pref-id>\n" +
+    "                       [--dry-run] [--force] [--vault <path>] [--json]\n" +
+    "                       [--agent <name>]\n" +
+    "Merge two near-duplicate preferences. <keep> retains identity and\n" +
+    "principle; <drop> retires with reason 'merged-into' and a\n" +
+    "superseded_by wikilink to <keep>. <keep> picks up the sorted-dedup\n" +
+    "union of evidenced_by, the summed applied_count / violated_count,\n" +
+    "and max(last_evidence_at). Confidence is recomputed by the next\n" +
+    "dream pass — not by merge itself.\n" +
+    "--dry-run prints the plan and writes nothing.\n" +
+    "--force skips the interactive prompt but does NOT bypass invariant\n" +
+    "guards (topic/scope mismatch, pin parity).\n",
+  explorer:
+    "usage: o2b brain explorer [--port <n>] [--vault <path>]\n" +
+    "       o2b brain explorer --export <path> [--force] [--vault <path>]\n" +
+    "Live mode: bind a loopback HTTP server on 127.0.0.1:<port> (default\n" +
+    "7777) that renders preferences and retired entries as a force-directed\n" +
+    "graph. Press Ctrl+C to stop.\n" +
+    "Export mode: write the same view as a single offline HTML file at\n" +
+    "<path>. Without --force, refuses to overwrite an existing file.\n" +
+    "Zero backend, no LLM, no network access. Markdown is parsed in the\n" +
+    "browser.\n",
 };
 
 // ── Public entry point ──────────────────────────────────────────────────────
@@ -1787,6 +1985,10 @@ export async function handleBrainSubcommand(
         return await cmdBrainScanInline(rest);
       case "import-session":
         return await cmdBrainImportSession(rest);
+      case "merge":
+        return await cmdBrainMerge(rest);
+      case "explorer":
+        return await cmdBrainExplorer(rest);
       default:
         process.stderr.write(`error: unknown brain verb: ${verb}\n`);
         process.stdout.write(BRAIN_HELP);

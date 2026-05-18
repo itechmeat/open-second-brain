@@ -472,3 +472,109 @@ describe("top_applied / top_referenced sections", () => {
     expect(targetEntry!.backlink_count).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe("merge_suggestions section (§12)", () => {
+  test("surfaces a near-duplicate pair in markdown and JSON", () => {
+    // Both prefs are confirmed in the SAME (topic, scope) bucket and
+    // share most of their `principle` tokens. The detector should
+    // pick them up at the default 0.6 threshold.
+    writePreference(
+      tmp,
+      basePref("imperative-a", {
+        topic: "commits",
+        principle: "Use imperative voice in commit subjects",
+        status: "confirmed",
+        confirmed_at: "2026-05-10T00:00:00Z",
+        applied_count: 3,
+        confidence: "high",
+      }),
+    );
+    writePreference(
+      tmp,
+      basePref("imperative-b", {
+        topic: "commits",
+        principle: "Write commit subjects in imperative voice",
+        status: "confirmed",
+        confirmed_at: "2026-05-10T00:00:00Z",
+        applied_count: 2,
+        confidence: "high",
+      }),
+    );
+
+    // Drive a confirmed event inside the window so the markdown path
+    // renders (the digest collapses to a one-liner when nothing in
+    // the window changed). Confirmation date inside [SINCE, UNTIL).
+    writePreference(
+      tmp,
+      basePref("noop-window", {
+        topic: "noop-window",
+        status: "confirmed",
+        confirmed_at: SINCE.toISOString(),
+        applied_count: 1,
+      }),
+    );
+
+    const md = renderDigest(tmp, { since: SINCE, until: UNTIL, format: "markdown" });
+    expect(md.content).toContain("## Merge suggestions");
+    expect(md.content).toContain("[[pref-imperative-a|");
+    expect(md.content).toContain("[[pref-imperative-b|");
+    expect(md.content).toContain("topic 'commits'");
+
+    const json = renderDigest(tmp, { since: SINCE, until: UNTIL, format: "json" });
+    const parsed = JSON.parse(json.content) as DigestJson;
+    expect(parsed.merge_suggestions.length).toBeGreaterThanOrEqual(1);
+    const pair = parsed.merge_suggestions[0]!;
+    expect(pair.a < pair.b).toBe(true);
+    expect(pair.topic).toBe("commits");
+    expect(pair.jaccard).toBeGreaterThanOrEqual(0.6);
+  });
+
+  test("no candidates → section absent in markdown, empty array in JSON", () => {
+    // Single confirmed pref → no pair → no suggestions.
+    writePreference(
+      tmp,
+      basePref("solo", {
+        status: "confirmed",
+        confirmed_at: SINCE.toISOString(),
+        applied_count: 1,
+      }),
+    );
+    const md = renderDigest(tmp, { since: SINCE, until: UNTIL, format: "markdown" });
+    expect(md.content).not.toContain("## Merge suggestions");
+    const json = renderDigest(tmp, { since: SINCE, until: UNTIL, format: "json" });
+    const parsed = JSON.parse(json.content) as DigestJson;
+    expect(parsed.merge_suggestions).toEqual([]);
+  });
+
+  test("merge_suggestions does not flip the empty-window collapse", () => {
+    // Build two near-duplicate prefs but place them OUTSIDE the
+    // window. The window itself contains nothing → digest should
+    // still collapse to the empty-window one-liner and report
+    // `empty: true`, even though merge_suggestions has entries.
+    writePreference(
+      tmp,
+      basePref("dup-a", {
+        topic: "outside",
+        principle: "alpha beta gamma delta",
+        status: "confirmed",
+        confirmed_at: "2026-04-01T00:00:00Z",
+        applied_count: 1,
+        confidence: "high",
+      }),
+    );
+    writePreference(
+      tmp,
+      basePref("dup-b", {
+        topic: "outside",
+        principle: "alpha beta gamma epsilon",
+        status: "confirmed",
+        confirmed_at: "2026-04-01T00:00:00Z",
+        applied_count: 1,
+        confidence: "high",
+      }),
+    );
+    const r = renderDigest(tmp, { since: SINCE, until: UNTIL, format: "markdown" });
+    expect(r.empty).toBe(true);
+    expect(r.content).toMatch(/^Brain digest — \d{4}-\d{2}-\d{2}: no changes\n$/);
+  });
+});

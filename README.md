@@ -124,12 +124,14 @@ o2b brain apply-evidence      Record applied / violated against a preference for
 o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions
 o2b brain query               Read helper: by preference, by topic, or by log timestamp
 o2b brain reject              (CLI-only) Retire a preference; requires --reason "<text>". Subsequent signals on the same topic are suppressed.
+o2b brain merge               (CLI-only) Fold one confirmed/quarantine pref into another (<keep> <drop>); --dry-run / --force; drop retires with reason 'merged-into'
 o2b brain pin / unpin         (CLI-only) Toggle pinned: true on a preference (exempt from auto-retire)
 o2b brain set-primary         (CLI-only) Declare or clear primary_agent in Brain/_brain.yaml (--clear)
 o2b brain protect             (CLI-only) Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
 o2b brain unprotect           (CLI-only) Remove the OSB-managed deny rules for the chosen target
 o2b brain snapshot diff       (CLI-only) Read-only diff between two snapshots, or snapshot vs live Brain/
 o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot (--dry-run previews)
+o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, …)
 o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain scan-inline         Capture `@osb` markers from vault markdown files (Daily/, project notes, …)

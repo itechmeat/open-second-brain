@@ -27,7 +27,7 @@
 
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { readTranscript } from "./lib/transcript.ts";
-import { summarizeTurn } from "./lib/detect.ts";
+import { detectHookRuntime, summarizeTurn } from "./lib/detect.ts";
 import { stopGuardrailReason } from "./lib/messages.ts";
 
 async function main(): Promise<void> {
@@ -53,9 +53,10 @@ async function main(): Promise<void> {
   const summary = summarizeTurn(signal.toolCalls, signal.bashCommands);
   if (!summary.hadArtifact || summary.hadLog) return;
 
+  const runtime = detectHookRuntime(payload);
   const out = {
     decision: "block",
-    reason: stopGuardrailReason(),
+    reason: stopGuardrailReason(runtime),
   };
   process.stdout.write(JSON.stringify(out) + "\n");
 }

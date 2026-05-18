@@ -509,6 +509,17 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
     }
   }
 
+  // §E.2 — Actionable hints derived from the check state.
+  // Rules match the design doc table; agents and operators read the
+  // list to know what command to run next without learning the
+  // internals of OSB.
+  const recommendations = buildRecommendations({
+    config,
+    embeddingKeyResolved,
+    vecExtension,
+    providerReachable,
+  });
+
   return Object.freeze({
     vaultReadable,
     indexDirWritable,
@@ -520,6 +531,51 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
     providerReason,
     warnings: Object.freeze(warnings),
     fatal: Object.freeze(fatal),
+    recommendations: Object.freeze(recommendations),
   });
+}
+
+interface BuildRecommendationsInput {
+  readonly config: ResolvedSearchConfig;
+  readonly embeddingKeyResolved: boolean;
+  readonly vecExtension: "loaded" | "unavailable" | "not-attempted";
+  readonly providerReachable: boolean | null;
+}
+
+function buildRecommendations(input: BuildRecommendationsInput): string[] {
+  const recs: string[] = [];
+
+  if (input.config.semantic.enabled && !input.embeddingKeyResolved) {
+    recs.push(
+      "Set OPEN_SECOND_BRAIN_EMBEDDING_KEY in ~/.hermes/.env (or the configured env file).",
+    );
+    recs.push(
+      "Provider: OpenAI `text-embedding-3-small` is the default; any OpenAI-compatible endpoint works via OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL.",
+    );
+  }
+
+  if (input.vecExtension === "unavailable") {
+    if (process.platform === "darwin") {
+      recs.push(
+        "Install Homebrew SQLite: `brew install sqlite`. The o2b wrapper picks it up automatically on the next invocation via DYLD_LIBRARY_PATH.",
+      );
+    } else {
+      recs.push(
+        "sqlite-vec did not load. Confirm the optional dependency with `bun pm ls`, or rebuild with `bun install --force`.",
+      );
+    }
+  }
+
+  // "Everything wired, no embeddings yet" → suggest the first
+  // reindex plus the optional cron template. providerReachable is
+  // `true` only after both key and vec are present, so it is the
+  // tightest proxy for "ready to compute but never did".
+  if (input.providerReachable === true && input.vecExtension === "loaded") {
+    recs.push(
+      "Run `o2b search reindex --embeddings` to compute the first vectors, then optionally `o2b search reindex --cron-template` for periodic refresh.",
+    );
+  }
+
+  return recs;
 }
 

@@ -93,6 +93,13 @@ export interface IndexCheckReport {
   readonly providerReason: string | null;
   readonly warnings: ReadonlyArray<string>;
   readonly fatal: ReadonlyArray<string>;
+  /**
+   * Actionable hints derived from the check state — empty when
+   * nothing needs operator attention. The CLI renders these under a
+   * `recommendations:` block; the JSON exposes them under the same
+   * key so headless callers (Hermes cron, CI) can act on them.
+   */
+  readonly recommendations: ReadonlyArray<string>;
 }
 
 export interface SearchOptions {

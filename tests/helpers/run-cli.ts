@@ -40,7 +40,7 @@ const RUNTIME_OVERRIDABLE_ENV = [
 
 export async function runCli(
   args: ReadonlyArray<string>,
-  opts: { env?: Record<string, string> } = {},
+  opts: { env?: Record<string, string>; stdin?: string } = {},
 ): Promise<RunResult> {
   const callerEnv = opts.env ?? {};
   // Build the child env from process.env, then strip any runtime-resolution
@@ -60,9 +60,14 @@ export async function runCli(
     const proc = Bun.spawn(["bun", "run", CLI_ENTRY, ...args], {
       cwd: ROOT,
       env,
+      stdin: opts.stdin === undefined ? "ignore" : "pipe",
       stdout: "pipe",
       stderr: "pipe",
     });
+    if (opts.stdin !== undefined && proc.stdin !== undefined) {
+      proc.stdin.write(opts.stdin);
+      await proc.stdin.end();
+    }
     const [stdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),

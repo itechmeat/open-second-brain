@@ -10,4 +10,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 # shellcheck source=./_bun-precheck.sh
 . "$SCRIPT_DIR/_bun-precheck.sh"
 
+# shellcheck source=./_macos-sqlite.sh
+. "$SCRIPT_DIR/_macos-sqlite.sh"
+
 exec bun run "$REPO_ROOT/src/cli/main.ts" "$@"

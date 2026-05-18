@@ -5,6 +5,105 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] - 2026-05-18
+
+Brings the v0.10.5 "Brain maturity + embeddings activation"
+cluster from `Projects/OpenSecondBrain/Features/_summary` and the
+Hermes onboarding report at
+`Projects/OpenSecondBrain/Features/embedding-provider-activation`:
+§14 local HTML/web explorer, §12 merge-suggestions plus the
+explicit `o2b brain merge` CLI, §4 completion of the deferred D5
+from v0.10.4 (per-runtime cadence in `hooks/lib/messages.ts`), the
+deferred D4 "good vs bad" examples in the `brain-memory` SKILL,
+and a §E embeddings-activation cluster (macOS sqlite shim,
+actionable `o2b search check` hints, `--cron-template`,
+`embeddings-setup` SKILL).
+
+No vault migration is required. Existing vaults stay valid:
+`merge` introduces one new retired reason (`merged-into`) and one
+new log event kind (`merge`); both surface only when the operator
+runs `o2b brain merge`.
+
+### Added
+
+- §14 — `o2b brain explorer` launches a loopback HTTP server (default
+  port `7777`, `--port <n>` to override) that renders preferences and
+  retired entries as a force-directed graph. `o2b brain explorer
+  --export <path>` writes the same view as a single offline HTML file
+  with inlined data; `--force` overwrites an existing file. Live and
+  export modes share one template at `templates/brain-explorer.html`.
+  Zero backend, no LLM, no network. Markdown is parsed in the browser
+  by a vendored ~150-line mini physics engine.
+- §12 — `o2b brain digest` gains a `## Merge suggestions` section
+  surfacing confirmed/quarantine pairs in the same `(topic, scope)`
+  whose `principle` tokens reach jaccard ≥ `0.6`. Pairs ≥ doctor's
+  own duplicate threshold continue to trip the
+  `duplicate-preferences` doctor lint. `o2b brain merge <keep>
+  <drop>` is the explicit resolver: `keep` retains its frontmatter,
+  picks up the deduped union of `evidenced_by`, the summed
+  `applied_count` and `violated_count`, and `max(last_evidence_at)`;
+  `drop` retires under reason `merged-into` with a `superseded_by`
+  wikilink to `keep`. The CLI prompts interactively unless `--force`
+  is passed; `--dry-run` reports the plan and writes nothing.
+- §4 (completes deferred D5 from v0.10.4) — `hooks/lib/messages.ts`
+  emits a per-runtime cadence line above the
+  `brain_feedback`/`brain_apply_evidence` block. Claude Code gets a
+  "many turns ahead, capture now" hint; Codex gets a "one-shot exec,
+  call before return" hint. Unknown runtime renders byte-identical
+  to the v0.10.4 baseline. Detection lives in
+  `hooks/lib/detect.ts:detectHookRuntime`, driven by hook-payload
+  shape (`transcript_path` substring or Claude's
+  `session_id`/`cwd`/`tool_use_id` triple). `stopGuardrailReason`
+  follows the same pattern.
+- §15 (completes deferred D4 from v0.10.4) — `skills/brain-memory/
+  SKILL.md` gains an `## Examples — good vs bad` section: four
+  contrastive pairs covering weak vs strong `principle`,
+  too-general vs precise `topic`, and `note` with versus without
+  the "why" line.
+- §E.1 — `scripts/_macos-sqlite.sh` shim, sourced from
+  `scripts/o2b` after the Bun precheck. Detects Darwin + Homebrew
+  SQLite and exports `DYLD_LIBRARY_PATH` so `bun:sqlite` picks up
+  a build with `LOAD_EXTENSION` enabled. No-op on Linux and on
+  macOS without `brew install sqlite`. Resolves the v0.10.4
+  blocker where `sqlite-vec` failed to load against Apple's
+  system SQLite (built with `SQLITE_OMIT_LOAD_EXTENSION`).
+- §E.2 — `o2b search check` gains a `recommendations` field on
+  both the human and JSON outputs. Rules surface concrete next
+  commands when `embedding_key` is missing, when `vec_extension`
+  fails to load (with a macOS-specific `brew install sqlite`
+  hint), and when the install is wired but no embeddings have
+  been computed yet.
+- §E.3 — `o2b search reindex --cron-template [--interval <N>m|h|d]`
+  prints a watchdog script, a native crontab line, and a
+  `hermes cron create` invocation. Pure stdout — writes nothing.
+  Default interval is 30 minutes; `--interval` accepts under
+  60m / 24h / unlimited days.
+- §E.4 — `skills/embeddings-setup/SKILL.md` describes the
+  proactive activation flow: when to engage, decision tree based
+  on `o2b search check` output, env-var setup, macOS Homebrew
+  branch, first reindex, and the optional cron template.
+
+### Changed
+
+- `tokenise` and `jaccard` lifted from `src/core/brain/doctor.ts`
+  into `src/core/brain/similarity.ts`. No behavioural change. The
+  doctor lint `duplicate-preferences` and the new merge-candidate
+  detector now share one implementation.
+- `tests/helpers/run-cli.ts` accepts an optional `stdin` string so
+  interactive CLI prompts (`o2b brain merge`) can be exercised
+  end-to-end.
+
+### Internal
+
+- New constant `BRAIN_RETIRED_REASON.mergedInto = "merged-into"`.
+- New log event kind `BRAIN_LOG_EVENT_KIND.merge = "merge"`.
+- New typed error `BrainMergeError` with discriminated `code`
+  values for each invariant guard.
+- New typed error `CronTemplateError` for the `--cron-template`
+  interval parser.
+- `IndexCheckReport` gains an optional `recommendations` array
+  (additive, JSON consumers reading by key are unaffected).
+
 ## [0.10.4] - 2026-05-17
 
 Brings the v0.10.4 "Brain onboarding quality" cluster from

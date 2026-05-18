@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  detectHookRuntime,
   isArtifactToolName,
   isLogToolName,
   summarizeTurn,
@@ -111,5 +112,66 @@ describe("summarizeTurn", () => {
   test("read-only tools yield no artifact", () => {
     const s = summarizeTurn([{ name: "Read" }, { name: "Grep" }]);
     expect(s).toEqual({ hadArtifact: false, hadLog: false });
+  });
+});
+
+describe("detectHookRuntime", () => {
+  test("Claude Code transcript path → claudecode", () => {
+    expect(
+      detectHookRuntime({
+        transcript_path:
+          "/Users/x/.claude/projects/-srv/projects/foo/abc.jsonl",
+      }),
+    ).toBe("claudecode");
+  });
+
+  test("Codex transcript path → codex", () => {
+    expect(
+      detectHookRuntime({
+        transcript_path: "/root/.codex/sessions/2026-05-18.json",
+      }),
+    ).toBe("codex");
+  });
+
+  test("Claude Code triple without transcript_path → claudecode", () => {
+    expect(
+      detectHookRuntime({
+        session_id: "x",
+        cwd: "/srv",
+        tool_use_id: "y",
+      }),
+    ).toBe("claudecode");
+  });
+
+  test("Codex apply_patch shape → codex", () => {
+    expect(
+      detectHookRuntime({
+        tool_name: "apply_patch",
+        tool_input: {
+          input:
+            "*** Begin Patch\n*** Update File: /tmp/x\n*** End Patch",
+        },
+      }),
+    ).toBe("codex");
+  });
+
+  test("apply_patch without a recognisable body → unknown", () => {
+    // The tool name alone is not enough — runtime detection requires
+    // the patch body so we never label hand-rolled payloads.
+    expect(
+      detectHookRuntime({
+        tool_name: "apply_patch",
+        tool_input: { input: "not a patch" },
+      }),
+    ).toBe("unknown");
+  });
+
+  test("malformed payloads → unknown without throwing", () => {
+    expect(detectHookRuntime(null)).toBe("unknown");
+    expect(detectHookRuntime(undefined)).toBe("unknown");
+    expect(detectHookRuntime("string")).toBe("unknown");
+    expect(detectHookRuntime(42)).toBe("unknown");
+    expect(detectHookRuntime({})).toBe("unknown");
+    expect(detectHookRuntime({ transcript_path: 42 })).toBe("unknown");
   });
 });

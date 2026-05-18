@@ -1156,12 +1156,24 @@ function scanApplyEvidence(vault: string): ApplyEvidenceEntry[] {
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.log)) return [];
   const out: ApplyEvidenceEntry[] = [];
+  const mergeAliases = new Map<string, string>();
   for (const name of readdirSync(dirs.log)) {
     if (!name.endsWith(".md")) continue;
     const date = name.slice(0, -3);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
     const { entries } = parseLogDay(vault, date);
     for (const e of entries) {
+      if (e.eventType === BRAIN_LOG_EVENT_KIND.merge) {
+        const keep = parseWikilinkFromBodyValue(e.body["keep"]);
+        const drop = parseWikilinkFromBodyValue(e.body["drop"]);
+        if (keep?.startsWith("pref-") && drop?.startsWith("pref-")) {
+          mergeAliases.set(
+            drop.slice("pref-".length),
+            resolveMergeAlias(keep.slice("pref-".length), mergeAliases),
+          );
+        }
+        continue;
+      }
       if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
       const prefRaw = e.body["preference"];
       const result = e.body["result"];
@@ -1181,10 +1193,33 @@ function scanApplyEvidence(vault: string): ApplyEvidenceEntry[] {
       });
     }
   }
+  const resolved = out.map((entry) => ({
+    ...entry,
+    pref_slug: resolveMergeAlias(entry.pref_slug, mergeAliases),
+  }));
   // Stable order: by timestamp ascending. Multiple entries at the same
   // second keep their parse order (parseLogDay returns insertion order).
-  out.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-  return out;
+  resolved.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  return resolved;
+}
+
+function parseWikilinkFromBodyValue(value: unknown): string | null {
+  return typeof value === "string" ? parseWikilink(value) : null;
+}
+
+function resolveMergeAlias(
+  slug: string,
+  aliases: ReadonlyMap<string, string>,
+): string {
+  let current = slug;
+  const seen = new Set<string>();
+  while (!seen.has(current)) {
+    seen.add(current);
+    const next = aliases.get(current);
+    if (!next) return current;
+    current = next;
+  }
+  return current;
 }
 
 function planRefresh(

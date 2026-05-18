@@ -118,4 +118,48 @@ describe("post-write-reminder hook", () => {
     expect(exit).toBe(0);
     expect(stdout).toBe("");
   });
+
+  test("Claude Code transcript path triggers the claudecode cadence line", async () => {
+    const r = await runHook({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: "/tmp/foo.md", content: "hi" },
+      transcript_path: "/Users/x/.claude/projects/-srv/foo.jsonl",
+    });
+    expect(r.exit).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.hookSpecificOutput.additionalContext).toContain(
+      "Claude Code session",
+    );
+  });
+
+  test("Codex apply_patch shape triggers the codex cadence line", async () => {
+    const patch =
+      "*** Begin Patch\n*** Update File: /tmp/x\n*** End Patch\n";
+    const r = await runHook({
+      hook_event_name: "PostToolUse",
+      tool_name: "apply_patch",
+      tool_input: { input: patch },
+    });
+    expect(r.exit).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.hookSpecificOutput.additionalContext).toContain("codex exec");
+  });
+
+  test("unknown runtime renders without either cadence line (v0.10.4 baseline)", async () => {
+    const r = await runHook({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: "/tmp/foo.md", content: "hi" },
+      // No transcript_path, no Claude triple, no apply_patch shape.
+    });
+    expect(r.exit).toBe(0);
+    const out = JSON.parse(r.stdout);
+    const text = out.hookSpecificOutput.additionalContext as string;
+    expect(text).not.toContain("Claude Code session");
+    expect(text).not.toContain("codex exec");
+    // Spot-check the original body is intact.
+    expect(text).toContain("brain_feedback");
+    expect(text).toContain("brain_apply_evidence");
+  });
 });
