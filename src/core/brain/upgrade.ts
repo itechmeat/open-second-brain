@@ -227,7 +227,16 @@ function planBrainYaml(vault: string): UpgradeFilePlan {
   try {
     before = readFileSync(path, "utf8");
   } catch (err) {
-    return makeError(rel, `read failed: ${(err as Error).message}`);
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "ENOENT") {
+      // The file vanished from a `o2b brain init`-bootstrapped
+      // vault. Same recovery shape as `planManagedPath`: treat
+      // missing as an update from empty so `--apply` restores the
+      // canonical body. Refusing here would block every other
+      // managed-file update behind one missing config.
+      return makeUpdate(rel, "", DEFAULT_BRAIN_CONFIG_YAML);
+    }
+    return makeError(rel, `read failed: ${e.message ?? String(err)}`);
   }
   // Validate the live file with the strict parser. A malformed source
   // is surfaced as `error` so the operator fixes it manually before

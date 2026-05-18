@@ -92,26 +92,33 @@ export function buildManifest(brainRoot: string): BrainManifest {
       // contents in the manifest would either explode the listing or
       // create a self-referential loop on rotate.
       if (rel === ".snapshots" || rel.startsWith(".snapshots/")) continue;
-      // Defense-in-depth: a `..` segment cannot legitimately appear
-      // inside a sane Brain tree. Drop it rather than classify under
-      // a bogus path.
-      if (rel.startsWith("..")) continue;
+      // Defense-in-depth: a `..` path *segment* cannot legitimately
+      // appear inside a sane Brain tree. We anchor on the segment
+      // boundary so an otherwise-valid filename like `..notes.md`
+      // (legal as a Unix dotfile) is not silently dropped from
+      // manifest coverage.
+      if (rel === ".." || rel.startsWith("../")) continue;
       if (st.isDirectory()) {
         stack.push(abs);
         continue;
       }
       if (!st.isFile()) continue;
-      collected.set(rel, hashFile(abs, st.size));
+      collected.set(rel, hashFile(abs));
     }
   }
 
   return freezeManifest(generated_at, collected);
 }
 
-function hashFile(abs: string, size: number): BrainManifestEntry {
+function hashFile(abs: string): BrainManifestEntry {
+  // Derive size from the actually-hashed bytes rather than the
+  // pre-read `lstat` so the (sha256, size) pair always describes
+  // the same payload. If the file changed between stat and read,
+  // the stat-based size could disagree with the hash and confuse a
+  // future drift comparison.
   const buf = readFileSync(abs);
   const sha256 = createHash("sha256").update(buf).digest("hex");
-  return Object.freeze({ sha256, size });
+  return Object.freeze({ sha256, size: buf.byteLength });
 }
 
 function freezeManifest(

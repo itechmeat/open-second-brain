@@ -86,7 +86,11 @@ export function renderTemplate(
   let out = template;
   for (const [key, value] of substitutions) {
     const pattern = new RegExp(`\\{\\{\\s*${escapeRegex(key)}\\s*\\}\\}`, "g");
-    out = out.replace(pattern, value);
+    // Function form keeps the substitution literal — string-form
+    // `replace` interprets `$&` / `$1` / `$n` / `$$` in `value` as
+    // backreference syntax. A vault name like `pay-$1` or
+    // `team-$everyone` would otherwise be silently mangled.
+    out = out.replace(pattern, () => value);
   }
   return out;
 }
