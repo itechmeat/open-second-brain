@@ -43,6 +43,15 @@ function isoDay(iso: string): string {
 
 export function renderPreferenceFromMemory(input: RenderMemoryInput): string {
   const slug = slugifyMemoryName(input.name);
+  if (!slug) {
+    // Punctuation-only / whitespace-only names produce an empty slug,
+    // which would yield the bare `pref-` id and a blank `topic:` field.
+    // Fail fast so the caller (orchestrator → CLI) surfaces a clear error
+    // rather than writing an ambiguous preference file.
+    throw new Error(
+      `claude-memory: cannot derive a slug from name ${JSON.stringify(input.name)}; rename the memory entry to include at least one alphanumeric character`,
+    );
+  }
   const prefId = `pref-${slug}`;
   const topic = slug;
   const scope = extractScope(input.body);

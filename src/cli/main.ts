@@ -1155,7 +1155,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
   const repoRoot = (flags["repo"] as string | undefined) ?? null;
 
   process.stderr.write(
-    `[mcp] open-second-brain ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
+    `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
   );
   return await serveStdio({ vault, configPath: config, repoRoot }, {}, { scope, serverName });
 }

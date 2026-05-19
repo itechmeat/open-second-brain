@@ -25,8 +25,12 @@ describe("buildToolTable scope filter", () => {
     for (const w of writer) {
       const matched = full.find((t) => t.name === w.name);
       expect(matched).toBeDefined();
-      expect(w.inputSchema).toEqual(matched!.inputSchema);
-      expect(w.description).toEqual(matched!.description);
+      // toBe asserts identity — writer scope filters from the same array,
+      // so each retained ToolDefinition's schema/description must be the
+      // same object instance. toEqual would silently allow accidental
+      // cloning.
+      expect(w.inputSchema).toBe(matched!.inputSchema);
+      expect(w.description).toBe(matched!.description);
     }
   });
 });

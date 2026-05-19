@@ -1622,10 +1622,36 @@ async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number> {
   let asJson = false;
   let vaultFlag: string | undefined;
 
+  // Demand a value for `--vault` / `--memory` and reject unknown flags
+  // outright. The previous loop silently dropped `--scope` typos and
+  // similar mistakes, which would default a fresh agent to `~/.../-X-vault`
+  // (often the wrong directory) without complaint. `consumeValue` advances
+  // the loop index in-place and returns null on a missing/flag-looking
+  // value — the caller surfaces the stderr message and returns 2.
+  const consumeValue = (flag: string, next: string | undefined): string | null => {
+    if (next === undefined || next.startsWith("--")) {
+      process.stderr.write(
+        `o2b brain import-claude-memory: ${flag} requires a value\n`,
+      );
+      return null;
+    }
+    return next;
+  };
+
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--vault") { vaultFlag = argv[++i]; continue; }
-    if (a === "--memory") { memory = argv[++i] ?? null; continue; }
+    if (a === "--vault") {
+      const v = consumeValue("--vault", argv[++i]);
+      if (v === null) return 2;
+      vaultFlag = v;
+      continue;
+    }
+    if (a === "--memory") {
+      const v = consumeValue("--memory", argv[++i]);
+      if (v === null) return 2;
+      memory = v;
+      continue;
+    }
     if (a === "--dry-run") {
       if (modeSet && mode !== "dry-run") {
         process.stderr.write(
@@ -1647,6 +1673,10 @@ async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number> {
     if (a === "--yes") { yes = true; continue; }
     if (a === "--json") { asJson = true; continue; }
     if (a === "--allow-arbitrary-memory-path") { allowArbitrary = true; continue; }
+    process.stderr.write(
+      `o2b brain import-claude-memory: unknown flag ${a}\n`,
+    );
+    return 2;
   }
 
   if (mode === "apply" && !yes && !process.stdin.isTTY) {

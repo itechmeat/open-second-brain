@@ -34,7 +34,11 @@ export function gitActivity(
       { encoding: "utf8" },
     );
   } catch {
-    return { commits: 0, filesChanged: 0, insertions: 0, deletions: 0 };
+    // Surface git failure as `null` so the orchestrator can fall back to
+    // mtime activity for this watched path. Returning zeros would mask a
+    // real "the agent shipped commits but git refused to talk" day and
+    // suppress the alert §D exists to raise.
+    return null;
   }
 
   let commits = 0;

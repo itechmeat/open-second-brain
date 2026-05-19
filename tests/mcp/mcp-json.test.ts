@@ -1,10 +1,15 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 
+// Resolve relative to this test file so the suite runs from any checkout
+// path (CI / contributor clones / worktrees) — not just `/srv/projects/...`.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const MCP_JSON_PATH = resolve(HERE, "..", "..", ".mcp.json");
+
 describe(".mcp.json shipped with the plugin", () => {
-  const file = JSON.parse(
-    readFileSync("/srv/projects/open-second-brain/.mcp.json", "utf8"),
-  );
+  const file = JSON.parse(readFileSync(MCP_JSON_PATH, "utf8"));
   test("declares both open-second-brain and -writer entries", () => {
     expect(Object.keys(file.mcpServers).sort()).toEqual([
       "open-second-brain",

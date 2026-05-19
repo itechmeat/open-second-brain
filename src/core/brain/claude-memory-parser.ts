@@ -13,7 +13,10 @@ export type ClaudeMemoryParseResult =
       readonly skipReason: string;
     };
 
-const FM_RE = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+// Accept both LF and CRLF line endings around the frontmatter fence —
+// memory files written from Windows clients carry `\r\n`, and a pure
+// `\n` regex would mis-classify them as malformed.
+const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/;
 
 /**
  * Minimal two-level YAML parser for Claude MEMORY.md frontmatter.

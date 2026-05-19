@@ -45,9 +45,16 @@ export function yesterdayWindow(now: Date, tz: string): YesterdayWindow {
  * civil date in tz. Iteratively correct the naive UTC midnight using
  * Intl's offset for the guessed instant. 4 iterations is enough for any
  * IANA timezone (verified against tzdata 2024a).
+ *
+ * The drift correction must include both time-of-day AND date offset.
+ * For west-of-UTC zones, the naive `Date.UTC(y, m-1, d, 0, 0, 0)`
+ * instant projects to the PREVIOUS local date — without a day-delta
+ * term the loop would settle on `00:00:00` on the wrong civil date and
+ * silently return a window 24 hours early.
  */
 function localMidnightUtc(y: number, m: number, d: number, tz: string): Date {
   let guess = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
+  const expected = `${y.toString().padStart(4, "0")}-${m.toString().padStart(2, "0")}-${d.toString().padStart(2, "0")}`;
   for (let i = 0; i < 4; i++) {
     const local = new Intl.DateTimeFormat("en-CA", {
       timeZone: tz,
@@ -64,8 +71,16 @@ function localMidnightUtc(y: number, m: number, d: number, tz: string): Date {
     const hh = timeParts[0]!;
     const mm = timeParts[1]!;
     const ss = timeParts[2]!;
-    const drift = hh * 3600 + mm * 60 + ss;
-    const expected = `${y.toString().padStart(4, "0")}-${m.toString().padStart(2, "0")}-${d.toString().padStart(2, "0")}`;
+    const dateParts = (date ?? "").split("-").map(Number);
+    const ly = dateParts[0]!;
+    const lm = dateParts[1]!;
+    const ld = dateParts[2]!;
+    // Whole-day signed offset between the observed local date and the
+    // target civil date. UTC-based midnight arithmetic is safe here
+    // because both inputs are already date-only.
+    const dayDelta =
+      (Date.UTC(ly, lm - 1, ld) - Date.UTC(y, m - 1, d)) / 86_400_000;
+    const drift = dayDelta * 86400 + hh * 3600 + mm * 60 + ss;
     if (date === expected && drift === 0) return guess;
     guess = new Date(guess.getTime() - drift * 1000);
   }

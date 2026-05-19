@@ -92,6 +92,13 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   const plans: PlannedFile[] = [];
   const skipped: Array<{ basename: string; reason: string }> = [];
   const filesToWrite: Array<{ plan: PlannedFile; body: string; sha256: string; slug: string }> = [];
+  // Two MEMORY files with different basenames can slugify to the same
+  // preference id (e.g. `feedback_no_em_dashes.md` and
+  // `feedback no-em-dashes.md`). Without this guard, both would land
+  // `pref-no-em-dashes.md`, and the second `atomicWriteFileSync` would
+  // silently overwrite the first one. Track seen prefIds and route
+  // any duplicate into the skipped list with a clear reason.
+  const seenPrefIds = new Map<string, string>();
 
   for (const name of readdirSync(opts.memoryDir).sort()) {
     if (name === "MEMORY.md") continue;
@@ -104,6 +111,15 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
     }
     const slug = slugifyMemoryName(parsed.name);
     const prefId = `pref-${slug}`;
+    const dupOf = seenPrefIds.get(prefId);
+    if (dupOf) {
+      skipped.push({
+        basename: name,
+        reason: `duplicate target preference id ${prefId} (also produced by ${dupOf}); rename the memory entry to disambiguate`,
+      });
+      continue;
+    }
+    seenPrefIds.set(prefId, name);
     // preferencePath adds pref- prefix itself, so pass just the slug
     const prefFile = preferencePath(opts.vault, slug);
     const manifestEntry = manifest.imports[name];

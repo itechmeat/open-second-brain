@@ -11,10 +11,25 @@ export interface VaultDelta {
 
 function countInWindow(dir: string, win: ActivityWindow): number {
   if (!existsSync(dir)) return 0;
+  // Mirror the defensive shape from activity-mtime: readdirSync /
+  // statSync can race with concurrent writers (dream pass, signal
+  // import) and would otherwise crash the nightly cron with an
+  // unhandled ENOENT/EPERM.
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return 0;
+  }
   let n = 0;
-  for (const name of readdirSync(dir)) {
+  for (const name of entries) {
     const p = join(dir, name);
-    const st = statSync(p);
+    let st;
+    try {
+      st = statSync(p);
+    } catch {
+      continue;
+    }
     if (!st.isFile()) continue;
     if (st.mtimeMs >= win.startUtc.getTime() && st.mtimeMs < win.endUtc.getTime()) n += 1;
   }
