@@ -1,7 +1,7 @@
 import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import { setPinned } from "../../../core/brain/pin.ts";
 import { BrainPreferenceNotFoundError } from "../../../core/brain/apply-evidence.ts";
-import { parse, fail, ok, okJson, resolveBrainVault } from "../helpers.ts";
+import { parse, fail, normalizeFlagString, ok, okJson, resolveBrainVault } from "../helpers.ts";
 
 async function pinOrUnpin(argv: string[], value: boolean): Promise<number> {
   const { flags } = parse(argv, {
@@ -9,7 +9,11 @@ async function pinOrUnpin(argv: string[], value: boolean): Promise<number> {
     id: { type: "string" },
     json: { type: "boolean" },
   });
-  if (typeof flags["id"] !== "string" || (flags["id"] as string).trim() === "") {
+  // Normalise once so `setPinned` and the slug rendering both see the
+  // same trimmed value — passing an untrimmed `"  pref-foo  "` into
+  // `setPinned` previously failed deep inside path resolution.
+  const id = normalizeFlagString(flags["id"]);
+  if (id === null) {
     return fail(`brain ${value ? "pin" : "unpin"} missing required flag: --id`);
   }
   const config = defaultConfigPath();
@@ -17,8 +21,8 @@ async function pinOrUnpin(argv: string[], value: boolean): Promise<number> {
   const agent = resolveAgentName(config);
 
   try {
-    const out = setPinned(vault, String(flags["id"]), value, { agent });
-    const slug = String(flags["id"]).trim().replace(/^pref-/, "");
+    const out = setPinned(vault, id, value, { agent });
+    const slug = id.replace(/^pref-/, "");
     const label = value ? "pinned" : "unpinned";
     const idemLabel = value ? "already pinned" : "already unpinned";
     if (flags["json"]) { okJson({ id: `pref-${slug}`, changed: out.changed, pinned: value }); }

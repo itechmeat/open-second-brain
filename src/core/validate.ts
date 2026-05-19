@@ -21,6 +21,11 @@ export function parseInteger(
   range?: { readonly min?: number; readonly max?: number },
 ): number {
   if (raw === null) return default_;
+  // `Number(" ")` returns 0 in JS — without this guard a whitespace-
+  // only config value would silently coerce to a valid integer.
+  if (raw.trim() === "") {
+    throw new Error(`${fieldName} must be an integer, got empty string`);
+  }
   const n = Number(raw);
   if (!Number.isFinite(n) || !Number.isInteger(n)) {
     throw new Error(`${fieldName} must be an integer, got '${raw}'`);
@@ -44,6 +49,9 @@ export function parseFloat01(
   fieldName: string,
 ): number {
   if (raw === null) return default_;
+  if (raw.trim() === "") {
+    throw new Error(`${fieldName} must be a number in [0, 1], got empty string`);
+  }
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0 || n > 1) {
     throw new Error(`${fieldName} must be a number in [0, 1], got '${raw}'`);

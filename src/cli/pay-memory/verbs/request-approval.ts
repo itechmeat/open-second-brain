@@ -1,6 +1,6 @@
 import { defaultConfigPath, resolveAgentName, resolveTimezone } from "../../../core/config.ts";
 import { writePendingRequest } from "../../../core/pay-memory/index.ts";
-import { requireVault, sortedReplacer } from "../../helpers.ts";
+import { normalizeFlagString, requireVault, sortedReplacer } from "../../helpers.ts";
 import { parseOptionalNumberFlag } from "../../coerce.ts";
 import { parseFlags } from "../../argparse.ts";
 
@@ -24,8 +24,12 @@ export async function cmdRequestPaymentApproval(argv: string[]): Promise<number>
   });
   const config = defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
-  const agent =
-    (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const explicitAgent = normalizeFlagString(flags["agent"]);
+  if (flags["agent"] !== undefined && explicitAgent === null) {
+    process.stderr.write("error: --agent must be a non-empty string when provided\n");
+    return 2;
+  }
+  const agent = explicitAgent ?? resolveAgentName(config);
   const tz = resolveTimezone(config);
 
   const { value: expectedAmount, error: expectedErr } = parseOptionalNumberFlag(

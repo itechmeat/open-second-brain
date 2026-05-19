@@ -15,8 +15,14 @@ export function parseOptionalNumberFlag(
   flags: Record<string, string | boolean | string[] | undefined>,
   name: string,
 ): { value: number | null; error: string | null } {
-  const raw = flags[name] as string | undefined;
+  const raw = flags[name];
   if (raw === undefined) return { value: null, error: null };
+  // A non-string value (boolean / string[]) indicates a misconfigured
+  // flag schema — surface it as a clean validation error instead of
+  // throwing at the `.trim()` call below.
+  if (typeof raw !== "string") {
+    return { value: null, error: `--${name} must be provided as a single string value` };
+  }
   const trimmed = raw.trim();
   if (trimmed === "") return { value: null, error: null };
   const parsed = Number(trimmed);
@@ -50,8 +56,11 @@ export function parseOptionalIsoDate(
   flags: Record<string, string | boolean | string[] | undefined>,
   name: string,
 ): { value: Date | null; error: string | null } {
-  const raw = flags[name] as string | undefined;
+  const raw = flags[name];
   if (raw === undefined) return { value: null, error: null };
+  if (typeof raw !== "string") {
+    return { value: null, error: `--${name} must be provided as a single string value` };
+  }
   const trimmed = raw.trim();
   if (trimmed === "") return { value: null, error: null };
   if (!ISO_8601_RE.test(trimmed)) {

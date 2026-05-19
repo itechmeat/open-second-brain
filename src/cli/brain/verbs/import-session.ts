@@ -5,7 +5,7 @@ import { SessionImportError } from "../../../core/brain/sessions/types.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
-import { parse, fail, ok, okJson, info, resolveBrainVault, ISO_8601_RE } from "../helpers.ts";
+import { parse, fail, info, normalizeFlagString, ok, okJson, resolveBrainVault, ISO_8601_RE } from "../helpers.ts";
 
 export async function cmdBrainImportSession(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -20,7 +20,11 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
   const sessionPath = positional[0]!;
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const explicitAgent = normalizeFlagString(flags["agent"]);
+  if (flags["agent"] !== undefined && explicitAgent === null) {
+    return fail("--agent must be a non-empty string when provided");
+  }
+  const agent = explicitAgent ?? resolveAgentName(config);
 
   const formatRaw = flags["format"] as string | undefined;
   let format: "claude" | "codex" | "hermes" | undefined;

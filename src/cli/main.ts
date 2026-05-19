@@ -29,6 +29,7 @@ import { handleDisciplineSubcommand } from "./discipline.ts";
 import { handleSearchSubcommand } from "./search.ts";
 import {
   NoVaultConfiguredError,
+  normalizeFlagString,
   requireVault,
   sortedReplacer,
 } from "./helpers.ts";
@@ -262,7 +263,11 @@ async function cmdAppendEvent(argv: string[]): Promise<number> {
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
   const tz = resolveTimezone(config);
-  const explicit = flags["as"] as string | undefined;
+  const explicit = normalizeFlagString(flags["as"]);
+  if (flags["as"] !== undefined && explicit === null) {
+    process.stderr.write("error: --as must be a non-empty string when provided\n");
+    return 2;
+  }
   const agent = explicit ?? resolveAgentName(config);
 
   let path: string;

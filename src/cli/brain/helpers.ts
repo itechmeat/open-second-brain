@@ -26,7 +26,7 @@
 import { resolveVault } from "../../core/config.ts";
 
 import { CliError, parseFlags, type FlagsSchema } from "../argparse.ts";
-import { NO_VAULT_ERROR } from "../helpers.ts";
+import { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
 
 // ── Vault resolution ────────────────────────────────────────────────────────
 
@@ -34,7 +34,13 @@ export function resolveBrainVault(
   flagVal: string | undefined,
   configPath: string | null,
 ): string {
-  const vault = flagVal ?? resolveVault(configPath ?? undefined);
+  // Mirror `requireVault` in `../helpers.ts`: explicit `--vault ""`
+  // is a user error, not an excuse to fall through to `resolveVault`.
+  const explicit = normalizeFlagString(flagVal);
+  if (flagVal !== undefined && explicit === null) {
+    throw new CliError(NO_VAULT_ERROR);
+  }
+  const vault = explicit ?? resolveVault(configPath ?? undefined);
   if (vault === null || vault === undefined) {
     throw new CliError(NO_VAULT_ERROR);
   }
@@ -58,7 +64,7 @@ export function parse(
 export { CliError } from "../argparse.ts";
 export { fail, info, ok, okJson } from "../output.ts";
 export { ISO_8601_RE, parseOptionalIsoDate } from "../coerce.ts";
-export { NO_VAULT_ERROR } from "../helpers.ts";
+export { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
 
 export { BRAIN_HELP, VERB_HELP } from "./help-text.ts";
 export {

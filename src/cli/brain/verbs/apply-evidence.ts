@@ -1,6 +1,6 @@
 import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import { appendApplyEvidence, BrainPreferenceNotFoundError } from "../../../core/brain/apply-evidence.ts";
-import { parse, fail, ok, okJson, resolveBrainVault } from "../helpers.ts";
+import { parse, fail, normalizeFlagString, ok, okJson, resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainApplyEvidence(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -19,7 +19,11 @@ export async function cmdBrainApplyEvidence(argv: string[]): Promise<number> {
   }
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const explicitAgent = normalizeFlagString(flags["agent"]);
+  if (flags["agent"] !== undefined && explicitAgent === null) {
+    return fail("--agent must be a non-empty string when provided");
+  }
+  const agent = explicitAgent ?? resolveAgentName(config);
 
   const resultStr = String(flags["result"]);
   if (resultStr !== "applied" && resultStr !== "violated" && resultStr !== "outdated") {

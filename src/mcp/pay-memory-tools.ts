@@ -97,7 +97,7 @@ async function toolPaymentReceiptAppend(
   if (fromRequest) {
     const loaded = loadPendingRequest(ctx.vault, fromRequest);
     if (!loaded) {
-      throw new Error(`pending request not found: ${fromRequest}`);
+      throw new MCPError(INVALID_PARAMS, `from_request not found: ${fromRequest}`);
     }
     const meta = loaded.metadata;
     const get = (k: string): string | null => {
@@ -241,7 +241,7 @@ async function toolPaymentRequestStatus(
   const id = coerceStr(args, "id", true)!;
   const loaded = loadPendingRequest(ctx.vault, id);
   if (!loaded) {
-    throw new Error(`pending request not found: ${id}`);
+    throw new MCPError(INVALID_PARAMS, `id not found: ${id}`);
   }
   const meta = loaded.metadata;
   const get = (k: string): string | null => {

@@ -41,7 +41,12 @@ export async function cmdBrainExplorer(argv: string[]): Promise<number> {
   ok(`Live explorer at ${server.url}`);
   info("Press Ctrl+C to stop.");
   await new Promise<void>((resolveStop) => {
-    const stop = (): void => { void server.close().then(() => resolveStop()); };
+    // `.catch(() => undefined).finally(...)` so the shutdown promise
+    // always settles — without the catch, a rejected `server.close()`
+    // leaves the outer await pending and Ctrl+C hangs the process.
+    const stop = (): void => {
+      void server.close().catch(() => undefined).finally(() => resolveStop());
+    };
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
   });
