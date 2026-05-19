@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -96,11 +96,18 @@ describe("handshake", () => {
     const inst = r.result.instructions as string;
     expect(inst).toContain("@hermes-vps-agent");
     // v0.9.0+ — instructions advertise Brain tools, not the legacy
-    // event_log_append / second_brain_capture path.
+    // `second_brain_capture` path. v0.10.8 instructions may mention
+    // `event_log_append` once, only as the historical name of the
+    // retired tool that `brain_note` now replaces — they must NOT
+    // teach the agent to call it.
     expect(inst).toContain("brain_feedback");
     expect(inst).toContain("brain_apply_evidence");
-    expect(inst).not.toContain("event_log_append");
+    expect(inst).toContain("brain_note");
     expect(inst).not.toContain("second_brain_capture");
+    // Allowed mention is the "retired" reference; reject any wording
+    // that frames `event_log_append` as an active tool to call.
+    expect(inst).not.toMatch(/call\s+`?event_log_append`?/i);
+    expect(inst).not.toMatch(/use\s+`?event_log_append`?/i);
   });
 
   test("negotiates alternate client version", async () => {
@@ -133,7 +140,7 @@ describe("handshake", () => {
 });
 
 describe("tool listing", () => {
-  test("advertises the core, Brain, and Pay Memory tools (v0.9.0+)", async () => {
+  test("advertises the core, Brain, and Pay Memory tools (v0.10.8+)", async () => {
     const server = new MCPServer({ vault: tmp });
     await initialize(server);
     const r = (await server.handleRequest({
@@ -148,10 +155,11 @@ describe("tool listing", () => {
         "second_brain_status",
         "second_brain_query",
         "vault_health",
-        // Brain (v0.9.0; brain_backlinks added in v0.9.1).
+        // Brain (brain_note added in v0.10.8 §32B).
         "brain_feedback",
         "brain_dream",
         "brain_apply_evidence",
+        "brain_note",
         "brain_digest",
         "brain_query",
         "brain_doctor",
@@ -287,8 +295,9 @@ describe("stdio loop", () => {
     const list = JSON.parse(lines[1]!);
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
-    // v0.10.0: 3 core (status/query/health) + 7 Brain + 8 Pay Memory + 1 Search = 19.
-    expect(list.result.tools.length).toBe(19);
+    // v0.10.8: 3 core (status/query/health) + 8 Brain (brain_note added §32B)
+    // + 8 Pay Memory + 1 Search = 20.
+    expect(list.result.tools.length).toBe(20);
   });
 
   test("returns parse error for invalid JSON", async () => {
@@ -345,7 +354,11 @@ describe("serveStdioFromString respects scope+name", () => {
     expect(lines[0].result.serverInfo.name).toBe("open-second-brain-writer");
     const toolNames = (lines[1].result.tools as Array<{ name: string }>)
       .map((t) => t.name).sort();
-    expect(toolNames).toEqual(["brain_apply_evidence", "brain_feedback"]);
+    expect(toolNames).toEqual([
+      "brain_apply_evidence",
+      "brain_feedback",
+      "brain_note",
+    ]);
   });
 });
 

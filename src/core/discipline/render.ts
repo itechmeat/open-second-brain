@@ -24,13 +24,13 @@ export function renderReport(r: RenderInput): string {
   } else {
     for (const [agent, c] of knownEntries) {
       lines.push(
-        `\\- ${e(agent)}: ${c.feedback} feedback, ${c.apply_evidence} apply\\-evidence, ${c.other} other \\(total ${c.total}\\)`,
+        `\\- ${e(agent)}: ${c.feedback} feedback, ${c.apply_evidence} apply\\-evidence, ${c.note} note, ${c.other} other \\(total ${c.total}\\)`,
       );
     }
   }
   for (const u of r.events.unknownAgents) {
     lines.push(
-      `\\- ${e(u.agent)} \\(unknown\\): ${u.counts.feedback} feedback, ${u.counts.apply_evidence} apply\\-evidence, ${u.counts.other} other \\(total ${u.counts.total}\\)`,
+      `\\- ${e(u.agent)} \\(unknown\\): ${u.counts.feedback} feedback, ${u.counts.apply_evidence} apply\\-evidence, ${u.counts.note} note, ${u.counts.other} other \\(total ${u.counts.total}\\)`,
     );
   }
   lines.push("");

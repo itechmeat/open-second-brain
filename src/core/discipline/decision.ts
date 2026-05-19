@@ -1,6 +1,5 @@
 import type { BrainEventCounts } from "./log-counts.ts";
 import type { GitActivity } from "./activity-git.ts";
-import type { MtimeActivity } from "./activity-mtime.ts";
 import type { VaultDelta } from "./vault-delta.ts";
 
 export interface RepoActivityRow {

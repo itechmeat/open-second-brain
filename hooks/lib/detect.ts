@@ -33,12 +33,12 @@ const NATIVE_ARTIFACT_NAMES = new Set<string>([
 // Tool-name suffixes that count as "the agent logged this turn",
 // regardless of any runtime-injected MCP prefix.
 //
-// §30 §A (v0.10.6) broadens the set from `event_log_append` only to
-// any of the three brain-event tools — `event_log_append` itself
-// (durable session summary), `brain_feedback` (new taste signal),
-// `brain_apply_evidence` (evidence trail against an active
-// preference). Either of these landing in a turn that produced a
-// durable artifact is enough to clear the stop guardrail.
+// §32 (v0.10.8) retires `event_log_append` and adds `brain_note` as
+// the third Brain-native writer (narrative milestones that fit
+// neither feedback nor apply-evidence). The set is now
+// `brain_feedback` / `brain_apply_evidence` / `brain_note`; any of
+// them landing in a turn that produced a durable artifact clears the
+// stop guardrail.
 //
 // Names appear bare in Codex transcripts and decorated as
 // `mcp__plugin_<plugin>_<server>__<name>` or `mcp__<server>__<name>`
@@ -46,16 +46,18 @@ const NATIVE_ARTIFACT_NAMES = new Set<string>([
 // start or a `__` separator so a future prefix change keeps working
 // without an emergency patch.
 const BRAIN_EVENT_NAME_SUFFIX =
-  /(?:^|__)(event_log_append|brain_feedback|brain_apply_evidence)$/;
+  /(?:^|__)(brain_feedback|brain_apply_evidence|brain_note)$/;
 
 // Bash command substrings that count as a brain-event call from the
 // CLI. We deliberately keep this list narrow: anything matched here
 // suppresses the guardrail. Spawning the MCP server (`o2b mcp …`)
 // does NOT log on its own, so it stays out of the list — only the
 // explicit event-emitting commands are in.
+//
+// §32 (v0.10.8) drops `o2b append-event` and `vault-log` — those
+// still work for human / cron use, but they target the deprecated
+// `Daily/` surface and no longer count as a Brain-side event.
 const BRAIN_EVENT_BASH_NEEDLES = [
-  "o2b append-event",
-  "vault-log ", // trailing space distinguishes the CLI from a literal log path
   "o2b brain feedback",
   "o2b brain apply-evidence",
 ];
@@ -66,8 +68,8 @@ export function isArtifactToolName(name: string): boolean {
 
 /**
  * True when `name` is one of the three brain-event tools (or a
- * runtime-decorated form thereof). The renamed-from `isLogToolName`
- * — kept tightly aligned with §30 §A's broadened semantics.
+ * runtime-decorated form thereof). §32 (v0.10.8) replaces the
+ * v0.10.6 set: `event_log_append` is retired; `brain_note` is added.
  */
 export function isBrainEventToolName(name: string): boolean {
   return BRAIN_EVENT_NAME_SUFFIX.test(name);
@@ -76,10 +78,9 @@ export function isBrainEventToolName(name: string): boolean {
 export interface TurnSummary {
   readonly hadArtifact: boolean;
   /**
-   * True when any of `event_log_append`, `brain_feedback`,
-   * `brain_apply_evidence` (MCP call or CLI invocation) landed in
-   * this turn. Renamed from `hadLog` in v0.10.6 §30 §A so the stop
-   * guardrail's correctness rests on the broader signal.
+   * True when any of `brain_feedback`, `brain_apply_evidence`, or
+   * `brain_note` (MCP call or CLI invocation) landed in this turn.
+   * §32 (v0.10.8): `event_log_append` no longer counts.
    */
   readonly hadBrainEvent: boolean;
 }

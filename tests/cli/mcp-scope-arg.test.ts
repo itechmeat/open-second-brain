@@ -42,7 +42,11 @@ describe("o2b mcp --scope arg validation", () => {
       const lines = res.stdout.trim().split("\n").map((l) => JSON.parse(l));
       const names = (lines[1].result.tools as Array<{ name: string }>)
         .map((t) => t.name).sort();
-      expect(names).toEqual(["brain_apply_evidence", "brain_feedback"]);
+      expect(names).toEqual([
+        "brain_apply_evidence",
+        "brain_feedback",
+        "brain_note",
+      ]);
     });
   });
 });

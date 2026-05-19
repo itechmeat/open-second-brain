@@ -11,7 +11,6 @@ import { parseClaudeMemoryFile } from "./claude-memory-parser.ts";
 import {
   loadManifest,
   saveManifest,
-  type ClaudeMemoryManifest,
 } from "./claude-memory-manifest.ts";
 import { planAction, type PlannedFile } from "./claude-memory-plan.ts";
 import { renderPreferenceFromMemory, slugifyMemoryName } from "./claude-memory-render.ts";

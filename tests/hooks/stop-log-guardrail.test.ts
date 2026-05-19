@@ -62,7 +62,7 @@ async function runHook(payload: unknown): Promise<RunResult> {
 }
 
 describe("stop-log-guardrail hook", () => {
-  test("blocks once when artifact was produced and no log was called", async () => {
+  test("blocks once when artifact was produced and no brain event was recorded", async () => {
     const transcript_path = writeTranscript([
       ccUser("please add a file"),
       ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
@@ -76,14 +76,38 @@ describe("stop-log-guardrail hook", () => {
     expect(r.stdout.endsWith("\n")).toBe(true);
     const out = JSON.parse(r.stdout);
     expect(out.decision).toBe("block");
-    expect(out.reason).toContain("event_log_append");
+    expect(out.reason).toContain("brain_feedback");
+    expect(out.reason).toContain("brain_apply_evidence");
+    expect(out.reason).toContain("brain_note");
+    // §32 (v0.10.8): event_log_append must not appear in the new
+    // guardrail body — the tool is retired across every runtime.
+    expect(out.reason).not.toContain("event_log_append");
   });
 
-  test("passes through when log was called this turn", async () => {
+  test("passes through when brain_feedback was called this turn", async () => {
     const transcript_path = writeTranscript([
       ccUser("please add a file"),
       ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
-      ccAssistantToolUse("event_log_append", { message: "added /tmp/x.md" }),
+      ccAssistantToolUse("brain_feedback", {
+        topic: "x",
+        signal: "positive",
+        principle: "p",
+      }),
+    ]);
+    const r = await runHook({
+      hook_event_name: "Stop",
+      transcript_path,
+      stop_hook_active: false,
+    });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("passes through when brain_note was called this turn (§32B)", async () => {
+    const transcript_path = writeTranscript([
+      ccUser("please add a file"),
+      ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
+      ccAssistantToolUse("brain_note", { text: "added /tmp/x.md" }),
     ]);
     const r = await runHook({
       hook_event_name: "Stop",
@@ -141,9 +165,43 @@ describe("stop-log-guardrail hook", () => {
     expect(r.stdout).toBe("");
   });
 
-  test("passes through when the agent logged via Bash (`o2b append-event`)", async () => {
+  test("passes through when the agent logged via Bash (`o2b brain feedback`)", async () => {
     const transcript_path = writeTranscript([
-      ccUser("add a file and log it via bash"),
+      ccUser("add a file and record a signal via bash"),
+      ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_b",
+              name: "Bash",
+              input: {
+                command:
+                  "o2b brain feedback --topic x --signal positive --principle p",
+              },
+            },
+          ],
+        },
+      }),
+    ]);
+    const r = await runHook({
+      hook_event_name: "Stop",
+      transcript_path,
+      stop_hook_active: false,
+    });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("blocks even when the deprecated `o2b append-event` bash needle is used (§32)", async () => {
+    // §32 (v0.10.8) drops `o2b append-event` from the brain-event
+    // detector. The CLI still works for humans / cron, but it no
+    // longer suppresses the stop guardrail.
+    const transcript_path = writeTranscript([
+      ccUser("add a file and write the legacy log line"),
       ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
       JSON.stringify({
         type: "assistant",
@@ -165,25 +223,26 @@ describe("stop-log-guardrail hook", () => {
       transcript_path,
       stop_hook_active: false,
     });
-    expect(r.exit).toBe(0);
-    expect(r.stdout).toBe("");
+    const out = JSON.parse(r.stdout);
+    expect(out.decision).toBe("block");
   });
 
-  test("passes through when the Claude MCP-prefixed event_log_append is called", async () => {
+  test("blocks even when the deprecated MCP-prefixed event_log_append is called (§32)", async () => {
     const transcript_path = writeTranscript([
       ccUser("add a file"),
       ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
-      ccAssistantToolUse("mcp__plugin_open-second-brain_open-second-brain__event_log_append", {
-        message: "added /tmp/x.md",
-      }),
+      ccAssistantToolUse(
+        "mcp__plugin_open-second-brain_open-second-brain__event_log_append",
+        { message: "added /tmp/x.md" },
+      ),
     ]);
     const r = await runHook({
       hook_event_name: "Stop",
       transcript_path,
       stop_hook_active: false,
     });
-    expect(r.exit).toBe(0);
-    expect(r.stdout).toBe("");
+    const out = JSON.parse(r.stdout);
+    expect(out.decision).toBe("block");
   });
 
   test("blocks for Codex apply_patch with no logging", async () => {
@@ -292,6 +351,10 @@ describe("stop-log-guardrail hook", () => {
     const reason = out.reason as string;
     expect(reason).not.toContain("This guardrail fires");
     expect(reason).not.toContain("codex exec");
-    expect(reason).toContain("event_log_append");
+    // §32 (v0.10.8) — the unknown-runtime body still names the
+    // current trio of brain-event tools.
+    expect(reason).toContain("brain_feedback");
+    expect(reason).toContain("brain_apply_evidence");
+    expect(reason).toContain("brain_note");
   });
 });

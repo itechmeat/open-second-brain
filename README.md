@@ -22,9 +22,14 @@ Three loops cooperate over plain Markdown:
 - **Accretion.** A deterministic `dream` pass clusters repeat signals
   into rules — counters and atomic file moves, no LLM.
 - **Application.** Agents log whether each rule was `applied` /
-  `violated` / `outdated`. `Brain/active.md` is auto-regenerated and
-  injected at session start; `brain_search` exposes full-text search
-  across the whole vault.
+  `violated` / `outdated`, or record a narrative milestone via
+  `brain_note` for events that fit neither category. `Brain/active.md`
+  is auto-regenerated and injected at session start; `brain_search`
+  exposes full-text search across the whole vault.
+
+Every event lands in `Brain/log/<date>.md` (human-facing) plus a
+structured `Brain/log/<date>.jsonl` sidecar (machine-facing), written
+atomically by one writer so the two stay in lockstep.
 
 ```mermaid
 flowchart LR
@@ -32,6 +37,7 @@ flowchart LR
     Agent -- brain_feedback --> Inbox[(Brain/inbox/)]
     Inbox -. dream .-> Pref[(Brain/preferences/)]
     Agent -- brain_apply_evidence --> Log[(Brain/log/)]
+    Agent -- brain_note --> Log
     Log -. dream .-> Pref
     Pref -. regenerate .-> Active[Brain/active.md]
     Active -- SessionStart hook --> Agent

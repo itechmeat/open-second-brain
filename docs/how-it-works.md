@@ -385,7 +385,7 @@ content as **resources** (added in v0.9.1):
 | `osb://status`                    | Markdown form of the `second_brain_status.brain` block |
 | `osb://preference/{id}`           | one `pref-` / `ret-` file                         |
 | `osb://topic/{slug}`              | every signal + active/retired pref for a topic    |
-| `osb://log/{date}`                | one day's `Brain/log/YYYY-MM-DD.md`               |
+| `osb://log/{date}`                | one day's `Brain/log/YYYY-MM-DD.md` (a parallel `YYYY-MM-DD.jsonl` sidecar carries the same events as one JSON row per line for machine consumers) |
 | `osb://backlinks/{id}`            | inverted reference map for `<id>`                 |
 
 Resources are pure read; mutating verbs stay on `tools/call`.
@@ -653,8 +653,10 @@ These are invariants of the system, not configuration to enable.
 - **Atomic per-file writes.** Every mutation goes through
   write-temp + rename; an interrupted run never leaves partial files.
 - **Audit-traceable.** Every state change emits a typed event in
-  `Brain/log/<day>.md`. The log is append-only; the dream log entry
-  for a run records exactly which preferences moved and why.
+  `Brain/log/<day>.md` plus a structured `<day>.jsonl` sidecar
+  (machine readers prefer the JSONL and fall back to parsing the
+  markdown for historical days). The log is append-only; the dream
+  log entry for a run records exactly which preferences moved and why.
 - **Reversible.** Pre-run snapshots plus
   `o2b brain rollback <run-id>` let you undo any single dream pass.
 - **Path-safe.** Every writer routes through a vault-boundary check;

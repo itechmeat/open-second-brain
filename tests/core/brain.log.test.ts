@@ -8,7 +8,7 @@ import {
   parseLogDay,
   type BrainLogEntry,
 } from "../../src/core/brain/log.ts";
-import { brainDirs, logPath } from "../../src/core/brain/paths.ts";
+import { brainDirs, logJsonlPath, logPath } from "../../src/core/brain/paths.ts";
 
 let tmp: string;
 
@@ -235,5 +235,108 @@ describe("ISO timestamp round-trip", () => {
         body: {},
       }),
     ).toThrow(/unknown event kind/);
+  });
+});
+
+describe("appendLogEvent — JSONL sidecar (§23, v0.10.8)", () => {
+  test("writes the same event to both .md and .jsonl", () => {
+    const entry: BrainLogEntry = {
+      timestamp: "2026-05-19T10:00:00Z",
+      eventType: "feedback",
+      body: { signal: "[[sig-x]]", topic: "x", sign: "positive" },
+    };
+    const res = appendLogEvent(tmp, entry);
+    const jsonlPath = logJsonlPath(tmp, "2026-05-19");
+
+    expect(existsSync(res.logPath)).toBe(true);
+    expect(existsSync(jsonlPath)).toBe(true);
+
+    const jsonl = readFileSync(jsonlPath, "utf8");
+    const lines = jsonl.trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const parsed = JSON.parse(lines[0]!);
+    expect(parsed).toEqual({
+      ts: "2026-05-19T10:00:00Z",
+      kind: "feedback",
+      payload: { signal: "[[sig-x]]", topic: "x", sign: "positive" },
+    });
+  });
+
+  test("appends a second event to both files", () => {
+    appendLogEvent(tmp, {
+      timestamp: "2026-05-19T10:00:00Z",
+      eventType: "feedback",
+      body: { signal: "[[sig-a]]", topic: "a", sign: "positive" },
+    });
+    appendLogEvent(tmp, {
+      timestamp: "2026-05-19T10:00:01Z",
+      eventType: "apply-evidence",
+      body: {
+        preference: "[[pref-a]]",
+        artifact: "[[file.ts]]",
+        agent: "@x",
+        result: "applied",
+      },
+    });
+    const jsonlPath = logJsonlPath(tmp, "2026-05-19");
+    const jsonl = readFileSync(jsonlPath, "utf8");
+    const lines = jsonl.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!).kind).toBe("feedback");
+    expect(JSON.parse(lines[1]!).kind).toBe("apply-evidence");
+  });
+
+  test("encodes array payloads as JSON arrays", () => {
+    appendLogEvent(tmp, {
+      timestamp: "2026-05-19T10:00:00Z",
+      eventType: "dream",
+      body: {
+        run_id: "dream-1",
+        new_unconfirmed: ["[[pref-a]]", "[[pref-b]]"],
+      },
+    });
+    const jsonlPath = logJsonlPath(tmp, "2026-05-19");
+    const jsonl = readFileSync(jsonlPath, "utf8");
+    const parsed = JSON.parse(jsonl.trim());
+    expect(parsed.payload.new_unconfirmed).toEqual(["[[pref-a]]", "[[pref-b]]"]);
+    expect(parsed.payload.run_id).toBe("dream-1");
+  });
+
+  test("creates the JSONL sidecar even when the .md already exists by hand", () => {
+    // Simulate a pre-v0.10.8 day: markdown present, sidecar absent.
+    const mdPath = logPath(tmp, "2026-05-10");
+    mkdirSync(brainDirs(tmp).log, { recursive: true });
+    writeFileSync(
+      mdPath,
+      `---
+kind: brain-log
+date: 2026-05-10
+tags: [brain, brain/log]
+---
+
+# Brain log — 2026-05-10
+
+## 09:00:00Z — feedback
+- signal: [[sig-old]]
+- topic: old
+- sign: positive
+`,
+      "utf8",
+    );
+
+    appendLogEvent(tmp, {
+      timestamp: "2026-05-10T10:00:00Z",
+      eventType: "feedback",
+      body: { signal: "[[sig-new]]", topic: "new", sign: "positive" },
+    });
+
+    const jsonlPath = logJsonlPath(tmp, "2026-05-10");
+    expect(existsSync(jsonlPath)).toBe(true);
+    const lines = readFileSync(jsonlPath, "utf8").trim().split("\n");
+    // Only the new event lands in JSONL — backfill of the pre-existing
+    // markdown block is intentionally out of scope (lazy fallback in
+    // readLogDay handles historical markdown).
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).payload.topic).toBe("new");
   });
 });

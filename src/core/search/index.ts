@@ -4,6 +4,12 @@
  */
 
 import { discoverConfig } from "../config.ts";
+import {
+  envOrConfig,
+  parseBool as parseBoolShared,
+  parseFloat01 as parseFloat01Shared,
+  parseInteger as parseIntegerShared,
+} from "../validate.ts";
 import { resolveIndexPath } from "./paths.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig, ResolvedEmbeddingConfig } from "./types.ts";
@@ -57,57 +63,48 @@ const DEFAULTS = {
   batchSize: 32,
 };
 
-function envOrConfig(
-  env: NodeJS.ProcessEnv,
-  config: Readonly<Record<string, string>>,
-  envKey: string,
-  configKey: string,
-): string | null {
-  const e = env[envKey];
-  if (e !== undefined && e !== "") return e;
-  const c = config[configKey];
-  if (c !== undefined && c !== "") return c;
-  return null;
-}
+type IntegerRange = { readonly min?: number; readonly max?: number };
 
 function parseInteger(
   raw: string | null,
   fallback: number,
   fieldName: string,
-  opts?: { readonly min?: number; readonly max?: number },
+  range?: IntegerRange,
 ): number {
-  if (raw === null) return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || !Number.isInteger(n)) {
-    throw new SearchError("INVALID_INPUT", `${fieldName} must be an integer, got '${raw}'`);
+  try {
+    return parseIntegerShared(raw, fallback, fieldName, range);
+  } catch (e) {
+    throw new SearchError("INVALID_INPUT", (e as Error).message);
   }
-  validateIntegerRange(n, fieldName, opts);
-  return n;
+}
+
+function parseFloat01(raw: string | null, fallback: number, fieldName: string): number {
+  try {
+    return parseFloat01Shared(raw, fallback, fieldName);
+  } catch (e) {
+    throw new SearchError("INVALID_INPUT", (e as Error).message);
+  }
+}
+
+function parseBool(raw: string | null, fallback: boolean, fieldName: string): boolean {
+  try {
+    return parseBoolShared(raw, fallback, fieldName);
+  } catch (e) {
+    throw new SearchError("INVALID_INPUT", (e as Error).message);
+  }
 }
 
 function validateIntegerRange(
   n: number,
   fieldName: string,
-  opts?: { readonly min?: number; readonly max?: number },
+  range?: IntegerRange,
 ): void {
-  if (opts?.min !== undefined && n < opts.min) {
-    throw new SearchError("INVALID_INPUT", `${fieldName} must be >= ${opts.min}, got ${n}`);
+  if (range?.min !== undefined && n < range.min) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be >= ${range.min}, got ${n}`);
   }
-  if (opts?.max !== undefined && n > opts.max) {
-    throw new SearchError("INVALID_INPUT", `${fieldName} must be <= ${opts.max}, got ${n}`);
+  if (range?.max !== undefined && n > range.max) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be <= ${range.max}, got ${n}`);
   }
-}
-
-function parseFloat01(raw: string | null, fallback: number, fieldName: string): number {
-  if (raw === null) return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0 || n > 1) {
-    throw new SearchError(
-      "INVALID_INPUT",
-      `${fieldName} must be a number in [0, 1], got '${raw}'`,
-    );
-  }
-  return n;
 }
 
 function validateWeight(n: number, fieldName: string): void {
@@ -139,16 +136,6 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
   validateIntegerRange(config.semantic.timeoutMs, "embedding_timeout_ms", { min: 1 });
   validateIntegerRange(config.semantic.concurrency, "embedding_concurrency", { min: 1 });
   validateIntegerRange(config.semantic.batchSize, "embedding_batch_size", { min: 1 });
-}
-
-function parseBool(raw: string | null, fallback: boolean, fieldName: string): boolean {
-  if (raw === null) return fallback;
-  if (raw === "true" || raw === "1") return true;
-  if (raw === "false" || raw === "0") return false;
-  throw new SearchError(
-    "INVALID_INPUT",
-    `${fieldName} must be 'true' or 'false', got '${raw}'`,
-  );
 }
 
 function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {

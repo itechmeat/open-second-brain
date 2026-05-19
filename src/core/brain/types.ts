@@ -186,9 +186,29 @@ export const BRAIN_LOG_EVENT_KIND = {
    * entries, plus conflict and snapshot information.
    */
   importClaudeMemory: "import-claude-memory",
+  /**
+   * `note` (§32B, v0.10.8) — one narrative-milestone line written by
+   * the `brain_note` MCP tool. Payload carries `text` (one-line
+   * description) and `agent`. Not consumed by the dream pass beyond
+   * counting; it exists so an agent has a Brain-native home for
+   * "release X shipped" / "PR Y merged" / "discovered fact Z" lines
+   * instead of falling back to the deprecated `event_log_append`
+   * surface.
+   */
+  note: "note",
 } as const;
 export type BrainLogEventKind =
   (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
+
+/**
+ * Precomputed set of every event-kind string. Both the markdown
+ * parser (`appendLogEvent`) and the JSONL reader (`readLogDay`) need
+ * the same set to validate incoming kinds; canonicalising the
+ * construction here keeps the two readers in lockstep.
+ */
+export const BRAIN_LOG_EVENT_KIND_SET: ReadonlySet<string> = new Set(
+  Object.values(BRAIN_LOG_EVENT_KIND),
+);
 
 // ----- File-frontmatter shapes ----------------------------------------------
 
@@ -542,6 +562,18 @@ export interface BrainImportClaudeMemoryLogEvent extends BrainLogEventBase {
   readonly kind: typeof BRAIN_LOG_EVENT_KIND.importClaudeMemory;
 }
 
+/**
+ * `note` entry (§32B, v0.10.8) — one narrative-milestone line. Not
+ * consumed by the dream pass; it exists so an agent has a Brain-native
+ * home for "I shipped X" / "PR Y merged" lines instead of falling back
+ * to the deprecated Daily/ event log.
+ */
+export interface BrainNoteLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.note;
+  readonly text: string;
+  readonly agent: string;
+}
+
 /** Discriminated union of every concrete log event type. */
 export type BrainLogEvent =
   | BrainDreamLogEvent
@@ -561,7 +593,8 @@ export type BrainLogEvent =
   | BrainMigrateFrontmatterLogEvent
   | BrainMergeLogEvent
   | BrainUpgradeLogEvent
-  | BrainImportClaudeMemoryLogEvent;
+  | BrainImportClaudeMemoryLogEvent
+  | BrainNoteLogEvent;
 
 // ----- Configuration (`Brain/_brain.yaml`) ----------------------------------
 

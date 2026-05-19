@@ -6,7 +6,6 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,

@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 
 import { BrainConfigError, loadBrainConfig } from "../brain/policy.ts";
 import { countBrainEvents, type BrainEventCounts } from "./log-counts.ts";

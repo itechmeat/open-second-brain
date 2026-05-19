@@ -67,14 +67,20 @@ export function postWriteReminder({
     "",
     "If a confirmed or unconfirmed preference in `Brain/preferences/`",
     "scopes to the artifact you just produced, call",
-    "`brain_apply_evidence` with `result: applied | violated` so the",
-    "dream pass can update confidence and retire stale rules.",
+    "`brain_apply_evidence` with `result: applied | violated | outdated`",
+    "so the dream pass can update confidence and retire stale rules.",
     "",
-    "Trivial edits (typo fix, pure formatting) don't need either call.",
-    "When a preference plausibly applies but you are unsure, record",
-    "the event with `note: \"speculative; <reason>\"` instead of",
-    "skipping — the dream pass discards single-event speculative",
-    "entries that do not recur.",
+    "If neither a new preference nor an evidence event fits but this",
+    "turn still produced a durable artifact worth referencing later",
+    "(release shipped, PR merged, fact discovered), call `brain_note`",
+    "with a one-line description — it lands in `Brain/log/<today>.md`",
+    "(plus the JSONL sidecar) under the `note` event kind.",
+    "",
+    "Trivial edits (typo fix, pure formatting) don't need any of the",
+    "three calls. When a preference plausibly applies but you are",
+    "unsure, record the event with `note: \"speculative; <reason>\"`",
+    "instead of skipping — the dream pass discards single-event",
+    "speculative entries that do not recur.",
   );
   return parts.join("\n");
 }
@@ -82,9 +88,9 @@ export function postWriteReminder({
 function stopGuardrailCadenceLine(runtime: HookRuntime): string {
   switch (runtime) {
     case "claudecode":
-      return "_This guardrail fires at most once per turn — send another reply (with or without `event_log_append`) to clear it._";
+      return "_This guardrail fires at most once per turn — send another reply (with or without a brain-event call) to clear it._";
     case "codex":
-      return "_This `codex exec` is about to end — call `event_log_append` now or finish silently; no further guardrail will fire._";
+      return "_This `codex exec` is about to end — call `brain_feedback` / `brain_apply_evidence` / `brain_note` now or finish silently; no further guardrail will fire._";
     case "unknown":
       return "";
   }
@@ -96,20 +102,22 @@ export function stopGuardrailReason(runtime: HookRuntime = "unknown"): string {
     "Open Second Brain hook: this turn touched files",
     "(Write / Edit / MultiEdit / apply_patch) but did not call any of:",
     "",
-    "- `event_log_append` — durable session-summary line for the day log",
-    "- `brain_apply_evidence` — evidence trail when an active preference",
-    "  in `Brain/preferences/` scopes to the artifact you just produced",
     "- `brain_feedback` — new taste correction the user expressed in this",
     "  turn (one signal per file, see the `brain-memory` skill)",
+    "- `brain_apply_evidence` — evidence trail when an active preference",
+    "  in `Brain/preferences/` scopes to the artifact you just produced",
+    "- `brain_note` — one-line narrative milestone (release shipped, PR",
+    "  merged, fact discovered) that fits neither of the first two",
     "",
   ];
   if (cadence !== "") parts.push(cadence, "");
   parts.push(
     "Pick whichever fits this turn:",
-    "- a durable artifact future sessions need to find → `event_log_append`",
-    "- an active preference applied or violated by the change →",
-    "  `brain_apply_evidence` with `result: applied | violated`",
     "- a new rule the user just stated → `brain_feedback`",
+    "- an active preference applied, violated, or made obsolete by the",
+    "  change → `brain_apply_evidence` with",
+    "  `result: applied | violated | outdated`",
+    "- a durable narrative milestone → `brain_note`",
     "",
     "If the change is trivial and not worth recording, just send your",
     "reply again — this guardrail fires at most once per turn and the",

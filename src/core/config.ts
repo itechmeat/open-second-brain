@@ -7,11 +7,12 @@
  * via parallel suites in tests/core/config.test.ts.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "./fs-atomic.ts";
+import { isFile } from "./fs-utils.ts";
 import type { ConfigDiscovery } from "./types.ts";
 
 const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"] as const;
@@ -66,7 +67,7 @@ export function parseSimpleYaml(text: string): Record<string, string> {
 /** Read and parse the config file, or report it as missing. */
 export function discoverConfig(path?: string): ConfigDiscovery {
   const resolved = path ?? defaultConfigPath();
-  if (!isRegularFile(resolved)) {
+  if (!isFile(resolved)) {
     return { path: resolved, exists: false, data: {} };
   }
   try {
@@ -174,13 +175,4 @@ function expandTilde(p: string): string {
   if (p === "~") return homedir();
   if (p.startsWith("~/")) return join(homedir(), p.slice(2));
   return p;
-}
-
-function isRegularFile(p: string): boolean {
-  if (!existsSync(p)) return false;
-  try {
-    return statSync(p).isFile();
-  } catch {
-    return false;
-  }
 }

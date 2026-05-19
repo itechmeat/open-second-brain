@@ -12,12 +12,12 @@ import {
   openSync,
   readFileSync,
   rmSync,
-  statSync,
   writeSync,
   closeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { isFile } from "./fs-utils.ts";
 import type { CheckResult } from "./types.ts";
 
 export function checkVaultWriteable(vault: string): CheckResult {
@@ -295,7 +295,6 @@ export function checkOpenclawInstallability(repoRoot: string): CheckResult[] {
   }
   return results;
 }
-
 export interface DoctorOptions {
   readonly vault: string;
   readonly config?: string | null;
@@ -315,13 +314,4 @@ export function doctor(opts: DoctorOptions): CheckResult[] {
     results.push(...checkOpenclawInstallability(root));
   }
   return results;
-}
-
-function isFile(p: string): boolean {
-  if (!existsSync(p)) return false;
-  try {
-    return statSync(p).isFile();
-  } catch {
-    return false;
-  }
 }

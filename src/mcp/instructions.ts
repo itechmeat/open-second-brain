@@ -21,19 +21,22 @@ export interface BuildInstructionsOpts {
 
 const WRITER_INSTRUCTIONS = `Open Second Brain — writer surface (always-loaded).
 
-Two tools live here:
+Three tools live here:
   - brain_feedback        — record one new taste signal the user just expressed.
   - brain_apply_evidence  — record applied | violated | outdated against an
                             active preference for an artifact this turn produced.
+  - brain_note            — record one narrative milestone (release shipped,
+                            PR merged, fact discovered) that fits neither
+                            category.
 
 The remaining Brain surface (digest, query, doctor, backlinks, search,
 Pay Memory tools, vault_health, second_brain_status, second_brain_query,
 and the scheduled learning pass) lives on the sibling
 "open-second-brain" MCP server (deferred). Use ToolSearch to reach it.
 
-Prefer the writer-server copy of brain_feedback / brain_apply_evidence over
-any duplicate exposed by the full server — both call the same handler, but the
-writer copy is always available without ToolSearch.`;
+Prefer the writer-server copies of brain_feedback / brain_apply_evidence /
+brain_note over any duplicate exposed by the full server — both call the same
+handler, but the writer copy is always available without ToolSearch.`;
 
 export function buildInstructions(opts: BuildInstructionsOpts | string): string {
   // Legacy call-site compat: plain string → full-surface branch.
@@ -56,7 +59,15 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "durable artifact (code shipped, config / instruction edited, " +
     "content drafted) and at least one preference in " +
     "`Brain/preferences/` scopes to that artifact. Record " +
-    "`result: applied | violated` per (preference, artifact) pair.\n" +
+    "`result: applied | violated | outdated` per (preference, " +
+    "artifact) pair.\n" +
+    "  - brain_note — call when this turn produced a durable " +
+    "narrative milestone (release shipped, PR merged, fact " +
+    "discovered) that fits neither `brain_feedback` nor " +
+    "`brain_apply_evidence`. Lands one line under event kind " +
+    "`note` in `Brain/log/<today>.md` (and the JSONL sidecar). " +
+    "This is the Brain-native replacement for the retired " +
+    "`event_log_append` tool.\n" +
     "  - brain_dream — runs the deterministic learning pass " +
     "(clusters signals, promotes preferences, retires stale rules). " +
     "Usually scheduled via cron, not invoked interactively.\n" +

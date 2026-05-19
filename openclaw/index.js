@@ -1478,12 +1478,12 @@ var require_adapter = __commonJS((exports, module) => {
     return newFs;
   }
   function toPromise(method) {
-    return (...args) => new Promise((resolve, reject) => {
+    return (...args) => new Promise((resolve3, reject) => {
       args.push((err, result) => {
         if (err) {
           reject(err);
         } else {
-          resolve(result);
+          resolve3(result);
         }
       });
       method(...args);
@@ -1554,11 +1554,11 @@ var require_proper_lockfile = __commonJS((exports, module) => {
 
 // src/openclaw/index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { existsSync as existsSync7 } from "node:fs";
-import { join as join10, resolve as resolvePath } from "node:path";
+import { existsSync as existsSync5 } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 // src/core/config.ts
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join2 } from "node:path";
 
@@ -1632,6 +1632,22 @@ function withTempFile(target, contents, commit) {
   }
 }
 
+// src/core/fs-utils.ts
+import { existsSync, statSync } from "node:fs";
+function isFile(p) {
+  if (!existsSync(p))
+    return false;
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+function stem(filename) {
+  const dot = filename.lastIndexOf(".");
+  return dot > 0 ? filename.slice(0, dot) : filename;
+}
+
 // src/core/config.ts
 var SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"];
 function defaultConfigPath() {
@@ -1665,7 +1681,7 @@ function parseSimpleYaml(text) {
 }
 function discoverConfig(path) {
   const resolved = path ?? defaultConfigPath();
-  if (!isRegularFile(resolved)) {
+  if (!isFile(resolved)) {
     return { path: resolved, exists: false, data: {} };
   }
   try {
@@ -1718,15 +1734,6 @@ function expandTilde(p) {
     return join2(homedir(), p.slice(2));
   return p;
 }
-function isRegularFile(p) {
-  if (!existsSync(p))
-    return false;
-  try {
-    return statSync(p).isFile();
-  } catch {
-    return false;
-  }
-}
 
 // src/core/doctor.ts
 import {
@@ -1735,7 +1742,6 @@ import {
   openSync as openSync2,
   readFileSync as readFileSync2,
   rmSync,
-  statSync as statSync2,
   writeSync as writeSync2,
   closeSync as closeSync2
 } from "node:fs";
@@ -2000,161 +2006,9 @@ function doctor(opts) {
   }
   return results;
 }
-function isFile(p) {
-  if (!existsSync2(p))
-    return false;
-  try {
-    return statSync2(p).isFile();
-  } catch {
-    return false;
-  }
-}
-
-// src/core/event-log.ts
-var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
-var SECRET_ASSIGNMENT_RE = /\b(api[_-]?key|token|secret|password|credential)(\s*[:=]\s*)\S+/gi;
-var EVENT_RE = /^- (\d{2}:\d{2}) — @/;
-var DATE_RE = /^(\d{4})\.(\d{2})\.(\d{2})$/;
-var TIME_RE = /^(\d{2}):(\d{2})$/;
-function redactText(text) {
-  return text.replace(SECRET_ASSIGNMENT_RE, (_match, field, sep) => `${field}${sep}[REDACTED]`);
-}
-function currentDate(tz) {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz ?? undefined,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  });
-  return fmt.format(new Date).replace(/-/g, ".");
-}
-function currentTime(tz) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz ?? undefined,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(new Date);
-  const get = (type) => parts.find((p) => p.type === type).value;
-  return `${get("hour")}:${get("minute")}`;
-}
-function dailyNotePath(vaultDir, date) {
-  return join4(vaultDir, "Daily", `${validateEventDate(date)}.md`);
-}
-function newDailyNote(date) {
-  return `---
-formatted: false
----
-
-# ${date}
-
-## Raw events
-
-`;
-}
-function validateEventTime(value) {
-  const m = TIME_RE.exec(value);
-  if (!m) {
-    throw new Error("event time must use HH:MM 24-hour format");
-  }
-  const hour = parseInt(m[1], 10);
-  const minute = parseInt(m[2], 10);
-  if (hour > 23 || minute > 59) {
-    throw new Error("event time must use HH:MM 24-hour format");
-  }
-  return value;
-}
-function validateEventDate(value) {
-  const m = DATE_RE.exec(value);
-  if (!m) {
-    throw new Error("event date must use YYYY.MM.DD format");
-  }
-  const year = parseInt(m[1], 10);
-  const month = parseInt(m[2], 10);
-  const day = parseInt(m[3], 10);
-  const utc = new Date(Date.UTC(year, month - 1, day));
-  if (utc.getUTCFullYear() !== year || utc.getUTCMonth() !== month - 1 || utc.getUTCDate() !== day) {
-    throw new Error("event date must use YYYY.MM.DD format");
-  }
-  return value;
-}
-function insertEventEntry(content, entry) {
-  const marker = "## Raw events";
-  const idx = content.indexOf(marker);
-  if (idx === -1) {
-    return content.trimEnd() + `
-
-` + marker + `
-
-` + entry + `
-`;
-  }
-  const before = content.slice(0, idx);
-  let after = content.slice(idx + marker.length).replace(/^\n+/, "");
-  const lines = after.split(`
-`).filter((line) => line.trim());
-  const entryTime = entry.slice(2, 7);
-  let inserted = false;
-  const output = [];
-  for (const line of lines) {
-    const m = EVENT_RE.exec(line);
-    if (!inserted && m && m[1] > entryTime) {
-      output.push(entry);
-      inserted = true;
-    }
-    output.push(line);
-  }
-  if (!inserted)
-    output.push(entry);
-  let raw = output.join(`
-`);
-  if (raw)
-    raw += `
-`;
-  return before + marker + `
-
-` + raw;
-}
-async function appendEvent(vaultDir, agent, message, opts = {}) {
-  const tz = opts.tz ?? null;
-  const eventDate = validateEventDate(opts.date ?? currentDate(tz));
-  const eventTime = validateEventTime(opts.time ?? currentTime(tz));
-  const path = dailyNotePath(vaultDir, eventDate);
-  const cleanMessage = redactText(message).replace(/\r?\n/g, " ");
-  const entry = `- ${eventTime} — @${agent} — ${cleanMessage}`;
-  const dailyDir = join4(vaultDir, "Daily");
-  mkdirSync3(dailyDir, { recursive: true });
-  const release = await import_proper_lockfile.default.lock(dailyDir, {
-    retries: { retries: 30, factor: 1.2, minTimeout: 30, maxTimeout: 500 },
-    stale: 1e4,
-    realpath: false
-  });
-  try {
-    let content;
-    if (existsSync3(path)) {
-      content = readFileSync3(path, "utf8");
-    } else {
-      content = newDailyNote(eventDate);
-    }
-    if (!content.includes("## Raw events")) {
-      content = content.trimEnd() + `
-
-## Raw events
-
-`;
-    }
-    const updated = insertEventEntry(content, entry);
-    atomicWriteFileSync(path, updated);
-  } finally {
-    await release();
-  }
-  return path;
-}
 
 // src/core/identity-reminder.ts
-import { readFileSync as readFileSync4 } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
 import { dirname as dirname3, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 var TEMPLATE_PATH = resolve(dirname3(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
@@ -2167,7 +2021,7 @@ function loadReminderTemplate() {
   if (commonTemplateCache !== undefined)
     return commonTemplateCache;
   try {
-    commonTemplateCache = readFileSync4(TEMPLATE_PATH, "utf8").trimEnd();
+    commonTemplateCache = readFileSync3(TEMPLATE_PATH, "utf8").trimEnd();
     return commonTemplateCache;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -2186,7 +2040,7 @@ function tryReadTargetTemplate(target) {
     return cached;
   let body;
   try {
-    body = readFileSync4(PER_TARGET_PATHS[target], "utf8").trimEnd();
+    body = readFileSync3(PER_TARGET_PATHS[target], "utf8").trimEnd();
   } catch (err) {
     if (err.code !== "ENOENT")
       throw err;
@@ -2220,10 +2074,10 @@ function buildReminder(agent, target) {
 }
 
 // src/core/pay-memory/paths.ts
-import { join as join5 } from "node:path";
+import { join as join4 } from "node:path";
 
 // src/core/path-safety.ts
-import { existsSync as existsSync4, realpathSync } from "node:fs";
+import { existsSync as existsSync3, realpathSync } from "node:fs";
 import { dirname as dirname4, posix, relative, resolve as resolve2, sep } from "node:path";
 function ensureInsideVault(target, vault) {
   const resolvedTarget = resolve2(target);
@@ -2231,7 +2085,7 @@ function ensureInsideVault(target, vault) {
   if (!isLexicallyInside(resolvedTarget, resolvedVault)) {
     throw new Error(`path escapes vault: ${target}`);
   }
-  if (existsSync4(resolvedVault)) {
+  if (existsSync3(resolvedVault)) {
     const realVault = safeRealpath(resolvedVault);
     const realAncestor = safeRealpath(deepestExistingAncestor(resolvedTarget));
     if (!isLexicallyInside(realAncestor, realVault)) {
@@ -2247,7 +2101,7 @@ function isLexicallyInside(target, root) {
 }
 function deepestExistingAncestor(target) {
   let cur = target;
-  while (!existsSync4(cur)) {
+  while (!existsSync3(cur)) {
     const parent = dirname4(cur);
     if (parent === cur)
       return cur;
@@ -2273,29 +2127,29 @@ function vaultRelative(target, vault) {
 var ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 var HHMM_RE = /^(\d{2}):(\d{2})$/;
 function payMemoryDirs(vault) {
-  const root = join5(vault, "AI Wiki");
+  const root = join4(vault, "AI Wiki");
   return {
-    policies: join5(root, "policies"),
-    payments: join5(root, "payments"),
-    assets: join5(root, "assets"),
-    drafts: join5(root, "drafts"),
-    reports: join5(root, "reports")
+    policies: join4(root, "policies"),
+    payments: join4(root, "payments"),
+    assets: join4(root, "assets"),
+    drafts: join4(root, "drafts"),
+    reports: join4(root, "reports")
   };
 }
 function policyPath(vault) {
-  return join5(payMemoryDirs(vault).policies, "spending.md");
+  return join4(payMemoryDirs(vault).policies, "spending.md");
 }
 function paymentsDateDir(vault, date) {
-  return join5(payMemoryDirs(vault).payments, validateIsoDate(date));
+  return join4(payMemoryDirs(vault).payments, validateIsoDate(date));
 }
 function receiptPath(vault, date, slug) {
-  return join5(paymentsDateDir(vault, date), `${validateSlug(slug)}.md`);
+  return join4(paymentsDateDir(vault, date), `${validateSlug(slug)}.md`);
 }
 function assetPath(vault, slug) {
-  return join5(payMemoryDirs(vault).assets, `${validateSlug(slug)}.md`);
+  return join4(payMemoryDirs(vault).assets, `${validateSlug(slug)}.md`);
 }
 function reportPath(vault, slug) {
-  return join5(payMemoryDirs(vault).reports, `${validateSlug(slug)}.md`);
+  return join4(payMemoryDirs(vault).reports, `${validateSlug(slug)}.md`);
 }
 var WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 function validateSlug(slug) {
@@ -2447,7 +2301,7 @@ function redactRawOutput(text) {
   return out;
 }
 // src/core/pay-memory/policy.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
 import { dirname as dirname5 } from "node:path";
 var DEFAULT_POLICY_TEMPLATE = `# Agent Spending Policy
 
@@ -2503,9 +2357,9 @@ The agent must save:
 function writePolicyIfMissing(vault, opts = {}) {
   const target = policyPath(vault);
   const overwrite = opts.overwrite ?? false;
-  mkdirSync4(dirname5(target), { recursive: true });
+  mkdirSync3(dirname5(target), { recursive: true });
   if (overwrite) {
-    const existed = existsSync5(target);
+    const existed = existsSync4(target);
     atomicWriteFileSync(target, DEFAULT_POLICY_TEMPLATE);
     return existed ? buildPolicyResult(target, "overwritten") : buildPolicyResult(target, "created");
   }
@@ -2529,8 +2383,8 @@ function buildPolicyResult(path, status) {
   };
 }
 // src/core/vault.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, readdirSync, statSync as statSync3, writeFileSync } from "node:fs";
-import { dirname as dirname6, join as join6, relative as relative2 } from "node:path";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync, writeFileSync } from "node:fs";
+import { dirname as dirname6, join as join5, relative as relative2 } from "node:path";
 var FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 var KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
 var PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
@@ -2564,7 +2418,7 @@ var DEFAULT_SKIP_FILES = ["index.md", "log.md"];
 function parseFrontmatter(path) {
   let text;
   try {
-    text = readFileSync6(path, "utf8");
+    text = readFileSync5(path, "utf8");
   } catch {
     return [{}, ""];
   }
@@ -2608,10 +2462,6 @@ function formatFrontmatter(metadata, body) {
 `) + `
 `;
 }
-function writeFrontmatter(path, metadata, body) {
-  mkdirSync5(dirname6(path), { recursive: true });
-  writeFileSync(path, formatFrontmatter(metadata, body), "utf8");
-}
 function writeFrontmatterAtomic(path, metadata, body, opts = {}) {
   const contents = formatFrontmatter(metadata, body);
   if (opts.overwrite) {
@@ -2652,7 +2502,7 @@ function walk(root, dir, skipDirs, skipFiles, out) {
     return;
   }
   for (const entry of entries) {
-    const full = join6(dir, entry.name);
+    const full = join5(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name))
         continue;
@@ -2679,10 +2529,6 @@ function walk(root, dir, skipDirs, skipFiles, out) {
     const title = typeof titleVal === "string" && titleVal ? titleVal : stem(entry.name);
     out.push({ title, path: full, metadata: meta });
   }
-}
-function stem(filename) {
-  const dot = filename.lastIndexOf(".");
-  return dot > 0 ? filename.slice(0, dot) : filename;
 }
 function stripQuotes(s) {
   if (s.length >= 2 && (s.startsWith('"') && s.endsWith('"') || s.startsWith("'") && s.endsWith("'"))) {
@@ -3043,7 +2889,7 @@ function renderAssetBody(input) {
 }
 // src/core/pay-memory/report.ts
 import { readdirSync as readdirSync2 } from "node:fs";
-import { join as join7 } from "node:path";
+import { join as join6 } from "node:path";
 var REPORT_FRONTMATTER_TYPE = "payment-report";
 function aggregateReceipts(vault, date) {
   const dir = paymentsDateDir(vault, date);
@@ -3061,7 +2907,7 @@ function aggregateReceipts(vault, date) {
       continue;
     if (!entry.name.toLowerCase().endsWith(".md"))
       continue;
-    const full = join7(dir, entry.name);
+    const full = join6(dir, entry.name);
     let meta;
     try {
       [meta] = parseFrontmatter(full);
@@ -3161,17 +3007,17 @@ function renderReportBody(date, title, task, summaries) {
 `);
 }
 // src/core/pay-memory/policy-rules.ts
-import { readFileSync as readFileSync7 } from "node:fs";
-import { join as join8 } from "node:path";
+import { readFileSync as readFileSync6 } from "node:fs";
+import { join as join7 } from "node:path";
 var POLICY_SCHEMA_VERSION = 1;
 function policyJsonPath(vault) {
-  return join8(payMemoryDirs(vault).policies, "spending.json");
+  return join7(payMemoryDirs(vault).policies, "spending.json");
 }
 function loadPolicyRules(vault) {
   const target = policyJsonPath(vault);
   let text;
   try {
-    text = readFileSync7(target, "utf8");
+    text = readFileSync6(target, "utf8");
   } catch (err) {
     if (err?.code === "ENOENT")
       return null;
@@ -3326,14 +3172,14 @@ function checkPolicy(vault, request) {
   };
 }
 // src/core/pay-memory/approval.ts
-var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
-import { join as join9 } from "node:path";
+var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+import { join as join8 } from "node:path";
 var PENDING_REQUEST_FRONTMATTER_TYPE = "pending-payment-request";
 function pendingDir(vault) {
-  return join9(payMemoryDirs(vault).payments, "_pending");
+  return join8(payMemoryDirs(vault).payments, "_pending");
 }
 function pendingRequestPath(vault, id) {
-  return join9(pendingDir(vault), `${validateSlug(id)}.md`);
+  return join8(pendingDir(vault), `${validateSlug(id)}.md`);
 }
 function writePendingRequest(vault, input) {
   if (!input.service?.trim())
@@ -3425,7 +3271,7 @@ async function transitionRequest(vault, id, expectedFrom, newStatus, patch) {
   if (!initial) {
     throw new Error(`pending request not found: ${id}`);
   }
-  const release = await import_proper_lockfile2.default.lock(lockTarget, {
+  const release = await import_proper_lockfile.default.lock(lockTarget, {
     retries: { retries: 30, factor: 1.2, minTimeout: 30, maxTimeout: 500 },
     stale: 1e4,
     realpath: false
@@ -3525,7 +3371,7 @@ function parseDecisionStatus(raw) {
   return "allowed";
 }
 // src/openclaw/index.ts
-import { mkdirSync as mkdirSync6 } from "node:fs";
+import { mkdirSync as mkdirSync5 } from "node:fs";
 
 // src/core/agent-identity.ts
 var PLACEHOLDER_AGENT_VALUES = new Set([
@@ -3644,7 +3490,7 @@ var openclaw_default = definePluginEntry({
           config_keys: Object.keys(discovery.data).sort(),
           config: redactMapping(discovery.data),
           vault_path: vault,
-          vault_exists: existsSync7(vault)
+          vault_exists: existsSync5(vault)
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -3670,7 +3516,7 @@ var openclaw_default = definePluginEntry({
       },
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
-        if (!existsSync7(vault))
+        if (!existsSync5(vault))
           throw new Error(`vault directory missing: ${vault}`);
         const pattern = params["pattern"] ?? null;
         const limit = typeof params["limit"] === "number" ? params["limit"] : 50;
@@ -3686,101 +3532,6 @@ var openclaw_default = definePluginEntry({
           limit,
           pattern,
           pages: matched
-        };
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-    });
-    api.registerTool({
-      name: "second_brain_capture",
-      description: "Write a new Markdown note to AI Wiki/notes/ with frontmatter.",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "Human-readable note title." },
-          content: { type: "string", description: "Markdown body of the note." },
-          tags: {
-            type: "array",
-            items: { type: "string" },
-            description: "Optional list of tag strings."
-          },
-          overwrite: {
-            type: "boolean",
-            description: "Allow overwriting an existing note with the same slug."
-          }
-        },
-        required: ["title", "content"],
-        additionalProperties: false
-      },
-      async execute(_id, params) {
-        const vault = resolveVaultPath(api);
-        if (!existsSync7(vault))
-          throw new Error(`vault directory missing: ${vault}`);
-        const title = params["title"] ?? "";
-        const content = params["content"] ?? "";
-        const tags = params["tags"] ?? [];
-        const overwrite = Boolean(params["overwrite"]);
-        if (!title.trim())
-          throw new Error("title must not be empty");
-        if (!content.trim())
-          throw new Error("content must not be empty");
-        const notesDir = join10(vault, "AI Wiki", "notes");
-        const slug = slugify(title);
-        const target = join10(notesDir, `${slug}.md`);
-        const noteExisted = existsSync7(target);
-        if (noteExisted && !overwrite) {
-          throw new Error(`note already exists: ${vaultRelative(target, vault)}`);
-        }
-        const metadata = {
-          title,
-          type: "note",
-          created: new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
-        };
-        if (tags.length > 0)
-          metadata["tags"] = tags;
-        writeFrontmatter(target, metadata, content.trim());
-        const result = {
-          path: vaultRelative(target, vault),
-          absolute_path: target,
-          slug,
-          overwritten: noteExisted && overwrite
-        };
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-    });
-    api.registerTool({
-      name: "event_log_append",
-      description: "Append a single-line event to the daily Markdown event log.",
-      parameters: {
-        type: "object",
-        properties: {
-          message: { type: "string", description: "Single-line event message." },
-          agent: { type: "string", description: "Agent name (default 'agent')." },
-          date: { type: "string", description: "Optional event date in YYYY.MM.DD format." },
-          time: { type: "string", description: "Optional event time in 24-hour HH:MM format." }
-        },
-        required: ["message"],
-        additionalProperties: false
-      },
-      async execute(_id, params) {
-        const vault = resolveVaultPath(api);
-        const message = params["message"];
-        if (!message || !message.trim()) {
-          throw new Error("missing required argument: message");
-        }
-        const argAgent = params["agent"] ?? null;
-        const date = params["date"] ?? null;
-        const time = params["time"] ?? null;
-        if (time)
-          validateEventTime(time);
-        const agent = resolveOpenclawAgent(api, argAgent);
-        const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
-        const path = await appendEvent(vault, agent, message, { date, time, tz });
-        const result = {
-          path: vaultRelative(path, vault),
-          absolute_path: path,
-          agent,
-          date,
-          time
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -3829,8 +3580,8 @@ var openclaw_default = definePluginEntry({
         const created = [];
         const skipped = [];
         for (const dir of [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports]) {
-          const existed = existsSync7(dir);
-          mkdirSync6(dir, { recursive: true });
+          const existed = existsSync5(dir);
+          mkdirSync5(dir, { recursive: true });
           (existed ? skipped : created).push(vaultRelative(dir, vault));
         }
         const policy = writePolicyIfMissing(vault, { overwrite });
