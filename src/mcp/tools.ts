@@ -605,8 +605,15 @@ function isDir(p: string): boolean {
   }
 }
 
-export function buildToolTable(): ToolDefinition[] {
-  return [
+export type ToolScope = "full" | "writer";
+
+const WRITER_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "brain_feedback",
+  "brain_apply_evidence",
+]);
+
+export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
+  const all: ToolDefinition[] = [
     {
       name: "second_brain_status",
       description: "Report Open Second Brain configuration and vault status.",
@@ -854,6 +861,8 @@ export function buildToolTable(): ToolDefinition[] {
       handler: toolPaymentReportGenerate,
     },
   ];
+  if (scope === "full") return all;
+  return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));
 }
 
 export function findTool(tools: ReadonlyArray<ToolDefinition>, name: string): ToolDefinition {

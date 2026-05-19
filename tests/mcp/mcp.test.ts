@@ -265,7 +265,6 @@ describe("tool calls", () => {
 
 describe("stdio loop", () => {
   test("processes initialize and tools/list", async () => {
-    const server = new MCPServer({ vault: tmp });
     const payload =
       [
         JSON.stringify({
@@ -281,7 +280,8 @@ describe("stdio loop", () => {
         JSON.stringify({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" }),
         JSON.stringify({ jsonrpc: JSONRPC_VERSION, id: 2, method: "tools/list" }),
       ].join("\n") + "\n";
-    const lines = await serveStdioFromString(server, payload);
+    const out = await serveStdioFromString({ vault: tmp }, payload);
+    const lines = out.trim().split("\n");
     expect(lines.length).toBe(2);
     const init = JSON.parse(lines[0]!);
     const list = JSON.parse(lines[1]!);
@@ -292,21 +292,76 @@ describe("stdio loop", () => {
   });
 
   test("returns parse error for invalid JSON", async () => {
-    const server = new MCPServer({ vault: tmp });
-    const lines = await serveStdioFromString(server, "{not json}\n");
-    const r = JSON.parse(lines[0]!);
+    const out = await serveStdioFromString({ vault: tmp }, "{not json}\n");
+    const r = JSON.parse(out.trim());
     expect(r.error.code).toBe(-32700);
   });
 
   test("returns invalid request for batch", async () => {
-    const server = new MCPServer({ vault: tmp });
     const batch = JSON.stringify([
       { jsonrpc: JSONRPC_VERSION, id: 1, method: "ping" },
       { jsonrpc: JSONRPC_VERSION, id: 2, method: "ping" },
     ]);
-    const lines = await serveStdioFromString(server, batch + "\n");
-    const r = JSON.parse(lines[0]!);
+    const out = await serveStdioFromString({ vault: tmp }, batch + "\n");
+    const r = JSON.parse(out.trim());
     expect(r.error.code).toBe(-32600);
     expect(r.error.message.toLowerCase()).toContain("batch");
+  });
+});
+
+describe("MCPServer serverName override", () => {
+  test("default ctor uses SERVER_NAME constant", async () => {
+    const server = new MCPServer({ vault: tmp });
+    const r = (await initialize(server))! as any;
+    expect(r.result.serverInfo.name).toBe("open-second-brain");
+  });
+
+  test("explicit serverName flows into initialize response", async () => {
+    const server = new MCPServer(
+      { vault: tmp, configPath: null, repoRoot: null },
+      { serverName: "open-second-brain-writer" },
+    );
+    const r = (await initialize(server))! as any;
+    expect(r.result.serverInfo.name).toBe("open-second-brain-writer");
+  });
+});
+
+describe("serveStdioFromString respects scope+name", () => {
+  test("writer scope filters tools/list response", async () => {
+    const ctx = { vault: "/tmp/x", configPath: null, repoRoot: null };
+    const initReq = JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {} },
+    });
+    const listReq = JSON.stringify({
+      jsonrpc: "2.0", id: 2, method: "tools/list", params: {},
+    });
+    const out = await serveStdioFromString(
+      ctx,
+      `${initReq}\n${listReq}\n`,
+      { scope: "writer", serverName: "open-second-brain-writer" },
+    );
+    const lines = out.trim().split("\n").map((l) => JSON.parse(l));
+    expect(lines[0].result.serverInfo.name).toBe("open-second-brain-writer");
+    const toolNames = (lines[1].result.tools as Array<{ name: string }>)
+      .map((t) => t.name).sort();
+    expect(toolNames).toEqual(["brain_apply_evidence", "brain_feedback"]);
+  });
+});
+
+import { buildInstructions } from "../../src/mcp/instructions.ts";
+
+describe("buildInstructions writer mode", () => {
+  test("writer instructions name both tools and point at the full server", () => {
+    const text = buildInstructions({
+      vault: "/tmp/x",
+      agent: "@agent",
+      scope: "writer",
+    });
+    expect(text).toContain("brain_feedback");
+    expect(text).toContain("brain_apply_evidence");
+    expect(text).toContain("open-second-brain"); // points at sibling server
+    expect(text).not.toMatch(/payment_/i);
+    expect(text).not.toMatch(/brain_dream/);
   });
 });
