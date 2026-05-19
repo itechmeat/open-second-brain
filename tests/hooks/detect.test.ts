@@ -24,51 +24,21 @@ describe("isArtifactToolName", () => {
 });
 
 describe("isBrainEventToolName", () => {
-  test("recognises the bare name used in Codex transcripts", () => {
-    expect(isBrainEventToolName("event_log_append")).toBe(true);
-  });
+  // §32 (v0.10.8): the three Brain-native writer tools are the only
+  // names that clear the guardrail. `event_log_append` no longer
+  // qualifies — the corresponding MCP tool is gone from every runtime.
 
-  test("recognises the Claude Code plugin-decorated MCP name", () => {
-    // Verified live against /root/.claude/projects/-root/*.jsonl —
-    // Claude prefixes plugin-supplied MCP tools with
-    // `mcp__plugin_<plugin>_<server>__`.
-    expect(
-      isBrainEventToolName("mcp__plugin_open-second-brain_open-second-brain__event_log_append"),
-    ).toBe(true);
-  });
-
-  test("recognises the legacy short MCP name", () => {
-    // Older Claude builds (and some forks) used a shorter prefix.
-    expect(isBrainEventToolName("mcp__open-second-brain__event_log_append")).toBe(true);
-  });
-
-  test("rejects unrelated names", () => {
-    expect(isBrainEventToolName("second_brain_capture")).toBe(false);
-    expect(isBrainEventToolName("Write")).toBe(false);
-    expect(isBrainEventToolName("event_log_append_other")).toBe(false);
-    expect(isBrainEventToolName("not_event_log_append")).toBe(false);
-  });
-
-  test("rejects names that contain the suffix but not as a `__`-bounded token", () => {
-    expect(isBrainEventToolName("xevent_log_append")).toBe(false);
-  });
-
-  // §30 §A (v0.10.6) — `brain_feedback` and `brain_apply_evidence`
-  // are now equally valid brain-events from the guardrail's
-  // perspective. The same name-suffix / MCP-prefix coverage applies.
-  test("recognises `brain_feedback` (bare)", () => {
+  test("recognises `brain_feedback` (bare and decorated)", () => {
     expect(isBrainEventToolName("brain_feedback")).toBe(true);
-  });
-
-  test("recognises `brain_feedback` under the Claude Code plugin prefix", () => {
     expect(
       isBrainEventToolName(
         "mcp__plugin_open-second-brain_open-second-brain__brain_feedback",
       ),
     ).toBe(true);
+    expect(isBrainEventToolName("mcp__open-second-brain__brain_feedback")).toBe(true);
   });
 
-  test("recognises `brain_apply_evidence` (bare and prefixed)", () => {
+  test("recognises `brain_apply_evidence` (bare and decorated)", () => {
     expect(isBrainEventToolName("brain_apply_evidence")).toBe(true);
     expect(
       isBrainEventToolName(
@@ -77,11 +47,41 @@ describe("isBrainEventToolName", () => {
     ).toBe(true);
   });
 
+  test("recognises `brain_note` (bare and decorated) — §32B", () => {
+    expect(isBrainEventToolName("brain_note")).toBe(true);
+    expect(
+      isBrainEventToolName(
+        "mcp__plugin_open-second-brain_open-second-brain-writer__brain_note",
+      ),
+    ).toBe(true);
+  });
+
+  test("event_log_append no longer counts as a brain event — §32", () => {
+    expect(isBrainEventToolName("event_log_append")).toBe(false);
+    expect(
+      isBrainEventToolName(
+        "mcp__plugin_open-second-brain_open-second-brain__event_log_append",
+      ),
+    ).toBe(false);
+    expect(isBrainEventToolName("mcp__open-second-brain__event_log_append")).toBe(false);
+  });
+
+  test("rejects unrelated names", () => {
+    expect(isBrainEventToolName("second_brain_capture")).toBe(false);
+    expect(isBrainEventToolName("Write")).toBe(false);
+    expect(isBrainEventToolName("brain_feedback_other")).toBe(false);
+    expect(isBrainEventToolName("not_brain_feedback")).toBe(false);
+  });
+
+  test("rejects names that contain the suffix but not as a `__`-bounded token", () => {
+    expect(isBrainEventToolName("xbrain_feedback")).toBe(false);
+    expect(isBrainEventToolName("xbrain_note")).toBe(false);
+  });
+
   test("rejects nearby but non-matching brain_* names", () => {
     expect(isBrainEventToolName("brain_query")).toBe(false);
     expect(isBrainEventToolName("brain_doctor")).toBe(false);
     expect(isBrainEventToolName("brain_digest")).toBe(false);
-    expect(isBrainEventToolName("xbrain_feedback")).toBe(false);
   });
 });
 
@@ -91,31 +91,35 @@ describe("summarizeTurn", () => {
     expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 
-  test("artifact AND MCP log → hadBrainEvent wins", () => {
-    const s = summarizeTurn([{ name: "Write" }, { name: "event_log_append" }]);
+  test("artifact AND MCP `brain_feedback` → hadBrainEvent wins", () => {
+    const s = summarizeTurn([{ name: "Write" }, { name: "brain_feedback" }]);
     expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
   });
 
-  test("artifact + bash that runs `o2b append-event` counts as log", () => {
+  test("artifact + MCP `brain_note` (§32B) clears guardrail", () => {
+    const s = summarizeTurn([{ name: "apply_patch" }, { name: "brain_note" }]);
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+  });
+
+  test("artifact + bash `o2b append-event` (deprecated, §32) does NOT clear guardrail", () => {
+    // §32 (v0.10.8): the Daily/-targeted CLI verb still works for
+    // humans/cron but no longer counts as a Brain-side event.
     const s = summarizeTurn(
       [{ name: "apply_patch" }, { name: "Bash" }],
       ["o2b append-event 'fixed bug'"],
     );
-    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 
-  test("artifact + bash that runs the legacy `vault-log` wrapper counts as log", () => {
+  test("artifact + bash `vault-log` (deprecated, §32) does NOT clear guardrail", () => {
     const s = summarizeTurn(
       [{ name: "Write" }, { name: "Bash" }],
       ["vault-log 'noted finding'"],
     );
-    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 
-  test("the trailing space in the `vault-log ` needle prevents false matches on paths", () => {
-    // A path like `/srv/audit/vault-log.json` must NOT be misread as
-    // an `o2b vault-log` invocation. The needle's trailing space (the
-    // CLI is always followed by an argument) makes the match precise.
+  test("artifact + bash that touches a `vault-log` path is not misread as a CLI call", () => {
     const s = summarizeTurn(
       [{ name: "Write" }, { name: "Bash" }],
       ["cat /srv/audit/vault-log.json"],

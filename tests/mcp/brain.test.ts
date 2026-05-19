@@ -38,6 +38,8 @@ import { buildToolTable } from "../../src/mcp/tools.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import {
   brainDirs,
+  logJsonlPath,
+  logPath,
   preferencePath,
 } from "../../src/core/brain/paths.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
@@ -684,5 +686,121 @@ describe("brain_backlinks", () => {
     // (the handler throws MCPError before producing a tool result).
     expect(r.error).toBeDefined();
     expect(r.error.message).toContain("id");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// brain_note (§32B, v0.10.8)
+// ---------------------------------------------------------------------------
+
+function logFileForToday(vaultDir: string): { md: string; jsonl: string } {
+  // The handler uses `new Date()` directly. Pick today's UTC date.
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    md: logPath(vaultDir, today),
+    jsonl: logJsonlPath(vaultDir, today),
+  };
+}
+
+describe("brain_note", () => {
+  test("appends a note event to both markdown and JSONL", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = (await call(server, "brain_note", {
+      text: "v0.10.7 shipped",
+    })) as any;
+
+    const payload = JSON.parse(r.result.content[0].text);
+    expect(payload.agent).toBe("claude");
+    expect(typeof payload.logged_at).toBe("string");
+
+    const paths = logFileForToday(vault);
+    expect(existsSync(paths.md)).toBe(true);
+    expect(existsSync(paths.jsonl)).toBe(true);
+    const md = readFileSync(paths.md, "utf8");
+    expect(md).toMatch(/— note$/m);
+    expect(md).toContain("text: v0.10.7 shipped");
+    expect(md).toContain("agent: claude");
+
+    const jsonlLines = readFileSync(paths.jsonl, "utf8").trim().split("\n");
+    const last = JSON.parse(jsonlLines[jsonlLines.length - 1]!);
+    expect(last.kind).toBe("note");
+    expect(last.payload.text).toBe("v0.10.7 shipped");
+    expect(last.payload.agent).toBe("claude");
+  });
+
+  test("redacts secret-shaped tokens before writing", async () => {
+    const server = makeServer();
+    await initialize(server);
+    await call(server, "brain_note", {
+      text: "deployed api_key=sk-abc123 to prod",
+    });
+
+    const paths = logFileForToday(vault);
+    const md = readFileSync(paths.md, "utf8");
+    expect(md).toContain("***REDACTED***");
+    expect(md).not.toContain("sk-abc123");
+  });
+
+  test("collapses multi-line input to one space-joined line", async () => {
+    const server = makeServer();
+    await initialize(server);
+    await call(server, "brain_note", { text: "line one\nline two" });
+
+    const paths = logFileForToday(vault);
+    const md = readFileSync(paths.md, "utf8");
+    expect(md).toContain("text: line one line two");
+  });
+
+  test("respects the agent override", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = (await call(server, "brain_note", {
+      text: "shipped X",
+      agent: "explicit-bot",
+    })) as any;
+    const payload = JSON.parse(r.result.content[0].text);
+    expect(payload.agent).toBe("explicit-bot");
+  });
+
+  test("rejects whitespace-only text", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = (await call(server, "brain_note", { text: "   " })) as any;
+    // The shared `coerceStr` helper treats whitespace as missing
+    // before the handler's own check fires — same shape as every
+    // other "required string field" rejection.
+    expect(r.error).toBeDefined();
+    expect(r.error.message).toMatch(/missing required argument: text|text is required/);
+  });
+
+  test("rejects missing text", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = (await call(server, "brain_note", {})) as any;
+    expect(r.error).toBeDefined();
+  });
+});
+
+describe("brain_note tool schema visibility", () => {
+  test("brain_note is advertised in the full tool list", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 51,
+      method: "tools/list",
+    })) as any;
+    const names = (r.result.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(names).toContain("brain_note");
+  });
+
+  test("brain_note belongs to the writer tool scope", () => {
+    const writer = buildToolTable("writer").map((t) => t.name);
+    expect(writer).toEqual(
+      expect.arrayContaining(["brain_feedback", "brain_apply_evidence", "brain_note"]),
+    );
+    // Writer scope is exactly these three — nothing else.
+    expect(writer).toHaveLength(3);
   });
 });

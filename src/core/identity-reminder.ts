@@ -1,17 +1,17 @@
 /**
  * Identity reminder: the text the OpenClaw `before_prompt_build` hook and
  * the Hermes `pre_llm_call` hook inject into each turn so the agent keeps
- * remembering it has access to `event_log_append` and under which
- * `@<agent_name>` it is supposed to log.
+ * remembering which `@<agent_name>` it is logging under and which Brain
+ * writer tool (`brain_feedback` / `brain_apply_evidence` / `brain_note`)
+ * fits the current turn.
  *
  * Single source of truth: `templates/identity-reminder.txt` at repo root.
  * The Hermes Python shim reads the same file; both runtimes stay in sync
  * without manual mirroring.
  *
- * The Codex and Claude Code adapters use the bundled `agent-event-log`
- * skill (description + body) instead of a hook — see
- * `skills/agent-event-log/SKILL.md`. Skill description is part of the
- * system prompt every session, so it does not need a hook to land.
+ * The Claude Code and Codex adapters get their per-turn nudge from the
+ * `hooks/lib/messages.ts:postWriteReminder` PostToolUse hook (and the
+ * Stop guardrail) instead of this template — see `hooks/README.md`.
  */
 
 import { readFileSync } from "node:fs";

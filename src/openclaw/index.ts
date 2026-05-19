@@ -23,7 +23,10 @@ import {
   resolveTimezone,
 } from "../core/config.ts";
 import { doctor } from "../core/doctor.ts";
-import { appendEvent, validateEventTime } from "../core/event-log.ts";
+// §32G (v0.10.8): `appendEvent` / `validateEventTime` are no longer
+// needed by the OpenClaw bundle — the `event_log_append` tool was
+// retired from this runtime. The functions still live in
+// `src/core/event-log.ts` for the human-side `o2b append-event` CLI.
 import { buildReminder } from "../core/identity-reminder.ts";
 import {
   checkPolicy,
@@ -273,47 +276,12 @@ export default definePluginEntry({
       },
     );
 
-    api.registerTool(
-      {
-        name: "event_log_append",
-        description: "Append a single-line event to the daily Markdown event log.",
-        parameters: {
-          type: "object",
-          properties: {
-            message: { type: "string", description: "Single-line event message." },
-            agent: { type: "string", description: "Agent name (default 'agent')." },
-            date: { type: "string", description: "Optional event date in YYYY.MM.DD format." },
-            time: { type: "string", description: "Optional event time in 24-hour HH:MM format." },
-          },
-          required: ["message"],
-          additionalProperties: false,
-        },
-        async execute(_id, params): Promise<unknown> {
-          const vault = resolveVaultPath(api);
-          const message = params["message"] as string | undefined;
-          if (!message || !message.trim()) {
-            // Treat whitespace-only the same as missing; the MCP-side
-            // `_coerce_str` does the same. Empty entries weaken the log.
-            throw new Error("missing required argument: message");
-          }
-          const argAgent = (params["agent"] as string | undefined) ?? null;
-          const date = (params["date"] as string | undefined) ?? null;
-          const time = (params["time"] as string | undefined) ?? null;
-          if (time) validateEventTime(time);
-          const agent = resolveOpenclawAgent(api, argAgent);
-          const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
-          const path = await appendEvent(vault, agent, message, { date, time, tz });
-          const result = {
-            path: vaultRelativePath(path, vault),
-            absolute_path: path,
-            agent,
-            date,
-            time,
-          };
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-        },
-      },
-    );
+    // §32G (v0.10.8): the OpenClaw `event_log_append` registration is
+    // gone. Agents on this runtime now record via the Brain writer
+    // tools served by the MCP server (`brain_feedback`,
+    // `brain_apply_evidence`, `brain_note`); the human-side
+    // `o2b append-event` CLI is the only remaining caller of
+    // `appendEvent`.
 
     api.registerTool(
       {

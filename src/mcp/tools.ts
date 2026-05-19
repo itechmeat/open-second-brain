@@ -1,19 +1,18 @@
 /**
- * MCP tool registry. As of v0.9.0 the advertised surface is:
+ * MCP tool registry. As of v0.10.8 the advertised surface is:
  *
  *   - Core read/health tools (`second_brain_status`, `second_brain_query`,
  *     `vault_health`).
- *   - Brain tools (`brain_feedback`, `brain_dream`,
- *     `brain_apply_evidence`, `brain_digest`, `brain_query`,
- *     `brain_doctor`) — see `./brain-tools.ts`.
+ *   - Brain tools (`brain_feedback`, `brain_apply_evidence`,
+ *     `brain_note`, `brain_dream`, `brain_digest`, `brain_query`,
+ *     `brain_doctor`, `brain_backlinks`) — see `./brain-tools.ts`.
  *   - Pay Memory tools (`payment_*`, `asset_capture`).
  *
- * `event_log_append` and `second_brain_capture` are intentionally
- * *not* registered here in v0.9.0 — Brain replaces them as the
- * agent-facing writable surface (design doc §11.1). Their handler
- * functions remain on disk (`toolEventLogAppend`, `toolCapture` below)
- * so the CLI / shell tooling keeps working; only the entries in the
- * exported tool array are removed.
+ * §32 (v0.10.8) retires `event_log_append` and `second_brain_capture`
+ * from every runtime. The `appendEvent` function in
+ * `src/core/event-log.ts` stays for the human-side CLI verb
+ * (`o2b append-event`) and cron-jobs; the MCP surface no longer
+ * advertises it. `toolCapture` likewise remains as a CLI helper.
  */
 
 import { existsSync, mkdirSync, statSync } from "node:fs";
@@ -27,7 +26,6 @@ import {
 } from "../core/config.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
-import { appendEvent, validateEventTime } from "../core/event-log.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import {
@@ -253,30 +251,10 @@ async function toolCapture(ctx: ServerContext, args: Record<string, unknown>): P
   };
 }
 
-async function toolEventLogAppend(
-  ctx: ServerContext,
-  args: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const message = coerceStr(args, "message", true)!;
-  const agent = coerceStr(args, "agent", false);
-  const date = coerceStr(args, "date", false);
-  const time = coerceStr(args, "time", false);
-
-  if (time !== null) validateEventTime(time);
-
-  const effectiveAgent =
-    normalizeAgentArgument(agent) ?? resolveAgentName(ctx.configPath ?? undefined);
-  const tz = resolveTimezone(ctx.configPath ?? undefined);
-  const path = await appendEvent(ctx.vault, effectiveAgent, message, { date, time, tz });
-
-  return {
-    path: vaultRelpath(path, ctx.vault),
-    absolute_path: resolve(path),
-    agent: effectiveAgent,
-    date,
-    time,
-  };
-}
+// §32G (v0.10.8): the `event_log_append` MCP handler is gone. The
+// bare `appendEvent` function in `src/core/event-log.ts` stays for
+// the CLI verb (`o2b append-event`) and cron-jobs that target the
+// human-side `Daily/` log; the MCP surface no longer advertises it.
 
 async function toolVaultHealth(
   ctx: ServerContext,
@@ -610,6 +588,7 @@ export type ToolScope = "full" | "writer";
 const WRITER_TOOL_NAMES: ReadonlySet<string> = new Set([
   "brain_feedback",
   "brain_apply_evidence",
+  "brain_note",
 ]);
 
 export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
@@ -641,11 +620,10 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
       },
       handler: toolQuery,
     },
-    // `second_brain_capture` and `event_log_append` are intentionally
-    // not advertised in v0.9.0+. Their handlers (`toolCapture`,
-    // `toolEventLogAppend`) remain in this file for human-side shell
-    // use (`o2b append-event`); only the entries in the exported tool
-    // array are removed — see §11.1 of the v0.9.0 design doc.
+    // `second_brain_capture` is intentionally not advertised — Brain
+    // replaces it. `event_log_append` was retired in §32 (v0.10.8);
+    // its handler has been removed. `toolCapture` remains in this
+    // file for the legacy `o2b capture` shell flow.
     ...BRAIN_TOOLS,
     ...SEARCH_TOOLS,
     {

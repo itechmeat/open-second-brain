@@ -25,12 +25,20 @@
  *     result back through `fs-atomic` in one shot.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+
+import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { logPath, validateIsoDate } from "./paths.ts";
+import {
+  brainDirs,
+  logJsonlPath,
+  logPath,
+  validateIsoDate,
+} from "./paths.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
+  BRAIN_LOG_EVENT_KIND_SET,
   type BrainLogEventKind,
 } from "./types.ts";
 
@@ -70,10 +78,6 @@ export interface AppendLogEventResult {
 }
 
 // ----- Constants ------------------------------------------------------------
-
-const EVENT_KIND_VALUES: ReadonlySet<string> = new Set(
-  Object.values(BRAIN_LOG_EVENT_KIND),
-);
 
 // `## HH:MM:SSZ — <kind>` — both the em dash (—) and the hyphen are
 // accepted to tolerate hand-edits. The mandatory `Z` after the time
@@ -156,7 +160,7 @@ export function parseLogDay(vault: string, date: string): ParseLogDayResult {
     const mm = header[2]!;
     const ss = header[3]!;
     const kindStr = header[4]!;
-    if (!EVENT_KIND_VALUES.has(kindStr)) {
+    if (!BRAIN_LOG_EVENT_KIND_SET.has(kindStr)) {
       warnings.push({
         path,
         lineNumber: headerLineNumber,
@@ -208,11 +212,42 @@ export function parseLogDay(vault: string, date: string): ParseLogDayResult {
  * this function. That's the stability guarantee the test suite asks
  * for.
  */
+/**
+ * Acquire the per-log-day directory lock with a bounded retry loop.
+ *
+ * `proper-lockfile`'s sync API refuses the `retries` option (it
+ * cannot block the event loop on a callback), so the retry loop is
+ * spelled out here: on `ELOCKED` the call sleeps for `SLEEP_MS` and
+ * tries again, up to `MAX_ATTEMPTS`. Any non-`ELOCKED` error is
+ * rethrown immediately (permission, fs corruption, …).
+ *
+ * Total worst-case wait: `MAX_ATTEMPTS * SLEEP_MS` ≈ 500 ms — short
+ * enough to feel synchronous to a coding agent, long enough to ride
+ * out a sibling `appendLogEvent` call that landed within the same
+ * millisecond.
+ */
+function acquireLogLock(logDir: string): () => void {
+  const MAX_ATTEMPTS = 10;
+  const SLEEP_MS = 50;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      return lockfile.lockSync(logDir, { stale: 10_000, realpath: false });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ELOCKED") throw err;
+      lastErr = err;
+      if (attempt < MAX_ATTEMPTS - 1) Bun.sleepSync(SLEEP_MS);
+    }
+  }
+  throw lastErr;
+}
+
 export function appendLogEvent(
   vault: string,
   event: BrainLogEntry,
 ): AppendLogEventResult {
-  if (!EVENT_KIND_VALUES.has(event.eventType)) {
+  if (!BRAIN_LOG_EVENT_KIND_SET.has(event.eventType)) {
     throw new Error(
       `appendLogEvent: unknown event kind '${event.eventType}' — must be one of ${Object.values(
         BRAIN_LOG_EVENT_KIND,
@@ -225,24 +260,59 @@ export function appendLogEvent(
   // byte-identical output (idempotency requirement).
   const ts = parseIsoUtc(event.timestamp);
   const path = logPath(vault, ts.date);
+  const jsonlPath = logJsonlPath(vault, ts.date);
+  const logDir = brainDirs(vault).log;
 
-  const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-  const block = renderEventBlock(event, ts.hms);
+  // §23 (v0.10.8): each event lands in both `<date>.jsonl` (machine
+  // surface, primary for `readLogDay`) and `<date>.md` (human-facing
+  // Obsidian view). JSONL is written first so a partial failure
+  // (e.g. ENOSPC between the two writes) leaves the machine-readable
+  // source authoritative — discipline-report and future tooling keep
+  // returning the correct counts; only the human Obsidian view lags
+  // until the next successful append rewrites the markdown.
+  //
+  // The pair shares one directory-level lock so two concurrent
+  // appenders cannot interleave each other's halves.
+  mkdirSync(logDir, { recursive: true });
+  const release = acquireLogLock(logDir);
 
-  let next: string;
-  if (existing === "") {
-    next = renderFileHeader(ts.date) + "\n" + block;
-  } else {
-    // Guarantee exactly one blank line between blocks; previous file may
-    // or may not end with a trailing newline.
-    const trimmed = existing.replace(/\s+$/, "");
-    next = `${trimmed}\n\n${block}`;
+  try {
+    // ---- JSONL sidecar (machine surface, primary) ---------------------
+    // One row per event. The row is a deterministic projection of the
+    // markdown body so the markdown and JSONL representations describe
+    // the same event byte-for-byte after JSON.parse.
+    const existingJsonl = existsSync(jsonlPath)
+      ? readFileSync(jsonlPath, "utf8")
+      : "";
+    const line = renderJsonlLine(event);
+    const nextJsonl =
+      existingJsonl === ""
+        ? `${line}\n`
+        : `${existingJsonl.replace(/\s+$/, "")}\n${line}\n`;
+    atomicWriteFileSync(jsonlPath, nextJsonl);
+
+    // ---- Markdown (human surface) -------------------------------------
+    const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+    const block = renderEventBlock(event, ts.hms);
+
+    let next: string;
+    if (existing === "") {
+      next = renderFileHeader(ts.date) + "\n" + block;
+    } else {
+      // Guarantee exactly one blank line between blocks; previous file
+      // may or may not end with a trailing newline.
+      const trimmed = existing.replace(/\s+$/, "");
+      next = `${trimmed}\n\n${block}`;
+    }
+    // Always finish with a single trailing newline — standard Markdown
+    // hygiene, and matches what `formatFrontmatter` emits elsewhere.
+    if (!next.endsWith("\n")) next += "\n";
+
+    atomicWriteFileSync(path, next);
+  } finally {
+    release();
   }
-  // Always finish with a single trailing newline — standard Markdown
-  // hygiene, and matches what `formatFrontmatter` emits elsewhere.
-  if (!next.endsWith("\n")) next += "\n";
 
-  atomicWriteFileSync(path, next);
   return { logPath: path };
 }
 
@@ -284,6 +354,25 @@ function renderEventBlock(event: BrainLogEntry, hms: string): string {
     }
   }
   return lines.join("\n") + "\n";
+}
+
+/**
+ * Render the JSONL projection of an event (§23, v0.10.8). The row
+ * shape is `{ ts, kind, payload }` where `payload` is a one-to-one map
+ * of the markdown body bullets. Array bullets become JSON arrays;
+ * scalar bullets become JSON strings. The function never sorts keys,
+ * so byte-identical inputs produce byte-identical rows.
+ */
+function renderJsonlLine(event: BrainLogEntry): string {
+  const payload: Record<string, string | ReadonlyArray<string>> = {};
+  for (const [key, value] of Object.entries(event.body)) {
+    payload[key] = value;
+  }
+  return JSON.stringify({
+    ts: event.timestamp,
+    kind: event.eventType,
+    payload,
+  });
 }
 
 // ----- Bullet block parser --------------------------------------------------

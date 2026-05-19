@@ -31,7 +31,6 @@
  * one-way (Brain tools may grow their own coercion rules later).
  */
 
-import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
 import { resolveAgentName } from "../core/config.ts";
@@ -56,10 +55,8 @@ import {
 } from "../core/brain/query.ts";
 import { writeSignal } from "../core/brain/signal.ts";
 import { writePreference } from "../core/brain/preference.ts";
-import { preferencePath } from "../core/brain/paths.ts";
 import { validateBrainFeedbackInput } from "../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../core/brain/time.ts";
-import { loadBrainConfig } from "../core/brain/policy.ts";
 import { slugify } from "../core/vault.ts";
 import { normalizeAgentArgument } from "../core/agent-identity.ts";
 import {
@@ -75,6 +72,7 @@ import {
 } from "../core/brain/types.ts";
 import { appendLogEvent } from "../core/brain/log.ts";
 import type { BrainLogEntry } from "../core/brain/log.ts";
+import { sanitiseTextField } from "../core/redactor.ts";
 
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
@@ -408,6 +406,53 @@ async function toolBrainApplyEvidence(
   }
 }
 
+// ----- brain_note (§32B, v0.10.8) ------------------------------------------
+
+const NOTE_TEXT_MAX_LEN = 4096;
+
+/**
+ * Append one narrative-milestone line to today's Brain log. This is the
+ * Brain-native replacement for the deprecated `event_log_append` tool:
+ * agents now record release / merged-PR / discovered-fact lines under
+ * the `note` event kind in `Brain/log/<today>.md` (and the JSONL
+ * sidecar) instead of falling back to `Daily/`.
+ */
+async function toolBrainNote(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const rawText = coerceStr(args, "text", true)!;
+  const agentArg = coerceStr(args, "agent", false);
+
+  // `singleLine` collapses newlines and trims to NOTE_TEXT_MAX_LEN. The
+  // shared sanitiser also strips C0 controls and folds U+2028/U+2029.
+  const sanitised = sanitiseTextField(rawText, {
+    maxLen: NOTE_TEXT_MAX_LEN,
+    singleLine: true,
+  }).trim();
+  if (!sanitised) {
+    throw new MCPError(INVALID_PARAMS, "brain_note: text is required");
+  }
+
+  const agent =
+    normalizeAgentArgument(agentArg) ??
+    resolveAgentName(ctx.configPath ?? undefined);
+  const timestamp = isoSecond(new Date());
+
+  const entry: BrainLogEntry = {
+    timestamp,
+    eventType: BRAIN_LOG_EVENT_KIND.note,
+    body: { text: sanitised, agent },
+  };
+  const res = appendLogEvent(ctx.vault, entry);
+  return {
+    logged_at: timestamp,
+    log_path: vaultRelativeSafe(ctx.vault, res.logPath),
+    absolute_log_path: resolve(res.logPath),
+    agent,
+  };
+}
+
 // ----- brain_digest --------------------------------------------------------
 
 async function toolBrainDigest(
@@ -671,21 +716,6 @@ export function vaultRelativeSafe(vault: string, target: string): string {
   return rel;
 }
 
-// Reference to satisfy "may need to look up pref path in MCP handler"
-// without re-exporting the helper from `core/brain/paths.ts` for the
-// public surface. Used only by the typecheck on `BrainPreferenceNotFoundError`
-// rethrow; we keep the import alive intentionally so future grep finds
-// the MCP layer using the same path helper as the core.
-//
-// (The function is invoked indirectly through `appendApplyEvidence`.)
-void preferencePath;
-
-// Loadable so future MCP-level config introspection can reuse the
-// validation surface without depending on the CLI module. Currently
-// unused — explicit import keeps the dependency graph documented.
-void loadBrainConfig;
-void existsSync;
-
 // ----- Tool registration ---------------------------------------------------
 
 export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
@@ -808,6 +838,29 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainApplyEvidence,
+  },
+  {
+    name: "brain_note",
+    description:
+      "Append one narrative-milestone line to today's Brain log (`Brain/log/<today>.md` plus its JSONL sidecar) under the `note` event kind. Use for events that are neither a new preference nor evidence against an existing one — release shipped, PR merged, fact discovered. Multi-line text is collapsed to one space-joined line; secret-shaped tokens are redacted.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          description:
+            "One-line narrative description. Newlines collapse to single spaces; the shared redactor strips secret-shaped tokens.",
+        },
+        agent: {
+          type: "string",
+          description:
+            "Optional agent identity override; defaults to the server-resolved name.",
+        },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+    handler: toolBrainNote,
   },
   {
     name: "brain_digest",

@@ -5,6 +5,108 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8] - 2026-05-19
+
+Closes §32 (retire `event_log_append` from every agent-facing surface
+in favor of `Brain/log/` as the single source of truth) and §23 (write
+a JSONL sidecar `Brain/log/<date>.jsonl` next to every markdown log
+day, with discipline-report switched to read JSONL when present and
+fall back to markdown when not). Companion design and impl plan at
+`docs/plans/2026-05-19-v0.10.8-design.md` and
+`docs/plans/2026-05-19-v0.10.8-impl.md`.
+
+### Added
+
+- §32B - `brain_note` MCP tool in the always-loaded writer-server
+  scope. Records one narrative-milestone line under event kind
+  `note` in `Brain/log/<today>.md` (plus the JSONL sidecar). Text
+  is run through `sanitiseTextField` (newline-collapse, secret
+  redaction, 4096-char cap). The agent identity is resolved through
+  the standard `resolveAgentName` chain so cron-jobs and runtime
+  shims share the same identity rules.
+- §32B - new `BRAIN_LOG_EVENT_KIND.note` constant and matching
+  `BrainNoteLogEvent` member in the discriminated union.
+  Discipline-report's `AgentCounts` gains a `note` counter that
+  surfaces in the Telegram MarkdownV2 block alongside `feedback`
+  and `apply-evidence`.
+- §23 - JSONL sidecar `Brain/log/<date>.jsonl` written atomically
+  next to each markdown event by `appendLogEvent`, under a single
+  `proper-lockfile` lock that protects the markdown-plus-JSONL pair
+  from interleaved concurrent writers. Each row is
+  `{ts, kind, payload}`; the payload is a one-to-one projection of
+  the markdown bullet body, with array bullets encoded as JSON
+  arrays.
+- §23 - new module `src/core/brain/log-jsonl.ts` exporting
+  `readLogDay(vault, date) -> {entries, source, warnings}`. JSONL
+  is preferred when present; falls back to `parseLogDay` for the
+  markdown-only case (historical pre-v0.10.8 days). Malformed
+  JSONL rows surface as warnings, not errors.
+
+### Changed
+
+- §32C - the Stop guardrail (`hooks/lib/messages.ts:stopGuardrailReason`)
+  and the PostToolUse reminder (`postWriteReminder`) point at the
+  three Brain writer tools (`brain_feedback`, `brain_apply_evidence`,
+  `brain_note`). `event_log_append` is no longer named anywhere on
+  the agent-facing surface.
+- §32C - `hooks/lib/detect.ts:BRAIN_EVENT_NAME_SUFFIX` and
+  `BRAIN_EVENT_BASH_NEEDLES` cover only the three Brain writer
+  tools. The `o2b append-event` / `vault-log` bash needles are
+  removed; those CLIs still work for human use but no longer
+  suppress the Stop guardrail.
+- §32D - all three identity-reminder templates
+  (`templates/identity-reminder.txt`, `.hermes.txt`, `.openclaw.txt`)
+  rewritten to direct agents to `brain_feedback` /
+  `brain_apply_evidence` / `brain_note` and to mention the
+  `Brain/log/<today>.md` (+ JSONL sidecar) destination. The
+  byte-pinned fixtures and the Python parity test are regenerated.
+- §32E - `hooks/README.md` rewritten to describe v0.10.8 semantics:
+  Brain/log/ as the single agent-facing log surface, Daily/ as the
+  human-CLI surface, and the JSONL sidecar contract.
+- §32F - `o2b append-event` CLI verb (`cmdAppendEvent` in
+  `src/cli/main.ts`) resolves the agent through `resolveAgentName`
+  instead of the literal `"agent"` fallback. Cron-jobs that already
+  set `VAULT_AGENT_NAME` are unaffected; cron-jobs that previously
+  relied on the literal `"agent"` get the config-declared identity
+  instead of a corrupted `@agent` Daily entry.
+- §32G - `event_log_append` MCP tool removed from every runtime:
+  the OpenClaw `registerTool` block, the `toolEventLogAppend`
+  handler in `src/mcp/tools.ts`, and the Hermes docstring mention.
+  The bare `appendEvent` function in `src/core/event-log.ts` stays
+  for the CLI verb (§32F) and any future shell-side use.
+- §23 - discipline-report (`src/core/discipline/log-counts.ts`)
+  reads through `readLogDay`. Same return shape; counts now include
+  the new `note` kind.
+
+### Migration
+
+No vault data migration is required. Historical `Brain/log/<date>.md`
+files without a sidecar JSONL are served by the reader's
+markdown-fallback path; the next write on any date produces both
+files. No installer changes; no schema bump in `_brain.yaml`.
+
+The Stop guardrail no longer clears on a bash `vault-log` /
+`o2b append-event` invocation - the operator or agent must use one
+of the three brain-event tools or finish the turn silently. Cron-jobs
+that use `o2b append-event` keep working; they just no longer count
+as a "brain event" for the guardrail.
+
+### Release-checklist gate
+
+Before shipping v0.10.8 from the working branch:
+
+1. `bun test` - all suites pass.
+2. `o2b discipline report` on `/root/vault` - status `ok` or
+   `info`; every `known_agent` with activity since v0.10.7 has at
+   least one brain event recorded (the lightweight §32A gate; see
+   the design doc for the rationale on dropping the calendar gate).
+3. Smoke: a `brain_note` MCP call produces both
+   `Brain/log/<today>.md` and `Brain/log/<today>.jsonl`, describing
+   the same event (same `ts`, `kind`, payload keys).
+4. Manual MCP probe: `event_log_append` is absent from
+   `bun src/mcp/main.ts` (full), `--scope writer`, the OpenClaw
+   bundle, and the Hermes tool list.
+
 ## [0.10.7] - 2026-05-18
 
 Closes the remaining §30 (Agent logging discipline) work from

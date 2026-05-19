@@ -33,8 +33,14 @@ describe("template", () => {
     expect(occurrences).toBeGreaterThanOrEqual(2);
   });
 
-  test("template references event_log_append", () => {
-    expect(loadReminderTemplate()).toContain("event_log_append");
+  test("template references the three Brain writer tools (§32, v0.10.8)", () => {
+    const body = loadReminderTemplate();
+    expect(body).toContain("brain_feedback");
+    expect(body).toContain("brain_apply_evidence");
+    expect(body).toContain("brain_note");
+    // event_log_append is retired across every runtime; the reminder
+    // must not point agents at the dead surface.
+    expect(body).not.toContain("event_log_append");
   });
 });
 

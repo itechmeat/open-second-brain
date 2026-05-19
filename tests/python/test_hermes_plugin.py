@@ -141,7 +141,12 @@ class PreLlmCallTests(unittest.TestCase):
         self.assertIn("context", result)
         ctx = result["context"]
         self.assertIn("@hermes-vps-agent", ctx)
-        self.assertIn("event_log_append", ctx)
+        # §32 (v0.10.8): the Hermes reminder now points at the three
+        # Brain writer tools; event_log_append is retired.
+        self.assertIn("brain_feedback", ctx)
+        self.assertIn("brain_apply_evidence", ctx)
+        self.assertIn("brain_note", ctx)
+        self.assertNotIn("event_log_append", ctx)
 
     def test_returns_context_from_persisted_config(self):
         with tempfile.TemporaryDirectory() as tmp:

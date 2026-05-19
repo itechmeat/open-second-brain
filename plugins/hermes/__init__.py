@@ -1,10 +1,11 @@
 """Hermes Python shim for Open Second Brain.
 
 Most of Open Second Brain runs as a Bun-based MCP server on stdio (registered
-via ``hermes mcp_servers`` in ``~/.hermes/config.yaml``). The MCP route is the
-only one Hermes needs for the five tools (``second_brain_status``,
-``second_brain_query``, ``second_brain_capture``, ``event_log_append``,
-``vault_health``).
+via ``hermes mcp_servers`` in ``~/.hermes/config.yaml``). MCP carries every
+agent-facing tool surface (``second_brain_status``, ``second_brain_query``,
+``vault_health``, plus the Brain writer surface: ``brain_feedback``,
+``brain_apply_evidence``, ``brain_note``); §32 (v0.10.8) retires the legacy
+``event_log_append`` tool from every runtime, including this one.
 
 This file exists for one Hermes-specific feature that MCP cannot replicate:
 the per-turn ``pre_llm_call`` hook, which appends a short identity reminder

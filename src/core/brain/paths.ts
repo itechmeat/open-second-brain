@@ -139,6 +139,18 @@ export function logPath(vault: string, date: string): string {
   return ensureInsideVault(join(brainDirs(vault).log, `${d}.md`), vault);
 }
 
+/**
+ * Structured JSONL sidecar that accompanies each `<date>.md` log
+ * file (§23, v0.10.8). Every machine consumer reads through this
+ * helper instead of doing the `.md → .jsonl` string conversion
+ * inline; if the sidecar layout ever moves (subdirectory,
+ * compression, …) every caller follows in one edit.
+ */
+export function logJsonlPath(vault: string, date: string): string {
+  const d = validateIsoDate(date);
+  return ensureInsideVault(join(brainDirs(vault).log, `${d}.jsonl`), vault);
+}
+
 /** Snapshots directory: `Brain/.snapshots/`. */
 export function snapshotsDir(vault: string): string {
   return brainDirs(vault).snapshots;

@@ -1,32 +1,48 @@
 # Open Second Brain — runtime hooks
 
 Plugin-bundled lifecycle hooks for Claude Code and Codex. The hooks
-exist to close the gap exposed by the Claude Code bug report at
-`Projects/OpenSecondBrain/Plan/1. claude-bug.md`: a soft MCP-server
-instruction is not enough to make `event_log_append` reliably fire
-after a durable artifact, and the agent had no visible signal that
-the log was skipped.
+make sure every turn that produces a durable artifact records the
+corresponding event in `Brain/log/<date>.md` (and its JSONL sidecar).
+`Brain/log/` is the single agent-facing log surface; `Daily/` remains
+as the human-CLI surface — populated by `o2b append-event` from
+cron-jobs and shell scripts, not by agents.
 
 Hermes and OpenClaw deliberately do **not** load these hooks. Hermes
-already injects an identity / log reminder via its `pre_llm_call`
-plugin shim, so the same nudge arrives through a different channel
-without duplicating subsystems. OpenClaw's native JS plugin format
-predates these hooks. If either runtime grows a Claude-style hook
-schema later, point its config at `hooks/hooks.json` and the same
-scripts will work — they only depend on the documented hook payload
-shape, not on the runtime.
+already injects an identity / writer-tool reminder via its
+`pre_llm_call` plugin shim, so the same nudge arrives through a
+different channel without duplicating subsystems. OpenClaw's native
+JS plugin format predates these hooks. If either runtime grows a
+Claude-style hook schema later, point its config at `hooks/hooks.json`
+and the same scripts will work — they only depend on the documented
+hook payload shape, not on the runtime.
 
 ## What the hooks do
 
-| Event         | Matcher                              | Behaviour                                                                              |
-|---------------|--------------------------------------|----------------------------------------------------------------------------------------|
-| `PostToolUse` | `Write\|Edit\|MultiEdit\|apply_patch` | Emits `additionalContext` reminding the agent to call `event_log_append` if the edit is durable. |
-| `Stop`        | (every Stop)                         | If the turn produced a durable artifact but no `event_log_append` call, returns `decision: "block"` once, then lets the second Stop pass. |
+| Event         | Matcher                              | Behaviour                                                                                                                                 |
+|---------------|--------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `PostToolUse` | `Write\|Edit\|MultiEdit\|apply_patch` | Emits `additionalContext` pointing at the three Brain writer tools (`brain_feedback`, `brain_apply_evidence`, `brain_note`) for a durable edit. |
+| `Stop`        | (every Stop)                         | If the turn produced a durable artifact and none of `brain_feedback` / `brain_apply_evidence` / `brain_note` landed, returns `decision: "block"` once, then lets the second Stop pass.       |
 
 The Stop guardrail respects the runtime-provided `stop_hook_active`
 flag: it fires at most once per turn, so the agent can deliberately
 decide that an edit was trivial and skip logging by just finishing
 again. No deadlocks.
+
+## JSONL sidecar
+
+Every event the writer lands in `Brain/log/<date>.md` is mirrored to
+`Brain/log/<date>.jsonl` in the same atomic step (one
+`proper-lockfile` lock for the pair). Machine consumers
+(`o2b discipline report` today, future tooling tomorrow) read JSONL
+through `src/core/brain/log-jsonl.ts:readLogDay`, which falls back to
+parsing markdown on days that pre-date v0.10.8. Hand-editing the
+markdown does not break the reader; deleting the JSONL forces the
+fallback path until the next write rebuilds it.
+
+The retired `event_log_append` MCP tool no longer exists in any
+runtime as of §32 (v0.10.8). The bash CLI `o2b append-event` still
+works for cron-jobs / shell scripts that target `Daily/`, but it no
+longer counts as a brain event for the Stop guardrail.
 
 ## Files
 

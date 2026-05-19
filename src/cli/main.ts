@@ -313,21 +313,31 @@ async function cmdDoctor(argv: string[]): Promise<number> {
 async function cmdAppendEvent(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv, {
     vault: { type: "string" },
-    as: { type: "string", default: process.env["VAULT_AGENT_NAME"] ?? "agent" },
+    as: { type: "string" },
     date: { type: "string" },
     time: { type: "string" },
+    config: { type: "string" },
   });
   if (positional.length < 1) {
     process.stderr.write("error: append-event requires a message argument\n");
     return 2;
   }
   const message = positional[0]!;
-  const vault = requireVault(flags["vault"] as string | undefined, defaultConfigPath());
-  const tz = resolveTimezone();
+  // §32F (v0.10.8): resolve the agent identity through the shared
+  // resolver instead of the literal `"agent"` fallback. The resolver
+  // chain honours `--as` -> `VAULT_AGENT_NAME` env -> `agent_name`
+  // from the plugin config -> the placeholder `"agent"` (only as the
+  // very last resort). Cron-jobs and shell scripts get the
+  // config-declared identity instead of corrupted `@agent` entries.
+  const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const tz = resolveTimezone(config);
+  const explicit = flags["as"] as string | undefined;
+  const agent = explicit ?? resolveAgentName(config);
 
   let path: string;
   try {
-    path = await appendEvent(vault, String(flags["as"] ?? "agent"), message, {
+    path = await appendEvent(vault, agent, message, {
       date: (flags["date"] as string | undefined) ?? null,
       time: (flags["time"] as string | undefined) ?? null,
       tz,

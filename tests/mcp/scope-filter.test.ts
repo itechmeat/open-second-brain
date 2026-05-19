@@ -13,10 +13,14 @@ describe("buildToolTable scope filter", () => {
     expect(full.length).toBeGreaterThanOrEqual(15);
   });
 
-  test("writer scope returns exactly the two writer tools", () => {
+  test("writer scope returns exactly the three writer tools (§32B v0.10.8)", () => {
     const writer = buildToolTable("writer");
     const names = writer.map((t) => t.name).sort();
-    expect(names).toEqual(["brain_apply_evidence", "brain_feedback"]);
+    expect(names).toEqual([
+      "brain_apply_evidence",
+      "brain_feedback",
+      "brain_note",
+    ]);
   });
 
   test("writer-scope schemas are the same instances as full scope", () => {
