@@ -59,7 +59,15 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "durable artifact (code shipped, config / instruction edited, " +
     "content drafted) and at least one preference in " +
     "`Brain/preferences/` scopes to that artifact. Record " +
-    "`result: applied | violated` per (preference, artifact) pair.\n" +
+    "`result: applied | violated | outdated` per (preference, " +
+    "artifact) pair.\n" +
+    "  - brain_note — call when this turn produced a durable " +
+    "narrative milestone (release shipped, PR merged, fact " +
+    "discovered) that fits neither `brain_feedback` nor " +
+    "`brain_apply_evidence`. Lands one line under event kind " +
+    "`note` in `Brain/log/<today>.md` (and the JSONL sidecar). " +
+    "This is the Brain-native replacement for the retired " +
+    "`event_log_append` tool.\n" +
     "  - brain_dream — runs the deterministic learning pass " +
     "(clusters signals, promotes preferences, retires stale rules). " +
     "Usually scheduled via cron, not invoked interactively.\n" +

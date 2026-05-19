@@ -126,6 +126,34 @@ tags: [brain, brain/log]
     expect(res.warnings[0]!.lineNumber).toBe(2);
   });
 
+  test("skips rows with malformed ts and surfaces a warning", () => {
+    const dir = brainDirs(tmp).log;
+    mkdirSync(dir, { recursive: true });
+    const lines = [
+      JSON.stringify({
+        ts: "2026-05-19 10:00:00",
+        kind: "feedback",
+        payload: { topic: "bad-ts" },
+      }),
+      JSON.stringify({
+        ts: "2026-05-19T10:00:01Z",
+        kind: "feedback",
+        payload: { topic: "ok" },
+      }),
+    ].join("\n");
+    writeFileSync(
+      logJsonlPath(tmp, "2026-05-19"),
+      lines + "\n",
+      "utf8",
+    );
+
+    const res = readLogDay(tmp, "2026-05-19");
+    expect(res.entries).toHaveLength(1);
+    expect(res.entries[0]!.body["topic"]).toBe("ok");
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings[0]!.message).toMatch(/invalid ts format/i);
+  });
+
   test("skips rows with unknown event kinds and surfaces a warning", () => {
     const dir = brainDirs(tmp).log;
     mkdirSync(dir, { recursive: true });

@@ -96,11 +96,18 @@ describe("handshake", () => {
     const inst = r.result.instructions as string;
     expect(inst).toContain("@hermes-vps-agent");
     // v0.9.0+ — instructions advertise Brain tools, not the legacy
-    // event_log_append / second_brain_capture path.
+    // `second_brain_capture` path. v0.10.8 instructions may mention
+    // `event_log_append` once, only as the historical name of the
+    // retired tool that `brain_note` now replaces — they must NOT
+    // teach the agent to call it.
     expect(inst).toContain("brain_feedback");
     expect(inst).toContain("brain_apply_evidence");
-    expect(inst).not.toContain("event_log_append");
+    expect(inst).toContain("brain_note");
     expect(inst).not.toContain("second_brain_capture");
+    // Allowed mention is the "retired" reference; reject any wording
+    // that frames `event_log_append` as an active tool to call.
+    expect(inst).not.toMatch(/call\s+`?event_log_append`?/i);
+    expect(inst).not.toMatch(/use\s+`?event_log_append`?/i);
   });
 
   test("negotiates alternate client version", async () => {

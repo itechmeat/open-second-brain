@@ -693,12 +693,17 @@ describe("brain_backlinks", () => {
 // brain_note (§32B, v0.10.8)
 // ---------------------------------------------------------------------------
 
-function logFileForToday(vaultDir: string): { md: string; jsonl: string } {
-  // The handler uses `new Date()` directly. Pick today's UTC date.
-  const today = new Date().toISOString().slice(0, 10);
+function logFilesForLoggedAt(
+  vaultDir: string,
+  loggedAt: string,
+): { md: string; jsonl: string } {
+  // Derive the date from the tool's own `logged_at` payload instead
+  // of `new Date()`. This avoids a flake if the test happens to cross
+  // `00:00:00Z` between the `brain_note` call and the file lookup.
+  const day = loggedAt.slice(0, 10);
   return {
-    md: logPath(vaultDir, today),
-    jsonl: logJsonlPath(vaultDir, today),
+    md: logPath(vaultDir, day),
+    jsonl: logJsonlPath(vaultDir, day),
   };
 }
 
@@ -714,7 +719,7 @@ describe("brain_note", () => {
     expect(payload.agent).toBe("claude");
     expect(typeof payload.logged_at).toBe("string");
 
-    const paths = logFileForToday(vault);
+    const paths = logFilesForLoggedAt(vault, payload.logged_at);
     expect(existsSync(paths.md)).toBe(true);
     expect(existsSync(paths.jsonl)).toBe(true);
     const md = readFileSync(paths.md, "utf8");
@@ -732,11 +737,12 @@ describe("brain_note", () => {
   test("redacts secret-shaped tokens before writing", async () => {
     const server = makeServer();
     await initialize(server);
-    await call(server, "brain_note", {
+    const r = (await call(server, "brain_note", {
       text: "deployed api_key=sk-abc123 to prod",
-    });
+    })) as any;
+    const payload = JSON.parse(r.result.content[0].text);
 
-    const paths = logFileForToday(vault);
+    const paths = logFilesForLoggedAt(vault, payload.logged_at);
     const md = readFileSync(paths.md, "utf8");
     expect(md).toContain("***REDACTED***");
     expect(md).not.toContain("sk-abc123");
@@ -745,9 +751,12 @@ describe("brain_note", () => {
   test("collapses multi-line input to one space-joined line", async () => {
     const server = makeServer();
     await initialize(server);
-    await call(server, "brain_note", { text: "line one\nline two" });
+    const r = (await call(server, "brain_note", {
+      text: "line one\nline two",
+    })) as any;
+    const payload = JSON.parse(r.result.content[0].text);
 
-    const paths = logFileForToday(vault);
+    const paths = logFilesForLoggedAt(vault, payload.logged_at);
     const md = readFileSync(paths.md, "utf8");
     expect(md).toContain("text: line one line two");
   });

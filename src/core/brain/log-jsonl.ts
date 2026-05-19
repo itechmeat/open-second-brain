@@ -29,6 +29,13 @@ export interface ReadLogDayResult {
   readonly warnings: ReadonlyArray<BrainLogParseWarning>;
 }
 
+// Canonical ISO-8601 UTC timestamp shape emitted by `renderJsonlLine`
+// in `log.ts`. Accept the same shape `parseIsoUtc` recognises so the
+// JSONL reader cannot leak a value that the markdown side would
+// reject. Sub-second precision is allowed because `JSON.stringify`
+// of a `Date` produces it; `parseIsoUtc` strips it back to seconds.
+const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
 /**
  * Read one day of Brain log events. Picks the JSONL sidecar when it
  * exists; otherwise falls back to parsing the markdown. When neither
@@ -113,6 +120,15 @@ function coerceEntry(
   const payload = obj["payload"];
   if (typeof ts !== "string" || typeof kind !== "string") {
     warnings.push({ path, lineNumber, message: "JSONL row missing ts/kind" });
+    return null;
+  }
+  // `ts` must match the canonical ISO-8601 UTC shape produced by
+  // `renderJsonlLine` (`YYYY-MM-DDTHH:MM:SSZ`, optional sub-second
+  // precision). Anything looser would let arbitrary strings into
+  // `BrainLogEntry.timestamp` and break downstream consumers that
+  // assume the strict format (e.g. `parseIsoUtc` in `log.ts`).
+  if (!ISO_UTC_TS_RE.test(ts)) {
+    warnings.push({ path, lineNumber, message: `invalid ts format: ${ts}` });
     return null;
   }
   if (!BRAIN_LOG_EVENT_KIND_SET.has(kind)) {
