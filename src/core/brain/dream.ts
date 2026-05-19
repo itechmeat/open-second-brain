@@ -62,7 +62,6 @@ import {
   brainDirs,
   preferencePath,
   processedSignalPath,
-  retiredPath,
   vaultRelative,
 } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";

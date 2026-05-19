@@ -23,6 +23,7 @@ import type {
 import { withTimeout } from "../core/search/with-timeout.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
+import { coerceBoolOptional, coerceStringOptional } from "./coerce.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -40,33 +41,6 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
   required: ["query"],
   additionalProperties: false,
 };
-
-function coerceBool(args: Record<string, unknown>, key: string): boolean | undefined {
-  if (!(key in args)) return undefined;
-  const v = args[key];
-  if (v === undefined || v === null) return undefined;
-  if (typeof v !== "boolean") {
-    throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a boolean`);
-  }
-  return v;
-}
-
-function coerceStringOptional(
-  args: Record<string, unknown>,
-  key: string,
-  maxLen: number,
-): string | undefined {
-  if (!(key in args)) return undefined;
-  const v = args[key];
-  if (v === undefined || v === null) return undefined;
-  if (typeof v !== "string") {
-    throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a string`);
-  }
-  if (v.length > maxLen) {
-    throw new MCPError(INVALID_PARAMS, `argument '${key}' exceeds ${maxLen} characters`);
-  }
-  return v;
-}
 
 function searchTimeoutError(ms: number): MCPError {
   return new MCPError(INTERNAL_ERROR, `search timeout after ${ms}ms`);
@@ -124,8 +98,8 @@ async function toolBrainSearch(
     limit = raw;
   }
 
-  const semantic = coerceBool(args, "semantic");
-  const keywordOnly = coerceBool(args, "keyword_only") ?? false;
+  const semantic = coerceBoolOptional(args, "semantic");
+  const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
 
   const config = resolveSearchConfig({

@@ -7,13 +7,14 @@
  * through Obsidian and the simple parser.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import {
   atomicCreateFileSyncExclusive,
   atomicWriteFileSync,
 } from "./fs-atomic.ts";
+import { stem } from "./fs-utils.ts";
 import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
@@ -317,11 +318,6 @@ function walk(
   }
 }
 
-function stem(filename: string): string {
-  const dot = filename.lastIndexOf(".");
-  return dot > 0 ? filename.slice(0, dot) : filename;
-}
-
 function stripQuotes(s: string): string {
   if (
     s.length >= 2 &&
@@ -405,11 +401,4 @@ function formatYamlValue(value: FrontmatterValue): string {
 export const EXCLUDED_DIRS = DEFAULT_SKIP_DIRS;
 export const EXCLUDED_FILES = DEFAULT_SKIP_FILES;
 
-export function _internalIsDir(p: string): boolean {
-  if (!existsSync(p)) return false;
-  try {
-    return statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-}
+export { isDir } from "./fs-utils.ts";

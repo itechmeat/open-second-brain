@@ -37,7 +37,7 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";

@@ -5,16 +5,17 @@
  * is no longer a hand-translated copy of the Python original — both runtimes
  * share the same source of truth.
  *
- * The plugin exposes the full Open Second Brain tool surface — the original
- * five (`second_brain_status`, `second_brain_query`, `second_brain_capture`,
- * `event_log_append`, `vault_health`) plus the eight Pay Memory tools added
- * in v0.8.0 — with parameter schemas mirrored from `src/mcp/tools.ts`.
+ * The plugin exposes the current Open Second Brain tool surface:
+ * `second_brain_status`, `second_brain_query`, `vault_health`, plus the
+ * eight Pay Memory tools added in v0.8.0. Legacy write tools
+ * (`second_brain_capture`, `event_log_append`) are retired from this
+ * agent-facing runtime.
  * No subprocess creation; passes the OpenClaw security scanner.
  */
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { existsSync } from "node:fs";
-import { join, resolve as resolvePath } from "node:path";
+import { resolve as resolvePath } from "node:path";
 
 import {
   discoverConfig,
@@ -42,11 +43,8 @@ import {
 } from "../core/pay-memory/index.ts";
 import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import { mkdirSync } from "node:fs";
-import { listVaultPages, slugify, writeFrontmatter } from "../core/vault.ts";
-import {
-  normalizeAgentArgument,
-  PLACEHOLDER_AGENT_VALUES,
-} from "../core/agent-identity.ts";
+import { listVaultPages } from "../core/vault.ts";
+import { normalizeAgentArgument } from "../core/agent-identity.ts";
 
 interface PluginConfig {
   vault?: string;
@@ -216,71 +214,11 @@ export default definePluginEntry({
       },
     );
 
-    api.registerTool(
-      {
-        name: "second_brain_capture",
-        description: "Write a new Markdown note to AI Wiki/notes/ with frontmatter.",
-        parameters: {
-          type: "object",
-          properties: {
-            title: { type: "string", description: "Human-readable note title." },
-            content: { type: "string", description: "Markdown body of the note." },
-            tags: {
-              type: "array",
-              items: { type: "string" },
-              description: "Optional list of tag strings.",
-            },
-            overwrite: {
-              type: "boolean",
-              description: "Allow overwriting an existing note with the same slug.",
-            },
-          },
-          required: ["title", "content"],
-          additionalProperties: false,
-        },
-        async execute(_id, params): Promise<unknown> {
-          const vault = resolveVaultPath(api);
-          if (!existsSync(vault)) throw new Error(`vault directory missing: ${vault}`);
-          const title = (params["title"] as string | undefined) ?? "";
-          const content = (params["content"] as string | undefined) ?? "";
-          const tags = (params["tags"] as string[] | undefined) ?? [];
-          const overwrite = Boolean(params["overwrite"]);
-          if (!title.trim()) throw new Error("title must not be empty");
-          if (!content.trim()) throw new Error("content must not be empty");
-
-          const notesDir = join(vault, "AI Wiki", "notes");
-          const slug = slugify(title);
-          const target = join(notesDir, `${slug}.md`);
-          // Capture existence BEFORE writeFrontmatter — otherwise existsSync
-          // is always true after the write, making `overwritten` a no-op
-          // signal whenever overwrite=true.
-          const noteExisted = existsSync(target);
-          if (noteExisted && !overwrite) {
-            throw new Error(`note already exists: ${vaultRelativePath(target, vault)}`);
-          }
-          const metadata: Record<string, string | number | boolean | string[]> = {
-            title,
-            type: "note",
-            created: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
-          };
-          if (tags.length > 0) metadata["tags"] = tags;
-          writeFrontmatter(target, metadata, content.trim());
-          const result = {
-            path: vaultRelativePath(target, vault),
-            absolute_path: target,
-            slug,
-            overwritten: noteExisted && overwrite,
-          };
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-        },
-      },
-    );
-
-    // §32G (v0.10.8): the OpenClaw `event_log_append` registration is
-    // gone. Agents on this runtime now record via the Brain writer
-    // tools served by the MCP server (`brain_feedback`,
-    // `brain_apply_evidence`, `brain_note`); the human-side
-    // `o2b append-event` CLI is the only remaining caller of
+    // §32G (v0.10.8): the OpenClaw `second_brain_capture` and
+    // `event_log_append` registrations are gone. Agents on this runtime
+    // now record via the Brain writer tools served by the MCP server
+    // (`brain_feedback`, `brain_apply_evidence`, `brain_note`); the
+    // human-side `o2b append-event` CLI is the only remaining caller of
     // `appendEvent`.
 
     api.registerTool(

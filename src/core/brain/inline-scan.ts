@@ -38,7 +38,7 @@ import {
   computeDedupHash,
   type DedupIndexEntry,
 } from "./dedup-hash.ts";
-import { discoverMarkersDetailed, type ParsedMarker } from "./inline.ts";
+import { discoverMarkersDetailed } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";

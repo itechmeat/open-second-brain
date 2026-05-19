@@ -1,0 +1,51 @@
+import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { appendApplyEvidence, BrainPreferenceNotFoundError } from "../../../core/brain/apply-evidence.ts";
+import { parse, fail, ok, okJson, resolveBrainVault } from "../helpers.ts";
+
+export async function cmdBrainApplyEvidence(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    pref: { type: "string" },
+    artifact: { type: "string" },
+    result: { type: "string" },
+    agent: { type: "string" },
+    note: { type: "string" },
+    json: { type: "boolean" },
+  });
+  for (const field of ["pref", "artifact", "result"] as const) {
+    if (typeof flags[field] !== "string" || (flags[field] as string).trim() === "") {
+      return fail(`brain apply-evidence missing required flag: --${field}`);
+    }
+  }
+  const config = defaultConfigPath();
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+
+  const resultStr = String(flags["result"]);
+  if (resultStr !== "applied" && resultStr !== "violated" && resultStr !== "outdated") {
+    return fail(`--result must be 'applied', 'violated', or 'outdated'; got ${resultStr}`);
+  }
+
+  try {
+    const out = appendApplyEvidence(vault, {
+      pref_id: String(flags["pref"]),
+      artifact: String(flags["artifact"]),
+      result: resultStr,
+      agent,
+      ...(flags["note"] ? { note: String(flags["note"]) } : {}),
+    });
+    if (flags["json"]) {
+      okJson({ logged_at: out.logged_at, log_path: out.log_path });
+    } else {
+      ok(`logged: ${out.log_path}`);
+      ok(`at: ${out.logged_at}`);
+    }
+    return 0;
+  } catch (exc) {
+    if (exc instanceof BrainPreferenceNotFoundError) {
+      process.stderr.write(`${exc.message}\n`);
+      return 2;
+    }
+    return fail(`apply-evidence failed: ${(exc as Error).message ?? exc}`);
+  }
+}

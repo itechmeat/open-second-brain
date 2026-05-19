@@ -34,6 +34,14 @@ export interface ReadLogDayResult {
 // JSONL reader cannot leak a value that the markdown side would
 // reject. Sub-second precision is allowed because `JSON.stringify`
 // of a `Date` produces it; `parseIsoUtc` strips it back to seconds.
+//
+// Sibling regex: `ISO_8601_RE` in `src/cli/coerce.ts`. That one is
+// looser (accepts `±HH:MM` offset, caps millisecond precision at 3
+// digits) because it has to admit whatever a human typed on the
+// CLI; this one is strict because it only ever sees values the
+// writer side just produced in canonical UTC. The two intentionally
+// do not share a constant — drift in either direction would silently
+// break the contract of the other surface.
 const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 /**

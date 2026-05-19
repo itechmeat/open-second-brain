@@ -62,7 +62,6 @@ import { normalizeAgentArgument } from "../core/agent-identity.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
   BRAIN_PREFERENCE_STATUS,
-  BRAIN_SIGNAL_SIGN,
   BRAIN_APPLY_RESULT,
   type BrainApplyResult,
   type BrainPreference,
@@ -76,102 +75,7 @@ import { sanitiseTextField } from "../core/redactor.ts";
 
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
-
-// ----- Local coercion helpers ----------------------------------------------
-//
-// Mirrors `tools.ts:coerceStr` family. We keep a private copy so the Brain
-// tool module does not depend on the legacy `tools.ts` private API
-// surface — the only shared types it imports are `ServerContext` and
-// `ToolDefinition`.
-
-function coerceStr(
-  args: Record<string, unknown>,
-  key: string,
-  required = true,
-  defaultValue: string | null = null,
-): string | null {
-  const value = args[key];
-  if (
-    value === undefined ||
-    value === null ||
-    (typeof value === "string" && value.trim() === "")
-  ) {
-    if (required) {
-      throw new MCPError(INVALID_PARAMS, `missing required argument: ${key}`);
-    }
-    return defaultValue;
-  }
-  if (typeof value !== "string") {
-    throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a string`);
-  }
-  return value;
-}
-
-function coerceStrList(
-  args: Record<string, unknown>,
-  key: string,
-): string[] | null {
-  const value = args[key];
-  if (value === undefined || value === null) return null;
-  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `argument '${key}' must be a list of strings`,
-    );
-  }
-  return [...value] as string[];
-}
-
-function coerceBool(
-  args: Record<string, unknown>,
-  key: string,
-): boolean {
-  const value = args[key];
-  if (value === undefined || value === null) return false;
-  if (typeof value !== "boolean") {
-    throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a boolean`);
-  }
-  return value;
-}
-
-/**
- * Parse an optional ISO-8601 timestamp argument. Empty / missing → null.
- * Anything else must be a parseable date string; otherwise INVALID_PARAMS.
- */
-function coerceIsoDate(
-  args: Record<string, unknown>,
-  key: string,
-): Date | null {
-  const raw = coerceStr(args, key, false);
-  if (raw === null) return null;
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `argument '${key}' must be a valid ISO-8601 timestamp`,
-    );
-  }
-  return d;
-}
-
-/**
- * Coerce the optional `format` argument shared across digest / query /
- * doctor. Accepts `markdown` (default) or `json`. Anything else throws.
- */
-function coerceFormat(
-  args: Record<string, unknown>,
-  key = "format",
-): "markdown" | "json" {
-  const raw = coerceStr(args, key, false);
-  if (raw === null) return "markdown";
-  if (raw !== "markdown" && raw !== "json") {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `argument '${key}' must be 'markdown' or 'json'`,
-    );
-  }
-  return raw;
-}
+import { coerceStr, coerceBool, coerceIsoDate, coerceFormat } from "./coerce.ts";
 
 // ----- brain_feedback ------------------------------------------------------
 

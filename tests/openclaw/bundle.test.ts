@@ -40,7 +40,6 @@ describe("openclaw bundle", () => {
       // core
       "second_brain_status",
       "second_brain_query",
-      "second_brain_capture",
       "vault_health",
       // Pay Memory
       "payment_memory_init",
@@ -60,6 +59,10 @@ describe("openclaw bundle", () => {
     // §32G (v0.10.8) removed `event_log_append` from every runtime.
     // The OpenClaw bundle must not contain the registration block.
     expect(bundleText).not.toContain(`name: "event_log_append"`);
+  });
+
+  test("does not register the retired second_brain_capture tool (§32G)", () => {
+    expect(bundleText).not.toContain(`name: "second_brain_capture"`);
   });
 
   test("does NOT contain Python references", () => {

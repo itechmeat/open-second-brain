@@ -1554,11 +1554,11 @@ var require_proper_lockfile = __commonJS((exports, module) => {
 
 // src/openclaw/index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { existsSync as existsSync6 } from "node:fs";
-import { join as join9, resolve as resolvePath } from "node:path";
+import { existsSync as existsSync5 } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 // src/core/config.ts
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join2 } from "node:path";
 
@@ -1632,6 +1632,22 @@ function withTempFile(target, contents, commit) {
   }
 }
 
+// src/core/fs-utils.ts
+import { existsSync, statSync } from "node:fs";
+function isFile(p) {
+  if (!existsSync(p))
+    return false;
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+function stem(filename) {
+  const dot = filename.lastIndexOf(".");
+  return dot > 0 ? filename.slice(0, dot) : filename;
+}
+
 // src/core/config.ts
 var SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"];
 function defaultConfigPath() {
@@ -1665,7 +1681,7 @@ function parseSimpleYaml(text) {
 }
 function discoverConfig(path) {
   const resolved = path ?? defaultConfigPath();
-  if (!isRegularFile(resolved)) {
+  if (!isFile(resolved)) {
     return { path: resolved, exists: false, data: {} };
   }
   try {
@@ -1718,15 +1734,6 @@ function expandTilde(p) {
     return join2(homedir(), p.slice(2));
   return p;
 }
-function isRegularFile(p) {
-  if (!existsSync(p))
-    return false;
-  try {
-    return statSync(p).isFile();
-  } catch {
-    return false;
-  }
-}
 
 // src/core/doctor.ts
 import {
@@ -1735,7 +1742,6 @@ import {
   openSync as openSync2,
   readFileSync as readFileSync2,
   rmSync,
-  statSync as statSync2,
   writeSync as writeSync2,
   closeSync as closeSync2
 } from "node:fs";
@@ -1999,15 +2005,6 @@ function doctor(opts) {
     results.push(...checkOpenclawInstallability(root));
   }
   return results;
-}
-function isFile(p) {
-  if (!existsSync2(p))
-    return false;
-  try {
-    return statSync2(p).isFile();
-  } catch {
-    return false;
-  }
 }
 
 // src/core/identity-reminder.ts
@@ -2386,7 +2383,7 @@ function buildPolicyResult(path, status) {
   };
 }
 // src/core/vault.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync, statSync as statSync3, writeFileSync } from "node:fs";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync, writeFileSync } from "node:fs";
 import { dirname as dirname6, join as join5, relative as relative2 } from "node:path";
 var FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 var KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
@@ -2465,10 +2462,6 @@ function formatFrontmatter(metadata, body) {
 `) + `
 `;
 }
-function writeFrontmatter(path, metadata, body) {
-  mkdirSync4(dirname6(path), { recursive: true });
-  writeFileSync(path, formatFrontmatter(metadata, body), "utf8");
-}
 function writeFrontmatterAtomic(path, metadata, body, opts = {}) {
   const contents = formatFrontmatter(metadata, body);
   if (opts.overwrite) {
@@ -2536,10 +2529,6 @@ function walk(root, dir, skipDirs, skipFiles, out) {
     const title = typeof titleVal === "string" && titleVal ? titleVal : stem(entry.name);
     out.push({ title, path: full, metadata: meta });
   }
-}
-function stem(filename) {
-  const dot = filename.lastIndexOf(".");
-  return dot > 0 ? filename.slice(0, dot) : filename;
 }
 function stripQuotes(s) {
   if (s.length >= 2 && (s.startsWith('"') && s.endsWith('"') || s.startsWith("'") && s.endsWith("'"))) {
@@ -3501,7 +3490,7 @@ var openclaw_default = definePluginEntry({
           config_keys: Object.keys(discovery.data).sort(),
           config: redactMapping(discovery.data),
           vault_path: vault,
-          vault_exists: existsSync6(vault)
+          vault_exists: existsSync5(vault)
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -3527,7 +3516,7 @@ var openclaw_default = definePluginEntry({
       },
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
-        if (!existsSync6(vault))
+        if (!existsSync5(vault))
           throw new Error(`vault directory missing: ${vault}`);
         const pattern = params["pattern"] ?? null;
         const limit = typeof params["limit"] === "number" ? params["limit"] : 50;
@@ -3543,63 +3532,6 @@ var openclaw_default = definePluginEntry({
           limit,
           pattern,
           pages: matched
-        };
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-    });
-    api.registerTool({
-      name: "second_brain_capture",
-      description: "Write a new Markdown note to AI Wiki/notes/ with frontmatter.",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "Human-readable note title." },
-          content: { type: "string", description: "Markdown body of the note." },
-          tags: {
-            type: "array",
-            items: { type: "string" },
-            description: "Optional list of tag strings."
-          },
-          overwrite: {
-            type: "boolean",
-            description: "Allow overwriting an existing note with the same slug."
-          }
-        },
-        required: ["title", "content"],
-        additionalProperties: false
-      },
-      async execute(_id, params) {
-        const vault = resolveVaultPath(api);
-        if (!existsSync6(vault))
-          throw new Error(`vault directory missing: ${vault}`);
-        const title = params["title"] ?? "";
-        const content = params["content"] ?? "";
-        const tags = params["tags"] ?? [];
-        const overwrite = Boolean(params["overwrite"]);
-        if (!title.trim())
-          throw new Error("title must not be empty");
-        if (!content.trim())
-          throw new Error("content must not be empty");
-        const notesDir = join9(vault, "AI Wiki", "notes");
-        const slug = slugify(title);
-        const target = join9(notesDir, `${slug}.md`);
-        const noteExisted = existsSync6(target);
-        if (noteExisted && !overwrite) {
-          throw new Error(`note already exists: ${vaultRelative(target, vault)}`);
-        }
-        const metadata = {
-          title,
-          type: "note",
-          created: new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
-        };
-        if (tags.length > 0)
-          metadata["tags"] = tags;
-        writeFrontmatter(target, metadata, content.trim());
-        const result = {
-          path: vaultRelative(target, vault),
-          absolute_path: target,
-          slug,
-          overwritten: noteExisted && overwrite
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -3648,7 +3580,7 @@ var openclaw_default = definePluginEntry({
         const created = [];
         const skipped = [];
         for (const dir of [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports]) {
-          const existed = existsSync6(dir);
+          const existed = existsSync5(dir);
           mkdirSync5(dir, { recursive: true });
           (existed ? skipped : created).push(vaultRelative(dir, vault));
         }
