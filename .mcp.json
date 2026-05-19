@@ -3,6 +3,11 @@
     "open-second-brain": {
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/o2b",
       "args": ["mcp"]
+    },
+    "open-second-brain-writer": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/o2b",
+      "args": ["mcp", "--scope", "writer"],
+      "alwaysLoad": true
     }
   }
 }

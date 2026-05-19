@@ -5,6 +5,89 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.7] - 2026-05-18
+
+Closes the remaining §30 (Agent logging discipline) work from
+`Projects/OpenSecondBrain/Features/_summary.md`. Three independent
+tracks ship together under one release.
+
+### Added
+
+- §30 §B - Writer MCP server split. A second `.mcp.json` entry
+  `open-second-brain-writer` exposes `brain_feedback` and
+  `brain_apply_evidence` with Claude Code's `alwaysLoad: true`
+  flag so the agent never pays the ToolSearch round-trip before
+  recording a taste signal or evidence event. The full MCP
+  surface stays deferred under the existing `open-second-brain`
+  entry. `o2b mcp` gains `--scope writer|full` (default `full`).
+- §30 §D - Daily discipline cron. New `bin/o2b-discipline-report`
+  + `o2b discipline {report|install|uninstall}` build a
+  deterministic Telegram MarkdownV2 block comparing brain-event
+  counts per agent (parsed from `Brain/log/<date>.md`) against
+  runtime-agnostic activity proxies: git activity on watched
+  repos, mtime walk on watched non-repo paths, vault delta on
+  `Brain/inbox/`, `Brain/preferences/`, `Brain/retired/`. Status
+  `ok | info | alert` is binary; numeric ratios were rejected in
+  design as noise-prone. Hermes cron job installable with
+  `o2b discipline install [--telegram-target] [--at]` (job id
+  derived from sha256(vault_path) so multiple vaults on one host
+  do not collide). No LLM in the report path.
+- §30 §E - Claude Code MEMORY to Brain bridge. New verb
+  `o2b brain import-claude-memory [--memory <path>]
+  [--dry-run | --apply] [--yes] [--json]
+  [--allow-arbitrary-memory-path]` reads `metadata.type: feedback`
+  entries from a Claude Code memory directory and writes them as
+  confirmed Brain preferences with a sidecar manifest
+  `Brain/.imports/claude-memory.json` for idempotency.
+  UPDATE preserves accumulated evidence (`_applied_count`,
+  `_violated_count`, `_evidenced_by`, `_last_evidence_at`,
+  `_confirmed_at`, `unconfirmed_until`, `pinned`, `scope`).
+  CONFLICT surfaces (preference exists without a manifest entry)
+  require manual resolution - never silent overwrites. Pre-apply
+  snapshot via the v0.10.6 manifest infrastructure; rollback via
+  `o2b brain rollback import-claude-memory-<ts>`.
+- New module `src/core/discipline/` (`report.ts`, `log-counts.ts`,
+  `window.ts`, `activity-git.ts`, `activity-mtime.ts`,
+  `vault-delta.ts`, `decision.ts`, `render.ts`, `telegram.ts`).
+- New CLI module `src/cli/discipline.ts` + `src/cli/discipline-install.ts`.
+- New entry `bin/o2b-discipline-report` + `scripts/discipline-report.ts`.
+- New `BrainConfig.discipline_report` optional section
+  (`enabled`, `timezone`, `watched_paths`, `known_agents`).
+- New §E modules under `src/core/brain/`:
+  `claude-memory-parser.ts`, `claude-memory-manifest.ts`,
+  `claude-memory-plan.ts`, `claude-memory-render.ts`,
+  `claude-memory-paths.ts`, `import-claude-memory.ts`.
+- `BRAIN_LOG_EVENT_KIND.importClaudeMemory = "import-claude-memory"`.
+
+### Changed
+
+- `src/mcp/tools.ts:buildToolTable` accepts an optional
+  `scope: "full" | "writer"` parameter; default unchanged.
+- `MCPServer` ctor accepts an optional second `runtimeOpts`
+  argument with `{ serverName, scope }`; defaults reproduce the
+  v0.10.6 behavior.
+- `serveStdio` / `serveStdioFromString` now build `MCPServer`
+  internally and forward `runtimeOpts`.
+- `buildInstructions` accepts the same `scope` field; the writer
+  branch returns a short, focused instructions block naming only
+  the two writer tools.
+- `parseBrainYaml` (in `src/core/brain/policy.ts`) now handles
+  block-style nested lists (`key:` followed by indented `- item`)
+  so the new `discipline_report.watched_paths` / `known_agents`
+  arrays parse correctly.
+
+### Migration
+
+No vault data migration is required. Existing vaults run §D
+with the feature disabled (default) until the operator adds the
+`discipline_report` section to `Brain/_brain.yaml` and runs
+`o2b discipline install`. §E is opt-in (operator runs the verb);
+the sidecar manifest `Brain/.imports/claude-memory.json` is
+created on first `--apply`. Pre-v0.10.7 installations with a
+single MCP server entry continue to work; the second
+`open-second-brain-writer` entry does not appear until the new
+`.mcp.json` is reinstalled.
+
 ## [0.10.6] - 2026-05-18
 
 Five tracks from `Projects/OpenSecondBrain/Features/_summary` shipped

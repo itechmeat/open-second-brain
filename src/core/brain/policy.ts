@@ -20,7 +20,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 
-import type { BrainConfig } from "./types.ts";
+import type { BrainConfig, DisciplineReportConfig } from "./types.ts";
 import { brainConfigPath } from "./paths.ts";
 
 /** Schema versions this build understands. Bump on incompatible changes. */
@@ -390,6 +390,90 @@ export function validateBrainConfigDetailed(
   );
   requirePositiveInteger("snapshots.retention_count", snapshots.retention_count, source);
 
+  // Optional `discipline_report` section. On any type mismatch, emit a
+  // warning and drop the section (return undefined) rather than throwing —
+  // the rest of the CLI surface must keep working.
+  let disciplineReport: DisciplineReportConfig | undefined;
+  if ("discipline_report" in obj) {
+    const dr = obj["discipline_report"];
+    if (typeof dr !== "object" || dr === null || Array.isArray(dr)) {
+      warnings.push({
+        path: source ?? "<config>",
+        message: `discipline_report: must be a map of keys; got ${describe(dr)} — section ignored`,
+      });
+    } else {
+      const drObj = dr as Record<string, unknown>;
+      let ok = true;
+
+      // enabled: boolean
+      if (typeof drObj["enabled"] !== "boolean") {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `discipline_report.enabled: must be a boolean; got ${describe(drObj["enabled"])} — section ignored`,
+        });
+        ok = false;
+      }
+
+      // timezone: string
+      if (typeof drObj["timezone"] !== "string") {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `discipline_report.timezone: must be a string; got ${describe(drObj["timezone"])} — section ignored`,
+        });
+        ok = false;
+      }
+
+      // watched_paths: array of strings
+      if (!Array.isArray(drObj["watched_paths"])) {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `discipline_report.watched_paths: must be an array; got ${describe(drObj["watched_paths"])} — section ignored`,
+        });
+        ok = false;
+      } else {
+        const badIdx = (drObj["watched_paths"] as unknown[]).findIndex(
+          (v) => typeof v !== "string",
+        );
+        if (badIdx >= 0) {
+          warnings.push({
+            path: source ?? "<config>",
+            message: `discipline_report.watched_paths[${badIdx}]: must be a string; got ${describe((drObj["watched_paths"] as unknown[])[badIdx])} — section ignored`,
+          });
+          ok = false;
+        }
+      }
+
+      // known_agents: array of strings
+      if (!Array.isArray(drObj["known_agents"])) {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `discipline_report.known_agents: must be an array; got ${describe(drObj["known_agents"])} — section ignored`,
+        });
+        ok = false;
+      } else {
+        const badIdx = (drObj["known_agents"] as unknown[]).findIndex(
+          (v) => typeof v !== "string",
+        );
+        if (badIdx >= 0) {
+          warnings.push({
+            path: source ?? "<config>",
+            message: `discipline_report.known_agents[${badIdx}]: must be a string; got ${describe((drObj["known_agents"] as unknown[])[badIdx])} — section ignored`,
+          });
+          ok = false;
+        }
+      }
+
+      if (ok) {
+        disciplineReport = {
+          enabled: drObj["enabled"] as boolean,
+          timezone: drObj["timezone"] as string,
+          watched_paths: drObj["watched_paths"] as ReadonlyArray<string>,
+          known_agents: drObj["known_agents"] as ReadonlyArray<string>,
+        };
+      }
+    }
+  }
+
   // Forward-compat: unknown top-level keys → warning, not error.
   const known = new Set([
     "schema_version",
@@ -398,6 +482,7 @@ export function validateBrainConfigDetailed(
     "retire",
     "confidence",
     "snapshots",
+    "discipline_report",
   ]);
   for (const key of Object.keys(obj)) {
     if (!known.has(key)) {
@@ -429,6 +514,7 @@ export function validateBrainConfigDetailed(
     snapshots: {
       retention_count: snapshots.retention_count as number,
     },
+    ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
   };
 
   return { config, warnings };
@@ -540,7 +626,8 @@ function describe(value: unknown): string {
 // inline arrays, anchors, and aliases — none of which the schema needs.
 
 type ParsedScalar = number | string | boolean | null;
-type ParsedBlock = Record<string, ParsedScalar | Record<string, ParsedScalar>>;
+type ParsedBlockValue = ParsedScalar | Record<string, ParsedScalar | ParsedScalar[]> | ParsedScalar[];
+type ParsedBlock = Record<string, ParsedBlockValue>;
 
 interface Line {
   readonly raw: string;
@@ -563,7 +650,10 @@ export function parseBrainYaml(text: string): ParsedBlock {
     const kv = splitKeyValue(line);
     if (kv.value === "") {
       // Block header: collect indented children.
-      const child: Record<string, ParsedScalar> = {};
+      // Each child may be a scalar value (`key: val`) or a list (`key:` followed
+      // by deeper-indented `- item` lines). Lists-within-blocks are the only
+      // third-level nesting we support — they are required for `discipline_report`.
+      const child: Record<string, ParsedScalar | ParsedScalar[]> = {};
       i++;
       const blockIndent = detectBlockIndent(lines, i);
       while (i < lines.length && lines[i]!.indent >= blockIndent && blockIndent > 0) {
@@ -576,9 +666,56 @@ export function parseBrainYaml(text: string): ParsedBlock {
         }
         const innerKv = splitKeyValue(inner);
         if (innerKv.value === "") {
-          throw new Error(
-            `line ${inner.lineNumber}: nested blocks deeper than one level are not supported`,
-          );
+          // Child key with no value — expect a list of `- item` lines at a
+          // deeper indent level.
+          i++;
+          const listIndent = detectBlockIndent(lines, i);
+          if (listIndent <= blockIndent) {
+            // Empty list (next line is at the same or shallower indent).
+            if (innerKv.key in child) {
+              throw new Error(
+                `line ${inner.lineNumber}: duplicate key '${innerKv.key}' in block '${kv.key}'`,
+              );
+            }
+            child[innerKv.key] = [];
+            continue;
+          }
+          const items: ParsedScalar[] = [];
+          while (i < lines.length && lines[i]!.indent >= listIndent) {
+            const listLine = lines[i]!;
+            if (listLine.indent !== listIndent) {
+              throw new Error(
+                `line ${listLine.lineNumber}: inconsistent indentation in list '${innerKv.key}' ` +
+                  `(expected ${listIndent} spaces, got ${listLine.indent})`,
+              );
+            }
+            if (!listLine.content.startsWith("- ") && listLine.content !== "-") {
+              // If it looks like a `key: value` pair, it's a deeper block — not
+              // supported. Preserve the original error message so existing tests
+              // that assert on the wording keep passing.
+              if (/^[A-Za-z_][A-Za-z0-9_-]*\s*:/.test(listLine.content)) {
+                throw new Error(
+                  `line ${listLine.lineNumber}: nested blocks deeper than one level are not supported`,
+                );
+              }
+              throw new Error(
+                `line ${listLine.lineNumber}: expected list item starting with '- ' ` +
+                  `in '${kv.key}.${innerKv.key}'`,
+              );
+            }
+            const itemText = listLine.content.startsWith("- ")
+              ? listLine.content.slice(2).trim()
+              : "";
+            items.push(parseScalar(itemText, listLine.lineNumber));
+            i++;
+          }
+          if (innerKv.key in child) {
+            throw new Error(
+              `line ${inner.lineNumber}: duplicate key '${innerKv.key}' in block '${kv.key}'`,
+            );
+          }
+          child[innerKv.key] = items;
+          continue;
         }
         if (innerKv.key in child) {
           throw new Error(

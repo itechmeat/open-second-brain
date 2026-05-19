@@ -179,6 +179,13 @@ export const BRAIN_LOG_EVENT_KIND = {
    * vault-relative paths of every managed file that was rewritten.
    */
   upgrade: "upgrade",
+  /**
+   * `import-claude-memory` — operator imported Claude Code memory via
+   * `o2b brain import-claude-memory <path>`. One log block per import;
+   * payload carries counters for created, updated, recreated, and skipped
+   * entries, plus conflict and snapshot information.
+   */
+  importClaudeMemory: "import-claude-memory",
 } as const;
 export type BrainLogEventKind =
   (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
@@ -525,6 +532,16 @@ export interface BrainUpgradeLogEvent extends BrainLogEventBase {
   readonly run_id: string;
 }
 
+/**
+ * `import-claude-memory` entry — operator ran
+ * `o2b brain import-claude-memory <path>`. Payload carries
+ * counters for created, updated, recreated, skipped_unchanged,
+ * skipped_non_feedback, plus conflict and snapshot information.
+ */
+export interface BrainImportClaudeMemoryLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.importClaudeMemory;
+}
+
 /** Discriminated union of every concrete log event type. */
 export type BrainLogEvent =
   | BrainDreamLogEvent
@@ -543,7 +560,8 @@ export type BrainLogEvent =
   | BrainImportSessionLogEvent
   | BrainMigrateFrontmatterLogEvent
   | BrainMergeLogEvent
-  | BrainUpgradeLogEvent;
+  | BrainUpgradeLogEvent
+  | BrainImportClaudeMemoryLogEvent;
 
 // ----- Configuration (`Brain/_brain.yaml`) ----------------------------------
 
@@ -592,6 +610,18 @@ export interface BrainSnapshotsConfig {
 }
 
 /**
+ * Optional configuration for the daily discipline report (§D of the
+ * agent-discipline-tail design). Absent on vaults that have not opted
+ * in; the loader returns `undefined` rather than injecting defaults.
+ */
+export interface DisciplineReportConfig {
+  readonly enabled: boolean;
+  readonly timezone: string;
+  readonly watched_paths: ReadonlyArray<string>;
+  readonly known_agents: ReadonlyArray<string>;
+}
+
+/**
  * Root of `Brain/_brain.yaml`. `schema_version` is mandatory; unknown
  * top-level keys are tolerated as forward-compat (logged as a warning by
  * the validator, not an error).
@@ -612,4 +642,6 @@ export interface BrainConfig {
   readonly retire: BrainRetireConfig;
   readonly confidence: BrainConfidenceConfig;
   readonly snapshots: BrainSnapshotsConfig;
+  /** Optional daily discipline-report configuration (§D). Absent when not configured. */
+  readonly discipline_report?: DisciplineReportConfig;
 }

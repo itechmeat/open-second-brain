@@ -78,6 +78,8 @@ describe("BRAIN_* const enums", () => {
       "merge",
       // §22 upgrade (v0.10.6)
       "upgrade",
+      // §3 import-claude-memory (agent-discipline-tail)
+      "import-claude-memory",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

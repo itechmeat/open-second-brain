@@ -138,7 +138,13 @@ o2b brain doctor              Check Brain-specific invariants (status-vs-folder,
 o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain scan-inline         Capture `@osb` markers from vault markdown files (Daily/, project notes, …)
 o2b brain import-session      Replay signals from a Claude/Codex/Hermes session .jsonl (or directory)
+o2b brain import-claude-memory (CLI-only) Import metadata.type=feedback entries from a Claude Code memory directory into Brain/preferences/. --dry-run / --apply, sidecar manifest for idempotency, UPDATE preserves accumulated evidence
 o2b brain migrate-frontmatter (CLI-only) Rewrite legacy `status:` keys to `_status:`
+
+# Discipline (daily logging-discipline cron)
+o2b discipline report         Render the daily MarkdownV2 block to stdout (brain-event counts per agent vs git/mtime activity); status ok | info | alert
+o2b discipline install        Register the Hermes cron job that delivers the report. --telegram-target is required; --at defaults to "59 4 * * *" UTC
+o2b discipline uninstall      Remove the cron job
 
 # Pay Memory
 o2b init-pay-memory           Bootstrap AI Wiki/{policies,payments,assets,drafts,reports}/
@@ -183,6 +189,24 @@ Each runtime registers the server differently — Hermes via
 the plugin-bundled `.mcp.json`, OpenClaw not at all (tools registered
 natively). The exact wiring is in `install.md`; the protocol,
 schemas, and lifecycle details are in [`docs/mcp.md`](docs/mcp.md).
+
+### Writer split (Claude Code 2.1.121+)
+
+The plugin's `.mcp.json` ships **two** MCP-server entries:
+
+- `open-second-brain` — the full surface (17 tools); subject to
+  Claude Code's `MCPSearch` tool-search deferral when MCP
+  definitions push the system prompt past 10% of the context window.
+- `open-second-brain-writer` — a minimal surface of exactly two
+  tools, `brain_feedback` and `brain_apply_evidence`, marked
+  `alwaysLoad: true`. The agent records taste signals and evidence
+  events without a ToolSearch round-trip on every session boot.
+
+Both servers reuse the same backing CLI (`o2b mcp --scope writer`
+vs the default `--scope full`). Handlers are byte-identical; the
+writer-mode instructions text explicitly tells the agent to prefer
+the writer copy over any duplicate the full server still exposes
+(both call the same code path).
 
 ## Lifecycle hooks (Claude Code & Codex)
 
@@ -238,10 +262,42 @@ The Brain verbs in full: `init`, `feedback`, `dream`,
 `apply-evidence`, `digest`, `query`, `reject`, `merge`, `pin`,
 `unpin`, `set-primary`, `protect`, `unprotect`, `snapshot diff`,
 `rollback`, `upgrade`, `export`, `doctor`, `backlinks`,
-`scan-inline`, `import-session`, `migrate-frontmatter`,
-`explorer`. Seven are mirrored as MCP tools (`brain_*`); the rest
-are intentionally CLI-only because they change the protected set,
-overwrite vault state, or are operator-only maintenance commands.
+`scan-inline`, `import-session`, `import-claude-memory`,
+`migrate-frontmatter`, `explorer`. Seven are mirrored as MCP tools
+(`brain_*`); the rest are intentionally CLI-only because they
+change the protected set, overwrite vault state, or are
+operator-only maintenance commands.
+
+### Discipline (daily logging sanity-check)
+
+`o2b discipline report` renders a deterministic Telegram MarkdownV2
+block comparing brain-event counts per agent (parsed from
+`Brain/log/<yesterday>.md`) against runtime-agnostic activity proxies
+(git on watched repos + mtime walk on watched non-repo paths + vault
+delta on `Brain/inbox|preferences|retired/`). Status is binary —
+`alert` if taste events (`feedback`+`apply_evidence`) are zero while
+activity is non-zero, `info` for a quiet day, `ok` otherwise. No LLM
+in the report path.
+
+`o2b discipline install --vault <v> --telegram-target <target>`
+writes one cron entry into the Hermes scheduler (job id derived from
+`sha256(vault)` so multiple vaults on one host do not collide). The
+configuration block lives in `Brain/_brain.yaml`:
+
+```yaml
+discipline_report:
+  enabled: true
+  timezone: "Europe/Belgrade"
+  watched_paths:
+    - "/srv/projects/open-second-brain"
+    - "/root/.hermes/plugins"
+  known_agents:
+    - "@claude-vps-agent"
+    - "@codex-vps-agent"
+```
+
+When the section is absent or `enabled: false`, the report exits 0
+with a stderr note and the cron job stays silent.
 
 ### Cross-project setup
 

@@ -8,7 +8,7 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
-import { MCPServer } from "./server.ts";
+import { MCPServer, type MCPServerOptions, type MCPServerRuntimeOptions } from "./server.ts";
 import { errorResponse, type JsonRpcResponse } from "./server.ts";
 import { INVALID_REQUEST, PARSE_ERROR } from "./protocol.ts";
 
@@ -26,9 +26,14 @@ export interface ServeStdioOptions {
  * batch requests (an array at the top level) yield a `-32600` invalid-request
  * response, matching the 2025-06-18 spec which removed batch support.
  */
-export async function serveStdio(server: MCPServer, opts: ServeStdioOptions = {}): Promise<number> {
-  const stdin = opts.stdin ?? process.stdin;
-  const stdout = opts.stdout ?? process.stdout;
+export async function serveStdio(
+  ctx: MCPServerOptions,
+  ioOpts: ServeStdioOptions = {},
+  runtimeOpts: MCPServerRuntimeOptions = {},
+): Promise<number> {
+  const server = new MCPServer(ctx, runtimeOpts);
+  const stdin = ioOpts.stdin ?? process.stdin;
+  const stdout = ioOpts.stdout ?? process.stdout;
   const rl = createInterface({ input: stdin, crlfDelay: Infinity });
 
   for await (const rawLine of rl) {
@@ -68,10 +73,17 @@ function writeFrame(out: Writable, response: JsonRpcResponse): void {
  * Synchronous-style serveStdio fallback for embedded test harnesses that pass
  * an in-memory string buffer instead of a real stream. Tests use this to
  * bypass the readline async iteration.
+ *
+ * Returns newline-joined output (one JSON-RPC frame per line, trailing newline).
  */
-export async function serveStdioFromString(server: MCPServer, payload: string): Promise<string[]> {
+export async function serveStdioFromString(
+  ctx: MCPServerOptions,
+  input: string,
+  opts: MCPServerRuntimeOptions = {},
+): Promise<string> {
+  const server = new MCPServer(ctx, opts);
   const out: string[] = [];
-  for (const rawLine of payload.split("\n")) {
+  for (const rawLine of input.split("\n")) {
     const line = rawLine.trim();
     if (!line) continue;
     let request: unknown;
@@ -96,5 +108,5 @@ export async function serveStdioFromString(server: MCPServer, payload: string): 
     const response = await server.handleRequest(request as Record<string, unknown>);
     if (response !== null) out.push(JSON.stringify(response));
   }
-  return out;
+  return out.join("\n") + (out.length > 0 ? "\n" : "");
 }

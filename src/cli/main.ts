@@ -44,6 +44,7 @@ import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { handleBrainSubcommand } from "./brain.ts";
+import { handleDisciplineSubcommand } from "./discipline.ts";
 import { handleSearchSubcommand } from "./search.ts";
 import {
   installCli,
@@ -1134,16 +1135,29 @@ async function cmdMcp(argv: string[]): Promise<number> {
     vault: { type: "string" },
     config: { type: "string" },
     repo: { type: "string" },
+    scope: { type: "string" },
   });
+
+  // Validate --scope before doing anything that could fail for other reasons.
+  const rawScope = (flags["scope"] as string | undefined) ?? "full";
+  if (rawScope !== "full" && rawScope !== "writer") {
+    process.stderr.write(
+      `o2b mcp: invalid --scope value: ${rawScope}; expected one of: full, writer\n`,
+    );
+    return 2;
+  }
+  const scope = rawScope;
+  const serverName =
+    scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
+
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
   const repoRoot = (flags["repo"] as string | undefined) ?? null;
 
   process.stderr.write(
-    `[mcp] open-second-brain ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
+    `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
   );
-  const server = new MCPServer({ vault, configPath: config, repoRoot });
-  return await serveStdio(server);
+  return await serveStdio({ vault, configPath: config, repoRoot }, {}, { scope, serverName });
 }
 
 async function cmdInstallCli(argv: string[]): Promise<number> {
@@ -1253,6 +1267,9 @@ Brain (observing memory):
   brain rollback            Restore Brain/ from a snapshot (--list / <run_id>)
   brain doctor              Validate Brain invariants (--strict promotes warnings)
 
+Discipline:
+  discipline report         Render the daily discipline report block (Telegram-safe)
+
 Search:
   search "<query>"          Search the vault index (default verb is 'query')
   search index              Incrementally update the index from the vault
@@ -1340,6 +1357,8 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         return await cmdPaymentDigest(rest);
       case "brain":
         return await handleBrainSubcommand(rest);
+      case "discipline":
+        return await handleDisciplineSubcommand(rest);
       case "search":
         return await handleSearchSubcommand(rest);
       default:

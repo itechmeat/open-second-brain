@@ -8,9 +8,42 @@
  * handlers remain on disk for shell-side use).
  */
 
-export function buildInstructions(defaultAgent: string): string {
+import type { ToolScope } from "./tools.ts";
+
+export interface BuildInstructionsOpts {
+  /** Resolved agent identity (e.g. "hermes-vps-agent"). */
+  readonly agent: string;
+  /** Vault path — reserved for future per-vault customisation. */
+  readonly vault?: string;
+  /** When "writer", return the trimmed writer-surface text. */
+  readonly scope?: ToolScope;
+}
+
+const WRITER_INSTRUCTIONS = `Open Second Brain — writer surface (always-loaded).
+
+Two tools live here:
+  - brain_feedback        — record one new taste signal the user just expressed.
+  - brain_apply_evidence  — record applied | violated | outdated against an
+                            active preference for an artifact this turn produced.
+
+The remaining Brain surface (digest, query, doctor, backlinks, search,
+Pay Memory tools, vault_health, second_brain_status, second_brain_query,
+and the scheduled learning pass) lives on the sibling
+"open-second-brain" MCP server (deferred). Use ToolSearch to reach it.
+
+Prefer the writer-server copy of brain_feedback / brain_apply_evidence over
+any duplicate exposed by the full server — both call the same handler, but the
+writer copy is always available without ToolSearch.`;
+
+export function buildInstructions(opts: BuildInstructionsOpts | string): string {
+  // Legacy call-site compat: plain string → full-surface branch.
+  const agent = typeof opts === "string" ? opts : opts.agent;
+  const scope = typeof opts === "string" ? undefined : opts.scope;
+
+  if (scope === "writer") return WRITER_INSTRUCTIONS;
+
   return (
-    `You are @${defaultAgent} on this Open Second Brain vault. ` +
+    `You are @${agent} on this Open Second Brain vault. ` +
     "Always log under this identity; do not invent or change the name.\n\n" +
     "Brain tools are the agent-facing writable surface (design doc §9).\n" +
     "  - brain_feedback — call once per taste signal the user (or a " +

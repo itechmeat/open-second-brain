@@ -22,12 +22,17 @@ import {
   listResourceTemplates,
   readResource,
 } from "./resources.ts";
-import { buildToolTable, findTool, type ServerContext, type ToolDefinition } from "./tools.ts";
+import { buildToolTable, findTool, type ServerContext, type ToolDefinition, type ToolScope } from "./tools.ts";
 
 export interface MCPServerOptions {
   readonly vault: string;
   readonly configPath?: string | null;
   readonly repoRoot?: string | null;
+}
+
+export interface MCPServerRuntimeOptions {
+  readonly serverName?: string;
+  readonly scope?: ToolScope;
 }
 
 export interface JsonRpcRequest {
@@ -49,12 +54,16 @@ export class MCPServer {
   readonly configPath: string | null;
   readonly repoRoot: string | null;
   readonly tools: ReadonlyArray<ToolDefinition>;
+  private readonly serverName: string;
+  private readonly scope: ToolScope;
 
-  constructor(opts: MCPServerOptions) {
+  constructor(opts: MCPServerOptions, runtimeOpts: MCPServerRuntimeOptions = {}) {
     this.vault = opts.vault;
     this.configPath = opts.configPath ?? null;
     this.repoRoot = opts.repoRoot ?? null;
-    this.tools = buildToolTable();
+    this.serverName = runtimeOpts.serverName ?? SERVER_NAME;
+    this.scope = runtimeOpts.scope ?? "full";
+    this.tools = buildToolTable(this.scope);
   }
 
   get context(): ServerContext {
@@ -148,8 +157,8 @@ export class MCPServer {
         tools: { listChanged: false },
         resources: { listChanged: false, subscribe: false },
       },
-      serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      instructions: buildInstructions(defaultAgent),
+      serverInfo: { name: this.serverName, version: SERVER_VERSION },
+      instructions: buildInstructions({ agent: defaultAgent, scope: this.scope }),
     };
   }
 
