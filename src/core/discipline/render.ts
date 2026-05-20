@@ -55,7 +55,7 @@ export function renderReport(r: RenderInput): string {
   const transcripts = r.activity.transcripts;
   if (transcripts && transcripts.byRuntime.length > 0) {
     const parts = transcripts.byRuntime
-      .filter((b) => b.fileCount > 0)
+      .filter((b) => b.fileCount > 0 || b.detail)
       .map((b) => {
         const base = `${e(b.runtime)}: ${b.fileCount}`;
         if (b.detail) {

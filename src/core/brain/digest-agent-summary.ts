@@ -147,6 +147,7 @@ function readLogsInWindow(
       }
     }
   }
+  out.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   return out;
 }
 

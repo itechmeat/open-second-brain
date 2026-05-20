@@ -39,6 +39,9 @@ export async function cmdBrainDigest(argv: string[]): Promise<number> {
     untilDate = d;
   }
   if (flags["window"]) {
+    if (flags["since"]) {
+      return fail("--since and --window are mutually exclusive");
+    }
     let windowDays: number;
     try {
       windowDays = parseWindow(String(flags["window"]));
