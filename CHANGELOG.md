@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.11] - 2026-05-20
+
+Multi-runtime install orchestrator plus a configurable
+`Most-applied (Nd)` block surfaced to operators alongside the
+existing lifetime-top section. One PR delivers seven new install
+targets, a wizard, a runtime-install health check, and a partial
+uptake of session-transcript awareness in the discipline report.
+Companion design and impl plan at
+`docs/plans/2026-05-20-multi-runtime-install-design.md` and
+`docs/plans/2026-05-20-multi-runtime-install-impl.md`.
+
+### Added
+
+- `o2b install --target <name>` for seven additional runtimes
+  alongside the existing Hermes / OpenClaw / Codex / Claude Code
+  paths: `cursor`, `aider`, `opencode`, `kiro`, `copilot-cli`,
+  `gemini-cli`, `pi`, plus a `generic` printout target for the
+  long tail. Default invocation (no `--target`) is detect-only;
+  `--apply` is required for any file writes, `--dry-run` /
+  `--check` cover the other read-only modes. JSON-merge runtimes
+  preserve user-authored keys; Aider uses a marker-fenced managed
+  block plus a sidecar context file; Pi uses a symlink; generic
+  prints to stdout or `--out <path>`.
+- `o2b uninstall --target <name>` paired with the new
+  `<vault>/.open-second-brain/install.lock.json` sidecar manifest.
+  Removes exactly what install wrote and never user-authored
+  config; refuses without `--force-from-snippet` when no manifest
+  entry exists.
+- `o2b init --interactive` first-time-setup wizard. Composes
+  `o2b init`, `o2b brain init`, and per-target `o2b install`
+  behind a single linear flow. Stdin-driven; safe-by-default
+  confirmation gate before any side effects.
+- `o2b install --check [--target X]` runtime health check.
+  Reports per-runtime status (`ok` / `drift` / `not-installed` /
+  `mcp-unreachable`) and prints the exact repair command. Exit
+  code 3 on drift, 0 otherwise.
+- `o2b mcp --writer-only` flag — alias for `--scope writer`,
+  used by every JSON-merge adapter when it writes the second of
+  the two registered MCP servers.
+- `o2b mcp --probe` flag — in-process MCP handshake used by
+  `o2b install --check` to confirm the server starts cleanly.
+- `_brain.yaml` block `active.{most_applied_window_days,
+  most_applied_limit}` (defaults 30 / 10; bounds 1..365 / 1..50).
+  Both `Brain/active.md` and `brain_digest` honour the values;
+  defaults unchanged from prior behaviour.
+- `Most-applied (Nd)` section in `brain_digest` Markdown plus a
+  mirrored `most_applied` field in the JSON form. Rendered only
+  when the window contains at least one applied event; JSON form
+  always carries the shape (with empty `entries` when applicable).
+- Per-runtime session-transcript awareness in the daily discipline
+  report. Resolvers for Claude Code, Codex, and Cursor surface a
+  `transcript-confirmed` sub-reason on `alert` rows when the proxy
+  signal lines up with runtime transcripts dated to the same day.
+  Remaining runtimes (opencode / kiro / Copilot CLI / Gemini CLI /
+  Aider / Pi) stay deferred.
+- Bundled Aider context template
+  `templates/install/aider-context.md.tmpl`.
+
+### Notes
+
+- Design closes `_summary.md` §4 second half (full installer with
+  auto-detect + managed block + dry-run) and §15 second half
+  (interactive `o2b init` wizard). Project-scope MCP config and
+  Pi path auto-detect remain deferred.
+- The `_brain.yaml` schema accepts the new `active:` block as flat
+  keys (`most_applied_window_days`, `most_applied_limit`). The
+  two-level YAML parser drove the choice; the in-memory
+  `BrainActiveConfig.most_applied` still groups them so consumers
+  pass one struct around.
+
 ## [0.10.10] - 2026-05-20
 
 Pull channels for runtimes without `SessionStart`. Adds an MCP

@@ -55,9 +55,13 @@ import {
   uninstallCli,
 } from "./install-cli.ts";
 import { planUninstall, renderPlan } from "./uninstall.ts";
+import { cmdInstall } from "./install/install.ts";
+import { cmdUninstallTarget } from "./install/uninstall-target.ts";
+import { cmdInitInteractive } from "./install/init-interactive.ts";
 import { MCPServer } from "../mcp/server.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
+import { buildToolTable } from "../mcp/tools.ts";
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
 
@@ -102,6 +106,11 @@ async function cmdStatus(argv: string[]): Promise<number> {
 }
 
 async function cmdInit(argv: string[]): Promise<number> {
+  // `--interactive` is its own mode — composed of `init` + `brain init` +
+  // per-target `install`. The non-interactive path below requires --vault.
+  if (argv.includes("--interactive")) {
+    return await cmdInitInteractive(argv.filter((a) => a !== "--interactive"));
+  }
   const { flags } = parseFlags(argv, {
     vault: { type: "string", required: true },
     name: { type: "string", default: "Second Brain" },
@@ -360,13 +369,26 @@ async function cmdMcp(argv: string[]): Promise<number> {
     config: { type: "string" },
     repo: { type: "string" },
     scope: { type: "string" },
+    "writer-only": { type: "boolean" },
+    probe: { type: "boolean" },
   });
 
-  // Validate --scope before doing anything that could fail for other reasons.
-  const rawScope = (flags["scope"] as string | undefined) ?? "full";
+  // `--writer-only` is an alias for `--scope writer`. The two flags
+  // are mutually consistent; if the user passes both, `--writer-only`
+  // wins only when `--scope` is absent or already "writer". A
+  // contradictory pair (e.g. `--scope full --writer-only`) is
+  // rejected to avoid silent surprises.
+  const writerOnly = Boolean(flags["writer-only"]);
+  const rawScope = (flags["scope"] as string | undefined) ?? (writerOnly ? "writer" : "full");
   if (rawScope !== "full" && rawScope !== "writer") {
     process.stderr.write(
       `o2b mcp: invalid --scope value: ${rawScope}; expected one of: full, writer\n`,
+    );
+    return 2;
+  }
+  if (writerOnly && rawScope !== "writer") {
+    process.stderr.write(
+      `o2b mcp: --writer-only conflicts with --scope ${rawScope}\n`,
     );
     return 2;
   }
@@ -375,6 +397,16 @@ async function cmdMcp(argv: string[]): Promise<number> {
     scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
+
+  if (flags["probe"]) {
+    return await runMcpProbe({
+      vault: flags["vault"] as string | undefined,
+      config,
+      scope,
+      serverName,
+    });
+  }
+
   const vault = requireVault(flags["vault"] as string | undefined, config);
   const repoRoot = (flags["repo"] as string | undefined) ?? null;
 
@@ -382,6 +414,36 @@ async function cmdMcp(argv: string[]): Promise<number> {
     `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
   );
   return await serveStdio({ vault, configPath: config, repoRoot }, {}, { scope, serverName });
+}
+
+async function runMcpProbe(args: {
+  vault: string | undefined;
+  config: string;
+  scope: "full" | "writer";
+  serverName: string;
+}): Promise<number> {
+  // The probe is an in-process MCP handshake: it counts the tools the
+  // server would advertise and exits. Used by `o2b install --check`
+  // to verify the server starts cleanly.
+  let vault: string;
+  try {
+    vault = requireVault(args.vault, args.config);
+  } catch (e) {
+    process.stdout.write(
+      `mcp probe FAIL: vault not configured (${(e as Error).message})\n`,
+    );
+    return 1;
+  }
+  try {
+    const tools = buildToolTable(args.scope);
+    process.stdout.write(
+      `mcp probe ok: ${args.serverName} (${tools.length} tools, vault=${vault})\n`,
+    );
+    return 0;
+  } catch (e) {
+    process.stdout.write(`mcp probe FAIL: ${(e as Error).message}\n`);
+    return 1;
+  }
 }
 
 async function cmdInstallCli(argv: string[]): Promise<number> {
@@ -392,6 +454,12 @@ async function cmdInstallCli(argv: string[]): Promise<number> {
 }
 
 async function cmdUninstall(argv: string[]): Promise<number> {
+  // `--target X` (and the `--target=X` form) is its own mode —
+  // per-runtime uninstall, distinct from the legacy `--apply-local`
+  // config-removal path.
+  if (argv.some((a) => a === "--target" || a.startsWith("--target="))) {
+    return await cmdUninstallTarget(argv);
+  }
   const { flags } = parseFlags(argv, {
     config: { type: "string" },
     "apply-local": { type: "boolean" },
@@ -462,7 +530,8 @@ Commands:
   index                     Regenerate the vault index from discovered pages
   mcp                       Run the optional MCP tool server (stdio JSON-RPC)
   install-cli               Create symlinks for o2b and vault-log in ~/.local/bin
-  uninstall                 Print an uninstall plan and (optionally) clean local config and CLI symlinks
+  install                   Multi-runtime install orchestrator (v0.10.11) — detect / plan / apply / --check (see install/)
+  uninstall                 Print an uninstall plan; --target X removes a per-runtime install
   tool-call                 Invoke an MCP tool handler from the CLI and print JSON to stdout
 
 Pay Memory:
@@ -556,6 +625,8 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         return await cmdMcp(rest);
       case "install-cli":
         return await cmdInstallCli(rest);
+      case "install":
+        return await cmdInstall(rest);
       case "uninstall":
         return await cmdUninstall(rest);
       case "tool-call":

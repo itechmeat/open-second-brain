@@ -52,4 +52,20 @@ describe("runDisciplineReport", () => {
     expect(res.text).toBe("");
     rmSync(vault, { recursive: true });
   });
+
+  test("missing Brain config disables report for legacy bare vaults", () => {
+    const vault = mkdtempSync(join(tmpdir(), "o2b-disc-missing-"));
+    const res = runDisciplineReport({ vault, now: new Date() });
+    expect(res.status).toBe("disabled");
+    expect(res.text).toBe("");
+    rmSync(vault, { recursive: true });
+  });
+
+  test("malformed Brain config is not silently disabled", () => {
+    const vault = mkdtempSync(join(tmpdir(), "o2b-disc-bad-"));
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), "not: valid: yaml\n", "utf8");
+    expect(() => runDisciplineReport({ vault, now: new Date() })).toThrow();
+    rmSync(vault, { recursive: true });
+  });
 });

@@ -40,7 +40,13 @@ import { join } from "node:path";
 
 import { backlinkCount, buildBacklinkIndex } from "./backlinks.ts";
 import { findMergeCandidates } from "./merge-candidates.ts";
+import { computeMostApplied } from "./most-applied.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
+import {
+  MOST_APPLIED_LIMIT_DEFAULT,
+  MOST_APPLIED_WINDOW_DAYS_DEFAULT,
+  loadBrainConfig,
+} from "./policy.ts";
 import { normaliseWikilinkTarget, renderPrefLink } from "./wikilink.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import { parseLogDay, type BrainLogEntry } from "./log.ts";
@@ -166,6 +172,25 @@ export interface DigestJsonTopReferenced {
 }
 
 /**
+ * Most-applied entry: one preference + its applied-in-window count.
+ * Drives the `Most-applied (Nd)` section in `brain_digest` Markdown
+ * and the mirrored block in the JSON output. The window length and
+ * limit come from `_brain.yaml:active.most_applied_*`.
+ */
+export interface DigestJsonMostAppliedEntry {
+  readonly id: string;
+  readonly principle: string;
+  readonly scope: string | null;
+  readonly applied_in_window: number;
+}
+
+export interface DigestJsonMostApplied {
+  readonly window_days: number;
+  readonly limit: number;
+  readonly entries: ReadonlyArray<DigestJsonMostAppliedEntry>;
+}
+
+/**
  * Near-duplicate pair surfaced for operator review. Detected by
  * `findMergeCandidates`. Reflects current vault state, not windowed
  * change — does not gate the `isEmpty` predicate.
@@ -200,6 +225,12 @@ export interface DigestJson {
   readonly top_applied: ReadonlyArray<DigestJsonTopApplied>;
   readonly top_referenced: ReadonlyArray<DigestJsonTopReferenced>;
   readonly merge_suggestions: ReadonlyArray<DigestJsonMergeSuggestion>;
+  /**
+   * Window-scoped most-applied list (v0.10.11). Mirrors the
+   * `Most-applied (Nd)` section of `Brain/active.md` and uses the
+   * same `_brain.yaml:active.most_applied_*` settings.
+   */
+  readonly most_applied: DigestJsonMostApplied;
 }
 
 /**
@@ -253,6 +284,7 @@ export function renderDigest(
       top_applied: data.top_applied,
       top_referenced: data.top_referenced,
       merge_suggestions: data.merge_suggestions,
+      most_applied: data.most_applied,
     };
     return Object.freeze({
       content: JSON.stringify(payload, null, 2) + "\n",
@@ -278,6 +310,7 @@ interface DigestData {
   readonly top_applied: ReadonlyArray<DigestJsonTopApplied>;
   readonly top_referenced: ReadonlyArray<DigestJsonTopReferenced>;
   readonly merge_suggestions: ReadonlyArray<DigestJsonMergeSuggestion>;
+  readonly most_applied: DigestJsonMostApplied;
 }
 
 function collectDigestData(
@@ -383,6 +416,44 @@ function collectDigestData(
     jaccard: c.jaccard,
   }));
 
+  // Most-applied (Nd) — mirrors the section in `Brain/active.md`.
+  // The window length / limit come from `_brain.yaml`; a corrupted
+  // config falls back to defaults so the digest never breaks on
+  // operator-side schema drift.
+  let mostAppliedWindowDays = MOST_APPLIED_WINDOW_DAYS_DEFAULT;
+  let mostAppliedLimit = MOST_APPLIED_LIMIT_DEFAULT;
+  try {
+    const cfg = loadBrainConfig(vault);
+    if (cfg.active?.most_applied) {
+      mostAppliedWindowDays = cfg.active.most_applied.window_days;
+      mostAppliedLimit = cfg.active.most_applied.limit;
+    }
+  } catch {
+    // fall through to defaults
+  }
+  const activePrefs = preferences
+    .filter(
+      ({ pref }) =>
+        pref.status === BRAIN_PREFERENCE_STATUS.confirmed ||
+        pref.status === BRAIN_PREFERENCE_STATUS.quarantine,
+    )
+    .map(({ pref }) => pref);
+  const mostAppliedEntries = computeMostApplied(vault, activePrefs, {
+    now: until,
+    windowDays: mostAppliedWindowDays,
+    limit: mostAppliedLimit,
+  }).map((e) => ({
+    id: e.preference.id,
+    principle: e.preference.principle,
+    scope: e.preference.scope ?? null,
+    applied_in_window: e.applied_30d,
+  }));
+  const most_applied: DigestJsonMostApplied = {
+    window_days: mostAppliedWindowDays,
+    limit: mostAppliedLimit,
+    entries: mostAppliedEntries,
+  };
+
   return {
     new_unconfirmed,
     confirmed,
@@ -392,6 +463,7 @@ function collectDigestData(
     top_applied,
     top_referenced,
     merge_suggestions,
+    most_applied,
   };
 }
 
@@ -454,7 +526,11 @@ function isEmpty(data: DigestData): boolean {
     data.confirmed.length === 0 &&
     data.retired.length === 0 &&
     data.confidence_shifts.length === 0 &&
-    data.contradictions.length === 0
+    data.contradictions.length === 0 &&
+    // most_applied is windowed — entries imply real activity that the
+    // operator wants to see in the daily digest even when nothing else
+    // changed (v0.10.11).
+    data.most_applied.entries.length === 0
   );
 }
 
@@ -759,6 +835,19 @@ function renderMarkdown(
           : item.reason;
       lines.push(
         `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${detail}`,
+      );
+    }
+    lines.push("");
+  }
+  if (data.most_applied.entries.length > 0) {
+    lines.push(
+      `## Most-applied (${data.most_applied.window_days}d) (${data.most_applied.entries.length})`,
+      "",
+    );
+    for (const item of data.most_applied.entries) {
+      const scope = item.scope ?? "—";
+      lines.push(
+        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${item.applied_in_window} applied`,
       );
     }
     lines.push("");

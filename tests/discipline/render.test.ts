@@ -47,5 +47,52 @@ describe("renderReport", () => {
     });
     expect(text).toContain("Status: alert");
     expect(text).toContain("zero brain events");
+    expect(text).not.toContain("transcript\\-confirmed");
+  });
+
+  test("status: alert + transcripts present adds transcript-confirmed sub-reason", () => {
+    const text = renderReport({
+      localDate: "2026-05-17",
+      timezone: "UTC",
+      status: "alert",
+      events: { byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } }, unknownAgents: [], total: 0 },
+      activity: {
+        repo: [{ path: "/x", git: { commits: 3, filesChanged: 5, insertions: 10, deletions: 2 } }],
+        nonRepo: [],
+        vaultDelta: { newSignals: 0, newPreferences: 0, newRetired: 0, total: 0 },
+        transcripts: {
+          byRuntime: [
+            { runtime: "claudecode", fileCount: 2, agentHint: "claude-vps-agent" },
+            { runtime: "codex", fileCount: 0, agentHint: "codex-vps-agent" },
+          ],
+          totalFiles: 2,
+        },
+      },
+    });
+    expect(text).toContain("Status: alert");
+    expect(text).toContain("transcripts — claudecode: 2");
+    expect(text).toContain("transcript\\-confirmed");
+  });
+
+  test("transcripts with zero files omit the line and skip the sub-reason", () => {
+    const text = renderReport({
+      localDate: "2026-05-17",
+      timezone: "UTC",
+      status: "alert",
+      events: { byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } }, unknownAgents: [], total: 0 },
+      activity: {
+        repo: [{ path: "/x", git: { commits: 1, filesChanged: 1, insertions: 1, deletions: 0 } }],
+        nonRepo: [],
+        vaultDelta: { newSignals: 0, newPreferences: 0, newRetired: 0, total: 0 },
+        transcripts: {
+          byRuntime: [
+            { runtime: "claudecode", fileCount: 0, agentHint: "claude-vps-agent" },
+          ],
+          totalFiles: 0,
+        },
+      },
+    });
+    expect(text).not.toContain("transcripts —");
+    expect(text).not.toContain("transcript\\-confirmed");
   });
 });

@@ -244,14 +244,14 @@ describe("regenerateActive — Most-applied (30d) section", () => {
     expect(result.counts.most_applied_30d).toBe(0);
   });
 
-  test("renders the section and includes scope + applied_30d count", () => {
+  test("renders the section and includes scope + window-agnostic applied count", () => {
     seedConfirmed("a", "Rule A", "medium");
     seedAppliedEvidence("pref-a", "2026-05-15T10:00:00Z");
     seedAppliedEvidence("pref-a", "2026-05-16T10:00:00Z");
     const result = regenerateActive(vault, { now: new Date("2026-05-20T00:00:00Z") });
     const body = readActive();
     expect(body).toContain("## Most-applied (30d) (1)");
-    expect(body).toContain("`pref-a` (scope: writing, applied_30d: 2)");
+    expect(body).toContain("`pref-a` (scope: writing, applied_in_window: 2)");
     expect(body).toContain("Rule A");
     expect(result.counts.most_applied_30d).toBe(1);
   });

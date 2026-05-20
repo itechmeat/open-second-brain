@@ -37,6 +37,11 @@ import { join } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { computeMostApplied, type MostAppliedEntry } from "./most-applied.ts";
+import {
+  MOST_APPLIED_LIMIT_DEFAULT,
+  MOST_APPLIED_WINDOW_DAYS_DEFAULT,
+  loadBrainConfig,
+} from "./policy.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
@@ -105,16 +110,36 @@ export function regenerateActive(
     .filter((p) => p.status === BRAIN_PREFERENCE_STATUS.quarantine)
     .sort(sortByIdAscending);
 
+  // Read window/limit from `_brain.yaml:active.most_applied_*`. The
+  // loader throws on a malformed `_brain.yaml`; we fall back to
+  // defaults so a corrupted config never blocks the active digest.
+  let windowDays = MOST_APPLIED_WINDOW_DAYS_DEFAULT;
+  let limit = MOST_APPLIED_LIMIT_DEFAULT;
+  try {
+    const cfg = loadBrainConfig(vault);
+    if (cfg.active?.most_applied) {
+      windowDays = cfg.active.most_applied.window_days;
+      limit = cfg.active.most_applied.limit;
+    }
+  } catch {
+    // intentional fallback — config error is doctor's job to surface
+  }
+
   // Most-applied draws from the active candidates (confirmed +
   // quarantine) only — retired preferences are reported in their own
   // section below and never resurrected through the hot list.
-  const mostApplied = computeMostApplied(vault, [...confirmed, ...quarantine], { now });
+  const mostApplied = computeMostApplied(vault, [...confirmed, ...quarantine], {
+    now,
+    windowDays,
+    limit,
+  });
 
   const body = renderBody({
     confirmed,
     quarantine,
     retiredRecent,
     mostApplied,
+    windowDays,
   });
 
   // `readExistingBody` returns the trimmed body (parseFrontmatter
@@ -212,6 +237,7 @@ interface RenderInput {
   readonly quarantine: ReadonlyArray<BrainPreference>;
   readonly retiredRecent: ReadonlyArray<BrainRetired>;
   readonly mostApplied: ReadonlyArray<MostAppliedEntry>;
+  readonly windowDays: number;
 }
 
 function renderBody(input: RenderInput): string {
@@ -231,7 +257,7 @@ function renderBody(input: RenderInput): string {
   out.push("");
 
   if (input.mostApplied.length > 0) {
-    out.push(`## Most-applied (30d) (${input.mostApplied.length})`);
+    out.push(`## Most-applied (${input.windowDays}d) (${input.mostApplied.length})`);
     out.push("");
     for (const m of input.mostApplied) out.push(renderMostAppliedLine(m));
     out.push("");
@@ -272,7 +298,11 @@ function renderMostAppliedLine(m: MostAppliedEntry): string {
   const p = m.preference;
   const tags: string[] = [];
   if (p.scope) tags.push(`scope: ${p.scope}`);
-  tags.push(`applied_30d: ${m.applied_30d}`);
+  // Display label is window-agnostic; the actual window length is in the
+  // `## Most-applied (Nd)` section header. The struct field
+  // (`MostAppliedEntry.applied_30d`) keeps its v0.10.10 name so internal
+  // consumers (MCP counts, e2e tests) don't break.
+  tags.push(`applied_in_window: ${m.applied_30d}`);
   return `- \`${p.id}\` (${tags.join(", ")}) — ${p.principle}`;
 }
 

@@ -1,6 +1,7 @@
 import type { BrainEventCounts } from "./log-counts.ts";
 import type { GitActivity } from "./activity-git.ts";
 import type { VaultDelta } from "./vault-delta.ts";
+import type { TranscriptActivity } from "./transcripts/types.ts";
 
 export interface RepoActivityRow {
   readonly path: string;
@@ -15,6 +16,22 @@ export interface ActivitySummary {
   readonly repo: ReadonlyArray<RepoActivityRow>;
   readonly nonRepo: ReadonlyArray<NonRepoActivityRow>;
   readonly vaultDelta: VaultDelta;
+  /**
+   * Per-runtime session-transcript activity (v0.10.11). Optional so
+   * the type is back-compat with callers / tests that have not been
+   * migrated yet. When present and non-empty it adds a
+   * `transcript-confirmed` sub-reason to an `alert` row.
+   */
+  readonly transcripts?: TranscriptActivity;
+}
+
+/**
+ * Did at least one per-runtime transcript surface activity in the
+ * report window? Used by the renderer to add a `transcript-confirmed`
+ * hint to an `alert` row.
+ */
+export function transcriptConfirmed(activity: ActivitySummary): boolean {
+  return (activity.transcripts?.totalFiles ?? 0) > 0;
 }
 
 export type DisciplineStatus = "ok" | "info" | "alert";
