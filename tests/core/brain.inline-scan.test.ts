@@ -261,6 +261,22 @@ describe("scanInline", () => {
     expect(result.found).toBe(0);
   });
 
+  test("v0.10.9: hardcoded Brain rule is path-scoped — nested 'Brain' dirs keep being scanned", async () => {
+    // The hard-skip targets `<vault>/Brain` specifically. A project
+    // directory like `projects/Brain/notes.md` is unrelated to the
+    // derived layer and must still be discoverable by scan-inline.
+    writeMd(
+      "projects/Brain/notes.md",
+      `@osb feedback negative topic=nested-brain-keep principle=p\n`,
+    );
+    const result = await scanInline(tmp, { agent: "test" });
+    expect(result.created).toBe(1);
+    const inbox = readdirSync(brainDirs(tmp).inbox);
+    expect(
+      inbox.some((f) => f.includes("nested-brain-keep")),
+    ).toBe(true);
+  });
+
   test("v0.10.9: vault.ignore_paths additions are respected", async () => {
     atomicWriteFileSync(
       join(brainDirs(tmp).brain, "_brain.yaml"),

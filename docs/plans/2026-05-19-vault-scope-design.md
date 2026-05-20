@@ -343,8 +343,11 @@ Failure modes:
 
 - Vault path missing: exit 1, single-line stderr error
   (matches existing `o2b brain doctor` convention).
-- `_brain.yaml` unreadable: status falls back to defaults but
-  prints a `warning:` line on stderr.
+- `_brain.yaml` unreadable / malformed: status fails closed
+  (§5) — single-line stderr error from the propagated
+  `BrainConfigError` and exit 1. Walkers cannot silently drop
+  the operator's policy, so the CLI surface refuses to render
+  partial counts.
 
 ### 7.2 `o2b vault inspect <relpath>`
 

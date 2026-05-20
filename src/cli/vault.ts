@@ -44,7 +44,10 @@ export async function handleVaultSubcommand(
   } catch (exc) {
     if (exc instanceof CliError) {
       process.stderr.write(`error: ${exc.message}\n`);
-      return 1;
+      // Argument / usage errors use exit 2 to stay consistent with the
+      // rest of the CLI; runtime failures inside a verb still bubble up
+      // through `fail()` (exit 1).
+      return 2;
     }
     throw exc;
   }

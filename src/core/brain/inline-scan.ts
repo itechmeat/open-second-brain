@@ -115,7 +115,10 @@ export async function scanInline(
   const scope = resolveVaultScope(vault);
   const rules: VaultIgnoreRule[] = [
     ...scope.rules,
-    { raw: "Brain", kind: "name" },
+    // `path` (not `name`) so the hard-skip targets only the top-level
+    // `<vault>/Brain/` directory; a project file like
+    // `projects/Brain/notes.md` keeps being scanned.
+    { raw: "Brain", kind: "path" },
     ...(opts.exclude ?? []).map(
       (raw): VaultIgnoreRule => ({ raw: normalisePrefix(raw), kind: "path" }),
     ),
@@ -227,9 +230,11 @@ export async function scanInline(
 // ----- Walker ---------------------------------------------------------------
 
 function normalisePrefix(rel: string): string {
-  // POSIX-normalise: strip leading/trailing slashes, replace OS-native
-  // separator with `/`. `matchIgnore` expects POSIX rel-paths.
-  return rel.replace(/^\/+|\/+$/g, "").split(sep).join("/");
+  // POSIX-normalise: replace OS-native separator with `/` FIRST, then
+  // strip leading/trailing slashes. On Windows `notes\\` must become
+  // `notes` (not `notes/`), so the separator conversion has to happen
+  // before the slash trim. `matchIgnore` expects POSIX rel-paths.
+  return rel.split(sep).join("/").replace(/^\/+|\/+$/g, "");
 }
 
 function* walkVault(

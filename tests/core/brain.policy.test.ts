@@ -473,6 +473,15 @@ describe("validateBrainConfig — vault block (v0.10.9)", () => {
       ),
     ).toThrow(/vault\.ignore_paths\[0\].*empty/);
   });
+
+  test("leading-slash entry is rejected (matchIgnore cannot match it)", () => {
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["/Brain/.snapshots"] } },
+        "<test>",
+      ),
+    ).toThrow(/vault\.ignore_paths\[0\].*leading '\/'/);
+  });
 });
 
 describe("loadBrainConfig — filesystem integration", () => {

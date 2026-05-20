@@ -161,6 +161,7 @@ describe("o2b vault inspect", () => {
       ["vault", "inspect", "idea.md", "--vault", vault, "--json"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
+    expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout);
     expect(payload.status).toBe("included");
     expect(payload.exists_on_disk).toBe(true);

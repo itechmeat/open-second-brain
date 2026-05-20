@@ -482,6 +482,17 @@ export function validateBrainConfigDetailed(
             source,
           );
         }
+        // Reject leading-slash entries explicitly. `matchIgnore` only
+        // compares vault-relative POSIX prefixes (no leading `/`), so
+        // `/Brain/.snapshots` would silently never match — exactly the
+        // fail-closed contract violation the v0.10.9 policy forbids.
+        if (normalised.startsWith("/")) {
+          throw new BrainConfigError(
+            "must be a bare name or vault-relative POSIX path without a leading '/'",
+            `vault.ignore_paths[${i}]`,
+            source,
+          );
+        }
         validated.push(normalised);
       });
       vault = { ignore_paths: Object.freeze(validated) };

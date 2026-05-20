@@ -507,7 +507,12 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
   // Per-command --help support: print the dedicated help line plus generic.
   // The `brain` subcommand has its own dispatcher with per-verb help, so we
   // skip the generic shortcut and hand control over directly.
-  if (rest.length === 1 && (rest[0] === "-h" || rest[0] === "--help") && command !== "brain") {
+  if (
+    rest.length === 1 &&
+    (rest[0] === "-h" || rest[0] === "--help") &&
+    command !== "brain" &&
+    command !== "vault"
+  ) {
     process.stdout.write(`${command}: see https://github.com/itechmeat/open-second-brain\n`);
     if (command === "uninstall") {
       process.stdout.write(

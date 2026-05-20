@@ -642,12 +642,13 @@ function buildScope(
 const DEFAULT_SCOPE = buildScope(DEFAULT_VAULT_IGNORE_PATHS, "defaults");
 
 export function resolveVaultScope(vault: string): VaultScope {
-  let cfg;
-  try {
-    cfg = loadBrainConfig(vault);
-  } catch {
-    return DEFAULT_SCOPE;
-  }
+  // Missing `_brain.yaml` is the only "silent" case — pre-v0.10.9
+  // vaults stay working under built-in defaults. Anything else
+  // (malformed YAML, schema mismatch, unreadable file) fails closed
+  // by propagating the `BrainConfigError` to the caller; walkers
+  // refuse to ingest paths the operator meant to hide.
+  if (!existsSync(brainConfigPath(vault))) return DEFAULT_SCOPE;
+  const cfg = loadBrainConfig(vault);
   const declared = cfg.vault?.ignore_paths;
   if (declared === undefined) return DEFAULT_SCOPE;
   return buildScope(declared, "_brain.yaml");
