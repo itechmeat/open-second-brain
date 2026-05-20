@@ -32,6 +32,10 @@ import {
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { isDir } from "../core/fs-utils.ts";
+import {
+  resolveVaultScope,
+  walkVaultScope,
+} from "../core/vault-scope/index.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import { PAY_MEMORY_TOOLS } from "./pay-memory-tools.ts";
@@ -88,6 +92,35 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
   const brain = vaultExists ? computeBrainStatus(ctx.vault) : null;
   const searchDisabled = discovery.data["search_enabled"] === "false";
   const search = vaultExists && !searchDisabled ? await buildSearchStatusBlock(ctx) : null;
+  // v0.10.9 — `vault` block exposes the shared exclusion policy plus
+  // aggregate include/exclude counts. Per-path detail lives in the CLI
+  // (`o2b vault status`); MCP payloads stay small.
+  //
+  // `resolveVaultScope` fails closed when `_brain.yaml` is malformed
+  // (design §5) — the right call for walkers that would otherwise
+  // silently drop the operator's policy. But this MCP tool is a
+  // read-only diagnostic, and the operator wants the brain / search /
+  // config blocks visible even when the vault scope cannot be
+  // resolved. Catch and degrade to `{ error: "..." }` instead of
+  // taking the whole `second_brain_status` payload down with it.
+  let vault: Record<string, unknown> | null = null;
+  if (vaultExists) {
+    try {
+      const scope = resolveVaultScope(ctx.vault);
+      const walk = walkVaultScope(ctx.vault, scope);
+      vault = {
+        ignore_source: scope.source,
+        rules: scope.rules.map((r) => ({ raw: r.raw, kind: r.kind })),
+        included: { files: walk.includedFiles, dirs: walk.includedDirs },
+        excluded: {
+          dirs: walk.excludedDirs.length,
+          files: walk.excludedFiles.length,
+        },
+      };
+    } catch (err) {
+      vault = { error: (err as Error)?.message ?? String(err) };
+    }
+  }
   return {
     config_path: String(discovery.path),
     config_exists: discovery.exists,
@@ -95,6 +128,7 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     config: redactMapping(discovery.data),
     vault_path: ctx.vault,
     vault_exists: vaultExists,
+    ...(vault ? { vault } : {}),
     ...(brain ? { brain } : {}),
     ...(search ? { search } : {}),
   };

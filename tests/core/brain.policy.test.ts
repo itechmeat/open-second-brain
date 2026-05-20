@@ -333,6 +333,157 @@ describe("validateBrainConfig — warnings (forward-compat)", () => {
   });
 });
 
+describe("validateBrainConfig — vault block (v0.10.9)", () => {
+  test("absent vault block leaves config.vault undefined", () => {
+    const cfg = validateBrainConfig({ schema_version: 1 }, "<test>");
+    expect(cfg.vault).toBeUndefined();
+  });
+
+  test("vault block present without ignore_paths leaves vault undefined", () => {
+    // Walker behaviour is identical to "absent block" (fall back to
+    // defaults) — see design §4 table row 2.
+    const cfg = validateBrainConfig(
+      { schema_version: 1, vault: {} },
+      "<test>",
+    );
+    expect(cfg.vault).toBeUndefined();
+  });
+
+  test("vault.ignore_paths populated → preserved verbatim", () => {
+    const cfg = validateBrainConfig(
+      {
+        schema_version: 1,
+        vault: { ignore_paths: [".git", "node_modules", "Brain/.snapshots"] },
+      },
+      "<test>",
+    );
+    expect(cfg.vault?.ignore_paths).toEqual([
+      ".git",
+      "node_modules",
+      "Brain/.snapshots",
+    ]);
+  });
+
+  test("vault.ignore_paths empty array honoured as explicit empty", () => {
+    const cfg = validateBrainConfig(
+      { schema_version: 1, vault: { ignore_paths: [] } },
+      "<test>",
+    );
+    expect(cfg.vault?.ignore_paths).toEqual([]);
+  });
+
+  test("vault.ignore_paths inline [] YAML form is honoured as explicit empty", () => {
+    const cfg = validateBrainConfig(
+      parseBrainYaml(`schema_version: 1\nvault:\n  ignore_paths: []\n`),
+      "<test>",
+    );
+    expect(cfg.vault?.ignore_paths).toEqual([]);
+  });
+
+  test("vault block not a map → BrainConfigError naming the field", () => {
+    expect(() =>
+      validateBrainConfig({ schema_version: 1, vault: 5 }, "<test>"),
+    ).toThrow(/vault/);
+  });
+
+  test("vault.ignore_paths not an array → BrainConfigError", () => {
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: "not-a-list" } },
+        "<test>",
+      ),
+    ).toThrow(/vault\.ignore_paths/);
+  });
+
+  test("non-string entry → BrainConfigError naming the index", () => {
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: [".git", 42] } },
+        "<test>",
+      ),
+    ).toThrow(/vault\.ignore_paths\[1\]/);
+  });
+
+  test("empty-string entry rejected", () => {
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["   "] } },
+        "<test>",
+      ),
+    ).toThrow(/non-empty/);
+  });
+
+  test("entry with newline is rejected", () => {
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["bad\nentry"] } },
+        "<test>",
+      ),
+    ).toThrow(/vault\.ignore_paths\[0\]/);
+  });
+
+  test("unknown sub-key under vault produces a warning, not an error", () => {
+    const result = validateBrainConfigDetailed(
+      {
+        schema_version: 1,
+        vault: { ignore_paths: [".git"], unknown_extra: true },
+      },
+      "<test>",
+    );
+    expect(result.config.vault?.ignore_paths).toEqual([".git"]);
+    expect(
+      result.warnings.some((w) => w.message.includes("unknown_extra")),
+    ).toBe(true);
+  });
+
+  test("DEFAULT_BRAIN_CONFIG_YAML parses with the vault block populated", () => {
+    const parsed = parseBrainYaml(DEFAULT_BRAIN_CONFIG_YAML);
+    const cfg = validateBrainConfig(parsed, "<default>");
+    expect(cfg.vault?.ignore_paths).toContain(".obsidian");
+    expect(cfg.vault?.ignore_paths).toContain("Brain/.snapshots");
+  });
+
+  test("trailing slash on a path entry is normalised, not silently dropped", () => {
+    const cfg = validateBrainConfig(
+      { schema_version: 1, vault: { ignore_paths: ["Brain/.snapshots/"] } },
+      "<test>",
+    );
+    expect(cfg.vault?.ignore_paths).toEqual(["Brain/.snapshots"]);
+  });
+
+  test("leading ./ on a path entry is normalised", () => {
+    const cfg = validateBrainConfig(
+      { schema_version: 1, vault: { ignore_paths: ["./Brain/.snapshots"] } },
+      "<test>",
+    );
+    expect(cfg.vault?.ignore_paths).toEqual(["Brain/.snapshots"]);
+  });
+
+  test("entry that normalises to empty (e.g. './' / '/') is rejected", () => {
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["./"] } },
+        "<test>",
+      ),
+    ).toThrow(/vault\.ignore_paths\[0\].*empty/);
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["///"] } },
+        "<test>",
+      ),
+    ).toThrow(/vault\.ignore_paths\[0\].*empty/);
+  });
+
+  test("leading-slash entry is rejected (matchIgnore cannot match it)", () => {
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["/Brain/.snapshots"] } },
+        "<test>",
+      ),
+    ).toThrow(/vault\.ignore_paths\[0\].*leading '\/'/);
+  });
+});
+
 describe("loadBrainConfig — filesystem integration", () => {
   test("loads a well-formed config from <vault>/Brain/_brain.yaml", () => {
     writeBrainYaml(tmp, DEFAULT_BRAIN_CONFIG_YAML);
@@ -382,6 +533,16 @@ describe("parseBrainYaml", () => {
     expect(parsed["bool_t"]).toBe(true);
     expect(parsed["bool_f"]).toBe(false);
     expect(parsed["none"]).toBeNull();
+  });
+
+  test("parses inline scalar arrays", () => {
+    const parsed = parseBrainYaml(
+      `schema_version: 1\nvault:\n  ignore_paths: [Drafts, "AI Wiki/cache"]\n`,
+    );
+    expect((parsed["vault"] as { ignore_paths: unknown }).ignore_paths).toEqual([
+      "Drafts",
+      "AI Wiki/cache",
+    ]);
   });
 
   test("parses one-level indented blocks", () => {

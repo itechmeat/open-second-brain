@@ -28,7 +28,7 @@ its own, plus a sibling derived-index directory.
 ```text
 <vault>/
 ├── Brain/                          # observing memory (agent-writable)
-│   ├── _brain.yaml                 # schema, thresholds, retention
+│   ├── _brain.yaml                 # schema, thresholds, retention, vault.ignore_paths
 │   ├── _BRAIN.md                   # operating manual for agents
 │   ├── active.md                   # derived: confirmed + quarantine + recently retired
 │   ├── inbox/                      # raw taste signals

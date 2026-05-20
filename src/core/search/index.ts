@@ -10,12 +10,17 @@ import {
   parseFloat01 as parseFloat01Shared,
   parseInteger as parseIntegerShared,
 } from "../validate.ts";
+import { resolveVaultScope } from "../vault-scope/index.ts";
 import { resolveIndexPath } from "./paths.ts";
 import { SearchError } from "./types.ts";
-import type { ResolvedSearchConfig, ResolvedEmbeddingConfig } from "./types.ts";
+import type {
+  ResolvedEmbeddingConfig,
+  ResolvedSearchConfig,
+  VaultIgnoreRule,
+} from "./types.ts";
 
-type SearchConfigOverrides = Partial<Omit<ResolvedSearchConfig, "ignorePaths" | "semantic">> & {
-  readonly ignorePaths?: ReadonlyArray<string>;
+type SearchConfigOverrides = Partial<Omit<ResolvedSearchConfig, "ignoreRules" | "semantic">> & {
+  readonly ignoreRules?: ReadonlyArray<VaultIgnoreRule>;
   readonly semantic?: Partial<ResolvedEmbeddingConfig>;
 };
 
@@ -29,6 +34,7 @@ export type {
   SearchErrorCode,
   SearchOptions,
   SearchOutcome,
+  VaultIgnoreRule,
 } from "./types.ts";
 export { SearchError, SEARCH_ERROR_CODES } from "./types.ts";
 
@@ -42,15 +48,6 @@ export {
   type IndexProgressEvent,
 } from "./indexer.ts";
 export { search } from "./search.ts";
-
-const DEFAULT_IGNORE_PATHS = [
-  ".git",
-  "node_modules",
-  ".open-second-brain",
-  ".obsidian/cache",
-  ".trash",
-  ".stversions",
-];
 
 const DEFAULTS = {
   chunkSize: 800,
@@ -147,14 +144,6 @@ function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] 
   );
 }
 
-function parseIgnorePaths(raw: string | null): string[] {
-  if (raw === null) return [...DEFAULT_IGNORE_PATHS];
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
 export function resolveSearchConfig(opts: {
   vault: string;
   configPath?: string;
@@ -192,16 +181,12 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.semanticWeight,
     "search_semantic_weight",
   );
-  if (keywordWeight + semanticWeight > 1.0 + 1e-9) {
-    throw new SearchError(
-      "INVALID_INPUT",
-      `keyword_weight + semantic_weight must sum to <= 1, got ${keywordWeight} + ${semanticWeight}`,
-    );
-  }
 
-  const ignorePaths = parseIgnorePaths(
-    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_IGNORE", "search_ignore_paths"),
-  );
+  // v0.10.9: single source of truth lives in Brain/_brain.yaml under
+  // `vault.ignore_paths`. The legacy `search_ignore_paths` config key
+  // and `OPEN_SECOND_BRAIN_SEARCH_IGNORE` env variable were removed.
+  const scope = resolveVaultScope(opts.vault);
+  const ignoreRules = scope.rules;
 
   const semanticEnabled = parseBool(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_SEMANTIC", "search_semantic_enabled"),
@@ -256,7 +241,7 @@ export function resolveSearchConfig(opts: {
   const base: ResolvedSearchConfig = Object.freeze({
     vault: opts.vault,
     dbPath,
-    ignorePaths: Object.freeze([...ignorePaths]),
+    ignoreRules,
     chunkSize,
     chunkOverlap,
     keywordWeight,
@@ -264,16 +249,17 @@ export function resolveSearchConfig(opts: {
     semantic,
   });
 
-  validateResolvedConfig(base);
-
-  if (!opts.overrides) return base;
+  if (!opts.overrides) {
+    validateResolvedConfig(base);
+    return base;
+  }
   const merged = Object.freeze({
     ...base,
     ...opts.overrides,
     semantic: Object.freeze({ ...base.semantic, ...(opts.overrides.semantic ?? {}) }),
-    ignorePaths: opts.overrides.ignorePaths
-      ? Object.freeze([...opts.overrides.ignorePaths])
-      : base.ignorePaths,
+    ignoreRules: opts.overrides.ignoreRules
+      ? Object.freeze([...opts.overrides.ignoreRules])
+      : base.ignoreRules,
   });
   validateResolvedConfig(merged);
   return merged;

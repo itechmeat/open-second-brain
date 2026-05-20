@@ -6,7 +6,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import type { ResolvedSearchConfig, ResolvedEmbeddingConfig } from "../../src/core/search/types.ts";
+import {
+  classifyVaultIgnoreRule,
+  DEFAULT_VAULT_IGNORE_PATHS,
+  type VaultIgnoreRule,
+} from "../../src/core/vault-scope/defaults.ts";
+import type {
+  ResolvedSearchConfig,
+  ResolvedEmbeddingConfig,
+} from "../../src/core/search/types.ts";
 
 export function createTempVault(prefix: string): {
   vault: string;
@@ -39,6 +47,11 @@ export function writeSymlink(vault: string, relLink: string, absTarget: string):
 export function makeConfig(opts: {
   vault: string;
   dbPath: string;
+  /**
+   * Optional terse shortcut: when provided, each string is classified
+   * into a `VaultIgnoreRule` (kind `path` if it contains `/`, else
+   * `name`). When omitted, the shared default rule set is used.
+   */
   ignorePaths?: ReadonlyArray<string>;
   semantic?: Partial<ResolvedEmbeddingConfig>;
 }): ResolvedSearchConfig {
@@ -53,20 +66,18 @@ export function makeConfig(opts: {
     concurrency: 4,
     batchSize: 32,
   });
-  const semantic: ResolvedEmbeddingConfig = Object.freeze({ ...baseSemantic, ...(opts.semantic ?? {}) });
+  const semantic: ResolvedEmbeddingConfig = Object.freeze({
+    ...baseSemantic,
+    ...(opts.semantic ?? {}),
+  });
+  const paths = opts.ignorePaths ?? DEFAULT_VAULT_IGNORE_PATHS;
+  const ignoreRules: ReadonlyArray<VaultIgnoreRule> = Object.freeze(
+    paths.map(classifyVaultIgnoreRule),
+  );
   return Object.freeze({
     vault: opts.vault,
     dbPath: opts.dbPath,
-    ignorePaths: Object.freeze([
-      ...(opts.ignorePaths ?? [
-        ".git",
-        "node_modules",
-        ".open-second-brain",
-        ".obsidian/cache",
-        ".trash",
-        ".stversions",
-      ]),
-    ]),
+    ignoreRules,
     chunkSize: 800,
     chunkOverlap: 100,
     keywordWeight: 0.6,

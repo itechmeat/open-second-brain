@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
@@ -57,8 +57,53 @@ test("defaults are returned when config and env are empty", () => {
   expect(cfg.semantic.enabled).toBe(false);
   expect(cfg.semantic.provider).toBe("openai-compat");
   expect(cfg.semantic.apiKey).toBeNull();
-  expect(cfg.ignorePaths).toContain(".git");
-  expect(cfg.ignorePaths).toContain(".open-second-brain");
+  const ignoreRaws = cfg.ignoreRules.map((r) => r.raw);
+  expect(ignoreRaws).toContain(".git");
+  expect(ignoreRaws).toContain(".open-second-brain");
+  // v0.10.9: the default set folds in `.obsidian` (whole dir) and
+  // `Brain/.snapshots`. These come from the shared `vault-scope`
+  // defaults, not the legacy `search_ignore_paths` plumbing.
+  expect(ignoreRaws).toContain(".obsidian");
+  expect(ignoreRaws).toContain("Brain/.snapshots");
+});
+
+test("OPEN_SECOND_BRAIN_SEARCH_IGNORE has no effect (removed in v0.10.9)", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  process.env["OPEN_SECOND_BRAIN_SEARCH_IGNORE"] = "from-env-1,from-env-2";
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  const raws = cfg.ignoreRules.map((r) => r.raw);
+  expect(raws).not.toContain("from-env-1");
+  expect(raws).not.toContain("from-env-2");
+});
+
+test("search_ignore_paths in config.yaml has no effect (removed in v0.10.9)", () => {
+  writeFileSync(
+    configPath,
+    `vault: "${tmp}"\nsearch_ignore_paths: "from-config-1,from-config-2"\n`,
+  );
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  const raws = cfg.ignoreRules.map((r) => r.raw);
+  expect(raws).not.toContain("from-config-1");
+  expect(raws).not.toContain("from-config-2");
+});
+
+test("vault.ignore_paths in Brain/_brain.yaml is the source of truth", () => {
+  mkdirSync(join(tmp, "Brain"), { recursive: true });
+  writeFileSync(
+    join(tmp, "Brain", "_brain.yaml"),
+    `schema_version: 1
+vault:
+  ignore_paths:
+    - my-cache
+    - Drafts
+`,
+  );
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  expect(cfg.ignoreRules.map((r) => r.raw)).toEqual(["my-cache", "Drafts"]);
+  // The path-style entry survives classification.
+  const draftsRule = cfg.ignoreRules.find((r) => r.raw === "Drafts");
+  expect(draftsRule?.kind).toBe("name");
 });
 
 test("env overrides config which overrides defaults", () => {
@@ -92,6 +137,20 @@ test("overrides win over both env and config", () => {
   });
   expect(cfg.keywordWeight).toBe(0.9);
   expect(cfg.semanticWeight).toBe(0.1);
+});
+
+test("overrides can repair invalid configured weight sums", () => {
+  writeFileSync(
+    configPath,
+    `vault: "${tmp}"\nsearch_keyword_weight: "0.7"\nsearch_semantic_weight: "0.5"\n`,
+  );
+  const cfg = resolveSearchConfig({
+    vault: tmp,
+    configPath,
+    overrides: { keywordWeight: 0.5, semanticWeight: 0.5 },
+  });
+  expect(cfg.keywordWeight).toBe(0.5);
+  expect(cfg.semanticWeight).toBe(0.5);
 });
 
 test("invalid numeric value throws INVALID_INPUT", () => {

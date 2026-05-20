@@ -25,7 +25,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
   return Object.freeze({
     vault: tmp,
     dbPath,
-    ignorePaths: Object.freeze([".git"]),
+    ignoreRules: Object.freeze([{ raw: ".git", kind: "name" as const }]),
     chunkSize: 800,
     chunkOverlap: 100,
     keywordWeight: 0.6,

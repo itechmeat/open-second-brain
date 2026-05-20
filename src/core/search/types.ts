@@ -4,6 +4,10 @@
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §12, §14.
  */
 
+import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
+
+export type { VaultIgnoreRule };
+
 export const SEARCH_ERROR_CODES = [
   "INDEX_MISSING",
   "INDEX_UNREADABLE",
@@ -133,7 +137,16 @@ export interface ResolvedEmbeddingConfig {
 export interface ResolvedSearchConfig {
   readonly vault: string;
   readonly dbPath: string;
-  readonly ignorePaths: ReadonlyArray<string>;
+  /**
+   * Vault-wide exclusion rules. Resolved through
+   * `src/core/vault-scope` from `<vault>/Brain/_brain.yaml` →
+   * `vault.ignore_paths`; falls back to the shared built-in default
+   * set when the block is not declared. The legacy
+   * `search_ignore_paths` config key and the
+   * `OPEN_SECOND_BRAIN_SEARCH_IGNORE` env variable were removed in
+   * v0.10.9.
+   */
+  readonly ignoreRules: ReadonlyArray<VaultIgnoreRule>;
   readonly chunkSize: number;
   readonly chunkOverlap: number;
   readonly keywordWeight: number;

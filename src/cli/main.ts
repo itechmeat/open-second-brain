@@ -27,6 +27,7 @@ import { CliError, parseFlags } from "./argparse.ts";
 import { handleBrainSubcommand } from "./brain.ts";
 import { handleDisciplineSubcommand } from "./discipline.ts";
 import { handleSearchSubcommand } from "./search.ts";
+import { handleVaultSubcommand } from "./vault.ts";
 import {
   NoVaultConfiguredError,
   normalizeFlagString,
@@ -489,6 +490,10 @@ Search:
   search reindex            Rebuild the index atomically (.new -> rename -> .bak)
   search status             Print index summary (counts, model, vec extension)
   search check              Pre-flight diagnostics (SQLite, FTS5, vec, provider)
+
+Vault scope:
+  vault status              Show how many files/dirs the active policy includes and which rules excluded
+  vault inspect <relpath>   Point-check one vault-relative path against the policy
 `;
 
 export async function main(argv: ReadonlyArray<string>): Promise<number> {
@@ -502,7 +507,12 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
   // Per-command --help support: print the dedicated help line plus generic.
   // The `brain` subcommand has its own dispatcher with per-verb help, so we
   // skip the generic shortcut and hand control over directly.
-  if (rest.length === 1 && (rest[0] === "-h" || rest[0] === "--help") && command !== "brain") {
+  if (
+    rest.length === 1 &&
+    (rest[0] === "-h" || rest[0] === "--help") &&
+    command !== "brain" &&
+    command !== "vault"
+  ) {
     process.stdout.write(`${command}: see https://github.com/itechmeat/open-second-brain\n`);
     if (command === "uninstall") {
       process.stdout.write(
@@ -567,6 +577,8 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         return await handleDisciplineSubcommand(rest);
       case "search":
         return await handleSearchSubcommand(rest);
+      case "vault":
+        return await handleVaultSubcommand(rest);
       default:
         process.stderr.write(`error: unknown command: ${command}\n`);
         process.stderr.write(HELP);

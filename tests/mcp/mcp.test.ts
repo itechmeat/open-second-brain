@@ -219,6 +219,74 @@ describe("tool calls", () => {
     expect(s.brain.sanity.signals_awaiting_dream).toBe(0);
   });
 
+  test("second_brain_status includes a `vault` block (v0.10.9)", async () => {
+    const vault = join(tmp, "vault");
+    mkdirSync(vault);
+    mkdirSync(join(vault, ".obsidian"));
+    writeFileSync(join(vault, ".obsidian", "app.json"), "{}");
+    writeFileSync(join(vault, "note.md"), "# x\n");
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, "vault_path: /tmp/vault\n");
+    const server = new MCPServer({ vault, configPath: config });
+    await initialize(server);
+    const r = (await callTool(server, "second_brain_status"))! as any;
+    const s = r.result.structuredContent;
+    expect(s.vault).toBeDefined();
+    expect(s.vault.ignore_source).toBeDefined();
+    expect(["_brain.yaml", "defaults"]).toContain(s.vault.ignore_source);
+    expect(Array.isArray(s.vault.rules)).toBe(true);
+    expect(s.vault.rules.some(
+      (r: { raw: string }) => r.raw === ".obsidian",
+    )).toBe(true);
+    expect(typeof s.vault.included.files).toBe("number");
+    expect(typeof s.vault.included.dirs).toBe("number");
+    expect(typeof s.vault.excluded.dirs).toBe("number");
+    expect(typeof s.vault.excluded.files).toBe("number");
+    expect(s.vault.excluded.dirs).toBeGreaterThanOrEqual(1);
+  });
+
+  test("second_brain_status omits `vault` block when vault directory missing", async () => {
+    const vault = join(tmp, "missing-vault");
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, "vault_path: /tmp/vault\n");
+    const server = new MCPServer({ vault, configPath: config });
+    await initialize(server);
+    const r = (await callTool(server, "second_brain_status"))! as any;
+    const s = r.result.structuredContent;
+    expect(s.vault_exists).toBe(false);
+    expect(s.vault).toBeUndefined();
+  });
+
+  test("second_brain_status degrades vault block to {error} when _brain.yaml is malformed (v0.10.9)", async () => {
+    // Fail-closed resolver (design §5) makes walkers and the CLI
+    // vault verb refuse to proceed on a malformed config. The MCP
+    // status tool is a read-only diagnostic — it should still
+    // expose the other blocks (brain / search / config) so the
+    // operator can see what is wrong without losing the rest.
+    const vault = join(tmp, "vault");
+    mkdirSync(vault);
+    mkdirSync(join(vault, "Brain"));
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      // entry contains a backslash → rejected by validator.
+      `schema_version: 1\nvault:\n  ignore_paths:\n    - "bad\\\\entry"\n`,
+    );
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, "vault_path: /tmp/vault\n");
+    const server = new MCPServer({ vault, configPath: config });
+    await initialize(server);
+    const r = (await callTool(server, "second_brain_status"))! as any;
+    const s = r.result.structuredContent;
+    // Other blocks must remain present.
+    expect(s.config_path).toBeDefined();
+    expect(s.vault_exists).toBe(true);
+    expect(s.brain).toBeDefined();
+    // Vault block degraded with the error message.
+    expect(s.vault).toBeDefined();
+    expect(typeof s.vault.error).toBe("string");
+    expect(s.vault.error).toContain("vault.ignore_paths");
+  });
+
   test("second_brain_query filters and limits", async () => {
     const vault = createSandboxVault(tmp);
     const server = new MCPServer({ vault });

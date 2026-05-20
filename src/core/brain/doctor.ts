@@ -40,6 +40,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
+import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
 import { parseLogDay } from "./log.ts";
 import {
@@ -121,6 +122,12 @@ export function runDoctor(
 
   // 1. Config schema check.
   checkConfig(vault, issues);
+  // 1b (v0.10.9). Vault scope hygiene: path-style entries that point at
+  // nothing on disk are typically typos. Only fires when the operator
+  // actually declared the `vault.ignore_paths` block (we never warn
+  // about defaults — a built-in entry like `.git` may legitimately be
+  // absent in a fresh vault).
+  checkVaultIgnore(vault, issues);
 
   // 2-6. Frontmatter checks across signals / preferences / retired.
   const knownBasenames = collectAllBasenames(vault);
@@ -248,6 +255,41 @@ function checkConfig(vault: string, issues: DoctorIssue[]): void {
         message: `_brain.yaml could not be loaded: ${(err as Error).message ?? String(err)}`,
       });
     }
+  }
+}
+
+// ----- Vault-scope check ---------------------------------------------------
+
+/**
+ * v0.10.9 hygiene lint: surface path-style entries in
+ * `vault.ignore_paths` that do not resolve to anything on disk. Such
+ * entries are typically typos — they look like exclusions but cannot
+ * fire. Bare-name rules are skipped (a missing `.git` directory is
+ * not an error).
+ *
+ * Only runs when the operator declared the block themselves; the
+ * built-in default set may legitimately list paths that do not exist
+ * in a given vault.
+ */
+function checkVaultIgnore(vault: string, issues: DoctorIssue[]): void {
+  let scope;
+  try {
+    scope = resolveVaultScope(vault);
+  } catch {
+    // `checkConfig` already reports the malformed/unreadable _brain.yaml.
+    // Do not let this follow-on lint mask the primary config issue.
+    return;
+  }
+  if (scope.source !== "_brain.yaml") return;
+  for (const rule of scope.rules) {
+    if (rule.kind !== "path") continue;
+    if (existsSync(join(vault, rule.raw))) continue;
+    issues.push({
+      severity: "warning",
+      code: "vault-ignore-missing-path",
+      message:
+        `vault.ignore_paths entry '${rule.raw}' does not exist in this vault`,
+    });
   }
 }
 

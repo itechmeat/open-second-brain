@@ -5,6 +5,94 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.9] - 2026-05-20
+
+Closes the "Vault Scope" feature: a single declarative exclusion
+policy in `Brain/_brain.yaml` (`vault.ignore_paths`) replaces the
+per-walker rules that used to drift between the search indexer and
+`scan-inline`. Operators get one-shot visibility through the new
+`o2b vault status` and `o2b vault inspect` verbs and an additive
+`vault` block on the MCP `second_brain_status` payload. `o2b brain
+doctor` warns when a path-style ignore entry points at nothing on
+disk. Companion design and impl plan at
+`docs/plans/2026-05-19-vault-scope-design.md` and
+`docs/plans/2026-05-19-vault-scope-impl.md`.
+
+### Removed
+
+- `search_ignore_paths` key from the flat plugin config
+  (`~/.config/open-second-brain/config.yaml`).
+- `OPEN_SECOND_BRAIN_SEARCH_IGNORE` environment variable.
+
+  Both surfaces are dropped without a deprecation cycle: the project
+  has no live users to protect, and a shim that silently changes
+  walker behaviour would be a footgun. Configure exclusions in
+  `Brain/_brain.yaml` under `vault.ignore_paths`.
+
+### Added
+
+- `vault.ignore_paths` block in `Brain/_brain.yaml`. Single source
+  of truth for every vault walker (search indexer, `scan-inline`,
+  future scanners). Entries without `/` match a directory name at
+  any depth; entries with `/` are vault-relative POSIX paths
+  matched exactly. The block is optional - absent means "use the
+  built-in defaults"; an explicit empty list means "exclude
+  nothing".
+- Default exclusion set widens `.obsidian/cache` to `.obsidian` (the
+  full directory) and adds `Brain/.snapshots` explicitly. New
+  vaults created by `o2b brain init` get the populated block in
+  `_brain.yaml`; pre-v0.10.9 vaults inherit the same defaults at
+  runtime without a file change.
+- `o2b vault status [--vault <path>] [--json]` - walks the vault
+  under the active policy and reports inclusion counts plus a
+  per-rule list of excluded directories. Subtree descendants
+  inside an excluded directory are not enumerated again.
+- `o2b vault inspect <relpath> [--vault <path>] [--json]` -
+  point-check whether one vault-relative path is included by the
+  active policy, with the matched rule and source.
+- MCP `second_brain_status` payload gains an additive `vault`
+  block: `ignore_source`, the classified `rules` list, and
+  aggregate `included` / `excluded` counts. Per-path detail stays
+  in the CLI.
+- `o2b brain doctor` lint `vault-ignore-missing-path` - warning
+  emitted when a path-style entry under `vault.ignore_paths` does
+  not exist on disk. Only fires when the operator declared the
+  block themselves (the built-in default set may list paths that
+  legitimately don't exist in a given vault).
+
+### Changed
+
+- `src/core/vault-scope` is the new home of the shared exclusion
+  policy: `DEFAULT_VAULT_IGNORE_PATHS`, `VaultIgnoreRule`,
+  `matchIgnore`, `resolveVaultScope`, `walkVaultScope`,
+  `inspectPath`. The search indexer (`src/core/search/walker.ts`)
+  and `scan-inline` (`src/core/brain/inline-scan.ts`) both delegate
+  ignore decisions to `matchIgnore`; previously each maintained
+  its own list of skip-paths.
+- `ResolvedSearchConfig.ignorePaths: ReadonlyArray<string>` is
+  replaced by `ignoreRules: ReadonlyArray<VaultIgnoreRule>`. The
+  string-array field is removed entirely (no internal caller other
+  than the walker read it).
+- `scan-inline` `--exclude` flag stays as narrowing on top of the
+  shared set. The hardcoded `Brain` directory skip is preserved -
+  scan-inline must never recurse into the derived layer regardless
+  of operator policy; `Brain` is appended to the effective rule
+  set in code, not in `_brain.yaml`.
+- `resolveVaultScope` fails closed when `Brain/_brain.yaml` exists
+  but is malformed or unreadable. Missing config still falls back to
+  built-in defaults for older vaults, but a broken declared policy no
+  longer silently drops custom exclusions.
+
+### Migration
+
+No vault-data migration is required. Vaults whose `Brain/_brain.yaml`
+does not include a `vault:` block continue to use the built-in
+default set on this release. Vaults that previously set
+`search_ignore_paths` (in the flat plugin config) or
+`OPEN_SECOND_BRAIN_SEARCH_IGNORE` (env) should copy the entries
+into `vault.ignore_paths`; both legacy surfaces have no effect on
+v0.10.9 onwards.
+
 ## [0.10.8] - 2026-05-19
 
 Closes §32 (retire `event_log_append` from every agent-facing surface
@@ -1987,6 +2075,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.10.9]: https://github.com/itechmeat/open-second-brain/compare/v0.10.8...v0.10.9
 [0.10.8]: https://github.com/itechmeat/open-second-brain/compare/v0.10.7...v0.10.8
 [0.10.7]: https://github.com/itechmeat/open-second-brain/compare/v0.10.6...v0.10.7
 [0.10.6]: https://github.com/itechmeat/open-second-brain/compare/v0.10.5...v0.10.6

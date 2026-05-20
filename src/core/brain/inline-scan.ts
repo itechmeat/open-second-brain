@@ -43,16 +43,11 @@ import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
-
-const HARD_SKIP_DIRS: ReadonlyArray<string> = Object.freeze([
-  ".git",
-  "node_modules",
-  ".open-second-brain",
-  ".obsidian",
-  ".trash",
-  ".stversions",
-  "Brain",
-]);
+import {
+  matchIgnore,
+  resolveVaultScope,
+  type VaultIgnoreRule,
+} from "../vault-scope/index.ts";
 
 const MAX_FILE_SIZE_BYTES = 1_048_576; // 1 MiB
 
@@ -111,9 +106,25 @@ export async function scanInline(
   let malformed = 0; // reserved — not surfaced separately yet
 
   const includePrefixes = (opts.paths ?? []).map((p) => normalisePrefix(p));
-  const userExcludes = (opts.exclude ?? []).map((p) => normalisePrefix(p));
 
-  for (const filePath of walkVault(vault, includePrefixes, userExcludes)) {
+  // Effective rule set (v0.10.9):
+  //   - shared `vault.ignore_paths` from Brain/_brain.yaml (or defaults)
+  //   - hardcoded `Brain` name-rule: scan-inline must never recurse
+  //     into the derived layer regardless of operator policy
+  //   - user `--exclude` entries, classified as path-prefix rules
+  const scope = resolveVaultScope(vault);
+  const rules: VaultIgnoreRule[] = [
+    ...scope.rules,
+    // `path` (not `name`) so the hard-skip targets only the top-level
+    // `<vault>/Brain/` directory; a project file like
+    // `projects/Brain/notes.md` keeps being scanned.
+    { raw: "Brain", kind: "path" },
+    ...(opts.exclude ?? []).map(
+      (raw): VaultIgnoreRule => ({ raw: normalisePrefix(raw), kind: "path" }),
+    ),
+  ];
+
+  for (const filePath of walkVault(vault, includePrefixes, rules)) {
     scanned++;
     let stat;
     try {
@@ -219,19 +230,23 @@ export async function scanInline(
 // ----- Walker ---------------------------------------------------------------
 
 function normalisePrefix(rel: string): string {
-  // Strip leading/trailing slashes; normalise separator to OS-native.
-  const trimmed = rel.replace(/^\/+|\/+$/g, "");
-  return trimmed.split("/").join(sep);
+  // POSIX-normalise: replace OS-native separator with `/` FIRST, then
+  // strip leading/trailing slashes. On Windows `notes\\` must become
+  // `notes` (not `notes/`), so the separator conversion has to happen
+  // before the slash trim. `matchIgnore` expects POSIX rel-paths.
+  return rel.split(sep).join("/").replace(/^\/+|\/+$/g, "");
 }
 
 function* walkVault(
   vault: string,
   includePrefixes: ReadonlyArray<string>,
-  userExcludes: ReadonlyArray<string>,
+  rules: ReadonlyArray<VaultIgnoreRule>,
 ): Generator<string> {
-  const stack: string[] = [vault];
+  const stack: Array<{ abs: string; rel: string }> = [
+    { abs: vault, rel: "" },
+  ];
   while (stack.length > 0) {
-    const dir = stack.pop()!;
+    const { abs: dir, rel: relDir } = stack.pop()!;
     let entries: Dirent[];
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -240,20 +255,14 @@ function* walkVault(
     }
     for (const entry of entries) {
       const full = join(dir, entry.name);
-      const rel = relative(vault, full);
+      const relPosix = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
 
-      // Hard skip: name-based at any depth.
-      if (entry.isDirectory() && HARD_SKIP_DIRS.includes(entry.name)) continue;
-
-      // User excludes: prefix match for both dirs and files.
-      if (userExcludes.some((p) => rel === p || rel.startsWith(p + sep))) {
-        continue;
-      }
+      if (matchIgnore(relPosix, rules).excluded) continue;
 
       if (entry.isDirectory()) {
-        // Include-narrowing only applies to files: directories must
-        // descend so subtree files inside an include prefix are reached.
-        stack.push(full);
+        // Include-narrowing applies only to files: descend so subtree
+        // files under an include prefix are still reached.
+        stack.push({ abs: full, rel: relPosix });
         continue;
       }
       if (!entry.isFile()) continue;
@@ -261,7 +270,7 @@ function* walkVault(
 
       if (includePrefixes.length > 0) {
         const matches = includePrefixes.some(
-          (p) => rel === p || rel.startsWith(p + sep),
+          (p) => relPosix === p || relPosix.startsWith(p + "/"),
         );
         if (!matches) continue;
       }

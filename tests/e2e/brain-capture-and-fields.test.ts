@@ -71,6 +71,16 @@ describe("capture + migration end-to-end", () => {
       "utf8",
     );
 
+    // Step 2b (v0.10.9): an Obsidian-plugin note with a stray marker
+    // must NOT be captured — the shared vault.ignore_paths excludes
+    // the whole `.obsidian` tree.
+    mkdirSync(join(vault, ".obsidian", "plugins", "x"), { recursive: true });
+    writeFileSync(
+      join(vault, ".obsidian", "plugins", "x", "note.md"),
+      "@osb feedback negative topic=e2e-obsidian-leak principle=p\n",
+      "utf8",
+    );
+
     // Step 3: scan-inline captures + rewrites
     r = await runCli(["brain", "scan-inline", "--vault", vault], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
@@ -82,6 +92,10 @@ describe("capture + migration end-to-end", () => {
     const inbox = join(vault, "Brain", "inbox");
     const inlineSigs = readdirSync(inbox).filter((n) => n.startsWith("sig-"));
     expect(inlineSigs.length).toBe(1);
+    // The .obsidian marker MUST NOT have produced a signal.
+    expect(
+      inlineSigs.some((n) => n.includes("e2e-obsidian-leak")),
+    ).toBe(false);
 
     // Step 4: import-session adds an independent signal from the
     // claude fixture (topic=mocking, distinct from e2e-inline).
