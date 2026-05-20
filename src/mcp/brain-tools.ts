@@ -86,7 +86,7 @@ import { appendLogEvent } from "../core/brain/log.ts";
 import type { BrainLogEntry } from "../core/brain/log.ts";
 import { appendBrainNote } from "../core/brain/note.ts";
 
-import { INVALID_PARAMS, MCPError } from "./protocol.ts";
+import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceStr, coerceBool, coerceIsoDate, coerceFormat } from "./coerce.ts";
 
@@ -353,7 +353,12 @@ async function toolBrainNote(
       ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
     });
   } catch (err) {
-    throw new MCPError(INVALID_PARAMS, (err as Error).message);
+    // `appendBrainNote` throws one validation error ("text is required");
+    // any other failure is an I/O / filesystem fault from `appendLogEvent`
+    // and must not be reported as a client-side INVALID_PARAMS.
+    const message = (err as Error).message ?? String(err);
+    const code = message.startsWith("brain_note:") ? INVALID_PARAMS : INTERNAL_ERROR;
+    throw new MCPError(code, message);
   }
   return {
     logged_at: res.logged_at,

@@ -84,6 +84,18 @@ function splitShellCommandSegments(command: string): string[] {
       continue;
     }
 
+    if (ch === "\\") {
+      // Outside-quotes backslash escapes the next character. Preserve
+      // both so an escaped separator (`echo \; o2b brain note ...`)
+      // does not split the segment.
+      current += ch;
+      const next = command[i + 1];
+      if (next !== undefined) {
+        current += next;
+        i += 1;
+      }
+      continue;
+    }
     if (ch === "'" || ch === '"') {
       quote = ch;
       current += ch;

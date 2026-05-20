@@ -231,6 +231,19 @@ describe("summarizeTurn", () => {
     expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
   });
 
+  test("escaped separator does NOT split a segment", () => {
+    // Outside quotes, `\;` is a literal semicolon — bash treats it as
+    // part of the previous token, so the line is one segment. If the
+    // splitter were to break on `;` regardless, an echo containing
+    // `o2b brain note` after the escaped semicolon could falsely
+    // clear the guardrail.
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ['echo \\; o2b brain note "not executed"'],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
+  });
+
   test("`o2b brain notes` lookalike does NOT clear guardrail", () => {
     // Trailing-space anchor in the needle list prevents a future
     // `notes` / `note-...` verb from being silently treated as a

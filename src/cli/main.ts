@@ -191,7 +191,16 @@ function writeSearchInitBlock(configPath: string): void {
   // template when the operator explicitly turned semantic search on
   // but did not configure the key.
   const semantic = resolveSemanticConfigState(data, process.env);
-  if (!semantic.semantic_enabled || semantic.embedding_key_present) return;
+  // Skip the embedding-key prompt when search is explicitly disabled
+  // (no point onboarding semantic when the whole layer is off), the
+  // semantic flag is off, or the key is already present.
+  if (
+    semantic.search_disabled ||
+    !semantic.semantic_enabled ||
+    semantic.embedding_key_present
+  ) {
+    return;
+  }
 
   process.stdout.write(
     [

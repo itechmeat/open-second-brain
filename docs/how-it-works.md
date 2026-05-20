@@ -305,7 +305,8 @@ expose the number alongside the band for inspection.
 ## Active preferences injection
 
 A confirmed rule is useless if the agent does not see it during work.
-v0.9.1 closes that gap with three cooperating surfaces, all derived
+Four cooperating surfaces close that gap (the first three since
+v0.9.1, the fourth — `brain_context` — since v0.10.10), all derived
 from the same source of truth (`Brain/preferences/`):
 
 ```mermaid
@@ -337,6 +338,11 @@ flowchart LR
   pull access (`osb://preferences/active` and friends in the table
   above). The MCP `initialize` reply advertises the `resources`
   capability so clients know to enumerate them.
+- **`brain_context` MCP tool** (v0.10.10) lives in the always-loaded
+  writer-scope MCP server. Runtimes that lack a `SessionStart` hook
+  *and* do not auto-load MCP resources (Cursor, Aider, raw Claude
+  API) can fetch the same `active.md` body plus active-preference
+  counts with a single tool call.
 
 `active.md` is **not** edited by hand — `o2b brain dream` and pin /
 unpin re-derive it from `preferences/` and `retired/`. Deleting the

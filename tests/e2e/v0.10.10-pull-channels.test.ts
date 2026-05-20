@@ -46,10 +46,6 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 describe("v0.10.10 pull-channels e2e", () => {
   test("init → brain note → status → brain_context MCP call", async () => {
     // 1. Bootstrap the vault and the Brain layer through the CLI.
@@ -74,7 +70,9 @@ describe("v0.10.10 pull-channels e2e", () => {
     const noteResult = JSON.parse(r.stdout);
     expect(noteResult.agent).toBe("tester");
 
-    const logMdPath = join(vault, "Brain", "log", `${today()}.md`);
+    // Derive the log path from the CLI response (UTC midnight roll could
+    // otherwise flake the assertion when the test crosses a date boundary).
+    const logMdPath = String(noteResult.absolute_log_path);
     const logJsonlPath = logMdPath.replace(/\.md$/, ".jsonl");
     const md = readFileSync(logMdPath, "utf8");
     expect(md).toContain("— note");
