@@ -129,6 +129,7 @@
     document.getElementById("details-body").textContent = "Failed to parse graph data: " + e.message;
     return;
   }
+  const VAULT_PATH = "__VAULT_PATH__";
 
   document.getElementById("vault-name").textContent = graph.vault_basename || "(unnamed vault)";
   document.getElementById("stats").textContent =
@@ -145,6 +146,20 @@
     edge: "#cfcfcf",
     "edge-supersedes": "#c92a2a",
   };
+
+  function showTooltip(text) {
+    let tip = document.getElementById("deeplink-tooltip");
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.id = "deeplink-tooltip";
+      tip.style.cssText = "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:8px 16px;border-radius:4px;font-size:12px;z-index:9999;transition:opacity 0.3s;";
+      document.body.appendChild(tip);
+    }
+    tip.textContent = text;
+    tip.style.opacity = "1";
+    clearTimeout(tip._timer);
+    tip._timer = setTimeout(() => { tip.style.opacity = "0"; }, 3000);
+  }
 
   // ---- State -------------------------------------------------------------
   const nodes = graph.nodes.map((n) => ({
@@ -524,6 +539,16 @@
       if (!li) return;
       selectNode(li.getAttribute("data-node-id"));
     };
+    list.ondblclick = (ev) => {
+      if (!VAULT_PATH) return;
+      const li = ev.target.closest("li[data-node-id]");
+      if (!li) return;
+      const nodeId = li.getAttribute("data-node-id");
+      const filePath = VAULT_PATH + (nodeId.startsWith("ret-")
+        ? "/Brain/retired/" : "/Brain/preferences/") + nodeId + ".md";
+      const uri = "obsidian://open?path=" + encodeURIComponent(filePath);
+      window.open(uri, "_blank");
+    };
   }
 
   // Defer the listbox rebuild to the next animation frame so a held-
@@ -594,6 +619,25 @@
     const y = e.clientY - r.top;
     const n = findNode(x, y);
     selectNode(n ? n.id : null);
+  });
+  canvas.addEventListener("dblclick", (e) => {
+    if (!VAULT_PATH) return;
+    const r = canvas.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    const n = findNode(x, y);
+    if (!n) return;
+    const filePath = VAULT_PATH + (n.id.startsWith("ret-")
+      ? "/Brain/retired/" : "/Brain/preferences/") + n.id + ".md";
+    const uri = "obsidian://open?path=" + encodeURIComponent(filePath);
+    const opened = window.open(uri, "_blank");
+    if (!opened) {
+      navigator.clipboard.writeText(filePath).then(() => {
+        showTooltip("Obsidian not detected — path copied to clipboard");
+      }).catch(() => {
+        showTooltip("Path: " + filePath);
+      });
+    }
   });
 
   // §14 polish: keyboard handlers on the listbox. The listbox is

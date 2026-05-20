@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.12] - 2026-05-20
+
+Operational friction reduction: one-command update across all
+runtimes, weekly brain digest with agent quality summary, Cursor
+SQLite deep parsing for accurate transcript activity, and Obsidian
+deep-links in the live explorer. Companion design and impl plan at
+`docs/superpowers/specs/2026-05-20-v0.10.12-design.md` and
+`docs/plans/2026-05-20-v0.10.12-impl.md`.
+
+### Added
+
+- `o2b update` — one-command update across all detected runtimes.
+  Skips unchanged payloads via sidecar hash comparison. Supports
+  `--target`, `--dry-run`, `--force`, `--json`. Post-update verify
+  with drift detection.
+- `o2b brain digest --window 7d` — arbitrary time windows for the
+  digest. Accepts `Nd` or bare `N` format (e.g. `7d`, `14`, `30d`).
+- Agent quality summary in digest — per-agent event counts, type
+  breakdown (feedback / apply-evidence / note), and confirmed/retired
+  attribution within the window.
+- `o2b discipline install --weekly` — installs a weekly brain digest
+  cron job (`osb-weekly-brain-digest`) defaulting to Monday 08:59 UTC.
+  Uses `scripts/discipline-report.ts --window 7d`.
+- Cursor SQLite deep parsing — discipline report reads `state.vscdb`
+  for session count + message count, eliminating mtime false-positives.
+  Falls back gracefully on any SQLite error.
+- Obsidian deep-link in explorer — double-click a node in live mode
+  to open the file in Obsidian via `obsidian://open?path=<absolute>`.
+  Fallback copies path to clipboard.
+
+### Changed
+
+- `scripts/discipline-report.ts` now accepts `--window Nd` for
+  digest mode, falling back to daily discipline report otherwise.
+
 ## [0.10.11] - 2026-05-20
 
 Multi-runtime install orchestrator plus a configurable

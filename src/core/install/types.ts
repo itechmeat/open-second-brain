@@ -106,6 +106,8 @@ export interface ManifestEntry {
   readonly owned_paths?: ReadonlyArray<string>;
   readonly owned_block_marker?: string;
   readonly fallback_file?: string | null;
+  /** SHA-256 of the last applied MCP payload (update orchestrator). */
+  readonly payload_hash?: string;
 }
 
 export interface ApplyResult {

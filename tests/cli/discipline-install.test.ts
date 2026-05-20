@@ -78,6 +78,65 @@ describe("o2b discipline install / uninstall", () => {
     expect(readJobs().jobs.length).toBe(0);
   });
 
+  test("weekly install uses weekly job name, script, and default schedule", async () => {
+    const env = { OSB_HERMES_JOBS: jobsFile };
+
+    const r = await runCli(
+      [
+        "discipline",
+        "install",
+        "--weekly",
+        "--vault",
+        vault,
+        "--telegram-target",
+        "telegram:-100123:42",
+      ],
+      { env },
+    );
+
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("created");
+
+    const job = readJobs().jobs[0] as {
+      id: string;
+      name: string;
+      script: string;
+      schedule: { kind: string; expr: string; display: string };
+    };
+    expect(job.id).toMatch(/^osb-weekly-brain-digest-/);
+    expect(job.name).toBe("osb-weekly-brain-digest");
+    expect(job.script).toContain("--window 7d");
+    expect(job.schedule.expr).toBe("59 8 * * 1");
+    expect(job.schedule.display).toBe("59 8 * * 1");
+  });
+
+  test("weekly install respects --at override", async () => {
+    const env = { OSB_HERMES_JOBS: jobsFile };
+
+    const r = await runCli(
+      [
+        "discipline",
+        "install",
+        "--weekly",
+        "--at",
+        "0 9 * * 1",
+        "--vault",
+        vault,
+        "--telegram-target",
+        "telegram:-100123:42",
+      ],
+      { env },
+    );
+
+    expect(r.returncode).toBe(0);
+
+    const job = readJobs().jobs[0] as {
+      schedule: { expr: string; display: string };
+    };
+    expect(job.schedule.expr).toBe("0 9 * * 1");
+    expect(job.schedule.display).toBe("0 9 * * 1");
+  });
+
   test("install without --vault exits 2 with error on stderr", async () => {
     const env = { OSB_HERMES_JOBS: jobsFile };
     const r = await runCli(["discipline", "install"], { env });
@@ -100,5 +159,49 @@ describe("o2b discipline install / uninstall", () => {
     const r = await runCli(["discipline", "uninstall"], { env });
     expect(r.returncode).toBe(2);
     expect(r.stderr).toContain("--vault is required");
+  });
+
+  test("uninstall --weekly removes only the weekly job", async () => {
+    const env = { OSB_HERMES_JOBS: jobsFile };
+
+    await runCli(
+      ["discipline", "install", "--vault", vault, "--telegram-target", "telegram:-100123:42"],
+      { env },
+    );
+    await runCli(
+      ["discipline", "install", "--weekly", "--vault", vault, "--telegram-target", "telegram:-100123:42"],
+      { env },
+    );
+    expect(readJobs().jobs.length).toBe(2);
+
+    const r = await runCli(
+      ["discipline", "uninstall", "--vault", vault, "--weekly"],
+      { env },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("removed");
+    expect(readJobs().jobs.length).toBe(1);
+    expect(readJobs().jobs[0]).toMatchObject({ name: "osb-discipline-report" });
+  });
+
+  test("uninstall without --weekly removes both jobs", async () => {
+    const env = { OSB_HERMES_JOBS: jobsFile };
+
+    await runCli(
+      ["discipline", "install", "--vault", vault, "--telegram-target", "telegram:-100123:42"],
+      { env },
+    );
+    await runCli(
+      ["discipline", "install", "--weekly", "--vault", vault, "--telegram-target", "telegram:-100123:42"],
+      { env },
+    );
+    expect(readJobs().jobs.length).toBe(2);
+
+    const r = await runCli(
+      ["discipline", "uninstall", "--vault", vault],
+      { env },
+    );
+    expect(r.returncode).toBe(0);
+    expect(readJobs().jobs.length).toBe(0);
   });
 });

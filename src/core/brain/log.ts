@@ -58,6 +58,7 @@ export type BrainLogEntryPayload = Readonly<
 export interface BrainLogEntry {
   readonly timestamp: string;
   readonly eventType: BrainLogEventKind;
+  readonly agent?: string;
   readonly body: BrainLogEntryPayload;
 }
 
@@ -193,6 +194,7 @@ export function parseLogDay(vault: string, date: string): ParseLogDayResult {
     entries.push({
       timestamp: `${validDate}T${hh}:${mm}:${ss}Z`,
       eventType: kindStr as BrainLogEventKind,
+      agent: typeof payload.agent === "string" ? payload.agent : undefined,
       body: Object.freeze(payload),
     });
   }
@@ -262,6 +264,13 @@ export function appendLogEvent(
   const path = logPath(vault, ts.date);
   const jsonlPath = logJsonlPath(vault, ts.date);
   const logDir = brainDirs(vault).log;
+  const topLevelAgent = (event as { agent?: unknown }).agent;
+  const eventBody =
+    typeof topLevelAgent === "string" && typeof event.body["agent"] !== "string"
+      ? Object.freeze({ ...event.body, agent: topLevelAgent })
+      : event.body;
+  const diskEvent: BrainLogEntry =
+    eventBody === event.body ? event : { ...event, body: eventBody };
 
   // §23 (v0.10.8): each event lands in both `<date>.jsonl` (machine
   // surface, primary for `readLogDay`) and `<date>.md` (human-facing
@@ -284,7 +293,7 @@ export function appendLogEvent(
     const existingJsonl = existsSync(jsonlPath)
       ? readFileSync(jsonlPath, "utf8")
       : "";
-    const line = renderJsonlLine(event);
+    const line = renderJsonlLine(diskEvent);
     const nextJsonl =
       existingJsonl === ""
         ? `${line}\n`
@@ -293,7 +302,7 @@ export function appendLogEvent(
 
     // ---- Markdown (human surface) -------------------------------------
     const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-    const block = renderEventBlock(event, ts.hms);
+    const block = renderEventBlock(diskEvent, ts.hms);
 
     let next: string;
     if (existing === "") {

@@ -280,9 +280,9 @@ describe("graceful degradation for confidence shifts / contradictions", () => {
       },
     });
     const res = renderDigest(tmp, { since: SINCE, until: UNTIL });
-    // Empty because no preference exists with matching window dates
-    // and no shifts/contradictions in the payload.
-    expect(res.empty).toBe(true);
+    // Not empty — the dream event produces an agent_summary entry
+    // (attributed to "unknown" since no agent field is present).
+    expect(res.empty).toBe(false);
   });
 
   test("a dream event with confidence_shifts populates the section", () => {
