@@ -36,6 +36,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
+import { computeMostApplied, type MostAppliedEntry } from "./most-applied.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
@@ -63,6 +64,15 @@ export interface RegenerateActiveResult {
     readonly confirmed: number;
     readonly quarantine: number;
     readonly retired_recent: number;
+    /**
+     * Length of the `Most-applied (30d)` section in this render
+     * pass. Zero when no `apply-evidence (result: applied)` events
+     * lie inside the trailing 30-day window or no preference still
+     * maps to one. `brain_context` echoes this through to MCP
+     * clients so they can render a counts ribbon without parsing
+     * the markdown body.
+     */
+    readonly most_applied_30d: number;
   };
 }
 
@@ -95,10 +105,16 @@ export function regenerateActive(
     .filter((p) => p.status === BRAIN_PREFERENCE_STATUS.quarantine)
     .sort(sortByIdAscending);
 
+  // Most-applied draws from the active candidates (confirmed +
+  // quarantine) only — retired preferences are reported in their own
+  // section below and never resurrected through the hot list.
+  const mostApplied = computeMostApplied(vault, [...confirmed, ...quarantine], { now });
+
   const body = renderBody({
     confirmed,
     quarantine,
     retiredRecent,
+    mostApplied,
   });
 
   // `readExistingBody` returns the trimmed body (parseFrontmatter
@@ -118,6 +134,7 @@ export function regenerateActive(
       confirmed: confirmed.length,
       quarantine: quarantine.length,
       retired_recent: retiredRecent.length,
+      most_applied_30d: mostApplied.length,
     },
   };
 }
@@ -194,6 +211,7 @@ interface RenderInput {
   readonly confirmed: ReadonlyArray<BrainPreference>;
   readonly quarantine: ReadonlyArray<BrainPreference>;
   readonly retiredRecent: ReadonlyArray<BrainRetired>;
+  readonly mostApplied: ReadonlyArray<MostAppliedEntry>;
 }
 
 function renderBody(input: RenderInput): string {
@@ -211,6 +229,13 @@ function renderBody(input: RenderInput): string {
     for (const p of input.confirmed) out.push(renderConfirmedLine(p));
   }
   out.push("");
+
+  if (input.mostApplied.length > 0) {
+    out.push(`## Most-applied (30d) (${input.mostApplied.length})`);
+    out.push("");
+    for (const m of input.mostApplied) out.push(renderMostAppliedLine(m));
+    out.push("");
+  }
 
   if (input.quarantine.length > 0) {
     out.push(`## Quarantine (${input.quarantine.length})`);
@@ -240,6 +265,14 @@ function renderConfirmedLine(p: BrainPreference): string {
   if (p.scope) tags.push(`scope: ${p.scope}`);
   tags.push(`confidence: ${p.confidence}${formatConfidenceValueTail(p)}`);
   if (p.pinned) tags.push("pinned");
+  return `- \`${p.id}\` (${tags.join(", ")}) — ${p.principle}`;
+}
+
+function renderMostAppliedLine(m: MostAppliedEntry): string {
+  const p = m.preference;
+  const tags: string[] = [];
+  if (p.scope) tags.push(`scope: ${p.scope}`);
+  tags.push(`applied_30d: ${m.applied_30d}`);
   return `- \`${p.id}\` (${tags.join(", ")}) — ${p.principle}`;
 }
 

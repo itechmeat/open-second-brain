@@ -192,9 +192,15 @@ async function toolVaultHealth(
 
 export type ToolScope = "full" | "writer";
 
+// The set is named after the original payload (mutating writers). As
+// of v0.10.10 it also hosts `brain_context`, a *reader* tool that has
+// to be always-loaded to be useful at session start. Renaming the
+// MCP server itself is deferred — see
+// `docs/plans/2026-05-20-v0.10.10-design.md` §12.
 const WRITER_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "brain_feedback",
   "brain_apply_evidence",
+  "brain_context",
+  "brain_feedback",
   "brain_note",
 ]);
 

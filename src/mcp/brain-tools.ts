@@ -1,8 +1,8 @@
 /**
  * MCP tool registrations for the Brain layer.
  *
- * Exposes the six Brain operations that are safe to invoke from an
- * agent harness:
+ * Exposes the Brain operations that are safe to invoke from an agent
+ * harness:
  *
  *   - `brain_feedback`        — record a single taste signal (or a
  *                                directly-confirmed preference when
@@ -16,6 +16,8 @@
  *   - `brain_query`           — read-only aggregation by preference id,
  *                                topic, or time window.
  *   - `brain_doctor`          — invariant / schema health check.
+ *   - `brain_backlinks`       — read-only inbound reference lookup.
+ *   - `brain_context`         — pull-bootstrap of `Brain/active.md`.
  *
  * The five Brain commands that remain CLI-only on purpose
  * (`init`, `reject`, `pin`, `unpin`, `rollback`) deliberately do *not*
@@ -33,7 +35,18 @@
 
 import { isAbsolute, relative, resolve } from "node:path";
 
+import { existsSync, readFileSync } from "node:fs";
+
 import { resolveAgentName } from "../core/config.ts";
+import {
+  brainActivePath,
+  brainDirs,
+} from "../core/brain/paths.ts";
+import {
+  regenerateActive,
+  type RegenerateActiveResult,
+} from "../core/brain/active.ts";
+import { parseFrontmatter } from "../core/vault.ts";
 import {
   appendApplyEvidence,
   BrainPreferenceNotFoundError,
@@ -71,7 +84,7 @@ import {
 } from "../core/brain/types.ts";
 import { appendLogEvent } from "../core/brain/log.ts";
 import type { BrainLogEntry } from "../core/brain/log.ts";
-import { sanitiseTextField } from "../core/redactor.ts";
+import { appendBrainNote } from "../core/brain/note.ts";
 
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
@@ -312,14 +325,17 @@ async function toolBrainApplyEvidence(
 
 // ----- brain_note (§32B, v0.10.8) ------------------------------------------
 
-const NOTE_TEXT_MAX_LEN = 4096;
-
 /**
  * Append one narrative-milestone line to today's Brain log. This is the
  * Brain-native replacement for the deprecated `event_log_append` tool:
  * agents now record release / merged-PR / discovered-fact lines under
  * the `note` event kind in `Brain/log/<today>.md` (and the JSONL
  * sidecar) instead of falling back to `Daily/`.
+ *
+ * The body lives in `appendBrainNote` so the CLI verb (`o2b brain
+ * note`) and this MCP handler share one code path. Validation errors
+ * land in MCP's `INVALID_PARAMS` envelope here; the CLI wrapper
+ * pre-validates usage shape and surfaces the same condition as exit 2.
  */
 async function toolBrainNote(
   ctx: ServerContext,
@@ -328,32 +344,105 @@ async function toolBrainNote(
   const rawText = coerceStr(args, "text", true)!;
   const agentArg = coerceStr(args, "agent", false);
 
-  // `singleLine` collapses newlines and trims to NOTE_TEXT_MAX_LEN. The
-  // shared sanitiser also strips C0 controls and folds U+2028/U+2029.
-  const sanitised = sanitiseTextField(rawText, {
-    maxLen: NOTE_TEXT_MAX_LEN,
-    singleLine: true,
-  }).trim();
-  if (!sanitised) {
-    throw new MCPError(INVALID_PARAMS, "brain_note: text is required");
+  let res;
+  try {
+    res = appendBrainNote({
+      vault: ctx.vault,
+      text: rawText,
+      ...(agentArg ? { agent: agentArg } : {}),
+      ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+    });
+  } catch (err) {
+    throw new MCPError(INVALID_PARAMS, (err as Error).message);
+  }
+  return {
+    logged_at: res.logged_at,
+    log_path: res.log_path,
+    absolute_log_path: res.absolute_log_path,
+    agent: res.agent,
+  };
+}
+
+// ----- brain_context (v0.10.10) --------------------------------------------
+
+type BrainContextCounts = RegenerateActiveResult["counts"];
+
+const EMPTY_CONTEXT_COUNTS: BrainContextCounts = {
+  confirmed: 0,
+  quarantine: 0,
+  retired_recent: 0,
+  most_applied_30d: 0,
+};
+
+/**
+ * Read-only pull-bootstrap of `Brain/active.md` + the active-preference
+ * counts. Built for runtimes that have no `SessionStart` hook (Cursor,
+ * Aider, raw Claude API): one tool call gives the agent the same
+ * shortcut card the SessionStart-aware runtimes get injected
+ * automatically.
+ *
+ * Behaviour matrix:
+ *   - Brain/ absent           → present:false, content:"", zero counts.
+ *   - Brain/ present, active.md absent → call regenerateActive (idempotent)
+ *                                        and read the regenerated file.
+ *   - Brain/ present, active.md fresh  → idempotent regenerate is a no-op
+ *                                        rewrite; the on-disk body is
+ *                                        returned verbatim.
+ */
+async function toolBrainContext(
+  ctx: ServerContext,
+): Promise<Record<string, unknown>> {
+  const dirs = brainDirs(ctx.vault);
+  const activePath = brainActivePath(ctx.vault);
+  if (!existsSync(dirs.brain)) {
+    return {
+      vault_path: ctx.vault,
+      present: false,
+      active_path: activePath,
+      content: "",
+      counts: EMPTY_CONTEXT_COUNTS,
+      generated_at: null,
+    };
   }
 
-  const agent =
-    normalizeAgentArgument(agentArg) ??
-    resolveAgentName(ctx.configPath ?? undefined);
-  const timestamp = isoSecond(new Date());
+  let counts: BrainContextCounts = EMPTY_CONTEXT_COUNTS;
+  let error: string | undefined;
+  try {
+    counts = regenerateActive(ctx.vault).counts;
+  } catch (err) {
+    error = (err as Error)?.message ?? String(err);
+  }
 
-  const entry: BrainLogEntry = {
-    timestamp,
-    eventType: BRAIN_LOG_EVENT_KIND.note,
-    body: { text: sanitised, agent },
-  };
-  const res = appendLogEvent(ctx.vault, entry);
+  // After a successful regenerateActive, active.md is guaranteed to
+  // exist (the function either wrote it or confirmed an equal body
+  // already on disk). A read failure here is an unrelated filesystem
+  // race, not a missing-file branch — handle it in the same `error`
+  // slot the regenerate failure uses.
+  let content = "";
+  let generatedAt: string | null = null;
+  if (!error) {
+    try {
+      content = readFileSync(activePath, "utf8");
+      const [meta] = parseFrontmatter(activePath);
+      const v = meta["generated_at"];
+      if (typeof v === "string" && v.trim().length > 0) {
+        generatedAt = v;
+      }
+    } catch (err) {
+      error = (err as Error)?.message ?? String(err);
+      content = "";
+      generatedAt = null;
+    }
+  }
+
   return {
-    logged_at: timestamp,
-    log_path: vaultRelativeSafe(ctx.vault, res.logPath),
-    absolute_log_path: resolve(res.logPath),
-    agent,
+    vault_path: ctx.vault,
+    present: true,
+    active_path: activePath,
+    content,
+    counts,
+    generated_at: generatedAt,
+    ...(error ? { error } : {}),
   };
 }
 
@@ -765,6 +854,17 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainNote,
+  },
+  {
+    name: "brain_context",
+    description:
+      "Pull the current Brain/active.md body plus active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: toolBrainContext,
   },
   {
     name: "brain_digest",

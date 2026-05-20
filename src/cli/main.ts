@@ -32,6 +32,7 @@ import {
   NoVaultConfiguredError,
   normalizeFlagString,
   requireVault,
+  resolveSemanticConfigState,
   sortedReplacer,
 } from "./helpers.ts";
 import {
@@ -67,10 +68,17 @@ async function cmdStatus(argv: string[]): Promise<number> {
     json: { type: "boolean" },
   });
   const result = discoverConfig(flags["config"] as string | undefined);
+  // v0.10.10 — semantic-search hint. Same truthy / key-present logic as
+  // `writeSearchInitBlock`; lifted into `resolveSemanticConfigState`
+  // so both call sites share a single source of truth.
+  const semantic = resolveSemanticConfigState(result.data, process.env);
   if (flags["json"]) {
     const output: Record<string, unknown> = {
       config_path: String(result.path),
       config_exists: result.exists,
+      semantic_enabled: semantic.semantic_enabled,
+      embedding_key_present: semantic.embedding_key_present,
+      semantic_hint: semantic.hint,
     };
     if (Object.keys(result.data).length > 0) {
       output["config_keys"] = Object.keys(result.data).sort();
@@ -85,6 +93,9 @@ async function cmdStatus(argv: string[]): Promise<number> {
       for (const key of Object.keys(result.data).sort()) {
         process.stdout.write(`- ${key}\n`);
       }
+    }
+    if (semantic.off && semantic.hint) {
+      process.stdout.write(`semantic: off (${semantic.hint})\n`);
     }
   }
   return 0;
@@ -175,22 +186,12 @@ function writeSearchInitBlock(configPath: string): void {
   process.stdout.write("  next: o2b search index   # build the vault search index\n");
 
   const data = discoverConfig(configPath).data;
-  // Accept "true" / "True" / "TRUE" / "1" from both the config file
-  // and the env override — matches the parseBool helper inside
-  // resolveSearchConfig so the init banner does not lie about state.
-  const truthy = (v: unknown): boolean => {
-    if (typeof v !== "string") return false;
-    const s = v.trim().toLowerCase();
-    return s === "true" || s === "1";
-  };
-  const enabled =
-    truthy(data["search_semantic_enabled"]) ||
-    truthy(process.env["OPEN_SECOND_BRAIN_SEARCH_SEMANTIC"]);
-  const keyPresent = !!(
-    (data["embedding_api_key"] && data["embedding_api_key"] !== "") ||
-    process.env["OPEN_SECOND_BRAIN_EMBEDDING_KEY"]
-  );
-  if (!enabled || keyPresent) return;
+  // v0.10.10 — share the truthy / key-present logic with `o2b status`
+  // through `resolveSemanticConfigState`. We only emit the detailed
+  // template when the operator explicitly turned semantic search on
+  // but did not configure the key.
+  const semantic = resolveSemanticConfigState(data, process.env);
+  if (!semantic.semantic_enabled || semantic.embedding_key_present) return;
 
   process.stdout.write(
     [
@@ -473,6 +474,7 @@ Brain (observing memory):
   brain feedback            Record a taste signal into Brain/inbox/
   brain dream               Run the deterministic dreaming pass (idempotent)
   brain apply-evidence      Log a real-work application of a preference
+  brain note                Append a one-line narrative milestone to Brain/log/today
   brain digest              Render the recent-changes digest (markdown or --json)
   brain query               Read by --preference, --topic, or --since
   brain reject              Move a preference to retired/ (user-rejected)

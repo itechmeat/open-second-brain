@@ -127,6 +127,7 @@ o2b brain init                Bootstrap Brain/{inbox,preferences,retired,log,.sn
 o2b brain feedback            Record one taste signal (--topic, --signal, --principle, ...)
 o2b brain dream               Run the deterministic consolidation pass (idempotent; usually cron'd)
 o2b brain apply-evidence      Record applied / violated against a preference for a durable artifact
+o2b brain note <text>         Append a one-line narrative milestone to Brain/log/<today>.md (cron / shell mirror of brain_note)
 o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions
 o2b brain query               Read helper: by preference, by topic, or by log timestamp
 o2b brain reject              (CLI-only) Retire a preference; requires --reason "<text>". Subsequent signals on the same topic are suppressed.

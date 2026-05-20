@@ -182,6 +182,66 @@ describe("summarizeTurn", () => {
     expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
   });
 
+  // v0.10.10 — CLI mirror of `brain_note` MCP tool.
+  test("artifact + bash `o2b brain note <text>` clears guardrail", () => {
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ['o2b brain note "v0.10.10 released"'],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+  });
+
+  test("artifact + env-prefixed bash `o2b brain note <text>` clears guardrail", () => {
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ['VAULT_DIR=/tmp/vault o2b brain note "v0.10.10 released"'],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+  });
+
+  test("echoing `o2b brain note` text does NOT clear guardrail", () => {
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ['echo \'o2b brain note "not executed"\''],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
+  });
+
+  test("commented `o2b brain note` text does NOT clear guardrail", () => {
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ['# o2b brain note "not executed"'],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
+  });
+
+  test("quoted `o2b brain note` after a separator does NOT clear guardrail", () => {
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ['echo "; o2b brain note not executed"'],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
+  });
+
+  test("actual `o2b brain note` after a separator clears guardrail", () => {
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ['cd /tmp && o2b brain note "executed"'],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
+  });
+
+  test("`o2b brain notes` lookalike does NOT clear guardrail", () => {
+    // Trailing-space anchor in the needle list prevents a future
+    // `notes` / `note-...` verb from being silently treated as a
+    // brain event.
+    const s = summarizeTurn(
+      [{ name: "Write" }, { name: "Bash" }],
+      ["o2b brain notes --vault /tmp/x"],
+    );
+    expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
+  });
+
   test("artifact + `o2b brain query` does NOT clear guardrail (read-only)", () => {
     const s = summarizeTurn(
       [{ name: "Write" }, { name: "Bash" }],
