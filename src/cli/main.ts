@@ -54,6 +54,7 @@ import {
   renderUninstallResult,
   uninstallCli,
 } from "./install-cli.ts";
+import { cmdUpdate } from "./update.ts";
 import { planUninstall, renderPlan } from "./uninstall.ts";
 import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
@@ -531,6 +532,7 @@ Commands:
   mcp                       Run the optional MCP tool server (stdio JSON-RPC)
   install-cli               Create symlinks for o2b and vault-log in ~/.local/bin
   install                   Multi-runtime install orchestrator (v0.10.11) — detect / plan / apply / --check (see install/)
+  update                    Update OSB installation across all detected runtimes
   uninstall                 Print an uninstall plan; --target X removes a per-runtime install
   tool-call                 Invoke an MCP tool handler from the CLI and print JSON to stdout
 
@@ -627,6 +629,8 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         return await cmdInstallCli(rest);
       case "install":
         return await cmdInstall(rest);
+      case "update":
+        return await cmdUpdate(rest);
       case "uninstall":
         return await cmdUninstall(rest);
       case "tool-call":

@@ -39,6 +39,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { backlinkCount, buildBacklinkIndex } from "./backlinks.ts";
+import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summary.ts";
 import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
@@ -190,6 +191,16 @@ export interface DigestJsonMostApplied {
   readonly entries: ReadonlyArray<DigestJsonMostAppliedEntry>;
 }
 
+export interface DigestJsonAgentSummary {
+  readonly agent: string;
+  readonly total_events: number;
+  readonly feedback_count: number;
+  readonly apply_evidence_count: number;
+  readonly note_count: number;
+  readonly confirmed_attributed: number;
+  readonly retired_attributed: number;
+}
+
 /**
  * Near-duplicate pair surfaced for operator review. Detected by
  * `findMergeCandidates`. Reflects current vault state, not windowed
@@ -225,6 +236,7 @@ export interface DigestJson {
   readonly top_applied: ReadonlyArray<DigestJsonTopApplied>;
   readonly top_referenced: ReadonlyArray<DigestJsonTopReferenced>;
   readonly merge_suggestions: ReadonlyArray<DigestJsonMergeSuggestion>;
+  readonly agent_summary: ReadonlyArray<DigestJsonAgentSummary>;
   /**
    * Window-scoped most-applied list (v0.10.11). Mirrors the
    * `Most-applied (Nd)` section of `Brain/active.md` and uses the
@@ -284,6 +296,7 @@ export function renderDigest(
       top_applied: data.top_applied,
       top_referenced: data.top_referenced,
       merge_suggestions: data.merge_suggestions,
+      agent_summary: data.agent_summary,
       most_applied: data.most_applied,
     };
     return Object.freeze({
@@ -310,6 +323,7 @@ interface DigestData {
   readonly top_applied: ReadonlyArray<DigestJsonTopApplied>;
   readonly top_referenced: ReadonlyArray<DigestJsonTopReferenced>;
   readonly merge_suggestions: ReadonlyArray<DigestJsonMergeSuggestion>;
+  readonly agent_summary: ReadonlyArray<AgentSummaryEntry>;
   readonly most_applied: DigestJsonMostApplied;
 }
 
@@ -416,6 +430,8 @@ function collectDigestData(
     jaccard: c.jaccard,
   }));
 
+  const agent_summary = computeAgentSummary(vault, since, until);
+
   // Most-applied (Nd) — mirrors the section in `Brain/active.md`.
   // The window length / limit come from `_brain.yaml`; a corrupted
   // config falls back to defaults so the digest never breaks on
@@ -463,6 +479,7 @@ function collectDigestData(
     top_applied,
     top_referenced,
     merge_suggestions,
+    agent_summary,
     most_applied,
   };
 }
@@ -527,10 +544,8 @@ function isEmpty(data: DigestData): boolean {
     data.retired.length === 0 &&
     data.confidence_shifts.length === 0 &&
     data.contradictions.length === 0 &&
-    // most_applied is windowed — entries imply real activity that the
-    // operator wants to see in the daily digest even when nothing else
-    // changed (v0.10.11).
-    data.most_applied.entries.length === 0
+    data.most_applied.entries.length === 0 &&
+    data.agent_summary.length === 0
   );
 }
 
@@ -852,6 +867,20 @@ function renderMarkdown(
     }
     lines.push("");
   }
+  if (data.agent_summary.length > 0) {
+    lines.push(`## Agent summary (${data.agent_summary.length})`, "");
+    for (const item of data.agent_summary) {
+      const parts = [
+        `**${item.agent}**`,
+        `${item.total_events} events`,
+        `(feedback: ${item.feedback_count}, apply: ${item.apply_evidence_count}, note: ${item.note_count})`,
+      ];
+      if (item.confirmed_attributed > 0) parts.push(`→ ${item.confirmed_attributed} confirmed`);
+      if (item.retired_attributed > 0) parts.push(`→ ${item.retired_attributed} retired`);
+      lines.push(`- ${parts.join(" ")}`);
+    }
+    lines.push("");
+  }
   if (data.top_applied.length > 0) {
     lines.push(`## Top applied (${data.top_applied.length})`, "");
     for (const item of data.top_applied) {
@@ -912,4 +941,3 @@ function renderMarkdown(
 
   return lines.join("\n").replace(/\n+$/, "\n");
 }
-

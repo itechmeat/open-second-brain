@@ -56,7 +56,13 @@ export function renderReport(r: RenderInput): string {
   if (transcripts && transcripts.byRuntime.length > 0) {
     const parts = transcripts.byRuntime
       .filter((b) => b.fileCount > 0)
-      .map((b) => `${e(b.runtime)}: ${b.fileCount}`);
+      .map((b) => {
+        const base = `${e(b.runtime)}: ${b.fileCount}`;
+        if (b.detail) {
+          return `${base} \\(${b.detail.sessionCount} sessions, ${b.detail.messageCount} messages\\)`;
+        }
+        return base;
+      });
     if (parts.length > 0) {
       lines.push(`\\- transcripts — ${parts.join(", ")}`);
     }

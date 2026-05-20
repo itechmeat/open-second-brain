@@ -2,11 +2,20 @@ import { defaultConfigPath } from "../../../core/config.ts";
 import { renderDigest, type RenderDigestOptions } from "../../../core/brain/digest.ts";
 import { parse, fail, resolveBrainVault, ISO_8601_RE } from "../helpers.ts";
 
+export function parseWindow(raw: string): number {
+  const m = /^(\d+)(?:d)?$/.exec(raw);
+  if (!m) throw new Error(`invalid --window value: ${raw} (expected Nd or N, e.g. 7d)`);
+  const n = parseInt(m[1]!, 10);
+  if (n <= 0) throw new Error(`invalid --window value: ${raw} (must be positive)`);
+  return n;
+}
+
 export async function cmdBrainDigest(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
     since: { type: "string" },
     until: { type: "string" },
+    window: { type: "string" },
     json: { type: "boolean" },
     "silent-if-empty": { type: "boolean" },
   });
@@ -28,6 +37,17 @@ export async function cmdBrainDigest(argv: string[]): Promise<number> {
     const d = new Date(raw);
     if (!Number.isFinite(d.getTime())) return fail(`--until must be a valid ISO-8601 timestamp; got ${raw}`);
     untilDate = d;
+  }
+  if (flags["window"]) {
+    let windowDays: number;
+    try {
+      windowDays = parseWindow(String(flags["window"]));
+    } catch (e) {
+      process.stderr.write(`error: ${(e as Error).message}\n`);
+      return 2;
+    }
+    const until = untilDate ?? new Date();
+    sinceDate = new Date(until.getTime() - windowDays * 24 * 60 * 60 * 1000);
   }
   const opts: RenderDigestOptions = {
     ...(sinceDate ? { since: sinceDate } : {}),

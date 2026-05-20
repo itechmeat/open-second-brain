@@ -125,6 +125,7 @@ o2b export-config             Write a redacted config snapshot
 o2b mcp                       Run the MCP tool server (stdio)
 o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
+o2b update                    Update OSB installation across all detected runtimes; --target <name> / --dry-run / --force / --json
 
 # Brain (observing memory)
 o2b brain init                Bootstrap Brain/{inbox,preferences,retired,log,.snapshots}/ + _brain.yaml + _BRAIN.md; --starter drops the bundled example set
@@ -132,7 +133,7 @@ o2b brain feedback            Record one taste signal (--topic, --signal, --prin
 o2b brain dream               Run the deterministic consolidation pass (idempotent; usually cron'd)
 o2b brain apply-evidence      Record applied / violated against a preference for a durable artifact
 o2b brain note <text>         Append a one-line narrative milestone to Brain/log/<today>.md (cron / shell mirror of brain_note)
-o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions
+o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions; --window 7d for arbitrary lookback
 o2b brain query               Read helper: by preference, by topic, or by log timestamp
 o2b brain reject              (CLI-only) Retire a preference; requires --reason "<text>". Subsequent signals on the same topic are suppressed.
 o2b brain merge               (CLI-only) Fold one confirmed/quarantine pref into another (<keep> <drop>); --dry-run / --force; drop retires with reason 'merged-into'
@@ -144,7 +145,7 @@ o2b brain snapshot diff       (CLI-only) Read-only diff between two snapshots, o
 o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot (--dry-run previews; drift abort vs --force-rollback)
 o2b brain upgrade             (CLI-only) Migrate release-owned files forward (_brain.yaml, _BRAIN.md, _OPEN_SECOND_BRAIN.md); --dry-run / --check / --apply --yes
 o2b brain export              Read-only dump of active preferences (--format json|llms-txt [--out <path>] [--force])
-o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence.
+o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence. Double-click a node to open it in Obsidian (live mode).
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, …)
 o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain scan-inline         Capture `@osb` markers from vault markdown files (Daily/, project notes, …)
@@ -158,8 +159,8 @@ o2b vault inspect <relpath>   Point-check one vault-relative path; reports match
 
 # Discipline (daily logging-discipline cron)
 o2b discipline report         Render the daily MarkdownV2 block to stdout (brain-event counts per agent vs git/mtime activity); status ok | info | alert
-o2b discipline install        Register the Hermes cron job that delivers the report. --telegram-target is required; --at defaults to "59 4 * * *" UTC
-o2b discipline uninstall      Remove the cron job
+o2b discipline install        Register the Hermes cron job that delivers the report. --telegram-target is required; --at defaults to "59 4 * * *" UTC; --weekly installs a Monday 08:59 weekly digest
+o2b discipline uninstall      Remove the cron job; --weekly removes only the weekly digest, without flag removes both
 
 # Pay Memory
 o2b init-pay-memory           Bootstrap AI Wiki/{policies,payments,assets,drafts,reports}/
@@ -512,8 +513,10 @@ GNOME Keyring, Windows Hello, 1Password) is configured by
 
 ## Updating
 
-Each runtime's CLI is authoritative for refreshing the plugin —
-follow the matching `## 7. Update` section in `install.md`:
+The quickest path is `o2b update` — it detects all installed runtimes,
+skips unchanged payloads, applies updates sequentially, and verifies
+afterwards. For manual per-runtime updates, follow the matching
+`## 7. Update` section in `install.md`:
 
 - Hermes: `hermes plugins update open-second-brain && hermes gateway restart`
 - Claude Code: `claude plugin marketplace update open-second-brain && claude plugin update open-second-brain@open-second-brain`

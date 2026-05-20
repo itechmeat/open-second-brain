@@ -232,6 +232,7 @@ const TEMPLATE_PATH = resolve(
  * surfaces immediately instead of producing a half-rendered HTML file.
  */
 const PLACEHOLDER = "__GRAPH_JSON__";
+const VAULT_PATH_PLACEHOLDER = "__VAULT_PATH__";
 
 let templateCache: string | undefined;
 
@@ -272,7 +273,10 @@ function loadTemplate(): string {
  * / `$1` injection through the JSON body (principle bodies are free
  * text and may contain `$`).
  */
-export function renderExportedHtml(graph: ExplorerGraph): string {
+export function renderExportedHtml(
+  graph: ExplorerGraph,
+  vaultPath?: string,
+): string {
   const json = JSON.stringify(graph).replace(/[<>&]/g, (c) => {
     switch (c) {
       case "<":
@@ -285,7 +289,16 @@ export function renderExportedHtml(graph: ExplorerGraph): string {
         return c;
     }
   });
-  return loadTemplate().replace(PLACEHOLDER, () => json);
+  let html = loadTemplate().replace(PLACEHOLDER, () => json);
+  if (vaultPath) {
+    html = html.replace(
+      VAULT_PATH_PLACEHOLDER,
+      JSON.stringify(vaultPath).slice(1, -1).replace(/\//g, "\\/"),
+    );
+  } else {
+    html = html.replace(VAULT_PATH_PLACEHOLDER, "");
+  }
+  return html;
 }
 
 /** Test-only escape hatch: forget the cached template body. */
@@ -319,7 +332,7 @@ export function buildLiveServer(vault: string, port: number): LiveServerHandle {
       const url = new URL(req.url);
       if (url.pathname === "/" || url.pathname === "/index.html") {
         const graph = collectExplorerData(vault);
-        const html = renderExportedHtml(graph);
+        const html = renderExportedHtml(graph, vault);
         return new Response(html, {
           headers: { "content-type": "text/html; charset=utf-8" },
         });

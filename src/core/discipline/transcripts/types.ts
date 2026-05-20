@@ -21,12 +21,19 @@ export interface TranscriptRuntime {
    * `home` is injectable for tests.
    */
   collect(dayStartMs: number, dayEndMs: number, home?: string): string[];
+  collectDetail?(dayStartMs: number, dayEndMs: number, home?: string): TranscriptDetail | null;
+}
+
+export interface TranscriptDetail {
+  readonly sessionCount: number;
+  readonly messageCount: number;
 }
 
 export interface TranscriptRuntimeActivity {
   readonly runtime: string;
   readonly fileCount: number;
   readonly agentHint: string | null;
+  readonly detail?: TranscriptDetail;
 }
 
 export interface TranscriptActivity {

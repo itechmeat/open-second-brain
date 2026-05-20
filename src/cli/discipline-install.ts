@@ -40,6 +40,19 @@ function jobId(vault: string): string {
   return `osb-discipline-report-${slug}`;
 }
 
+function weeklyJobId(vault: string): string {
+  const slug = createHash("sha256")
+    .update(resolve(vault) + ":weekly")
+    .digest("hex")
+    .slice(0, 12);
+  return `osb-weekly-brain-digest-${slug}`;
+}
+
+function weeklyScriptPath(vault: string): string {
+  const escaped = vault.replace(/\\/g, "\\\\").replace(/'/g, "'\\''");
+  return scriptPath() + " --window 7d --vault '" + escaped + "'";
+}
+
 interface HermesJob {
   id: string;
   name: string;
@@ -93,10 +106,16 @@ export async function disciplineInstallVerb(
   let vault = pickVault(args, defaultVault);
   let telegramTarget = "";
   let at = "59 4 * * *";
+  let atProvided = false;
+  let weekly = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--vault") {
       // already picked up by pickVault; skip the value
       i++;
+      continue;
+    }
+    if (args[i] === "--weekly") {
+      weekly = true;
       continue;
     }
     if (args[i] === "--telegram-target") {
@@ -105,8 +124,12 @@ export async function disciplineInstallVerb(
     }
     if (args[i] === "--at") {
       at = args[++i] ?? at;
+      atProvided = true;
       continue;
     }
+  }
+  if (weekly && !atProvided) {
+    at = "59 8 * * 1";
   }
   if (!vault) {
     process.stderr.write("o2b discipline install: --vault is required\n");
@@ -124,14 +147,18 @@ export async function disciplineInstallVerb(
   }
   const file = jobsFilePath();
   const data = loadJobs(file);
-  const id = jobId(vault);
+  const id = weekly ? weeklyJobId(vault) : jobId(vault);
   const existing = data.jobs.find((j) => j.id === id);
   const next: HermesJob = {
     id,
-    name: "osb-discipline-report",
-    script: scriptPath(),
+    name: weekly ? "osb-weekly-brain-digest" : "osb-discipline-report",
+    script: weekly ? weeklyScriptPath(vault) : scriptPath(),
     no_agent: true,
-    schedule: { kind: "cron", expr: at, display: at },
+    schedule: {
+      kind: "cron",
+      expr: at,
+      display: at,
+    },
     deliver: telegramTarget,
     enabled: true,
   };
@@ -151,7 +178,16 @@ export async function disciplineUninstallVerb(
   args: string[],
   defaultVault: string,
 ): Promise<number> {
-  const vault = pickVault(args, defaultVault);
+  let vault: string | undefined;
+  let weekly = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--vault" && i + 1 < args.length) {
+      vault = args[++i];
+    } else if (args[i] === "--weekly") {
+      weekly = true;
+    }
+  }
+  vault = vault ?? defaultVault;
   if (!vault) {
     process.stderr.write(
       "o2b discipline uninstall: --vault is required\n",
@@ -160,13 +196,13 @@ export async function disciplineUninstallVerb(
   }
   const file = jobsFilePath();
   const data = loadJobs(file);
-  const id = jobId(vault);
+  const ids = weekly ? [weeklyJobId(vault)] : [jobId(vault), weeklyJobId(vault)];
   const before = data.jobs.length;
-  data.jobs = data.jobs.filter((j) => j.id !== id);
+  data.jobs = data.jobs.filter((j) => !ids.includes(j.id));
   saveJobs(file, data);
   const removed = before - data.jobs.length;
   process.stdout.write(
-    `o2b discipline: ${removed > 0 ? "removed" : "no-op"} (job '${id}')\n`,
+    `o2b discipline: ${removed > 0 ? "removed" : "no-op"} (job '${ids.join("', '")}')\n`,
   );
   return 0;
 }

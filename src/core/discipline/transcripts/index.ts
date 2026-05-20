@@ -38,13 +38,14 @@ export function collectTranscriptActivity(
   let total = 0;
   for (const r of runtimes) {
     const files = r.collect(opts.dayStartMs, opts.dayEndMs, opts.home);
+    const detail = r.collectDetail?.(opts.dayStartMs, opts.dayEndMs, opts.home) ?? null;
     byRuntime.push({
       runtime: r.runtime,
       fileCount: files.length,
       agentHint: r.agentHint,
+      ...(detail ? { detail } : {}),
     });
     total += files.length;
   }
   return { byRuntime, totalFiles: total };
 }
-
