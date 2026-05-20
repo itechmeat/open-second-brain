@@ -44,6 +44,13 @@ runtime as of §32 (v0.10.8). The bash CLI `o2b append-event` still
 works for cron-jobs / shell scripts that target `Daily/`, but it no
 longer counts as a brain event for the Stop guardrail.
 
+As of v0.10.10 a third bash needle joins the guardrail-clearing
+set: `o2b brain note` — the CLI mirror of the MCP `brain_note`
+tool. Cron jobs and shell scripts can land a Brain-native
+narrative-milestone event without going through the MCP surface;
+the matching turn clears the Stop guardrail the same way an MCP
+call would.
+
 ## Files
 
 - `hooks.json` — lifecycle config picked up by both runtimes. Claude

@@ -236,6 +236,17 @@ Agent runtime
 
 Full design: [`docs/plans/2026-05-15-brain-observing-memory.md`](plans/2026-05-15-brain-observing-memory.md).
 
+As of v0.10.10 the always-loaded `open-second-brain-writer` MCP
+server hosts one read tool (`brain_context`) alongside the three
+writers (`brain_feedback`, `brain_apply_evidence`, `brain_note`).
+The reader exists for runtimes without a `SessionStart` hook
+(Cursor, Aider, raw Claude API) — they call it once at session
+start to pull the same `Brain/active.md` content the hook-aware
+runtimes get auto-injected. The MCP server name is preserved for
+backward compatibility with existing client `.mcp.json` entries;
+renaming is deferred until a second reader joins the always-load
+scope.
+
 ## Event log
 
 The event log is append-only. It records operational events, not polished knowledge.

@@ -13,11 +13,12 @@ describe("buildToolTable scope filter", () => {
     expect(full.length).toBeGreaterThanOrEqual(15);
   });
 
-  test("writer scope returns exactly the three writer tools (§32B v0.10.8)", () => {
+  test("writer scope returns the three writers plus brain_context (v0.10.10)", () => {
     const writer = buildToolTable("writer");
     const names = writer.map((t) => t.name).sort();
     expect(names).toEqual([
       "brain_apply_evidence",
+      "brain_context",
       "brain_feedback",
       "brain_note",
     ]);

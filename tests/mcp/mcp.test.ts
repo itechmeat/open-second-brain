@@ -155,11 +155,13 @@ describe("tool listing", () => {
         "second_brain_status",
         "second_brain_query",
         "vault_health",
-        // Brain (brain_note added in v0.10.8 §32B).
+        // Brain (brain_note added in v0.10.8 §32B,
+        // brain_context added in v0.10.10).
         "brain_feedback",
         "brain_dream",
         "brain_apply_evidence",
         "brain_note",
+        "brain_context",
         "brain_digest",
         "brain_query",
         "brain_doctor",
@@ -363,9 +365,9 @@ describe("stdio loop", () => {
     const list = JSON.parse(lines[1]!);
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
-    // v0.10.8: 3 core (status/query/health) + 8 Brain (brain_note added §32B)
-    // + 8 Pay Memory + 1 Search = 20.
-    expect(list.result.tools.length).toBe(20);
+    // v0.10.10: 3 core (status/query/health) + 9 Brain (brain_note §32B
+    // and brain_context v0.10.10) + 8 Pay Memory + 1 Search = 21.
+    expect(list.result.tools.length).toBe(21);
   });
 
   test("returns parse error for invalid JSON", async () => {
@@ -424,6 +426,7 @@ describe("serveStdioFromString respects scope+name", () => {
       .map((t) => t.name).sort();
     expect(toolNames).toEqual([
       "brain_apply_evidence",
+      "brain_context",
       "brain_feedback",
       "brain_note",
     ]);

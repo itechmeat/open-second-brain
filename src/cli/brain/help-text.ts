@@ -14,6 +14,7 @@ Brain verbs (observing memory):
   feedback         Record a taste signal (--topic, --signal, --principle)
   dream            Run the deterministic dreaming pass (idempotent)
   apply-evidence   Log a real-work application of a preference
+  note             Append a one-line narrative milestone to Brain/log/today
   digest           Render the recent-changes digest (markdown or --json)
   query            Read by --preference, --topic, or --since
   reject           Move a preference to retired (user-rejected); --yes if pinned
@@ -60,6 +61,11 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain apply-evidence --pref <id> --artifact <wikilink> --result applied|violated|outdated\n" +
     "  [--agent <name>] [--note <text>] [--vault <path>] [--json]\n" +
     "Appends a single event to today's log. Missing preference exits 2.\n",
+  note:
+    "usage: o2b brain note <text> [--agent <name>] [--vault <path>] [--config <path>] [--json]\n" +
+    "Append one narrative-milestone line to Brain/log/<today>.md under the `note`\n" +
+    "event kind. CLI mirror of the MCP `brain_note` tool — same on-disk contract.\n" +
+    "Use from cron jobs and shell scripts. Multi-line text collapses to one line.\n",
   digest:
     "usage: o2b brain digest [--vault <path>] [--since <ISO>] [--until <ISO>] [--json] [--silent-if-empty]\n" +
     "Renders the 24-hour change digest. Empty + --silent-if-empty exits 2.\n",

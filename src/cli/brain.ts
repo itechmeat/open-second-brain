@@ -11,6 +11,7 @@ import { BRAIN_HELP, VERB_HELP } from "./brain/helpers.ts";
 import {
   cmdBrainInit,
   cmdBrainFeedback,
+  cmdBrainNote,
   cmdBrainDream,
   cmdBrainApplyEvidence,
   cmdBrainDigest,
@@ -54,6 +55,7 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
     switch (verb) {
       case "init": return await cmdBrainInit(rest);
       case "feedback": return await cmdBrainFeedback(rest);
+      case "note": return await cmdBrainNote(rest);
       case "dream": return await cmdBrainDream(rest);
       case "apply-evidence": return await cmdBrainApplyEvidence(rest);
       case "digest": return await cmdBrainDigest(rest);

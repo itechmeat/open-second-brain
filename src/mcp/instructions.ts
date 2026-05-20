@@ -19,15 +19,21 @@ export interface BuildInstructionsOpts {
   readonly scope?: ToolScope;
 }
 
-const WRITER_INSTRUCTIONS = `Open Second Brain — writer surface (always-loaded).
+const WRITER_INSTRUCTIONS = `Open Second Brain — always-loaded MCP surface.
 
-Three tools live here:
+Four tools live here (three writers + one reader; the server's name is
+preserved for backward compatibility with existing client configs):
   - brain_feedback        — record one new taste signal the user just expressed.
   - brain_apply_evidence  — record applied | violated | outdated against an
                             active preference for an artifact this turn produced.
   - brain_note            — record one narrative milestone (release shipped,
                             PR merged, fact discovered) that fits neither
                             category.
+  - brain_context         — pull the current Brain/active.md body plus
+                            active-preference counts. Read-only. Use at session
+                            start when the host runtime lacks a SessionStart
+                            hook (Cursor, Aider, raw Claude API). Runtimes that
+                            already inject active.md via a hook can skip this.
 
 The remaining Brain surface (digest, query, doctor, backlinks, search,
 Pay Memory tools, vault_health, second_brain_status, second_brain_query,

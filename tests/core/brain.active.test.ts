@@ -80,7 +80,12 @@ describe("regenerateActive — empty Brain", () => {
     const result = regenerateActive(vault, { now: new Date("2026-05-15T10:00:00Z") });
 
     expect(existsSync(result.path)).toBe(true);
-    expect(result.counts).toEqual({ confirmed: 0, quarantine: 0, retired_recent: 0 });
+    expect(result.counts).toEqual({
+      confirmed: 0,
+      quarantine: 0,
+      retired_recent: 0,
+      most_applied_30d: 0,
+    });
 
     const body = readActive();
     expect(body).toContain("kind: brain-active");
@@ -205,5 +210,76 @@ describe("regenerateActive — corruption tolerance", () => {
     const body = readActive();
     expect(body).toContain("pref-healthy");
     expect(body).not.toContain("pref-corrupted");
+  });
+});
+
+// ── Most-applied (30d) section — v0.10.10 ──────────────────────────────────
+
+import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
+
+function seedAppliedEvidence(
+  prefId: string,
+  timestamp: string,
+  artifact: string = "[[src/test.ts]]",
+): void {
+  appendLogEvent(vault, {
+    timestamp,
+    eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
+    body: {
+      preference: `[[${prefId}]]`,
+      artifact,
+      agent: "tester",
+      result: "applied",
+    },
+  });
+}
+
+describe("regenerateActive — Most-applied (30d) section", () => {
+  test("section absent when no apply-evidence events lie inside the window", () => {
+    seedConfirmed("a", "Rule A", "medium");
+    const result = regenerateActive(vault, { now: new Date("2026-05-20T00:00:00Z") });
+    const body = readActive();
+    expect(body).not.toContain("## Most-applied");
+    expect(result.counts.most_applied_30d).toBe(0);
+  });
+
+  test("renders the section and includes scope + applied_30d count", () => {
+    seedConfirmed("a", "Rule A", "medium");
+    seedAppliedEvidence("pref-a", "2026-05-15T10:00:00Z");
+    seedAppliedEvidence("pref-a", "2026-05-16T10:00:00Z");
+    const result = regenerateActive(vault, { now: new Date("2026-05-20T00:00:00Z") });
+    const body = readActive();
+    expect(body).toContain("## Most-applied (30d) (1)");
+    expect(body).toContain("`pref-a` (scope: writing, applied_30d: 2)");
+    expect(body).toContain("Rule A");
+    expect(result.counts.most_applied_30d).toBe(1);
+  });
+
+  test("section appears between Confirmed and Quarantine", () => {
+    seedConfirmed("a", "Confirmed rule", "high");
+    seedQuarantine("q", "Quarantined rule");
+    seedAppliedEvidence("pref-a", "2026-05-15T10:00:00Z");
+    regenerateActive(vault, { now: new Date("2026-05-20T00:00:00Z") });
+    const body = readActive();
+    const confirmedIdx = body.indexOf("## Confirmed");
+    const mostAppliedIdx = body.indexOf("## Most-applied");
+    const quarantineIdx = body.indexOf("## Quarantine");
+    expect(confirmedIdx).toBeGreaterThan(-1);
+    expect(mostAppliedIdx).toBeGreaterThan(confirmedIdx);
+    expect(quarantineIdx).toBeGreaterThan(mostAppliedIdx);
+  });
+
+  test("idempotent rerender with no log change leaves the file untouched", () => {
+    seedConfirmed("a", "Rule A", "medium");
+    seedAppliedEvidence("pref-a", "2026-05-15T10:00:00Z");
+    const first = regenerateActive(vault, { now: new Date("2026-05-20T00:00:00Z") });
+    const mtimeBefore = statSync(first.path).mtimeMs;
+    // Bump `now` so the frontmatter timestamp would differ if a write
+    // happened. The body must be identical, so `changed: false`.
+    const second = regenerateActive(vault, { now: new Date("2026-05-20T00:30:00Z") });
+    expect(second.changed).toBe(false);
+    const mtimeAfter = statSync(second.path).mtimeMs;
+    expect(mtimeAfter).toBe(mtimeBefore);
   });
 });

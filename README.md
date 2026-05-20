@@ -127,6 +127,7 @@ o2b brain init                Bootstrap Brain/{inbox,preferences,retired,log,.sn
 o2b brain feedback            Record one taste signal (--topic, --signal, --principle, ...)
 o2b brain dream               Run the deterministic consolidation pass (idempotent; usually cron'd)
 o2b brain apply-evidence      Record applied / violated against a preference for a durable artifact
+o2b brain note <text>         Append a one-line narrative milestone to Brain/log/<today>.md (cron / shell mirror of brain_note)
 o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions
 o2b brain query               Read helper: by preference, by topic, or by log timestamp
 o2b brain reject              (CLI-only) Retire a preference; requires --reason "<text>". Subsequent signals on the same topic are suppressed.
@@ -183,10 +184,10 @@ exposes the same deterministic operations as MCP tools:
 
 - **Core (3):** `second_brain_status`, `second_brain_query`,
   `vault_health`.
-- **Brain (7):** `brain_feedback`, `brain_dream`,
-  `brain_apply_evidence`, `brain_digest`, `brain_query`,
-  `brain_doctor`, `brain_backlinks`. See the [Brain section](#brain-observing-memory)
-  below.
+- **Brain (9):** `brain_feedback`, `brain_dream`,
+  `brain_apply_evidence`, `brain_note`, `brain_context`,
+  `brain_digest`, `brain_query`, `brain_doctor`, `brain_backlinks`.
+  See the [Brain section](#brain-observing-memory) below.
 - **Pay Memory (8):** `payment_memory_init`,
   `payment_receipt_append`, `asset_capture`,
   `payment_report_generate`, `payment_policy_check`,
@@ -204,13 +205,16 @@ schemas, and lifecycle details are in [`docs/mcp.md`](docs/mcp.md).
 
 The plugin's `.mcp.json` ships **two** MCP-server entries:
 
-- `open-second-brain` — the full surface (17 tools); subject to
+- `open-second-brain` — the full surface (21 tools); subject to
   Claude Code's `MCPSearch` tool-search deferral when MCP
   definitions push the system prompt past 10% of the context window.
-- `open-second-brain-writer` — a minimal surface of exactly two
-  tools, `brain_feedback` and `brain_apply_evidence`, marked
-  `alwaysLoad: true`. The agent records taste signals and evidence
-  events without a ToolSearch round-trip on every session boot.
+- `open-second-brain-writer` — a minimal always-loaded surface of
+  four tools: `brain_feedback`, `brain_apply_evidence`, `brain_note`
+  (writers) and `brain_context` (read-only pull-bootstrap of
+  `Brain/active.md`, v0.10.10). The agent records taste signals,
+  evidence events, and milestone notes — and fetches the active
+  rule digest at session start in runtimes without a SessionStart
+  hook — without a ToolSearch round-trip on every session boot.
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer`
 vs the default `--scope full`). Handlers are byte-identical; the

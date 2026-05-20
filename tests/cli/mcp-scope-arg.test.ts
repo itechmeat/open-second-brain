@@ -44,6 +44,7 @@ describe("o2b mcp --scope arg validation", () => {
         .map((t) => t.name).sort();
       expect(names).toEqual([
         "brain_apply_evidence",
+        "brain_context",
         "brain_feedback",
         "brain_note",
       ]);

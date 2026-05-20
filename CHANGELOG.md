@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.10] - 2026-05-20
+
+Pull channels for runtimes without `SessionStart`. Adds an MCP
+`brain_context` tool, surfaces a `Most-applied (30d)` section in
+`Brain/active.md`, ships the `o2b brain note` CLI verb, and prints
+a semantic-search hint in `o2b status`. The always-loaded
+`open-second-brain-writer` MCP server now also hosts one read
+tool; the server name is preserved for backward compatibility and
+a rename is deferred (see
+`docs/plans/2026-05-20-v0.10.10-design.md` §12). Companion design
+and impl plan at `docs/plans/2026-05-20-v0.10.10-design.md` and
+`docs/plans/2026-05-20-v0.10.10-impl.md`.
+
+### Added
+
+- `brain_context` MCP tool — read-only pull-bootstrap of the
+  current `Brain/active.md` body plus active-preference counts.
+  Hosted in the always-loaded `open-second-brain-writer` MCP
+  server so MCP clients without a `SessionStart` hook (Cursor,
+  Aider, raw Claude API) can fetch the same shortcut card the
+  hook-aware runtimes get injected automatically.
+- `Most-applied (30d)` section in `Brain/active.md` — top ten
+  `confirmed` / `quarantine` preferences ranked by
+  `apply-evidence (result: applied)` events whose timestamp lies
+  inside the trailing 30-day window. Section is omitted when the
+  count is zero. The render is fully derived from `Brain/log/`;
+  no new persistent state is introduced.
+- `o2b brain note <text>` CLI verb — Brain-native milestone log
+  for cron jobs and shell scripts. Same on-disk contract as the
+  MCP `brain_note` tool: writes one `note` event to
+  `Brain/log/<today>.md` plus the JSONL sidecar. Supports
+  `--agent`, `--vault`, `--config`, and `--json`. Multi-line text
+  collapses to one line (matches the MCP contract).
+- `o2b status` semantic-search hint — when semantic search is
+  enabled in config but unusable (key missing) and search is not
+  disabled outright, the human output appends
+  `semantic: off (run 'o2b search check' for setup steps)` after
+  the `config_keys:` block. `--json` payload always carries the
+  new keys `semantic_enabled`, `embedding_key_present`, and
+  `semantic_hint` (last one is `null` when fully configured or
+  when search is disabled).
+- `appendBrainNote` core function in `src/core/brain/note.ts`.
+  Single source of truth shared by the MCP `brain_note` handler
+  and the new CLI verb so the on-disk shape cannot drift between
+  surfaces.
+- `computeMostApplied` core function in
+  `src/core/brain/most-applied.ts`. Pure read; the caller passes
+  the candidate preferences so retired rules never surface in
+  the active digest.
+- `resolveSemanticConfigState` helper in `src/cli/helpers.ts`.
+  Single source of truth for `o2b status` and the `o2b init`
+  search banner; collapses the duplicated truthy / key-present
+  logic onto one function.
+
+### Changed
+
+- `RegenerateActiveResult.counts` gains a `most_applied_30d`
+  field. Internal additive change; the existing
+  `{confirmed, quarantine, retired_recent}` triple keeps its
+  values and semantics.
+- Hook detector (`hooks/lib/detect.ts`) recognises
+  `o2b brain note` as a brain event needle, alongside
+  `o2b brain feedback` and `o2b brain apply-evidence`. The stop
+  guardrail clears for any of the three CLI verbs.
+- The always-loaded MCP server tool table grows from three
+  writers to four (three writers + `brain_context` reader). The
+  server's exposed name (`open-second-brain-writer` in
+  `.mcp.json`) is unchanged; renaming is deferred until a second
+  reader joins the always-load scope.
+
 ## [0.10.9] - 2026-05-20
 
 Closes the "Vault Scope" feature: a single declarative exclusion

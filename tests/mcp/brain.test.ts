@@ -807,9 +807,16 @@ describe("brain_note tool schema visibility", () => {
   test("brain_note belongs to the writer tool scope", () => {
     const writer = buildToolTable("writer").map((t) => t.name);
     expect(writer).toEqual(
-      expect.arrayContaining(["brain_feedback", "brain_apply_evidence", "brain_note"]),
+      expect.arrayContaining([
+        "brain_feedback",
+        "brain_apply_evidence",
+        "brain_note",
+        // v0.10.10 added the `brain_context` reader to the same scope
+        // so runtimes without a SessionStart hook can fetch active.md
+        // without going through ToolSearch.
+        "brain_context",
+      ]),
     );
-    // Writer scope is exactly these three — nothing else.
-    expect(writer).toHaveLength(3);
+    expect(writer).toHaveLength(4);
   });
 });

@@ -305,7 +305,8 @@ expose the number alongside the band for inspection.
 ## Active preferences injection
 
 A confirmed rule is useless if the agent does not see it during work.
-v0.9.1 closes that gap with three cooperating surfaces, all derived
+Four cooperating surfaces close that gap (the first three since
+v0.9.1, the fourth — `brain_context` — since v0.10.10), all derived
 from the same source of truth (`Brain/preferences/`):
 
 ```mermaid
@@ -315,13 +316,17 @@ flowchart LR
     Active -- SessionStart hook --> ClaudeStart["Claude Code / Codex<br/>session start"]
     Active -- PostCompact hook --> ClaudeCompact["Claude Code / Codex<br/>after /compact"]
     Active -- "osb://preferences/active" --> MCPHost["MCP host (Hermes, others)"]
+    Active -- "brain_context tool" --> PullRT["Cursor / Aider / raw API<br/>(no SessionStart hook)"]
 ```
 
 - **`Brain/active.md`** is a derived Markdown digest: confirmed
-  preferences (id, scope, confidence, principle), quarantined
-  preferences with their applied / violated counters, and the three
-  most recently retired entries. The writer is idempotent — if the
-  rendered body matches the file on disk, no I/O happens.
+  preferences (id, scope, confidence, principle), a `Most-applied
+  (30d)` section ranking up to ten confirmed/quarantine rules by
+  `apply-evidence (result: applied)` events in the trailing
+  30-day window, quarantined preferences with their applied /
+  violated counters, and the three most recently retired entries.
+  The writer is idempotent — if the rendered body matches the file
+  on disk, no I/O happens.
 - **SessionStart hook** (`startup | resume | clear`) and
   **PostCompact hook** (`manual | auto`) inject the body as
   `additionalContext` so the agent sees current rules at the start of
@@ -333,6 +338,11 @@ flowchart LR
   pull access (`osb://preferences/active` and friends in the table
   above). The MCP `initialize` reply advertises the `resources`
   capability so clients know to enumerate them.
+- **`brain_context` MCP tool** (v0.10.10) lives in the always-loaded
+  writer-scope MCP server. Runtimes that lack a `SessionStart` hook
+  *and* do not auto-load MCP resources (Cursor, Aider, raw Claude
+  API) can fetch the same `active.md` body plus active-preference
+  counts with a single tool call.
 
 `active.md` is **not** edited by hand — `o2b brain dream` and pin /
 unpin re-derive it from `preferences/` and `retired/`. Deleting the
@@ -349,6 +359,8 @@ are mirrored in MCP; destructive operations are CLI-only by design.
 | Record taste signal      | `o2b brain feedback`       | `brain_feedback`      | writes signal + log event (sanitised) |
 | Consolidation pass       | `o2b brain dream`          | `brain_dream`         | mutates preferences/retired, atomic snapshot, regenerates `Brain/active.md` |
 | Record application       | `o2b brain apply-evidence` | `brain_apply_evidence`| appends log event; `result ∈ {applied, violated, outdated}`; artifact supports `[[file:120-145]]` ranges |
+| Record milestone         | `o2b brain note <text>`    | `brain_note`          | appends one `note` log event to `Brain/log/<today>.md` plus the JSONL sidecar. Multi-line collapses to one line. CLI mirror exists for cron / shell. |
+| Pull active context      | — (use MCP)                | `brain_context`       | read-only; returns `Brain/active.md` body + counts. Always-loaded on the writer MCP server so runtimes without a `SessionStart` hook (Cursor, Aider, raw Claude API) can fetch it at session start. |
 | Render summary           | `o2b brain digest`         | `brain_digest`        | read-only; includes `top_applied` and `top_referenced` sections |
 | Inspect state            | `o2b brain query`          | `brain_query`         | read-only              |
 | Computed backlinks       | `o2b brain backlinks <id>` | `brain_backlinks`     | read-only; inverted reference map across `preferences/`, `retired/`, `log/` |

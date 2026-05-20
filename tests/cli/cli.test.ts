@@ -16,6 +16,14 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+describe("help", () => {
+  test("top-level help includes the Brain note verb", async () => {
+    const r = await runCli(["--help"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("brain note");
+  });
+});
+
 describe("status", () => {
   test("reports missing config", async () => {
     const config = join(tmp, "missing.yaml");

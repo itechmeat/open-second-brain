@@ -48,19 +48,70 @@ const NATIVE_ARTIFACT_NAMES = new Set<string>([
 const BRAIN_EVENT_NAME_SUFFIX =
   /(?:^|__)(brain_feedback|brain_apply_evidence|brain_note)$/;
 
-// Bash command substrings that count as a brain-event call from the
-// CLI. We deliberately keep this list narrow: anything matched here
-// suppresses the guardrail. Spawning the MCP server (`o2b mcp …`)
-// does NOT log on its own, so it stays out of the list — only the
-// explicit event-emitting commands are in.
+// Bash command shape that counts as a brain-event call from the CLI.
+// Keep this anchored to command boundaries rather than raw substrings:
+// generated text like `echo "o2b brain note ..."` must not suppress the
+// guardrail. Spawning the MCP server (`o2b mcp …`) does NOT log on its
+// own, so it stays out of the matcher — only the explicit event-emitting
+// commands are in.
 //
 // §32 (v0.10.8) drops `o2b append-event` and `vault-log` — those
 // still work for human / cron use, but they target the deprecated
 // `Daily/` surface and no longer count as a Brain-side event.
-const BRAIN_EVENT_BASH_NEEDLES = [
-  "o2b brain feedback",
-  "o2b brain apply-evidence",
-];
+const SHELL_ASSIGNMENT = String.raw`[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)`;
+const BRAIN_EVENT_BASH_COMMAND_RE = new RegExp(
+  String.raw`^(?:env\s+(?:${SHELL_ASSIGNMENT}\s+)*)?(?:${SHELL_ASSIGNMENT}\s+)*o2b\s+brain\s+(?:apply-evidence|feedback|note)(?:\s|$)`,
+);
+
+function splitShellCommandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i]!;
+    if (quote) {
+      current += ch;
+      if (ch === "\\") {
+        const next = command[i + 1];
+        if (next !== undefined) {
+          current += next;
+          i += 1;
+        }
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+
+    if (ch === "\\") {
+      // Outside-quotes backslash escapes the next character. Preserve
+      // both so an escaped separator (`echo \; o2b brain note ...`)
+      // does not split the segment.
+      current += ch;
+      const next = command[i + 1];
+      if (next !== undefined) {
+        current += next;
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === ";" || ch === "&" || ch === "|") {
+      segments.push(current);
+      current = "";
+      if (command[i + 1] === ch) i += 1;
+      continue;
+    }
+    current += ch;
+  }
+  segments.push(current);
+  return segments;
+}
 
 export function isArtifactToolName(name: string): boolean {
   return NATIVE_ARTIFACT_NAMES.has(name);
@@ -97,7 +148,11 @@ export function summarizeTurn(
   }
   if (!hadBrainEvent) {
     for (const cmd of bashCommandsThisTurn) {
-      if (BRAIN_EVENT_BASH_NEEDLES.some((n) => cmd.includes(n))) {
+      if (
+        splitShellCommandSegments(cmd).some((segment) =>
+          BRAIN_EVENT_BASH_COMMAND_RE.test(segment.trim()),
+        )
+      ) {
         hadBrainEvent = true;
         break;
       }
