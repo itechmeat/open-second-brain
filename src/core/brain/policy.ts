@@ -21,7 +21,13 @@
 
 import { existsSync, readFileSync } from "node:fs";
 
-import type { BrainConfig, BrainVaultConfig, DisciplineReportConfig } from "./types.ts";
+import type {
+  BrainActiveConfig,
+  BrainConfig,
+  BrainMostAppliedConfig,
+  BrainVaultConfig,
+  DisciplineReportConfig,
+} from "./types.ts";
 // Imported from `defaults.ts` (not from `vault-scope/index.ts`) to
 // break the module-init cycle: the resolver lives in `index.ts` and
 // itself imports `loadBrainConfig` from this file. See the
@@ -34,6 +40,20 @@ import { brainConfigPath } from "./paths.ts";
 
 /** Schema versions this build understands. Bump on incompatible changes. */
 export const BRAIN_CONFIG_SUPPORTED_VERSIONS: ReadonlyArray<number> = [1];
+
+/**
+ * Bounds applied to `active.most_applied.{window_days, limit}` at load
+ * time. Values outside these ranges are hard errors — clamping silently
+ * would mask the operator's intent.
+ */
+export const MOST_APPLIED_WINDOW_DAYS_MIN = 1;
+export const MOST_APPLIED_WINDOW_DAYS_MAX = 365;
+export const MOST_APPLIED_LIMIT_MIN = 1;
+export const MOST_APPLIED_LIMIT_MAX = 50;
+/** Default window when `_brain.yaml` lacks `active.most_applied.window_days`. */
+export const MOST_APPLIED_WINDOW_DAYS_DEFAULT = 30;
+/** Default top-N limit when `_brain.yaml` lacks `active.most_applied.limit`. */
+export const MOST_APPLIED_LIMIT_DEFAULT = 10;
 
 /**
  * Default `_brain.yaml` content. Mirrors §10 of the design doc. Used by
@@ -508,6 +528,73 @@ export function validateBrainConfigDetailed(
     }
   }
 
+  // Optional `active.{most_applied_window_days, most_applied_limit}`
+  // block (v0.10.11). Hard-error on shape problems — operator-tunable
+  // knobs should never silently fall back to defaults.
+  //
+  // The YAML keys are flat at level 2 to fit the existing two-level
+  // parser; the in-memory shape `BrainActiveConfig.most_applied` still
+  // groups them so downstream consumers (`active.md`, `brain_digest`)
+  // can pass one struct around.
+  let active: BrainActiveConfig | undefined;
+  if ("active" in obj) {
+    const rawActive = obj["active"];
+    if (typeof rawActive !== "object" || rawActive === null || Array.isArray(rawActive)) {
+      throw new BrainConfigError(
+        `block must be a map of keys; got ${describe(rawActive)}`,
+        "active",
+        source,
+      );
+    }
+    const activeMap = rawActive as Record<string, unknown>;
+    const hasWindow = "most_applied_window_days" in activeMap;
+    const hasLimit = "most_applied_limit" in activeMap;
+    let mostApplied: BrainMostAppliedConfig | undefined;
+    if (hasWindow || hasLimit) {
+      const windowDays = hasWindow
+        ? activeMap["most_applied_window_days"]
+        : MOST_APPLIED_WINDOW_DAYS_DEFAULT;
+      const limit = hasLimit ? activeMap["most_applied_limit"] : MOST_APPLIED_LIMIT_DEFAULT;
+      if (
+        typeof windowDays !== "number" ||
+        !Number.isInteger(windowDays) ||
+        windowDays < MOST_APPLIED_WINDOW_DAYS_MIN ||
+        windowDays > MOST_APPLIED_WINDOW_DAYS_MAX
+      ) {
+        throw new BrainConfigError(
+          `must be an integer between ${MOST_APPLIED_WINDOW_DAYS_MIN} and ` +
+            `${MOST_APPLIED_WINDOW_DAYS_MAX}; got ${describe(windowDays)}`,
+          "active.most_applied_window_days",
+          source,
+        );
+      }
+      if (
+        typeof limit !== "number" ||
+        !Number.isInteger(limit) ||
+        limit < MOST_APPLIED_LIMIT_MIN ||
+        limit > MOST_APPLIED_LIMIT_MAX
+      ) {
+        throw new BrainConfigError(
+          `must be an integer between ${MOST_APPLIED_LIMIT_MIN} and ` +
+            `${MOST_APPLIED_LIMIT_MAX}; got ${describe(limit)}`,
+          "active.most_applied_limit",
+          source,
+        );
+      }
+      mostApplied = { window_days: windowDays, limit };
+    }
+    // Forward-compat: unknown sub-keys under `active:` → warning.
+    for (const k of Object.keys(activeMap)) {
+      if (k !== "most_applied_window_days" && k !== "most_applied_limit") {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `active.${k}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
+    active = mostApplied !== undefined ? { most_applied: mostApplied } : {};
+  }
+
   // Optional `discipline_report` section. On any type mismatch, emit a
   // warning and drop the section (return undefined) rather than throwing —
   // the rest of the CLI surface must keep working.
@@ -601,6 +688,7 @@ export function validateBrainConfigDetailed(
     "confidence",
     "snapshots",
     "vault",
+    "active",
     "discipline_report",
   ]);
   for (const key of Object.keys(obj)) {
@@ -634,6 +722,7 @@ export function validateBrainConfigDetailed(
       retention_count: snapshots.retention_count as number,
     },
     ...(vault !== undefined ? { vault } : {}),
+    ...(active !== undefined ? { active } : {}),
     ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
   };
 

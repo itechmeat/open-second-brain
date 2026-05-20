@@ -320,13 +320,16 @@ flowchart LR
 ```
 
 - **`Brain/active.md`** is a derived Markdown digest: confirmed
-  preferences (id, scope, confidence, principle), a `Most-applied
-  (30d)` section ranking up to ten confirmed/quarantine rules by
-  `apply-evidence (result: applied)` events in the trailing
-  30-day window, quarantined preferences with their applied /
+  preferences (id, scope, confidence, principle), a
+  `Most-applied (Nd)` section ranking confirmed/quarantine rules
+  by `apply-evidence (result: applied)` events in the trailing
+  window (defaults to 30 days / top-10; configurable via
+  `active.most_applied_window_days` and `active.most_applied_limit`
+  in `_brain.yaml`), quarantined preferences with their applied /
   violated counters, and the three most recently retired entries.
   The writer is idempotent — if the rendered body matches the file
-  on disk, no I/O happens.
+  on disk, no I/O happens. The same window / limit drive a mirrored
+  `Most-applied (Nd)` section in `brain_digest` output.
 - **SessionStart hook** (`startup | resume | clear`) and
   **PostCompact hook** (`manual | auto`) inject the body as
   `additionalContext` so the agent sees current rules at the start of

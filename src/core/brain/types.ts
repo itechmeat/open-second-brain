@@ -661,6 +661,24 @@ export interface BrainVaultConfig {
 }
 
 /**
+ * Configuration for the `Most-applied (Nd)` block surfaced both in
+ * `Brain/active.md` and the `brain_digest` output (v0.10.11).
+ *
+ * Both fields are optional in `_brain.yaml`; absence means consumers
+ * fall back to `MOST_APPLIED_WINDOW_DAYS_DEFAULT` (30) and
+ * `MOST_APPLIED_LIMIT_DEFAULT` (10).
+ */
+export interface BrainMostAppliedConfig {
+  readonly window_days: number;
+  readonly limit: number;
+}
+
+/** Container for the `active:` block of `_brain.yaml`. */
+export interface BrainActiveConfig {
+  readonly most_applied?: BrainMostAppliedConfig;
+}
+
+/**
  * Optional configuration for the daily discipline report (§D of the
  * agent-discipline-tail design). Absent on vaults that have not opted
  * in; the loader returns `undefined` rather than injecting defaults.
@@ -701,6 +719,12 @@ export interface BrainConfig {
    * user explicitly wants no exclusions".
    */
   readonly vault?: BrainVaultConfig;
+  /**
+   * Optional `active.most_applied` block (v0.10.11). Drives both the
+   * `Most-applied (Nd)` section in `Brain/active.md` and the
+   * mirrored `most_applied` block in `brain_digest`.
+   */
+  readonly active?: BrainActiveConfig;
   /** Optional daily discipline-report configuration (§D). Absent when not configured. */
   readonly discipline_report?: DisciplineReportConfig;
 }

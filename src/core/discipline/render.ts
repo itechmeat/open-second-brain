@@ -1,6 +1,10 @@
 import { escapeMarkdownV2 as e } from "./telegram.ts";
 import type { BrainEventCounts } from "./log-counts.ts";
-import type { ActivitySummary, DisciplineStatus } from "./decision.ts";
+import {
+  transcriptConfirmed,
+  type ActivitySummary,
+  type DisciplineStatus,
+} from "./decision.ts";
 
 export interface RenderInput {
   readonly localDate: string;
@@ -48,6 +52,15 @@ export function renderReport(r: RenderInput): string {
   lines.push(
     `\\- vault — ${vd.newSignals} new signals, ${vd.newPreferences} new preferences, ${vd.newRetired} new retired`,
   );
+  const transcripts = r.activity.transcripts;
+  if (transcripts && transcripts.byRuntime.length > 0) {
+    const parts = transcripts.byRuntime
+      .filter((b) => b.fileCount > 0)
+      .map((b) => `${e(b.runtime)}: ${b.fileCount}`);
+    if (parts.length > 0) {
+      lines.push(`\\- transcripts — ${parts.join(", ")}`);
+    }
+  }
 
   if (r.status === "alert") {
     lines.push("");
@@ -58,6 +71,11 @@ export function renderReport(r: RenderInput): string {
     lines.push(
       "_Activity present; zero brain events recorded\\. Stop guardrail likely bypassed or hook regressed\\._",
     );
+    if (transcriptConfirmed(r.activity)) {
+      lines.push(
+        "_Sub\\-reason: transcript\\-confirmed — runtime session files dated to this window\\._",
+      );
+    }
   }
   return lines.join("\n");
 }

@@ -11,6 +11,10 @@ import { existsSync, readdirSync } from "node:fs";
 
 import { brainDirs } from "./paths.ts";
 import { readLogDay } from "./log-jsonl.ts";
+import {
+  MOST_APPLIED_LIMIT_DEFAULT,
+  MOST_APPLIED_WINDOW_DAYS_DEFAULT,
+} from "./policy.ts";
 import { isoDate } from "./time.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
 import {
@@ -20,9 +24,7 @@ import {
   type BrainPreference,
 } from "./types.ts";
 
-const WINDOW_MS = 30 * 24 * 3600 * 1000;
 const DAY_MS = 24 * 3600 * 1000;
-const DEFAULT_LIMIT = 10;
 const LOG_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 
 export interface MostAppliedEntry {
@@ -33,6 +35,8 @@ export interface MostAppliedEntry {
 export interface ComputeMostAppliedOptions {
   /** Window anchor. Defaults to `new Date()`. */
   readonly now?: Date;
+  /** Window length in days. Defaults to 30. */
+  readonly windowDays?: number;
   /** Max entries returned. Defaults to 10. */
   readonly limit?: number;
 }
@@ -52,7 +56,8 @@ export function computeMostApplied(
   opts: ComputeMostAppliedOptions = {},
 ): ReadonlyArray<MostAppliedEntry> {
   const now = opts.now ?? new Date();
-  const limit = opts.limit ?? DEFAULT_LIMIT;
+  const windowDays = opts.windowDays ?? MOST_APPLIED_WINDOW_DAYS_DEFAULT;
+  const limit = opts.limit ?? MOST_APPLIED_LIMIT_DEFAULT;
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.log)) return [];
 
@@ -73,7 +78,7 @@ export function computeMostApplied(
   if (prefByKey.size === 0) return [];
 
   const windowEndMs = now.getTime();
-  const windowStartMs = windowEndMs - WINDOW_MS;
+  const windowStartMs = windowEndMs - windowDays * DAY_MS;
   // Day-level fence: include the day before window start to absorb
   // UTC drift between the event timestamp and the file's date prefix.
   const earliestDayPrefix = isoDate(new Date(windowStartMs - DAY_MS));

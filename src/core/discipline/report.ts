@@ -1,13 +1,21 @@
 import { existsSync } from "node:fs";
 
-import { BrainConfigError, loadBrainConfig } from "../brain/policy.ts";
+import { loadBrainConfig } from "../brain/policy.ts";
+import { brainConfigPath } from "../brain/paths.ts";
 import { countBrainEvents, type BrainEventCounts } from "./log-counts.ts";
 import { gitActivity } from "./activity-git.ts";
 import { mtimeActivity } from "./activity-mtime.ts";
 import { vaultDelta } from "./vault-delta.ts";
-import { decideStatus, type ActivitySummary, type DisciplineStatus, type RepoActivityRow, type NonRepoActivityRow } from "./decision.ts";
+import {
+  decideStatus,
+  type ActivitySummary,
+  type DisciplineStatus,
+  type NonRepoActivityRow,
+  type RepoActivityRow,
+} from "./decision.ts";
 import { renderReport } from "./render.ts";
 import { yesterdayWindow } from "./window.ts";
+import { collectTranscriptActivity } from "./transcripts/index.ts";
 
 export interface RunDisciplineReportOpts {
   readonly vault: string;
@@ -28,15 +36,10 @@ export function runDisciplineReport(opts: RunDisciplineReportOpts): DisciplineRe
   // Downgrade to the `disabled` shape — same as an explicit `enabled:
   // false` — so the Hermes cron stays silent instead of posting empty
   // messages on every tick.
-  let cfg;
-  try {
-    cfg = loadBrainConfig(opts.vault);
-  } catch (e) {
-    if (e instanceof BrainConfigError) {
-      return { status: "disabled", text: "", localDate: null, events: null, activity: null };
-    }
-    throw e;
+  if (!existsSync(brainConfigPath(opts.vault))) {
+    return { status: "disabled", text: "", localDate: null, events: null, activity: null };
   }
+  const cfg = loadBrainConfig(opts.vault);
   const d = cfg.discipline_report;
   if (!d || !d.enabled) {
     return { status: "disabled", text: "", localDate: null, events: null, activity: null };
@@ -58,7 +61,20 @@ export function runDisciplineReport(opts: RunDisciplineReportOpts): DisciplineRe
   }
   const vd = vaultDelta(opts.vault, win);
 
-  const activity: ActivitySummary = { repo, nonRepo, vaultDelta: vd };
+  // Per-runtime session-transcript activity (v0.10.11). Hardened: if
+  // a resolver throws (unreadable home, missing perms), we degrade
+  // to zero counts rather than failing the whole report.
+  let transcripts;
+  try {
+    transcripts = collectTranscriptActivity({
+      dayStartMs: win.startUtc.getTime(),
+      dayEndMs: win.endUtc.getTime(),
+    });
+  } catch {
+    transcripts = { byRuntime: [], totalFiles: 0 };
+  }
+
+  const activity: ActivitySummary = { repo, nonRepo, vaultDelta: vd, transcripts };
   const status = decideStatus(events, activity);
   const text = renderReport({
     localDate: win.localDate,

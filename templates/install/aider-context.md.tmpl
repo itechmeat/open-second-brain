@@ -1,0 +1,38 @@
+# Open Second Brain — agent context for Aider
+
+You have access to an Open Second Brain vault rooted at `{{VAULT}}`. The
+vault holds an observing-memory layer at `{{VAULT}}/Brain/` with your
+active preferences, log, and recent retire events.
+
+You run as identity `@{{AGENT_NAME}}`.
+
+## When to write to Brain
+
+You cannot call Brain MCP tools from Aider — Aider has no MCP client at
+the time this context was generated. Use the `o2b` CLI on PATH:
+
+- `o2b brain feedback --topic <slug> --signal positive|negative \
+   --principle "..." [--scope writing|coding|...]` when the user
+  expresses a rule that should outlast the current task.
+- `o2b brain apply-evidence --preference <pref-id> --artifact "[[path]]" \
+   --result applied|violated|outdated` after producing a durable
+  artifact that touches an active preference.
+- `o2b brain note --text "..."` for durable narrative milestones that
+  fit neither category (release shipped, PR merged, fact discovered).
+
+## Read access
+
+- `o2b brain query --preference <id>` — fetch one preference by id.
+- `o2b brain query --topic <slug>` — fetch preferences by topic.
+- `o2b brain digest` — read the latest activity digest.
+- The file `{{VAULT}}/Brain/active.md` is the authoritative list of
+  active preferences and the Most-applied window.
+
+## Sanity checks
+
+- `o2b brain doctor` — runs schema + invariant lints over `Brain/`.
+- `o2b install --check --target aider` — verifies that this Aider
+  install is recognised by OSB.
+
+This file is regenerated on every `o2b install --target aider --apply`.
+Do not hand-edit; changes will be overwritten.

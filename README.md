@@ -57,7 +57,8 @@ safety invariants are in [`docs/how-it-works.md`](docs/how-it-works.md).
 | Claude Code     | Marketplace plugin + bundled `.mcp.json` + lifecycle hooks | `hooks/hooks.json` registers a `PostToolUse` reminder that points the agent at `brain_feedback` / `brain_apply_evidence` after every Write/Edit. See [`hooks/`](hooks/). |
 | OpenAI Codex    | Marketplace plugin + MCP server + lifecycle hooks         | Same hook bundle as Claude Code.                                                                 |
 | OpenClaw        | Native JS plugin (`openclaw.extensions`) — no MCP needed | Core query/status/health tools are registered directly inside OpenClaw's Node.js process. Native parity with the `brain_*` tools is tracked separately in the post-v0.9 roadmap. |
-| Other MCP hosts | Generic adapter (stdio MCP server, persisted plugin config) | See `install.md` branch E for the contract.                                                      |
+| Cursor / Aider / opencode / kiro / Copilot CLI / Gemini CLI / Pi | One-shot `o2b install --target <name> --apply` | v0.10.11 multi-runtime orchestrator with idempotent managed block and sidecar manifest. See `install/<name>.md` and `install.md`. |
+| Other MCP hosts | Generic adapter (stdio MCP server, persisted plugin config) | `o2b install --target generic --apply --out -` prints the payload; see `install/generic.md`.    |
 
 ## What it does
 
@@ -81,31 +82,34 @@ safety invariants are in [`docs/how-it-works.md`](docs/how-it-works.md).
 
 ## Install
 
-`install.md` is the canonical install guide. It is written so an
-agent can read it directly and pick the right branch by runtime
-name. The recommended way to install is to send your agent the
-prompt below — replace `[runtime]` with `Hermes`, `Claude Code`,
-`Codex`, or `OpenClaw`:
+`install.md` is a short router. Pick the matching per-runtime page
+under [`install/`](install/) and follow it end-to-end. The
+MCP-aware runtimes share one CLI orchestrator:
 
-```text
-Install the open-second-brain plugin for [runtime] following the
-instructions at
-https://raw.githubusercontent.com/itechmeat/open-second-brain/main/install.md
+```bash
+o2b install --target <name> --apply
+o2b install --check
 ```
 
-For manual installs, follow the matching branch in
-[`install.md`](install.md) directly:
+Supported `--target` values: `cursor`, `aider`, `opencode`, `kiro`,
+`copilot-cli`, `gemini-cli`, `pi`, `generic`. Each writes a sidecar
+manifest at `<vault>/.open-second-brain/install.lock.json` so
+`o2b uninstall --target <name> --apply` removes exactly what was
+added.
 
-- Branch A — Hermes
-- Branch B — OpenClaw
-- Branch C — Codex
-- Branch D — Claude Code
-- Branch E — generic adapter (other runtimes)
+For runtimes that ship their own plugin/MCP install pipeline
+(Hermes, Claude Code, Codex, OpenClaw) the corresponding
+`install/<runtime>.md` walks through the runtime-native flow.
 
-Each branch covers the same six steps: collect vault path, install
-plugin, publish CLI to PATH (`o2b install-cli`), initialise the
-vault (`o2b init`), register the MCP server (where needed), and
-verify with `o2b doctor` + a daily-identity check.
+First-time-setup users can also run a guided wizard:
+
+```bash
+o2b init --interactive
+```
+
+The wizard composes `o2b init`, optional `o2b brain init`, and
+per-target `o2b install` behind a single linear question/answer
+flow with an explicit confirmation gate.
 
 ## CLI
 

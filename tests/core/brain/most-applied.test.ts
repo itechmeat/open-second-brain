@@ -212,4 +212,45 @@ describe("computeMostApplied", () => {
     const result = computeMostApplied(vault, [buildPref("pref-a")], { now });
     expect(result.length).toBe(1);
   });
+
+  describe("custom windowDays / limit (v0.10.11)", () => {
+    test("windowDays: 7 excludes events older than 7 days", () => {
+      const now = new Date("2026-05-20T00:00:00Z");
+      seedApplied(vault, "2026-05-19T00:00:00Z", "[[pref-a]]"); // 1d ago
+      seedApplied(vault, "2026-05-10T00:00:00Z", "[[pref-a]]"); // 10d ago
+      const result = computeMostApplied(vault, [buildPref("pref-a")], { now, windowDays: 7 });
+      expect(result.length).toBe(1);
+      expect(result[0]!.applied_30d).toBe(1);
+    });
+
+    test("windowDays: 365 includes events from one year ago", () => {
+      const now = new Date("2026-05-20T00:00:00Z");
+      seedApplied(vault, "2025-06-01T00:00:00Z", "[[pref-a]]");  // ~354 days ago
+      const result = computeMostApplied(vault, [buildPref("pref-a")], { now, windowDays: 365 });
+      expect(result.length).toBe(1);
+    });
+
+    test("limit: 2 truncates a 3-pref result", () => {
+      const now = new Date("2026-05-20T00:00:00Z");
+      seedApplied(vault, "2026-05-19T00:00:00Z", "[[pref-a]]");
+      seedApplied(vault, "2026-05-19T00:00:00Z", "[[pref-a]]");
+      seedApplied(vault, "2026-05-19T00:00:00Z", "[[pref-b]]");
+      seedApplied(vault, "2026-05-19T00:00:00Z", "[[pref-c]]");
+      const result = computeMostApplied(
+        vault,
+        [buildPref("pref-a"), buildPref("pref-b"), buildPref("pref-c")],
+        { now, limit: 2 },
+      );
+      expect(result.length).toBe(2);
+      expect(result.map((r) => r.preference.id)).toEqual(["pref-a", "pref-b"]);
+    });
+
+    test("default windowDays still 30 when option omitted", () => {
+      const now = new Date("2026-05-20T00:00:00Z");
+      seedApplied(vault, "2026-05-15T00:00:00Z", "[[pref-a]]");  // 5d ago
+      seedApplied(vault, "2026-04-10T00:00:00Z", "[[pref-a]]");  // 40d ago — excluded
+      const result = computeMostApplied(vault, [buildPref("pref-a")], { now });
+      expect(result[0]!.applied_30d).toBe(1);
+    });
+  });
 });
