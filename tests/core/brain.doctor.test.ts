@@ -47,6 +47,11 @@ beforeEach(() => {
     dirs.preferences,
     dirs.retired,
     dirs.log,
+    // v0.10.9: bootstrap-matched scaffold. The default _brain.yaml
+    // lists `Brain/.snapshots` under `vault.ignore_paths`, so the
+    // doctor's `vault-ignore-missing-path` lint expects the directory
+    // to exist (real `o2b brain init` creates it).
+    dirs.snapshots,
   ]) {
     mkdirSync(d, { recursive: true });
   }
@@ -802,5 +807,58 @@ describe("frontmatter-double-shape lint (§24)", () => {
     });
     const res = runDoctor(tmp);
     expect(res.warnings.filter((w) => w.code === "frontmatter-double-shape")).toHaveLength(0);
+  });
+});
+
+describe("vault-ignore-missing-path lint (v0.10.9)", () => {
+  test("warns when vault.ignore_paths contains a path-style entry that does not exist", () => {
+    atomicWriteFileSync(
+      brainConfigPath(tmp),
+      `schema_version: 1
+vault:
+  ignore_paths:
+    - Brain/.snapshots
+    - Notes/does-not-exist
+`,
+    );
+    const res = runDoctor(tmp);
+    const missing = res.warnings.find((w) => w.code === "vault-ignore-missing-path");
+    expect(missing).toBeDefined();
+    expect(missing!.message).toContain("Notes/does-not-exist");
+    // Brain/.snapshots was created by the test scaffold — no warning
+    // for that entry.
+    expect(
+      res.warnings
+        .filter((w) => w.code === "vault-ignore-missing-path")
+        .map((w) => w.message)
+        .join("\n"),
+    ).not.toContain("Brain/.snapshots");
+  });
+
+  test("does NOT warn about bare-name entries that have no current match", () => {
+    atomicWriteFileSync(
+      brainConfigPath(tmp),
+      `schema_version: 1
+vault:
+  ignore_paths:
+    - .git
+    - node_modules
+`,
+    );
+    const res = runDoctor(tmp);
+    expect(
+      res.warnings.find((w) => w.code === "vault-ignore-missing-path"),
+    ).toBeUndefined();
+  });
+
+  test("does NOT warn when the vault block is absent (defaults source)", () => {
+    atomicWriteFileSync(
+      brainConfigPath(tmp),
+      `schema_version: 1\n`,
+    );
+    const res = runDoctor(tmp);
+    expect(
+      res.warnings.find((w) => w.code === "vault-ignore-missing-path"),
+    ).toBeUndefined();
   });
 });

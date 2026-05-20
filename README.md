@@ -147,6 +147,10 @@ o2b brain import-session      Replay signals from a Claude/Codex/Hermes session 
 o2b brain import-claude-memory (CLI-only) Import metadata.type=feedback entries from a Claude Code memory directory into Brain/preferences/. --dry-run / --apply, sidecar manifest for idempotency, UPDATE preserves accumulated evidence
 o2b brain migrate-frontmatter (CLI-only) Rewrite legacy `status:` keys to `_status:`
 
+# Vault scope (single exclusion policy for every vault walker)
+o2b vault status              Walks the vault under the active policy; reports include / exclude counts and which rules fired
+o2b vault inspect <relpath>   Point-check one vault-relative path; reports matched rule, source, and whether the path exists on disk
+
 # Discipline (daily logging-discipline cron)
 o2b discipline report         Render the daily MarkdownV2 block to stdout (brain-event counts per agent vs git/mtime activity); status ok | info | alert
 o2b discipline install        Register the Hermes cron job that delivers the report. --telegram-target is required; --at defaults to "59 4 * * *" UTC

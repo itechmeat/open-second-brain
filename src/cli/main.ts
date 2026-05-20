@@ -27,6 +27,7 @@ import { CliError, parseFlags } from "./argparse.ts";
 import { handleBrainSubcommand } from "./brain.ts";
 import { handleDisciplineSubcommand } from "./discipline.ts";
 import { handleSearchSubcommand } from "./search.ts";
+import { handleVaultSubcommand } from "./vault.ts";
 import {
   NoVaultConfiguredError,
   normalizeFlagString,
@@ -489,6 +490,10 @@ Search:
   search reindex            Rebuild the index atomically (.new -> rename -> .bak)
   search status             Print index summary (counts, model, vec extension)
   search check              Pre-flight diagnostics (SQLite, FTS5, vec, provider)
+
+Vault scope:
+  vault status              Show how many files/dirs the active policy includes and which rules excluded
+  vault inspect <relpath>   Point-check one vault-relative path against the policy
 `;
 
 export async function main(argv: ReadonlyArray<string>): Promise<number> {
@@ -567,6 +572,8 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         return await handleDisciplineSubcommand(rest);
       case "search":
         return await handleSearchSubcommand(rest);
+      case "vault":
+        return await handleVaultSubcommand(rest);
       default:
         process.stderr.write(`error: unknown command: ${command}\n`);
         process.stderr.write(HELP);

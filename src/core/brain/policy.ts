@@ -10,6 +10,7 @@
  *   - `# comments` and blank lines
  *   - `key: <scalar>` (numbers parsed; quoted strings stripped)
  *   - `key:` followed by an indented block of the same form (one level)
+ *   - `key: []` and simple inline scalar arrays (`[a, "b"]`)
  *
  * Anything else is treated as invalid and surfaces through
  * `validateBrainConfig` with a field-named error. No external
@@ -20,7 +21,15 @@
 
 import { existsSync, readFileSync } from "node:fs";
 
-import type { BrainConfig, DisciplineReportConfig } from "./types.ts";
+import type { BrainConfig, BrainVaultConfig, DisciplineReportConfig } from "./types.ts";
+// Imported from `defaults.ts` (not from `vault-scope/index.ts`) to
+// break the module-init cycle: the resolver lives in `index.ts` and
+// itself imports `loadBrainConfig` from this file. See the
+// `defaults.ts` header for the rationale.
+import {
+  classifyVaultIgnoreRule,
+  DEFAULT_VAULT_IGNORE_PATHS,
+} from "../vault-scope/defaults.ts";
 import { brainConfigPath } from "./paths.ts";
 
 /** Schema versions this build understands. Bump on incompatible changes. */
@@ -52,6 +61,9 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = Object.freeze({
   }),
   snapshots: Object.freeze({
     retention_count: 10,
+  }),
+  vault: Object.freeze({
+    ignore_paths: DEFAULT_VAULT_IGNORE_PATHS,
   }),
 }) as BrainConfig;
 
@@ -90,6 +102,22 @@ confidence:
 
 snapshots:
   retention_count: 10
+
+# Vault-wide exclusion policy. Single source of truth for every
+# vault walker (search indexer, scan-inline, future scanners).
+# Entries without a slash match a directory name anywhere in the
+# tree; entries with a slash match a vault-relative POSIX path
+# exactly. Remove the block to fall back to the built-in defaults;
+# set ignore_paths to an empty list to disable exclusions entirely.
+vault:
+  ignore_paths:
+    - .git
+    - node_modules
+    - .open-second-brain
+    - .obsidian
+    - .trash
+    - .stversions
+    - Brain/.snapshots
 `;
 
 const YAML_STRING_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
@@ -390,6 +418,85 @@ export function validateBrainConfigDetailed(
   );
   requirePositiveInteger("snapshots.retention_count", snapshots.retention_count, source);
 
+  // Optional `vault` block (v0.10.9). Hard-error on shape problems —
+  // exclusions affect every walker, silent ignore would be a footgun.
+  // The block is absent for vaults created before v0.10.9 and for
+  // operators who explicitly removed it; the resolver falls back to
+  // `DEFAULT_VAULT_IGNORE_PATHS` in both cases.
+  let vault: BrainVaultConfig | undefined;
+  if ("vault" in obj) {
+    const raw = obj["vault"];
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new BrainConfigError(
+        `block must be a map of keys; got ${describe(raw)}`,
+        "vault",
+        source,
+      );
+    }
+    const rawMap = raw as Record<string, unknown>;
+    if ("ignore_paths" in rawMap) {
+      const list = rawMap["ignore_paths"];
+      if (!Array.isArray(list)) {
+        throw new BrainConfigError(
+          `must be a list of strings; got ${describe(list)}`,
+          "vault.ignore_paths",
+          source,
+        );
+      }
+      const validated: string[] = [];
+      list.forEach((entry, i) => {
+        if (typeof entry !== "string") {
+          throw new BrainConfigError(
+            `must be a string; got ${describe(entry)}`,
+            `vault.ignore_paths[${i}]`,
+            source,
+          );
+        }
+        const trimmed = entry.trim();
+        if (trimmed.length === 0) {
+          throw new BrainConfigError(
+            "must be a non-empty string",
+            `vault.ignore_paths[${i}]`,
+            source,
+          );
+        }
+        for (const bad of YAML_STRING_REJECTED_CHARS) {
+          if (trimmed.includes(bad)) {
+            throw new BrainConfigError(
+              `contains a disallowed character ${JSON.stringify(bad)}; ` +
+                "use a simple one-line path",
+              `vault.ignore_paths[${i}]`,
+              source,
+            );
+          }
+        }
+        // `classifyVaultIgnoreRule` strips leading `./` / trailing
+        // `/` / collapsing `//`. An entry that normalises to the
+        // empty string (`./`, `/`, `///`) would silently disable
+        // itself; reject so the operator sees the typo immediately.
+        const normalised = classifyVaultIgnoreRule(trimmed).raw;
+        if (normalised.length === 0) {
+          throw new BrainConfigError(
+            "normalises to the empty string; use a real directory name or vault-relative path",
+            `vault.ignore_paths[${i}]`,
+            source,
+          );
+        }
+        validated.push(normalised);
+      });
+      vault = { ignore_paths: Object.freeze(validated) };
+    }
+    // Forward-compat: unknown sub-keys under `vault:` → warning.
+    for (const key of Object.keys(rawMap)) {
+      if (key !== "ignore_paths") {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `vault.${key}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
+  }
+
   // Optional `discipline_report` section. On any type mismatch, emit a
   // warning and drop the section (return undefined) rather than throwing —
   // the rest of the CLI surface must keep working.
@@ -482,6 +589,7 @@ export function validateBrainConfigDetailed(
     "retire",
     "confidence",
     "snapshots",
+    "vault",
     "discipline_report",
   ]);
   for (const key of Object.keys(obj)) {
@@ -514,6 +622,7 @@ export function validateBrainConfigDetailed(
     snapshots: {
       retention_count: snapshots.retention_count as number,
     },
+    ...(vault !== undefined ? { vault } : {}),
     ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
   };
 
@@ -623,7 +732,7 @@ function describe(value: unknown): string {
 //   - otherwise: the literal string
 //
 // This intentionally rejects nested mappings deeper than two levels,
-// inline arrays, anchors, and aliases — none of which the schema needs.
+// anchors, and aliases — none of which the schema needs.
 
 type ParsedScalar = number | string | boolean | null;
 type ParsedBlockValue = ParsedScalar | Record<string, ParsedScalar | ParsedScalar[]> | ParsedScalar[];
@@ -706,7 +815,13 @@ export function parseBrainYaml(text: string): ParsedBlock {
             const itemText = listLine.content.startsWith("- ")
               ? listLine.content.slice(2).trim()
               : "";
-            items.push(parseScalar(itemText, listLine.lineNumber));
+            const item = parseScalar(itemText, listLine.lineNumber);
+            if (Array.isArray(item)) {
+              throw new Error(
+                `line ${listLine.lineNumber}: nested inline arrays are not supported`,
+              );
+            }
+            items.push(item);
             i++;
           }
           if (innerKv.key in child) {
@@ -798,7 +913,10 @@ function detectBlockIndent(lines: Line[], cursor: number): number {
   return first.indent;
 }
 
-function parseScalar(text: string, lineNumber: number): ParsedScalar {
+function parseScalar(text: string, lineNumber: number): ParsedScalar | ParsedScalar[] {
+  if (text.startsWith("[") && text.endsWith("]")) {
+    return parseInlineArray(text.slice(1, -1), lineNumber);
+  }
   if (
     text.length >= 2 &&
     ((text.startsWith('"') && text.endsWith('"')) ||
@@ -822,4 +940,55 @@ function parseScalar(text: string, lineNumber: number): ParsedScalar {
     return n;
   }
   return text;
+}
+
+function parseInlineArray(innerRaw: string, lineNumber: number): ParsedScalar[] {
+  const inner = innerRaw.trim();
+  if (inner === "") return [];
+
+  const out: ParsedScalar[] = [];
+  let current = "";
+  let inQuote = false;
+  let quoteChar: '"' | "'" | "" = "";
+
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i]!;
+    if (inQuote) {
+      current += ch;
+      if (ch === quoteChar) {
+        inQuote = false;
+        quoteChar = "";
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inQuote = true;
+      quoteChar = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === ",") {
+      out.push(parseInlineArrayItem(current, lineNumber));
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (inQuote) {
+    throw new Error(`line ${lineNumber}: unterminated quoted string in inline array`);
+  }
+  out.push(parseInlineArrayItem(current, lineNumber));
+  return out;
+}
+
+function parseInlineArrayItem(text: string, lineNumber: number): ParsedScalar {
+  const trimmed = text.trim();
+  if (trimmed === "") {
+    throw new Error(`line ${lineNumber}: empty item in inline array`);
+  }
+  const parsed = parseScalar(trimmed, lineNumber);
+  if (Array.isArray(parsed)) {
+    throw new Error(`line ${lineNumber}: nested inline arrays are not supported`);
+  }
+  return parsed;
 }

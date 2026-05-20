@@ -223,4 +223,60 @@ describe("scanInline", () => {
     expect(result.created).toBe(0);
     expect(result.malformed).toBe(1);
   });
+
+  test("v0.10.9: skips files under .obsidian via shared vault.ignore_paths", async () => {
+    // The bootstrap writes DEFAULT_BRAIN_CONFIG_YAML which declares
+    // `.obsidian` in `vault.ignore_paths`.
+    mkdirSync(join(tmp, ".obsidian", "plugins", "foo"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".obsidian", "plugins", "foo", "note.md"),
+      `@osb feedback negative topic=obsidian-leak principle="should not be captured"\n`,
+      "utf8",
+    );
+    writeMd(
+      "Daily/keep.md",
+      `@osb feedback negative topic=visible principle=p\n`,
+    );
+    const result = await scanInline(tmp, { agent: "test" });
+    expect(result.created).toBe(1);
+    const inbox = readdirSync(brainDirs(tmp).inbox);
+    expect(inbox.some((f) => f.includes("obsidian-leak"))).toBe(false);
+    expect(inbox.some((f) => f.includes("visible"))).toBe(true);
+  });
+
+  test("v0.10.9: hardcoded Brain skip survives an empty vault.ignore_paths declaration", async () => {
+    // Operator explicitly empties the policy. Brain/ MUST still be
+    // skipped because scan-inline cannot self-reference the derived
+    // layer regardless of operator choice.
+    atomicWriteFileSync(
+      join(brainDirs(tmp).brain, "_brain.yaml"),
+      `schema_version: 1\nvault:\n  ignore_paths:\n`,
+    );
+    writeFileSync(
+      join(brainDirs(tmp).brain, "stray.md"),
+      `@osb feedback positive topic=brain-self principle=x\n`,
+      "utf8",
+    );
+    const result = await scanInline(tmp, { agent: "test" });
+    expect(result.found).toBe(0);
+  });
+
+  test("v0.10.9: vault.ignore_paths additions are respected", async () => {
+    atomicWriteFileSync(
+      join(brainDirs(tmp).brain, "_brain.yaml"),
+      `schema_version: 1\nvault:\n  ignore_paths:\n    - Drafts\n`,
+    );
+    writeMd(
+      "Drafts/x.md",
+      `@osb feedback negative topic=drafted principle=p\n`,
+    );
+    writeMd(
+      "Daily/d.md",
+      `@osb feedback negative topic=visible principle=p\n`,
+    );
+    const result = await scanInline(tmp, { agent: "test" });
+    expect(result.created).toBe(1);
+    const inbox = readdirSync(brainDirs(tmp).inbox);
+    expect(inbox.some((f) => f.includes("drafted"))).toBe(false);
+  });
 });

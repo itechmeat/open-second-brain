@@ -643,6 +643,24 @@ export interface BrainSnapshotsConfig {
 }
 
 /**
+ * Vault-wide exclusion policy (`Brain/_brain.yaml` → `vault:`).
+ *
+ * Single source of truth for every vault walker — search indexer,
+ * `scan-inline`, future scanners. Anchored in
+ * `docs/plans/2026-05-19-vault-scope-design.md` §4.
+ *
+ * Entries without `/` are bare directory names matched at any
+ * depth; entries containing `/` are vault-relative POSIX paths
+ * matched exactly. The block is optional in `_brain.yaml`; absence
+ * (or absence of `ignore_paths`) leaves this field `undefined` and
+ * the walkers fall back to `DEFAULT_VAULT_IGNORE_PATHS`. An
+ * explicit empty array is a user choice meaning "exclude nothing".
+ */
+export interface BrainVaultConfig {
+  readonly ignore_paths: ReadonlyArray<string>;
+}
+
+/**
  * Optional configuration for the daily discipline report (§D of the
  * agent-discipline-tail design). Absent on vaults that have not opted
  * in; the loader returns `undefined` rather than injecting defaults.
@@ -675,6 +693,14 @@ export interface BrainConfig {
   readonly retire: BrainRetireConfig;
   readonly confidence: BrainConfidenceConfig;
   readonly snapshots: BrainSnapshotsConfig;
+  /**
+   * Vault-wide exclusion policy (v0.10.9). Absent when the user
+   * has not declared `vault.ignore_paths` in `_brain.yaml`; the
+   * resolver falls back to `DEFAULT_VAULT_IGNORE_PATHS` in that
+   * case. Present with an empty `ignore_paths` array means "the
+   * user explicitly wants no exclusions".
+   */
+  readonly vault?: BrainVaultConfig;
   /** Optional daily discipline-report configuration (§D). Absent when not configured. */
   readonly discipline_report?: DisciplineReportConfig;
 }

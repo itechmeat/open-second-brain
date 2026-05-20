@@ -50,12 +50,24 @@ test("skips ignored bare directory names anywhere in tree", () => {
   expect(collect(cfg)).toEqual(["keep.md"]);
 });
 
-test("skips ignored relative-path directories", () => {
+test("skips ignored relative-path directories but keeps sibling subtrees", () => {
+  writeMd(vault, "keep.md", "x");
+  // `Brain/.snapshots` is a path-style rule in the default set.
+  writeMd(vault, "Brain/.snapshots/2026-05-19.md", "x");
+  // `Brain/active.md` is a sibling under the same parent — must NOT
+  // be eaten by the snapshots rule.
+  writeMd(vault, "Brain/active.md", "x");
+  const cfg = makeConfig({ vault, dbPath: join(vault, "x.sqlite") });
+  expect(collect(cfg)).toEqual(["Brain/active.md", "keep.md"]);
+});
+
+test("v0.10.9 default: full .obsidian directory is excluded", () => {
   writeMd(vault, "keep.md", "x");
   writeMd(vault, ".obsidian/cache/cached.md", "x");
-  writeMd(vault, ".obsidian/other.md", "x"); // kept (cache is the specific subdir)
+  writeMd(vault, ".obsidian/plugins/foo/note.md", "x");
+  writeMd(vault, ".obsidian/app.md", "x");
   const cfg = makeConfig({ vault, dbPath: join(vault, "x.sqlite") });
-  expect(collect(cfg)).toEqual([".obsidian/other.md", "keep.md"]);
+  expect(collect(cfg)).toEqual(["keep.md"]);
 });
 
 test("ignores symlinks pointing outside vault", () => {

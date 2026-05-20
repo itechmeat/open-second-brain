@@ -93,6 +93,19 @@ function safeRealpath(p: string): string {
 }
 
 /**
+ * Convert an OS-native path to POSIX form (forward slashes).
+ *
+ * Returns the input unchanged on POSIX hosts (`sep === "/"`); on
+ * Windows, replaces every `\\` separator with `/`. Used by the
+ * vault walkers when they project absolute or vault-relative OS
+ * paths into the POSIX form that `matchIgnore` and Obsidian
+ * wikilinks both expect.
+ */
+export function toPosix(p: string): string {
+  return sep === "/" ? p : p.split(sep).join("/");
+}
+
+/**
  * Vault-relative path with forward slashes.
  *
  * Markdown rendering and Obsidian wikilinks both want forward slashes
