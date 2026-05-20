@@ -81,8 +81,14 @@ describe("pi adapter", () => {
 
   test("re-apply replaces broken symlink (target removed)", () => {
     piAdapter.apply(piAdapter.plan(payload, env()), payload, env(), applyOpts());
-    // Remove the source — symlink is now dangling
+    // Remove the source so the existing symlink is genuinely dangling
+    // when we re-apply. The adapter must restore the link target after
+    // recreating the source.
     rmSync(skillSource, { recursive: true, force: true });
+    // Confirm the link is now broken (symlink present, target gone).
+    expect(existsSync(linkPath())).toBe(false);
+    expect(readlinkSync(linkPath())).toBe(skillSource);
+    // Recreate the source and re-apply.
     mkdirSync(skillSource, { recursive: true });
     writeFileSync(join(skillSource, "SKILL.md"), "# new\n");
     piAdapter.apply(piAdapter.plan(payload, env()), payload, env(), applyOpts());

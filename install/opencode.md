@@ -26,7 +26,12 @@ o2b uninstall --target opencode --apply
 
 ## Notes
 
-- Confirm the upstream `sst/opencode` MCP config path against the
-  current docs before adopting on a new release. The adapter
-  defaults to `~/.config/opencode/mcp.json` but reads
-  `XDG_CONFIG_HOME` when set.
+- Upstream is `anomalyco/opencode` (formerly hosted under
+  `sst/opencode`). Confirm the MCP config path against the current
+  upstream docs before adopting on a new release — the project has
+  moved its config layout between releases. The adapter defaults to
+  `~/.config/opencode/mcp.json` and reads `XDG_CONFIG_HOME` when
+  set; if upstream renames the file (e.g. to `opencode.json`),
+  the JSON-merge adapter pattern keeps working — only the
+  resolver function in `src/core/install/adapters/opencode.ts`
+  needs an update.

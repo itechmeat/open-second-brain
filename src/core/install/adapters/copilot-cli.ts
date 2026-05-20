@@ -183,8 +183,15 @@ function uninstallViaCli(): { removed: string[] } {
   return { removed };
 }
 
-function uninstallViaFile(env: InstallEnv, dryRun: boolean): { path: string; touched: boolean } {
-  const path = fallbackPath(env);
+function uninstallViaFile(
+  env: InstallEnv,
+  dryRun: boolean,
+  storedPath?: string | null,
+): { path: string; touched: boolean } {
+  // Prefer the path recorded at install time; only fall back to env-derived
+  // resolution when the manifest entry didn't carry one. This keeps
+  // uninstall deterministic across XDG_CONFIG_HOME / HOME changes.
+  const path = storedPath ?? fallbackPath(env);
   if (!existsSync(path)) return { path, touched: false };
   const current = readFileSync(path, "utf8");
   const next = removeMcpServers(current);
@@ -235,6 +242,14 @@ export const copilotCliAdapter: InstallAdapter = {
             status: "installed",
             configPath: fb,
             notes: ["file-fallback: both OSB keys present"],
+          };
+        }
+        if (has(OSB_KEY_FULL) || has(OSB_KEY_WRITER)) {
+          return {
+            target: TARGET,
+            status: "drift",
+            configPath: fb,
+            notes: ["file-fallback: partial OSB keys"],
           };
         }
       } catch {
@@ -333,10 +348,20 @@ export const copilotCliAdapter: InstallAdapter = {
 
     const viaCli = stored?.operation === "subprocess";
     if (viaCli) {
-      const { removed } = uninstallViaCli();
-      for (const r of removed) removed_keys.push(r);
+      if (opts.dryRun) {
+        // Dry-run must not touch the runtime's MCP registry. Simulate
+        // the two removals so the operator sees what would happen.
+        removed_keys.push(OSB_KEY_FULL, OSB_KEY_WRITER);
+      } else {
+        const { removed } = uninstallViaCli();
+        for (const r of removed) removed_keys.push(r);
+      }
     } else {
-      const { path, touched } = uninstallViaFile(env, opts.dryRun);
+      const { path, touched } = uninstallViaFile(
+        env,
+        opts.dryRun,
+        stored?.fallback_file ?? stored?.config_path ?? null,
+      );
       if (touched) {
         removed_keys.push(`mcpServers.${OSB_KEY_FULL}`, `mcpServers.${OSB_KEY_WRITER}`);
       } else {

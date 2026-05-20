@@ -140,7 +140,7 @@ export const genericAdapter: InstallAdapter = {
     return { target: TARGET, manifest, steps_executed: opts.dryRun ? 0 : 1 };
   },
 
-  uninstall(env: InstallEnv, _opts: ApplyOpts & { fromSnippet?: boolean }): UninstallResult {
+  uninstall(env: InstallEnv, opts: ApplyOpts & { fromSnippet?: boolean }): UninstallResult {
     const m = readManifest(env.vault).installs[TARGET];
     const skipped: Array<readonly [string, string]> = [];
     if (m?.owned_paths?.length) {
@@ -153,7 +153,7 @@ export const genericAdapter: InstallAdapter = {
         "generic: never wrote to disk; nothing to do",
       ]);
     }
-    removeEntry(env.vault, TARGET);
+    if (!opts.dryRun) removeEntry(env.vault, TARGET);
     return { target: TARGET, removed_keys: [], removed_paths: [], skipped };
   },
 

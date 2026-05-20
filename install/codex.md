@@ -21,7 +21,9 @@ Codex caches the plugin at a version-hashed path; locate the
 script:
 
 ```bash
-"$(find ~/.codex -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)" install-cli
+O2B_SCRIPT="$(find ~/.codex -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)"
+[ -n "$O2B_SCRIPT" ] || { echo "o2b installer not found in Codex plugin cache" >&2; exit 1; }
+"$O2B_SCRIPT" install-cli
 ```
 
 ## 3. Initialize the vault

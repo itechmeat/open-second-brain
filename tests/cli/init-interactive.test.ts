@@ -99,6 +99,19 @@ describe("init wizard", () => {
     expect(initCall).toContain("UTC");
     // Final call must be `o2b install --check`
     expect(calls[calls.length - 1]).toEqual(["install", "--check"]);
+    // At least one pre-check call must be a per-target install with --apply.
+    // The scripted answer "1,2" selects targets 1 and 2 in the detected list;
+    // both should yield `o2b install --target <name> --apply` invocations.
+    const perTargetApplies = calls
+      .slice(0, -1)
+      .filter((c) => c[0] === "install" && c.includes("--apply") && c.includes("--target"));
+    expect(perTargetApplies.length).toBe(2);
+    for (const c of perTargetApplies) {
+      const tIdx = c.indexOf("--target");
+      // --target must be followed by a non-flag target name
+      expect(c[tIdx + 1]).toBeDefined();
+      expect((c[tIdx + 1] ?? "").startsWith("--")).toBe(false);
+    }
   });
 
   test("'no' at confirmation runs nothing", async () => {

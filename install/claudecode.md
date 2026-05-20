@@ -16,7 +16,9 @@ claude plugin install open-second-brain@open-second-brain
 Claude caches the plugin at a versioned path; locate the script:
 
 ```bash
-"$(find ~/.claude/plugins/cache -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)" install-cli
+O2B_SCRIPT="$(find ~/.claude/plugins/cache -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)"
+[ -n "$O2B_SCRIPT" ] || { echo "o2b installer not found in Claude plugin cache" >&2; exit 1; }
+"$O2B_SCRIPT" install-cli
 ```
 
 ## 3. Initialize the vault

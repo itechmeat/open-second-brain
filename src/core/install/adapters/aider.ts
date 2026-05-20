@@ -232,8 +232,11 @@ export const aiderAdapter: InstallAdapter = {
   },
 
   uninstall(env: InstallEnv, opts: ApplyOpts & { fromSnippet?: boolean }): UninstallResult {
-    const conf = resolveConfPath(env);
     const stored = readManifest(env.vault).installs[TARGET];
+    // Prefer the config path recorded at install time. `AIDER_CONFIG`
+    // or `cwd` can change between install and uninstall, and
+    // `resolveConfPath(env)` would then return a different file.
+    const conf = stored?.config_path ?? resolveConfPath(env);
     const skipped: Array<readonly [string, string]> = [];
     const removed_paths: string[] = [];
 
@@ -284,7 +287,7 @@ export const aiderAdapter: InstallAdapter = {
         fix_hint: null,
       };
     }
-    const conf = resolveConfPath(env);
+    const conf = stored.config_path ?? resolveConfPath(env);
     if (!existsSync(conf)) {
       return {
         target: TARGET,

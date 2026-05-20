@@ -260,7 +260,11 @@ export async function runWizard(opts: WizardOpts): Promise<WizardResult> {
   opts.stdout.write("\nPlanned commands:\n");
   for (const c of actions) opts.stdout.write(`  o2b ${c.join(" ")}\n`);
   if (lang && lang !== "en") {
-    opts.stdout.write(`  (language preference \`${lang}\` will be recorded after init)\n`);
+    opts.stdout.write(
+      `  (language preference \`${lang}\` is not yet persisted; record it ` +
+        `manually with \`o2b brain feedback --principle "respond in ${lang}" ` +
+        `--signal positive --topic user-language --force-confirmed\` after init)\n`,
+    );
   }
   opts.stdout.write("\n");
   const confirm = (await ask(opts, "Run these commands now? (yes/no)", "no")).toLowerCase();

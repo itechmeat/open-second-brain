@@ -454,9 +454,10 @@ async function cmdInstallCli(argv: string[]): Promise<number> {
 }
 
 async function cmdUninstall(argv: string[]): Promise<number> {
-  // `--target X` is its own mode — per-runtime uninstall, distinct from the
-  // legacy `--apply-local` config-removal path.
-  if (argv.includes("--target")) {
+  // `--target X` (and the `--target=X` form) is its own mode —
+  // per-runtime uninstall, distinct from the legacy `--apply-local`
+  // config-removal path.
+  if (argv.some((a) => a === "--target" || a.startsWith("--target="))) {
     return await cmdUninstallTarget(argv);
   }
   const { flags } = parseFlags(argv, {
@@ -529,7 +530,8 @@ Commands:
   index                     Regenerate the vault index from discovered pages
   mcp                       Run the optional MCP tool server (stdio JSON-RPC)
   install-cli               Create symlinks for o2b and vault-log in ~/.local/bin
-  uninstall                 Print an uninstall plan and (optionally) clean local config and CLI symlinks
+  install                   Multi-runtime install orchestrator (v0.10.11) — detect / plan / apply / --check (see install/)
+  uninstall                 Print an uninstall plan; --target X removes a per-runtime install
   tool-call                 Invoke an MCP tool handler from the CLI and print JSON to stdout
 
 Pay Memory:

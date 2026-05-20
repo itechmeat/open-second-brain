@@ -146,14 +146,16 @@ export const piAdapter: InstallAdapter = {
     const stat = lstatOrNull(target);
     if (stat) {
       if (stat.isSymbolicLink()) {
-        const current = readlinkSync(target);
-        if (current === source) {
-          // Already the canonical link.
+        // Resolve the link target relative to the symlink's directory so
+        // `current === source` holds for both absolute and relative link
+        // targets (e.g. `../../skills/brain-memory`).
+        const current = resolve(dirname(target), readlinkSync(target));
+        const canonicalSource = resolve(source);
+        if (current === canonicalSource) {
           const manifest = buildManifest(env, target);
           if (!opts.dryRun) recordEntry(env.vault, manifest);
           return { target: TARGET, manifest, steps_executed: 0 };
         }
-        // Different link target — replace.
         if (!opts.dryRun) rmSync(target, { force: true });
       } else {
         if (!opts.force) {
@@ -231,19 +233,20 @@ export const piAdapter: InstallAdapter = {
         fix_hint: "o2b install --target pi --apply",
       };
     }
-    const target = readlinkSync(path);
-    if (!existsSync(target)) {
+    const linkTarget = readlinkSync(path);
+    const resolvedTarget = resolve(dirname(path), linkTarget);
+    if (!existsSync(resolvedTarget)) {
       return {
         target: TARGET,
         status: "drift",
-        details: [`${path} → ${target} (target missing)`],
+        details: [`${path} → ${linkTarget} (target missing)`],
         fix_hint: "o2b install --target pi --apply",
       };
     }
     return {
       target: TARGET,
       status: "ok",
-      details: [`${path} → ${target}`],
+      details: [`${path} → ${linkTarget}`],
       fix_hint: null,
     };
   },

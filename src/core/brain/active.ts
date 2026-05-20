@@ -298,7 +298,11 @@ function renderMostAppliedLine(m: MostAppliedEntry): string {
   const p = m.preference;
   const tags: string[] = [];
   if (p.scope) tags.push(`scope: ${p.scope}`);
-  tags.push(`applied_30d: ${m.applied_30d}`);
+  // Display label is window-agnostic; the actual window length is in the
+  // `## Most-applied (Nd)` section header. The struct field
+  // (`MostAppliedEntry.applied_30d`) keeps its v0.10.10 name so internal
+  // consumers (MCP counts, e2e tests) don't break.
+  tags.push(`applied_in_window: ${m.applied_30d}`);
   return `- \`${p.id}\` (${tags.join(", ")}) — ${p.principle}`;
 }
 

@@ -1,9 +1,11 @@
 /**
  * opencode adapter — JSON-merge into `~/.config/opencode/mcp.json`.
  *
- * Per upstream `sst/opencode` MCP docs the file lives under
+ * Upstream is `anomalyco/opencode` (formerly hosted under
+ * `sst/opencode`). The MCP config file lives under
  * `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/mcp.json` and uses the
- * standard `mcpServers` key.
+ * standard `mcpServers` key. Re-verify against upstream docs if a
+ * new opencode release ships before the next OSB release.
  */
 
 import { join } from "node:path";

@@ -88,15 +88,24 @@ uninstall process.
 
 The installation is complete only when all of the following hold:
 
-- [ ] plugin (or per-target managed block) installed;
+Universal:
+
+- [ ] plugin (or per-target managed block / symlink / printout)
+      installed;
 - [ ] runtime restarted to pick up the change;
-- [ ] all tools advertised by the runtime's MCP listing;
 - [ ] vault initialized (`o2b init` succeeded);
 - [ ] `o2b doctor` reports OK;
-- [ ] `o2b install --check` reports `ok` for the target;
+- [ ] `o2b install --check` reports `ok` (or `installed` for `generic`)
+      for the target;
 - [ ] `AI Wiki/identity/agents.md` contains the chosen agent name;
 - [ ] a test event written without an explicit `agent` argument
       stamps `@<chosen-agent-name>` in `Daily/`, not `@agent`.
+
+MCP-driven runtimes only (Cursor, opencode, kiro, Copilot CLI,
+Gemini CLI, Claude Code, Codex, Hermes — not `aider`, `pi`, or
+`generic`):
+
+- [ ] all OSB tools advertised by the runtime's MCP listing.
 
 If any single item is missing, the install is incomplete — report
 that to the user and do not mark the workflow as successful.

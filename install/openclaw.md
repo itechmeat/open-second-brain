@@ -26,8 +26,18 @@ openclaw gateway restart
 
 ## 2. Publish the `o2b` CLI on PATH
 
+Run from the plugin checkout directory:
+
 ```bash
 ./scripts/o2b install-cli
+```
+
+If you don't know the checkout path, the absolute-path variant works
+from anywhere (OpenClaw stores installed plugins under `~/.openclaw/`
+by default):
+
+```bash
+"$(find ~/.openclaw -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)" install-cli
 ```
 
 ## 3. Initialize the vault
@@ -48,6 +58,11 @@ openclaw config set plugins.entries.open-second-brain.config.instanceName '"My S
 openclaw config set plugins.entries.open-second-brain.config.agentName '"<chosen-agent-name>"'
 openclaw config set plugins.entries.open-second-brain.config.timezone '"<chosen-tz>"'
 ```
+
+The values are stored as JSON, so string values must be valid JSON
+(hence the inner double quotes). The outer single quotes are shell
+escaping so bash does not consume the doubles. That's why the
+arguments look like `'"...".`
 
 ## 5. Verify
 
