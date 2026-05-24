@@ -141,13 +141,32 @@ async function indexInto(
       // present file from the index just because a single read failed.
       seen.add(file.relPath);
       try {
-        const content = readUtf8(file.absPath);
-        const contentHash = sha256(content);
         const mtimeSec = Math.floor(file.stat.mtimeMs / 1000);
+        const size = file.stat.size;
         const prev = existing.get(file.relPath);
 
-        if (!opts?.force && prev && prev.contentHash === contentHash && prev.mtime === mtimeSec) {
+        // Fastpath: if mtime and size both match, skip the full
+        // content read + SHA256 hash. This is the same trade-off
+        // as `make` — mtime can theoretically be fooled but the
+        // probability is negligible for vault editing workflows.
+        if (!opts?.force && prev && prev.mtime === mtimeSec && prev.size === size) {
           stats.unchanged++;
+          opts?.onFile?.({ path: file.relPath, kind: "unchanged" });
+          continue;
+        }
+
+        const content = readUtf8(file.absPath);
+        const contentHash = sha256(content);
+
+        // Fallback: fastpath missed (mtime or size changed). If
+        // the content hash still matches, the file is logically
+        // unchanged — update stored mtime/size to re-arm the
+        // fastpath on the next run, but skip chunk/link work.
+        if (!opts?.force && prev && prev.contentHash === contentHash) {
+          stats.unchanged++;
+          // Re-arm the fastpath: store the current stat so next
+          // run can skip the read entirely.
+          store.touchDocument(file.relPath, mtimeSec, size);
           opts?.onFile?.({ path: file.relPath, kind: "unchanged" });
           continue;
         }

@@ -216,6 +216,21 @@ export interface DigestJsonMergeSuggestion {
   readonly jaccard: number;
 }
 
+/**
+ * Vault-level connection-density health metric (v0.10.14).
+ * Surfaces the ratio of linked notes to total notes, orphan count,
+ * and backlink distribution — answering whether the vault grows as a
+ * network of ideas or as an "organized graveyard".
+ */
+export interface DigestJsonConnectionHealth {
+  readonly total_nodes: number;
+  readonly linked_nodes: number;
+  readonly orphan_nodes: number;
+  readonly mean_backlinks: number;
+  readonly median_backlinks: number;
+  readonly link_density: number;
+}
+
 export interface DigestJson {
   readonly schema_version: 1;
   readonly generated_at: string;
@@ -243,6 +258,11 @@ export interface DigestJson {
    * same `_brain.yaml:active.most_applied_*` settings.
    */
   readonly most_applied: DigestJsonMostApplied;
+  /**
+   * Vault-level connection-density health metric (v0.10.14).
+   * Independent of the window — reflects current vault state.
+   */
+  readonly connection_health: DigestJsonConnectionHealth;
 }
 
 /**
@@ -298,6 +318,7 @@ export function renderDigest(
       merge_suggestions: data.merge_suggestions,
       agent_summary: data.agent_summary,
       most_applied: data.most_applied,
+      connection_health: data.connection_health,
     };
     return Object.freeze({
       content: JSON.stringify(payload, null, 2) + "\n",
@@ -325,6 +346,7 @@ interface DigestData {
   readonly merge_suggestions: ReadonlyArray<DigestJsonMergeSuggestion>;
   readonly agent_summary: ReadonlyArray<AgentSummaryEntry>;
   readonly most_applied: DigestJsonMostApplied;
+  readonly connection_health: DigestJsonConnectionHealth;
 }
 
 function collectDigestData(
@@ -481,6 +503,7 @@ function collectDigestData(
     merge_suggestions,
     agent_summary,
     most_applied,
+    connection_health: computeConnectionHealth(vault, preferences),
   };
 }
 
@@ -535,6 +558,56 @@ function pickTopReferenced(
     scope: pref.scope ?? null,
     backlink_count: count,
   }));
+}
+
+/**
+ * Compute vault-level connection-density health metrics from the
+ * backlink index over all preferences and retired entries.
+ */
+function computeConnectionHealth(
+  vault: string,
+  preferences: ReadonlyArray<PreferenceWithPath>,
+): DigestJsonConnectionHealth {
+  const index = buildBacklinkIndex(vault);
+  const allIds = preferences.map(({ pref }) => pref.id);
+  // Also include retired entries.
+  const dirs = brainDirs(vault);
+  if (existsSync(dirs.retired)) {
+    for (const entry of readdirSync(dirs.retired, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      if (!entry.name.startsWith("ret-")) continue;
+      allIds.push(entry.name.replace(/\.md$/, ""));
+    }
+  }
+
+  const totalNodes = allIds.length;
+  const counts = allIds.map((id) => backlinkCount(index, id));
+  const linkedNodes = counts.filter((c) => c > 0).length;
+  const orphanNodes = totalNodes - linkedNodes;
+
+  let meanBacklinks = 0;
+  let medianBacklinks = 0;
+  if (totalNodes > 0) {
+    const sum = counts.reduce((a, b) => a + b, 0);
+    meanBacklinks = Math.round((sum / totalNodes) * 100) / 100;
+    const sorted = [...counts].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    medianBacklinks = sorted.length % 2 === 0
+      ? (sorted[mid - 1]! + sorted[mid]!) / 2
+      : sorted[mid]!;
+  }
+  const linkDensity = totalNodes > 0
+    ? Math.round((linkedNodes / totalNodes) * 1000) / 1000
+    : 0;
+
+  return Object.freeze({
+    total_nodes: totalNodes,
+    linked_nodes: linkedNodes,
+    orphan_nodes: orphanNodes,
+    mean_backlinks: meanBacklinks,
+    median_backlinks: medianBacklinks,
+    link_density: linkDensity,
+  });
 }
 
 function isEmpty(data: DigestData): boolean {
@@ -902,6 +975,23 @@ function renderMarkdown(
       );
     }
     lines.push("");
+  }
+  // Connection health is always rendered when vault has nodes — it
+  // reflects vault-wide structural state, not windowed change.
+  if (data.connection_health.total_nodes > 0) {
+    const ch = data.connection_health;
+    const pct = Math.round(ch.link_density * 100);
+    lines.push(
+      "## Connection health",
+      "",
+      `- Total nodes: ${ch.total_nodes}`,
+      `- Linked (≥1 inbound): ${ch.linked_nodes}`,
+      `- Orphans (0 inbound): ${ch.orphan_nodes}`,
+      `- Mean backlinks: ${ch.mean_backlinks}`,
+      `- Median backlinks: ${ch.median_backlinks}`,
+      `- Link density: ${pct}%`,
+      "",
+    );
   }
   if (data.merge_suggestions.length > 0) {
     lines.push(`## Merge suggestions (${data.merge_suggestions.length})`, "");
