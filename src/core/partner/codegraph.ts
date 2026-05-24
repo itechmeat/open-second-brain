@@ -95,6 +95,7 @@ export function findCodeProjects(opts: FindCodeProjectsOptions): string[] {
     } catch {
       entries = [];
     }
+    entries.sort((a, b) => a.localeCompare(b));
     for (const name of entries) {
       if (scanned >= limit) break;
       consider(join(vaultParent, name));
@@ -151,8 +152,17 @@ function defaultRunStatusJson(projectPath: string): CodegraphStatusResult {
       stderr: "pipe",
     });
     const stdout = new TextDecoder().decode(proc.stdout).trim();
+    const stderr = new TextDecoder().decode(proc.stderr).trim();
+    if (!proc.success) {
+      if (stdout) {
+        try {
+          const parsed = JSON.parse(stdout) as CodegraphStatusData;
+          return { ok: true, data: parsed };
+        } catch {}
+      }
+      return { ok: false, error: stderr || `codegraph status exited ${proc.exitCode}` };
+    }
     if (!stdout) {
-      const stderr = new TextDecoder().decode(proc.stderr).trim();
       return { ok: false, error: stderr || "empty status output" };
     }
     const parsed = JSON.parse(stdout) as CodegraphStatusData;
