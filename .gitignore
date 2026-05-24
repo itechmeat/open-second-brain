@@ -22,3 +22,4 @@ node_modules/
 !.env.example
 .open-second-brain.local.yaml
 sandbox-vault/
+.codegraph/

@@ -590,6 +590,20 @@ you want to.
   the pre-v0.10.6 direct-restore path with a stderr warning.
   Retention is configurable in `_brain.yaml`.
 
+## Partner tools
+
+OSB stays in the vault / Brain / prose lane. When the user works on
+code next to the vault, the agent benefits from a complementary index
+over the source - call graphs, callers, callees, impact. The
+[codegraph](https://github.com/colbymchenry/codegraph) CLI and its
+stdio MCP server cover that surface. OSB detects codegraph through
+`o2b doctor` (a `code_graph` line appears when a code project is in
+scope) and ships an agent-facing playbook at
+`skills/codegraph-partner/SKILL.md` that tells the agent when to
+recommend installation and how to disambiguate `codegraph_*` vs
+`brain_*` queries. OSB never installs, initializes, or writes data
+for codegraph - that stays in codegraph's own installer.
+
 ## Repository
 
 GitHub: <https://github.com/itechmeat/open-second-brain>

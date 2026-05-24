@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -75,7 +75,12 @@ describe("manifest schema checks accept fixture repo", () => {
   test("doctor passes on a valid plugin-repo fixture", () => {
     const vault = createSandboxVault(tmp);
     const repo = createPluginRepo(tmp, true);
-    const results = doctor({ vault, repoRoot: repo });
+    const results = doctor({
+      vault,
+      repoRoot: repo,
+      cwd: tmp,
+      partner: { codegraph: { disabled: true } },
+    });
     for (const r of results) {
       expect(r.ok).toBe(true);
     }
@@ -120,5 +125,36 @@ describe("doctor aggregator", () => {
   test("returns at least the vault check", () => {
     const results = doctor({ vault: tmp });
     expect(results.length).toBeGreaterThan(0);
+  });
+
+  test("omits code_graph when no code project is reachable from cwd or vault", () => {
+    const vaultDir = join(tmp, "vault");
+    mkdirSync(vaultDir);
+    const results = doctor({ vault: vaultDir, cwd: vaultDir });
+    expect(results.some((r) => r.name === "code_graph")).toBe(false);
+  });
+
+  test("omits code_graph when partner.codegraph.disabled is true", () => {
+    const repo = join(tmp, "myrepo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}\n");
+    const vaultDir = join(tmp, "vault");
+    mkdirSync(vaultDir);
+    const results = doctor({
+      vault: vaultDir,
+      cwd: repo,
+      partner: { codegraph: { disabled: true } },
+    });
+    expect(results.some((r) => r.name === "code_graph")).toBe(false);
+  });
+
+  test("includes code_graph when cwd is a code project", () => {
+    const repo = join(tmp, "myrepo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}\n");
+    const vaultDir = join(tmp, "vault");
+    mkdirSync(vaultDir);
+    const results = doctor({ vault: vaultDir, cwd: repo });
+    expect(results.some((r) => r.name === "code_graph")).toBe(true);
   });
 });

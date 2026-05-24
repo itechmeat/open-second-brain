@@ -1,0 +1,235 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import {
+  checkCodegraph,
+  findCodeProjects,
+  isCodeProject,
+} from "../../../src/core/partner/codegraph.ts";
+
+let tmp: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "o2b-codegraph-partner-"));
+});
+
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+function makeRepo(dir: string, manifest: string = "package.json"): string {
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(join(dir, ".git"));
+  writeFileSync(join(dir, manifest), "{}\n");
+  return dir;
+}
+
+function makeIndexed(dir: string): void {
+  mkdirSync(join(dir, ".codegraph"), { recursive: true });
+  writeFileSync(join(dir, ".codegraph", "codegraph.db"), "");
+}
+
+describe("isCodeProject", () => {
+  test("empty directory is not a code project", () => {
+    expect(isCodeProject(tmp)).toBe(false);
+  });
+
+  test(".git alone is not enough", () => {
+    mkdirSync(join(tmp, ".git"));
+    expect(isCodeProject(tmp)).toBe(false);
+  });
+
+  test("manifest alone is not enough", () => {
+    writeFileSync(join(tmp, "package.json"), "{}\n");
+    expect(isCodeProject(tmp)).toBe(false);
+  });
+
+  test(".git + package.json -> code project", () => {
+    makeRepo(tmp);
+    expect(isCodeProject(tmp)).toBe(true);
+  });
+
+  test(".git + tsconfig.json -> code project", () => {
+    makeRepo(tmp, "tsconfig.json");
+    expect(isCodeProject(tmp)).toBe(true);
+  });
+
+  test(".git + pyproject.toml -> code project", () => {
+    makeRepo(tmp, "pyproject.toml");
+    expect(isCodeProject(tmp)).toBe(true);
+  });
+
+  test(".git + Cargo.toml -> code project", () => {
+    makeRepo(tmp, "Cargo.toml");
+    expect(isCodeProject(tmp)).toBe(true);
+  });
+
+  test(".git + go.mod -> code project", () => {
+    makeRepo(tmp, "go.mod");
+    expect(isCodeProject(tmp)).toBe(true);
+  });
+
+  test("non-existent dir -> false", () => {
+    expect(isCodeProject(join(tmp, "missing"))).toBe(false);
+  });
+});
+
+describe("findCodeProjects", () => {
+  test("cwd as a code project is included", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    const out = findCodeProjects({ cwd: repo, vault: join(tmp, "vault") });
+    expect(out).toContain(repo);
+  });
+
+  test("empty scope yields empty result", () => {
+    mkdirSync(join(tmp, "vault"));
+    mkdirSync(join(tmp, "vault-sibling"));
+    const out = findCodeProjects({ cwd: tmp, vault: join(tmp, "vault") });
+    expect(out).toEqual([]);
+  });
+
+  test("vault parent siblings are inspected", () => {
+    const vault = join(tmp, "vault");
+    mkdirSync(vault);
+    const sibling = makeRepo(join(tmp, "my-app"));
+    const out = findCodeProjects({ cwd: vault, vault });
+    expect(out).toContain(sibling);
+  });
+
+  test("does not descend below depth 1 in vault parent", () => {
+    const vault = join(tmp, "vault");
+    mkdirSync(vault);
+    const nested = makeRepo(join(tmp, "outer", "inner", "deep-repo"));
+    const out = findCodeProjects({ cwd: vault, vault });
+    expect(out).not.toContain(nested);
+  });
+
+  test("honors scanExtraPaths", () => {
+    mkdirSync(join(tmp, "vault"));
+    const extra = makeRepo(join(tmp, "elsewhere", "ext-repo"));
+    const out = findCodeProjects({
+      cwd: join(tmp, "vault"),
+      vault: join(tmp, "vault"),
+      scanExtraPaths: [extra],
+    });
+    expect(out).toContain(extra);
+  });
+
+  test("dedupes overlapping scopes", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    const out = findCodeProjects({
+      cwd: repo,
+      vault: join(tmp, "vault"),
+      scanExtraPaths: [repo],
+    });
+    expect(out.filter((p: string) => p === repo).length).toBe(1);
+  });
+
+  test("bails out at the scan limit", () => {
+    const vault = join(tmp, "vault");
+    mkdirSync(vault);
+    for (let i = 0; i < 60; i++) {
+      makeRepo(join(tmp, `repo-${i}`));
+    }
+    const out = findCodeProjects({ cwd: vault, vault, limit: 10 });
+    expect(out.length).toBeLessThanOrEqual(10);
+  });
+});
+
+describe("checkCodegraph", () => {
+  test("null when nothing in scope is a code project", () => {
+    mkdirSync(join(tmp, "vault"));
+    const r = checkCodegraph(
+      { cwd: tmp, vault: join(tmp, "vault") },
+      { whichCodegraph: () => null },
+    );
+    expect(r).toBeNull();
+  });
+
+  test("null when disabled", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    const r = checkCodegraph(
+      { cwd: repo, vault: join(tmp, "vault"), disabled: true },
+      { whichCodegraph: () => "/usr/bin/codegraph" },
+    );
+    expect(r).toBeNull();
+  });
+
+  test("code project + no CLI -> missing", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    const r = checkCodegraph(
+      { cwd: repo, vault: join(tmp, "vault") },
+      { whichCodegraph: () => null },
+    );
+    expect(r).not.toBeNull();
+    expect(r!.name).toBe("code_graph");
+    expect(r!.ok).toBe(false);
+    expect(r!.message.toLowerCase()).toContain("not installed");
+  });
+
+  test("code project + CLI + no .codegraph/ -> not_indexed", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    const r = checkCodegraph(
+      { cwd: repo, vault: join(tmp, "vault") },
+      { whichCodegraph: () => "/usr/bin/codegraph" },
+    );
+    expect(r!.ok).toBe(false);
+    expect(r!.message.toLowerCase()).toContain("not indexed");
+    expect(r!.message).toContain("codegraph init");
+  });
+
+  test("code project + CLI + indexed + status ok -> ok", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    makeIndexed(repo);
+    const r = checkCodegraph(
+      { cwd: repo, vault: join(tmp, "vault") },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        runStatusJson: () => ({
+          ok: true,
+          data: { initialized: true, nodeCount: 4737, fileCount: 392, edgeCount: 11342 },
+        }),
+      },
+    );
+    expect(r!.ok).toBe(true);
+    expect(r!.message).toContain("4737");
+    expect(r!.message).toContain("392");
+  });
+
+  test("status reports initialized:false -> not_indexed", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    makeIndexed(repo);
+    const r = checkCodegraph(
+      { cwd: repo, vault: join(tmp, "vault") },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        runStatusJson: () => ({ ok: true, data: { initialized: false } }),
+      },
+    );
+    expect(r!.ok).toBe(false);
+    expect(r!.message.toLowerCase()).toContain("not indexed");
+  });
+
+  test("status returns an error -> error state surfaced", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    makeIndexed(repo);
+    const r = checkCodegraph(
+      { cwd: repo, vault: join(tmp, "vault") },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        runStatusJson: () => ({ ok: false, error: "stale lock" }),
+      },
+    );
+    expect(r!.ok).toBe(false);
+    expect(r!.message.toLowerCase()).toContain("stale lock");
+  });
+
+  test("falls back to real PATH lookup when no whichCodegraph dep provided", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    const r = checkCodegraph({ cwd: repo, vault: join(tmp, "vault") });
+    expect(r).not.toBeNull();
+    expect(r!.name).toBe("code_graph");
+  });
+});
