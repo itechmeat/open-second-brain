@@ -60,3 +60,15 @@ covers vault invariants — they are complementary, not substitutes.
 Then send one event without an explicit `agent` argument and confirm
 that the new `Daily/YYYY.MM.DD.md` line begins with the chosen
 `@<agent_name>` prefix, not the literal `@agent` placeholder.
+
+## Plays well with codegraph
+
+If your vault sits next to code repositories, OSB cooperates with
+[codegraph](https://github.com/colbymchenry/codegraph) as a partner
+tool: codegraph owns the symbol graph and call relationships in a
+codebase, OSB owns the prose / Brain / preferences in the vault. When
+`o2b doctor` runs from inside or beside a code project, it adds a
+`code_graph` line that summarises whether codegraph is installed and
+indexed there. Installation is performed by codegraph's own installer,
+not by OSB. See `skills/codegraph-partner/SKILL.md` for the agent-side
+playbook.

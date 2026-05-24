@@ -18,6 +18,7 @@ import {
 import { dirname, join } from "node:path";
 
 import { isFile } from "./fs-utils.ts";
+import { checkCodegraph } from "./partner/codegraph.ts";
 import type { CheckResult } from "./types.ts";
 
 export function checkVaultWriteable(vault: string): CheckResult {
@@ -299,6 +300,13 @@ export interface DoctorOptions {
   readonly vault: string;
   readonly config?: string | null;
   readonly repoRoot?: string | null;
+  readonly cwd?: string;
+  readonly partner?: {
+    readonly codegraph?: {
+      readonly disabled?: boolean;
+      readonly scanExtraPaths?: ReadonlyArray<string>;
+    };
+  };
 }
 
 export function doctor(opts: DoctorOptions): CheckResult[] {
@@ -313,5 +321,12 @@ export function doctor(opts: DoctorOptions): CheckResult[] {
     results.push(checkOpenclawManifest(join(root, "openclaw.plugin.json")));
     results.push(...checkOpenclawInstallability(root));
   }
+  const cg = checkCodegraph({
+    cwd: opts.cwd ?? process.cwd(),
+    vault: opts.vault,
+    scanExtraPaths: opts.partner?.codegraph?.scanExtraPaths,
+    disabled: opts.partner?.codegraph?.disabled,
+  });
+  if (cg) results.push(cg);
   return results;
 }

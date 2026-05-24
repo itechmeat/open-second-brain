@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.13] - 2026-05-24
+
+Partner integration with [codegraph](https://github.com/colbymchenry/codegraph):
+detection-only doctor check plus an agent-facing playbook. OSB stays
+in the vault / prose / Brain lane; codegraph keeps its codebase
+symbol-graph lane. No data is mirrored between them.
+
+### Added
+
+- `code_graph` check in `o2b doctor` - reports installed / not_indexed
+  / missing / error for the current code-project scope. Scope is the
+  current working directory plus top-level siblings of the vault's
+  parent, capped at 50 inspected directories. Configurable through
+  `DoctorOptions.partner.codegraph` (`disabled`, `scanExtraPaths`).
+- `skills/codegraph-partner/SKILL.md` - agent-facing playbook with
+  detection algorithm, branch-by-state behaviour, a hard rule to
+  append `.codegraph/` to `.gitignore` after any `codegraph init`,
+  and a `codegraph_*` vs `brain_*` disambiguation table.
+- `src/core/partner/codegraph.ts` - module exposing `isCodeProject`,
+  `findCodeProjects`, and `checkCodegraph` with dependency-injection
+  hooks for testable `which` / `status -j` interactions.
+
+### Notes
+
+- OSB does not call `codegraph install`, `codegraph init`, or
+  `codegraph index` automatically. The partner CLI is detected, never driven.
+- `.codegraph/` is now in `.gitignore` so any local index inside the
+  OSB repo itself does not land in commits.
+
 ## [0.10.12] - 2026-05-20
 
 Operational friction reduction: one-command update across all
@@ -2262,6 +2291,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 [0.10.0]: https://github.com/itechmeat/open-second-brain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/itechmeat/open-second-brain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/itechmeat/open-second-brain/compare/v0.8.1...v0.9.0
+[0.10.13]: https://github.com/itechmeat/open-second-brain/compare/v0.10.12...v0.10.13
 [0.8.1]: https://github.com/itechmeat/open-second-brain/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/itechmeat/open-second-brain/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/itechmeat/open-second-brain/compare/v0.6.2...v0.7.0
