@@ -43,6 +43,7 @@ import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summ
 import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
+import type { TrustVerdict } from "./doctor.ts";
 import { collectMaintenanceActions } from "./maintenance/collect.ts";
 import type { ActionItem } from "./maintenance/action-scorer.ts";
 import {
@@ -272,6 +273,24 @@ export interface DigestJson {
    * needs doing. Independent of the window.
    */
   readonly actions: ReadonlyArray<ActionItem>;
+  /**
+   * Aggregate vault trust verdict (v0.10.16). Absent when no
+   * doctor input was threaded into the digest call; consumers that
+   * only need the legacy preference-and-signal sections can ignore
+   * the field.
+   */
+  readonly trust_verdict?: TrustVerdict;
+  /**
+   * Count of dream-pass uncertain entries in the most recent run
+   * (v0.10.16). Zero when no dream input was provided.
+   */
+  readonly uncertain_count: number;
+  /**
+   * Count of dream-pass signal clusters held back by the
+   * self-approval guardrail in the most recent run (v0.10.16).
+   * Zero when no dream input was provided.
+   */
+  readonly quarantined_count: number;
 }
 
 /**
@@ -329,6 +348,8 @@ export function renderDigest(
       most_applied: data.most_applied,
       connection_health: data.connection_health,
       actions: data.actions,
+      uncertain_count: 0,
+      quarantined_count: 0,
     };
     return Object.freeze({
       content: JSON.stringify(payload, null, 2) + "\n",
