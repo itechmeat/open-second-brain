@@ -56,6 +56,7 @@ import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions.ts";
 import { buildConceptCluster } from "../core/brain/link-graph/concept-cluster.ts";
 import { auditMoc, MocAuditError } from "../core/brain/link-graph/moc-audit.ts";
+import { readVaultInstructionFile } from "../core/brain/vault-instruction-file.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
@@ -464,6 +465,17 @@ async function toolBrainContext(
     }
   }
 
+  // Optional vault-root instruction file (v0.10.17). Absent file =
+  // field omitted so hosts that strip unknown fields stay
+  // byte-identical. Read errors are silently swallowed - this is a
+  // best-effort enrichment, not a hard contract.
+  let vaultInstruction: ReturnType<typeof readVaultInstructionFile> = null;
+  try {
+    vaultInstruction = readVaultInstructionFile(ctx.vault);
+  } catch {
+    vaultInstruction = null;
+  }
+
   return {
     vault_path: ctx.vault,
     present: true,
@@ -472,6 +484,15 @@ async function toolBrainContext(
     counts,
     generated_at: generatedAt,
     ...(error ? { error } : {}),
+    ...(vaultInstruction
+      ? {
+          vault_instruction: {
+            path: vaultInstruction.path,
+            content: vaultInstruction.content,
+            lines: vaultInstruction.lines,
+          },
+        }
+      : {}),
   };
 }
 

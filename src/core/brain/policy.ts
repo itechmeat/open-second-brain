@@ -25,6 +25,7 @@ import type {
   BrainActiveConfig,
   BrainConfig,
   BrainGuardrailConfig,
+  BrainLinkGraphConfig,
   BrainMostAppliedConfig,
   BrainVaultConfig,
   DisciplineReportConfig,
@@ -880,6 +881,77 @@ export function validateBrainConfigDetailed(
     }
   }
 
+  // Optional `link_graph` block (v0.10.17). Shape:
+  //   link_graph:
+  //     moc_min_outbound_links: 5     # positive integer
+  //     moc_min_link_ratio: 0.3       # number in (0, 1]
+  //     vault_instruction_file: VAULT.md  # vault-relative path
+  // Absent block → `cfg.link_graph` undefined; resolveLinkGraph
+  // returns the bit-identical defaults.
+  let linkGraph: BrainLinkGraphConfig | undefined;
+  if ("link_graph" in obj) {
+    const rawLg = obj["link_graph"];
+    if (typeof rawLg !== "object" || rawLg === null || Array.isArray(rawLg)) {
+      throw new BrainConfigError(
+        "link_graph must be a mapping",
+        "link_graph",
+        source,
+      );
+    }
+    const lgObj = rawLg as Record<string, unknown>;
+    const partialLg: Record<string, unknown> = {};
+    if ("moc_min_outbound_links" in lgObj) {
+      const v = lgObj["moc_min_outbound_links"];
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+        throw new BrainConfigError(
+          "must be a positive integer",
+          "link_graph.moc_min_outbound_links",
+          source,
+        );
+      }
+      partialLg["moc_min_outbound_links"] = v;
+    }
+    if ("moc_min_link_ratio" in lgObj) {
+      const v = lgObj["moc_min_link_ratio"];
+      if (typeof v !== "number" || !Number.isFinite(v) || v <= 0 || v > 1) {
+        throw new BrainConfigError(
+          "must be a number in (0, 1]",
+          "link_graph.moc_min_link_ratio",
+          source,
+        );
+      }
+      partialLg["moc_min_link_ratio"] = v;
+    }
+    if ("vault_instruction_file" in lgObj) {
+      const v = lgObj["vault_instruction_file"];
+      if (typeof v !== "string" || v.trim().length === 0) {
+        throw new BrainConfigError(
+          "must be a non-empty string",
+          "link_graph.vault_instruction_file",
+          source,
+        );
+      }
+      partialLg["vault_instruction_file"] = v;
+    }
+    // Forward-compat: unknown sub-keys under `link_graph:` → warning.
+    for (const key of Object.keys(lgObj)) {
+      if (
+        key !== "moc_min_outbound_links" &&
+        key !== "moc_min_link_ratio" &&
+        key !== "vault_instruction_file"
+      ) {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `link_graph.${key}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
+    linkGraph =
+      Object.keys(partialLg).length > 0
+        ? (partialLg as BrainLinkGraphConfig)
+        : {};
+  }
+
   // Forward-compat: unknown top-level keys → warning, not error.
   const known = new Set([
     "schema_version",
@@ -892,6 +964,7 @@ export function validateBrainConfigDetailed(
     "active",
     "discipline_report",
     "guardrails",
+    "link_graph",
   ]);
   for (const key of Object.keys(obj)) {
     if (!known.has(key)) {
@@ -927,6 +1000,7 @@ export function validateBrainConfigDetailed(
     ...(active !== undefined ? { active } : {}),
     ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
     ...(guardrails !== undefined ? { guardrails } : {}),
+    ...(linkGraph !== undefined ? { link_graph: linkGraph } : {}),
   };
 
   return { config, warnings };
