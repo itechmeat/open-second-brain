@@ -29,6 +29,36 @@
 
 import { basename } from "node:path";
 
+/**
+ * Local regex for the rich extractor. Captures the full bracket
+ * body (everything between `[[` and `]]`), so anchor / alias / block
+ * info survives for downstream `parseWikilinkRich` consumption.
+ *
+ * Bracketed by `]]` and forbidding embedded `]` so nested brackets
+ * don't collapse two adjacent wikilinks into one match. Anchored to
+ * non-newline so a link that spans lines is not silently joined.
+ */
+const RICH_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
+
+/**
+ * Local mask for fenced and inline code spans. Mirrors the constant
+ * used by `extractWikilinks` in `vault.ts` so a wikilink that lives
+ * inside a code block does not pollute the index.
+ */
+const CODE_BLOCK_RE = /```[\s\S]*?```|`[^`]+`/g;
+
+/**
+ * Inclusive list of file-extension suffixes (lower-case) that
+ * disqualify a wikilink from the backlink index. Mirrors the media
+ * filter in `vault.ts:extractWikilinks` so embed-style links don't
+ * register as backlinks.
+ */
+const MEDIA_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".tiff",
+  ".avif", ".mp4", ".webm", ".ogv", ".mov", ".mkv", ".avi", ".mp3",
+  ".wav", ".ogg", ".flac", ".m4a", ".pdf",
+]);
+
 export interface WikilinkParse {
   /** Canonical bare id - same shape `normaliseWikilinkTarget` returns. */
   readonly target: string;
@@ -117,4 +147,35 @@ export function parseWikilinkRich(value: string): WikilinkParse {
     ...(block !== undefined ? { block } : {}),
     ...(alias !== undefined ? { alias } : {}),
   });
+}
+
+/**
+ * Yield every wikilink bracket-body from a Markdown content string,
+ * preserving anchor / alias / block decoration so callers can run
+ * each through {@link parseWikilinkRich}.
+ *
+ * Skips text inside fenced or inline code blocks (mirrors the
+ * masking pass in `extractWikilinks` from `vault.ts`). Media-extension
+ * targets (`.png`, `.pdf`, …) are dropped so an embed-style link
+ * does not pollute the backlink index.
+ *
+ * Returns the bare bracket body (no surrounding `[[`/`]]`). Empty
+ * input yields an empty array.
+ */
+export function extractWikilinkRichBodies(content: string): ReadonlyArray<string> {
+  const masked = content.replace(CODE_BLOCK_RE, " ");
+  const out: string[] = [];
+  for (const m of masked.matchAll(RICH_WIKILINK_RE)) {
+    const body = m[1]!;
+    // Drop embed-style media links - same filter as
+    // `extractWikilinks` in `vault.ts`. The check inspects the
+    // bare-target portion (before `#`/`|`) to avoid false-positives
+    // on aliases that happen to end in a media-shaped extension.
+    const targetSide = body.split(/[#|]/, 1)[0]!.trim();
+    const dot = targetSide.lastIndexOf(".");
+    const ext = dot >= 0 ? targetSide.slice(dot).toLowerCase() : "";
+    if (MEDIA_EXTENSIONS.has(ext)) continue;
+    out.push(body);
+  }
+  return out;
 }
