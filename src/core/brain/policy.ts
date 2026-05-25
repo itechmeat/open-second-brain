@@ -24,9 +24,11 @@ import { existsSync, readFileSync } from "node:fs";
 import type {
   BrainActiveConfig,
   BrainConfig,
+  BrainGuardrailConfig,
   BrainMostAppliedConfig,
   BrainVaultConfig,
   DisciplineReportConfig,
+  ResolvedBrainGuardrailConfig,
 } from "./types.ts";
 // Imported from `defaults.ts` (not from `vault-scope/index.ts`) to
 // break the module-init cycle: the resolver lives in `index.ts` and
@@ -54,6 +56,66 @@ export const MOST_APPLIED_LIMIT_MAX = 50;
 export const MOST_APPLIED_WINDOW_DAYS_DEFAULT = 30;
 /** Default top-N limit when `_brain.yaml` lacks `active.most_applied.limit`. */
 export const MOST_APPLIED_LIMIT_DEFAULT = 10;
+
+/**
+ * Hard upper bound on `guardrails.instruction_file_max_lines`. Any
+ * value above this is a misconfiguration - vault-root instruction
+ * files are intended to stay small for compliance reasons, so a
+ * ceiling like 100000 lines silently disables the warning.
+ */
+export const INSTRUCTION_FILE_MAX_LINES_CEILING = 10000;
+
+/**
+ * Default `guardrails` block (v0.10.16). When `_brain.yaml` omits
+ * `guardrails` (or omits individual fields), `resolveGuardrails`
+ * returns these values so consumers can rely on a fully-populated
+ * struct.
+ *
+ * Defaults are chosen to be strictly looser than every existing
+ * dream-pass gate so adding the guardrail cannot block a promotion
+ * that previously succeeded:
+ *   - `promotion_min_signals: 1` is below any sane
+ *     `dream.candidate_threshold` (default 3). When an operator
+ *     tunes `candidate_threshold` below 2, the guardrail still
+ *     cannot block them by default - explicit opt-in is required
+ *     via the `_brain.yaml:guardrails:promotion_min_signals` field.
+ *   - `promotion_min_distinct_agents: 1` imposes no cross-agent
+ *     requirement.
+ *   - `promotion_min_age_days: 0` disables the age gate.
+ *   - `instruction_file_max_lines: 200` matches the documented
+ *     compliance ceiling.
+ */
+export const BRAIN_GUARDRAIL_DEFAULTS: ResolvedBrainGuardrailConfig = Object.freeze({
+  promotion_min_signals: 1,
+  promotion_min_distinct_agents: 1,
+  promotion_min_age_days: 0,
+  instruction_file_max_lines: 200,
+}) as ResolvedBrainGuardrailConfig;
+
+/**
+ * Merge a parsed `guardrails` block (or `undefined`) with
+ * `BRAIN_GUARDRAIL_DEFAULTS`. Returns a fully-populated struct so
+ * consumers do not branch on optional fields.
+ */
+export function resolveGuardrails(
+  cfg: BrainConfig,
+): ResolvedBrainGuardrailConfig {
+  const g = cfg.guardrails;
+  if (g === undefined) return BRAIN_GUARDRAIL_DEFAULTS;
+  return {
+    promotion_min_signals:
+      g.promotion_min_signals ?? BRAIN_GUARDRAIL_DEFAULTS.promotion_min_signals,
+    promotion_min_distinct_agents:
+      g.promotion_min_distinct_agents ??
+      BRAIN_GUARDRAIL_DEFAULTS.promotion_min_distinct_agents,
+    promotion_min_age_days:
+      g.promotion_min_age_days ??
+      BRAIN_GUARDRAIL_DEFAULTS.promotion_min_age_days,
+    instruction_file_max_lines:
+      g.instruction_file_max_lines ??
+      BRAIN_GUARDRAIL_DEFAULTS.instruction_file_max_lines,
+  };
+}
 
 /**
  * Default `_brain.yaml` content. Mirrors §10 of the design doc. Used by
@@ -679,6 +741,98 @@ export function validateBrainConfigDetailed(
     }
   }
 
+  // Optional `guardrails` block (v0.10.16). Hard-error on shape
+  // problems - thresholds are operator-tunable and silent fallback
+  // would mask the operator's intent. Missing block leaves
+  // `cfg.guardrails` undefined; `resolveGuardrails` injects defaults
+  // on the read side so consumers receive a fully-populated struct.
+  let guardrails: BrainGuardrailConfig | undefined;
+  if ("guardrails" in obj) {
+    const raw = obj["guardrails"];
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new BrainConfigError(
+        `block must be a map of keys; got ${describe(raw)}`,
+        "guardrails",
+        source,
+      );
+    }
+    const rawMap = raw as Record<string, unknown>;
+    const partial: {
+      promotion_min_signals?: number;
+      promotion_min_distinct_agents?: number;
+      promotion_min_age_days?: number;
+      instruction_file_max_lines?: number;
+    } = {};
+
+    if ("promotion_min_signals" in rawMap) {
+      requirePositiveInteger(
+        "guardrails.promotion_min_signals",
+        rawMap["promotion_min_signals"],
+        source,
+      );
+      partial.promotion_min_signals = rawMap["promotion_min_signals"] as number;
+    }
+    if ("promotion_min_distinct_agents" in rawMap) {
+      requirePositiveInteger(
+        "guardrails.promotion_min_distinct_agents",
+        rawMap["promotion_min_distinct_agents"],
+        source,
+      );
+      partial.promotion_min_distinct_agents = rawMap[
+        "promotion_min_distinct_agents"
+      ] as number;
+    }
+    if ("promotion_min_age_days" in rawMap) {
+      requireNonNegativeInteger(
+        "guardrails.promotion_min_age_days",
+        rawMap["promotion_min_age_days"],
+        source,
+      );
+      partial.promotion_min_age_days = rawMap["promotion_min_age_days"] as number;
+    }
+    if ("instruction_file_max_lines" in rawMap) {
+      requirePositiveInteger(
+        "guardrails.instruction_file_max_lines",
+        rawMap["instruction_file_max_lines"],
+        source,
+      );
+      const v = rawMap["instruction_file_max_lines"] as number;
+      if (v > INSTRUCTION_FILE_MAX_LINES_CEILING) {
+        throw new BrainConfigError(
+          `must be at most ${INSTRUCTION_FILE_MAX_LINES_CEILING}; got ${describe(v)}`,
+          "guardrails.instruction_file_max_lines",
+          source,
+        );
+      }
+      partial.instruction_file_max_lines = v;
+    }
+
+    // Forward-compat: unknown sub-keys under `guardrails:` → warning.
+    const knownGuardrailKeys = new Set([
+      "promotion_min_signals",
+      "promotion_min_distinct_agents",
+      "promotion_min_age_days",
+      "instruction_file_max_lines",
+    ]);
+    for (const key of Object.keys(rawMap)) {
+      if (!knownGuardrailKeys.has(key)) {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `guardrails.${key}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
+
+    if (Object.keys(partial).length > 0) {
+      guardrails = partial;
+    } else {
+      // Block present but contained only unknown fields: keep an
+      // empty marker so `cfg.guardrails` is non-undefined and
+      // distinguishable from "block absent entirely".
+      guardrails = {};
+    }
+  }
+
   // Forward-compat: unknown top-level keys → warning, not error.
   const known = new Set([
     "schema_version",
@@ -690,6 +844,7 @@ export function validateBrainConfigDetailed(
     "vault",
     "active",
     "discipline_report",
+    "guardrails",
   ]);
   for (const key of Object.keys(obj)) {
     if (!known.has(key)) {
@@ -724,6 +879,7 @@ export function validateBrainConfigDetailed(
     ...(vault !== undefined ? { vault } : {}),
     ...(active !== undefined ? { active } : {}),
     ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
+    ...(guardrails !== undefined ? { guardrails } : {}),
   };
 
   return { config, warnings };

@@ -62,6 +62,8 @@ import {
 } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
+import { buildOperatorSummary } from "../core/brain/trust/operator-summary.ts";
+import { BRAIN_ROLES } from "../core/brain/trust/role.ts";
 import {
   BrainNotFoundError,
   queryByLogSince,
@@ -259,7 +261,20 @@ async function toolBrainDream(
     retired: summary.retired.map((r) => ({ id: r.id, reason: r.reason })),
     contradictions: [...summary.contradictions],
     moved_to_processed: [...summary.moved_to_processed],
+    suppressed: [...summary.suppressed],
     warnings: summary.warnings.map((w) => ({ code: w.code, message: w.message })),
+    uncertain: summary.uncertain.map((u) => ({
+      code: u.code,
+      ...(u.topic !== undefined ? { topic: u.topic } : {}),
+      message: u.message,
+    })),
+    quarantined: summary.quarantined.map((q) => ({
+      topic: q.topic,
+      signal_count: q.signal_count,
+      distinct_agents: q.distinct_agents,
+      age_days: q.age_days,
+      failed_gates: [...q.failed_gates],
+    })),
     snapshot_path: summary.snapshot_path
       ? vaultRelativeSafe(ctx.vault, summary.snapshot_path)
       : null,
@@ -306,8 +321,12 @@ async function toolBrainApplyEvidence(
   // (isError: true) rather than an MCP protocol error. The design doc
   // says "not an error condition" — the agent should see an informative
   // payload that explains what to do next, not a JSON-RPC error frame.
+  // v0.10.16: assert applier role at the MCP boundary so the structural
+  // permission gate fires before any I/O.
   try {
-    const res = appendApplyEvidence(ctx.vault, input);
+    const res = appendApplyEvidence(ctx.vault, input, {
+      role: BRAIN_ROLES.applier,
+    });
     return {
       logged_at: res.logged_at,
       log_path: vaultRelativeSafe(ctx.vault, res.log_path),
@@ -611,6 +630,22 @@ async function toolBrainDoctor(
       impact: a.impact,
       ...(a.target !== undefined ? { target: a.target } : {}),
     })),
+    // v0.10.16: trust-layer fields. `trust_verdict` is always populated
+    // by runDoctor; `verification_delta_summary` only when the caller
+    // threads a dream summary through (not exposed via this tool's
+    // surface, so it stays absent here). `instruction_file_warnings`
+    // surfaces vault-root instruction files exceeding the configured
+    // ceiling.
+    ...(result.trust_verdict !== undefined
+      ? { trust_verdict: result.trust_verdict }
+      : {}),
+    instruction_file_warnings: (result.instruction_file_warnings ?? []).map(
+      (w) => ({
+        path: w.path,
+        lines: w.lines,
+        ceiling: w.ceiling,
+      }),
+    ),
   };
 }
 
@@ -728,6 +763,97 @@ export function vaultRelativeSafe(vault: string, target: string): string {
 }
 
 // ----- Tool registration ---------------------------------------------------
+
+// ----- brain_operator_summary (v0.10.16) -----------------------------------
+
+/**
+ * Aggregate operator dashboard: trust verdict, doctor / dream
+ * counts, verification delta summary, ranked maintenance actions,
+ * and instruction-file ceiling warnings - one read-only call so an
+ * operator does not run `brain_digest` + `brain_doctor` separately.
+ */
+async function toolBrainOperatorSummary(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const topRaw = args["top_actions"];
+  let topActionsN: number | undefined;
+  if (topRaw !== undefined && topRaw !== null) {
+    // Strict integer coercion: reject `"3abc"`, `"2.5"`, and other
+    // shapes `Number.parseInt` would silently accept. Only a pure
+    // integer literal is allowed.
+    if (typeof topRaw === "number") {
+      if (!Number.isInteger(topRaw) || topRaw < 0) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_operator_summary: top_actions must be a non-negative integer",
+        );
+      }
+      topActionsN = topRaw;
+    } else if (typeof topRaw === "string") {
+      const trimmed = topRaw.trim();
+      if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_operator_summary: top_actions must be a non-negative integer",
+        );
+      }
+      topActionsN = Number.parseInt(trimmed, 10);
+    } else {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_operator_summary: top_actions must be a non-negative integer",
+      );
+    }
+  }
+
+  const includeDreamRaw = args["include_dream"];
+  let includeDream: boolean;
+  if (includeDreamRaw === undefined || includeDreamRaw === null) {
+    includeDream = true;
+  } else if (typeof includeDreamRaw === "boolean") {
+    includeDream = includeDreamRaw;
+  } else {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_operator_summary: include_dream must be a boolean",
+    );
+  }
+
+  let dreamSummary;
+  let dreamError: string | undefined;
+  if (includeDream) {
+    try {
+      dreamSummary = dream(ctx.vault, { dryRun: true });
+    } catch (err) {
+      // Surface the failure so callers know the dashboard is missing
+      // verification + dream signals; do not silently produce a
+      // partial envelope.
+      dreamError = (err as Error).message ?? String(err);
+    }
+  }
+  const summary = buildOperatorSummary(ctx.vault, {
+    ...(dreamSummary ? { dreamSummary } : {}),
+    ...(topActionsN !== undefined ? { topActionsN } : {}),
+  });
+  return {
+    vault_path: ctx.vault,
+    trust_verdict: summary.trust_verdict,
+    digest_summary: summary.digest_summary,
+    doctor_summary: {
+      warning_count: summary.doctor_summary.warning_count,
+      error_count: summary.doctor_summary.error_count,
+    },
+    dream_summary: summary.dream_summary,
+    verification_delta: {
+      summary: summary.verification_delta.summary,
+      entries: summary.verification_delta.entries,
+    },
+    top_actions: summary.top_actions,
+    instruction_file_warnings: summary.instruction_file_warnings,
+    ...(dreamError !== undefined ? { dream_error: dreamError } : {}),
+  };
+}
 
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
@@ -1049,5 +1175,27 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainContextPack,
+  },
+  {
+    name: "brain_operator_summary",
+    description:
+      "Aggregate operator dashboard: trust verdict, doctor + dream counts, verification delta, ranked maintenance actions, and instruction-file ceiling warnings. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        include_dream: {
+          type: "boolean",
+          description:
+            "When true (default), run a dry-run dream pass and fold its verification delta into the summary.",
+        },
+        top_actions: {
+          type: "integer",
+          minimum: 0,
+          description: "Cap on the ranked maintenance action list. Defaults to 5.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainOperatorSummary,
   },
 ]);

@@ -43,6 +43,7 @@ import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summ
 import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
+import type { TrustVerdict } from "./doctor.ts";
 import { collectMaintenanceActions } from "./maintenance/collect.ts";
 import type { ActionItem } from "./maintenance/action-scorer.ts";
 import {
@@ -82,6 +83,18 @@ export interface RenderDigestOptions {
    * picks `new Date()` itself.
    */
   readonly now?: Date;
+  /**
+   * Optional doctor result (v0.10.16). When supplied, `trust_verdict`
+   * lands in the JSON payload and a `## Trust` section renders in
+   * markdown.
+   */
+  readonly doctorResult?: import("./doctor.ts").RunDoctorResult;
+  /**
+   * Optional dream summary (v0.10.16). When supplied,
+   * `uncertain_count` and `quarantined_count` reflect the
+   * counterparts on the summary instead of defaulting to zero.
+   */
+  readonly dreamSummary?: import("./dream.ts").DreamRunSummary;
 }
 
 export interface RenderDigestResult {
@@ -272,6 +285,24 @@ export interface DigestJson {
    * needs doing. Independent of the window.
    */
   readonly actions: ReadonlyArray<ActionItem>;
+  /**
+   * Aggregate vault trust verdict (v0.10.16). Absent when no
+   * doctor input was threaded into the digest call; consumers that
+   * only need the legacy preference-and-signal sections can ignore
+   * the field.
+   */
+  readonly trust_verdict?: TrustVerdict;
+  /**
+   * Count of dream-pass uncertain entries in the most recent run
+   * (v0.10.16). Zero when no dream input was provided.
+   */
+  readonly uncertain_count: number;
+  /**
+   * Count of dream-pass signal clusters held back by the
+   * self-approval guardrail in the most recent run (v0.10.16).
+   * Zero when no dream input was provided.
+   */
+  readonly quarantined_count: number;
 }
 
 /**
@@ -329,6 +360,14 @@ export function renderDigest(
       most_applied: data.most_applied,
       connection_health: data.connection_health,
       actions: data.actions,
+      // Guarded: dreamSummary may arrive from an untyped JSON-RPC
+      // boundary (or from a future caller that has not populated
+      // every array). Optional-chain the inner length read.
+      uncertain_count: opts.dreamSummary?.uncertain?.length ?? 0,
+      quarantined_count: opts.dreamSummary?.quarantined?.length ?? 0,
+      ...(opts.doctorResult?.trust_verdict !== undefined
+        ? { trust_verdict: opts.doctorResult.trust_verdict }
+        : {}),
     };
     return Object.freeze({
       content: JSON.stringify(payload, null, 2) + "\n",
@@ -337,10 +376,34 @@ export function renderDigest(
   }
 
   // Markdown.
-  const content = empty
+  const baseMd = empty
     ? renderEmptyMarkdown(until)
     : renderMarkdown(data, since, until);
+  const trustSection = renderTrustSection(opts.doctorResult, opts.dreamSummary);
+  const content = trustSection ? `${baseMd}\n${trustSection}` : baseMd;
   return Object.freeze({ content, empty });
+}
+
+/**
+ * Markdown `## Trust` section (v0.10.16). Rendered only when either
+ * a doctor result or a dream summary is threaded through the digest
+ * options - otherwise legacy output stays bit-identical.
+ */
+function renderTrustSection(
+  doctor?: import("./doctor.ts").RunDoctorResult,
+  dream?: import("./dream.ts").DreamRunSummary,
+): string {
+  if (doctor === undefined && dream === undefined) return "";
+  const lines: string[] = ["## Trust", ""];
+  if (doctor?.trust_verdict !== undefined) {
+    lines.push(`- Verdict: **${doctor.trust_verdict}**`);
+  }
+  if (dream !== undefined) {
+    lines.push(`- Uncertain: ${dream.uncertain.length}`);
+    lines.push(`- Quarantined: ${dream.quarantined.length}`);
+  }
+  lines.push("");
+  return lines.join("\n");
 }
 
 // ----- Data collection ------------------------------------------------------

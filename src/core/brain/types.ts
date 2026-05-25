@@ -691,6 +691,42 @@ export interface DisciplineReportConfig {
 }
 
 /**
+ * Optional `guardrails:` block (v0.10.16). Tunes the dream pass
+ * self-approval thresholds (`promotion_*`) and the doctor
+ * instruction-file-ceiling warning (`instruction_file_max_lines`).
+ *
+ * Any subset of the four fields may be present; missing fields fall
+ * back to `BRAIN_GUARDRAIL_DEFAULTS` via `resolveGuardrails`. Absent
+ * block leaves the field undefined and keeps current behaviour
+ * bit-identical.
+ */
+export interface BrainGuardrailConfig {
+  /**
+   * Minimum same-sign signal count required for the dream pass to
+   * auto-promote a topic from unconfirmed to confirmed. Below this,
+   * the topic is quarantined and waits for more evidence.
+   */
+  readonly promotion_min_signals?: number;
+  /**
+   * Minimum number of distinct agents that must have raised
+   * same-sign signals for the topic. Defaults to `1` (i.e. no
+   * cross-agent requirement).
+   */
+  readonly promotion_min_distinct_agents?: number;
+  /**
+   * Minimum age (in days) of the earliest signal in the cluster
+   * before promotion is permitted. `0` means "no age gate".
+   */
+  readonly promotion_min_age_days?: number;
+  /**
+   * Hard ceiling (in lines) on vault-root instruction files
+   * (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`). Files above this size
+   * surface a doctor warning.
+   */
+  readonly instruction_file_max_lines?: number;
+}
+
+/**
  * Root of `Brain/_brain.yaml`. `schema_version` is mandatory; unknown
  * top-level keys are tolerated as forward-compat (logged as a warning by
  * the validator, not an error).
@@ -727,4 +763,24 @@ export interface BrainConfig {
   readonly active?: BrainActiveConfig;
   /** Optional daily discipline-report configuration (§D). Absent when not configured. */
   readonly discipline_report?: DisciplineReportConfig;
+  /**
+   * Optional `guardrails:` block (v0.10.16). Tunes the dream pass
+   * self-approval thresholds and the instruction-file-ceiling
+   * warning. Absent: callers fall back to `BRAIN_GUARDRAIL_DEFAULTS`
+   * via `resolveGuardrails`, keeping current behaviour bit-identical.
+   */
+  readonly guardrails?: BrainGuardrailConfig;
+}
+
+/**
+ * Concrete (fully-resolved) guardrail config. Returned by
+ * `resolveGuardrails(cfg)` so consumers do not have to handle
+ * optionals - the resolver fills missing fields with
+ * `BRAIN_GUARDRAIL_DEFAULTS`.
+ */
+export interface ResolvedBrainGuardrailConfig {
+  readonly promotion_min_signals: number;
+  readonly promotion_min_distinct_agents: number;
+  readonly promotion_min_age_days: number;
+  readonly instruction_file_max_lines: number;
 }

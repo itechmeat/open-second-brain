@@ -84,6 +84,12 @@ safety invariants are in [`docs/how-it-works.md`](docs/how-it-works.md).
   (`o2b brain context-pack --max-tokens N`). Per-page metadata
   (`_lifecycle`, `tier`, `merged_into`) feeds the ranker and the
   search relevance signal.
+- Aggregates an operator dashboard from trust verdict, doctor /
+  dream counts, verification delta, instruction-file ceiling
+  warnings, and top maintenance actions
+  (`o2b brain summary` / `brain_operator_summary`). The verdict
+  band (`clean | watch | investigate`) is computed from
+  structural signals only - no LLM, no per-language vocabulary.
 - (Optional) Records paid agent actions through **Pay Memory**:
   receipts, generated assets, spending policy decisions, human
   approval state, and per-day reports — all as plain Markdown
@@ -198,10 +204,11 @@ exposes the same deterministic operations as MCP tools:
 
 - **Core (3):** `second_brain_status`, `second_brain_query`,
   `vault_health`.
-- **Brain (9):** `brain_feedback`, `brain_dream`,
+- **Brain (11):** `brain_feedback`, `brain_dream`,
   `brain_apply_evidence`, `brain_note`, `brain_context`,
-  `brain_digest`, `brain_query`, `brain_doctor`, `brain_backlinks`.
-  See the [Brain section](#brain-observing-memory) below.
+  `brain_digest`, `brain_query`, `brain_doctor`, `brain_backlinks`,
+  `brain_context_pack`, `brain_operator_summary`. See the
+  [Brain section](#brain-observing-memory) below.
 - **Pay Memory (8):** `payment_memory_init`,
   `payment_receipt_append`, `asset_capture`,
   `payment_report_generate`, `payment_policy_check`,

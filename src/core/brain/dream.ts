@@ -57,7 +57,8 @@ import {
   createSnapshot,
   pruneSnapshots,
 } from "./snapshot.ts";
-import { loadBrainConfig } from "./policy.ts";
+import { loadBrainConfig, resolveGuardrails } from "./policy.ts";
+import { applySelfApprovalGuardrail } from "./trust/self-approval-guardrail.ts";
 import {
   brainDirs,
   preferencePath,
@@ -93,6 +94,46 @@ export interface DreamWarning {
   readonly message: string;
 }
 
+/**
+ * Entry surfacing a step the dream pass attempted but could not
+ * fully verify. Distinct from a `DreamWarning` (which flags
+ * configuration smells): an `uncertain` entry means "I tried, no
+ * hard error, but I cannot claim the operation completed". Consumed
+ * by the trust verdict + operator summary (v0.10.16).
+ */
+export interface DreamUncertainEntry {
+  /** Stable code identifying which sub-operation could not confirm. */
+  readonly code: string;
+  /** Optional topic slug or preference id this uncertainty concerns. */
+  readonly topic?: string;
+  /** Human-readable explanation. */
+  readonly message: string;
+}
+
+/**
+ * Entry surfacing a signal cluster that the self-approval guardrail
+ * (v0.10.16) held back from promotion because one or more configured
+ * thresholds were not met. Distinct from `suppressed` (which fires
+ * on a user-rejected retired preference); a quarantined cluster
+ * stays inbox-side and may promote on the next dream pass once
+ * more evidence accumulates.
+ */
+export interface DreamQuarantinedEntry {
+  /** Topic slug whose signals are held below the promotion threshold. */
+  readonly topic: string;
+  /** Count of accumulated same-sign signals. */
+  readonly signal_count: number;
+  /** Number of distinct agents that raised same-sign signals. */
+  readonly distinct_agents: number;
+  /** Age (in days) of the earliest signal in the cluster. */
+  readonly age_days: number;
+  /**
+   * Which threshold(s) blocked promotion: any subset of
+   * `min_signals`, `min_distinct_agents`, `min_age_days`.
+   */
+  readonly failed_gates: ReadonlyArray<string>;
+}
+
 export interface DreamRunSummary {
   /** `dream-YYYY-MM-DD-HHMMSS`. */
   readonly run_id: string;
@@ -123,6 +164,19 @@ export interface DreamRunSummary {
    * extension point for future advisory checks.
    */
   readonly warnings: ReadonlyArray<DreamWarning>;
+  /**
+   * Sub-operations the dream pass attempted but could not fully
+   * verify. Empty on every clean run; populated by future
+   * uncertainty-surfacing paths (v0.10.16).
+   */
+  readonly uncertain: ReadonlyArray<DreamUncertainEntry>;
+  /**
+   * Signal clusters held back from promotion by the self-approval
+   * guardrail (v0.10.16). Empty when no cluster missed a threshold,
+   * or when the guardrail is configured at default values that
+   * match pre-v0.10.16 behaviour.
+   */
+  readonly quarantined: ReadonlyArray<DreamQuarantinedEntry>;
   /** Snapshot file (absent on a no-op run). */
   readonly snapshot_path?: string;
   /** Log file the run summary landed in (absent on a no-op run). */
@@ -258,6 +312,10 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     plan.signalsToMove.size > 0 ||
     plan.retainPinned.length > 0 ||
     plan.signalsSuppressed.length > 0 ||
+    // v0.10.16: quarantine is a recorded decision (deferred-but-noted),
+    // so a run that produces only quarantine entries is still a
+    // meaningful run from the operator's perspective.
+    plan.quarantined.length > 0 ||
     scan.corrupted.length > 0;
 
   if (!changed) {
@@ -272,6 +330,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       moved_to_processed: [],
       suppressed: [],
       warnings: Object.freeze([...warnings]),
+      uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
+      quarantined: Object.freeze([...plan.quarantined]),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -562,6 +622,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       s.signal.replace(/^\[\[/, "").replace(/\]\]$/, ""),
     ),
     warnings: Object.freeze([...warnings]),
+    uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
+    quarantined: Object.freeze([...plan.quarantined]),
     ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
     ...(dryRun
       ? { dry_run: true }
@@ -674,6 +736,15 @@ interface PlanState {
    * the inbox does not accumulate.
    */
   readonly signalsSuppressed: SignalSuppressedPlan[];
+  /**
+   * Signal clusters held back from promotion by the self-approval
+   * guardrail (v0.10.16). The cluster passed the existing
+   * `candidate_threshold` but failed one or more configured
+   * thresholds in `BrainGuardrailConfig`. Preserved across the plan
+   * so it surfaces on the DreamRunSummary without affecting the
+   * existing move-to-processed semantics.
+   */
+  readonly quarantined: DreamQuarantinedEntry[];
 }
 
 interface SignalSuppressedPlan {
@@ -740,6 +811,7 @@ function emptyPlan(): PlanState {
     signalsToMove: new Map(),
     contradictionTopics: new Set(),
     signalsSuppressed: [],
+    quarantined: [],
   };
 }
 
@@ -853,6 +925,44 @@ function planTopics(
     const minoritySize = Math.min(positives.length, negatives.length);
     const dominantSize = dominant.length - minoritySize; // cancellation
     if (dominantSize >= cfg.dream.candidate_threshold) {
+      // v0.10.16: extra self-approval guardrail. Defaults
+      // (min_signals=2, min_distinct_agents=1, min_age_days=0) make
+      // this check a no-op for clusters that already passed
+      // candidate_threshold. Operators may opt into stricter
+      // thresholds via `_brain.yaml:guardrails:*`. A failed gate
+      // routes the cluster to `quarantined` instead of creating a
+      // new unconfirmed preference; the contributing signals stay
+      // in inbox/ so the cluster naturally re-evaluates on the next
+      // pass once more evidence accumulates.
+      const guardrails = resolveGuardrails(cfg);
+      const distinctAgents = new Set(dominant.map((s) => s.signal.agent)).size;
+      let earliestSignalMs = Number.POSITIVE_INFINITY;
+      for (const s of dominant) {
+        const t = Date.parse(s.signal.created_at);
+        if (Number.isFinite(t) && t < earliestSignalMs) earliestSignalMs = t;
+      }
+      const ageDays =
+        Number.isFinite(earliestSignalMs)
+          ? Math.max(0, Math.floor((now.getTime() - earliestSignalMs) / (24 * 60 * 60 * 1000)))
+          : 0;
+      const verdict = applySelfApprovalGuardrail(
+        {
+          signal_count: dominantSize,
+          distinct_agents: distinctAgents,
+          age_days: ageDays,
+        },
+        guardrails,
+      );
+      if (verdict.decision === "quarantine") {
+        plan.quarantined.push({
+          topic,
+          signal_count: dominantSize,
+          distinct_agents: distinctAgents,
+          age_days: ageDays,
+          failed_gates: verdict.failed_gates,
+        });
+        continue;
+      }
       // Decide supersede: if a retired pref for the same topic exists,
       // wire it through.
       const retiredForTopic = retiredByTopic.get(topic);
