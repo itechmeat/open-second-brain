@@ -9,6 +9,11 @@
  * testable and substitutable.
  */
 
+import {
+  PAGE_TIER_DEFAULT,
+  tierWeight,
+  type PageTier,
+} from "../brain/page-meta/tier.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "./store.ts";
 import type { BrainSearchResult } from "./types.ts";
 
@@ -20,6 +25,13 @@ export interface RankerInputs {
   readonly inboundLinkSources: ReadonlyMap<number, ReadonlySet<number>>;
   /** For each chunkId: the tag set of its document. */
   readonly tagsByDoc: ReadonlyMap<number, ReadonlySet<string>>;
+  /**
+   * Optional importance tier per documentId. Missing entries (and
+   * the absent map entirely) resolve to `supporting`, whose tier
+   * weight is `1.0` - so a vault without any tier tags ranks
+   * bit-identically to pre-tier behaviour.
+   */
+  readonly tierByDoc?: ReadonlyMap<number, PageTier>;
 }
 
 export interface RankerOptions {
@@ -181,7 +193,12 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const weighted =
       opts.keywordWeight * c.keywordScore +
       (semanticEnabled ? opts.semanticWeight : 0) * c.semanticScore;
-    const score = clamp01(weighted + linkBoost + recency);
+    // Tier multiplier applied to the relevance portion only so the
+    // tag / link / recency boosts stay tier-neutral. Default
+    // `supporting` → 1.0 keeps untagged vaults bit-identical.
+    const tier = inputs.tierByDoc?.get(c.documentId) ?? PAGE_TIER_DEFAULT;
+    const tierMul = tierWeight(tier);
+    const score = clamp01(weighted * tierMul + linkBoost + recency);
 
     ranked.push(
       Object.freeze({

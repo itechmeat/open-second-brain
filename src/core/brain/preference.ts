@@ -59,6 +59,8 @@ import {
   type BrainRetired,
   type BrainRetiredReason,
 } from "./types.ts";
+import type { PageLifecycle } from "./page-meta/lifecycle.ts";
+import type { PageTier } from "./page-meta/tier.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -130,6 +132,21 @@ export interface WritePreferenceInput {
    * refresh pass always supplies a finite value.
    */
   readonly confidence_value?: number | null;
+  /**
+   * Per-page lifecycle. Defaults to `stable` when unspecified so
+   * legacy callers do not need to thread the field through. Dream
+   * promotes `stable` → `verified` once a preference accumulates
+   * enough independent applied-evidence events; the lint --consolidate
+   * pass can demote `stable` → `draft` for very old, never-applied
+   * pages.
+   */
+  readonly lifecycle?: PageLifecycle;
+  /**
+   * Per-page importance tier. User-editable, unprefixed in YAML
+   * (next to `pinned`). Reader-side default is `supporting`; emitted
+   * only when supplied so legacy fixtures stay byte-identical.
+   */
+  readonly tier?: PageTier;
   readonly pinned?: boolean;
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
@@ -342,6 +359,18 @@ function preferenceFrontmatter(
   if (input.aliases && input.aliases.length > 0) {
     metadata["aliases"] = [...input.aliases];
   }
+  // `_lifecycle` is emitted only when the caller supplies it. Legacy
+  // call sites stay byte-identical; new writers (dream refresh pass,
+  // lint consolidate) opt in by passing the field. Readers fall back
+  // to `stable` via `readLifecycle()`.
+  if (input.lifecycle !== undefined) {
+    metadata["_lifecycle"] = input.lifecycle;
+  }
+  // `tier` is user-editable (unprefixed). Emitted only when supplied;
+  // readers fall back to `supporting` via `readTier()`.
+  if (input.tier !== undefined) {
+    metadata["tier"] = input.tier;
+  }
   return metadata;
 }
 
@@ -449,6 +478,7 @@ export const DERIVED_FIELDS: ReadonlyArray<string> = Object.freeze([
   "confidence_value",
   "evidenced_by",
   "contradicted_by",
+  "lifecycle",
 ]);
 
 /**

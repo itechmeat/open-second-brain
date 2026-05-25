@@ -601,6 +601,16 @@ describe("brain_doctor", () => {
     // At least one issue must be surfaced — either a warning or an error.
     expect(s.errors.length + s.warnings.length).toBeGreaterThan(0);
   });
+
+  test("v0.10.15 surfaces suggested_actions alongside errors/warnings", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = await call(server, "brain_doctor", {});
+    const s = r.result.structuredContent;
+    expect(Array.isArray(s.suggested_actions)).toBe(true);
+    // Empty vault → empty actions array, but the field is always
+    // present so MCP clients can rely on the shape.
+  });
 });
 
 // ---------------------------------------------------------------------------
