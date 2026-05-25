@@ -729,6 +729,65 @@ export function vaultRelativeSafe(vault: string, target: string): string {
 
 // ----- Tool registration ---------------------------------------------------
 
+// ----- brain_operator_summary (v0.10.16) -----------------------------------
+
+/**
+ * Aggregate operator dashboard: trust verdict, doctor / dream
+ * counts, verification delta summary, ranked maintenance actions,
+ * and instruction-file ceiling warnings - one read-only call so an
+ * operator does not run `brain_digest` + `brain_doctor` separately.
+ */
+async function toolBrainOperatorSummary(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const topRaw = args["top_actions"];
+  const topActionsN =
+    topRaw === undefined
+      ? undefined
+      : Number.isInteger(topRaw)
+        ? (topRaw as number)
+        : Number.parseInt(String(topRaw ?? ""), 10);
+  if (topActionsN !== undefined && (!Number.isFinite(topActionsN) || topActionsN < 0)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_operator_summary: top_actions must be a non-negative integer",
+    );
+  }
+  const includeDream = args["include_dream"] !== false;
+  const { buildOperatorSummary } = await import(
+    "../core/brain/trust/operator-summary.ts"
+  );
+  let dreamSummary;
+  if (includeDream) {
+    try {
+      dreamSummary = dream(ctx.vault, { dryRun: true });
+    } catch {
+      dreamSummary = undefined;
+    }
+  }
+  const summary = buildOperatorSummary(ctx.vault, {
+    ...(dreamSummary ? { dreamSummary } : {}),
+    ...(topActionsN !== undefined ? { topActionsN } : {}),
+  });
+  return {
+    vault_path: ctx.vault,
+    trust_verdict: summary.trust_verdict,
+    digest_summary: summary.digest_summary,
+    doctor_summary: {
+      warning_count: summary.doctor_summary.warning_count,
+      error_count: summary.doctor_summary.error_count,
+    },
+    dream_summary: summary.dream_summary,
+    verification_delta: {
+      summary: summary.verification_delta.summary,
+      entries: summary.verification_delta.entries,
+    },
+    top_actions: summary.top_actions,
+    instruction_file_warnings: summary.instruction_file_warnings,
+  };
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -1049,5 +1108,27 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainContextPack,
+  },
+  {
+    name: "brain_operator_summary",
+    description:
+      "Aggregate operator dashboard: trust verdict, doctor + dream counts, verification delta, ranked maintenance actions, and instruction-file ceiling warnings. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        include_dream: {
+          type: "boolean",
+          description:
+            "When true (default), run a dry-run dream pass and fold its verification delta into the summary.",
+        },
+        top_actions: {
+          type: "integer",
+          minimum: 0,
+          description: "Cap on the ranked maintenance action list. Defaults to 5.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainOperatorSummary,
   },
 ]);
