@@ -931,6 +931,16 @@ export function validateBrainConfigDetailed(
           source,
         );
       }
+      // Reject absolute paths and `..` traversal at load time so
+      // the config surface fails loudly instead of silently
+      // omitting the envelope field at read time.
+      if (v.startsWith("/") || v.startsWith("\\") || v.includes("..")) {
+        throw new BrainConfigError(
+          "must be a vault-relative path without '..' segments",
+          "link_graph.vault_instruction_file",
+          source,
+        );
+      }
       partialLg["vault_instruction_file"] = v;
     }
     // Forward-compat: unknown sub-keys under `link_graph:` → warning.

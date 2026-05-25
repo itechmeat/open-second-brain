@@ -218,13 +218,12 @@ describe("buildAliasIndex - collision handling", () => {
     expect(idx.get("shared")).toBe("pref-aaa");
   });
 
-  test("alias does not collide with another note's canonical id (declared first wins)", () => {
-    // pref-foo has alias "bar"; pref-bar has no alias.
-    // Lookup of "bar" must return whichever the alias claims, which
-    // resolves first by sorted canonical id. With sorted order
-    // pref-bar comes before pref-foo, but pref-bar does NOT claim
-    // "bar" as an alias - aliases are declarations, not implicit
-    // self-references. So lookup of "bar" returns pref-foo.
+  test("alias that shadows an existing canonical id is silently dropped (no hijack)", () => {
+    // pref-foo declares alias "pref-bar"; pref-bar exists on disk.
+    // Without the on-disk-collision guard, [[pref-bar]] backlinks
+    // would re-route to pref-foo and the real pref-bar would lose
+    // every inbound reference. The alias-index drops the offending
+    // entry so the canonical artifact keeps owning its id.
     writePref(
       "pref-foo",
       [
@@ -233,7 +232,7 @@ describe("buildAliasIndex - collision handling", () => {
         "topic: foo",
         "status: confirmed",
         "principle: x",
-        "aliases: [bar]",
+        "aliases: [pref-bar]",
         "---",
       ].join("\n"),
     );
@@ -249,7 +248,7 @@ describe("buildAliasIndex - collision handling", () => {
       ].join("\n"),
     );
     const idx = buildAliasIndex(vault);
-    expect(idx.get("bar")).toBe("pref-foo");
+    expect(idx.get("pref-bar")).toBeUndefined();
   });
 });
 

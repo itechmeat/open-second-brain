@@ -100,9 +100,7 @@ export function buildConceptCluster(
     targetId: normalised,
     targetTitle,
     linkers: Object.freeze(linkers) as ReadonlyArray<ConceptLinker>,
-    unlinkedMentions: Object.freeze([
-      ...unlinkedMentions,
-    ]) as ReadonlyArray<MentionRef>,
+    unlinkedMentions,
     generatedAt: isoSecond(),
   });
 }

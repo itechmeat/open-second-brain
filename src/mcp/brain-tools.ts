@@ -899,6 +899,10 @@ async function toolBrainUnlinkedMentions(
     );
   }
   const targetId = normaliseWikilinkTarget(idRaw);
+  // Limit coercion mirrors the v0.10.16 `brain_operator_summary`
+  // precedent: accept either a number or a strict integer-literal
+  // string (`"5"` ok; `"abc"`, `"3abc"`, `"2.5"` rejected). This
+  // keeps the MCP boundary uniform across new tools.
   const limitRaw = args["limit"];
   let limit: number | undefined;
   if (limitRaw !== undefined && limitRaw !== null) {
@@ -910,6 +914,22 @@ async function toolBrainUnlinkedMentions(
         );
       }
       limit = limitRaw;
+    } else if (typeof limitRaw === "string") {
+      const trimmed = limitRaw.trim();
+      if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_unlinked_mentions: limit must be a positive integer",
+        );
+      }
+      const parsed = Number.parseInt(trimmed, 10);
+      if (parsed < 1) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_unlinked_mentions: limit must be a positive integer",
+        );
+      }
+      limit = parsed;
     } else {
       throw new MCPError(
         INVALID_PARAMS,

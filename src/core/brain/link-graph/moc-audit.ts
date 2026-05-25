@@ -83,7 +83,7 @@ export function auditMoc(
   const outboundBodies = extractWikilinkRichBodies(hubBody);
   const outboundTargets = uniq(
     outboundBodies
-      .map((b) => normaliseWikilinkTarget(parseWikilinkRich(b).target))
+      .map((b) => parseWikilinkRich(b).target)
       .filter((t) => t.length > 0 && t !== hubCanonical),
   );
 
@@ -95,11 +95,13 @@ export function auditMoc(
   }
 
   // Link-ratio: total characters inside `[[…]]` over non-whitespace
-  // body characters. Both numerator and denominator are bounded by
-  // body length so the ratio sits in [0, 1].
+  // body characters. Whitespace is excluded from the denominator so
+  // a heavily-indented link list isn't penalised against a compact
+  // one. Numerator includes the four bracket characters (`[[]]`)
+  // per link so a bracket-heavy body counts proportionally.
   const linkChars = outboundBodies.reduce((sum, b) => sum + b.length + 4, 0);
   const bodyChars = hubBody.replace(/\s+/g, "").length;
-  const ratio = bodyChars > 0 ? linkChars / hubBody.length : 0;
+  const ratio = bodyChars > 0 ? linkChars / bodyChars : 0;
   if (ratio < minRatio) {
     throw new MocAuditError(
       `not a MOC: link ratio ${ratio.toFixed(2)} < threshold ${minRatio}`,
@@ -154,7 +156,7 @@ export function auditMoc(
       if (!path) continue;
       const body = stripFrontmatter(readFileSync(path, "utf8"));
       for (const bracketBody of extractWikilinkRichBodies(body)) {
-        const t = normaliseWikilinkTarget(parseWikilinkRich(bracketBody).target);
+        const t = parseWikilinkRich(bracketBody).target;
         if (t === target) {
           missingCounts.set(target, (missingCounts.get(target) ?? 0) + 1);
         }

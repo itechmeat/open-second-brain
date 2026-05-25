@@ -48,17 +48,38 @@ export function buildAliasIndex(vault: string): AliasIndex {
   const dirs = brainDirs(vault);
   const map = new Map<string, string>();
 
+  // Collect every on-disk canonical id (lower-cased + NFC) in one
+  // pass so the alias-collection phase can skip any alias that
+  // collides with a real basename. Without this guard, an alias
+  // entry can hijack an existing artifact's backlinks.
+  const reservedCanonical = new Set<string>();
+  collectCanonicalNames(dirs.preferences, reservedCanonical);
+  collectCanonicalNames(dirs.retired, reservedCanonical);
+
   // Single sorted pass yields deterministic first-wins resolution
   // when two artifacts claim the same alias. Sorting by `(kind,
   // basename)` puts `pref-*` before `ret-*`; within each kind,
   // alphabetical basename order wins.
-  collect(dirs.preferences, map);
-  collect(dirs.retired, map);
+  collect(dirs.preferences, reservedCanonical, map);
+  collect(dirs.retired, reservedCanonical, map);
 
   return Object.freeze(map) as AliasIndex;
 }
 
-function collect(dir: string, into: Map<string, string>): void {
+function collectCanonicalNames(dir: string, into: Set<string>): void {
+  if (!existsSync(dir)) return;
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".md")) continue;
+    const canonicalId = name.slice(0, -".md".length);
+    into.add(canonicalId.normalize("NFC").toLowerCase());
+  }
+}
+
+function collect(
+  dir: string,
+  reservedCanonical: ReadonlySet<string>,
+  into: Map<string, string>,
+): void {
   if (!existsSync(dir)) return;
   // Sort the directory listing so the first-wins rule is
   // deterministic across filesystems that don't enumerate in
@@ -81,6 +102,11 @@ function collect(dir: string, into: Map<string, string>): void {
       const trimmed = alias.trim();
       if (trimmed.length === 0) continue;
       const key = trimmed.normalize("NFC").toLowerCase();
+      // Skip aliases that would shadow an existing on-disk id.
+      // The canonical artifact wins; the alias is silently dropped
+      // to avoid hijacking its backlinks. A follow-up brain_doctor
+      // lint surfaces these collisions for operator attention.
+      if (reservedCanonical.has(key)) continue;
       // First-wins: only set when the key isn't taken yet.
       if (!into.has(key)) into.set(key, canonicalId);
     }
