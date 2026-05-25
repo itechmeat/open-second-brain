@@ -96,9 +96,80 @@ export interface RunDoctorOptions {
   readonly now?: Date;
 }
 
+/**
+ * Aggregate verdict introduced in v0.10.16. Compresses doctor errors,
+ * dream warnings, and verification-delta counts into one of three
+ * states an operator can act on at a glance.
+ */
+export type TrustVerdict = "clean" | "watch" | "investigate";
+
+/**
+ * Compact counts attached to a `RunDoctorResult` so callers can render
+ * a one-line "verification delta: X drift, Y regression, Z missing"
+ * summary without re-walking the vault. Full per-entry detail lives
+ * on the trust-layer `operator_summary` composer.
+ */
+export interface VerificationDeltaSummary {
+  readonly confirmed: number;
+  readonly drift: number;
+  readonly regression: number;
+  readonly missing_evidence: number;
+}
+
+/**
+ * Warning entry produced by the instruction-file-ceiling helper
+ * (v0.10.16). Doctor surfaces these as a parallel array so the
+ * trust verdict has structured input without having to grep the
+ * generic `warnings` list.
+ */
+export interface InstructionFileCeilingWarning {
+  /** Vault-relative path of the offending instruction file. */
+  readonly path: string;
+  /** Observed line count. */
+  readonly lines: number;
+  /** Configured ceiling at the time of the check. */
+  readonly ceiling: number;
+}
+
+/**
+ * Per-check uncertainty entry. Distinct from `warnings` / `errors`:
+ * these are sub-operations the doctor attempted but cannot claim
+ * completed cleanly (e.g. an instruction-file the doctor could not
+ * read, a verification step that timed out). Empty on every clean
+ * run. v0.10.16 extension point.
+ */
+export interface DoctorUncertainEntry {
+  readonly code: string;
+  readonly path?: string;
+  readonly message: string;
+}
+
 export interface RunDoctorResult {
   readonly warnings: ReadonlyArray<DoctorIssue>;
   readonly errors: ReadonlyArray<DoctorIssue>;
+  /**
+   * Aggregate trust verdict (v0.10.16). Absent when the trust helper
+   * was not invoked; consumers of `runDoctor` that only need the
+   * legacy warning / error stream can ignore the field.
+   */
+  readonly trust_verdict?: TrustVerdict;
+  /**
+   * Counts of verification-delta states for the most recent dream
+   * cycle. Absent when verification did not run.
+   */
+  readonly verification_delta_summary?: VerificationDeltaSummary;
+  /**
+   * Warnings emitted by the instruction-file-ceiling helper. Empty
+   * when the helper did not run or no tracked file exceeded the
+   * configured ceiling.
+   */
+  readonly instruction_file_warnings?: ReadonlyArray<InstructionFileCeilingWarning>;
+  /**
+   * Sub-operations the doctor attempted but could not fully verify.
+   * Empty on every clean run; populated when an uncertainty-surfacing
+   * helper is invoked.
+   */
+  readonly uncertain?: ReadonlyArray<DoctorUncertainEntry>;
 }
 
 // ----- Entry point ----------------------------------------------------------
