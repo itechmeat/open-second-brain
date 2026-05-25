@@ -38,6 +38,7 @@ import {
   cmdBrainTokenFootprint,
   cmdBrainContextPack,
   cmdBrainLint,
+  cmdBrainActions,
 } from "./brain/verbs/index.ts";
 
 export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promise<number> {
@@ -86,6 +87,7 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
       case "token-footprint": return await cmdBrainTokenFootprint(rest);
       case "context-pack": return await cmdBrainContextPack(rest);
       case "lint": return await cmdBrainLint(rest);
+      case "actions": return await cmdBrainActions(rest);
       default:
         process.stderr.write(`error: unknown brain verb: ${verb}\n`);
         process.stdout.write(BRAIN_HELP);
