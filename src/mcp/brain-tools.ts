@@ -57,6 +57,19 @@ import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions
 import { buildConceptCluster } from "../core/brain/link-graph/concept-cluster.ts";
 import { auditMoc, MocAuditError } from "../core/brain/link-graph/moc-audit.ts";
 import { readVaultInstructionFile } from "../core/brain/vault-instruction-file.ts";
+import { buildTimelineIndex } from "../core/brain/temporal/build-index.ts";
+import { selectEvents } from "../core/brain/temporal/select-events.ts";
+import { buildBeliefEvolution } from "../core/brain/temporal/belief-evolution.ts";
+import { findStaleEntries } from "../core/brain/temporal/stale-watch.ts";
+import { buildDailyBrief } from "../core/brain/temporal/daily-brief.ts";
+import { buildWeeklySynthesis } from "../core/brain/temporal/weekly-brief.ts";
+import {
+  loadBrainConfig,
+  resolveTemporal,
+  BRAIN_TEMPORAL_DEFAULTS,
+} from "../core/brain/policy.ts";
+import type { BrainLogEventKind } from "../core/brain/types.ts";
+import { BRAIN_LOG_EVENT_KIND_SET } from "../core/brain/types.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
@@ -1035,6 +1048,250 @@ async function toolBrainMocAudit(
   }
 }
 
+// ----- Temporal subsystem MCP wrappers (v0.10.18) --------------------------
+
+function coercePositiveInteger(
+  tool: string,
+  field: string,
+  raw: unknown,
+): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "number") {
+    if (!Number.isInteger(raw) || raw < 1) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `${tool}: ${field} must be a positive integer`,
+      );
+    }
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `${tool}: ${field} must be a positive integer`,
+      );
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    if (parsed < 1) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `${tool}: ${field} must be a positive integer`,
+      );
+    }
+    return parsed;
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    `${tool}: ${field} must be a positive integer`,
+  );
+}
+
+function coerceIsoTimestampOrDate(
+  tool: string,
+  field: string,
+  raw: unknown,
+): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${tool}: ${field} must be an ISO date or ISO timestamp`,
+    );
+  }
+  return raw.trim();
+}
+
+function coerceEventKind(
+  tool: string,
+  raw: unknown,
+): BrainLogEventKind | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") {
+    throw new MCPError(INVALID_PARAMS, `${tool}: kind must be a string`);
+  }
+  if (!BRAIN_LOG_EVENT_KIND_SET.has(raw)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${tool}: kind must be a known BrainLogEventKind`,
+    );
+  }
+  return raw as BrainLogEventKind;
+}
+
+function resolveTemporalCfgSafe(vault: string): typeof BRAIN_TEMPORAL_DEFAULTS {
+  try {
+    const cfg = loadBrainConfig(vault);
+    return resolveTemporal(cfg);
+  } catch {
+    return BRAIN_TEMPORAL_DEFAULTS;
+  }
+}
+
+/**
+ * `brain_timeline` - frozen chronological list of events filtered by
+ * any combination of `pref_id`, `topic`, `kind`, `since`, `until`,
+ * `limit`. Pure read.
+ */
+async function toolBrainTimeline(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const prefId = typeof args["pref_id"] === "string" ? args["pref_id"] : undefined;
+  const topic = typeof args["topic"] === "string" ? args["topic"] : undefined;
+  const kind = coerceEventKind("brain_timeline", args["kind"]);
+  const since = coerceIsoTimestampOrDate("brain_timeline", "since", args["since"]);
+  const until = coerceIsoTimestampOrDate("brain_timeline", "until", args["until"]);
+  const limit = coercePositiveInteger("brain_timeline", "limit", args["limit"]);
+
+  const index = buildTimelineIndex(ctx.vault, {
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  });
+  const events = selectEvents(index, {
+    ...(prefId !== undefined ? { prefId } : {}),
+    ...(topic !== undefined ? { topic } : {}),
+    ...(kind !== undefined ? { kind } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  });
+  const sliced = limit !== undefined ? events.slice(0, limit) : events;
+  return {
+    vault_path: ctx.vault,
+    window: index.window,
+    total: events.length,
+    events: sliced.map((ev) => ({
+      at: ev.at,
+      kind: ev.kind,
+      source: ev.source,
+      ...(ev.prefId !== undefined ? { pref_id: ev.prefId } : {}),
+      ...(ev.topic !== undefined ? { topic: ev.topic } : {}),
+      ...(ev.result !== undefined ? { result: ev.result } : {}),
+      ...(ev.artifact !== undefined ? { artifact: ev.artifact } : {}),
+      ...(ev.reason !== undefined ? { reason: ev.reason } : {}),
+      ...(ev.text !== undefined ? { text: ev.text } : {}),
+    })),
+  };
+}
+
+/**
+ * `brain_belief_evolution` - per-pref / per-topic chronological story:
+ * status transitions, evidence rollup with running counts, and
+ * retirement chain.
+ */
+async function toolBrainBeliefEvolution(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const prefIdRaw = args["pref_id"];
+  const topicRaw = args["topic"];
+  const hasPref = typeof prefIdRaw === "string" && prefIdRaw.trim().length > 0;
+  const hasTopic = typeof topicRaw === "string" && topicRaw.trim().length > 0;
+  if (hasPref === hasTopic) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_belief_evolution: exactly one of pref_id or topic is required",
+    );
+  }
+  const target = hasPref
+    ? { prefId: (prefIdRaw as string).trim() }
+    : { topic: (topicRaw as string).trim() };
+  const index = buildTimelineIndex(ctx.vault, {});
+  const evo = buildBeliefEvolution(index, ctx.vault, target);
+  return {
+    vault_path: ctx.vault,
+    target: evo.target,
+    transitions: evo.transitions,
+    evidence: evo.evidence,
+    retirements: evo.retirements,
+    generated_at: evo.generatedAt,
+  };
+}
+
+/**
+ * `brain_stale_scan` - structural staleness report for preferences,
+ * signals, and log files. Thresholds come from the `temporal:` config
+ * block.
+ */
+async function toolBrainStaleScan(
+  ctx: ServerContext,
+  _args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  void _args;
+  const cfg = resolveTemporalCfgSafe(ctx.vault);
+  const index = buildTimelineIndex(ctx.vault, {});
+  const report = findStaleEntries(index, ctx.vault, cfg);
+  return {
+    vault_path: ctx.vault,
+    thresholds: report.thresholds,
+    stale_preferences: report.stalePreferences,
+    stale_signals: report.staleSignals,
+    stale_log_files: report.staleLogFiles,
+    generated_at: report.generatedAt,
+  };
+}
+
+/**
+ * `brain_daily_brief` - structured counters + transitions + source
+ * pointers for one day. Defaults `date` to today UTC when omitted.
+ */
+async function toolBrainDailyBrief(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const dateRaw = args["date"];
+  const date =
+    dateRaw === undefined || dateRaw === null
+      ? new Date().toISOString().slice(0, 10)
+      : coerceIsoTimestampOrDate("brain_daily_brief", "date", dateRaw)!;
+  const cfg = resolveTemporalCfgSafe(ctx.vault);
+  const index = buildTimelineIndex(ctx.vault, {});
+  const brief = buildDailyBrief(index, ctx.vault, date, {
+    offsetHours: cfg.daily_window_offset_hours,
+  });
+  return {
+    vault_path: ctx.vault,
+    date: brief.date,
+    window: brief.window,
+    events_by_kind: brief.eventsByKind,
+    status_transitions: brief.statusTransitions,
+    vault_delta: brief.vaultDelta,
+    source_pointers: brief.sourcePointers,
+    generated_at: brief.generatedAt,
+  };
+}
+
+/**
+ * `brain_weekly_synthesis` - 7-day deterministic summary plus retired
+ * and contradictions lists.
+ */
+async function toolBrainWeeklySynthesis(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const weekEndRaw = args["week_end"];
+  const weekEnd =
+    weekEndRaw === undefined || weekEndRaw === null
+      ? new Date().toISOString().slice(0, 10)
+      : coerceIsoTimestampOrDate("brain_weekly_synthesis", "week_end", weekEndRaw)!;
+  const cfg = resolveTemporalCfgSafe(ctx.vault);
+  const index = buildTimelineIndex(ctx.vault, {});
+  const synth = buildWeeklySynthesis(index, ctx.vault, weekEnd, cfg);
+  return {
+    vault_path: ctx.vault,
+    window_start: synth.windowStart,
+    window_end: synth.windowEnd,
+    events_by_kind: synth.eventsByKind,
+    status_transitions: synth.statusTransitions,
+    retired: synth.retired,
+    contradictions: synth.contradictions,
+    vault_delta: synth.vaultDelta,
+    source_pointers: synth.sourcePointers,
+    generated_at: synth.generatedAt,
+  };
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -1420,6 +1677,115 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainMocAudit,
+  },
+  {
+    name: "brain_timeline",
+    description:
+      "Chronological list of Brain events filtered by any combination of pref_id, topic, kind, since, until, limit. Returns the canonical TimelineIndex projection. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pref_id: {
+          type: "string",
+          description:
+            "Restrict to events for this preference / retired / signal id.",
+        },
+        topic: {
+          type: "string",
+          description: "Restrict to events for this topic slug.",
+        },
+        kind: {
+          type: "string",
+          description:
+            "Restrict to events of this BrainLogEventKind (e.g. `apply-evidence`).",
+        },
+        since: {
+          type: "string",
+          description:
+            "Inclusive lower bound (ISO date or ISO timestamp). Defaults to epoch.",
+        },
+        until: {
+          type: "string",
+          description:
+            "Exclusive upper bound (ISO date or ISO timestamp). Defaults to now.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Maximum number of events to return after filtering. Omit for no cap.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainTimeline,
+  },
+  {
+    name: "brain_belief_evolution",
+    description:
+      "Per-preference or per-topic chronological story: status transitions (creation/promotion/retirement) derived from dream summaries, evidence rollup with running counts, and retirement chain. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pref_id: {
+          type: "string",
+          description:
+            "Target preference id (e.g. `pref-foo`). Mutually exclusive with `topic`.",
+        },
+        topic: {
+          type: "string",
+          description:
+            "Target topic slug. Aggregates every pref-* / ret-* sharing the topic. Mutually exclusive with `pref_id`.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainBeliefEvolution,
+  },
+  {
+    name: "brain_stale_scan",
+    description:
+      "Structural staleness report: preferences, signals, and Brain/log files inactive longer than the configured `temporal:` thresholds (stale_pref_days / stale_signal_days / stale_log_days). Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: toolBrainStaleScan,
+  },
+  {
+    name: "brain_daily_brief",
+    description:
+      "Deterministic daily brief: events grouped by kind, status transitions, vault delta (newPromotions / newRetired / newFeedback / evidenceApplied / evidenceViolated), and deduplicated artifact wikilinks. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        date: {
+          type: "string",
+          description:
+            "ISO date (`YYYY-MM-DD`) the brief targets. Defaults to today UTC.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainDailyBrief,
+  },
+  {
+    name: "brain_weekly_synthesis",
+    description:
+      "Deterministic 7-day synthesis: events grouped by kind, status transitions, retired-in-window list, contradictions (signal-suppressed + apply-evidence violated), vault delta, and source pointers. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        week_end: {
+          type: "string",
+          description:
+            "ISO date (`YYYY-MM-DD`) the 7-day window ends at (exclusive). Defaults to today UTC.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainWeeklySynthesis,
   },
   {
     name: "brain_operator_summary",

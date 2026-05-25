@@ -160,7 +160,9 @@ describe("tool listing", () => {
         // brain_context_pack added in v0.10.15,
         // brain_operator_summary added in v0.10.16,
         // brain_unlinked_mentions / brain_concept_synthesis /
-        // brain_moc_audit added in v0.10.17).
+        // brain_moc_audit added in v0.10.17,
+        // brain_timeline / brain_belief_evolution / brain_stale_scan /
+        // brain_daily_brief / brain_weekly_synthesis added in v0.10.18).
         "brain_feedback",
         "brain_dream",
         "brain_apply_evidence",
@@ -174,6 +176,11 @@ describe("tool listing", () => {
         "brain_unlinked_mentions",
         "brain_concept_synthesis",
         "brain_moc_audit",
+        "brain_timeline",
+        "brain_belief_evolution",
+        "brain_stale_scan",
+        "brain_daily_brief",
+        "brain_weekly_synthesis",
         "brain_operator_summary",
         // Pay Memory (unchanged).
         "payment_memory_init",
@@ -374,10 +381,11 @@ describe("stdio loop", () => {
     const list = JSON.parse(lines[1]!);
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
-    // v0.10.17: 3 core + 14 Brain (brain_unlinked_mentions /
-    // brain_concept_synthesis / brain_moc_audit added v0.10.17)
-    // + 8 Pay Memory + 1 Search = 26.
-    expect(list.result.tools.length).toBe(26);
+    // v0.10.18: 3 core + 19 Brain (brain_timeline /
+    // brain_belief_evolution / brain_stale_scan / brain_daily_brief /
+    // brain_weekly_synthesis added v0.10.18)
+    // + 8 Pay Memory + 1 Search = 31.
+    expect(list.result.tools.length).toBe(31);
   });
 
   test("returns parse error for invalid JSON", async () => {
