@@ -41,6 +41,7 @@ Brain verbs (observing memory):
   context-pack        Return a tier-then-recency vault slice under a token budget
   lint                Self-healing structural checks (--consolidate); --apply to write
   actions             Ranked maintenance action list (dedup + lint + footprint)
+  summary             Operator dashboard: trust verdict, doctor/dream counts, actions
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -242,4 +243,10 @@ export const VERB_HELP: Record<string, string> = {
     "action by impact (dedup count × weight, staleness × age,\n" +
     "broken-link count, token-footprint excess), and prints the top N\n" +
     "(default 10) sorted by impact descending. Read-only.\n",
+  summary:
+    "usage: o2b brain summary [--skip-dream] [--top-actions <n>] [--vault <path>] [--json]\n" +
+    "Operator dashboard. Aggregates trust verdict, doctor warnings/errors,\n" +
+    "dream uncertain/quarantined counts, verification delta, top maintenance\n" +
+    "actions, and instruction-file ceiling warnings into one report.\n" +
+    "Runs a dry-run dream pass by default; --skip-dream omits it. Read-only.\n",
 };
