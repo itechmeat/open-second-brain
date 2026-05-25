@@ -60,6 +60,7 @@ import {
   type BrainRetiredReason,
 } from "./types.ts";
 import type { PageLifecycle } from "./page-meta/lifecycle.ts";
+import type { PageTier } from "./page-meta/tier.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -140,6 +141,12 @@ export interface WritePreferenceInput {
    * pages.
    */
   readonly lifecycle?: PageLifecycle;
+  /**
+   * Per-page importance tier. User-editable, unprefixed in YAML
+   * (next to `pinned`). Reader-side default is `supporting`; emitted
+   * only when supplied so legacy fixtures stay byte-identical.
+   */
+  readonly tier?: PageTier;
   readonly pinned?: boolean;
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
@@ -358,6 +365,11 @@ function preferenceFrontmatter(
   // to `stable` via `readLifecycle()`.
   if (input.lifecycle !== undefined) {
     metadata["_lifecycle"] = input.lifecycle;
+  }
+  // `tier` is user-editable (unprefixed). Emitted only when supplied;
+  // readers fall back to `supporting` via `readTier()`.
+  if (input.tier !== undefined) {
+    metadata["tier"] = input.tier;
   }
   return metadata;
 }
