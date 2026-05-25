@@ -29,6 +29,7 @@ import type {
   BrainVaultConfig,
   DisciplineReportConfig,
   ResolvedBrainGuardrailConfig,
+  ResolvedBrainLinkGraphConfig,
 } from "./types.ts";
 // Imported from `defaults.ts` (not from `vault-scope/index.ts`) to
 // break the module-init cycle: the resolver lives in `index.ts` and
@@ -114,6 +115,52 @@ export function resolveGuardrails(
     instruction_file_max_lines:
       g.instruction_file_max_lines ??
       BRAIN_GUARDRAIL_DEFAULTS.instruction_file_max_lines,
+  };
+}
+
+/**
+ * Default `link_graph` block (v0.10.17). Absent from `_brain.yaml`
+ * (or with absent individual keys) falls back here via
+ * `resolveLinkGraph`. Both knobs are purely structural - no
+ * vocabulary detection of "this looks like a MOC".
+ *
+ * Defaults:
+ *   - `moc_min_outbound_links: 5` - the heuristic floor for "this
+ *     is a hub note", chosen to filter out prose notes with a few
+ *     inline references.
+ *   - `moc_min_link_ratio: 0.3` - 30 % of the body's non-whitespace
+ *     characters must sit inside `[[…]]` for the audit to accept
+ *     the note as a MOC. Prose notes typically score below 0.1.
+ *   - `vault_instruction_file: "VAULT.md"` - the user-authored
+ *     vault-root instruction file `brain_context` surfaces when
+ *     present. Configurable per vault.
+ */
+export const BRAIN_LINK_GRAPH_DEFAULTS: ResolvedBrainLinkGraphConfig =
+  Object.freeze({
+    moc_min_outbound_links: 5,
+    moc_min_link_ratio: 0.3,
+    vault_instruction_file: "VAULT.md",
+  }) as ResolvedBrainLinkGraphConfig;
+
+/**
+ * Merge a parsed `link_graph` block (or `undefined`) with
+ * `BRAIN_LINK_GRAPH_DEFAULTS`.
+ */
+export function resolveLinkGraph(
+  cfg: BrainConfig,
+): ResolvedBrainLinkGraphConfig {
+  const lg = cfg.link_graph;
+  if (lg === undefined) return BRAIN_LINK_GRAPH_DEFAULTS;
+  return {
+    moc_min_outbound_links:
+      lg.moc_min_outbound_links ??
+      BRAIN_LINK_GRAPH_DEFAULTS.moc_min_outbound_links,
+    moc_min_link_ratio:
+      lg.moc_min_link_ratio ??
+      BRAIN_LINK_GRAPH_DEFAULTS.moc_min_link_ratio,
+    vault_instruction_file:
+      lg.vault_instruction_file ??
+      BRAIN_LINK_GRAPH_DEFAULTS.vault_instruction_file,
   };
 }
 

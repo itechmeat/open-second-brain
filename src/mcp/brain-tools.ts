@@ -55,6 +55,7 @@ import {
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions.ts";
 import { buildConceptCluster } from "../core/brain/link-graph/concept-cluster.ts";
+import { auditMoc, MocAuditError } from "../core/brain/link-graph/moc-audit.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
@@ -952,6 +953,47 @@ async function toolBrainConceptSynthesis(
   };
 }
 
+// ----- brain_moc_audit (v0.10.17) ------------------------------------------
+
+/**
+ * Per-MOC coverage audit. Classifies cluster members into
+ * `wellCovered` / `fragile` / `candidateMissing` and surfaces a
+ * `suggestedNext` candidate. MOC detection is purely structural -
+ * outbound link count + link density.
+ */
+async function toolBrainMocAudit(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const idRaw = args["id"];
+  if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_moc_audit: id must be a non-empty string",
+    );
+  }
+  const targetId = normaliseWikilinkTarget(idRaw);
+  try {
+    const report = auditMoc(ctx.vault, targetId);
+    return {
+      vault_path: ctx.vault,
+      hub_id: report.hubId,
+      outbound_count: report.outboundCount,
+      well_covered: report.wellCovered,
+      fragile: report.fragile,
+      candidate_missing: report.candidateMissing,
+      ...(report.suggestedNext
+        ? { suggested_next: report.suggestedNext }
+        : {}),
+    };
+  } catch (err) {
+    if (err instanceof MocAuditError) {
+      throw new MCPError(INVALID_PARAMS, `brain_moc_audit: ${err.message}`);
+    }
+    throw err;
+  }
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -1319,6 +1361,24 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainConceptSynthesis,
+  },
+  {
+    name: "brain_moc_audit",
+    description:
+      "Per-MOC coverage audit. Given a hub note id, classifies its outbound cluster into well-covered / fragile / candidate-missing and surfaces a suggested-next candidate. MOC detection is purely structural (outbound link count + link density). Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "Hub note id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainMocAudit,
   },
   {
     name: "brain_operator_summary",

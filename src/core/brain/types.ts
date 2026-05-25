@@ -770,6 +770,13 @@ export interface BrainConfig {
    * via `resolveGuardrails`, keeping current behaviour bit-identical.
    */
   readonly guardrails?: BrainGuardrailConfig;
+  /**
+   * Optional `link_graph:` block (v0.10.17). Tunes the MOC audit
+   * thresholds and names the vault-root instruction file the
+   * `brain_context` envelope surfaces. Absent: callers fall back to
+   * `BRAIN_LINK_GRAPH_DEFAULTS` via `resolveLinkGraph`.
+   */
+  readonly link_graph?: BrainLinkGraphConfig;
 }
 
 /**
@@ -783,4 +790,40 @@ export interface ResolvedBrainGuardrailConfig {
   readonly promotion_min_distinct_agents: number;
   readonly promotion_min_age_days: number;
   readonly instruction_file_max_lines: number;
+}
+
+/**
+ * Optional `link_graph:` block (v0.10.17). Drives the MOC audit
+ * threshold heuristics. Absent: callers fall back to
+ * `BRAIN_LINK_GRAPH_DEFAULTS` via `resolveLinkGraph`.
+ *
+ * Both knobs are purely structural - link counts and ratios over
+ * body length. No vocabulary detection of "this looks like a MOC".
+ */
+export interface BrainLinkGraphConfig {
+  /**
+   * Minimum number of outbound wikilinks a note must have for
+   * `auditMoc` to treat it as a MOC candidate. Below this the audit
+   * throws so callers don't misinterpret a thin note as a hub.
+   */
+  readonly moc_min_outbound_links?: number;
+  /**
+   * Minimum ratio of wikilink characters to non-whitespace body
+   * characters. A high-density link-list note crosses this; a prose
+   * note with a few inline references does not.
+   */
+  readonly moc_min_link_ratio?: number;
+  /**
+   * Vault-relative path of the user-authored instruction file the
+   * `brain_context` envelope optionally surfaces. Defaults to
+   * `VAULT.md`. The file is read on demand, NOT injected by a
+   * scheduler.
+   */
+  readonly vault_instruction_file?: string;
+}
+
+export interface ResolvedBrainLinkGraphConfig {
+  readonly moc_min_outbound_links: number;
+  readonly moc_min_link_ratio: number;
+  readonly vault_instruction_file: string;
 }

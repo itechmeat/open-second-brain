@@ -118,6 +118,56 @@ describe("brain_unlinked_mentions registration", () => {
   });
 });
 
+describe("brain_moc_audit registration", () => {
+  test("registered in the full tool table", () => {
+    const tools = buildToolTable("full");
+    expect(tools.find((t) => t.name === "brain_moc_audit")).toBeDefined();
+  });
+
+  test("NOT in the writer-only scope", () => {
+    const tools = buildToolTable("writer");
+    expect(tools.find((t) => t.name === "brain_moc_audit")).toBeUndefined();
+  });
+});
+
+describe("brain_moc_audit round trip", () => {
+  test("returns bucketed envelope for a qualifying hub", async () => {
+    writePref("pref-a", { kind: "preference", topic: "a", status: "confirmed", principle: "p" });
+    writePref("pref-b", { kind: "preference", topic: "b", status: "confirmed", principle: "p" });
+    writePref("pref-c", { kind: "preference", topic: "c", status: "confirmed", principle: "p" });
+    writePref("pref-d", { kind: "preference", topic: "d", status: "confirmed", principle: "p" });
+    writePref("pref-e", { kind: "preference", topic: "e", status: "confirmed", principle: "p" });
+    writePref(
+      "pref-hub",
+      { kind: "preference", topic: "hub", status: "confirmed", principle: "p" },
+      "[[pref-a]] [[pref-b]] [[pref-c]] [[pref-d]] [[pref-e]] [[pref-missing]]",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callTool(server, "brain_moc_audit", { id: "pref-hub" });
+    const out = JSON.parse(r.result!.content[0]!.text);
+    expect(out["hub_id"]).toBe("pref-hub");
+    expect(out["outbound_count"]).toBe(6);
+    expect(
+      (out["candidate_missing"] as Array<{ id: string }>).some(
+        (c) => c.id === "pref-missing",
+      ),
+    ).toBe(true);
+  });
+
+  test("non-MOC hub returns INVALID_PARAMS", async () => {
+    writePref(
+      "pref-thin",
+      { kind: "preference", topic: "t", status: "confirmed", principle: "p" },
+      "Just [[pref-a]] and [[pref-b]] here.",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callTool(server, "brain_moc_audit", { id: "pref-thin" });
+    expect(r.error?.code).toBe(-32602);
+  });
+});
+
 describe("brain_concept_synthesis registration", () => {
   test("registered in the full tool table", () => {
     const tools = buildToolTable("full");

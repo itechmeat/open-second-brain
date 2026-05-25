@@ -44,6 +44,7 @@ Brain verbs (observing memory):
   summary             Operator dashboard: trust verdict, doctor/dream counts, actions
   unlinked            Raw-text mentions of an artifact's title/aliases outside [[...]]
   synthesise          Concept cluster: target + linkers (depth-1), optionally + mentions
+  moc-audit           Per-MOC coverage audit (well-covered/fragile/candidate-missing)
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -264,4 +265,11 @@ export const VERB_HELP: Record<string, string> = {
     "raw-text mentions outside [[...]]. Pure assembler, no LLM call. Output\n" +
     "is a deterministic JSON envelope downstream consumers can feed to\n" +
     "any synthesis prompt. Read-only.\n",
+  "moc-audit":
+    "usage: o2b brain moc-audit <hub-id> [--vault <path>] [--json]\n" +
+    "Per-MOC coverage audit. Given a hub note id, classifies cluster\n" +
+    "members into well-covered / fragile / candidate-missing buckets and\n" +
+    "surfaces a suggested-next candidate. MOC detection is purely\n" +
+    "structural (outbound link count + link density thresholds from\n" +
+    "_brain.yaml). Read-only.\n",
 };
