@@ -118,6 +118,95 @@ describe("brain_unlinked_mentions registration", () => {
   });
 });
 
+describe("brain_concept_synthesis registration", () => {
+  test("registered in the full tool table", () => {
+    const tools = buildToolTable("full");
+    expect(tools.find((t) => t.name === "brain_concept_synthesis")).toBeDefined();
+  });
+
+  test("NOT in the writer-only scope", () => {
+    const tools = buildToolTable("writer");
+    expect(tools.find((t) => t.name === "brain_concept_synthesis")).toBeUndefined();
+  });
+});
+
+describe("brain_concept_synthesis round trip", () => {
+  test("returns envelope with linkers", async () => {
+    writePref("pref-tgt", {
+      kind: "preference",
+      topic: "t",
+      status: "confirmed",
+      principle: "p",
+      title: "Subj",
+    });
+    writePref(
+      "pref-linker",
+      {
+        kind: "preference",
+        topic: "l",
+        status: "confirmed",
+        principle: "p",
+      },
+      "I see [[pref-tgt]] here.",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callTool(server, "brain_concept_synthesis", {
+      id: "pref-tgt",
+    });
+    const out = JSON.parse(r.result!.content[0]!.text);
+    expect(out["target_id"]).toBe("pref-tgt");
+    expect(out["target_title"]).toBe("Subj");
+    expect(out["linkers"].length).toBe(1);
+    expect(out["unlinked_mentions"]).toEqual([]);
+  });
+
+  test("include_unlinked=true populates unlinked_mentions", async () => {
+    writePref("pref-tgt", {
+      kind: "preference",
+      topic: "t",
+      status: "confirmed",
+      principle: "p",
+      title: "Subject Line",
+    });
+    writePref(
+      "pref-prose",
+      {
+        kind: "preference",
+        topic: "l",
+        status: "confirmed",
+        principle: "p",
+      },
+      "Subject Line shows up here.",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callTool(server, "brain_concept_synthesis", {
+      id: "pref-tgt",
+      include_unlinked: true,
+    });
+    const out = JSON.parse(r.result!.content[0]!.text);
+    expect(out["unlinked_mentions"].length).toBe(1);
+  });
+
+  test("rejects empty id with INVALID_PARAMS", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callTool(server, "brain_concept_synthesis", { id: "" });
+    expect(r.error?.code).toBe(-32602);
+  });
+
+  test("rejects non-boolean include_unlinked", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callTool(server, "brain_concept_synthesis", {
+      id: "pref-x",
+      include_unlinked: "yes",
+    });
+    expect(r.error?.code).toBe(-32602);
+  });
+});
+
 describe("brain_unlinked_mentions round trip", () => {
   test("returns mention list for matching prose", async () => {
     writePref(

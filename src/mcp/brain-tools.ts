@@ -54,6 +54,7 @@ import {
 } from "../core/brain/apply-evidence.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions.ts";
+import { buildConceptCluster } from "../core/brain/link-graph/concept-cluster.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
@@ -909,6 +910,48 @@ async function toolBrainUnlinkedMentions(
   };
 }
 
+// ----- brain_concept_synthesis (v0.10.17) ----------------------------------
+
+/**
+ * Concept-scoped cluster envelope: target + all linkers (depth-1)
+ * plus optionally unlinked mentions. Pure assembler; no LLM call.
+ */
+async function toolBrainConceptSynthesis(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const idRaw = args["id"];
+  if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_concept_synthesis: id must be a non-empty string",
+    );
+  }
+  const includeUnlinkedRaw = args["include_unlinked"];
+  let includeUnlinked = false;
+  if (includeUnlinkedRaw !== undefined && includeUnlinkedRaw !== null) {
+    if (typeof includeUnlinkedRaw !== "boolean") {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_concept_synthesis: include_unlinked must be a boolean",
+      );
+    }
+    includeUnlinked = includeUnlinkedRaw;
+  }
+  const targetId = normaliseWikilinkTarget(idRaw);
+  const cluster = buildConceptCluster(ctx.vault, targetId, {
+    includeUnlinked,
+  });
+  return {
+    vault_path: ctx.vault,
+    target_id: cluster.targetId,
+    target_title: cluster.targetTitle,
+    linkers: cluster.linkers,
+    unlinked_mentions: cluster.unlinkedMentions,
+    generated_at: cluster.generatedAt,
+  };
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -1253,6 +1296,29 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainUnlinkedMentions,
+  },
+  {
+    name: "brain_concept_synthesis",
+    description:
+      "Concept-scoped cluster: target note + every artifact that wikilinks to it (depth-1), optionally including unlinked-mention rows. Deterministic JSON envelope, no LLM call inside. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "Target id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
+        },
+        include_unlinked: {
+          type: "boolean",
+          description:
+            "When true, also populate `unlinked_mentions` (raw-text mentions outside `[[...]]`). Defaults to false.",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainConceptSynthesis,
   },
   {
     name: "brain_operator_summary",

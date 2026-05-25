@@ -28,3 +28,4 @@ export { cmdBrainLint } from "./lint.ts";
 export { cmdBrainActions } from "./actions.ts";
 export { cmdBrainSummary } from "./summary.ts";
 export { cmdBrainUnlinked } from "./unlinked.ts";
+export { cmdBrainSynthesise } from "./synthesise.ts";

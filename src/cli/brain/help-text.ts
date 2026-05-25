@@ -43,6 +43,7 @@ Brain verbs (observing memory):
   actions             Ranked maintenance action list (dedup + lint + footprint)
   summary             Operator dashboard: trust verdict, doctor/dream counts, actions
   unlinked            Raw-text mentions of an artifact's title/aliases outside [[...]]
+  synthesise          Concept cluster: target + linkers (depth-1), optionally + mentions
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -256,4 +257,11 @@ export const VERB_HELP: Record<string, string> = {
     "already inside a [[...]] wikilink. Match boundary is Unicode-aware\n" +
     "(codepoint class), language-agnostic. Walks Brain/preferences/ and\n" +
     "Brain/retired/. Read-only.\n",
+  synthesise:
+    "usage: o2b brain synthesise <id> [--include-unlinked] [--vault <path>] [--json]\n" +
+    "Assemble the concept-cluster envelope: target note + every artifact\n" +
+    "that wikilinks to it (depth-1). With --include-unlinked also include\n" +
+    "raw-text mentions outside [[...]]. Pure assembler, no LLM call. Output\n" +
+    "is a deterministic JSON envelope downstream consumers can feed to\n" +
+    "any synthesis prompt. Read-only.\n",
 };
