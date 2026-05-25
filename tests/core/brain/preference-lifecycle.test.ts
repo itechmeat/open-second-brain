@@ -15,6 +15,8 @@ import {
   writePreference,
   type WritePreferenceInput,
 } from "../../../src/core/brain/preference.ts";
+import { readLifecycle } from "../../../src/core/brain/page-meta/lifecycle.ts";
+import { parseFrontmatter } from "../../../src/core/vault.ts";
 import {
   BRAIN_CONFIDENCE,
   BRAIN_PREFERENCE_STATUS,
@@ -70,10 +72,11 @@ describe("writePreference — _lifecycle emission", () => {
   test("default lifecycle for parsed legacy file is stable (via readLifecycle)", () => {
     const res = writePreference(vault, basePref("legacy2"));
     const pref = parsePreference(res.path);
-    // The parser does not surface lifecycle as a typed field on
-    // BrainPreference (yet). Read-side defaulting lives in
-    // readLifecycle, but verify the on-disk shape stays legacy.
     expect(pref).toBeDefined();
+    // Confirm the actual default contract: the read-side helper
+    // returns `stable` when the field is absent on disk.
+    const [meta] = parseFrontmatter(res.path);
+    expect(readLifecycle(meta)).toBe("stable");
     const yaml = readFileSync(res.path, "utf8");
     expect(yaml).not.toMatch(/^_lifecycle:/m);
   });

@@ -24,8 +24,10 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
   if (!maxTokensRaw) {
     return fail("brain context-pack: --max-tokens <n> is required");
   }
-  const maxTokens = Number.parseInt(maxTokensRaw, 10);
-  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
+  // Strict integer parsing - `Number()` rejects partial numeric
+  // strings like "12abc" that `parseInt` would silently accept.
+  const maxTokens = Number(maxTokensRaw);
+  if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
     return fail(`brain context-pack: --max-tokens must be a positive integer; got ${maxTokensRaw}`);
   }
 

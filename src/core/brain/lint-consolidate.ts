@@ -165,8 +165,11 @@ function applyDemotion(path: string): boolean {
   } catch {
     return false;
   }
-  if (!raw.startsWith("---\n")) return false;
-  const close = raw.indexOf("\n---\n", 4);
+  // Accept either LF or CRLF frontmatter delimiters so Windows-written
+  // vaults (Syncthing peer on Windows, manual hand-edit) still demote.
+  if (!/^---\r?\n/.test(raw)) return false;
+  const closeMatch = /\r?\n---\r?\n/.exec(raw.slice(3));
+  const close = closeMatch ? 3 + closeMatch.index : -1;
   if (close < 0) return false;
   const head = raw.slice(0, close);
   const tail = raw.slice(close);

@@ -38,6 +38,9 @@ describe("computeDedupHash (unicode-aware)", () => {
   });
 
   test("NFC vs NFD decomposed accent hashes identically", () => {
+    // First input is precomposed (NFC: U+00E9 `é`); second is the
+    // decomposed form (NFD: `e` + U+0301 combining acute) so the
+    // hash must collapse both to the same key.
     const a = computeDedupHash({
       topic: "ru",
       signal: "positive",
@@ -46,7 +49,7 @@ describe("computeDedupHash (unicode-aware)", () => {
     const b = computeDedupHash({
       topic: "ru",
       signal: "positive",
-      principle: "café au lait",
+      principle: "café au lait",
     });
     expect(a).toBe(b);
   });

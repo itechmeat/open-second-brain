@@ -59,7 +59,7 @@ Eight atomic TDD units in the order the chosen variant requires. Each unit ends 
   - modified: `src/cli/brain/verbs/index.ts` (register verb)
   - modified: `src/core/brain/digest.ts` (add `tokenFootprint` section to digest payload)
   - new tests: `tests/core/brain/text/tokenizer.test.ts`, `tests/core/brain/token-footprint.test.ts`, `tests/cli/brain/token-footprint.test.ts`
-- **Acceptance**: `estimateTokens()` returns word-count × 1.3 with CJK-block adjustment; deterministic. `computeTokenFootprint(vault)` returns per-category counts (preferences, signals, retired, daily, other). Digest output includes `Token footprint` section with `total`, `byCategory`, `exceededWarnThreshold` boolean. Default threshold 200_000, overridable via `BRAIN_TOKEN_WARN_THRESHOLD` env var.
+- **Acceptance**: `estimateTokens()` returns `ceil(utf8_bytes / 4)`; deterministic, language-agnostic, no script-specific branching. `computeTokenFootprint(vault)` returns per-category counts (preferences, signals, retired, daily, other). Digest output includes `Token footprint` section with `total`, `byCategory`, `exceededWarnThreshold` boolean. Default threshold 200_000, overridable via `BRAIN_TOKEN_WARN_THRESHOLD` env var.
 - **Depends on**: none (introduces tokenizer that later tasks reuse).
 - **Commit**: `feat(brain): vault token footprint monitor`
 

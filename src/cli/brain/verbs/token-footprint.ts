@@ -7,7 +7,7 @@
 
 import { defaultConfigPath } from "../../../core/config.ts";
 import { computeTokenFootprint } from "../../../core/brain/token-footprint.ts";
-import { parse, okJson, resolveBrainVault } from "../helpers.ts";
+import { parse, fail, okJson, resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainTokenFootprint(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -17,10 +17,20 @@ export async function cmdBrainTokenFootprint(argv: string[]): Promise<number> {
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const override = flags["warn-threshold"] as string | undefined;
+  const overrideRaw = flags["warn-threshold"] as string | undefined;
+  let warnThreshold: number | undefined;
+  if (overrideRaw !== undefined) {
+    const parsed = Number(overrideRaw);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return fail(
+        `brain token-footprint: --warn-threshold must be a positive integer; got ${overrideRaw}`,
+      );
+    }
+    warnThreshold = parsed;
+  }
 
   const report = computeTokenFootprint(vault, {
-    warnThreshold: override ? Number.parseInt(override, 10) : undefined,
+    ...(warnThreshold !== undefined ? { warnThreshold } : {}),
     envWarnThreshold: process.env["BRAIN_TOKEN_WARN_THRESHOLD"],
   });
 

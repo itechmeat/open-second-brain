@@ -31,7 +31,7 @@ Layered architecture for the bundle, chosen from a 3-variant brainstorm:
 
 **Variant 1 (Layered foundation)**. Three horizontal layers built bottom-up; the eight feature outputs sit on top.
 
-```
+```text
 Consumer layer:  ranker.ts | digest.ts | doctor.ts | dream.ts | inline-scan.ts | sessions/import.ts
                  + new CLI verbs (lint, token-footprint, context-pack, page-dedup)
                  + new MCP tool (brain_context_pack)
@@ -54,7 +54,7 @@ Consumers depend on layers, never on each other. The DAG keeps the diff coherent
 - **`tier:` is user-editable, NOT under `_` prefix**: tier expresses operator intent (which preferences/notes matter most), so it sits alongside `pinned` as user-owned metadata. Default at read-time is `"supporting"`.
 - **`merged_into:` lives on the secondary, never the canonical**: a dedup merge writes `merged_into: pref-<canonical-slug>` to the secondary's frontmatter and rewrites every wikilink in the vault that pointed to the secondary. Reading code resolves `merged_into` transitively (capped at depth 5 to fail-loud on cycles).
 - **NFKC + casefold goes into `text/normalize.ts`, NOT into `dedup-hash.ts` directly**: `dedup-hash.ts` keeps its narrow purpose (compute a SHA256 of normalised inputs). The new helper is a one-line `s.normalize("NFKC").toLowerCase()` wrapper but lives in `text/` so other call sites (search ranker, alias index, future fuzzy match) can reuse it.
-- **Token counter is heuristic, not tokenizer-accurate**: word-count × 1.3 with a few class-based adjustments (whitespace runs, CJK blocks counted per character × 0.5). Deterministic, no LLM, no external dependency. Calibrated against a small fixture of known-token-count strings. Good enough for monitoring + budget enforcement.
+- **Token counter is heuristic, not tokenizer-accurate**: deterministic `ceil(utf8_bytes / 4)`, the OpenAI rule-of-thumb generalised to bytes so it stays language-agnostic. No script-specific branching, no external tokenizer dependency. Good enough for monitoring + budget enforcement.
 - **`brain_context_pack(max_tokens, query?)`**: returns highest-tier pages first, then most-recently-applied preferences, then `confirmed` signals, until adding the next item would exceed `max_tokens`. Result includes the actual token estimate so callers can introspect. `query?` is an optional substring filter; full semantic search stays in the existing `brain_search` tool.
 - **`o2b brain lint --consolidate`**:
   - Dry-run by default; `--apply` required to write.

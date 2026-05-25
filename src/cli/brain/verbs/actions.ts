@@ -14,7 +14,7 @@ import {
   scoreActions,
   type ActionInputs,
 } from "../../../core/brain/maintenance/action-scorer.ts";
-import { parse, okJson, resolveBrainVault } from "../helpers.ts";
+import { parse, fail, okJson, resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainActions(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -24,9 +24,17 @@ export async function cmdBrainActions(argv: string[]): Promise<number> {
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const topN = flags["top-n"]
-    ? Math.max(1, Number.parseInt(flags["top-n"] as string, 10))
-    : 10;
+  const topNRaw = flags["top-n"] as string | undefined;
+  let topN = 10;
+  if (topNRaw !== undefined) {
+    const parsed = Number(topNRaw);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return fail(
+        `brain actions: --top-n must be a positive integer; got ${topNRaw}`,
+      );
+    }
+    topN = parsed;
+  }
 
   const dedup = findDuplicateCandidates(vault);
   const lint = lintConsolidate(vault, { apply: false });

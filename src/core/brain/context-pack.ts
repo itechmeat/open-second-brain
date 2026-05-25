@@ -15,7 +15,6 @@
 
 import {
   existsSync,
-  readFileSync,
   readdirSync,
   statSync,
 } from "node:fs";
@@ -79,12 +78,6 @@ function collectCandidates(vault: string): Candidate[] {
     for (const name of readdirSync(dir)) {
       if (!name.endsWith(".md")) continue;
       const full = join(dir, name);
-      let raw: string;
-      try {
-        raw = readFileSync(full, "utf8");
-      } catch {
-        continue;
-      }
       let meta: Record<string, unknown>;
       let body: string;
       try {
@@ -95,11 +88,21 @@ function collectCandidates(vault: string): Candidate[] {
       const id = typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
       const tier = readTier(meta);
       const created = typeof meta["created_at"] === "string" ? meta["created_at"] : "";
-      const createdAtMs = created
-        ? Date.parse(created)
-        : statSync(full).mtimeMs;
+      let fallbackMtimeMs = 0;
+      if (!created) {
+        try {
+          fallbackMtimeMs = statSync(full).mtimeMs;
+        } catch {
+          fallbackMtimeMs = 0;
+        }
+      }
+      const createdAtMs = created ? Date.parse(created) : fallbackMtimeMs;
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
       const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
+      // Token budget is computed against the body the pack actually
+      // emits, not the full file - frontmatter tokens are never
+      // returned to the caller, so charging them would under-fill
+      // the context window.
       out.push({
         id,
         path: full,
@@ -108,7 +111,7 @@ function collectCandidates(vault: string): Candidate[] {
         topic,
         principle,
         body,
-        tokens: estimateTokens(raw),
+        tokens: estimateTokens(body),
       });
     }
   }

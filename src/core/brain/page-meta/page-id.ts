@@ -45,11 +45,24 @@ export function readMergedInto(
   return null;
 }
 
+/**
+ * Strict page-id format: `pref-<slug>` or `ret-<slug>` where the
+ * slug matches the same `[a-z0-9-]+` shape `validateSlug` enforces.
+ * Anything else - path separators, newlines, dots, uppercase - is
+ * rejected so a crafted `merged_into:` value cannot escape the
+ * Brain/ dirs or inject extra YAML keys into a write.
+ */
+const PAGE_ID_RE = /^(pref|ret)-[a-z0-9-]+$/;
+
+function isValidPageId(id: string): boolean {
+  return PAGE_ID_RE.test(id);
+}
+
 function pageIdToPath(vault: string, id: string): string | null {
+  if (!isValidPageId(id)) return null;
   const dirs = brainDirs(vault);
   if (id.startsWith("pref-")) return join(dirs.preferences, `${id}.md`);
-  if (id.startsWith("ret-")) return join(dirs.retired, `${id}.md`);
-  return null;
+  return join(dirs.retired, `${id}.md`);
 }
 
 /**
@@ -117,6 +130,20 @@ export function setMergedInto(
   secondaryId: string,
   canonicalId: string,
 ): string {
+  if (!isValidPageId(secondaryId)) {
+    throw new MergeChainError(
+      "MALFORMED",
+      secondaryId,
+      `invalid secondary page id: ${secondaryId}`,
+    );
+  }
+  if (!isValidPageId(canonicalId)) {
+    throw new MergeChainError(
+      "MALFORMED",
+      canonicalId,
+      `invalid canonical page id: ${canonicalId}`,
+    );
+  }
   if (secondaryId === canonicalId) {
     throw new MergeChainError(
       "CYCLE",

@@ -28,7 +28,7 @@ Project: Open Second Brain (OSB) - https://github.com/itechmeat/open-second-brai
 Runtime: Bun + TypeScript, Markdown vault on disk, optional SQLite-backed search index.
 Recent commits (newest first):
 
-```
+```text
 9d9636b feat: index fastpath, PEM/JWT redaction, vault connection health (v0.10.14) (#29)
 7d81f0b feat: codegraph-partner skill + o2b doctor check (v0.10.13) (#28)
 0462b91 feat: v0.10.12 operational friction reduction (#27)
@@ -84,8 +84,9 @@ Constraints:
 
 Produce exactly 3 distinct architectural variants for how to STRUCTURE the bundle (shared modules, ordering, naming conventions, test surfaces). The variants must differ in how they group the eight features into shared building blocks, not in which features ship.
 
-For each variant:
+For each variant, follow this template exactly:
 
+```markdown
 ### Variant N: <short name>
 - **Approach**: 2-3 sentences describing the variant.
 - **Shared building blocks**: list the new core modules / types this variant introduces and what feature(s) each one underlies.
@@ -93,10 +94,13 @@ For each variant:
 - **Trade-offs**: bullet list of pros and cons.
 - **Complexity**: small | medium | large
 - **Risk**: low | medium | high
+```
 
-After the three variants, add exactly one recommendation:
+After the three variants, add exactly one recommendation in this shape:
 
+```markdown
 ### Recommended: Variant N
 **Rationale**: 2-3 sentences explaining why this variant over the others, considering the project context and constraints above.
+```
 
 Output nothing outside of these sections.

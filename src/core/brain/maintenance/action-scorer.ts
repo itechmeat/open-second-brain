@@ -148,6 +148,10 @@ export function scoreActions(
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
-  const cap = opts.topN ?? 10;
+  // Clamp + floor opts.topN so negative or fractional input cannot
+  // produce slice(0, -n) (which silently truncates from the tail
+  // in JS semantics) or off-by-one truncation.
+  const capRaw = opts.topN ?? 10;
+  const cap = Number.isFinite(capRaw) ? Math.max(0, Math.floor(capRaw)) : 10;
   return Object.freeze(all.slice(0, cap));
 }
