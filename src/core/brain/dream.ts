@@ -57,7 +57,8 @@ import {
   createSnapshot,
   pruneSnapshots,
 } from "./snapshot.ts";
-import { loadBrainConfig } from "./policy.ts";
+import { loadBrainConfig, resolveGuardrails } from "./policy.ts";
+import { applySelfApprovalGuardrail } from "./trust/self-approval-guardrail.ts";
 import {
   brainDirs,
   preferencePath,
@@ -326,7 +327,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       suppressed: [],
       warnings: Object.freeze([...warnings]),
       uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
-      quarantined: Object.freeze([] as ReadonlyArray<DreamQuarantinedEntry>),
+      quarantined: Object.freeze([...plan.quarantined]),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -618,7 +619,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     ),
     warnings: Object.freeze([...warnings]),
     uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
-    quarantined: Object.freeze([] as ReadonlyArray<DreamQuarantinedEntry>),
+    quarantined: Object.freeze([...plan.quarantined]),
     ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
     ...(dryRun
       ? { dry_run: true }
@@ -731,6 +732,15 @@ interface PlanState {
    * the inbox does not accumulate.
    */
   readonly signalsSuppressed: SignalSuppressedPlan[];
+  /**
+   * Signal clusters held back from promotion by the self-approval
+   * guardrail (v0.10.16). The cluster passed the existing
+   * `candidate_threshold` but failed one or more configured
+   * thresholds in `BrainGuardrailConfig`. Preserved across the plan
+   * so it surfaces on the DreamRunSummary without affecting the
+   * existing move-to-processed semantics.
+   */
+  readonly quarantined: DreamQuarantinedEntry[];
 }
 
 interface SignalSuppressedPlan {
@@ -797,6 +807,7 @@ function emptyPlan(): PlanState {
     signalsToMove: new Map(),
     contradictionTopics: new Set(),
     signalsSuppressed: [],
+    quarantined: [],
   };
 }
 
@@ -910,6 +921,44 @@ function planTopics(
     const minoritySize = Math.min(positives.length, negatives.length);
     const dominantSize = dominant.length - minoritySize; // cancellation
     if (dominantSize >= cfg.dream.candidate_threshold) {
+      // v0.10.16: extra self-approval guardrail. Defaults
+      // (min_signals=2, min_distinct_agents=1, min_age_days=0) make
+      // this check a no-op for clusters that already passed
+      // candidate_threshold. Operators may opt into stricter
+      // thresholds via `_brain.yaml:guardrails:*`. A failed gate
+      // routes the cluster to `quarantined` instead of creating a
+      // new unconfirmed preference; the contributing signals stay
+      // in inbox/ so the cluster naturally re-evaluates on the next
+      // pass once more evidence accumulates.
+      const guardrails = resolveGuardrails(cfg);
+      const distinctAgents = new Set(dominant.map((s) => s.signal.agent)).size;
+      let earliestSignalMs = Number.POSITIVE_INFINITY;
+      for (const s of dominant) {
+        const t = Date.parse(s.signal.created_at);
+        if (Number.isFinite(t) && t < earliestSignalMs) earliestSignalMs = t;
+      }
+      const ageDays =
+        Number.isFinite(earliestSignalMs)
+          ? Math.max(0, Math.floor((now.getTime() - earliestSignalMs) / (24 * 60 * 60 * 1000)))
+          : 0;
+      const verdict = applySelfApprovalGuardrail(
+        {
+          signal_count: dominantSize,
+          distinct_agents: distinctAgents,
+          age_days: ageDays,
+        },
+        guardrails,
+      );
+      if (verdict.decision === "quarantine") {
+        plan.quarantined.push({
+          topic,
+          signal_count: dominantSize,
+          distinct_agents: distinctAgents,
+          age_days: ageDays,
+          failed_gates: verdict.failed_gates,
+        });
+        continue;
+      }
       // Decide supersede: if a retired pref for the same topic exists,
       // wire it through.
       const retiredForTopic = retiredByTopic.get(topic);
