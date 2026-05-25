@@ -29,6 +29,20 @@ export interface TemporalEventSource {
 }
 
 /**
+ * Denormalised slice of the `dream` summary event body that downstream
+ * consumers (belief-evolution) need to attribute per-preference status
+ * transitions without re-touching disk. Populated only on events of
+ * kind `dream`. Each array carries the original wikilink strings (e.g.
+ * `[[pref-foo|Principle]]` or `[[ret-foo|Principle]] (reason)`) so
+ * consumers can resolve the prefId and any inline reason themselves.
+ */
+export interface DreamSummarySlots {
+  readonly newUnconfirmed?: ReadonlyArray<string>;
+  readonly confirmed?: ReadonlyArray<string>;
+  readonly retired?: ReadonlyArray<string>;
+}
+
+/**
  * One normalized chronological event. Flat shape - optional slots are
  * populated when the source row carries the corresponding field. The
  * `kind` slot reuses the existing `BrainLogEventKind` enum verbatim so
@@ -67,6 +81,12 @@ export interface TemporalEvent {
   readonly validUntil?: string;
   /** Bi-temporal: transaction-time (frontmatter `recorded_at`). */
   readonly recordedAt?: string;
+  /**
+   * Populated only when `kind === "dream"`. Carries the array payload
+   * slices (`new_unconfirmed`, `confirmed`, `retired`) required by
+   * belief-evolution to derive per-preference status transitions.
+   */
+  readonly dreamSummary?: DreamSummarySlots;
 }
 
 /** Window that produced a {@link TimelineIndex}. */

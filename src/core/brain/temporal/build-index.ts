@@ -30,6 +30,7 @@ import {
   type BrainLogEventKind,
 } from "./../types.ts";
 import type {
+  DreamSummarySlots,
   TemporalEvent,
   TemporalEventSource,
   TimelineIndex,
@@ -229,6 +230,10 @@ function normaliseLogEntry(
     entry.eventType === BRAIN_LOG_EVENT_KIND.note
       ? readScalar(body["text"])
       : undefined;
+  const dreamSummary =
+    entry.eventType === BRAIN_LOG_EVENT_KIND.dream
+      ? readDreamSummary(body)
+      : undefined;
   return Object.freeze({
     at: entry.timestamp,
     kind: entry.eventType,
@@ -239,7 +244,42 @@ function normaliseLogEntry(
     ...(result !== undefined ? { result } : {}),
     ...(artifact !== undefined ? { artifact } : {}),
     ...(text !== undefined ? { text } : {}),
+    ...(dreamSummary !== undefined ? { dreamSummary } : {}),
   });
+}
+
+/**
+ * Pull the dream summary array slices off the entry body. Returns
+ * `undefined` when no slot is populated so the spread above omits the
+ * `dreamSummary` field on no-op runs.
+ */
+function readDreamSummary(
+  body: BrainLogEntry["body"],
+): DreamSummarySlots | undefined {
+  const newUnconfirmed = readStringArray(body["new_unconfirmed"]);
+  const confirmed = readStringArray(body["confirmed"]);
+  const retired = readStringArray(body["retired"]);
+  if (
+    newUnconfirmed === undefined &&
+    confirmed === undefined &&
+    retired === undefined
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    ...(newUnconfirmed !== undefined ? { newUnconfirmed } : {}),
+    ...(confirmed !== undefined ? { confirmed } : {}),
+    ...(retired !== undefined ? { retired } : {}),
+  });
+}
+
+function readStringArray(value: unknown): ReadonlyArray<string> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  if (value.length === 0) return undefined;
+  for (const v of value) {
+    if (typeof v !== "string") return undefined;
+  }
+  return Object.freeze([...(value as ReadonlyArray<string>)]);
 }
 
 function readScalar(value: unknown): string | undefined {
