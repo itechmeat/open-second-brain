@@ -212,15 +212,16 @@ describe("TemporalEvent + TimelineIndex shapes", () => {
   test("TimelineIndex type is exported with the expected slot set", () => {
     const idx: TimelineIndex = Object.freeze({
       events: Object.freeze([] as ReadonlyArray<TemporalEvent>),
-      eventsByKind: Object.freeze({}),
-      eventsByPrefId: Object.freeze({}),
-      eventsByTopic: Object.freeze({}),
+      eventsByKind: new Map(),
+      eventsByPrefId: new Map(),
+      eventsByTopic: new Map(),
       window: Object.freeze({
         since: "1970-01-01T00:00:00Z",
         until: "2026-05-25T23:59:59Z",
       }),
     });
     expect(idx.events.length).toBe(0);
+    expect(idx.eventsByKind.size).toBe(0);
     expect(idx.window.since).toBe("1970-01-01T00:00:00Z");
     expect(Object.isFrozen(idx)).toBe(true);
   });

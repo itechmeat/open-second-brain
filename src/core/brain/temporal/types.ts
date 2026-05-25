@@ -82,6 +82,11 @@ export interface TimelineWindow {
  * projection helper takes a `TimelineIndex` and never re-touches disk
  * so the five helpers (timeline-reader, belief-evolution, stale-watch,
  * daily-brief, weekly-brief) observe one canonical window semantics.
+ *
+ * Groups use `ReadonlyMap` so key lookups stay strongly typed
+ * (`BrainLogEventKind` for `eventsByKind`, free-form ids for
+ * `eventsByPrefId` / `eventsByTopic`) without runtime key shape
+ * gymnastics or escape hatches.
  */
 export interface TimelineIndex {
   /**
@@ -89,18 +94,15 @@ export interface TimelineIndex {
    * broken by `source.path` then `source.line` for determinism.
    */
   readonly events: ReadonlyArray<TemporalEvent>;
-  /** Events grouped by `kind`. Keys are the `BrainLogEventKind` values. */
-  readonly eventsByKind: Readonly<
-    Partial<Record<BrainLogEventKind, ReadonlyArray<TemporalEvent>>>
+  /** Events grouped by `kind`. */
+  readonly eventsByKind: ReadonlyMap<
+    BrainLogEventKind,
+    ReadonlyArray<TemporalEvent>
   >;
   /** Events grouped by `prefId` (only events that carry one). */
-  readonly eventsByPrefId: Readonly<
-    Record<string, ReadonlyArray<TemporalEvent>>
-  >;
+  readonly eventsByPrefId: ReadonlyMap<string, ReadonlyArray<TemporalEvent>>;
   /** Events grouped by `topic` (only events that carry one). */
-  readonly eventsByTopic: Readonly<
-    Record<string, ReadonlyArray<TemporalEvent>>
-  >;
+  readonly eventsByTopic: ReadonlyMap<string, ReadonlyArray<TemporalEvent>>;
   /** Window the index was materialized for. */
   readonly window: TimelineWindow;
 }
