@@ -55,7 +55,7 @@ describe("buildWeeklySynthesis", () => {
       "2026-05-25",
       BRAIN_TEMPORAL_DEFAULTS,
     );
-    expect(brief.windowEnd).toBe("2026-05-25T00:00:00.000Z");
+    expect(brief.windowEnd).toBe("2026-05-25T00:00:00Z");
     expect(brief.retired.length).toBe(0);
     expect(brief.contradictions.length).toBe(0);
     expect(Object.isFrozen(brief)).toBe(true);
@@ -69,8 +69,8 @@ describe("buildWeeklySynthesis", () => {
       "2026-05-25",
       BRAIN_TEMPORAL_DEFAULTS,
     );
-    expect(brief.windowEnd).toBe("2026-05-25T00:00:00.000Z");
-    expect(brief.windowStart).toBe("2026-05-18T00:00:00.000Z");
+    expect(brief.windowEnd).toBe("2026-05-25T00:00:00Z");
+    expect(brief.windowStart).toBe("2026-05-18T00:00:00Z");
   });
 
   test("contradictions list combines signal-suppressed + apply-evidence violated", () => {

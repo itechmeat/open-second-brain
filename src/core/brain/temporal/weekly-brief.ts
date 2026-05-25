@@ -16,6 +16,7 @@
  * Task 7 in `plan.md`.
  */
 
+import { isoSecond } from "./../time.ts";
 import type {
   BrainLogEventKind,
   ResolvedBrainTemporalConfig,
@@ -85,8 +86,8 @@ export function buildWeeklySynthesis(
     );
   }
   const windowStartMs = windowEndMs - 7 * ONE_DAY_MS;
-  const windowStart = new Date(windowStartMs).toISOString();
-  const windowEndIso = new Date(windowEndMs).toISOString();
+  const windowStart = isoSecond(new Date(windowStartMs));
+  const windowEndIso = isoSecond(new Date(windowEndMs));
   const generatedAt = (opts.now ?? new Date()).toISOString();
 
   const events = selectEvents(index, {

@@ -153,6 +153,6 @@ describe("o2b brain weekly", () => {
     );
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout);
-    expect(payload.windowEnd).toBe("2026-05-25T00:00:00.000Z");
+    expect(payload.windowEnd).toBe("2026-05-25T00:00:00Z");
   });
 });

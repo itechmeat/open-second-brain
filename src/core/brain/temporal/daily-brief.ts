@@ -16,6 +16,7 @@
  * Task 6 in `plan.md`.
  */
 
+import { isoSecond } from "./../time.ts";
 import type { BrainLogEventKind } from "./../types.ts";
 import { selectEvents } from "./select-events.ts";
 import {
@@ -89,8 +90,13 @@ function dailyWindow(
     throw new Error(`buildDailyBrief: invalid date ${JSON.stringify(date)}`);
   }
   const offsetMs = offsetHours * ONE_HOUR_MS;
+  // Use second-precision canonical UTC so the string compare in
+  // `selectEvents` matches the shape of event timestamps emitted by
+  // `appendLogEvent` (also second-precision). Mixing the
+  // `Date.toISOString()` `.000Z` form would still work by accident
+  // (lexical ordering of `Z` vs `.`) but is fragile.
   return Object.freeze({
-    since: new Date(dayStartMs - offsetMs).toISOString(),
-    until: new Date(dayStartMs - offsetMs + ONE_DAY_MS).toISOString(),
+    since: isoSecond(new Date(dayStartMs - offsetMs)),
+    until: isoSecond(new Date(dayStartMs - offsetMs + ONE_DAY_MS)),
   });
 }

@@ -276,10 +276,12 @@ function readDreamSummary(
 function readStringArray(value: unknown): ReadonlyArray<string> | undefined {
   if (!Array.isArray(value)) return undefined;
   if (value.length === 0) return undefined;
+  const out: string[] = [];
   for (const v of value) {
     if (typeof v !== "string") return undefined;
+    out.push(v);
   }
-  return Object.freeze([...(value as ReadonlyArray<string>)]);
+  return Object.freeze(out);
 }
 
 function readScalar(value: unknown): string | undefined {

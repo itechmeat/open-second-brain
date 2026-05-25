@@ -157,6 +157,25 @@ describe("buildBeliefEvolution by prefId", () => {
     expect(evo.retirements[0]!.supersededBy).toBe("pref-foo-v2");
   });
 
+  test("retirement chain cycle does not infinite-loop (visited-set guard)", () => {
+    // ret-a.supersedes -> ret-b; ret-b.supersedes -> ret-a (cycle).
+    writeFileSync(
+      join(VAULT, "Brain", "retired", "ret-a.md"),
+      `---\nid: ret-a\nkind: brain-retired\nstatus: retired\nretired_at: 2026-05-20T08:00:00Z\nretired_reason: superseded\nretired_by: "[[dream-r]]"\ncreated_at: 2026-04-01T00:00:00Z\ntags: ["brain"]\ntopic: cycle\nprinciple: A\nevidenced_by: []\nconfidence: medium\nsupersedes: "[[ret-b]]"\n---\n`,
+    );
+    writeFileSync(
+      join(VAULT, "Brain", "retired", "ret-b.md"),
+      `---\nid: ret-b\nkind: brain-retired\nstatus: retired\nretired_at: 2026-05-19T08:00:00Z\nretired_reason: superseded\nretired_by: "[[dream-r]]"\ncreated_at: 2026-04-01T00:00:00Z\ntags: ["brain"]\ntopic: cycle\nprinciple: B\nevidenced_by: []\nconfidence: medium\nsupersedes: "[[ret-a]]"\n---\n`,
+    );
+    const idx = buildTimelineIndex(VAULT, {});
+    // Should terminate (no hang) and surface both records exactly
+    // once even though the supersedes-chain loops.
+    const evo = buildBeliefEvolution(idx, VAULT, { prefId: "pref-a" });
+    expect(evo.retirements.length).toBe(2);
+    const ids = evo.retirements.map((r) => r.prefId).sort();
+    expect(ids).toEqual(["ret-a", "ret-b"]);
+  });
+
   test("envelope is frozen, transitions/evidence arrays frozen", () => {
     const idx = buildTimelineIndex(VAULT, {});
     const evo = buildBeliefEvolution(idx, VAULT, { prefId: "pref-foo" });

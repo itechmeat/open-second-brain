@@ -201,7 +201,7 @@ describe("brain_weekly_synthesis", () => {
     const { result } = await callTool(server, "brain_weekly_synthesis", {
       week_end: "2026-05-25",
     });
-    expect(result?.window_end).toBe("2026-05-25T00:00:00.000Z");
+    expect(result?.window_end).toBe("2026-05-25T00:00:00Z");
     expect(Array.isArray(result?.contradictions)).toBe(true);
     expect(Array.isArray(result?.retired)).toBe(true);
   });

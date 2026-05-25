@@ -177,6 +177,42 @@ describe("buildDailyBrief", () => {
     expect(brief.sourcePointers).toContain("src/y.ts");
   });
 
+  test("midnight-boundary event at since is included, at until is excluded", () => {
+    writeJsonl(VAULT, "2026-05-25", [
+      {
+        timestamp: "2026-05-25T00:00:00Z",
+        kind: "feedback",
+        body: {
+          signal: "[[sig-2026-05-25-edge-since]]",
+          topic: "edge",
+          sign: "positive",
+          agent: "claude",
+        },
+      },
+    ]);
+    writeJsonl(VAULT, "2026-05-26", [
+      {
+        timestamp: "2026-05-26T00:00:00Z",
+        kind: "feedback",
+        body: {
+          signal: "[[sig-2026-05-26-edge-until]]",
+          topic: "edge",
+          sign: "positive",
+          agent: "claude",
+        },
+      },
+    ]);
+    const idx = buildTimelineIndex(VAULT, {
+      since: "2026-05-01T00:00:00Z",
+      until: "2026-06-01T00:00:00Z",
+    });
+    const brief = buildDailyBrief(idx, VAULT, "2026-05-25");
+    // since=2026-05-25T00:00:00Z (inclusive) -> event at exact since
+    // is counted. until=2026-05-26T00:00:00Z (exclusive) -> event at
+    // exact until is NOT counted.
+    expect(brief.vaultDelta.newFeedback).toBe(1);
+  });
+
   test("daily window respects daily_window_offset_hours config", () => {
     // Event at 03:30 UTC on May 26 falls into the May 26 brief by
     // default (offset 0 = UTC days). The index needs an explicit

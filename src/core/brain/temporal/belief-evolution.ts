@@ -25,12 +25,12 @@ import { join } from "node:path";
 
 import { parseFrontmatter } from "../../vault.ts";
 import { brainDirs } from "./../paths.ts";
-import { parseWikilink } from "./../wikilink.ts";
 import {
   BRAIN_APPLY_RESULT,
   BRAIN_LOG_EVENT_KIND,
   type BrainApplyResult,
 } from "./../types.ts";
+import { extractId } from "./period-common.ts";
 import { selectEvents } from "./select-events.ts";
 import type { TemporalEvent, TimelineIndex } from "./types.ts";
 
@@ -84,9 +84,6 @@ export interface BeliefEvolutionEnvelope {
 export interface BuildBeliefEvolutionOptions {
   readonly now?: Date;
 }
-
-const RUN_PREFIX = /^(pref|ret)-/;
-const LINK_REASON_RE = /\(([^)]+)\)\s*$/;
 
 export function buildBeliefEvolution(
   index: TimelineIndex,
@@ -290,26 +287,27 @@ function collectEvidence(
 
 function collectRetirements(
   vault: string,
-  target: BeliefEvolutionTarget,
+  _target: BeliefEvolutionTarget,
   targetIds: ReadonlySet<string>,
 ): BeliefRetirement[] {
   const dir = brainDirs(vault).retired;
   if (!existsSync(dir)) return [];
   const out: BeliefRetirement[] = [];
   const visited = new Set<string>();
+  // Seed queue once per source id. `pref-foo` and `ret-foo` share
+  // the slug, so a `pref-` id always pushes its `ret-` sibling too.
+  // Topic targets already enumerate every `ret-*` with the topic
+  // via `resolveTargetIds`, so a second loop would only feed
+  // duplicates (the visited-set guards them out, but the dedup at
+  // the seed step avoids the queue grind in the first place).
   const queue: string[] = [];
   for (const id of targetIds) {
     if (id.startsWith("ret-")) queue.push(id);
     if (id.startsWith("pref-")) queue.push(`ret-${id.slice("pref-".length)}`);
   }
-  // Topic targets pull in every ret-* with the topic too.
-  if ("topic" in target) {
-    for (const id of targetIds) {
-      if (id.startsWith("ret-")) queue.push(id);
-    }
-  }
   while (queue.length > 0) {
-    const id = queue.shift()!;
+    const id = queue.shift();
+    if (id === undefined) break;
     if (visited.has(id)) continue;
     visited.add(id);
     const path = join(dir, `${id}.md`);
@@ -363,12 +361,4 @@ function collectRetirements(
 
 function readScalar(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function extractId(linkOrId: string): string | undefined {
-  // Drop the trailing `(reason)` suffix dream uses for retired
-  // entries before parsing the wikilink body.
-  const stripped = linkOrId.replace(LINK_REASON_RE, "").trim();
-  const target = parseWikilink(stripped) ?? stripped;
-  return RUN_PREFIX.test(target) ? target : undefined;
 }
