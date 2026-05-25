@@ -93,6 +93,46 @@ export interface DreamWarning {
   readonly message: string;
 }
 
+/**
+ * Entry surfacing a step the dream pass attempted but could not
+ * fully verify. Distinct from a `DreamWarning` (which flags
+ * configuration smells): an `uncertain` entry means "I tried, no
+ * hard error, but I cannot claim the operation completed". Consumed
+ * by the trust verdict + operator summary (v0.10.16).
+ */
+export interface DreamUncertainEntry {
+  /** Stable code identifying which sub-operation could not confirm. */
+  readonly code: string;
+  /** Optional topic slug or preference id this uncertainty concerns. */
+  readonly topic?: string;
+  /** Human-readable explanation. */
+  readonly message: string;
+}
+
+/**
+ * Entry surfacing a signal cluster that the self-approval guardrail
+ * (v0.10.16) held back from promotion because one or more configured
+ * thresholds were not met. Distinct from `suppressed` (which fires
+ * on a user-rejected retired preference); a quarantined cluster
+ * stays inbox-side and may promote on the next dream pass once
+ * more evidence accumulates.
+ */
+export interface DreamQuarantinedEntry {
+  /** Topic slug whose signals are held below the promotion threshold. */
+  readonly topic: string;
+  /** Count of accumulated same-sign signals. */
+  readonly signal_count: number;
+  /** Number of distinct agents that raised same-sign signals. */
+  readonly distinct_agents: number;
+  /** Age (in days) of the earliest signal in the cluster. */
+  readonly age_days: number;
+  /**
+   * Which threshold(s) blocked promotion: any subset of
+   * `min_signals`, `min_distinct_agents`, `min_age_days`.
+   */
+  readonly failed_gates: ReadonlyArray<string>;
+}
+
 export interface DreamRunSummary {
   /** `dream-YYYY-MM-DD-HHMMSS`. */
   readonly run_id: string;
@@ -123,6 +163,19 @@ export interface DreamRunSummary {
    * extension point for future advisory checks.
    */
   readonly warnings: ReadonlyArray<DreamWarning>;
+  /**
+   * Sub-operations the dream pass attempted but could not fully
+   * verify. Empty on every clean run; populated by future
+   * uncertainty-surfacing paths (v0.10.16).
+   */
+  readonly uncertain: ReadonlyArray<DreamUncertainEntry>;
+  /**
+   * Signal clusters held back from promotion by the self-approval
+   * guardrail (v0.10.16). Empty when no cluster missed a threshold,
+   * or when the guardrail is configured at default values that
+   * match pre-v0.10.16 behaviour.
+   */
+  readonly quarantined: ReadonlyArray<DreamQuarantinedEntry>;
   /** Snapshot file (absent on a no-op run). */
   readonly snapshot_path?: string;
   /** Log file the run summary landed in (absent on a no-op run). */
@@ -272,6 +325,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       moved_to_processed: [],
       suppressed: [],
       warnings: Object.freeze([...warnings]),
+      uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
+      quarantined: Object.freeze([] as ReadonlyArray<DreamQuarantinedEntry>),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -562,6 +617,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       s.signal.replace(/^\[\[/, "").replace(/\]\]$/, ""),
     ),
     warnings: Object.freeze([...warnings]),
+    uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
+    quarantined: Object.freeze([] as ReadonlyArray<DreamQuarantinedEntry>),
     ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
     ...(dryRun
       ? { dry_run: true }
