@@ -163,3 +163,25 @@ test("indexVault tolerates empty vault", async () => {
   expect(stats.chunksTotal).toBe(0);
 });
 
+test("mtime+size fastpath skips read; hash fallback detects same-content touch", async () => {
+  writeMd(vault, "a.md", "# Hello World\n\nSome content here.");
+  const cfg = makeConfig({ vault, dbPath });
+
+  const first = await indexVault(cfg);
+  expect(first.added).toBe(1);
+  expect(first.unchanged).toBe(0);
+
+  // Touch the file: change mtime without changing content.
+  // The fastpath should NOT fire (mtime differs) but the hash
+  // fallback should detect unchanged content.
+  const p = join(vault, "a.md");
+  const future = new Date(Date.now() + 100_000);
+  utimesSync(p, future, future);
+
+  const second = await indexVault(cfg);
+  // mtime changed → fastpath miss → read+hash runs → same hash → unchanged
+  expect(second.unchanged).toBe(1);
+  expect(second.updated).toBe(0);
+  expect(second.added).toBe(0);
+});
+

@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.14] - 2026-05-25
+
+Three independent quality-of-life improvements bundled into one
+release: an indexer fastpath that skips reading unchanged files, a
+broader secret redactor that catches PEM private-key blocks and
+JWT-shaped tokens, and a new vault-level connection-health metric
+that surfaces orphan ratio and backlink density in `brain_digest`.
+
+### Added
+
+- `Store.touchDocument(relPath, mtime, size)` - targeted stat update
+  for re-arming the indexer fastpath without overwriting metadata.
+- `DocumentSummary.size` - exposed alongside `mtime` and
+  `contentHash` from `listDocuments()` so the indexer can compare
+  size cheaply before falling back to a content hash.
+- PEM private-key block redaction in `event-log.ts` - state-machine
+  pass that replaces multi-line `-----BEGIN ... PRIVATE KEY-----`
+  blocks with `[REDACTED PRIVATE KEY]`. Covers RSA, EC, DSA,
+  OpenSSH, PGP, and encrypted variants.
+- JWT-shaped token redaction in `event-log.ts` - conservative match
+  on three base64url segments (each at least 4 characters) replaced
+  with `***REDACTED_JWT_<last-4>`. Does not false-positive on
+  semver-style version numbers like `1.2.3`.
+- `DigestJsonConnectionHealth` in `brain_digest` JSON and markdown
+  output - reports `total_nodes`, `linked_nodes`, `orphan_nodes`,
+  `mean_backlinks`, `median_backlinks`, `link_density`. Computed
+  once from the existing backlink index over all preferences and
+  retired entries.
+
+### Changed
+
+- `indexer.ts` short-circuits SHA256 hashing when `mtime` and
+  `size` both match the stored summary, falling back to hash
+  comparison only when stats differ. On a hash-match-but-stat-drift
+  case the indexer calls `touchDocument()` to re-arm the fastpath
+  for the next run.
+
 ## [0.10.13] - 2026-05-24
 
 Partner integration with [codegraph](https://github.com/colbymchenry/codegraph):

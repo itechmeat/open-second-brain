@@ -51,6 +51,7 @@ export interface DocumentSummary {
   readonly id: number;
   readonly contentHash: string;
   readonly mtime: number;
+  readonly size: number;
 }
 
 export interface ChunkInput {
@@ -372,13 +373,13 @@ export class Store {
 
   listDocuments(): Map<string, DocumentSummary> {
     const rows = this.db
-      .query<{ id: number; path: string; content_hash: string; mtime: number }, []>(
-        "SELECT id, path, content_hash, mtime FROM documents",
+      .query<{ id: number; path: string; content_hash: string; mtime: number; size: number }, []>(
+        "SELECT id, path, content_hash, mtime, size FROM documents",
       )
       .all();
     const map = new Map<string, DocumentSummary>();
     for (const r of rows) {
-      map.set(r.path, { id: r.id, contentHash: r.content_hash, mtime: r.mtime });
+      map.set(r.path, { id: r.id, contentHash: r.content_hash, mtime: r.mtime, size: r.size });
     }
     return map;
   }
@@ -423,6 +424,20 @@ export class Store {
     if (id === null) return;
     this.purgeVecRowsForDocument(id);
     this.db.run("DELETE FROM documents WHERE id = ?", [id]);
+  }
+
+  /**
+   * Touch a document's mtime and size without changing its title,
+   * hash, or triggering chunk replacement. Used by the indexer's
+   * mtime-fastpath fallback to re-arm the stat cache after a
+   * same-content touch.
+   */
+  touchDocument(path: string, mtime: number, size: number): void {
+    const now = nowIso();
+    this.db.run(
+      "UPDATE documents SET mtime = ?, size = ?, updated_at = ?, indexed_at = ? WHERE path = ?",
+      [mtime, size, now, now, path],
+    );
   }
 
   // ── chunks ─────────────────────────────────────────────────────────────────

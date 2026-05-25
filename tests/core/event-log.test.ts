@@ -27,6 +27,48 @@ describe("redactText", () => {
       "api_key=[REDACTED] token: [REDACTED] password = [REDACTED]",
     );
   });
+
+  test("redacts PEM private-key blocks", () => {
+    const input = `Here is a key:
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy0AHB7MhgHcTz6sE2I2yPB
+aFDrBz9vFqU4yL3mW5mG3qFqR1vF0F3F1F1F1F1F1F1F1F1F1F1F1F
+-----END RSA PRIVATE KEY-----
+And some more text.`;
+    const result = redactText(input);
+    expect(result).toContain("[REDACTED PRIVATE KEY]");
+    expect(result).not.toContain("MIIEpA");
+    expect(result).toContain("And some more text.");
+  });
+
+  test("redacts EC private-key blocks", () => {
+    const input = "-----BEGIN EC PRIVATE KEY-----\nsecretstuff\n-----END EC PRIVATE KEY-----";
+    expect(redactText(input)).toBe("[REDACTED PRIVATE KEY]");
+  });
+
+  test("masks JWT-shaped tokens", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    const result = redactText(`token is ${jwt}`);
+    expect(result).toContain("***REDACTED_JWT_sw5c");
+    expect(result).not.toContain("eyJhbG");
+  });
+
+  test("does not mask version numbers as JWTs", () => {
+    expect(redactText("version 1.2.3 is fine")).toBe("version 1.2.3 is fine");
+  });
+
+  test("combined: PEM + JWT + secret assignment", () => {
+    const input = `api_key=secret123
+-----BEGIN PRIVATE KEY-----
+base64content
+-----END PRIVATE KEY-----
+bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.abc123def456ghi789`;
+    const result = redactText(input);
+    expect(result).toContain("api_key=[REDACTED]");
+    expect(result).toContain("[REDACTED PRIVATE KEY]");
+    expect(result).not.toContain("base64content");
+    expect(result).toContain("***REDACTED_JWT_");
+  });
 });
 
 describe("validateEventTime", () => {

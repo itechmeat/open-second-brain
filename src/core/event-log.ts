@@ -19,9 +19,62 @@ const EVENT_RE = /^- (\d{2}:\d{2}) — @/;
 const DATE_RE = /^(\d{4})\.(\d{2})\.(\d{2})$/;
 const TIME_RE = /^(\d{2}):(\d{2})$/;
 
+/** Match PEM block headers for private-key-like types. */
+const PEM_BEGIN_RE = /-----BEGIN\s+(?:RSA\s+)?(?:EC\s+)?(?:DSA\s+)?(?:OPENSSH\s+)?(?:ENCRYPTED\s+)?(?:PGP\s+)?PRIVATE KEY-----/;
+const PEM_END_RE = /-----END\s+(?:RSA\s+)?(?:EC\s+)?(?:DSA\s+)?(?:OPENSSH\s+)?(?:ENCRYPTED\s+)?(?:PGP\s+)?PRIVATE KEY-----/;
+
+/**
+ * Conservative JWT-shaped token heuristic: three base64url segments
+ * (alphanumeric, `-`, `_`) separated by dots, total length ≥ 32 chars.
+ * Excludes common false positives like version numbers (`1.2.3`) by
+ * requiring each segment to be at least 4 characters.
+ */
+const JWT_RE = /\b[a-zA-Z0-9_-]{4,}\.[a-zA-Z0-9_-]{4,}\.[a-zA-Z0-9_-]{4,}\b/g;
+
+/** Redact PEM private-key blocks with a `<REDACTED>` marker. */
+function redactPemBlocks(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let inside = false;
+  for (const line of lines) {
+    if (!inside) {
+      if (PEM_BEGIN_RE.test(line)) {
+        inside = true;
+        out.push("[REDACTED PRIVATE KEY]");
+      } else {
+        out.push(line);
+      }
+    } else {
+      if (PEM_END_RE.test(line)) {
+        inside = false;
+        // The END line itself is consumed by the redaction marker.
+      }
+      // All interior lines are silently dropped.
+    }
+  }
+  return out.join("\n");
+}
+
+/** Mask standalone JWT-shaped tokens to last 4 chars. */
+function redactJwtTokens(text: string): string {
+  return text.replace(JWT_RE, (match) => {
+    const tail = match.slice(-4);
+    return `***REDACTED_JWT_${tail}`;
+  });
+}
+
 /** Replace secret-like value assignments with `[REDACTED]`. */
-export function redactText(text: string): string {
+function redactSecretAssignments(text: string): string {
   return text.replace(SECRET_ASSIGNMENT_RE, (_match, field, sep) => `${field}${sep}[REDACTED]`);
+}
+
+/**
+ * Multi-pass redaction: PEM blocks → JWT tokens → secret assignments.
+ * PEM runs line-by-line first so multi-line blocks are consumed before
+ * the regex-based passes see the interior base64 data.
+ */
+export function redactText(text: string): string {
+  return redactSecretAssignments(redactJwtTokens(redactPemBlocks(text)));
 }
 
 /**
