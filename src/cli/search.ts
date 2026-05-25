@@ -119,6 +119,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     "keyword-weight": { type: "string" },
     "semantic-weight": { type: "string" },
     "auto-refresh": { type: "boolean" },
+    property: { type: "string-array" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
   });
@@ -152,12 +153,15 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
   const semanticOverride: boolean | undefined =
     flags["semantic"] === true ? true : flags["keyword-only"] === true ? false : undefined;
 
+  const properties = parsePropertyFlags(flags["property"] as string[] | undefined);
+
   const outcome = await search(cfg, {
     query,
     limit: limitNum,
     semantic: semanticOverride,
     keywordOnly: flags["keyword-only"] === true,
     pathPrefix: typeof flags["path"] === "string" ? (flags["path"] as string) : undefined,
+    ...(properties !== undefined ? { properties } : {}),
   });
 
   if (flags["json"]) {
@@ -166,6 +170,36 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
   }
   process.stdout.write(renderOutcomeHuman(outcome, flags["verbose"] === true));
   return 0;
+}
+
+/**
+ * Parse the repeatable `--property KEY=VALUE` flag into the
+ * `properties` map shape that `search()` consumes. Multiple
+ * `--property KEY=...` entries for the same KEY accumulate (OR).
+ * Different KEYs accumulate as separate entries (AND).
+ */
+function parsePropertyFlags(
+  raw: ReadonlyArray<string> | undefined,
+): ReadonlyMap<string, ReadonlyArray<string>> | undefined {
+  if (!raw || raw.length === 0) return undefined;
+  const acc = new Map<string, string[]>();
+  for (const entry of raw) {
+    const eq = entry.indexOf("=");
+    if (eq <= 0) {
+      throw new CliError(`--property must be KEY=VALUE, got: ${entry}`);
+    }
+    const key = entry.slice(0, eq).trim();
+    const value = entry.slice(eq + 1).trim();
+    if (key.length === 0 || value.length === 0) {
+      throw new CliError(`--property must be KEY=VALUE, got: ${entry}`);
+    }
+    const arr = acc.get(key) ?? [];
+    arr.push(value);
+    acc.set(key, arr);
+  }
+  const frozen = new Map<string, ReadonlyArray<string>>();
+  for (const [k, v] of acc) frozen.set(k, Object.freeze(v));
+  return frozen;
 }
 
 function jsonForOutcome(o: SearchOutcome): unknown {

@@ -114,6 +114,14 @@ export interface SearchOptions {
   readonly pathPrefix?: string;
   readonly keywordWeight?: number;
   readonly semanticWeight?: number;
+  /**
+   * Property filter map (v0.10.17). Each key maps to one or more
+   * accepted scalar values. Within one key the match is OR; across
+   * keys it is AND. The filter is applied as a post-rank phase
+   * against the source frontmatter of each result. Absent map = no
+   * filter (existing behaviour).
+   */
+  readonly properties?: ReadonlyMap<string, ReadonlyArray<string>>;
 }
 
 export interface SearchOutcome {

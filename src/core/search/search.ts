@@ -9,8 +9,12 @@
  * the store but the public surface stays uniform.
  */
 
+import { join } from "node:path";
+
+import { parseFrontmatter } from "../vault.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { runFtsQuery } from "./fts.ts";
+import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -116,14 +120,44 @@ export async function search(
       },
     );
 
+    // Optional post-rank property filter (v0.10.17). Reads each
+    // result's source frontmatter and drops rows whose scalars do
+    // not match the requested key/value pairs. Caching by document
+    // path keeps the read cost bounded by the result set, not the
+    // vault.
+    const filtered =
+      opts.properties && opts.properties.size > 0
+        ? applyPropertyFilter(ranked, opts.properties, config.vault)
+        : ranked;
+
     return Object.freeze({
-      results: Object.freeze(ranked),
+      results: Object.freeze(filtered),
       warnings: Object.freeze(warnings),
-      total: ranked.length,
+      total: filtered.length,
     });
   } finally {
     await store.close();
   }
+}
+
+function applyPropertyFilter(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  filters: ReadonlyMap<string, ReadonlyArray<string>>,
+  vault: string,
+): ReadonlyArray<BrainSearchResult> {
+  const cache = new Map<string, Record<string, unknown> | null>();
+  const reader = (path: string): Record<string, unknown> | null => {
+    if (cache.has(path)) return cache.get(path) ?? null;
+    try {
+      const [meta] = parseFrontmatter(join(vault, path));
+      cache.set(path, meta as Record<string, unknown>);
+      return meta as Record<string, unknown>;
+    } catch {
+      cache.set(path, null);
+      return null;
+    }
+  };
+  return filterByProperties(ranked, filters, reader);
 }
 
 interface SemanticPhaseOutcome {
