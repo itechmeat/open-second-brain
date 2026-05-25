@@ -931,17 +931,25 @@ export function validateBrainConfigDetailed(
           source,
         );
       }
+      // Trim BEFORE the path-shape check so a value like
+      // `" VAULT.md "` doesn't survive validation and fail at
+      // read time as a missing file.
+      const trimmed = v.trim();
       // Reject absolute paths and `..` traversal at load time so
       // the config surface fails loudly instead of silently
       // omitting the envelope field at read time.
-      if (v.startsWith("/") || v.startsWith("\\") || v.includes("..")) {
+      if (
+        trimmed.startsWith("/") ||
+        trimmed.startsWith("\\") ||
+        trimmed.includes("..")
+      ) {
         throw new BrainConfigError(
           "must be a vault-relative path without '..' segments",
           "link_graph.vault_instruction_file",
           source,
         );
       }
-      partialLg["vault_instruction_file"] = v;
+      partialLg["vault_instruction_file"] = trimmed;
     }
     // Forward-compat: unknown sub-keys under `link_graph:` → warning.
     for (const key of Object.keys(lgObj)) {

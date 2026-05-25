@@ -104,6 +104,16 @@ export async function search(
     const inboundLinkSources = store.inboundLinkSources(idsList);
     const tagsByDoc = store.tagsByChunkDocument(idsList);
 
+    // When a property filter is active, overfetch the ranked
+    // candidates so the post-filter result set still has a chance
+    // of producing `limit` matching rows. Without this, the
+    // top-`limit` ranked hits can lose all their property-matching
+    // candidates to the filter and surface zero results even when
+    // matches exist deeper in the rank.
+    const hasPropertyFilter =
+      opts.properties !== undefined && opts.properties.size > 0;
+    const rankLimit = hasPropertyFilter ? Math.max(limit * 5, 50) : limit;
+
     const ranked = rankResults(
       {
         keyword: kwHits,
@@ -115,7 +125,7 @@ export async function search(
       {
         keywordWeight: opts.keywordWeight ?? config.keywordWeight,
         semanticWeight: opts.semanticWeight ?? config.semanticWeight,
-        limit,
+        limit: rankLimit,
         semanticEnabled: policy.wantSemantic && semanticAttempted,
       },
     );
@@ -124,11 +134,13 @@ export async function search(
     // result's source frontmatter and drops rows whose scalars do
     // not match the requested key/value pairs. Caching by document
     // path keeps the read cost bounded by the result set, not the
-    // vault.
-    const filtered =
-      opts.properties && opts.properties.size > 0
-        ? applyPropertyFilter(ranked, opts.properties, config.vault)
-        : ranked;
+    // vault. After filtering we truncate back to the caller's
+    // declared `limit` so the property-filter overfetch above
+    // doesn't leak through.
+    const filteredAll = hasPropertyFilter
+      ? applyPropertyFilter(ranked, opts.properties!, config.vault)
+      : ranked;
+    const filtered = filteredAll.slice(0, limit);
 
     return Object.freeze({
       results: Object.freeze(filtered),

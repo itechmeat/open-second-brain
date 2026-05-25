@@ -12,8 +12,14 @@
  * surface.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 import { loadBrainConfig, resolveLinkGraph } from "./policy.ts";
 
@@ -58,9 +64,22 @@ export function readVaultInstructionFile(
   if (!existsSync(full)) return null;
   let content: string;
   try {
-    const st = statSync(full);
+    // Resolve the vault root once so the boundary check is
+    // immune to the vault path itself being a symlink.
+    const vaultReal = realpathSync(vault);
+    // Reject symlinks at the candidate path - a symlink at
+    // `<vault>/VAULT.md` pointing outside the vault would
+    // otherwise bypass the relative-path guards via the
+    // symlink-following `statSync` + `readFileSync` below.
+    if (lstatSync(full).isSymbolicLink()) return null;
+    const fullReal = realpathSync(full);
+    const rel = relative(vaultReal, fullReal);
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      return null;
+    }
+    const st = statSync(fullReal);
     if (!st.isFile()) return null;
-    content = readFileSync(full, "utf8");
+    content = readFileSync(fullReal, "utf8");
   } catch {
     return null;
   }
