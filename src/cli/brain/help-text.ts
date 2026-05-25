@@ -42,6 +42,7 @@ Brain verbs (observing memory):
   lint                Self-healing structural checks (--consolidate); --apply to write
   actions             Ranked maintenance action list (dedup + lint + footprint)
   summary             Operator dashboard: trust verdict, doctor/dream counts, actions
+  unlinked            Raw-text mentions of an artifact's title/aliases outside [[...]]
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -249,4 +250,10 @@ export const VERB_HELP: Record<string, string> = {
     "dream uncertain/quarantined counts, verification delta, top maintenance\n" +
     "actions, and instruction-file ceiling warnings into one report.\n" +
     "Runs a dry-run dream pass by default; --skip-dream omits it. Read-only.\n",
+  unlinked:
+    "usage: o2b brain unlinked <id> [--limit <n>] [--vault <path>] [--json]\n" +
+    "Raw-text mentions of <id>'s title and frontmatter aliases that are NOT\n" +
+    "already inside a [[...]] wikilink. Match boundary is Unicode-aware\n" +
+    "(codepoint class), language-agnostic. Walks Brain/preferences/ and\n" +
+    "Brain/retired/. Read-only.\n",
 };

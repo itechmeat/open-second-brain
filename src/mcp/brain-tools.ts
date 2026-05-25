@@ -53,6 +53,7 @@ import {
   type AppendApplyEvidenceInput,
 } from "../core/brain/apply-evidence.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
+import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
@@ -855,6 +856,59 @@ async function toolBrainOperatorSummary(
   };
 }
 
+// ----- brain_unlinked_mentions (v0.10.17) ----------------------------------
+
+/**
+ * Raw-text mentions of a target's title / aliases that are NOT
+ * already inside `[[...]]` wikilinks. Read-only walker over
+ * `Brain/preferences/` and `Brain/retired/`. Match boundary is
+ * Unicode-aware (`\p{L}`, `\p{N}`), language-agnostic.
+ */
+async function toolBrainUnlinkedMentions(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const idRaw = args["id"];
+  if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_unlinked_mentions: id must be a non-empty string",
+    );
+  }
+  const targetId = normaliseWikilinkTarget(idRaw);
+  const limitRaw = args["limit"];
+  let limit: number | undefined;
+  if (limitRaw !== undefined && limitRaw !== null) {
+    if (typeof limitRaw === "number") {
+      if (!Number.isInteger(limitRaw) || limitRaw < 1) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_unlinked_mentions: limit must be a positive integer",
+        );
+      }
+      limit = limitRaw;
+    } else {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_unlinked_mentions: limit must be a positive integer",
+      );
+    }
+  }
+  const mentions = findUnlinkedMentions(ctx.vault, targetId, {
+    ...(limit !== undefined ? { limit } : {}),
+  });
+  return {
+    vault_path: ctx.vault,
+    target_id: targetId,
+    mentions: mentions.map((m) => ({
+      source: m.source,
+      line: m.line,
+      term: m.term,
+      context: m.contextSnippet,
+    })),
+  };
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -1175,6 +1229,30 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainContextPack,
+  },
+  {
+    name: "brain_unlinked_mentions",
+    description:
+      "Raw-text mentions of a target's title / aliases that are NOT already inside `[[...]]`. Walks Brain/preferences and Brain/retired; match boundary is Unicode-aware (codepoint class), language-agnostic. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "Target id (e.g. `pref-foo`, `ret-bar`). Wikilink decoration is stripped if present.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Maximum number of mentions to return. Defaults to 100; the scanner stops as soon as the cap is hit.",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainUnlinkedMentions,
   },
   {
     name: "brain_operator_summary",
