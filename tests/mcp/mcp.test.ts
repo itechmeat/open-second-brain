@@ -156,7 +156,8 @@ describe("tool listing", () => {
         "second_brain_query",
         "vault_health",
         // Brain (brain_note added in v0.10.8 §32B,
-        // brain_context added in v0.10.10).
+        // brain_context added in v0.10.10,
+        // brain_context_pack added in v0.10.15).
         "brain_feedback",
         "brain_dream",
         "brain_apply_evidence",
@@ -166,6 +167,7 @@ describe("tool listing", () => {
         "brain_query",
         "brain_doctor",
         "brain_backlinks",
+        "brain_context_pack",
         // Pay Memory (unchanged).
         "payment_memory_init",
         "payment_receipt_append",
@@ -365,9 +367,9 @@ describe("stdio loop", () => {
     const list = JSON.parse(lines[1]!);
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
-    // v0.10.10: 3 core (status/query/health) + 9 Brain (brain_note §32B
-    // and brain_context v0.10.10) + 8 Pay Memory + 1 Search = 21.
-    expect(list.result.tools.length).toBe(21);
+    // v0.10.15: 3 core + 10 Brain (brain_context_pack added v0.10.15)
+    // + 8 Pay Memory + 1 Search = 22.
+    expect(list.result.tools.length).toBe(22);
   });
 
   test("returns parse error for invalid JSON", async () => {

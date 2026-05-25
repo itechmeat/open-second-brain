@@ -53,6 +53,7 @@ import {
   type AppendApplyEvidenceInput,
 } from "../core/brain/apply-evidence.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
+import { packContext } from "../core/brain/context-pack.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import {
   renderDigest,
@@ -716,6 +717,48 @@ export function vaultRelativeSafe(vault: string, target: string): string {
 
 // ----- Tool registration ---------------------------------------------------
 
+// ----- brain_context_pack (v0.10.15) ---------------------------------------
+
+/**
+ * Bounded-token vault slice ordered by importance tier then recency.
+ * Lets an agent prime its context window under a strict budget.
+ */
+async function toolBrainContextPack(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const maxRaw = args["max_tokens"];
+  const maxTokens = typeof maxRaw === "number" ? maxRaw : Number.parseInt(String(maxRaw ?? ""), 10);
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_context_pack: max_tokens must be a positive integer",
+    );
+  }
+  const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
+  const report = packContext(ctx.vault, {
+    maxTokens,
+    ...(query ? { query } : {}),
+  });
+  return {
+    vault_path: ctx.vault,
+    max_tokens: report.maxTokens,
+    tokens_used: report.tokensUsed,
+    items: report.items.map((i) => ({
+      id: i.id,
+      path: i.path,
+      tier: i.tier,
+      tokens: i.tokens,
+      body: i.body,
+    })),
+    skipped: report.skipped.map((s) => ({
+      id: s.id,
+      tokens: s.tokens,
+      reason: s.reason,
+    })),
+  };
+}
+
 export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_feedback",
@@ -971,5 +1014,28 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainBacklinks,
+  },
+  {
+    name: "brain_context_pack",
+    description:
+      "Return the highest-tier, most recent vault slice that fits under `max_tokens`. Ordered core → supporting → peripheral, newest first; stops adding pages when the next page would exceed the budget. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        max_tokens: {
+          type: "integer",
+          minimum: 1,
+          description: "Strict upper bound on the returned slice's token count.",
+        },
+        query: {
+          type: "string",
+          description:
+            "Optional case/Unicode-insensitive substring filter on topic + principle.",
+        },
+      },
+      required: ["max_tokens"],
+      additionalProperties: false,
+    },
+    handler: toolBrainContextPack,
   },
 ]);
