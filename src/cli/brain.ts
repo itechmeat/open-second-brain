@@ -34,6 +34,7 @@ import {
   cmdBrainScanInline,
   cmdBrainImportSession,
   cmdBrainImportClaudeMemory,
+  cmdBrainPageDedup,
 } from "./brain/verbs/index.ts";
 
 export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promise<number> {
@@ -78,6 +79,7 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
       case "upgrade": return await cmdBrainUpgrade(rest);
       case "export": return await cmdBrainExport(rest);
       case "explorer": return await cmdBrainExplorer(rest);
+      case "page-dedup": return await cmdBrainPageDedup(rest);
       default:
         process.stderr.write(`error: unknown brain verb: ${verb}\n`);
         process.stdout.write(BRAIN_HELP);
