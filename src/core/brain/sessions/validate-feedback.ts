@@ -12,6 +12,7 @@
  * envelope (`MCPError` for MCP, soft warning for import).
  */
 
+import { assessRuleQuality } from "../trust/assess-rule-quality.ts";
 import { BRAIN_SIGNAL_SIGN } from "../types.ts";
 
 export interface ValidatedFeedback {
@@ -81,6 +82,19 @@ export function validateBrainFeedbackInput(input: unknown): ValidationResult {
   const principle = nonEmptyString(record["principle"]);
   if (principle === null) {
     return { ok: false, reason: "brain_feedback missing required field: principle" };
+  }
+
+  // v0.10.16: structural quality gate. Reject only on structurally-broken
+  // input (empty, single token). Warn-level findings are advisory and do
+  // not block submission - the operator may still write a long or filler-
+  // heavy principle if they accept the trade-off. The detector is
+  // language-agnostic by construction (codepoint shape only).
+  const quality = assessRuleQuality(principle);
+  if (quality.severity === "reject") {
+    return {
+      ok: false,
+      reason: `brain_feedback principle failed quality gate: ${quality.reasons.join(", ")}`,
+    };
   }
 
   const scope = optionalString(record["scope"]);

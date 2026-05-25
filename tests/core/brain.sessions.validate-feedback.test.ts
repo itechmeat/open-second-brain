@@ -27,7 +27,7 @@ describe("validateBrainFeedbackInput", () => {
     const r = validateBrainFeedbackInput({
       topic: "t",
       signal: "positive",
-      principle: "p",
+      principle: "limit retries to 10 per hour",
       scope: "writing",
       agent: "claude",
       raw: "quoted text",
