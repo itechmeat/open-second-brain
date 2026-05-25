@@ -266,6 +266,12 @@ export interface BrainSignal {
    * `<path>#<turn-id>`. Empty / absent for inline / live signals.
    */
   readonly session_ref?: string;
+  /** Bi-temporal event-time start (additive optional, v0.10.18). */
+  readonly valid_from?: string;
+  /** Bi-temporal event-time end (additive optional, v0.10.18). */
+  readonly valid_until?: string;
+  /** Bi-temporal transaction-time (additive optional, v0.10.18). */
+  readonly recorded_at?: string;
 }
 
 /**
@@ -324,6 +330,24 @@ export interface BrainPreference {
   /** Optional wikilink to a retired pref this one replaces. */
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
+  /**
+   * Bi-temporal: event-time start. ISO-8601 UTC timestamp marking
+   * when the rule was first considered true (independent of when the
+   * vault learned about it). Additive optional - absent on legacy
+   * files; readers must tolerate `undefined`.
+   */
+  readonly valid_from?: string;
+  /**
+   * Bi-temporal: event-time end. ISO-8601 UTC timestamp marking when
+   * the rule stopped being considered true. Additive optional.
+   */
+  readonly valid_until?: string;
+  /**
+   * Bi-temporal: transaction-time. ISO-8601 UTC timestamp marking
+   * when the vault recorded the rule (distinct from `created_at`,
+   * which is the dream-pass promotion moment). Additive optional.
+   */
+  readonly recorded_at?: string;
 }
 
 /**
@@ -373,6 +397,12 @@ export interface BrainRetired {
    * retires.
    */
   readonly user_rejected_reason?: string | null;
+  /** Bi-temporal event-time start (additive optional, v0.10.18). */
+  readonly valid_from?: string;
+  /** Bi-temporal event-time end (additive optional, v0.10.18). */
+  readonly valid_until?: string;
+  /** Bi-temporal transaction-time (additive optional, v0.10.18). */
+  readonly recorded_at?: string;
 }
 
 /**
