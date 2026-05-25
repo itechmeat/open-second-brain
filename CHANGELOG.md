@@ -5,6 +5,135 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.16] - 2026-05-25
+
+Trust and operator surfaces: eight related self-reporting features
+ship together under the theme "trust the brain's self-reporting".
+A new `src/core/brain/trust/` subsystem holds pure helpers that
+compute verification deltas, an aggregate trust verdict, a
+language-agnostic preference quality gate, role-permission
+boundaries, a self-approval guardrail, and instruction-file
+compliance warnings. One new MCP tool (`brain_operator_summary`)
+plus one new CLI verb (`o2b brain summary`) aggregate doctor,
+dream, and vault metadata into a single operator dashboard.
+
+### Added
+
+- `src/core/brain/trust/role.ts` - `BRAIN_ROLES` (`writer`,
+  `dreamer`, `applier`, `unknown`) and `BRAIN_OPERATIONS` enums.
+  Atom for the role-permission gate.
+- `src/core/brain/trust/check-role-permission.ts` -
+  `checkRolePermission(role, op, currentStatus?)`. Static
+  allow-list per role; rejects cross-role attempts with a
+  structured reason.
+- `src/core/brain/trust/assess-rule-quality.ts` -
+  `assessRuleQuality(principle)`. **Language-agnostic** structural
+  detector. No vocabulary list, no stopword set, no unit
+  dictionary; only codepoint shape (Unicode `\p{L}` / `\p{N}`,
+  digit / operator presence, single-character token ratio).
+  Surfaces as a quality gate at `brain_feedback` time.
+- `src/core/brain/trust/self-approval-guardrail.ts` -
+  `applySelfApprovalGuardrail({signal_count, distinct_agents,
+  age_days}, config)`. Promotes only when all three thresholds
+  pass; quarantines otherwise. Defaults
+  (`promotion_min_signals: 2`, `promotion_min_distinct_agents: 1`,
+  `promotion_min_age_days: 0`) keep pre-v0.10.16 dream behaviour
+  bit-identical.
+- `src/core/brain/trust/compute-verification-delta.ts` -
+  `computeVerificationDelta(vault, dream)`. Classifies each
+  preference id cited by a dream summary into one of `confirmed`,
+  `drift`, `regression`, `missing_evidence`. Pure read-only;
+  emits vault-relative paths only.
+- `src/core/brain/trust/instruction-file-ceiling.ts` -
+  `checkInstructionFileCeiling(vault, { maxLines })`. Warns when
+  any tracked vault-root instruction file (`CLAUDE.md`,
+  `AGENTS.md`, `GEMINI.md`) exceeds the configured ceiling.
+- `src/core/brain/trust/compute-trust-verdict.ts` -
+  `computeTrustVerdict({ doctorWarnings, doctorErrors,
+  dreamWarnings, verification, driftWatchThreshold? })`. Returns
+  one of `clean`, `watch`, `investigate`.
+- `src/core/brain/trust/operator-summary.ts` -
+  `buildOperatorSummary(vault, opts)` and
+  `renderOperatorSummaryMarkdown(summary)`. One read-only call
+  that aggregates doctor, dream, verification, instruction-file
+  warnings, and ranked maintenance actions into a single
+  envelope.
+- `BRAIN_GUARDRAIL_DEFAULTS` and `resolveGuardrails(cfg)` in
+  `policy.ts`. Backward-compatible defaults; an explicit
+  `guardrails:` block in `_brain.yaml` overrides any subset.
+- `DreamRunSummary.uncertain: ReadonlyArray<DreamUncertainEntry>`
+  and `DreamRunSummary.quarantined:
+  ReadonlyArray<DreamQuarantinedEntry>` (empty on every clean run).
+- `RunDoctorResult.trust_verdict` (always populated),
+  `RunDoctorResult.verification_delta_summary` (present when a
+  dream summary is threaded through), `RunDoctorResult.
+  instruction_file_warnings`, and `RunDoctorResult.uncertain`.
+- `DigestJson.trust_verdict?`, `DigestJson.uncertain_count`,
+  `DigestJson.quarantined_count`. Markdown digest gains a `##
+  Trust` section when doctor or dream input is supplied.
+- `brain_operator_summary` MCP tool in the full scope. Returns
+  the structured envelope from `buildOperatorSummary`.
+- `o2b brain summary [--skip-dream] [--top-actions <n>]
+  [--vault <path>] [--json]` CLI verb. Markdown by default, JSON
+  on demand.
+- `BrainRolePermissionError` thrown by
+  `appendApplyEvidence(vault, input, { role })` when the role is
+  not permitted.
+
+### Changed
+
+- `brain_feedback` rejects structurally-broken principles
+  (empty, single token) via `assessRuleQuality`. Warn-level
+  findings (too-long, no-measurable-signal, filler) are
+  advisory and do not block submission.
+- `brain_dream` invokes `applySelfApprovalGuardrail` before
+  creating a new unconfirmed preference. Clusters that pass
+  `candidate_threshold` but fail a guardrail threshold land in
+  `quarantined`; the contributing signals stay in `inbox/` so the
+  cluster naturally re-evaluates on the next pass. With default
+  guardrails this never fires (all defaults at or below the
+  existing thresholds), so existing tests stay green.
+- `brain_dream` MCP wrapper surfaces `uncertain[]`,
+  `quarantined[]`, and `suppressed[]` arrays.
+- `brain_doctor` always populates `trust_verdict` (computed from
+  doctor warnings/errors plus the verification delta when
+  available) and `instruction_file_warnings`. The MCP wrapper
+  emits both.
+- `brain_apply_evidence` MCP wrapper asserts `applier` role at
+  the boundary; rejects calls from other roles with a structured
+  error.
+- `BrainConfig.guardrails?: BrainGuardrailConfig` (new optional
+  block in `_brain.yaml`). Validates each subfield as a positive
+  integer (`promotion_min_age_days` allows zero); rejects values
+  above the hard `INSTRUCTION_FILE_MAX_LINES_CEILING` of 10000.
+- `brain_digest` accepts optional `doctorResult` and
+  `dreamSummary` in `RenderDigestOptions`. When neither is
+  supplied, output stays bit-identical to v0.10.15.
+
+### Notes
+
+- The trust subsystem follows the v0.10.15 precedent
+  (`page-meta/`, `maintenance/`): atoms (field additions on
+  existing summary types) -> helpers (pure functions in
+  `trust/`) -> consumers (existing brain tools call into helpers
+  but keep their public contract).
+- The preference quality gate is **shape-based only**. The
+  detector reads codepoints, never vocabulary. A vague rule
+  expressed in one language and the same rule expressed in
+  another language are treated identically by construction.
+- No on-disk migration. Existing preference and retired pages
+  stay byte-identical; readers fall back to documented defaults
+  when the new fields are absent.
+- `brain_operator_summary` is registered in the full MCP scope
+  only. The always-loaded writer scope keeps its four-tool
+  surface (`brain_feedback`, `brain_apply_evidence`,
+  `brain_note`, `brain_context`).
+- Role enforcement is incremental in v0.10.16: enforced on
+  `brain_apply_evidence` at the MCP boundary. Future releases
+  may thread the role check through writer-side calls
+  (`writeSignal`, `writePreference`).
+- 2135 tests pass; typecheck and sync-version clean.
+
 ## [0.10.15] - 2026-05-25
 
 Vault care bundle: eight related upstream-inspired metadata and
@@ -2424,6 +2553,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 [0.10.0]: https://github.com/itechmeat/open-second-brain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/itechmeat/open-second-brain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/itechmeat/open-second-brain/compare/v0.8.1...v0.9.0
+[0.10.16]: https://github.com/itechmeat/open-second-brain/compare/v0.10.15...v0.10.16
 [0.10.15]: https://github.com/itechmeat/open-second-brain/compare/v0.10.14...v0.10.15
 [0.10.14]: https://github.com/itechmeat/open-second-brain/compare/v0.10.13...v0.10.14
 [0.10.13]: https://github.com/itechmeat/open-second-brain/compare/v0.10.12...v0.10.13

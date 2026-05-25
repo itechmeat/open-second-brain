@@ -84,6 +84,12 @@ safety invariants are in [`docs/how-it-works.md`](docs/how-it-works.md).
   (`o2b brain context-pack --max-tokens N`). Per-page metadata
   (`_lifecycle`, `tier`, `merged_into`) feeds the ranker and the
   search relevance signal.
+- Aggregates an operator dashboard from trust verdict, doctor /
+  dream counts, verification delta, instruction-file ceiling
+  warnings, and top maintenance actions
+  (`o2b brain summary` / `brain_operator_summary`). The verdict
+  band (`clean | watch | investigate`) is computed from
+  structural signals only - no LLM, no per-language vocabulary.
 - (Optional) Records paid agent actions through **Pay Memory**:
   receipts, generated assets, spending policy decisions, human
   approval state, and per-day reports — all as plain Markdown
