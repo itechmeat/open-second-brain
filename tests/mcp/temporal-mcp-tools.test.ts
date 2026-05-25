@@ -5,8 +5,8 @@
  * and one INVALID_PARAMS branch per tool.
  */
 
-import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -88,6 +88,9 @@ async function callTool(
 }
 
 let VAULT: string;
+afterEach(() => {
+  if (VAULT) rmSync(VAULT, { recursive: true, force: true });
+});
 beforeEach(() => {
   VAULT = makeVault();
   writeJsonl(VAULT, "2026-05-20", [

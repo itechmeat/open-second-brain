@@ -106,7 +106,8 @@ function scanPreferences(
     }
     const lastSeenAt = mostRecentEventAt(index, pref.id) ??
       pref.last_evidence_at ?? pref.created_at;
-    const ageDays = Math.floor((nowMs - Date.parse(lastSeenAt)) / ONE_DAY_MS);
+    const ageDays = computeAgeDays(lastSeenAt, nowMs);
+    if (ageDays === undefined) continue;
     if (ageDays < thresholdDays) continue;
     out.push(
       Object.freeze({
@@ -140,9 +141,8 @@ function scanSignals(
     } catch {
       continue;
     }
-    const ageDays = Math.floor(
-      (nowMs - Date.parse(signal.created_at)) / ONE_DAY_MS,
-    );
+    const ageDays = computeAgeDays(signal.created_at, nowMs);
+    if (ageDays === undefined) continue;
     if (ageDays < thresholdDays) continue;
     out.push(
       Object.freeze({
@@ -194,4 +194,15 @@ function mostRecentEventAt(
   if (events === undefined || events.length === 0) return undefined;
   // events is sorted ascending; last element is most recent.
   return events[events.length - 1]!.at;
+}
+
+/**
+ * Compute whole-day age between an anchor timestamp and `now`.
+ * Returns `undefined` when the anchor is unparseable so the caller
+ * can skip the row instead of emitting a `NaN` `ageDays`.
+ */
+function computeAgeDays(anchorIso: string, nowMs: number): number | undefined {
+  const ms = Date.parse(anchorIso);
+  if (!Number.isFinite(ms)) return undefined;
+  return Math.floor((nowMs - ms) / ONE_DAY_MS);
 }

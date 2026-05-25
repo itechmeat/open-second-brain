@@ -116,6 +116,8 @@ describe("buildTimelineIndex", () => {
     const ev = idx.events[0]!;
     expect(ev.kind).toBe("feedback");
     expect(ev.topic).toBe("bar");
+    // signal wikilink is the feedback event's lifecycle anchor.
+    expect(ev.prefId).toBe("sig-2026-05-21-bar");
     expect(idx.eventsByTopic.get("bar")?.length).toBe(1);
   });
 

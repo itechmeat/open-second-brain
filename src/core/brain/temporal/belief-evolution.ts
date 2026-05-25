@@ -355,7 +355,11 @@ function collectRetirements(
       queue.push(`ret-${supersededBy.slice("pref-".length)}`);
     }
   }
-  out.sort((a, b) => (a.retiredAt < b.retiredAt ? -1 : 1));
+  out.sort((a, b) => {
+    if (a.retiredAt < b.retiredAt) return -1;
+    if (a.retiredAt > b.retiredAt) return 1;
+    return a.prefId.localeCompare(b.prefId);
+  });
   return out;
 }
 

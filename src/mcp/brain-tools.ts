@@ -1086,19 +1086,37 @@ function coercePositiveInteger(
   );
 }
 
+const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 function coerceIsoTimestampOrDate(
   tool: string,
   field: string,
   raw: unknown,
+  shape: "date-only" | "date-or-timestamp" = "date-or-timestamp",
 ): string | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "string" || raw.trim().length === 0) {
     throw new MCPError(
       INVALID_PARAMS,
-      `${tool}: ${field} must be an ISO date or ISO timestamp`,
+      `${tool}: ${field} must be an ISO date${shape === "date-or-timestamp" ? " or ISO timestamp" : " (YYYY-MM-DD)"}`,
     );
   }
-  return raw.trim();
+  const v = raw.trim();
+  if (shape === "date-only" && !ISO_DATE_ONLY_RE.test(v)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${tool}: ${field} must be an ISO date (YYYY-MM-DD); got ${JSON.stringify(v)}`,
+    );
+  }
+  // Validate by parsing - rejects "2026-13-99" / "garbage" / etc.
+  const ms = Date.parse(v);
+  if (!Number.isFinite(ms)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${tool}: ${field} must be a parseable ISO date${shape === "date-or-timestamp" ? " or timestamp" : ""}; got ${JSON.stringify(v)}`,
+    );
+  }
+  return v;
 }
 
 function coerceEventKind(
@@ -1230,10 +1248,13 @@ async function toolBrainDailyBrief(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const dateRaw = args["date"];
-  const date =
-    dateRaw === undefined || dateRaw === null
-      ? new Date().toISOString().slice(0, 10)
-      : coerceIsoTimestampOrDate("brain_daily_brief", "date", dateRaw)!;
+  const dateCoerced = coerceIsoTimestampOrDate(
+    "brain_daily_brief",
+    "date",
+    dateRaw,
+    "date-only",
+  );
+  const date = dateCoerced ?? new Date().toISOString().slice(0, 10);
   const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
   const brief = buildDailyBrief(index, ctx.vault, date, {
@@ -1260,10 +1281,13 @@ async function toolBrainWeeklySynthesis(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const weekEndRaw = args["week_end"];
-  const weekEnd =
-    weekEndRaw === undefined || weekEndRaw === null
-      ? new Date().toISOString().slice(0, 10)
-      : coerceIsoTimestampOrDate("brain_weekly_synthesis", "week_end", weekEndRaw)!;
+  const weekEndCoerced = coerceIsoTimestampOrDate(
+    "brain_weekly_synthesis",
+    "week_end",
+    weekEndRaw,
+    "date-only",
+  );
+  const weekEnd = weekEndCoerced ?? new Date().toISOString().slice(0, 10);
   const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
   const synth = buildWeeklySynthesis(index, ctx.vault, weekEnd, cfg);

@@ -126,16 +126,33 @@ function resolveWindow(opts: BuildTimelineIndexOptions): TimelineWindow {
   const sinceRaw = opts.since;
   const untilRaw = opts.until;
   const now = opts.now ?? new Date();
-  const since = sinceRaw !== undefined ? expandDate(sinceRaw) : "1970-01-01T00:00:00Z";
+  const since =
+    sinceRaw !== undefined
+      ? normalizeWindowBound(sinceRaw, "since")
+      : "1970-01-01T00:00:00Z";
   const until =
     untilRaw !== undefined
-      ? expandDate(untilRaw)
+      ? normalizeWindowBound(untilRaw, "until")
       : new Date(now.getTime() + 1).toISOString();
   return Object.freeze({ since, until });
 }
 
-function expandDate(value: string): string {
-  return ISO_DATE_ONLY_RE.test(value) ? `${value}T00:00:00Z` : value;
+/**
+ * Normalize a caller-supplied window bound to a canonical UTC ISO
+ * timestamp so the downstream lexicographic comparison in
+ * `selectEvents` is unambiguous. Accepts either a bare ISO date
+ * (interpreted as `T00:00:00Z`) or a full ISO timestamp. Rejects
+ * unparseable strings so a typo cannot silently mis-filter events.
+ */
+function normalizeWindowBound(value: string, field: "since" | "until"): string {
+  const expanded = ISO_DATE_ONLY_RE.test(value) ? `${value}T00:00:00Z` : value;
+  const ms = Date.parse(expanded);
+  if (!Number.isFinite(ms)) {
+    throw new Error(
+      `buildTimelineIndex: ${field} must be an ISO date or ISO timestamp; got ${JSON.stringify(value)}`,
+    );
+  }
+  return expanded;
 }
 
 function dateKeyFromIso(iso: string): string {
@@ -172,8 +189,14 @@ function collectLogEvents(
   for (const date of sortedDates) {
     if (date < lowerBound) continue;
     if (date > upperBound) continue;
-    const { entries } = readLogDay(vault, date);
-    const filePath = join(logDir, `${date}.jsonl`);
+    const { entries, source } = readLogDay(vault, date);
+    // Reflect the actual source `readLogDay` consumed so the
+    // audit pointer stays accurate when the JSONL sidecar is
+    // missing and the markdown fallback is used.
+    const filePath = join(
+      logDir,
+      source === "markdown-fallback" ? `${date}.md` : `${date}.jsonl`,
+    );
     const vaultPath = relative(vault, filePath);
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i]!;
