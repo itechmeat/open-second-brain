@@ -90,6 +90,29 @@ safety invariants are in [`docs/how-it-works.md`](docs/how-it-works.md).
   (`o2b brain summary` / `brain_operator_summary`). The verdict
   band (`clean | watch | investigate`) is computed from
   structural signals only - no LLM, no per-language vocabulary.
+- Exposes the vault as a connected link graph: frontmatter
+  `aliases:` resolve transparently into the backlink index;
+  every `BacklinkRef` keeps `#heading` / `#^block-id` anchors so
+  consumers see paragraph-level intent; raw-text mentions outside
+  `[[...]]` surface via `o2b brain unlinked` /
+  `brain_unlinked_mentions`; a concept-scoped cluster (target +
+  linkers, optionally + unlinked mentions) lands as a
+  deterministic JSON envelope via `o2b brain synthesise` /
+  `brain_concept_synthesis`; per-MOC coverage audit classifies
+  cluster members into well-covered / fragile / candidate-missing
+  via `o2b brain moc-audit` / `brain_moc_audit`. Match boundaries
+  are Unicode-aware (codepoint class) and the MOC heuristic uses
+  link density only - no per-language vocabulary anywhere.
+- Layers structured property filters on top of full-text search
+  (`o2b search "<query>" --property type=decision --property
+  status=open`). The filter applies to frontmatter scalars as a
+  post-FTS phase; `additionalProperties` extension on
+  `brain_search` mirrors it at the MCP boundary.
+- Surfaces a user-authored vault-root instruction file
+  (`VAULT.md` by default, configurable via
+  `link_graph.vault_instruction_file`) through the `brain_context`
+  envelope. Absent file = field omitted; existing hosts stay
+  byte-identical.
 - (Optional) Records paid agent actions through **Pay Memory**:
   receipts, generated assets, spending policy decisions, human
   approval state, and per-day reports — all as plain Markdown
@@ -204,10 +227,12 @@ exposes the same deterministic operations as MCP tools:
 
 - **Core (3):** `second_brain_status`, `second_brain_query`,
   `vault_health`.
-- **Brain (11):** `brain_feedback`, `brain_dream`,
+- **Brain (14):** `brain_feedback`, `brain_dream`,
   `brain_apply_evidence`, `brain_note`, `brain_context`,
   `brain_digest`, `brain_query`, `brain_doctor`, `brain_backlinks`,
-  `brain_context_pack`, `brain_operator_summary`. See the
+  `brain_context_pack`, `brain_unlinked_mentions`,
+  `brain_concept_synthesis`, `brain_moc_audit`,
+  `brain_operator_summary`. See the
   [Brain section](#brain-observing-memory) below.
 - **Pay Memory (8):** `payment_memory_init`,
   `payment_receipt_append`, `asset_capture`,

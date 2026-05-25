@@ -9,8 +9,12 @@
  * the store but the public surface stays uniform.
  */
 
+import { join } from "node:path";
+
+import { parseFrontmatter } from "../vault.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { runFtsQuery } from "./fts.ts";
+import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -100,6 +104,16 @@ export async function search(
     const inboundLinkSources = store.inboundLinkSources(idsList);
     const tagsByDoc = store.tagsByChunkDocument(idsList);
 
+    // When a property filter is active, overfetch the ranked
+    // candidates so the post-filter result set still has a chance
+    // of producing `limit` matching rows. Without this, the
+    // top-`limit` ranked hits can lose all their property-matching
+    // candidates to the filter and surface zero results even when
+    // matches exist deeper in the rank.
+    const hasPropertyFilter =
+      opts.properties !== undefined && opts.properties.size > 0;
+    const rankLimit = hasPropertyFilter ? Math.max(limit * 5, 50) : limit;
+
     const ranked = rankResults(
       {
         keyword: kwHits,
@@ -111,19 +125,51 @@ export async function search(
       {
         keywordWeight: opts.keywordWeight ?? config.keywordWeight,
         semanticWeight: opts.semanticWeight ?? config.semanticWeight,
-        limit,
+        limit: rankLimit,
         semanticEnabled: policy.wantSemantic && semanticAttempted,
       },
     );
 
+    // Optional post-rank property filter (v0.10.17). Reads each
+    // result's source frontmatter and drops rows whose scalars do
+    // not match the requested key/value pairs. Caching by document
+    // path keeps the read cost bounded by the result set, not the
+    // vault. After filtering we truncate back to the caller's
+    // declared `limit` so the property-filter overfetch above
+    // doesn't leak through.
+    const filteredAll = hasPropertyFilter
+      ? applyPropertyFilter(ranked, opts.properties!, config.vault)
+      : ranked;
+    const filtered = filteredAll.slice(0, limit);
+
     return Object.freeze({
-      results: Object.freeze(ranked),
+      results: Object.freeze(filtered),
       warnings: Object.freeze(warnings),
-      total: ranked.length,
+      total: filtered.length,
     });
   } finally {
     await store.close();
   }
+}
+
+function applyPropertyFilter(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  filters: ReadonlyMap<string, ReadonlyArray<string>>,
+  vault: string,
+): ReadonlyArray<BrainSearchResult> {
+  const cache = new Map<string, Record<string, unknown> | null>();
+  const reader = (path: string): Record<string, unknown> | null => {
+    if (cache.has(path)) return cache.get(path) ?? null;
+    try {
+      const [meta] = parseFrontmatter(join(vault, path));
+      cache.set(path, meta as Record<string, unknown>);
+      return meta as Record<string, unknown>;
+    } catch {
+      cache.set(path, null);
+      return null;
+    }
+  };
+  return filterByProperties(ranked, filters, reader);
 }
 
 interface SemanticPhaseOutcome {

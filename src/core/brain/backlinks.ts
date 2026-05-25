@@ -28,7 +28,12 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { extractWikilinks, parseFrontmatter } from "../vault.ts";
+import { parseFrontmatter } from "../vault.ts";
+import { buildAliasIndex } from "./link-graph/alias-index.ts";
+import {
+  extractWikilinkRichBodies,
+  parseWikilinkRich,
+} from "./link-graph/parse-wikilink.ts";
 import { parseLogDay } from "./log.ts";
 import { brainDirs } from "./paths.ts";
 import { normalizeDerivedKeys } from "./preference.ts";
@@ -51,6 +56,27 @@ export interface BacklinkRef {
   readonly field: string;
   /** ISO-8601 timestamp for log entries; absent for preference/retired sources. */
   readonly timestamp?: string;
+  /**
+   * Heading-anchor text from `[[target#Heading]]` (v0.10.17+). Present
+   * only when the wikilink carried a heading anchor; absent for plain
+   * targets and for block references.
+   */
+  readonly targetAnchor?: string;
+  /**
+   * Block-id text from `[[target#^abc]]` (v0.10.17+). Present only
+   * when the wikilink carried a block anchor; absent otherwise. The
+   * `^` sigil is stripped; just the bare id is recorded.
+   */
+  readonly targetBlock?: string;
+  /**
+   * When the wikilink was written via an alias declared in the
+   * target's frontmatter `aliases:` array (v0.10.17+), the alias
+   * string the linker actually typed. `source` still keys against the
+   * canonical id; this field surfaces the alias spelling for
+   * downstream consumers (digest, doctor, concept synthesis) that
+   * want to show how the link was phrased.
+   */
+  readonly aliasSource?: string;
 }
 
 /** Frozen target → refs map. Keys are normalised wikilink targets. */
@@ -67,22 +93,47 @@ export type BacklinkIndex = ReadonlyMap<string, ReadonlyArray<BacklinkRef>>;
  */
 export function buildBacklinkIndex(vault: string): BacklinkIndex {
   const dirs = brainDirs(vault);
+  const aliasIndex = buildAliasIndex(vault);
   const map = new Map<string, BacklinkRef[]>();
-  // Dedup key: `<source>\x00<target>`. Preference body mirrors
-  // frontmatter `evidenced_by` (rendered as "## Origin" bullets), so a
-  // naive walk double-counts every pref→signal edge. We keep the
-  // first-seen field (frontmatter) and drop later duplicates.
+  // Dedup key: `<source>\x00<canonical>\x00<anchor>\x00<block>`.
+  // Anchor + block are part of the dedup key so two refs to
+  // different anchors of the same target keep both entries (Unit 3
+  // requirement).
   const seen = new Set<string>();
 
   const push = (target: string, ref: BacklinkRef): void => {
-    const norm = normaliseWikilinkTarget(target);
-    if (!norm || norm === ref.source) return; // skip self-refs and empties
-    const key = `${ref.source}\x00${norm}`;
+    const parsed = parseWikilinkRich(target);
+    const bare = parsed.target;
+    if (!bare) return;
+
+    // Resolve via the alias index. Lookup key is NFC + lower-case
+    // (matches the key normalisation `buildAliasIndex` emits). The
+    // alias resolves to a different canonical id only when the
+    // alias entry actually maps somewhere else.
+    const aliasKey = bare.normalize("NFC").toLowerCase();
+    let canonicalId = normaliseWikilinkTarget(bare);
+    let aliasSource: string | undefined;
+    const aliasHit = aliasIndex.get(aliasKey);
+    if (aliasHit && aliasHit !== canonicalId) {
+      aliasSource = bare;
+      canonicalId = aliasHit;
+    }
+    if (!canonicalId || canonicalId === ref.source) return;
+
+    const key = `${ref.source}\x00${canonicalId}\x00${parsed.anchor ?? ""}\x00${parsed.block ?? ""}`;
     if (seen.has(key)) return;
     seen.add(key);
-    const arr = map.get(norm);
-    if (arr) arr.push(ref);
-    else map.set(norm, [ref]);
+
+    const enriched: BacklinkRef = {
+      ...ref,
+      ...(parsed.anchor !== undefined ? { targetAnchor: parsed.anchor } : {}),
+      ...(parsed.block !== undefined ? { targetBlock: parsed.block } : {}),
+      ...(aliasSource !== undefined ? { aliasSource } : {}),
+    };
+
+    const arr = map.get(canonicalId);
+    if (arr) arr.push(enriched);
+    else map.set(canonicalId, [enriched]);
   };
 
   collectPreferences(dirs.preferences, "preference", push);
@@ -161,8 +212,8 @@ function collectPreferences(
         push(retiredBy, { source, sourceKind: kind, field: "retired_by" });
       }
     }
-    for (const target of extractWikilinks(body)) {
-      push(target, { source, sourceKind: kind, field: "body" });
+    for (const body0 of extractWikilinkRichBodies(body)) {
+      push(body0, { source, sourceKind: kind, field: "body" });
     }
   }
 }
@@ -182,8 +233,8 @@ function collectSignals(
       const sources = meta["source"];
       const list = Array.isArray(sources) ? sources : sources ? [String(sources)] : [];
       for (const t of list) push(t, { source, sourceKind: "signal", field: "source" });
-      for (const target of extractWikilinks(body)) {
-        push(target, { source, sourceKind: "signal", field: "body" });
+      for (const body0 of extractWikilinkRichBodies(body)) {
+        push(body0, { source, sourceKind: "signal", field: "body" });
       }
     } catch {
       continue;

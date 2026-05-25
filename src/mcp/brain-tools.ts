@@ -53,6 +53,10 @@ import {
   type AppendApplyEvidenceInput,
 } from "../core/brain/apply-evidence.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
+import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions.ts";
+import { buildConceptCluster } from "../core/brain/link-graph/concept-cluster.ts";
+import { auditMoc, MocAuditError } from "../core/brain/link-graph/moc-audit.ts";
+import { readVaultInstructionFile } from "../core/brain/vault-instruction-file.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
@@ -461,6 +465,17 @@ async function toolBrainContext(
     }
   }
 
+  // Optional vault-root instruction file (v0.10.17). Absent file =
+  // field omitted so hosts that strip unknown fields stay
+  // byte-identical. Read errors are silently swallowed - this is a
+  // best-effort enrichment, not a hard contract.
+  let vaultInstruction: ReturnType<typeof readVaultInstructionFile> = null;
+  try {
+    vaultInstruction = readVaultInstructionFile(ctx.vault);
+  } catch {
+    vaultInstruction = null;
+  }
+
   return {
     vault_path: ctx.vault,
     present: true,
@@ -469,6 +484,15 @@ async function toolBrainContext(
     counts,
     generated_at: generatedAt,
     ...(error ? { error } : {}),
+    ...(vaultInstruction
+      ? {
+          vault_instruction: {
+            path: vaultInstruction.path,
+            content: vaultInstruction.content,
+            lines: vaultInstruction.lines,
+          },
+        }
+      : {}),
   };
 }
 
@@ -855,6 +879,162 @@ async function toolBrainOperatorSummary(
   };
 }
 
+// ----- brain_unlinked_mentions (v0.10.17) ----------------------------------
+
+/**
+ * Raw-text mentions of a target's title / aliases that are NOT
+ * already inside `[[...]]` wikilinks. Read-only walker over
+ * `Brain/preferences/` and `Brain/retired/`. Match boundary is
+ * Unicode-aware (`\p{L}`, `\p{N}`), language-agnostic.
+ */
+async function toolBrainUnlinkedMentions(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const idRaw = args["id"];
+  if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_unlinked_mentions: id must be a non-empty string",
+    );
+  }
+  const targetId = normaliseWikilinkTarget(idRaw);
+  // Limit coercion mirrors the v0.10.16 `brain_operator_summary`
+  // precedent: accept either a number or a strict integer-literal
+  // string (`"5"` ok; `"abc"`, `"3abc"`, `"2.5"` rejected). This
+  // keeps the MCP boundary uniform across new tools.
+  const limitRaw = args["limit"];
+  let limit: number | undefined;
+  if (limitRaw !== undefined && limitRaw !== null) {
+    if (typeof limitRaw === "number") {
+      if (!Number.isInteger(limitRaw) || limitRaw < 1) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_unlinked_mentions: limit must be a positive integer",
+        );
+      }
+      limit = limitRaw;
+    } else if (typeof limitRaw === "string") {
+      const trimmed = limitRaw.trim();
+      if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_unlinked_mentions: limit must be a positive integer",
+        );
+      }
+      const parsed = Number.parseInt(trimmed, 10);
+      if (parsed < 1) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_unlinked_mentions: limit must be a positive integer",
+        );
+      }
+      limit = parsed;
+    } else {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_unlinked_mentions: limit must be a positive integer",
+      );
+    }
+  }
+  const mentions = findUnlinkedMentions(ctx.vault, targetId, {
+    ...(limit !== undefined ? { limit } : {}),
+  });
+  return {
+    vault_path: ctx.vault,
+    target_id: targetId,
+    mentions: mentions.map((m) => ({
+      source: m.source,
+      line: m.line,
+      term: m.term,
+      context: m.contextSnippet,
+    })),
+  };
+}
+
+// ----- brain_concept_synthesis (v0.10.17) ----------------------------------
+
+/**
+ * Concept-scoped cluster envelope: target + all linkers (depth-1)
+ * plus optionally unlinked mentions. Pure assembler; no LLM call.
+ */
+async function toolBrainConceptSynthesis(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const idRaw = args["id"];
+  if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_concept_synthesis: id must be a non-empty string",
+    );
+  }
+  const includeUnlinkedRaw = args["include_unlinked"];
+  let includeUnlinked = false;
+  if (includeUnlinkedRaw !== undefined && includeUnlinkedRaw !== null) {
+    if (typeof includeUnlinkedRaw !== "boolean") {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_concept_synthesis: include_unlinked must be a boolean",
+      );
+    }
+    includeUnlinked = includeUnlinkedRaw;
+  }
+  const targetId = normaliseWikilinkTarget(idRaw);
+  const cluster = buildConceptCluster(ctx.vault, targetId, {
+    includeUnlinked,
+  });
+  return {
+    vault_path: ctx.vault,
+    target_id: cluster.targetId,
+    target_title: cluster.targetTitle,
+    linkers: cluster.linkers,
+    unlinked_mentions: cluster.unlinkedMentions,
+    generated_at: cluster.generatedAt,
+  };
+}
+
+// ----- brain_moc_audit (v0.10.17) ------------------------------------------
+
+/**
+ * Per-MOC coverage audit. Classifies cluster members into
+ * `wellCovered` / `fragile` / `candidateMissing` and surfaces a
+ * `suggestedNext` candidate. MOC detection is purely structural -
+ * outbound link count + link density.
+ */
+async function toolBrainMocAudit(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const idRaw = args["id"];
+  if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_moc_audit: id must be a non-empty string",
+    );
+  }
+  const targetId = normaliseWikilinkTarget(idRaw);
+  try {
+    const report = auditMoc(ctx.vault, targetId);
+    return {
+      vault_path: ctx.vault,
+      hub_id: report.hubId,
+      outbound_count: report.outboundCount,
+      well_covered: report.wellCovered,
+      fragile: report.fragile,
+      candidate_missing: report.candidateMissing,
+      ...(report.suggestedNext
+        ? { suggested_next: report.suggestedNext }
+        : {}),
+    };
+  } catch (err) {
+    if (err instanceof MocAuditError) {
+      throw new MCPError(INVALID_PARAMS, `brain_moc_audit: ${err.message}`);
+    }
+    throw err;
+  }
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -1175,6 +1355,71 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainContextPack,
+  },
+  {
+    name: "brain_unlinked_mentions",
+    description:
+      "Raw-text mentions of a target's title / aliases that are NOT already inside `[[...]]`. Walks Brain/preferences and Brain/retired; match boundary is Unicode-aware (codepoint class), language-agnostic. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "Target id (e.g. `pref-foo`, `ret-bar`). Wikilink decoration is stripped if present.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Maximum number of mentions to return. Defaults to 100; the scanner stops as soon as the cap is hit.",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainUnlinkedMentions,
+  },
+  {
+    name: "brain_concept_synthesis",
+    description:
+      "Concept-scoped cluster: target note + every artifact that wikilinks to it (depth-1), optionally including unlinked-mention rows. Deterministic JSON envelope, no LLM call inside. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "Target id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
+        },
+        include_unlinked: {
+          type: "boolean",
+          description:
+            "When true, also populate `unlinked_mentions` (raw-text mentions outside `[[...]]`). Defaults to false.",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainConceptSynthesis,
+  },
+  {
+    name: "brain_moc_audit",
+    description:
+      "Per-MOC coverage audit. Given a hub note id, classifies its outbound cluster into well-covered / fragile / candidate-missing and surfaces a suggested-next candidate. MOC detection is purely structural (outbound link count + link density). Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "Hub note id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainMocAudit,
   },
   {
     name: "brain_operator_summary",

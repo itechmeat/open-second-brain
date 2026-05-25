@@ -37,6 +37,15 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
     path_prefix: { type: "string", maxLength: 256 },
+    properties: {
+      type: "object",
+      description:
+        "Optional frontmatter property filter (v0.10.17). Each key maps to one or more accepted scalar values; multi-value within a key is OR, multiple keys is AND.",
+      additionalProperties: {
+        type: "array",
+        items: { type: "string" },
+      },
+    },
   },
   required: ["query"],
   additionalProperties: false,
@@ -44,6 +53,51 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
 
 function searchTimeoutError(ms: number): MCPError {
   return new MCPError(INTERNAL_ERROR, `search timeout after ${ms}ms`);
+}
+
+/**
+ * Validate + normalise the `properties` argument shape. Returns
+ * `undefined` when the argument is absent. Throws INVALID_PARAMS
+ * on a malformed shape so callers get a clear error rather than a
+ * silently-ignored filter.
+ */
+function parsePropertiesArgument(
+  raw: unknown,
+): ReadonlyMap<string, ReadonlyArray<string>> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "argument 'properties' must be an object mapping key → array of strings",
+    );
+  }
+  const map = new Map<string, ReadonlyArray<string>>();
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(v)) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `argument 'properties.${k}' must be an array of strings`,
+      );
+    }
+    const accepted: string[] = [];
+    for (const item of v) {
+      if (typeof item !== "string") {
+        throw new MCPError(
+          INVALID_PARAMS,
+          `argument 'properties.${k}' must contain only strings`,
+        );
+      }
+      accepted.push(item);
+    }
+    if (accepted.length === 0) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `argument 'properties.${k}' must not be empty`,
+      );
+    }
+    map.set(k, Object.freeze(accepted));
+  }
+  return map;
 }
 
 function truncateContent(c: string, max: number): string {
@@ -101,6 +155,7 @@ async function toolBrainSearch(
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
+  const properties = parsePropertiesArgument(args["properties"]);
 
   const config = resolveSearchConfig({
     vault: ctx.vault,
@@ -116,6 +171,7 @@ async function toolBrainSearch(
         semantic: semantic ?? null,
         keywordOnly,
         pathPrefix,
+        ...(properties !== undefined ? { properties } : {}),
       }),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,

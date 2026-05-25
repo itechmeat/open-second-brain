@@ -42,6 +42,9 @@ Brain verbs (observing memory):
   lint                Self-healing structural checks (--consolidate); --apply to write
   actions             Ranked maintenance action list (dedup + lint + footprint)
   summary             Operator dashboard: trust verdict, doctor/dream counts, actions
+  unlinked            Raw-text mentions of an artifact's title/aliases outside [[...]]
+  synthesise          Concept cluster: target + linkers (depth-1), optionally + mentions
+  moc-audit           Per-MOC coverage audit (well-covered/fragile/candidate-missing)
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -249,4 +252,24 @@ export const VERB_HELP: Record<string, string> = {
     "dream uncertain/quarantined counts, verification delta, top maintenance\n" +
     "actions, and instruction-file ceiling warnings into one report.\n" +
     "Runs a dry-run dream pass by default; --skip-dream omits it. Read-only.\n",
+  unlinked:
+    "usage: o2b brain unlinked <id> [--limit <n>] [--vault <path>] [--json]\n" +
+    "Raw-text mentions of <id>'s title and frontmatter aliases that are NOT\n" +
+    "already inside a [[...]] wikilink. Match boundary is Unicode-aware\n" +
+    "(codepoint class), language-agnostic. Walks Brain/preferences/ and\n" +
+    "Brain/retired/. Read-only.\n",
+  synthesise:
+    "usage: o2b brain synthesise <id> [--include-unlinked] [--vault <path>] [--json]\n" +
+    "Assemble the concept-cluster envelope: target note + every artifact\n" +
+    "that wikilinks to it (depth-1). With --include-unlinked also include\n" +
+    "raw-text mentions outside [[...]]. Pure assembler, no LLM call. Output\n" +
+    "is a deterministic JSON envelope downstream consumers can feed to\n" +
+    "any synthesis prompt. Read-only.\n",
+  "moc-audit":
+    "usage: o2b brain moc-audit <hub-id> [--vault <path>] [--json]\n" +
+    "Per-MOC coverage audit. Given a hub note id, classifies cluster\n" +
+    "members into well-covered / fragile / candidate-missing buckets and\n" +
+    "surfaces a suggested-next candidate. MOC detection is purely\n" +
+    "structural (outbound link count + link density thresholds from\n" +
+    "_brain.yaml). Read-only.\n",
 };

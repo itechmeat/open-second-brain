@@ -5,6 +5,132 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.17] - 2026-05-25
+
+Link graph surfaces: seven related features that expose the vault
+as a connected graph. A new `src/core/brain/link-graph/` subsystem
+holds pure helpers (rich wikilink parse, frontmatter alias index,
+unlinked-mentions scanner, concept-cluster assembler, per-MOC
+audit). The backlink index now resolves Obsidian-style frontmatter
+`aliases:` arrays and preserves `#heading` / `#^block-id` anchors
+on every `BacklinkRef`. Three new MCP tools
+(`brain_unlinked_mentions`, `brain_concept_synthesis`,
+`brain_moc_audit`) and three new CLI verbs (`o2b brain unlinked`,
+`synthesise`, `moc-audit`) surface the helpers; `brain_search`
+gains an optional `properties` argument and `o2b search` grows a
+repeatable `--property KEY=VALUE` flag for frontmatter-scalar
+filters; `brain_context` envelope optionally surfaces a vault-root
+instruction file (`VAULT.md` by default).
+
+### Added
+
+- `src/core/brain/link-graph/parse-wikilink.ts` -
+  `parseWikilinkRich(value)` returns
+  `{target, anchor, block, alias}` for any Obsidian wikilink
+  shape; existing `parseWikilink` / `normaliseWikilinkTarget`
+  string contracts are unchanged. Sibling helper
+  `extractWikilinkRichBodies(content)` yields full bracket bodies
+  so anchor info survives the body walk.
+- `src/core/brain/link-graph/alias-index.ts` -
+  `buildAliasIndex(vault)` walks `Brain/preferences/` +
+  `Brain/retired/` and returns a frozen
+  `Map<aliasLowerNFC, canonicalId>`. Collisions resolve first-wins
+  by sorted canonical id; aliases that would shadow an existing
+  on-disk basename are silently dropped (no backlink hijack).
+- `src/core/brain/link-graph/unlinked-mentions.ts` -
+  `findUnlinkedMentions(vault, targetId, opts)` returns raw-text
+  occurrences of the target's title / aliases that are NOT inside
+  `[[...]]` brackets and NOT inside code spans. **Language-agnostic
+  by construction** - matches only via Unicode codepoint classes
+  (`\p{L}`, `\p{N}`), rejects single-codepoint terms.
+- `src/core/brain/link-graph/concept-cluster.ts` -
+  `buildConceptCluster(vault, targetId, opts)` assembles a
+  deterministic envelope: target + every linker (depth-1) +
+  optional unlinked mentions. Pure assembler; no LLM call.
+- `src/core/brain/link-graph/moc-audit.ts` -
+  `auditMoc(vault, hubId, opts)` classifies cluster members into
+  `wellCovered`, `fragile`, `candidateMissing`, plus a
+  `suggestedNext` pick. MOC detection is purely structural -
+  outbound link count + non-whitespace link-density ratio. No
+  vocabulary detection of "this looks like a MOC".
+- `src/core/search/property-filter.ts` -
+  `filterByProperties(rows, filters, reader)` is a pure post-FTS
+  phase. Multi-value within a key = OR; multiple keys = AND.
+  Dependency-injected frontmatter reader keeps the helper testable
+  without I/O.
+- `src/core/brain/vault-instruction-file.ts` -
+  `readVaultInstructionFile(vault, name?)` reads a vault-root
+  user-authored instruction file (default `VAULT.md`,
+  configurable via `link_graph.vault_instruction_file`).
+  Rejects unsafe overrides at config time (absolute paths, `..`
+  segments). `brain_context` envelope grows an optional
+  `vault_instruction: {path, content, lines}` field; absent file
+  = field omitted.
+- New atoms on existing types:
+  - `BacklinkRef` (`src/core/brain/backlinks.ts`) gains optional
+    `targetAnchor`, `targetBlock`, `aliasSource` fields. Existing
+    consumers reading only the four legacy fields keep compiling.
+  - `SearchOptions.properties` (`src/core/search/types.ts`)
+    optional `ReadonlyMap<string, ReadonlyArray<string>>`.
+- New `link_graph:` block in `_brain.yaml`
+  (`src/core/brain/policy.ts`):
+  - `moc_min_outbound_links` (default 5)
+  - `moc_min_link_ratio` (default 0.3)
+  - `vault_instruction_file` (default `VAULT.md`)
+- Three new full-scope MCP tools (`src/mcp/brain-tools.ts`):
+  - `brain_unlinked_mentions(id, limit?)`
+  - `brain_concept_synthesis(id, include_unlinked?)`
+  - `brain_moc_audit(id)`
+- `brain_search` (`src/mcp/search-tools.ts`) accepts an optional
+  `properties` argument; the schema validates each key maps to
+  an array of strings.
+- Three new CLI verbs:
+  - `o2b brain unlinked <id> [--limit N] [--json]`
+  - `o2b brain synthesise <id> [--include-unlinked] [--json]`
+  - `o2b brain moc-audit <id> [--json]`
+- `o2b search` grows a repeatable `--property KEY=VALUE` flag
+  (`src/cli/search.ts`); malformed entries fail loudly with a
+  usage error before any I/O.
+
+### Changed
+
+- `buildBacklinkIndex` (`src/core/brain/backlinks.ts`) rewrites
+  its push helper to consult the alias index and call
+  `parseWikilinkRich` on every incoming target string, populating
+  the new `BacklinkRef.targetAnchor` / `targetBlock` /
+  `aliasSource` fields. Dedup key now includes the anchor/block
+  so two refs to different sections of the same target keep both
+  entries.
+- `brain_context` envelope additively grows the optional
+  `vault_instruction` field. Hosts that strip unknown fields stay
+  byte-identical.
+- README capability bullets describe the new link-graph surfaces,
+  property-filtered search, and vault-root instruction file. MCP
+  tool inventory bumps from 11 to 14 Brain tools.
+
+### Notes
+
+- **Language-agnostic by construction.** None of the new
+  helpers uses a vocabulary list, stopword set, per-language
+  regex table, or unit dictionary. Detectors rely on Unicode
+  codepoint classes and structural sigils only.
+- **Backward compatibility by construction.** New fields on
+  `BacklinkRef` are additive optionals. Existing consumers that
+  destructure only the four legacy fields keep compiling. The
+  `brain_context` envelope's `vault_instruction` field is absent
+  when the file is missing. `SearchOptions.properties` absent =
+  identical pre-v0.10.17 behaviour.
+- **No new external dependencies.** Helpers use only
+  `node:fs`, `node:path`, and existing internal utilities.
+- **No LLM calls in core helpers.** `buildConceptCluster` and
+  `auditMoc` are pure assemblers; downstream consumers can feed
+  the deterministic envelope to an LLM later.
+- Three new tools register in the full MCP scope only. The
+  writer-scope surface stays at four tools
+  (`brain_feedback`, `brain_apply_evidence`, `brain_note`,
+  `brain_context`); the last grows the additive
+  `vault_instruction` field on the existing envelope.
+
 ## [0.10.16] - 2026-05-25
 
 Trust and operator surfaces: eight related self-reporting features
@@ -2553,6 +2679,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 [0.10.0]: https://github.com/itechmeat/open-second-brain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/itechmeat/open-second-brain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/itechmeat/open-second-brain/compare/v0.8.1...v0.9.0
+[0.10.17]: https://github.com/itechmeat/open-second-brain/compare/v0.10.16...v0.10.17
 [0.10.16]: https://github.com/itechmeat/open-second-brain/compare/v0.10.15...v0.10.16
 [0.10.15]: https://github.com/itechmeat/open-second-brain/compare/v0.10.14...v0.10.15
 [0.10.14]: https://github.com/itechmeat/open-second-brain/compare/v0.10.13...v0.10.14
