@@ -36,6 +36,8 @@ import { appendLogEvent, type AppendLogEventResult, type BrainLogEntry } from ".
 import { parsePreference } from "./preference.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import { isoSecond } from "./time.ts";
+import { checkRolePermission } from "./trust/check-role-permission.ts";
+import { BRAIN_OPERATIONS, type BrainRole } from "./trust/role.ts";
 import { renderPrefLink } from "./wikilink.ts";
 import {
   BRAIN_APPLY_RESULT,
@@ -67,6 +69,20 @@ export class BrainPreferenceNotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown when {@link appendApplyEvidence} is called with a role that
+ * is not permitted to record evidence (v0.10.16).
+ */
+export class BrainRolePermissionError extends Error {
+  readonly role: BrainRole;
+
+  constructor(role: BrainRole, reason: string) {
+    super(`apply-evidence permission denied for role '${role}': ${reason}`);
+    this.name = "BrainRolePermissionError";
+    this.role = role;
+  }
+}
+
 /** Input contract for {@link appendApplyEvidence}. */
 export interface AppendApplyEvidenceInput {
   /**
@@ -93,6 +109,13 @@ export interface AppendApplyEvidenceOptions {
    * so the resulting log entry is byte-deterministic.
    */
   readonly now?: Date;
+  /**
+   * Caller role (v0.10.16). When provided, the role-permission gate
+   * runs and rejects calls from roles that are not allowed to record
+   * evidence. Legacy callers that omit the field bypass the gate -
+   * the default is to preserve pre-v0.10.16 behaviour.
+   */
+  readonly role?: BrainRole;
 }
 
 export interface AppendApplyEvidenceResult {
@@ -116,6 +139,12 @@ export function appendApplyEvidence(
   input: AppendApplyEvidenceInput,
   opts: AppendApplyEvidenceOptions = {},
 ): AppendApplyEvidenceResult {
+  if (opts.role !== undefined) {
+    const verdict = checkRolePermission(opts.role, BRAIN_OPERATIONS.evidence_record);
+    if (!verdict.allowed) {
+      throw new BrainRolePermissionError(opts.role, verdict.reason ?? "denied");
+    }
+  }
   if (!input.pref_id || !input.pref_id.trim()) {
     throw new Error("apply-evidence missing field: pref_id");
   }
