@@ -124,7 +124,7 @@ Consumers depend on layers, never on each other. The DAG keeps the diff coherent
 
 ## Risks and open questions
 
-- **Migrate sweep idempotency**: extending `migrate-frontmatter` to add three new fields needs the same byte-identical-output guarantee as the existing sweep. Plan: keep field ordering stable, emit defaults only when fields are absent.
+- **Migration sweep deliberately skipped**: the original plan extended `migrate-frontmatter` to backfill `_lifecycle: stable` and `tier: supporting` on legacy pages. Implementation chose read-side defaults instead - `readLifecycle()` and `readTier()` return the documented default whenever the field is absent. Trade-off: legacy files stay byte-identical (no Syncthing churn, no migration risk on user vaults), at the cost of the new fields not appearing in on-disk YAML until a write touches the page. Acceptable because every reader has a fallback path; revisit only if a future feature actually needs the field materialised on disk.
 - **Page-dedup wikilink patcher rewriting tests**: care needed not to rewrite wikilinks inside committed fixture files. Mitigation: dedup operates only on `Brain/` paths (use `brainDirs()`), tests run in a tmpdir.
 - **Token estimator accuracy on CJK**: heuristic may under- or over-count; the warn threshold (200k default) has slack. If accuracy proves insufficient post-merge, swap the implementation behind `text/tokenizer.ts` without touching consumers.
 - **Ranker tier weighting must not regress existing test snapshots**: ranker tests use fixture vaults where every page is implicitly `tier: supporting` (the default). The new weighting term must be neutral when all pages carry the default tier. Plan: tier weight multiplier defaults to `1.0` for `supporting`.

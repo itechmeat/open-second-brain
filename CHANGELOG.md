@@ -39,8 +39,9 @@ rather than re-cutting the schema.
   NFKC + Unicode case folding, the shared key normaliser used by
   dedup-hash and page-dedup.
 - `src/core/brain/text/tokenizer.ts` (`estimateTokens`) -
-  deterministic heuristic token counter: 1.3 tokens per word plus
-  1 token per CJK / hiragana / katakana / hangul character.
+  deterministic heuristic token counter: `ceil(utf8_bytes / 4)`.
+  Language-agnostic; no script-specific branching so the formula
+  works uniformly for any input.
 - `src/core/brain/page-dedup.ts` - exact-normalised-key page
   dedup, secondary marking via `merged_into`, vault-wide wikilink
   patcher that preserves aliases and anchors.
@@ -89,14 +90,16 @@ rather than re-cutting the schema.
 - The `tier` field is unprefixed (user-editable territory next to
   `pinned`); `_lifecycle` carries the Group-C `_` prefix because
   dream owns lifecycle transitions.
-- Action scorer is exposed standalone in v0.10.15; integration
-  into `brain_digest` and `brain_doctor` output sections is
-  scheduled as a follow-up so the existing snapshot-tested
-  formatters stay untouched in this release.
 - `brain_context_pack` is registered in the full MCP scope only,
   not the always-loaded writer scope. The writer scope keeps its
   four-tool surface (`brain_feedback`, `brain_apply_evidence`,
   `brain_note`, `brain_context`).
+- No migration runs for the new `_lifecycle` / `tier` fields:
+  legacy preference and retired pages are left byte-identical.
+  Readers apply documented defaults (`stable`, `supporting`)
+  when the field is absent, so behaviour is consistent without
+  rewriting existing files. New writes opt in by passing the
+  fields to `writePreference`.
 
 ## [0.10.14] - 2026-05-25
 

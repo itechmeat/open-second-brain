@@ -11,9 +11,10 @@
  * than recursing forever.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { brainDirs } from "../paths.ts";
 
@@ -155,7 +156,7 @@ export function setMergedInto(
     }
     const next = `${nextHead}${tail}`;
     if (next !== raw) {
-      writeFileSync(secondaryPath, next, "utf8");
+      atomicWriteFileSync(secondaryPath, next);
     }
     return canonicalId;
   }

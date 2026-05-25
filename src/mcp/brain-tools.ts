@@ -54,6 +54,7 @@ import {
 } from "../core/brain/apply-evidence.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import { packContext } from "../core/brain/context-pack.ts";
+import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import {
   renderDigest,
@@ -598,6 +599,17 @@ async function toolBrainDoctor(
       code: i.code,
       message: i.message,
       ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
+    })),
+    // v0.10.15: ranked maintenance actions surfaced as a parallel
+    // signal to errors/warnings. The list is independent of `strict`
+    // because nothing here downgrades the `ok` flag - actions are
+    // suggestions, not invariant violations.
+    suggested_actions: collectMaintenanceActions(ctx.vault).map((a) => ({
+      id: a.id,
+      category: a.category,
+      title: a.title,
+      impact: a.impact,
+      ...(a.target !== undefined ? { target: a.target } : {}),
     })),
   };
 }

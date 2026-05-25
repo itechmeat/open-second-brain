@@ -75,6 +75,25 @@ describe("lintConsolidate — fix-merged-link", () => {
     expect(content).toContain("[[pref-canon|the rule]]");
     expect(content).toContain("[[pref-canon#section]]");
   });
+
+  test("does not rewrite wikilinks that merely share a prefix", () => {
+    writePref("canon", { topic: "x", principle: "y" });
+    writePref("dup", { topic: "x", principle: "y", merged_into: "pref-canon" });
+    writeFileSync(
+      join(vault, "Brain", "log", "2026-05-25.md"),
+      "real [[pref-dup]] vs [[pref-dup-extra]] vs [[pref-duplicate]]\n",
+    );
+    const report = lintConsolidate(vault, { apply: true });
+    expect(report.fixes.length).toBe(1);
+    const content = readFileSync(
+      join(vault, "Brain", "log", "2026-05-25.md"),
+      "utf8",
+    );
+    expect(content).toContain("[[pref-canon]]");
+    expect(content).toContain("[[pref-dup-extra]]");
+    expect(content).toContain("[[pref-duplicate]]");
+    expect(content).not.toMatch(/\[\[pref-dup\]\]/);
+  });
 });
 
 describe("lintConsolidate — demote-stale-stable", () => {

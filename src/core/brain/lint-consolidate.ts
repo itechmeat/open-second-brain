@@ -23,10 +23,10 @@ import {
   readFileSync,
   readdirSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 
+import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { brainDirs } from "./paths.ts";
 import {
@@ -177,7 +177,7 @@ function applyDemotion(path: string): boolean {
     `$1draft`,
   );
   if (updatedHead === head) return false;
-  writeFileSync(path, updatedHead + tail, "utf8");
+  atomicWriteFileSync(path, updatedHead + tail);
   return true;
 }
 
@@ -232,7 +232,7 @@ export function lintConsolidate(
         if (fileFixes.length === 0) continue;
         fixes.push(...fileFixes);
         if (opts.apply && rewritten !== raw) {
-          writeFileSync(full, rewritten, "utf8");
+          atomicWriteFileSync(full, rewritten);
           filesWritten += 1;
         }
       }

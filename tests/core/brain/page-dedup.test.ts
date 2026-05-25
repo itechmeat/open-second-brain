@@ -135,6 +135,26 @@ describe("patchWikilinks", () => {
     const touched = patchWikilinks(vault, "pref-x", "pref-x");
     expect(touched).toBe(0);
   });
+
+  test("does not rewrite wikilinks that merely share a prefix", () => {
+    // Patching `pref-old` must NOT touch `[[pref-old-extra]]` or
+    // `[[pref-older]]` - those are distinct identities that just
+    // happen to start with the same substring. The lookahead in
+    // the patcher's regex defends this; pin it explicitly so a
+    // future regex rewrite cannot regress the case.
+    const log = join(vault, "Brain", "log", "2026-05-25.md");
+    writeFileSync(
+      log,
+      "matches [[pref-old]] and skips [[pref-old-extra]] and [[pref-older]]\n",
+    );
+    const touched = patchWikilinks(vault, "pref-old", "pref-new");
+    expect(touched).toBe(1);
+    const content = readFileSync(log, "utf8");
+    expect(content).toContain("[[pref-new]]");
+    expect(content).toContain("[[pref-old-extra]]");
+    expect(content).toContain("[[pref-older]]");
+    expect(content).not.toMatch(/\[\[pref-old\]\]/);
+  });
 });
 
 describe("mergePage", () => {

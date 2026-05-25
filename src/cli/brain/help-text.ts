@@ -36,6 +36,11 @@ Brain verbs (observing memory):
   scan-inline         Capture @osb markers from vault markdown files (Daily/, project notes, etc.)
   import-session      Replay signals from a Claude/Codex/Hermes session .jsonl (or directory)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
+  page-dedup          Detect (and optionally merge) near-duplicate vault pages
+  token-footprint     Report per-category vault token size with a warn threshold
+  context-pack        Return a tier-then-recency vault slice under a token budget
+  lint                Self-healing structural checks (--consolidate); --apply to write
+  actions             Ranked maintenance action list (dedup + lint + footprint)
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -199,4 +204,42 @@ export const VERB_HELP: Record<string, string> = {
     "<path>. Without --force, refuses to overwrite an existing file.\n" +
     "Zero backend, no LLM, no network access. The page consumes a\n" +
     "prebuilt JSON graph; it does not parse vault Markdown client-side.\n",
+  "page-dedup":
+    "usage: o2b brain page-dedup [--apply] [--yes] [--vault <path>] [--json]\n" +
+    "Detect near-duplicate vault pages by normalised topic+principle key.\n" +
+    "Dry-run by default: lists each cluster with its canonical (oldest)\n" +
+    "and secondary ids. --apply writes `merged_into:` on every secondary\n" +
+    "and rewrites `[[secondary]]` wikilinks across the vault to the\n" +
+    "canonical. Requires --yes in non-interactive mode (--json or non-TTY).\n",
+  "token-footprint":
+    "usage: o2b brain token-footprint [--warn-threshold <n>] [--vault <path>] [--json]\n" +
+    "Report per-category vault token size (preferences, retired, inbox,\n" +
+    "processed, log, other) using the language-agnostic\n" +
+    "`ceil(utf8_bytes / 4)` heuristic. Flags vaults that cross the warn\n" +
+    "threshold (default 200000; override via --warn-threshold or the\n" +
+    "BRAIN_TOKEN_WARN_THRESHOLD env var).\n",
+  "context-pack":
+    "usage: o2b brain context-pack --max-tokens <n> [--query <q>] [--vault <path>] [--json]\n" +
+    "Return the highest-tier, most recent vault slice that fits under\n" +
+    "<n> tokens. Items ordered core → supporting → peripheral, then\n" +
+    "newest first. Stops adding pages when the next page would exceed\n" +
+    "the budget. --query <q> filters by NFKC+casefold substring match\n" +
+    "on topic + principle.\n",
+  lint:
+    "usage: o2b brain lint --consolidate [--apply] [--yes] [--vault <path>] [--json]\n" +
+    "Self-healing structural lint. Dry-run by default; --apply writes\n" +
+    "the smallest possible fix per finding. Two operations:\n" +
+    "  fix-merged-link    rewrite wikilinks pointing at a page that\n" +
+    "                     carries `merged_into:` to the canonical.\n" +
+    "  demote-stale-stable   demote `_lifecycle: stable` preferences\n" +
+    "                        older than 180 days with no recent\n" +
+    "                        evidence to `_lifecycle: draft`.\n" +
+    "Requires --yes in non-interactive mode (--json or non-TTY).\n",
+  actions:
+    "usage: o2b brain actions [--top-n <n>] [--vault <path>] [--json]\n" +
+    "Ranked maintenance action list. Aggregates page-dedup, lint\n" +
+    "(dry-run), and token-footprint signals, scores each candidate\n" +
+    "action by impact (dedup count × weight, staleness × age,\n" +
+    "broken-link count, token-footprint excess), and prints the top N\n" +
+    "(default 10) sorted by impact descending. Read-only.\n",
 };

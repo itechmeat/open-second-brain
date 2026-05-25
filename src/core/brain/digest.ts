@@ -43,6 +43,8 @@ import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summ
 import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
+import { collectMaintenanceActions } from "./maintenance/collect.ts";
+import type { ActionItem } from "./maintenance/action-scorer.ts";
 import {
   MOST_APPLIED_LIMIT_DEFAULT,
   MOST_APPLIED_WINDOW_DAYS_DEFAULT,
@@ -263,6 +265,13 @@ export interface DigestJson {
    * Independent of the window — reflects current vault state.
    */
   readonly connection_health: DigestJsonConnectionHealth;
+  /**
+   * Ranked maintenance actions (v0.10.15). Aggregates page-dedup
+   * candidates, lint demotions / merged-link rewrites, and token
+   * footprint excess; deterministic ordering. Empty when nothing
+   * needs doing. Independent of the window.
+   */
+  readonly actions: ReadonlyArray<ActionItem>;
 }
 
 /**
@@ -319,6 +328,7 @@ export function renderDigest(
       agent_summary: data.agent_summary,
       most_applied: data.most_applied,
       connection_health: data.connection_health,
+      actions: data.actions,
     };
     return Object.freeze({
       content: JSON.stringify(payload, null, 2) + "\n",
@@ -347,6 +357,7 @@ interface DigestData {
   readonly agent_summary: ReadonlyArray<AgentSummaryEntry>;
   readonly most_applied: DigestJsonMostApplied;
   readonly connection_health: DigestJsonConnectionHealth;
+  readonly actions: ReadonlyArray<ActionItem>;
 }
 
 function collectDigestData(
@@ -504,6 +515,7 @@ function collectDigestData(
     agent_summary,
     most_applied,
     connection_health: computeConnectionHealth(vault, preferences),
+    actions: collectMaintenanceActions(vault),
   };
 }
 
@@ -992,6 +1004,16 @@ function renderMarkdown(
       `- Link density: ${pct}%`,
       "",
     );
+  }
+  // Ranked maintenance actions (v0.10.15). Same window-independent
+  // shape as connection-health: surface only when the scorer
+  // returned anything, so empty vaults stay quiet.
+  if (data.actions.length > 0) {
+    lines.push(`## Actions (${data.actions.length})`, "");
+    for (const a of data.actions) {
+      lines.push(`- [${a.category}] impact ${a.impact} — ${a.title}`);
+    }
+    lines.push("");
   }
   if (data.merge_suggestions.length > 0) {
     lines.push(`## Merge suggestions (${data.merge_suggestions.length})`, "");
