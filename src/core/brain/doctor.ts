@@ -205,10 +205,14 @@ export function runDoctor(
   if (!existsSync(dirs.brain)) {
     // No Brain layer present is not an error here — `o2b brain init`
     // is the right command, but a vault without Brain is allowed in
-    // v0.9. Return clean.
+    // v0.9. Return clean. v0.10.16: emit the new trust-layer fields
+    // with their clean / empty defaults for shape symmetry with the
+    // normal-return path.
     return Object.freeze({
       warnings: Object.freeze([]),
       errors: Object.freeze([]),
+      trust_verdict: "clean" as TrustVerdict,
+      instruction_file_warnings: Object.freeze([]),
     });
   }
 

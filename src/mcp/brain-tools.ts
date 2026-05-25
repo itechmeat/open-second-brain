@@ -62,6 +62,8 @@ import {
 } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
+import { buildOperatorSummary } from "../core/brain/trust/operator-summary.ts";
+import { BRAIN_ROLES } from "../core/brain/trust/role.ts";
 import {
   BrainNotFoundError,
   queryByLogSince,
@@ -259,7 +261,20 @@ async function toolBrainDream(
     retired: summary.retired.map((r) => ({ id: r.id, reason: r.reason })),
     contradictions: [...summary.contradictions],
     moved_to_processed: [...summary.moved_to_processed],
+    suppressed: [...summary.suppressed],
     warnings: summary.warnings.map((w) => ({ code: w.code, message: w.message })),
+    uncertain: summary.uncertain.map((u) => ({
+      code: u.code,
+      ...(u.topic !== undefined ? { topic: u.topic } : {}),
+      message: u.message,
+    })),
+    quarantined: summary.quarantined.map((q) => ({
+      topic: q.topic,
+      signal_count: q.signal_count,
+      distinct_agents: q.distinct_agents,
+      age_days: q.age_days,
+      failed_gates: [...q.failed_gates],
+    })),
     snapshot_path: summary.snapshot_path
       ? vaultRelativeSafe(ctx.vault, summary.snapshot_path)
       : null,
@@ -306,8 +321,12 @@ async function toolBrainApplyEvidence(
   // (isError: true) rather than an MCP protocol error. The design doc
   // says "not an error condition" — the agent should see an informative
   // payload that explains what to do next, not a JSON-RPC error frame.
+  // v0.10.16: assert applier role at the MCP boundary so the structural
+  // permission gate fires before any I/O.
   try {
-    const res = appendApplyEvidence(ctx.vault, input);
+    const res = appendApplyEvidence(ctx.vault, input, {
+      role: BRAIN_ROLES.applier,
+    });
     return {
       logged_at: res.logged_at,
       log_path: vaultRelativeSafe(ctx.vault, res.log_path),
@@ -611,6 +630,22 @@ async function toolBrainDoctor(
       impact: a.impact,
       ...(a.target !== undefined ? { target: a.target } : {}),
     })),
+    // v0.10.16: trust-layer fields. `trust_verdict` is always populated
+    // by runDoctor; `verification_delta_summary` only when the caller
+    // threads a dream summary through (not exposed via this tool's
+    // surface, so it stays absent here). `instruction_file_warnings`
+    // surfaces vault-root instruction files exceeding the configured
+    // ceiling.
+    ...(result.trust_verdict !== undefined
+      ? { trust_verdict: result.trust_verdict }
+      : {}),
+    instruction_file_warnings: (result.instruction_file_warnings ?? []).map(
+      (w) => ({
+        path: w.path,
+        lines: w.lines,
+        ceiling: w.ceiling,
+      }),
+    ),
   };
 }
 
@@ -755,9 +790,6 @@ async function toolBrainOperatorSummary(
     );
   }
   const includeDream = args["include_dream"] !== false;
-  const { buildOperatorSummary } = await import(
-    "../core/brain/trust/operator-summary.ts"
-  );
   let dreamSummary;
   if (includeDream) {
     try {

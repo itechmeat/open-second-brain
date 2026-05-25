@@ -94,7 +94,7 @@ export function buildOperatorSummary(
   const guardrails = opts.guardrails ?? BRAIN_GUARDRAIL_DEFAULTS;
   const dreamSummary = opts.dreamSummary;
 
-  const doctorResult = safeDoctor(vault);
+  const doctorResult = safeDoctor(vault, guardrails, dreamSummary);
   const dreamCounts = summariseDream(dreamSummary);
   const digestCounts = collectDigestCounts(vault);
   const verification = dreamSummary
@@ -176,9 +176,16 @@ export function renderOperatorSummaryMarkdown(summary: OperatorSummary): string 
 
 // ----- Internals -----------------------------------------------------------
 
-function safeDoctor(vault: string): RunDoctorResult {
+function safeDoctor(
+  vault: string,
+  guardrails: ResolvedBrainGuardrailConfig,
+  dreamSummary: DreamRunSummary | undefined,
+): RunDoctorResult {
   try {
-    return runDoctor(vault);
+    return runDoctor(vault, {
+      guardrails,
+      ...(dreamSummary ? { dreamSummary } : {}),
+    });
   } catch {
     return Object.freeze({ warnings: [], errors: [] });
   }

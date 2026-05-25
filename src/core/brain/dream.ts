@@ -312,6 +312,10 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     plan.signalsToMove.size > 0 ||
     plan.retainPinned.length > 0 ||
     plan.signalsSuppressed.length > 0 ||
+    // v0.10.16: quarantine is a recorded decision (deferred-but-noted),
+    // so a run that produces only quarantine entries is still a
+    // meaningful run from the operator's perspective.
+    plan.quarantined.length > 0 ||
     scan.corrupted.length > 0;
 
   if (!changed) {

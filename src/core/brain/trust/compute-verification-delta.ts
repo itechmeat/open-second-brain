@@ -28,7 +28,7 @@
 import { existsSync } from "node:fs";
 
 import type { DreamRunSummary } from "../dream.ts";
-import { preferencePath, retiredPath } from "../paths.ts";
+import { preferencePath, retiredPath, vaultRelative } from "../paths.ts";
 import { parsePreference } from "../preference.ts";
 
 export type VerificationDeltaState =
@@ -105,19 +105,23 @@ function classifyConfirmedClaim(vault: string, id: string): VerificationDeltaEnt
     try {
       const pref = parsePreference(prefPath);
       if (pref.applied_count > 0) {
-        return Object.freeze({ id, state: "confirmed", path: prefPath });
+        return Object.freeze({
+          id,
+          state: "confirmed",
+          path: vaultRelative(prefPath, vault),
+        });
       }
       return Object.freeze({
         id,
         state: "drift",
-        path: prefPath,
+        path: vaultRelative(prefPath, vault),
         note: "claimed confirmed but applied_count is zero",
       });
     } catch (err) {
       return Object.freeze({
         id,
         state: "missing_evidence",
-        path: prefPath,
+        path: vaultRelative(prefPath, vault),
         note: `parse error: ${(err as Error).message}`,
       });
     }
@@ -128,7 +132,7 @@ function classifyConfirmedClaim(vault: string, id: string): VerificationDeltaEnt
     return Object.freeze({
       id,
       state: "regression",
-      path: retPath,
+      path: vaultRelative(retPath, vault),
       note: "dream claimed confirmed but preference is now retired",
     });
   }
@@ -142,14 +146,18 @@ function classifyUnconfirmedClaim(vault: string, id: string): VerificationDeltaE
   }
   const prefPath = preferencePath(vault, slug);
   if (existsSync(prefPath)) {
-    return Object.freeze({ id, state: "confirmed", path: prefPath });
+    return Object.freeze({
+      id,
+      state: "confirmed",
+      path: vaultRelative(prefPath, vault),
+    });
   }
   const retPath = retiredPath(vault, slug);
   if (existsSync(retPath)) {
     return Object.freeze({
       id,
       state: "regression",
-      path: retPath,
+      path: vaultRelative(retPath, vault),
       note: "dream claimed unconfirmed but preference is already retired",
     });
   }
@@ -163,7 +171,24 @@ function classifyRetiredClaim(vault: string, id: string): VerificationDeltaEntry
   }
   const retPath = retiredPath(vault, slug);
   if (existsSync(retPath)) {
-    return Object.freeze({ id, state: "confirmed", path: retPath });
+    return Object.freeze({
+      id,
+      state: "confirmed",
+      path: vaultRelative(retPath, vault),
+    });
+  }
+  // Symmetric to `classifyConfirmedClaim`: if dream said "retired"
+  // but the file is still under preferences/ (i.e. dream's claim does
+  // not match disk), treat as a regression rather than as
+  // missing_evidence so the verdict reflects the disagreement.
+  const stillActivePath = preferencePath(vault, slug);
+  if (existsSync(stillActivePath)) {
+    return Object.freeze({
+      id,
+      state: "regression",
+      path: vaultRelative(stillActivePath, vault),
+      note: "dream claimed retired but preference is still under preferences/",
+    });
   }
   return Object.freeze({
     id,
