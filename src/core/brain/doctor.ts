@@ -45,9 +45,16 @@ import { buildBacklinkIndex } from "./backlinks.ts";
 import { parseLogDay } from "./log.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
+  BRAIN_GUARDRAIL_DEFAULTS,
   BrainConfigError,
   loadBrainConfigDetailed,
 } from "./policy.ts";
+import { computeTrustVerdict } from "./trust/compute-trust-verdict.ts";
+import {
+  computeVerificationDelta,
+  type VerificationDeltaSummaryCounts,
+} from "./trust/compute-verification-delta.ts";
+import { checkInstructionFileCeiling } from "./trust/instruction-file-ceiling.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
 import {
   BrainDoubleShapeError,
@@ -94,6 +101,20 @@ export interface RunDoctorOptions {
    * Tests pin this for determinism.
    */
   readonly now?: Date;
+  /**
+   * Optional precomputed dream summary (v0.10.16). When supplied,
+   * the doctor runs the verification-delta helper and folds the
+   * counts into the trust verdict. When omitted, verification
+   * defaults to all-zero counts and the trust verdict is computed
+   * against doctor signals alone.
+   */
+  readonly dreamSummary?: import("./dream.ts").DreamRunSummary;
+  /**
+   * Optional resolved guardrail config (v0.10.16). When omitted,
+   * `BRAIN_GUARDRAIL_DEFAULTS` are used. Drives the
+   * instruction-file-ceiling check.
+   */
+  readonly guardrails?: import("./types.ts").ResolvedBrainGuardrailConfig;
 }
 
 /**
@@ -270,9 +291,44 @@ export function runDoctor(
   const warnings = issues.filter((i) => i.severity === "warning");
   const errors = issues.filter((i) => i.severity === "error");
 
+  // v0.10.16 trust layer. Each computation is best-effort: a failure
+  // in a helper must not poison the legacy warning / error stream.
+  const guardrails = opts.guardrails ?? BRAIN_GUARDRAIL_DEFAULTS;
+  let instructionWarnings: ReadonlyArray<InstructionFileCeilingWarning> = [];
+  try {
+    instructionWarnings = checkInstructionFileCeiling(vault, {
+      maxLines: guardrails.instruction_file_max_lines,
+    });
+  } catch { /* doctor never throws */ }
+
+  let verificationCounts: VerificationDeltaSummaryCounts | undefined;
+  if (opts.dreamSummary !== undefined) {
+    try {
+      const delta = computeVerificationDelta(vault, opts.dreamSummary);
+      verificationCounts = delta.summary;
+    } catch { /* doctor never throws */ }
+  }
+
+  const trustVerdict: TrustVerdict = computeTrustVerdict({
+    doctorWarnings: warnings,
+    doctorErrors: errors,
+    dreamWarnings: opts.dreamSummary?.warnings ?? [],
+    verification: verificationCounts ?? {
+      confirmed: 0,
+      drift: 0,
+      regression: 0,
+      missing_evidence: 0,
+    },
+  });
+
   return Object.freeze({
     warnings: Object.freeze(warnings),
     errors: Object.freeze(errors),
+    trust_verdict: trustVerdict,
+    ...(verificationCounts !== undefined
+      ? { verification_delta_summary: verificationCounts }
+      : {}),
+    instruction_file_warnings: instructionWarnings,
   });
 }
 

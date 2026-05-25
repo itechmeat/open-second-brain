@@ -42,13 +42,15 @@ afterEach(() => {
 });
 
 describe("RunDoctorResult trust-layer atoms", () => {
-  test("clean vault: new fields absent or empty", () => {
+  test("clean vault: legacy fields empty, trust verdict computed by C4", () => {
     const result = runDoctor(tmp);
     // Old surface unchanged.
     expect(result.warnings).toEqual([]);
     expect(result.errors).toEqual([]);
-    // New optional fields: either absent or empty.
-    expect(result.trust_verdict).toBeUndefined();
+    // New optional fields: trust_verdict is populated by the C4
+    // integration (default `clean` on a healthy vault); the rest
+    // remain absent / empty because no dream summary was supplied.
+    expect(result.trust_verdict).toBe("clean");
     expect(result.verification_delta_summary).toBeUndefined();
     expect(result.instruction_file_warnings ?? []).toEqual([]);
     expect(result.uncertain ?? []).toEqual([]);
