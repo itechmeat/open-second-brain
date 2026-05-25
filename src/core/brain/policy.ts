@@ -216,6 +216,23 @@ export function resolveTemporal(
 }
 
 /**
+ * Load + resolve the `temporal:` block, falling back to
+ * `BRAIN_TEMPORAL_DEFAULTS` when the config file is missing,
+ * malformed, or otherwise unreadable. Used by every temporal
+ * consumer (MCP wrappers, CLI verbs) so a freshly-initialised vault
+ * still produces a useful report.
+ */
+export function loadTemporalConfigSafe(
+  vault: string,
+): ResolvedBrainTemporalConfig {
+  try {
+    return resolveTemporal(loadBrainConfig(vault));
+  } catch {
+    return BRAIN_TEMPORAL_DEFAULTS;
+  }
+}
+
+/**
  * Default `_brain.yaml` content. Mirrors §10 of the design doc. Used by
  * `brain init` and as the fallback inside `loadBrainConfig` when callers
  * opt into permissive mode (the current API is strict — absent file

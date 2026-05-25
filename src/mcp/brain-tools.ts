@@ -63,13 +63,11 @@ import { buildBeliefEvolution } from "../core/brain/temporal/belief-evolution.ts
 import { findStaleEntries } from "../core/brain/temporal/stale-watch.ts";
 import { buildDailyBrief } from "../core/brain/temporal/daily-brief.ts";
 import { buildWeeklySynthesis } from "../core/brain/temporal/weekly-brief.ts";
+import { loadTemporalConfigSafe } from "../core/brain/policy.ts";
 import {
-  loadBrainConfig,
-  resolveTemporal,
-  BRAIN_TEMPORAL_DEFAULTS,
-} from "../core/brain/policy.ts";
-import type { BrainLogEventKind } from "../core/brain/types.ts";
-import { BRAIN_LOG_EVENT_KIND_SET } from "../core/brain/types.ts";
+  isBrainLogEventKind,
+  type BrainLogEventKind,
+} from "../core/brain/types.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
@@ -1111,22 +1109,13 @@ function coerceEventKind(
   if (typeof raw !== "string") {
     throw new MCPError(INVALID_PARAMS, `${tool}: kind must be a string`);
   }
-  if (!BRAIN_LOG_EVENT_KIND_SET.has(raw)) {
+  if (!isBrainLogEventKind(raw)) {
     throw new MCPError(
       INVALID_PARAMS,
       `${tool}: kind must be a known BrainLogEventKind`,
     );
   }
-  return raw as BrainLogEventKind;
-}
-
-function resolveTemporalCfgSafe(vault: string): typeof BRAIN_TEMPORAL_DEFAULTS {
-  try {
-    const cfg = loadBrainConfig(vault);
-    return resolveTemporal(cfg);
-  } catch {
-    return BRAIN_TEMPORAL_DEFAULTS;
-  }
+  return raw;
 }
 
 /**
@@ -1219,7 +1208,7 @@ async function toolBrainStaleScan(
   _args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   void _args;
-  const cfg = resolveTemporalCfgSafe(ctx.vault);
+  const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
   const report = findStaleEntries(index, ctx.vault, cfg);
   return {
@@ -1245,7 +1234,7 @@ async function toolBrainDailyBrief(
     dateRaw === undefined || dateRaw === null
       ? new Date().toISOString().slice(0, 10)
       : coerceIsoTimestampOrDate("brain_daily_brief", "date", dateRaw)!;
-  const cfg = resolveTemporalCfgSafe(ctx.vault);
+  const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
   const brief = buildDailyBrief(index, ctx.vault, date, {
     offsetHours: cfg.daily_window_offset_hours,
@@ -1275,7 +1264,7 @@ async function toolBrainWeeklySynthesis(
     weekEndRaw === undefined || weekEndRaw === null
       ? new Date().toISOString().slice(0, 10)
       : coerceIsoTimestampOrDate("brain_weekly_synthesis", "week_end", weekEndRaw)!;
-  const cfg = resolveTemporalCfgSafe(ctx.vault);
+  const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
   const synth = buildWeeklySynthesis(index, ctx.vault, weekEnd, cfg);
   return {

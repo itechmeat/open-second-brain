@@ -30,3 +30,8 @@ export { cmdBrainSummary } from "./summary.ts";
 export { cmdBrainUnlinked } from "./unlinked.ts";
 export { cmdBrainSynthesise } from "./synthesise.ts";
 export { cmdBrainMocAudit } from "./moc-audit.ts";
+export { cmdBrainTimeline } from "./temporal-timeline.ts";
+export { cmdBrainEvolution } from "./temporal-evolution.ts";
+export { cmdBrainStale } from "./temporal-stale.ts";
+export { cmdBrainDaily } from "./temporal-daily.ts";
+export { cmdBrainWeekly } from "./temporal-weekly.ts";

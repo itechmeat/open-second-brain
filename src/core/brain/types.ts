@@ -210,6 +210,16 @@ export const BRAIN_LOG_EVENT_KIND_SET: ReadonlySet<string> = new Set(
   Object.values(BRAIN_LOG_EVENT_KIND),
 );
 
+/**
+ * Type guard narrowing an arbitrary string to {@link BrainLogEventKind}.
+ * Use at boundary checks (CLI flag parsing, MCP input coercion, JSONL
+ * deserialisation) so the typed-string union flows through downstream
+ * code without a runtime `as` cast.
+ */
+export function isBrainLogEventKind(value: string): value is BrainLogEventKind {
+  return BRAIN_LOG_EVENT_KIND_SET.has(value);
+}
+
 // ----- File-frontmatter shapes ----------------------------------------------
 
 /**
