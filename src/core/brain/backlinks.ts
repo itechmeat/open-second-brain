@@ -51,6 +51,27 @@ export interface BacklinkRef {
   readonly field: string;
   /** ISO-8601 timestamp for log entries; absent for preference/retired sources. */
   readonly timestamp?: string;
+  /**
+   * Heading-anchor text from `[[target#Heading]]` (v0.10.17+). Present
+   * only when the wikilink carried a heading anchor; absent for plain
+   * targets and for block references.
+   */
+  readonly targetAnchor?: string;
+  /**
+   * Block-id text from `[[target#^abc]]` (v0.10.17+). Present only
+   * when the wikilink carried a block anchor; absent otherwise. The
+   * `^` sigil is stripped; just the bare id is recorded.
+   */
+  readonly targetBlock?: string;
+  /**
+   * When the wikilink was written via an alias declared in the
+   * target's frontmatter `aliases:` array (v0.10.17+), the alias
+   * string the linker actually typed. `source` still keys against the
+   * canonical id; this field surfaces the alias spelling for
+   * downstream consumers (digest, doctor, concept synthesis) that
+   * want to show how the link was phrased.
+   */
+  readonly aliasSource?: string;
 }
 
 /** Frozen target → refs map. Keys are normalised wikilink targets. */
