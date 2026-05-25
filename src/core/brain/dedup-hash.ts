@@ -23,6 +23,7 @@ import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { brainDirs } from "./paths.ts";
+import { normalizeForDedup } from "./text/normalize.ts";
 
 export interface DedupHashInput {
   readonly topic: string;
@@ -89,10 +90,10 @@ export function computeDedupHash(input: DedupHashInput): string {
   // Use NUL as the field separator so a topic / principle containing
   // any printable character can't collide with the next field's prefix.
   const parts = [
-    input.topic.trim(),
+    normalizeForDedup(input.topic.trim()),
     input.signal,
-    input.principle.normalize("NFC").trim().replace(/\s+/g, " "),
-    (input.scope ?? "").trim(),
+    normalizeForDedup(input.principle.trim().replace(/\s+/g, " ")),
+    normalizeForDedup((input.scope ?? "").trim()),
   ];
   return createHash("sha256").update(parts.join("\u0000")).digest("hex");
 }
