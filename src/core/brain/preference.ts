@@ -586,8 +586,32 @@ export function parsePreference(path: string): BrainPreference {
     ...(meta["aliases"] !== undefined && Array.isArray(meta["aliases"])
       ? { aliases: [...(meta["aliases"] as ReadonlyArray<string>)] }
       : {}),
+    ...spreadBiTemporal(meta),
   };
   return Object.freeze(result);
+}
+
+/**
+ * Read the additive bi-temporal slots (`valid_from`, `valid_until`,
+ * `recorded_at`) from a frontmatter map. Returns a partial object
+ * with only the slots the file actually carries; absent on legacy
+ * files. Shared between `parsePreference` and `parseRetired` so the
+ * spread call site stays one-line and the slot names live in exactly
+ * one place.
+ */
+function spreadBiTemporal(meta: Record<string, unknown>): {
+  readonly valid_from?: string;
+  readonly valid_until?: string;
+  readonly recorded_at?: string;
+} {
+  const validFrom = optionalScalarString(meta, "valid_from");
+  const validUntil = optionalScalarString(meta, "valid_until");
+  const recordedAt = optionalScalarString(meta, "recorded_at");
+  return {
+    ...(validFrom !== undefined ? { valid_from: validFrom } : {}),
+    ...(validUntil !== undefined ? { valid_until: validUntil } : {}),
+    ...(recordedAt !== undefined ? { recorded_at: recordedAt } : {}),
+  };
 }
 
 /**
@@ -665,6 +689,7 @@ export function parseRetired(path: string): BrainRetired {
     ...(optionalScalarString(meta, "user_rejected_reason") !== undefined
       ? { user_rejected_reason: optionalScalarString(meta, "user_rejected_reason") }
       : {}),
+    ...spreadBiTemporal(meta),
   };
   return Object.freeze(result);
 }

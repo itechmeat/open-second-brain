@@ -27,10 +27,12 @@ import type {
   BrainGuardrailConfig,
   BrainLinkGraphConfig,
   BrainMostAppliedConfig,
+  BrainTemporalConfig,
   BrainVaultConfig,
   DisciplineReportConfig,
   ResolvedBrainGuardrailConfig,
   ResolvedBrainLinkGraphConfig,
+  ResolvedBrainTemporalConfig,
 } from "./types.ts";
 // Imported from `defaults.ts` (not from `vault-scope/index.ts`) to
 // break the module-init cycle: the resolver lives in `index.ts` and
@@ -163,6 +165,71 @@ export function resolveLinkGraph(
       lg.vault_instruction_file ??
       BRAIN_LINK_GRAPH_DEFAULTS.vault_instruction_file,
   };
+}
+
+/**
+ * Default `temporal:` block (v0.10.18). Drives the temporal +
+ * synthesis subsystem. Absent block falls back here via
+ * `resolveTemporal`. All knobs are purely structural:
+ *
+ *   - `stale_pref_days: 90` - 3 months without activity before a
+ *     preference is reported as stale.
+ *   - `stale_signal_days: 30` - 1 month without activity for signals.
+ *   - `stale_log_days: 180` - 6 months for Brain/log files.
+ *   - `weekly_start_dow: 1` - ISO-8601 weekday number (1 = Monday,
+ *     7 = Sunday). Configurable for vaults that prefer Sunday-start
+ *     weeks without any language-specific detection.
+ *   - `daily_window_offset_hours: 0` - daily-brief windows align
+ *     with UTC midnight by default.
+ */
+export const BRAIN_TEMPORAL_DEFAULTS: ResolvedBrainTemporalConfig =
+  Object.freeze({
+    stale_pref_days: 90,
+    stale_signal_days: 30,
+    stale_log_days: 180,
+    weekly_start_dow: 1,
+    daily_window_offset_hours: 0,
+  }) as ResolvedBrainTemporalConfig;
+
+/**
+ * Merge a parsed `temporal` block (or `undefined`) with
+ * `BRAIN_TEMPORAL_DEFAULTS`.
+ */
+export function resolveTemporal(
+  cfg: BrainConfig,
+): ResolvedBrainTemporalConfig {
+  const tp = cfg.temporal;
+  if (tp === undefined) return BRAIN_TEMPORAL_DEFAULTS;
+  return {
+    stale_pref_days:
+      tp.stale_pref_days ?? BRAIN_TEMPORAL_DEFAULTS.stale_pref_days,
+    stale_signal_days:
+      tp.stale_signal_days ?? BRAIN_TEMPORAL_DEFAULTS.stale_signal_days,
+    stale_log_days:
+      tp.stale_log_days ?? BRAIN_TEMPORAL_DEFAULTS.stale_log_days,
+    weekly_start_dow:
+      tp.weekly_start_dow ?? BRAIN_TEMPORAL_DEFAULTS.weekly_start_dow,
+    daily_window_offset_hours:
+      tp.daily_window_offset_hours ??
+      BRAIN_TEMPORAL_DEFAULTS.daily_window_offset_hours,
+  };
+}
+
+/**
+ * Load + resolve the `temporal:` block, falling back to
+ * `BRAIN_TEMPORAL_DEFAULTS` when the config file is missing,
+ * malformed, or otherwise unreadable. Used by every temporal
+ * consumer (MCP wrappers, CLI verbs) so a freshly-initialised vault
+ * still produces a useful report.
+ */
+export function loadTemporalConfigSafe(
+  vault: string,
+): ResolvedBrainTemporalConfig {
+  try {
+    return resolveTemporal(loadBrainConfig(vault));
+  } catch {
+    return BRAIN_TEMPORAL_DEFAULTS;
+  }
 }
 
 /**
@@ -970,6 +1037,97 @@ export function validateBrainConfigDetailed(
         : {};
   }
 
+  // Optional `temporal` block (v0.10.18). Shape:
+  //   temporal:
+  //     stale_pref_days: 90              # positive integer
+  //     stale_signal_days: 30            # positive integer
+  //     stale_log_days: 180              # positive integer
+  //     weekly_start_dow: 1              # 1..7 (ISO-8601 weekday)
+  //     daily_window_offset_hours: 0     # -23..23
+  // Absent block → `cfg.temporal` undefined; resolveTemporal returns
+  // the bit-identical defaults.
+  let temporal: BrainTemporalConfig | undefined;
+  if ("temporal" in obj) {
+    const rawTp = obj["temporal"];
+    if (typeof rawTp !== "object" || rawTp === null || Array.isArray(rawTp)) {
+      throw new BrainConfigError(
+        "temporal must be a mapping",
+        "temporal",
+        source,
+      );
+    }
+    const tpObj = rawTp as Record<string, unknown>;
+    const partialTp: Record<string, unknown> = {};
+    const positiveIntKeys: ReadonlyArray<
+      "stale_pref_days" | "stale_signal_days" | "stale_log_days"
+    > = ["stale_pref_days", "stale_signal_days", "stale_log_days"];
+    for (const key of positiveIntKeys) {
+      if (key in tpObj) {
+        const v = tpObj[key];
+        if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+          throw new BrainConfigError(
+            "must be a positive integer",
+            `temporal.${key}`,
+            source,
+          );
+        }
+        partialTp[key] = v;
+      }
+    }
+    if ("weekly_start_dow" in tpObj) {
+      const v = tpObj["weekly_start_dow"];
+      if (
+        typeof v !== "number" ||
+        !Number.isInteger(v) ||
+        v < 1 ||
+        v > 7
+      ) {
+        throw new BrainConfigError(
+          "must be an ISO-8601 weekday number (1..7)",
+          "temporal.weekly_start_dow",
+          source,
+        );
+      }
+      partialTp["weekly_start_dow"] = v;
+    }
+    if ("daily_window_offset_hours" in tpObj) {
+      const v = tpObj["daily_window_offset_hours"];
+      if (
+        typeof v !== "number" ||
+        !Number.isInteger(v) ||
+        v < -23 ||
+        v > 23
+      ) {
+        throw new BrainConfigError(
+          "must be an integer in [-23, 23]",
+          "temporal.daily_window_offset_hours",
+          source,
+        );
+      }
+      partialTp["daily_window_offset_hours"] = v;
+    }
+    // Forward-compat: unknown sub-keys under `temporal:` → warning.
+    const knownTp = new Set([
+      "stale_pref_days",
+      "stale_signal_days",
+      "stale_log_days",
+      "weekly_start_dow",
+      "daily_window_offset_hours",
+    ]);
+    for (const key of Object.keys(tpObj)) {
+      if (!knownTp.has(key)) {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `temporal.${key}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
+    temporal =
+      Object.keys(partialTp).length > 0
+        ? (partialTp as BrainTemporalConfig)
+        : {};
+  }
+
   // Forward-compat: unknown top-level keys → warning, not error.
   const known = new Set([
     "schema_version",
@@ -983,6 +1141,7 @@ export function validateBrainConfigDetailed(
     "discipline_report",
     "guardrails",
     "link_graph",
+    "temporal",
   ]);
   for (const key of Object.keys(obj)) {
     if (!known.has(key)) {
@@ -1019,6 +1178,7 @@ export function validateBrainConfigDetailed(
     ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
     ...(guardrails !== undefined ? { guardrails } : {}),
     ...(linkGraph !== undefined ? { link_graph: linkGraph } : {}),
+    ...(temporal !== undefined ? { temporal } : {}),
   };
 
   return { config, warnings };

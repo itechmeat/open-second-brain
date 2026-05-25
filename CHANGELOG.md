@@ -5,6 +5,120 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.18] - 2026-05-25
+
+Temporal + synthesis layer: seven related features that add time as
+a first-class axis. A new `src/core/brain/temporal/` subsystem
+materializes one `TimelineIndex` per invocation from
+`Brain/log/<date>.jsonl` plus retired/ frontmatter, then five pure
+projection helpers (`selectEvents`, `buildBeliefEvolution`,
+`findStaleEntries`, `buildDailyBrief`, `buildWeeklySynthesis`) feed
+five operator surfaces over that same index. Preference, signal,
+and retired frontmatter grow additive optional `valid_from` /
+`valid_until` / `recorded_at` slots so future write paths can
+populate the bi-temporal axis without breaking existing files. A new
+`temporal:` block in `_brain.yaml` tunes per-kind staleness
+thresholds, daily window offset, and weekly window alignment. No
+helper calls an LLM; every output is a deterministic data shape the
+agent assembles into prose externally.
+
+### Added
+
+- `src/core/brain/temporal/types.ts` - `TemporalEvent` (flat shape
+  reusing `BrainLogEventKind` plus optional denormalized slots),
+  `TimelineIndex` (frozen materialized view with `ReadonlyMap`
+  groups by kind / prefId / topic), `DreamSummarySlots` (denormalized
+  array slice for belief-evolution).
+- `src/core/brain/temporal/build-index.ts` -
+  `buildTimelineIndex(vault, opts)`: the single disk-touching helper.
+  Walks `Brain/log/*.jsonl` via the canonical `readLogDay` reader
+  plus `Brain/retired/*.md` frontmatter; normalises every entry to
+  one `TemporalEvent`; groups, sorts (ties broken by source path +
+  line), freezes.
+- `src/core/brain/temporal/select-events.ts` -
+  `selectEvents(index, filters)`: pure projection, filters by AND
+  of `prefId` / `topic` / `kind` / `since` / `until`. Picks the
+  narrowest pre-grouped bucket the filter set permits.
+- `src/core/brain/temporal/belief-evolution.ts` -
+  `buildBeliefEvolution(index, vault, target)` for `prefId` or
+  `topic`. Returns frozen `{target, transitions, evidence,
+  retirements, generatedAt}`. Transitions derived from dream
+  summary arrays (`new_unconfirmed` / `confirmed` / `retired`);
+  evidence rollup carries per-row running counts; retirement chain
+  walked via `supersedes` / `superseded_by` with a visited-set
+  cycle guard.
+- `src/core/brain/temporal/stale-watch.ts` -
+  `findStaleEntries(index, vault, cfg)`. Pure structural staleness:
+  walks `Brain/preferences/`, `Brain/inbox/`, `Brain/log/` against
+  the configured per-kind day thresholds. Uses the timeline's
+  most-recent event timestamp as the staleness anchor when present,
+  falls back to `last_evidence_at` then `created_at` then file
+  mtime depending on kind.
+- `src/core/brain/temporal/daily-brief.ts` -
+  `buildDailyBrief(index, vault, date, opts?)`. Daily counters,
+  status transitions, vault delta, deduplicated artifact wikilinks.
+  Window aligned to UTC midnight by default; configurable via
+  `temporal.daily_window_offset_hours`.
+- `src/core/brain/temporal/weekly-brief.ts` -
+  `buildWeeklySynthesis(index, vault, weekEnd, cfg, opts?)`. 7-day
+  window ending at `weekEnd`. Same counters as daily plus
+  `retired-in-window` list and `contradictions` (`signal-suppressed`
+  events combined with `apply-evidence` rows where `result ===
+  "violated"`).
+- `src/core/brain/temporal/period-common.ts` - shared helpers
+  consumed by both briefs: `countByKind`, `collectTransitions`,
+  `computeVaultDelta`, `collectSourcePointers`, `extractId`. One
+  canonical implementation per helper.
+- New atoms on existing types:
+  - `BrainPreference`, `BrainSignal`, `BrainRetired`
+    (`src/core/brain/types.ts`) gain optional `valid_from`,
+    `valid_until`, `recorded_at` slots. Existing files stay
+    byte-identical; parsers populate the slots only when present.
+  - `isBrainLogEventKind(value)` exported from
+    `src/core/brain/types.ts` so callers narrow strings without a
+    runtime cast.
+- New `temporal:` block in `_brain.yaml`
+  (`src/core/brain/policy.ts`):
+  - `stale_pref_days` (default 90)
+  - `stale_signal_days` (default 30)
+  - `stale_log_days` (default 180)
+  - `weekly_start_dow` (default 1 - ISO-8601 Monday)
+  - `daily_window_offset_hours` (default 0 - UTC)
+- Five new full-scope MCP tools (`src/mcp/brain-tools.ts`):
+  `brain_timeline`, `brain_belief_evolution`, `brain_stale_scan`,
+  `brain_daily_brief`, `brain_weekly_synthesis`. Writer scope
+  remains frozen at four tools.
+- Five new CLI verbs: `o2b brain timeline`, `o2b brain evolution`,
+  `o2b brain stale`, `o2b brain daily`, `o2b brain weekly`. Each
+  honours `--vault` / `--json` plus verb-specific flags.
+
+### Changed
+
+- README capability paragraph extended; MCP tool inventory bumped
+  from `Brain (14)` to `Brain (19)`.
+- `tests/mcp/mcp.test.ts` tool-inventory assertion updated 26 -> 31.
+- `loadTemporalConfigSafe(vault)` exported from
+  `src/core/brain/policy.ts` so MCP wrappers and CLI verbs share
+  one load-with-defaults helper.
+
+### Notes
+
+- Language-agnostic by construction. No vocabulary lists, no
+  stopwords, no per-language regex tables. Filters use only typed
+  event-kind enums, frontmatter keys, ISO-8601 timestamps, and the
+  `pref-/ret-/sig-` slug regex.
+- Backwards compatible. The new frontmatter slots are additive
+  optionals; existing preference / signal / retired files stay
+  byte-identical when not opted in. Existing public APIs unchanged.
+- No LLM call inside helpers. The brief and evolution helpers
+  return frozen deterministic envelopes; downstream agents do the
+  narrative work.
+- Window bounds are second-precision canonical UTC (matching
+  `appendLogEvent`'s emitted timestamps) so string comparison
+  semantics are unambiguous at midnight boundaries.
+- 2343 tests pass (+83 over the v0.10.17 baseline of 2260);
+  typecheck and version-sync remain clean.
+
 ## [0.10.17] - 2026-05-25
 
 Link graph surfaces: seven related features that expose the vault
@@ -2679,6 +2793,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 [0.10.0]: https://github.com/itechmeat/open-second-brain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/itechmeat/open-second-brain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/itechmeat/open-second-brain/compare/v0.8.1...v0.9.0
+[0.10.18]: https://github.com/itechmeat/open-second-brain/compare/v0.10.17...v0.10.18
 [0.10.17]: https://github.com/itechmeat/open-second-brain/compare/v0.10.16...v0.10.17
 [0.10.16]: https://github.com/itechmeat/open-second-brain/compare/v0.10.15...v0.10.16
 [0.10.15]: https://github.com/itechmeat/open-second-brain/compare/v0.10.14...v0.10.15

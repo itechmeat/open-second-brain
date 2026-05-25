@@ -361,8 +361,48 @@ export function parseSignal(path: string): BrainSignal {
     ...(source_type !== undefined ? { source_type } : {}),
     ...(dedup_hash !== undefined ? { dedup_hash } : {}),
     ...(session_ref !== undefined ? { session_ref } : {}),
+    ...readBiTemporal(meta, path),
   };
   return Object.freeze(result);
+}
+
+/**
+ * Read the additive bi-temporal slots (`valid_from`, `valid_until`,
+ * `recorded_at`) from a signal frontmatter map. Returns only the
+ * slots the file actually carries; absent on legacy files.
+ *
+ * Slot values are validated as non-empty strings; an empty / whitespace
+ * value is rejected (the field is present in the file but carries no
+ * useful timestamp - that's a corruption worth surfacing).
+ */
+function readBiTemporal(
+  meta: ReturnType<typeof parseFrontmatter>[0],
+  path: string,
+): {
+  readonly valid_from?: string;
+  readonly valid_until?: string;
+  readonly recorded_at?: string;
+} {
+  return {
+    ...readBiTemporalSlot(meta, "valid_from", path),
+    ...readBiTemporalSlot(meta, "valid_until", path),
+    ...readBiTemporalSlot(meta, "recorded_at", path),
+  };
+}
+
+function readBiTemporalSlot(
+  meta: ReturnType<typeof parseFrontmatter>[0],
+  key: "valid_from" | "valid_until" | "recorded_at",
+  path: string,
+): Partial<Record<"valid_from" | "valid_until" | "recorded_at", string>> {
+  const v = meta[key];
+  if (v === undefined) return {};
+  if (typeof v !== "string") {
+    throw new Error(`signal field '${key}' must be a string (${path})`);
+  }
+  const trimmed = v.trim();
+  if (trimmed.length === 0) return {};
+  return { [key]: trimmed };
 }
 
 // ----- Helpers --------------------------------------------------------------

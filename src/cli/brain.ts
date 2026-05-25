@@ -43,6 +43,11 @@ import {
   cmdBrainUnlinked,
   cmdBrainSynthesise,
   cmdBrainMocAudit,
+  cmdBrainTimeline,
+  cmdBrainEvolution,
+  cmdBrainStale,
+  cmdBrainDaily,
+  cmdBrainWeekly,
 } from "./brain/verbs/index.ts";
 
 export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promise<number> {
@@ -96,6 +101,11 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
       case "unlinked": return await cmdBrainUnlinked(rest);
       case "synthesise": return await cmdBrainSynthesise(rest);
       case "moc-audit": return await cmdBrainMocAudit(rest);
+      case "timeline": return await cmdBrainTimeline(rest);
+      case "evolution": return await cmdBrainEvolution(rest);
+      case "stale": return await cmdBrainStale(rest);
+      case "daily": return await cmdBrainDaily(rest);
+      case "weekly": return await cmdBrainWeekly(rest);
       default:
         process.stderr.write(`error: unknown brain verb: ${verb}\n`);
         process.stdout.write(BRAIN_HELP);

@@ -113,6 +113,24 @@ safety invariants are in [`docs/how-it-works.md`](docs/how-it-works.md).
   `link_graph.vault_instruction_file`) through the `brain_context`
   envelope. Absent file = field omitted; existing hosts stay
   byte-identical.
+- Treats time as a first-class axis. The `temporal:` config block
+  drives a new `src/core/brain/temporal/` subsystem that
+  materializes one `TimelineIndex` per invocation from
+  `Brain/log/<date>.jsonl` plus retired/ frontmatter and feeds
+  five operator surfaces over the same deterministic projection:
+  a chronological event list (`o2b brain timeline` /
+  `brain_timeline`), per-preference or per-topic belief evolution
+  (`o2b brain evolution` / `brain_belief_evolution`) with running
+  evidence counts and retire-chain walking, structural staleness
+  reports (`o2b brain stale` / `brain_stale_scan`) using
+  configurable per-kind thresholds, a daily brief
+  (`o2b brain daily` / `brain_daily_brief`), and a 7-day synthesis
+  with contradictions list (`o2b brain weekly` /
+  `brain_weekly_synthesis`). All helpers ship deterministic data
+  shapes - no LLM call inside. Preference, signal, and retired
+  frontmatter grow additive optional `valid_from` / `valid_until`
+  / `recorded_at` slots so future write paths can populate the
+  bi-temporal axis without breaking existing files.
 - (Optional) Records paid agent actions through **Pay Memory**:
   receipts, generated assets, spending policy decisions, human
   approval state, and per-day reports — all as plain Markdown
@@ -227,11 +245,13 @@ exposes the same deterministic operations as MCP tools:
 
 - **Core (3):** `second_brain_status`, `second_brain_query`,
   `vault_health`.
-- **Brain (14):** `brain_feedback`, `brain_dream`,
+- **Brain (19):** `brain_feedback`, `brain_dream`,
   `brain_apply_evidence`, `brain_note`, `brain_context`,
   `brain_digest`, `brain_query`, `brain_doctor`, `brain_backlinks`,
   `brain_context_pack`, `brain_unlinked_mentions`,
-  `brain_concept_synthesis`, `brain_moc_audit`,
+  `brain_concept_synthesis`, `brain_moc_audit`, `brain_timeline`,
+  `brain_belief_evolution`, `brain_stale_scan`,
+  `brain_daily_brief`, `brain_weekly_synthesis`,
   `brain_operator_summary`. See the
   [Brain section](#brain-observing-memory) below.
 - **Pay Memory (8):** `payment_memory_init`,

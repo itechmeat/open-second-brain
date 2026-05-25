@@ -45,6 +45,11 @@ Brain verbs (observing memory):
   unlinked            Raw-text mentions of an artifact's title/aliases outside [[...]]
   synthesise          Concept cluster: target + linkers (depth-1), optionally + mentions
   moc-audit           Per-MOC coverage audit (well-covered/fragile/candidate-missing)
+  timeline            Chronological event list filtered by pref-id/topic/kind/since/until
+  evolution           Per-pref or per-topic story: status transitions + evidence + retire
+  stale               Stale preferences/signals/log files (configurable thresholds)
+  daily               Daily brief: events by kind, status transitions, vault delta
+  weekly              7-day synthesis: transitions, retired, contradictions, vault delta
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -272,4 +277,34 @@ export const VERB_HELP: Record<string, string> = {
     "surfaces a suggested-next candidate. MOC detection is purely\n" +
     "structural (outbound link count + link density thresholds from\n" +
     "_brain.yaml). Read-only.\n",
+  timeline:
+    "usage: o2b brain timeline [--pref-id <id>] [--topic <slug>]\n" +
+    "  [--kind <event-kind>] [--since <iso>] [--until <iso>]\n" +
+    "  [--limit <n>] [--vault <path>] [--json]\n" +
+    "Chronological list of Brain events filtered by any combination of\n" +
+    "pref-id / topic / kind / since / until / limit. Reads JSONL log via\n" +
+    "the canonical TimelineIndex. Read-only.\n",
+  evolution:
+    "usage: o2b brain evolution (--pref-id <id> | --topic <slug>)\n" +
+    "  [--vault <path>] [--json]\n" +
+    "Per-preference or per-topic story: status transitions (creation,\n" +
+    "promotion, retirement) derived from dream summaries; evidence\n" +
+    "rollup with running applied / violated / outdated counts; retirement\n" +
+    "chain walked via supersedes / superseded_by links. Read-only.\n",
+  stale:
+    "usage: o2b brain stale [--vault <path>] [--json]\n" +
+    "Structural staleness report. Lists preferences, signals, and log\n" +
+    "files inactive longer than the configured `temporal:` thresholds\n" +
+    "(stale_pref_days / stale_signal_days / stale_log_days). Read-only.\n",
+  daily:
+    "usage: o2b brain daily [--date <YYYY-MM-DD>] [--vault <path>] [--json]\n" +
+    "Per-day deterministic brief: events grouped by kind, status\n" +
+    "transitions, vault delta, deduplicated artifact wikilinks. Defaults\n" +
+    "to today UTC. Read-only.\n",
+  weekly:
+    "usage: o2b brain weekly [--week-end <YYYY-MM-DD>] [--vault <path>] [--json]\n" +
+    "7-day deterministic synthesis: events by kind, status transitions,\n" +
+    "retired-in-window list, contradictions (signal-suppressed plus\n" +
+    "apply-evidence violated), vault delta, source pointers. Defaults to\n" +
+    "today UTC for week-end. Read-only.\n",
 };
