@@ -5,6 +5,99 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.15] - 2026-05-25
+
+Vault care bundle: eight related upstream-inspired metadata and
+maintenance features ship together in one release. New per-page
+frontmatter axes (`_lifecycle`, `tier`, `merged_into`), a Unicode-
+aware dedup key, a heuristic tokenizer, a bounded-token context
+pack, a self-healing lint pass, page-level deduplication, and a
+ranked maintenance action list - all built on a layered
+foundation so future maintenance features add a peer module
+rather than re-cutting the schema.
+
+### Added
+
+- `_lifecycle` frontmatter axis (`draft`, `stable`, `verified`,
+  `deprecated`, `archived`, `disputed`) on Brain pages. Default
+  read-side fallback is `stable`. Helpers in
+  `src/core/brain/page-meta/lifecycle.ts`: `readLifecycle`,
+  `isStale`, `ageDaysFromIso`.
+- Generalised `_confidence` read-helper in
+  `src/core/brain/page-meta/confidence.ts` so non-preference pages
+  can carry the existing `BRAIN_CONFIDENCE` triple.
+- `tier` frontmatter axis (`core`, `supporting`, `peripheral`) on
+  vault pages. Default `supporting` keeps the search ranker
+  bit-identical on untagged vaults. Ranker accepts an optional
+  `tierByDoc` input and applies a multiplicative weight to the
+  relevance term only.
+- `merged_into:` pointer + canonical resolver in
+  `src/core/brain/page-meta/page-id.ts`. Cycle detection bounded
+  at depth 5; dangling pointers fall through to the last reachable
+  id.
+- `src/core/brain/text/normalize.ts` (`normalizeForDedup`) -
+  NFKC + Unicode case folding, the shared key normaliser used by
+  dedup-hash and page-dedup.
+- `src/core/brain/text/tokenizer.ts` (`estimateTokens`) -
+  deterministic heuristic token counter: 1.3 tokens per word plus
+  1 token per CJK / hiragana / katakana / hangul character.
+- `src/core/brain/page-dedup.ts` - exact-normalised-key page
+  dedup, secondary marking via `merged_into`, vault-wide wikilink
+  patcher that preserves aliases and anchors.
+- `o2b brain page-dedup [--apply]` CLI verb.
+- `src/core/brain/token-footprint.ts` -
+  `computeTokenFootprint(vault)` returning per-category counts
+  (preferences, retired, inbox, processed, log, other) with a
+  `BRAIN_TOKEN_WARN_THRESHOLD` env override.
+- `o2b brain token-footprint [--json]` CLI verb.
+- `src/core/brain/context-pack.ts` - tier-then-recency ordered
+  vault slice under a strict token budget, optional substring
+  query filter (Unicode + case insensitive).
+- `o2b brain context-pack --max-tokens <n> [--query <q>]` CLI verb.
+- `brain_context_pack` MCP tool exposing the same slice through
+  the JSON-RPC surface.
+- `src/core/brain/lint-consolidate.ts` -
+  `lintConsolidate(vault, { apply })` performs two self-healing
+  operations: `fix-merged-link` rewrites wikilinks pointing at a
+  page that carries `merged_into:` to the canonical, and
+  `demote-stale-stable` flags `_lifecycle: stable` preferences
+  older than 180 days with no recent evidence for demotion to
+  `draft`. Dry-run by default.
+- `o2b brain lint --consolidate [--apply] [--yes] [--json]` CLI verb.
+- `src/core/brain/maintenance/action-scorer.ts` -
+  `scoreActions(inputs, { topN })` deterministic ranking of
+  vault-maintenance actions by impact (dedup count × weight,
+  staleness × age, broken-link count, token-footprint excess).
+- `o2b brain actions [--top-n N] [--json]` CLI verb aggregating
+  dedup, lint, and footprint inputs through the scorer.
+
+### Changed
+
+- `computeDedupHash` now passes topic, principle, and scope
+  through `normalizeForDedup` before hashing so fullwidth /
+  halfwidth, NFC / NFD, and case-only variants collapse into one
+  signal. Previously only NFC normalisation applied to principle.
+- `RankerInputs` gains an optional `tierByDoc` field; absent or
+  `supporting` entries leave the ranker output bit-identical.
+- `writePreference` accepts optional `lifecycle` and `tier` inputs
+  and emits `_lifecycle` / `tier` frontmatter only when the
+  caller supplies them. Existing callers (and fixtures) stay
+  byte-identical.
+
+### Notes
+
+- The `tier` field is unprefixed (user-editable territory next to
+  `pinned`); `_lifecycle` carries the Group-C `_` prefix because
+  dream owns lifecycle transitions.
+- Action scorer is exposed standalone in v0.10.15; integration
+  into `brain_digest` and `brain_doctor` output sections is
+  scheduled as a follow-up so the existing snapshot-tested
+  formatters stay untouched in this release.
+- `brain_context_pack` is registered in the full MCP scope only,
+  not the always-loaded writer scope. The writer scope keeps its
+  four-tool surface (`brain_feedback`, `brain_apply_evidence`,
+  `brain_note`, `brain_context`).
+
 ## [0.10.14] - 2026-05-25
 
 Three independent quality-of-life improvements bundled into one

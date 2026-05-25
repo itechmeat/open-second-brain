@@ -75,6 +75,15 @@ safety invariants are in [`docs/how-it-works.md`](docs/how-it-works.md).
   (`o2b export-config`).
 - Runs vault + adapter health checks (`o2b doctor`, plus
   `o2b brain doctor` for Brain-specific invariants).
+- Surfaces vault care signals as one ranked next-step list
+  (`o2b brain actions`): page-level duplicates
+  (`o2b brain page-dedup`), self-healing structural drift
+  (`o2b brain lint --consolidate`), token-budget monitoring
+  (`o2b brain token-footprint`), and a bounded-token vault slice
+  for priming an agent's context window
+  (`o2b brain context-pack --max-tokens N`). Per-page metadata
+  (`_lifecycle`, `tier`, `merged_into`) feeds the ranker and the
+  search relevance signal.
 - (Optional) Records paid agent actions through **Pay Memory**:
   receipts, generated assets, spending policy decisions, human
   approval state, and per-day reports — all as plain Markdown
