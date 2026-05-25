@@ -777,25 +777,59 @@ async function toolBrainOperatorSummary(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const topRaw = args["top_actions"];
-  const topActionsN =
-    topRaw === undefined
-      ? undefined
-      : Number.isInteger(topRaw)
-        ? (topRaw as number)
-        : Number.parseInt(String(topRaw ?? ""), 10);
-  if (topActionsN !== undefined && (!Number.isFinite(topActionsN) || topActionsN < 0)) {
+  let topActionsN: number | undefined;
+  if (topRaw !== undefined && topRaw !== null) {
+    // Strict integer coercion: reject `"3abc"`, `"2.5"`, and other
+    // shapes `Number.parseInt` would silently accept. Only a pure
+    // integer literal is allowed.
+    if (typeof topRaw === "number") {
+      if (!Number.isInteger(topRaw) || topRaw < 0) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_operator_summary: top_actions must be a non-negative integer",
+        );
+      }
+      topActionsN = topRaw;
+    } else if (typeof topRaw === "string") {
+      const trimmed = topRaw.trim();
+      if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          "brain_operator_summary: top_actions must be a non-negative integer",
+        );
+      }
+      topActionsN = Number.parseInt(trimmed, 10);
+    } else {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_operator_summary: top_actions must be a non-negative integer",
+      );
+    }
+  }
+
+  const includeDreamRaw = args["include_dream"];
+  let includeDream: boolean;
+  if (includeDreamRaw === undefined || includeDreamRaw === null) {
+    includeDream = true;
+  } else if (typeof includeDreamRaw === "boolean") {
+    includeDream = includeDreamRaw;
+  } else {
     throw new MCPError(
       INVALID_PARAMS,
-      "brain_operator_summary: top_actions must be a non-negative integer",
+      "brain_operator_summary: include_dream must be a boolean",
     );
   }
-  const includeDream = args["include_dream"] !== false;
+
   let dreamSummary;
+  let dreamError: string | undefined;
   if (includeDream) {
     try {
       dreamSummary = dream(ctx.vault, { dryRun: true });
-    } catch {
-      dreamSummary = undefined;
+    } catch (err) {
+      // Surface the failure so callers know the dashboard is missing
+      // verification + dream signals; do not silently produce a
+      // partial envelope.
+      dreamError = (err as Error).message ?? String(err);
     }
   }
   const summary = buildOperatorSummary(ctx.vault, {
@@ -817,6 +851,7 @@ async function toolBrainOperatorSummary(
     },
     top_actions: summary.top_actions,
     instruction_file_warnings: summary.instruction_file_warnings,
+    ...(dreamError !== undefined ? { dream_error: dreamError } : {}),
   };
 }
 

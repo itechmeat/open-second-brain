@@ -1,9 +1,10 @@
 /**
  * v0.10.16: dream pass invokes the self-approval guardrail before
  * creating a new unconfirmed preference. Default config preserves
- * pre-v0.10.16 behaviour (the candidate_threshold of 3 is stricter
- * than min_signals=2, so the existing tests stay green); a tighter
- * guardrail routes the cluster to `quarantined` instead.
+ * pre-v0.10.16 behaviour (defaults are strictly looser than every
+ * existing dream-pass gate, so the guardrail never blocks by
+ * default); a tighter guardrail routes the cluster to `quarantined`
+ * instead.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

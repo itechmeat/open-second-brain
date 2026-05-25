@@ -21,7 +21,7 @@ const HEAD = `schema_version: 1\n`;
 
 describe("BRAIN_GUARDRAIL_DEFAULTS", () => {
   test("documents the four threshold defaults", () => {
-    expect(BRAIN_GUARDRAIL_DEFAULTS.promotion_min_signals).toBe(2);
+    expect(BRAIN_GUARDRAIL_DEFAULTS.promotion_min_signals).toBe(1);
     expect(BRAIN_GUARDRAIL_DEFAULTS.promotion_min_distinct_agents).toBe(1);
     expect(BRAIN_GUARDRAIL_DEFAULTS.promotion_min_age_days).toBe(0);
     expect(BRAIN_GUARDRAIL_DEFAULTS.instruction_file_max_lines).toBe(200);

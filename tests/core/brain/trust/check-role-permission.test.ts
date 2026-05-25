@@ -102,6 +102,15 @@ describe("checkRolePermission - forbidden paths", () => {
     expect(r.reason).toMatch(/already|wrong-source-state/);
   });
 
+  test("dreamer + promote without currentStatus is denied (fail-closed)", () => {
+    const r = checkRolePermission(
+      BRAIN_ROLES.dreamer,
+      BRAIN_OPERATIONS.preference_promote_confirmed,
+    );
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toMatch(/currentStatus is required|wrong-source-state/);
+  });
+
   test("applier must not promote a preference", () => {
     const r = checkRolePermission(
       BRAIN_ROLES.applier,

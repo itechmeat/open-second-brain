@@ -37,7 +37,7 @@ Variant 2 from the consultant pass. Introduce a new subsystem directory `src/cor
 
 Three layers, strict downward dependency:
 
-```
+```text
 atoms        - data-shape additions on existing summary types
                 + new BrainGuardrailConfig in policy.ts
                 + new BrainRole enum in trust/role.ts
@@ -80,7 +80,7 @@ consumers    - brain_dream uses self-approval-guardrail
 
 ### New files (~24)
 
-```
+```text
 src/core/brain/trust/
   role.ts                          (BrainRole enum, BrainOperation type)
   check-role-permission.ts         (helper)
@@ -118,7 +118,7 @@ docs/brainstorm/trust-operator-surfaces/
 
 ### Modified files (~24)
 
-```
+```text
 src/core/brain/dream.ts            (uncertain[], quarantined[] in DreamRunSummary;
                                     invoke self-approval-guardrail)
 src/core/brain/doctor.ts           (trust_verdict, verification_delta_summary,

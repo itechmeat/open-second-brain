@@ -76,15 +76,26 @@ export function checkRolePermission(
   // preference that is currently `unconfirmed`. Re-promoting an
   // already-confirmed preference (or one that has been retired) is
   // a no-op at best and a permission violation at worst.
-  if (
-    op === BRAIN_OPERATIONS.preference_promote_confirmed &&
-    currentStatus !== undefined &&
-    currentStatus !== "unconfirmed"
-  ) {
-    return Object.freeze({
-      allowed: false,
-      reason: `wrong-source-state: cannot promote from '${currentStatus}', expected 'unconfirmed'`,
-    });
+  //
+  // Fail-closed contract: when `currentStatus` is undefined for the
+  // promote operation, the caller could not determine the source
+  // state - we reject rather than silently allow. Callers that
+  // genuinely know the preference is unconfirmed must say so
+  // explicitly.
+  if (op === BRAIN_OPERATIONS.preference_promote_confirmed) {
+    if (currentStatus === undefined) {
+      return Object.freeze({
+        allowed: false,
+        reason:
+          "wrong-source-state: currentStatus is required for preference_promote_confirmed",
+      });
+    }
+    if (currentStatus !== "unconfirmed") {
+      return Object.freeze({
+        allowed: false,
+        reason: `wrong-source-state: cannot promote from '${currentStatus}', expected 'unconfirmed'`,
+      });
+    }
   }
 
   return Object.freeze({ allowed: true });

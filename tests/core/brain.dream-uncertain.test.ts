@@ -39,8 +39,10 @@ describe("DreamRunSummary uncertain + quarantined atoms", () => {
     expect(res.quarantined).toEqual([]);
   });
 
-  test("frozen arrays - cannot mutate the result", () => {
+  test("frozen result and nested arrays cannot mutate", () => {
     const res = dream(vault);
     expect(Object.isFrozen(res)).toBe(true);
+    expect(Object.isFrozen(res.uncertain)).toBe(true);
+    expect(Object.isFrozen(res.quarantined)).toBe(true);
   });
 });

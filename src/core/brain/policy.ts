@@ -71,10 +71,14 @@ export const INSTRUCTION_FILE_MAX_LINES_CEILING = 10000;
  * returns these values so consumers can rely on a fully-populated
  * struct.
  *
- * Defaults are chosen to keep the dream pass and the doctor pass
- * bit-identical with pre-v0.10.16 behaviour:
- *   - `promotion_min_signals: 2` matches the existing dream
- *     candidate threshold baseline.
+ * Defaults are chosen to be strictly looser than every existing
+ * dream-pass gate so adding the guardrail cannot block a promotion
+ * that previously succeeded:
+ *   - `promotion_min_signals: 1` is below any sane
+ *     `dream.candidate_threshold` (default 3). When an operator
+ *     tunes `candidate_threshold` below 2, the guardrail still
+ *     cannot block them by default - explicit opt-in is required
+ *     via the `_brain.yaml:guardrails:promotion_min_signals` field.
  *   - `promotion_min_distinct_agents: 1` imposes no cross-agent
  *     requirement.
  *   - `promotion_min_age_days: 0` disables the age gate.
@@ -82,7 +86,7 @@ export const INSTRUCTION_FILE_MAX_LINES_CEILING = 10000;
  *     compliance ceiling.
  */
 export const BRAIN_GUARDRAIL_DEFAULTS: ResolvedBrainGuardrailConfig = Object.freeze({
-  promotion_min_signals: 2,
+  promotion_min_signals: 1,
   promotion_min_distinct_agents: 1,
   promotion_min_age_days: 0,
   instruction_file_max_lines: 200,

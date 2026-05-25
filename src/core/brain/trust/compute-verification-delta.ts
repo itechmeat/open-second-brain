@@ -100,10 +100,36 @@ function classifyConfirmedClaim(vault: string, id: string): VerificationDeltaEnt
   if (slug === null) {
     return Object.freeze({ id, state: "missing_evidence", note: "unrecognised id prefix" });
   }
-  const prefPath = preferencePath(vault, slug);
+  // Path construction can throw for slugs that violate the slug-safety
+  // contract (`validateSlug` inside `preferencePath`). A malformed id
+  // is a missing-evidence verdict, not a fatal abort.
+  let prefPath: string;
+  try {
+    prefPath = preferencePath(vault, slug);
+  } catch (err) {
+    return Object.freeze({
+      id,
+      state: "missing_evidence",
+      note: `invalid slug: ${(err as Error).message}`,
+    });
+  }
   if (existsSync(prefPath)) {
     try {
       const pref = parsePreference(prefPath);
+      // Validate the on-disk status against the dream claim. If dream
+      // said "confirmed" but the file is still `unconfirmed` (or
+      // sitting in `quarantine`), the claim does not match disk.
+      // Report as drift even when applied_count is non-zero. The
+      // `retired` status never lands here because retired pages live
+      // under `retired/`, not `preferences/`.
+      if (pref.status !== "confirmed") {
+        return Object.freeze({
+          id,
+          state: "drift",
+          path: vaultRelative(prefPath, vault),
+          note: `claimed confirmed but on-disk status is '${pref.status}'`,
+        });
+      }
       if (pref.applied_count > 0) {
         return Object.freeze({
           id,
@@ -127,7 +153,12 @@ function classifyConfirmedClaim(vault: string, id: string): VerificationDeltaEnt
     }
   }
   // Not under preferences/: check whether it moved to retired/.
-  const retPath = retiredPath(vault, slug);
+  let retPath: string;
+  try {
+    retPath = retiredPath(vault, slug);
+  } catch {
+    return Object.freeze({ id, state: "missing_evidence" });
+  }
   if (existsSync(retPath)) {
     return Object.freeze({
       id,
@@ -144,7 +175,16 @@ function classifyUnconfirmedClaim(vault: string, id: string): VerificationDeltaE
   if (slug === null) {
     return Object.freeze({ id, state: "missing_evidence", note: "unrecognised id prefix" });
   }
-  const prefPath = preferencePath(vault, slug);
+  let prefPath: string;
+  try {
+    prefPath = preferencePath(vault, slug);
+  } catch (err) {
+    return Object.freeze({
+      id,
+      state: "missing_evidence",
+      note: `invalid slug: ${(err as Error).message}`,
+    });
+  }
   if (existsSync(prefPath)) {
     return Object.freeze({
       id,
@@ -152,7 +192,12 @@ function classifyUnconfirmedClaim(vault: string, id: string): VerificationDeltaE
       path: vaultRelative(prefPath, vault),
     });
   }
-  const retPath = retiredPath(vault, slug);
+  let retPath: string;
+  try {
+    retPath = retiredPath(vault, slug);
+  } catch {
+    return Object.freeze({ id, state: "missing_evidence" });
+  }
   if (existsSync(retPath)) {
     return Object.freeze({
       id,
@@ -169,7 +214,16 @@ function classifyRetiredClaim(vault: string, id: string): VerificationDeltaEntry
   if (slug === null) {
     return Object.freeze({ id, state: "missing_evidence", note: "unrecognised id prefix" });
   }
-  const retPath = retiredPath(vault, slug);
+  let retPath: string;
+  try {
+    retPath = retiredPath(vault, slug);
+  } catch (err) {
+    return Object.freeze({
+      id,
+      state: "missing_evidence",
+      note: `invalid slug: ${(err as Error).message}`,
+    });
+  }
   if (existsSync(retPath)) {
     return Object.freeze({
       id,
@@ -181,7 +235,16 @@ function classifyRetiredClaim(vault: string, id: string): VerificationDeltaEntry
   // but the file is still under preferences/ (i.e. dream's claim does
   // not match disk), treat as a regression rather than as
   // missing_evidence so the verdict reflects the disagreement.
-  const stillActivePath = preferencePath(vault, slug);
+  let stillActivePath: string;
+  try {
+    stillActivePath = preferencePath(vault, slug);
+  } catch {
+    return Object.freeze({
+      id,
+      state: "missing_evidence",
+      note: "dream claimed retired but no file under retired/",
+    });
+  }
   if (existsSync(stillActivePath)) {
     return Object.freeze({
       id,

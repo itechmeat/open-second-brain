@@ -38,11 +38,17 @@ export async function cmdBrainSummary(argv: string[]): Promise<number> {
   }
 
   let dreamSummary;
+  let dreamError: string | undefined;
   if (!flags["skip-dream"]) {
     try {
       dreamSummary = dream(vault, { dryRun: true });
-    } catch {
-      dreamSummary = undefined;
+    } catch (err) {
+      // Surface the failure rather than silently producing a partial
+      // dashboard. stderr keeps the human-readable text channel
+      // separate from the structured payload; the `dream_error`
+      // field on the JSON output lets automation react.
+      dreamError = (err as Error).message ?? String(err);
+      process.stderr.write(`warning: dry-run dream failed: ${dreamError}\n`);
     }
   }
 
@@ -66,10 +72,14 @@ export async function cmdBrainSummary(argv: string[]): Promise<number> {
       },
       top_actions: summary.top_actions,
       instruction_file_warnings: summary.instruction_file_warnings,
+      ...(dreamError !== undefined ? { dream_error: dreamError } : {}),
     });
     return 0;
   }
 
   process.stdout.write(renderOperatorSummaryMarkdown(summary));
+  if (dreamError !== undefined) {
+    process.stdout.write(`\nDream error: ${dreamError}\n`);
+  }
   return 0;
 }

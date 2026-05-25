@@ -52,7 +52,7 @@ describe("buildOperatorSummary - structural envelope", () => {
     expect(r.dream_summary.quarantined_count).toBe(0);
   });
 
-  test("instruction-file warning surfaces in envelope and trust=watch", () => {
+  test("instruction-file warning surfaces in envelope; verdict stays clean (informational)", () => {
     writeFileSync(join(vault, "CLAUDE.md"), "line\n".repeat(300));
     const r = buildOperatorSummary(vault, {
       dreamSummary: emptyDream(),

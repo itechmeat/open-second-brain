@@ -135,5 +135,39 @@ describe("brain_operator_summary tool - round trip", () => {
       params: { name: "brain_operator_summary", arguments: { top_actions: -1 } },
     })) as { error?: { code: number; message: string } };
     expect(r.error).toBeDefined();
+    // JSON-RPC INVALID_PARAMS = -32602. Assert the specific code so
+    // the test fails on the wrong failure mode (e.g. INTERNAL_ERROR
+    // smuggled through).
+    expect(r.error?.code).toBe(-32602);
+  });
+
+  test("rejects malformed top_actions string via INVALID_PARAMS", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 12,
+      method: "tools/call",
+      params: {
+        name: "brain_operator_summary",
+        arguments: { top_actions: "3abc" },
+      },
+    })) as { error?: { code: number; message: string } };
+    expect(r.error?.code).toBe(-32602);
+  });
+
+  test("rejects non-boolean include_dream via INVALID_PARAMS", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 13,
+      method: "tools/call",
+      params: {
+        name: "brain_operator_summary",
+        arguments: { include_dream: "yes" },
+      },
+    })) as { error?: { code: number; message: string } };
+    expect(r.error?.code).toBe(-32602);
   });
 });

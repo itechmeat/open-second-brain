@@ -116,7 +116,7 @@ Files under `src/core/brain/` (~50 files, ~25k LOC), `src/mcp/`,
 `tests/core/brain/` with the same shape.
 
 **Recent commits (last 20)**:
-```
+```text
 a84ddaa chore: bump version to 0.10.15
 d045ea1 chore: bump version to 0.10.15 (#31)
 5755200 v0.10.15: vault care bundle - metadata, dedup, lint, context-pack, actions (#30)
@@ -176,7 +176,7 @@ Brain preferences, prior PRs):
 
 Produce exactly 3 distinct architectural variants. For each variant:
 
-### Variant N: <short name>
+## Variant N: <short name>
 - **Approach**: 2-3 sentences describing the variant.
 - **Trade-offs**: bullet list of pros and cons.
 - **Complexity**: small | medium | large
@@ -184,7 +184,7 @@ Produce exactly 3 distinct architectural variants. For each variant:
 
 After the three variants, add exactly one recommendation:
 
-### Recommended: Variant N
+## Recommended: Variant N
 **Rationale**: 2-3 sentences explaining why this variant over the
 others, considering the project context and constraints above.
 

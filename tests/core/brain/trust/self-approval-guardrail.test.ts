@@ -15,10 +15,13 @@ describe("applySelfApprovalGuardrail - default config", () => {
     expect(r.failed_gates).toEqual([]);
   });
 
-  test("quarantines when signal count below min_signals (default 2)", () => {
+  test("quarantines when signal count below explicit min_signals", () => {
+    // Defaults set min_signals=1 (strictly looser than dream's
+    // candidate_threshold) so the gate never fires by default. Pass an
+    // explicit tighter threshold to exercise the quarantine path.
     const r = applySelfApprovalGuardrail(
       { signal_count: 1, distinct_agents: 1, age_days: 0 },
-      cfg,
+      { ...cfg, promotion_min_signals: 2 },
     );
     expect(r.decision).toBe("quarantine");
     expect(r.failed_gates).toContain("min_signals");

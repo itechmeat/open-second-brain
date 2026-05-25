@@ -151,6 +151,61 @@ describe("computeVerificationDelta", () => {
   });
 });
 
+describe("computeVerificationDelta - regression + path contract", () => {
+  test("regression: dream cited as confirmed but on-disk status is unconfirmed", () => {
+    writePreference(vault, {
+      slug: "claim-mismatch",
+      topic: "claim-mismatch",
+      principle: "limit Z to 10",
+      created_at: "2026-05-20T00:00:00Z",
+      unconfirmed_until: "2026-06-03T00:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: ["[[sig-z]]"],
+    });
+    const r = computeVerificationDelta(
+      vault,
+      emptyDream({ confirmed: ["pref-claim-mismatch"] }),
+    );
+    expect(r.summary.drift).toBe(1);
+    expect(r.entries[0]?.state).toBe("drift");
+    expect(r.entries[0]?.note).toMatch(/on-disk status is 'unconfirmed'/);
+  });
+
+  test("entries carry vault-relative paths (no absolute host paths leak)", () => {
+    writePreference(vault, {
+      slug: "path-shape",
+      topic: "path-shape",
+      principle: "limit P to 5",
+      created_at: "2026-05-20T00:00:00Z",
+      confirmed_at: "2026-05-21T00:00:00Z",
+      unconfirmed_until: "2026-06-03T00:00:00Z",
+      status: "confirmed",
+      evidenced_by: ["[[sig-p]]"],
+      applied_count: 1,
+      last_evidence_at: "2026-05-22T00:00:00Z",
+    });
+    const r = computeVerificationDelta(
+      vault,
+      emptyDream({ confirmed: ["pref-path-shape"] }),
+    );
+    const path = r.entries[0]?.path ?? "";
+    // Vault-relative path: starts with `Brain/preferences/`, never
+    // with `/tmp/...` or any other absolute host directory.
+    expect(path.startsWith("/")).toBe(false);
+    expect(path).toBe("Brain/preferences/pref-path-shape.md");
+  });
+
+  test("malformed slug surfaces as missing_evidence, not a thrown error", () => {
+    // Slug with characters rejected by validateSlug (uppercase, spaces).
+    const r = computeVerificationDelta(
+      vault,
+      emptyDream({ confirmed: ["pref-Invalid Slug!"] }),
+    );
+    expect(r.summary.missing_evidence).toBe(1);
+    expect(r.entries[0]?.state).toBe("missing_evidence");
+  });
+});
+
 describe("computeVerificationDelta structural invariants", () => {
   test("result is frozen", () => {
     const r = computeVerificationDelta(vault, emptyDream());

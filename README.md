@@ -204,10 +204,11 @@ exposes the same deterministic operations as MCP tools:
 
 - **Core (3):** `second_brain_status`, `second_brain_query`,
   `vault_health`.
-- **Brain (9):** `brain_feedback`, `brain_dream`,
+- **Brain (11):** `brain_feedback`, `brain_dream`,
   `brain_apply_evidence`, `brain_note`, `brain_context`,
-  `brain_digest`, `brain_query`, `brain_doctor`, `brain_backlinks`.
-  See the [Brain section](#brain-observing-memory) below.
+  `brain_digest`, `brain_query`, `brain_doctor`, `brain_backlinks`,
+  `brain_context_pack`, `brain_operator_summary`. See the
+  [Brain section](#brain-observing-memory) below.
 - **Pay Memory (8):** `payment_memory_init`,
   `payment_receipt_append`, `asset_capture`,
   `payment_report_generate`, `payment_policy_check`,

@@ -360,8 +360,11 @@ export function renderDigest(
       most_applied: data.most_applied,
       connection_health: data.connection_health,
       actions: data.actions,
-      uncertain_count: opts.dreamSummary?.uncertain.length ?? 0,
-      quarantined_count: opts.dreamSummary?.quarantined.length ?? 0,
+      // Guarded: dreamSummary may arrive from an untyped JSON-RPC
+      // boundary (or from a future caller that has not populated
+      // every array). Optional-chain the inner length read.
+      uncertain_count: opts.dreamSummary?.uncertain?.length ?? 0,
+      quarantined_count: opts.dreamSummary?.quarantined?.length ?? 0,
       ...(opts.doctorResult?.trust_verdict !== undefined
         ? { trust_verdict: opts.doctorResult.trust_verdict }
         : {}),
