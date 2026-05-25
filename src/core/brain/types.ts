@@ -777,6 +777,14 @@ export interface BrainConfig {
    * `BRAIN_LINK_GRAPH_DEFAULTS` via `resolveLinkGraph`.
    */
   readonly link_graph?: BrainLinkGraphConfig;
+  /**
+   * Optional `temporal:` block (v0.10.18). Drives the temporal +
+   * synthesis subsystem (`src/core/brain/temporal/`) - stale-watch
+   * thresholds, weekly window alignment, daily window offset.
+   * Absent: callers fall back to `BRAIN_TEMPORAL_DEFAULTS` via
+   * `resolveTemporal`.
+   */
+  readonly temporal?: BrainTemporalConfig;
 }
 
 /**
@@ -826,4 +834,54 @@ export interface ResolvedBrainLinkGraphConfig {
   readonly moc_min_outbound_links: number;
   readonly moc_min_link_ratio: number;
   readonly vault_instruction_file: string;
+}
+
+/**
+ * Optional `temporal:` block (v0.10.18). Tunes the temporal +
+ * synthesis subsystem (`src/core/brain/temporal/`).
+ *
+ * All knobs are purely structural - thresholds in days and ISO-8601
+ * weekday numbers. No language-specific defaults; no vocabulary
+ * detection.
+ */
+export interface BrainTemporalConfig {
+  /**
+   * Days since a preference's most-recent event before it is reported
+   * by `findStaleEntries`. Positive integer.
+   */
+  readonly stale_pref_days?: number;
+  /**
+   * Days since a signal's most-recent event before it is reported as
+   * stale. Positive integer.
+   */
+  readonly stale_signal_days?: number;
+  /**
+   * Days since a Brain/log/ file was last touched before it is
+   * reported as stale. Positive integer.
+   */
+  readonly stale_log_days?: number;
+  /**
+   * Weekly-synthesis window alignment. ISO-8601 weekday number
+   * (1 = Monday ... 7 = Sunday). Default 1.
+   */
+  readonly weekly_start_dow?: number;
+  /**
+   * Daily-brief window offset from UTC in whole hours, range -23..23.
+   * 0 means days align with UTC midnight. Non-zero values let
+   * non-UTC vaults align daily briefs with local midnight without
+   * adding a full timezone library.
+   */
+  readonly daily_window_offset_hours?: number;
+}
+
+/**
+ * Concrete (fully-resolved) temporal config. Returned by
+ * `resolveTemporal(cfg)` so consumers do not branch on optionals.
+ */
+export interface ResolvedBrainTemporalConfig {
+  readonly stale_pref_days: number;
+  readonly stale_signal_days: number;
+  readonly stale_log_days: number;
+  readonly weekly_start_dow: number;
+  readonly daily_window_offset_hours: number;
 }
