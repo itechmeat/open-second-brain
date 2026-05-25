@@ -24,3 +24,4 @@ export { cmdBrainImportClaudeMemory } from "./import-claude-memory.ts";
 export { cmdBrainPageDedup } from "./page-dedup.ts";
 export { cmdBrainTokenFootprint } from "./token-footprint.ts";
 export { cmdBrainContextPack } from "./context-pack.ts";
+export { cmdBrainLint } from "./lint.ts";
