@@ -83,6 +83,18 @@ export interface RenderDigestOptions {
    * picks `new Date()` itself.
    */
   readonly now?: Date;
+  /**
+   * Optional doctor result (v0.10.16). When supplied, `trust_verdict`
+   * lands in the JSON payload and a `## Trust` section renders in
+   * markdown.
+   */
+  readonly doctorResult?: import("./doctor.ts").RunDoctorResult;
+  /**
+   * Optional dream summary (v0.10.16). When supplied,
+   * `uncertain_count` and `quarantined_count` reflect the
+   * counterparts on the summary instead of defaulting to zero.
+   */
+  readonly dreamSummary?: import("./dream.ts").DreamRunSummary;
 }
 
 export interface RenderDigestResult {
@@ -348,8 +360,11 @@ export function renderDigest(
       most_applied: data.most_applied,
       connection_health: data.connection_health,
       actions: data.actions,
-      uncertain_count: 0,
-      quarantined_count: 0,
+      uncertain_count: opts.dreamSummary?.uncertain.length ?? 0,
+      quarantined_count: opts.dreamSummary?.quarantined.length ?? 0,
+      ...(opts.doctorResult?.trust_verdict !== undefined
+        ? { trust_verdict: opts.doctorResult.trust_verdict }
+        : {}),
     };
     return Object.freeze({
       content: JSON.stringify(payload, null, 2) + "\n",
@@ -358,10 +373,34 @@ export function renderDigest(
   }
 
   // Markdown.
-  const content = empty
+  const baseMd = empty
     ? renderEmptyMarkdown(until)
     : renderMarkdown(data, since, until);
+  const trustSection = renderTrustSection(opts.doctorResult, opts.dreamSummary);
+  const content = trustSection ? `${baseMd}\n${trustSection}` : baseMd;
   return Object.freeze({ content, empty });
+}
+
+/**
+ * Markdown `## Trust` section (v0.10.16). Rendered only when either
+ * a doctor result or a dream summary is threaded through the digest
+ * options - otherwise legacy output stays bit-identical.
+ */
+function renderTrustSection(
+  doctor?: import("./doctor.ts").RunDoctorResult,
+  dream?: import("./dream.ts").DreamRunSummary,
+): string {
+  if (doctor === undefined && dream === undefined) return "";
+  const lines: string[] = ["## Trust", ""];
+  if (doctor?.trust_verdict !== undefined) {
+    lines.push(`- Verdict: **${doctor.trust_verdict}**`);
+  }
+  if (dream !== undefined) {
+    lines.push(`- Uncertain: ${dream.uncertain.length}`);
+    lines.push(`- Quarantined: ${dream.quarantined.length}`);
+  }
+  lines.push("");
+  return lines.join("\n");
 }
 
 // ----- Data collection ------------------------------------------------------
