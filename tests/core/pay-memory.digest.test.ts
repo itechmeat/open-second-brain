@@ -10,6 +10,7 @@ import {
 } from "../../src/core/pay-memory/digest.ts";
 import { writeReceipt } from "../../src/core/pay-memory/receipt.ts";
 
+
 let tmp: string;
 
 beforeEach(() => {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { parseFrontmatter } from "../../src/core/vault.ts";
 import { writeReceipt } from "../../src/core/pay-memory/receipt.ts";
 
+
 let tmp: string;
 
 beforeEach(() => {

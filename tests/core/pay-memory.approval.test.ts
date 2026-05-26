@@ -14,6 +14,17 @@ import {
 } from "../../src/core/pay-memory/approval.ts";
 import { policyJsonPath } from "../../src/core/pay-memory/policy-rules.ts";
 
+import {
+  PAY_MEMORY_ASSETS_REL,
+  PAY_MEMORY_DRAFTS_REL,
+  PAY_MEMORY_PENDING_REL,
+  PAY_MEMORY_POLICIES_REL,
+  PAY_MEMORY_REPORTS_REL,
+  PAY_MEMORY_ROOT_REL,
+  PAY_MEMORY_SPENDING_JSON_REL,
+  PAY_MEMORY_SPENDING_MD_REL,
+} from "../../src/core/pay-memory/paths.ts";
+
 let tmp: string;
 
 beforeEach(() => {
@@ -64,7 +75,7 @@ describe("writePendingRequest", () => {
   });
 
   test("records the policy decision when policies/spending.json is present", () => {
-    mkdirSync(join(tmp, "Brain", "payments", "policies"), { recursive: true });
+    mkdirSync(join(tmp, PAY_MEMORY_POLICIES_REL), { recursive: true });
     writeFileSync(
       policyJsonPath(tmp),
       JSON.stringify({ allowed_services: ["paysponge/fal"], require_approval_above: 0.04 }),
@@ -78,7 +89,7 @@ describe("writePendingRequest", () => {
   });
 
   test("enforcePolicy=true blocks creation when policy denies", () => {
-    mkdirSync(join(tmp, "Brain", "payments", "policies"), { recursive: true });
+    mkdirSync(join(tmp, PAY_MEMORY_POLICIES_REL), { recursive: true });
     writeFileSync(
       policyJsonPath(tmp),
       JSON.stringify({ allowed_services: ["paysponge/fal"] }),

@@ -5,6 +5,17 @@ import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
+import {
+  PAY_MEMORY_ASSETS_REL,
+  PAY_MEMORY_DRAFTS_REL,
+  PAY_MEMORY_PENDING_REL,
+  PAY_MEMORY_POLICIES_REL,
+  PAY_MEMORY_REPORTS_REL,
+  PAY_MEMORY_ROOT_REL,
+  PAY_MEMORY_SPENDING_JSON_REL,
+  PAY_MEMORY_SPENDING_MD_REL,
+} from "../../src/core/pay-memory/paths.ts";
+
 let tmp: string;
 let vault: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -61,7 +72,7 @@ describe("payment_memory_init", () => {
     expect(s.policy_status).toBe("created");
     expect(s.created).toContain("Brain/payments/policies");
     // Receipts go DIRECTLY under Brain/payments/ (no nested payments subdir).
-    expect(existsSync(join(vault, "Brain", "payments"))).toBe(true);
+    expect(existsSync(join(vault, PAY_MEMORY_ROOT_REL))).toBe(true);
     for (const sub of ["policies", "assets", "drafts", "reports"]) {
       expect(existsSync(join(vault, "Brain", "payments", sub))).toBe(true);
     }
@@ -230,7 +241,7 @@ describe("payment_policy_check", () => {
     await call(server, "payment_memory_init");
     const { writeFileSync } = await import("node:fs");
     writeFileSync(
-      join(vault, "Brain", "payments", "policies", "spending.json"),
+      join(vault, PAY_MEMORY_SPENDING_JSON_REL),
       JSON.stringify({ allowed_services: ["paysponge/fal"] }),
       "utf8",
     );

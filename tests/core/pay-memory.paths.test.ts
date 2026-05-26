@@ -6,6 +6,12 @@ import {
   isoDateNow,
   isoTimeNow,
   isoTimestampZ,
+  PAY_MEMORY_ASSETS_REL,
+  PAY_MEMORY_DRAFTS_REL,
+  PAY_MEMORY_POLICIES_REL,
+  PAY_MEMORY_REPORTS_REL,
+  PAY_MEMORY_ROOT_REL,
+  PAY_MEMORY_SPENDING_MD_REL,
   payMemoryDirs,
   paymentsDateDir,
   policyPath,
@@ -19,25 +25,25 @@ import {
 describe("payMemoryDirs", () => {
   test("composes the canonical Brain/payments layout", () => {
     const dirs = payMemoryDirs("/vault");
-    expect(dirs.policies).toBe(join("/vault", "Brain", "payments", "policies"));
-    expect(dirs.payments).toBe(join("/vault", "Brain", "payments"));
-    expect(dirs.assets).toBe(join("/vault", "Brain", "payments", "assets"));
-    expect(dirs.drafts).toBe(join("/vault", "Brain", "payments", "drafts"));
-    expect(dirs.reports).toBe(join("/vault", "Brain", "payments", "reports"));
+    expect(dirs.policies).toBe(join("/vault", PAY_MEMORY_POLICIES_REL));
+    expect(dirs.payments).toBe(join("/vault", PAY_MEMORY_ROOT_REL));
+    expect(dirs.assets).toBe(join("/vault", PAY_MEMORY_ASSETS_REL));
+    expect(dirs.drafts).toBe(join("/vault", PAY_MEMORY_DRAFTS_REL));
+    expect(dirs.reports).toBe(join("/vault", PAY_MEMORY_REPORTS_REL));
   });
 
   test("policyPath, receiptPath, assetPath, reportPath", () => {
-    expect(policyPath("/v")).toBe(join("/v", "Brain", "payments", "policies", "spending.md"));
+    expect(policyPath("/v")).toBe(join("/v", PAY_MEMORY_SPENDING_MD_REL));
     expect(receiptPath("/v", "2026-05-10", "fal-x")).toBe(
-      join("/v", "Brain", "payments", "2026-05-10", "fal-x.md"),
+      join("/v", PAY_MEMORY_ROOT_REL, "2026-05-10", "fal-x.md"),
     );
-    expect(assetPath("/v", "header")).toBe(join("/v", "Brain", "payments", "assets", "header.md"));
-    expect(reportPath("/v", "demo")).toBe(join("/v", "Brain", "payments", "reports", "demo.md"));
+    expect(assetPath("/v", "header")).toBe(join("/v", PAY_MEMORY_ASSETS_REL, "header.md"));
+    expect(reportPath("/v", "demo")).toBe(join("/v", PAY_MEMORY_REPORTS_REL, "demo.md"));
   });
 
   test("paymentsDateDir validates date", () => {
     expect(paymentsDateDir("/v", "2026-05-10")).toBe(
-      join("/v", "Brain", "payments", "2026-05-10"),
+      join("/v", PAY_MEMORY_ROOT_REL, "2026-05-10"),
     );
     expect(() => paymentsDateDir("/v", "2026.05.10")).toThrow();
     expect(() => paymentsDateDir("/v", "10-05-2026")).toThrow();

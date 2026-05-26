@@ -11,6 +11,17 @@ import {
 } from "../../src/core/pay-memory/policy-rules.ts";
 import { writeReceipt } from "../../src/core/pay-memory/receipt.ts";
 
+import {
+  PAY_MEMORY_ASSETS_REL,
+  PAY_MEMORY_DRAFTS_REL,
+  PAY_MEMORY_PENDING_REL,
+  PAY_MEMORY_POLICIES_REL,
+  PAY_MEMORY_REPORTS_REL,
+  PAY_MEMORY_ROOT_REL,
+  PAY_MEMORY_SPENDING_JSON_REL,
+  PAY_MEMORY_SPENDING_MD_REL,
+} from "../../src/core/pay-memory/paths.ts";
+
 let tmp: string;
 
 beforeEach(() => {
@@ -23,7 +34,7 @@ afterEach(() => {
 
 function writePolicy(rules: unknown) {
   const path = policyJsonPath(tmp);
-  mkdirSync(join(tmp, "Brain", "payments", "policies"), { recursive: true });
+  mkdirSync(join(tmp, PAY_MEMORY_POLICIES_REL), { recursive: true });
   writeFileSync(path, JSON.stringify(rules, null, 2), "utf8");
 }
 
@@ -51,7 +62,7 @@ describe("loadPolicyRules", () => {
 
   test("rejects malformed JSON", () => {
     const path = policyJsonPath(tmp);
-    mkdirSync(join(tmp, "Brain", "payments", "policies"), { recursive: true });
+    mkdirSync(join(tmp, PAY_MEMORY_POLICIES_REL), { recursive: true });
     writeFileSync(path, "{ not json", "utf8");
     expect(() => loadPolicyRules(tmp)).toThrow(/not valid JSON/);
   });
