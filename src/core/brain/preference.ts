@@ -128,6 +128,21 @@ export interface WritePreferenceInput {
    */
   readonly tier?: PageTier;
   readonly pinned?: boolean;
+  /**
+   * Brain Integrity Suite (v0.12.0). Optional monotonic write counter
+   * persisted as `_revision`. The dream pass / `writePreferenceTxn`
+   * supplies the next value; direct callers may omit, in which case
+   * the writer emits `_revision: 0` so the field is always present
+   * on disk.
+   */
+  readonly revision?: number;
+  /**
+   * Brain Integrity Suite (v0.12.0). Optional sha256 of the canonical
+   * `(principle, scope)` pair persisted as `_content_hash`. Dream
+   * supplies on promotion to `confirmed`; emitted verbatim when
+   * supplied, omitted otherwise.
+   */
+  readonly content_hash?: string;
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
   /** Optional extra tags merged after the canonical set. */
@@ -334,6 +349,12 @@ function preferenceFrontmatter(
     _confidence_value: confidenceValueField,
     pinned,
   };
+  // Brain Integrity Suite additive fields. Both follow the
+  // `_lifecycle` precedent: emit only when the caller supplies a
+  // value so legacy fixtures and the starter bundle stay
+  // byte-identical with absent-as-default reader semantics.
+  if (input.revision !== undefined) metadata["_revision"] = input.revision;
+  if (input.content_hash) metadata["_content_hash"] = input.content_hash;
   if (input.scope?.trim()) metadata["scope"] = input.scope.trim();
   if (input.supersedes?.trim()) metadata["supersedes"] = input.supersedes.trim();
   if (input.aliases && input.aliases.length > 0) {
@@ -459,6 +480,8 @@ export const DERIVED_FIELDS: ReadonlyArray<string> = Object.freeze([
   "evidenced_by",
   "contradicted_by",
   "lifecycle",
+  "revision",
+  "content_hash",
 ]);
 
 /**
@@ -553,6 +576,10 @@ export function parsePreference(path: string): BrainPreference {
     confidence: parseConfidence(meta, path),
     confidence_value: parseConfidenceValue(meta, path),
     pinned: parsePinned(meta),
+    revision: optionalNumber(meta, "revision", 0),
+    ...(optionalScalarString(meta, "content_hash") !== undefined
+      ? { content_hash: optionalScalarString(meta, "content_hash") }
+      : {}),
     ...(optionalScalarString(meta, "scope") !== undefined
       ? { scope: optionalScalarString(meta, "scope") }
       : {}),
