@@ -31,6 +31,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     keywordWeight: 0.6,
     semanticWeight: 0.4,
     semantic,
+    recall: Object.freeze({ mmrLambda: 0.7 }),
     ...(overrides ?? {}),
   });
 }

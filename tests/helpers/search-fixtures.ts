@@ -54,6 +54,8 @@ export function makeConfig(opts: {
    */
   ignorePaths?: ReadonlyArray<string>;
   semantic?: Partial<ResolvedEmbeddingConfig>;
+  /** MMR tradeoff; defaults to 0.7. Pass 1 to disable diversification. */
+  mmrLambda?: number;
 }): ResolvedSearchConfig {
   const baseSemantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: false,
@@ -83,5 +85,6 @@ export function makeConfig(opts: {
     keywordWeight: 0.6,
     semanticWeight: 0.4,
     semantic,
+    recall: Object.freeze({ mmrLambda: opts.mmrLambda ?? 0.7 }),
   });
 }

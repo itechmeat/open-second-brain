@@ -15,6 +15,7 @@ import { resolveIndexPath } from "./paths.ts";
 import { SearchError } from "./types.ts";
 import type {
   ResolvedEmbeddingConfig,
+  ResolvedRecallConfig,
   ResolvedSearchConfig,
   VaultIgnoreRule,
 } from "./types.ts";
@@ -30,6 +31,7 @@ export type {
   IndexStats,
   IndexStatusSnapshot,
   ResolvedEmbeddingConfig,
+  ResolvedRecallConfig,
   ResolvedSearchConfig,
   SearchErrorCode,
   SearchOptions,
@@ -58,6 +60,7 @@ const DEFAULTS = {
   timeoutMs: 10_000,
   concurrency: 4,
   batchSize: 32,
+  mmrLambda: 0.7,
 };
 
 type IntegerRange = { readonly min?: number; readonly max?: number };
@@ -238,6 +241,13 @@ export function resolveSearchConfig(opts: {
     batchSize,
   });
 
+  const mmrLambda = parseFloat01(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_MMR_LAMBDA", "search_mmr_lambda"),
+    DEFAULTS.mmrLambda,
+    "search_mmr_lambda",
+  );
+  const recall: ResolvedRecallConfig = Object.freeze({ mmrLambda });
+
   const base: ResolvedSearchConfig = Object.freeze({
     vault: opts.vault,
     dbPath,
@@ -247,6 +257,7 @@ export function resolveSearchConfig(opts: {
     keywordWeight,
     semanticWeight,
     semantic,
+    recall,
   });
 
   if (!opts.overrides) {

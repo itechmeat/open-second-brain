@@ -129,6 +129,11 @@ export interface SearchOptions {
    * filter (existing behaviour).
    */
   readonly properties?: ReadonlyMap<string, ReadonlyArray<string>>;
+  /**
+   * Per-query MMR override (v0.13.0). Absent uses the resolved config
+   * default; `1` disables diversification for this query.
+   */
+  readonly mmrLambda?: number;
 }
 
 export interface SearchOutcome {
@@ -149,6 +154,17 @@ export interface ResolvedEmbeddingConfig {
   readonly batchSize: number;
 }
 
+/**
+ * Recall-quality tunables (v0.13.0). Each layer is bounded and
+ * deterministic; the defaults enable the layer while leaving a clear
+ * off switch (`mmrLambda = 1`, `maxHops = 0`). A vault that never opts
+ * out ranks by the documented defaults.
+ */
+export interface ResolvedRecallConfig {
+  /** MMR relevance-vs-diversity tradeoff in [0, 1]; 1 disables MMR. */
+  readonly mmrLambda: number;
+}
+
 export interface ResolvedSearchConfig {
   readonly vault: string;
   readonly dbPath: string;
@@ -167,4 +183,5 @@ export interface ResolvedSearchConfig {
   readonly keywordWeight: number;
   readonly semanticWeight: number;
   readonly semantic: ResolvedEmbeddingConfig;
+  readonly recall: ResolvedRecallConfig;
 }

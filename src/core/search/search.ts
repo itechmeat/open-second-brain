@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { parseFrontmatter } from "../vault.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { runFtsQuery } from "./fts.ts";
+import { mmrRerank } from "./mmr.ts";
 import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
 import { Store } from "./store.ts";
@@ -112,9 +113,16 @@ export async function search(
     // matches exist deeper in the rank.
     const hasPropertyFilter =
       opts.properties !== undefined && opts.properties.size > 0;
-    const rankLimit = hasPropertyFilter ? Math.max(limit * 5, 50) : limit;
 
-    const ranked = rankResults(
+    // MMR needs a candidate pool wider than `limit` to diversify from;
+    // when it is disabled (lambda >= 1) the pool collapses back to the
+    // historical rankLimit so behaviour stays bit-identical.
+    const mmrLambda = opts.mmrLambda ?? config.recall.mmrLambda;
+    const mmrActive = mmrLambda < 1;
+    const baseRankLimit = hasPropertyFilter ? Math.max(limit * 5, 50) : limit;
+    const rankLimit = mmrActive ? Math.max(baseRankLimit, limit * 3, 30) : baseRankLimit;
+
+    let ranked = rankResults(
       {
         keyword: kwHits,
         semantic: semHits,
@@ -129,6 +137,11 @@ export async function search(
         semanticEnabled: policy.wantSemantic && semanticAttempted,
       },
     );
+
+    // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
+    if (mmrActive) {
+      ranked = mmrRerank(ranked, { lambda: mmrLambda });
+    }
 
     // Optional post-rank property filter (v0.10.17). Reads each
     // result's source frontmatter and drops rows whose scalars do
