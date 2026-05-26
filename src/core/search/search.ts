@@ -125,13 +125,18 @@ export async function search(
     const hasPropertyFilter =
       opts.properties !== undefined && opts.properties.size > 0;
 
-    // MMR needs a candidate pool wider than `limit` to diversify from;
-    // when it is disabled (lambda >= 1) the pool collapses back to the
-    // historical rankLimit so behaviour stays bit-identical.
+    // MMR and traversal both need a candidate pool wider than `limit`:
+    // MMR diversifies from it, and traversal seeds expansion from it (a
+    // narrow pool lets a high-parent expansion crowd a genuine but
+    // lower-ranked hit out of the final window). When both are disabled
+    // the pool collapses back to the historical rankLimit.
     const mmrLambda = opts.mmrLambda ?? config.recall.mmrLambda;
     const mmrActive = mmrLambda < 1;
+    const maxHops = opts.maxHops ?? config.recall.maxHops;
+    const traversalActive = maxHops > 0;
     const baseRankLimit = hasPropertyFilter ? Math.max(limit * 5, 50) : limit;
-    const rankLimit = mmrActive ? Math.max(baseRankLimit, limit * 3, 30) : baseRankLimit;
+    const rankLimit =
+      mmrActive || traversalActive ? Math.max(baseRankLimit, limit * 3, 30) : baseRankLimit;
 
     let ranked = rankResults(
       {
@@ -154,8 +159,7 @@ export async function search(
     // hits and surface related documents not already matched, scored by
     // decay. No-op when maxHops == 0. Runs before MMR so expansions are
     // subject to the same diversity pass.
-    const maxHops = opts.maxHops ?? config.recall.maxHops;
-    if (maxHops > 0 && ranked.length > 0) {
+    if (traversalActive && ranked.length > 0) {
       ranked = applyTraversal(store, ranked, {
         maxHops,
         hopDecay: config.recall.hopDecay,

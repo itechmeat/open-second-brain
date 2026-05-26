@@ -25,10 +25,12 @@ export interface MarkdownChunk {
   readonly endLine: number;
   readonly tokenCount: number;
   /**
-   * Breadcrumb of headings in effect at the chunk's start, joined by
-   * " > " (e.g. "Top > Section A"). Empty when no heading precedes the
-   * chunk. Indexed in a dedicated FTS column so a mid-document chunk
-   * keeps its topical anchor; never part of the display content.
+   * Breadcrumb of headings the chunk falls under, joined by " > "
+   * (e.g. "Top > Section A"). Computed at the chunk's end so a chunk
+   * spanning into a deeper subsection is anchored to the deepest
+   * heading it covers. Empty when no heading precedes the chunk.
+   * Indexed in a dedicated FTS column so a mid-document chunk keeps its
+   * topical anchor; never part of the display content.
    */
   readonly headingPath: string;
 }
@@ -425,14 +427,15 @@ function collectHeadings(blocks: ReadonlyArray<Block>): HeadingMark[] {
 }
 
 /**
- * Breadcrumb of headings in effect at `startLine`: replay heading marks
- * at or before the line, maintaining a level-stack (a heading pops every
- * entry at its level or deeper). Returns the stack texts joined " > ".
+ * Breadcrumb of headings in effect at `atLine` (the chunk's end line):
+ * replay heading marks at or before the line, maintaining a level-stack
+ * (a heading pops every entry at its level or deeper). Returns the stack
+ * texts joined " > ".
  */
-function headingPathAt(headings: ReadonlyArray<HeadingMark>, startLine: number): string {
+function headingPathAt(headings: ReadonlyArray<HeadingMark>, atLine: number): string {
   const stack: HeadingMark[] = [];
   for (const h of headings) {
-    if (h.line > startLine) break;
+    if (h.line > atLine) break;
     while (stack.length > 0 && stack[stack.length - 1]!.level >= h.level) stack.pop();
     stack.push(h);
   }

@@ -35,7 +35,8 @@ export interface RankerInputs {
   /**
    * Optional per-chunk count of query entities the chunk also carries
    * (v0.13.0). Missing entries (and the absent map) contribute zero
-   * boost, so a vault with no entity index ranks bit-identically.
+   * boost, so the entity layer adds nothing until the index is
+   * populated by a reindex.
    */
   readonly entityMatchByChunk?: ReadonlyMap<number, number>;
 }

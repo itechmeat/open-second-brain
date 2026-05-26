@@ -116,9 +116,12 @@ interface Migration {
  *     breadcrumb is searchable without polluting the display content.
  *
  * Existing rows carry no entities and an empty heading_path until a
- * reindex repopulates them, so a pre-migration index ranks
- * bit-identically until then. The FTS rebuild reindexes whatever
- * chunks already exist against the new column layout.
+ * reindex repopulates them, so those two layers contribute nothing to
+ * scoring until then. (The MMR and traversal recall layers are enabled
+ * by default and do change ordering versus prior versions - v0.13.0 is
+ * a deliberate ranking change and requires `o2b search reindex`.) The
+ * FTS rebuild reindexes whatever chunks already exist against the new
+ * column layout.
  */
 const DDL_V2_ENTITIES = `
 CREATE TABLE IF NOT EXISTS chunk_entities (
