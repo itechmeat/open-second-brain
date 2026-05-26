@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-05-26
+
+Brain-centric vault layout. The agent now owns one top-level
+directory in the vault: `Brain/`. The legacy `AI Wiki/` subtree is
+gone; Pay Memory writes nest under `Brain/payments/`. User-authored
+notes (daily journals, weekly notes, etc.) live wherever the
+operator names them and become read-only inputs to the agent only
+when listed under a new `notes.read_paths` config block. The
+`appendEvent` / `o2b append-event` writer that previously touched
+`Daily/<date>.md` is removed entirely; agents record narrative
+milestones through `brain_note` into `Brain/log/<today>.md`.
+
+### Added
+
+- `_brain.yaml` gains a `notes:` block with `read_paths` - the
+  vault-relative folders the agent may READ user-authored notes
+  from. Empty (or absent) means no scanning; the agent never writes
+  to those paths.
+- Path constants module (`src/core/brain/paths.ts`,
+  `src/core/pay-memory/paths.ts`): every vault-relative path used by
+  Brain or Pay Memory now lives behind a named constant
+  (`BRAIN_ROOT_REL`, `PAY_MEMORY_*_REL`, etc.). Future renames are a
+  one-line edit.
+- `o2b brain upgrade` learned a legacy-AI-Wiki migration step. On
+  `--apply` it moves `AI Wiki/{payments,policies,assets,drafts,reports}/`
+  into `Brain/payments/` and removes seven Open-Second-Brain-managed
+  scaffolding files from the legacy root. Idempotent; never clobbers
+  an existing target file; preserves user-authored content elsewhere
+  under `AI Wiki/`. Covered by `tests/core/brain/upgrade-aiwiki-migration.test.ts`.
+
+### Changed
+
+- `o2b init` no longer scaffolds vault content. Vault bootstrap is
+  `o2b brain init`'s job; `o2b init` now only persists machine-local
+  config (vault path, agent name, timezone).
+- `o2b brain init` no longer writes `AI Wiki/_OPEN_SECOND_BRAIN.md`.
+  The operating manual lives at `Brain/_BRAIN.md` only.
+- `o2b index` writes to `<vault>/Brain/_INDEX.md` instead of
+  `<vault>/AI Wiki/index.md`.
+- `o2b brain scan-inline` walks only folders listed under
+  `notes.read_paths` (or `--path` overrides). Default is "no folders
+  to scan"; the agent never crawls the vault without an operator
+  opt-in.
+- Pay Memory writes under `Brain/payments/` (receipts go directly
+  into `Brain/payments/<YYYY-MM-DD>/<slug>.md`, no nested
+  `payments/` subdir).
+- Brain upgrade plan order: `Brain/_brain.yaml`, `Brain/_BRAIN.md`
+  (drops the legacy overview file from the plan).
+
+### Removed
+
+- `o2b append-event` CLI verb and the `appendEvent` core function.
+- `src/core/event-log.ts`, `tests/core/event-log.test.ts`, and the
+  concurrent-append helper.
+- `tests/cli/append-event.test.ts` and the vault-log compat block.
+- `src/core/init.ts` (the legacy `bootstrapVault` scaffolder).
+- `src/core/brain/templates/_OPEN_SECOND_BRAIN.md.tpl` and the
+  `LEGACY_OVERVIEW_*` exports.
+- Historical inline comments referencing the retired
+  `second_brain_capture` / `event_log_append` MCP tools, the
+  `appendEvent` function, and the AI Wiki/ Daily/ folders.
+
+### Breaking changes
+
+- Existing v0.10.x vaults with content under `AI Wiki/` should run
+  `o2b brain upgrade --apply` to migrate Pay Memory artefacts into
+  `Brain/payments/`. The migration is idempotent and non-destructive.
+- Shell scripts and cron jobs that piped messages into
+  `Daily/<date>.md` via `o2b append-event` must migrate to
+  `o2b brain note` (writes into `Brain/log/<today>.md` + JSONL
+  sidecar).
+- Operators who relied on scan-inline's old "scan everything" default
+  must add the desired folders under `notes.read_paths` in
+  `_brain.yaml`, or pass `--path` explicitly on every invocation.
+
 ## [0.10.18] - 2026-05-25
 
 Temporal + synthesis layer: seven related features that add time as
@@ -2793,6 +2868,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 [0.10.0]: https://github.com/itechmeat/open-second-brain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/itechmeat/open-second-brain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/itechmeat/open-second-brain/compare/v0.8.1...v0.9.0
+[0.11.0]: https://github.com/itechmeat/open-second-brain/compare/v0.10.18...v0.11.0
 [0.10.18]: https://github.com/itechmeat/open-second-brain/compare/v0.10.17...v0.10.18
 [0.10.17]: https://github.com/itechmeat/open-second-brain/compare/v0.10.16...v0.10.17
 [0.10.16]: https://github.com/itechmeat/open-second-brain/compare/v0.10.15...v0.10.16
