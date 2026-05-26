@@ -133,7 +133,7 @@ Full list (~50 verbs across `o2b`, `o2b brain`, `o2b vault`, `o2b discipline`, P
 - Plain Markdown on your filesystem. No daemon, no background writes.
 - The MCP server is a stdio subprocess that exits with the parent runtime.
 - Secrets are not supposed to live in the vault. Daily logs and config exports go through a best-effort redactor for common secret-name patterns.
-- Brain mutations (`dream`, `merge`, `migrate-frontmatter`, `upgrade`) take a pre-run snapshot with a SHA-256 sidecar; `o2b brain rollback` aborts on drift unless `--force-rollback`.
+- Brain mutations (`dream`, `merge`, `upgrade`) take a pre-run snapshot with a SHA-256 sidecar; `o2b brain rollback` aborts on drift unless `--force-rollback`.
 - Hooks (Claude Code, Codex) only inject text into the agent's context; they never write to the vault directly.
 
 ## Updating

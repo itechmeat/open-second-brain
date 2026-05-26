@@ -308,11 +308,11 @@ export interface BrainPreference {
   /** ISO-8601 UTC of most recent `apply-evidence` entry. */
   readonly last_evidence_at: string | null;
   /**
-   * Categorical band — `low | medium | high`. Derived from
-   * {@link confidence_value} after the count-based hard floors
-   * (`applied <= low_max_applied`, `violated >= applied`, etc.) are
-   * applied. Stays on the public type so MCP / digest consumers that
-   * predate the numeric field keep working unchanged.
+   * Categorical band — `low | medium | high`. Derived directly from
+   * {@link confidence_value} via the `confidence.medium_min` and
+   * `confidence.high_min` thresholds. Stays on the public type so
+   * MCP / digest consumers that predate the numeric field keep
+   * working unchanged.
    */
   readonly confidence: BrainConfidence;
   /**
@@ -634,26 +634,23 @@ export interface BrainRetireConfig {
 }
 
 export interface BrainConfidenceConfig {
-  /** `applied_count <= low_max_applied` → confidence `low`. */
-  readonly low_max_applied: number;
-  /** `applied_count >= high_min_applied` is required for `high`. */
-  readonly high_min_applied: number;
   /**
-   * Fresh-evidence factor: `now - last_evidence_at <
-   * stale_evidence_days * high_freshness_factor`. Must be in `(0, 1]`.
+   * Gate for the "low-evidence-confirmed" doctor warning and the
+   * auto-promotion of unconfirmed preferences to confirmed.
+   * `applied_count <= low_max_applied` keeps a confirmed pref on the
+   * doctor watch-list.
    */
-  readonly high_freshness_factor: number;
+  readonly low_max_applied: number;
   /**
    * Lower threshold on the numeric `confidence_value` for the
-   * derived `medium` band. Anything below this lands as `low` after
-   * the legacy count-based hard floors. Must be in `[0, 1]` and
-   * strictly less than {@link high_min}.
+   * `medium` band. Must be in `[0, 1]` and strictly less than
+   * {@link high_min}.
    */
   readonly medium_min: number;
   /**
    * Lower threshold on the numeric `confidence_value` for the
-   * derived `high` band. Must be in `[0, 1]` and strictly greater
-   * than {@link medium_min}.
+   * `high` band. Must be in `[0, 1]` and strictly greater than
+   * {@link medium_min}.
    */
   readonly high_min: number;
 }

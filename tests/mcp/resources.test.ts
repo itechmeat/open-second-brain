@@ -256,11 +256,11 @@ created_at: 2026-05-01T00:00:00Z
 tags: [brain, brain/retired]
 topic: old-thing
 principle: A stale rule
-evidenced_by: []
-applied_count: 0
-violated_count: 0
-last_evidence_at: null
-confidence: low
+_evidenced_by: []
+_applied_count: 0
+_violated_count: 0
+_last_evidence_at: null
+_confidence: low
 pinned: false
 ---
 

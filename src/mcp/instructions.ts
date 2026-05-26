@@ -1,11 +1,11 @@
 /**
  * Server-supplied instructions returned in `initialize.instructions`.
  *
- * In v0.9.0 the wording shifts from a single event-log-centric flow to
- * the Brain observing-memory layer. Six new `brain_*` tools are the
- * canonical writable surface; `event_log_append` and
- * `second_brain_capture` are no longer advertised to agents (their
- * handlers remain on disk for shell-side use).
+ * The Brain observing-memory layer is the canonical writable surface:
+ * three writer tools (`brain_feedback`, `brain_apply_evidence`,
+ * `brain_note`) plus the read-only `brain_context` reader live on the
+ * always-loaded writer scope; the remaining `brain_*` surface ships on
+ * the deferred full server.
  */
 
 import { PAY_MEMORY_SPENDING_JSON_REL } from "../core/pay-memory/paths.ts";

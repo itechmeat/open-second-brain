@@ -471,6 +471,12 @@ export const DERIVED_FIELDS: ReadonlyArray<string> = Object.freeze([
 export function normalizeDerivedKeys(meta: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...meta };
   for (const name of DERIVED_FIELDS) {
+    if (name in out && out[name] !== undefined) {
+      throw new Error(
+        `frontmatter field '${name}' must use the '_'-prefixed shape ('_${name}'); ` +
+          "un-prefixed Group C keys are no longer accepted",
+      );
+    }
     const prefixed = `_${name}`;
     if (prefixed in out && out[prefixed] !== undefined) {
       out[name] = out[prefixed];
@@ -726,6 +732,7 @@ export function moveToRetired(
   // verbatim (`topic`, `principle`, `evidenced_by`, counters, …), drop
   // the active-state fields that no longer apply (`unconfirmed_until`,
   // `confirmed_at`), and stamp the retire metadata on top.
+  const derivedSet = new Set<string>(DERIVED_FIELDS);
   const newMeta: FrontmatterMap = {};
   for (const [k, v] of Object.entries(meta)) {
     // Identity keys overwritten below.
@@ -741,11 +748,19 @@ export function moveToRetired(
       );
       continue;
     }
+    // Group C derived fields go to disk in the `_`-prefixed shape so
+    // parseRetired's `normalizeDerivedKeys` accepts the file. `meta`
+    // is the normalised in-memory view, so the keys here are still
+    // un-prefixed and need re-prefixing on write.
+    if (derivedSet.has(k)) {
+      newMeta[`_${k}`] = v as never;
+      continue;
+    }
     newMeta[k] = v as never;
   }
   newMeta["kind"] = "brain-retired";
   newMeta["id"] = newId;
-  newMeta["status"] = "retired";
+  newMeta["_status"] = "retired";
   newMeta["retired_at"] = opts.now.toISOString();
   newMeta["retired_reason"] = reason;
   newMeta["retired_by"] = opts.retired_by;

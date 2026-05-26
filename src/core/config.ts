@@ -145,8 +145,9 @@ export function resolveVault(configPath?: string): string | null {
  * Resolve the agent identity used when no explicit `agent` is supplied.
  *
  * Order: `VAULT_AGENT_NAME` env → `agent_name`/`agentName` in plugin config →
- * the literal placeholder `"agent"`. Shared between MCP server's
- * `event_log_append` default-agent resolution and the Hermes pre_llm_call hook.
+ * the literal placeholder `"agent"`. Used by every Brain writer that needs
+ * an `agent:` field (signals, evidence rows, log entries) and by the
+ * Hermes pre_llm_call hook.
  */
 export function resolveAgentName(configPath?: string): string {
   const env = process.env["VAULT_AGENT_NAME"];

@@ -82,7 +82,10 @@ weight.
   `LEGACY_OVERVIEW_*` exports.
 - Legacy step-function band derivation in `computeConfidence`. The
   `legacyBand` / `max(legacy, numeric)` "lift-only" overlay is
-  gone; numeric thresholds win outright.
+  gone; numeric thresholds win outright. The dead config fields
+  `confidence.high_min_applied` and `confidence.high_freshness_factor`
+  that fed the step-function are removed from the schema, validator,
+  default YAML, and type declarations.
 - Historical inline comments referencing the retired
   `second_brain_capture` / `event_log_append` / `appendEvent` /
   AI Wiki/ / Daily/ surfaces, and the pre-v0.10.3 / pre-v0.10.6

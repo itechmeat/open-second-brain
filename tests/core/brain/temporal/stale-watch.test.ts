@@ -52,11 +52,11 @@ describe("findStaleEntries", () => {
   test("preference stale when last_evidence_at older than stale_pref_days", () => {
     writeFileSync(
       join(VAULT, "Brain", "preferences", "pref-fresh.md"),
-      `---\nid: pref-fresh\nkind: brain-preference\nstatus: confirmed\ncreated_at: 2026-04-01T00:00:00Z\nunconfirmed_until: 2026-04-14T00:00:00Z\ntags: ["brain"]\ntopic: fresh\nprinciple: Fresh\nevidenced_by: []\nconfidence: medium\nlast_evidence_at: 2026-05-20T00:00:00Z\n---\n`,
+      `---\nid: pref-fresh\nkind: brain-preference\n_status: confirmed\ncreated_at: 2026-04-01T00:00:00Z\nunconfirmed_until: 2026-04-14T00:00:00Z\ntags: ["brain"]\ntopic: fresh\nprinciple: Fresh\n_evidenced_by: []\n_confidence: medium\n_last_evidence_at: 2026-05-20T00:00:00Z\n---\n`,
     );
     writeFileSync(
       join(VAULT, "Brain", "preferences", "pref-stale.md"),
-      `---\nid: pref-stale\nkind: brain-preference\nstatus: confirmed\ncreated_at: 2025-12-01T00:00:00Z\nunconfirmed_until: 2025-12-14T00:00:00Z\ntags: ["brain"]\ntopic: stale\nprinciple: Stale\nevidenced_by: []\nconfidence: medium\nlast_evidence_at: 2026-01-01T00:00:00Z\n---\n`,
+      `---\nid: pref-stale\nkind: brain-preference\n_status: confirmed\ncreated_at: 2025-12-01T00:00:00Z\nunconfirmed_until: 2025-12-14T00:00:00Z\ntags: ["brain"]\ntopic: stale\nprinciple: Stale\n_evidenced_by: []\n_confidence: medium\n_last_evidence_at: 2026-01-01T00:00:00Z\n---\n`,
     );
     const idx = buildTimelineIndex(VAULT, {});
     const out = findStaleEntries(idx, VAULT, BRAIN_TEMPORAL_DEFAULTS, {
@@ -70,7 +70,7 @@ describe("findStaleEntries", () => {
   test("preference without last_evidence_at uses created_at as staleness anchor", () => {
     writeFileSync(
       join(VAULT, "Brain", "preferences", "pref-old.md"),
-      `---\nid: pref-old\nkind: brain-preference\nstatus: unconfirmed\ncreated_at: 2025-10-01T00:00:00Z\nunconfirmed_until: 2025-10-14T00:00:00Z\ntags: ["brain"]\ntopic: old\nprinciple: Old\nevidenced_by: []\nconfidence: low\nlast_evidence_at: null\n---\n`,
+      `---\nid: pref-old\nkind: brain-preference\n_status: unconfirmed\ncreated_at: 2025-10-01T00:00:00Z\nunconfirmed_until: 2025-10-14T00:00:00Z\ntags: ["brain"]\ntopic: old\nprinciple: Old\n_evidenced_by: []\n_confidence: low\n_last_evidence_at: null\n---\n`,
     );
     const idx = buildTimelineIndex(VAULT, {});
     const out = findStaleEntries(idx, VAULT, BRAIN_TEMPORAL_DEFAULTS, {

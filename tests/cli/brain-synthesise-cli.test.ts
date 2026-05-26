@@ -14,13 +14,29 @@ let vault: string;
 let configHome: string;
 let configPath: string;
 
+const DERIVED_KEYS = new Set([
+  "status",
+  "applied_count",
+  "violated_count",
+  "last_evidence_at",
+  "confidence",
+  "confidence_value",
+  "evidenced_by",
+  "contradicted_by",
+  "lifecycle",
+  "confirmed_at",
+]);
+
 function writePref(
   slug: string,
   frontmatter: Record<string, string>,
   body = "",
 ): void {
   const lines = ["---"];
-  for (const [k, v] of Object.entries(frontmatter)) lines.push(`${k}: ${v}`);
+  for (const [k, v] of Object.entries(frontmatter)) {
+    const key = DERIVED_KEYS.has(k) ? `_${k}` : k;
+    lines.push(`${key}: ${v}`);
+  }
   lines.push("---", "", body);
   writeFileSync(join(vault, "Brain", "preferences", `${slug}.md`), lines.join("\n"));
 }

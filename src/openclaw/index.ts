@@ -1,15 +1,11 @@
 /**
  * OpenClaw native plugin entry for Open Second Brain.
  *
- * Pure TypeScript that delegates to `src/core/*` so the JS implementation
- * is no longer a hand-translated copy of the Python original — both runtimes
- * share the same source of truth.
+ * Pure TypeScript that delegates to `src/core/*` so the OpenClaw runtime
+ * shares the same source of truth as the CLI and MCP server.
  *
- * The plugin exposes the current Open Second Brain tool surface:
- * `second_brain_status`, `second_brain_query`, `vault_health`, plus the
- * eight Pay Memory tools added in v0.8.0. Legacy write tools
- * (`second_brain_capture`, `event_log_append`) are retired from this
- * agent-facing runtime.
+ * Exposes the current tool surface: `second_brain_status`,
+ * `second_brain_query`, `vault_health`, plus the eight Pay Memory tools.
  * No subprocess creation; passes the OpenClaw security scanner.
  */
 

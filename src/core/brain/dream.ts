@@ -1526,35 +1526,20 @@ function planRefresh(
 }
 
 /**
- * Confidence computation. Returns both the categorical band (the
- * existing agent-visible contract) and the numeric value behind it
- * (§10 Tier-A addition).
+ * Confidence computation. Returns both the numeric value and the
+ * categorical band derived from it.
  *
- * The numeric value is `Wilson 95% lower bound × freshness decay`:
+ * `value = wilson_low(applied, n) * freshness`:
  *
- *   - `wilson_low(applied, n)` where `n = applied + violated` —
- *     a conservative lower bound on the application rate. `n == 0`
- *     yields `0`.
+ *   - `wilson_low(applied, n)` where `n = applied + violated` -
+ *     a conservative 95% lower bound on the application rate.
+ *     `n == 0` yields `0`.
  *   - `freshness` linearly decays from `1.0` at age 0 to `0.0` at
  *     `retire.stale_evidence_days`. `null` last_evidence_at → `0`.
  *
- * Band derivation is the **max** of two views:
- *
- *   1. The legacy step-function (kept verbatim) — preserves every
- *      published boundary so existing tests and agent contracts stay
- *      intact: `applied <= low_max_applied` ⇒ `low`,
- *      `violated >= applied` ⇒ `low`, `applied >= high_min_applied ∧
- *      violated == 0 ∧ fresh` ⇒ `high`, else `medium`.
- *   2. The numeric thresholds (`medium_min`, `high_min`) applied to
- *      `value` — gives a `low | medium | high` view that can only
- *      lift the legacy band, never lower it.
- *
- * Taking the max means a future operator can lower `high_min` to
- * promote `medium` prefs to `high` based on observed performance,
- * without ever demoting a pref that the legacy view already calls
- * `high` (because the legacy floor sticks). The numeric value is
- * always returned and is what the digest's drop tracker compares
- * across runs.
+ * Band thresholds (`confidence.medium_min`, `confidence.high_min`)
+ * are applied to `value` directly. The numeric value is what the
+ * digest's drop tracker compares across runs.
  */
 export interface ConfidenceComputeResult {
   readonly value: number;

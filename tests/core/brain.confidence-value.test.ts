@@ -83,7 +83,7 @@ describe("computeConfidence — numeric value", () => {
   });
 
   test("applied=10, violated=0, stale → low (freshness collapses the value)", () => {
-    // last evidence ~78 days ago — past high_freshness_factor cutoff
+    // last evidence ~78 days ago — freshness multiplier near zero
     // but not past stale_evidence_days. Wilson ≈ 0.72 * freshness ≈
     // 0.13 yields value ≈ 0.10 — squarely in the low band.
     const r = computeConfidence(10, 0, iso("2026-02-26"), cfg, NOW);

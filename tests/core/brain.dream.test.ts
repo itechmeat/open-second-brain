@@ -391,9 +391,8 @@ describe("dream — unconfirmed → confirmed promotion on first applied evidenc
 describe("dream — confidence formula at boundaries", () => {
   // We exercise the formula indirectly: seed evidence, run dream, read
   // pref.confidence. Default config (from policy.ts):
-  //   low_max_applied: 2, high_min_applied: 10
-  //   stale_evidence_days: 90, high_freshness_factor: 0.8
-  // → "fresh" means last_evidence_at < 72 days ago.
+  //   low_max_applied: 2, stale_evidence_days: 90,
+  //   medium_min: 0.40, high_min: 0.75.
   function setupForConfidence(slug: string, applied: number, violated: number, fresh: boolean): void {
     writePreference(vault, {
       slug,
@@ -407,7 +406,7 @@ describe("dream — confidence formula at boundaries", () => {
     // Generate apply-evidence entries spread over days. The most
     // recent one drives `last_evidence_at`. "fresh" anchors near
     // `now` so freshness ≈ 1.0; "stale" puts evidence ~78 days back
-    // so freshness collapses below the high_freshness_factor cutoff.
+    // so the freshness multiplier collapses confidence_value.
     const baseDate = fresh ? "2026-05-14" : "2026-01-01";
     for (let i = 0; i < applied; i++) {
       const d = new Date(`${baseDate}T10:00:0${i % 10}Z`);

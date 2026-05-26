@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { defaultConfigPath } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import {
+  BRAIN_ROOT_REL,
   brainConfigPath,
   brainDirs,
   brainManualPath,
@@ -99,7 +100,7 @@ export function copyStarterBundle(
     throw err;
   }
   for (const sub of STARTER_TARGETS) {
-    const dir = join(vault, "Brain", sub);
+    const dir = join(vault, BRAIN_ROOT_REL, sub);
     let entries;
     try {
       // `withFileTypes` returns Dirent objects so we avoid a `statSync`
@@ -138,7 +139,7 @@ export function copyStarterBundle(
   for (const sub of STARTER_TARGETS) {
     const srcDir = join(src, sub);
     if (!existsSync(srcDir)) continue;
-    const destDir = join(vault, "Brain", sub);
+    const destDir = join(vault, BRAIN_ROOT_REL, sub);
     // Single recursive copy per subdir — orders of magnitude fewer
     // syscalls than file-by-file. The filter rejects dotfiles
     // (`.gitkeep`, `.DS_Store`) so the bundle stays focused on
@@ -153,7 +154,7 @@ export function copyStarterBundle(
     // that we did not copy and should not surface as starter entries.
     for (const name of readdirSync(srcDir)) {
       if (name.startsWith(".")) continue;
-      copied.push(join("Brain", sub, name));
+      copied.push(join(BRAIN_ROOT_REL, sub, name));
     }
   }
   return Object.freeze({ copied });

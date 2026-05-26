@@ -13,7 +13,7 @@ pinned: false
 scope: writing
 kind: brain-retired
 id: ret-no-emojis-in-code
-status: retired
+_status: retired
 retired_at: "2026-05-15T16:00:00.000Z"
 retired_reason: rebutted
 retired_by: "[[Brain/log/2026-05-15]]"

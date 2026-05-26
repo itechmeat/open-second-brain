@@ -293,8 +293,6 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = Object.freeze({
   }),
   confidence: Object.freeze({
     low_max_applied: 2,
-    high_min_applied: 10,
-    high_freshness_factor: 0.8,
     medium_min: 0.40,
     high_min: 0.75,
   }),
@@ -328,14 +326,12 @@ retire:
   stale_evidence_days: 90
 
 confidence:
+  # low_max_applied gates the "low-evidence-confirmed" doctor warning
+  # and the auto-promotion of unconfirmed preferences to confirmed.
   low_max_applied: 2
-  high_min_applied: 10
-  high_freshness_factor: 0.8
-  # Derived-band thresholds on the numeric confidence_value (Wilson
-  # lower bound × freshness decay). The count-based hard floors
-  # above still take precedence: low_max_applied / violated >=
-  # applied / missing-fresh keep a rule at low / medium regardless
-  # of the numeric value.
+  # Band thresholds on the numeric confidence_value (Wilson lower
+  # bound times freshness decay). value >= high_min ⇒ high;
+  # value >= medium_min ⇒ medium; else low.
   medium_min: 0.40
   high_min: 0.75
 
@@ -437,7 +433,6 @@ export interface LoadBrainConfigResult {
  *   - YAML shape errors
  *   - unsupported `schema_version`
  *   - non-integer / out-of-range thresholds
- *   - `high_freshness_factor` outside `(0, 1]`
  *   - non-integer / non-positive `snapshots.retention_count`
  *
  * Unknown top-level keys are reported as warnings, not errors.
@@ -611,23 +606,6 @@ export function validateBrainConfigDetailed(
     confidence.low_max_applied,
     source,
   );
-  requirePositiveInteger(
-    "confidence.high_min_applied",
-    confidence.high_min_applied,
-    source,
-  );
-  if (
-    typeof confidence.high_freshness_factor !== "number" ||
-    !Number.isFinite(confidence.high_freshness_factor) ||
-    confidence.high_freshness_factor <= 0 ||
-    confidence.high_freshness_factor > 1
-  ) {
-    throw new BrainConfigError(
-      `must be a number in (0, 1]; got ${JSON.stringify(confidence.high_freshness_factor)}`,
-      "confidence.high_freshness_factor",
-      source,
-    );
-  }
   requireUnitInterval(
     "confidence.medium_min",
     confidence.medium_min,
@@ -1292,8 +1270,6 @@ export function validateBrainConfigDetailed(
     },
     confidence: {
       low_max_applied: confidence.low_max_applied as number,
-      high_min_applied: confidence.high_min_applied as number,
-      high_freshness_factor: confidence.high_freshness_factor as number,
       medium_min: confidence.medium_min as number,
       high_min: confidence.high_min as number,
     },

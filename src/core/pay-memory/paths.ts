@@ -58,6 +58,7 @@ export interface PayMemoryDirs {
   readonly assets: string;
   readonly drafts: string;
   readonly reports: string;
+  readonly pending: string;
 }
 
 export function payMemoryDirs(vault: string): PayMemoryDirs {
@@ -67,11 +68,12 @@ export function payMemoryDirs(vault: string): PayMemoryDirs {
     assets: join(vault, PAY_MEMORY_ASSETS_REL),
     drafts: join(vault, PAY_MEMORY_DRAFTS_REL),
     reports: join(vault, PAY_MEMORY_REPORTS_REL),
+    pending: join(vault, PAY_MEMORY_PENDING_REL),
   };
 }
 
 export function policyPath(vault: string): string {
-  return join(payMemoryDirs(vault).policies, "spending.md");
+  return join(vault, PAY_MEMORY_SPENDING_MD_REL);
 }
 
 export function paymentsDateDir(vault: string, date: string): string {
