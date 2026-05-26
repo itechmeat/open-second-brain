@@ -6,7 +6,7 @@ Pay Memory is an audit layer for paid agent actions. The agent makes the paid AP
 
 ```bash
 o2b init-pay-memory --vault /path/to/vault
-# -> AI Wiki/{policies,payments,assets,drafts,reports}/ and policies/spending.md
+# -> Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs) and policies/spending.md
 ```
 
 ## Recording a paid call
@@ -21,7 +21,7 @@ o2b append-payment-receipt \
   --reason "Generate one original blog header image" \
   --actual-amount 0.05 --currency USDC \
   --result-ref https://fal-cdn.example/img.png \
-  --result-note "AI Wiki/assets/blog-header.md" \
+  --result-note "Brain/payments/assets/blog-header.md" \
   --raw-output-file /tmp/pay-output.txt
 
 o2b capture-asset \
@@ -29,18 +29,18 @@ o2b capture-asset \
   --title "Blog Header: Pay Memory" \
   --service paysponge/fal \
   --result-url https://fal-cdn.example/img.png \
-  --source-receipt "AI Wiki/payments/2026-05-10/<receipt-slug>.md"
+  --source-receipt "Brain/payments/2026-05-10/<receipt-slug>.md"
 
 o2b payment-report --vault /path/to/vault --date 2026-05-10
 ```
 
 The `--raw-output-file` of a receipt is run through a redactor that masks values for `api_key` / `token` / `secret` / `bearer` / `authorization` / `private_key` / `password` / `passwd` / `pwd` / `credential` / `session_token` in env, YAML, JSON, and HTTP-header shapes. Best-effort only - verify the saved receipt before sharing it externally.
 
-The spending policy at `AI Wiki/policies/spending.md` is read by the agent before each paid call; the MVP does not enforce policy at runtime.
+The spending policy at `Brain/payments/policies/spending.md` is read by the agent before each paid call; the MVP does not enforce policy at runtime.
 
 ## Machine-readable spending policy (optional)
 
-To enable runtime enforcement, drop a JSON companion at `AI Wiki/policies/spending.json`:
+To enable runtime enforcement, drop a JSON companion at `Brain/payments/policies/spending.json`:
 
 ```json
 {
@@ -64,7 +64,7 @@ Exit codes are `0` (allowed), `1` (denied), `3` (approval required) so a shell s
 
 ## Approval workflow (optional)
 
-For paid calls that should not happen until a human signs off, Pay Memory ships a pending-payment-request artifact under `AI Wiki/payments/_pending/` with a `pending -> approved/rejected -> consumed` state machine.
+For paid calls that should not happen until a human signs off, Pay Memory ships a pending-payment-request artifact under `Brain/payments/_pending/` with a `pending -> approved/rejected -> consumed` state machine.
 
 Agent side:
 
@@ -73,7 +73,7 @@ o2b request-payment-approval \
   --service paysponge/fal \
   --reason "Generate one blog header image" \
   --expected-amount 0.05 --currency USDC
-# -> AI Wiki/payments/_pending/req-2026-05-10-1000-fal-...md
+# -> Brain/payments/_pending/req-2026-05-10-1000-fal-...md
 ```
 
 Human side, after reviewing the request file in Obsidian:
@@ -88,7 +88,7 @@ Agent side, after the approved paid call succeeded and the receipt was saved:
 
 ```bash
 o2b consume-payment-request --id <id> \
-  --receipt "AI Wiki/payments/2026-05-10/<receipt-slug>.md"
+  --receipt "Brain/payments/2026-05-10/<receipt-slug>.md"
 ```
 
 The MCP-server side mirrors `payment_request_approval`, `payment_request_status` (poll for approval), and `payment_request_consume`.
@@ -121,10 +121,10 @@ Eight Pay Memory tools, all on the full MCP scope:
 
 | Tool | Purpose |
 | --- | --- |
-| `payment_memory_init` | Bootstrap `AI Wiki/{policies,payments,assets,drafts,reports}/`. |
+| `payment_memory_init` | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)`. |
 | `payment_receipt_append` | Save a redacted Markdown receipt for one paid API call. |
 | `asset_capture` | Save a Markdown note for an asset produced by a paid call, linked to its receipt. |
-| `payment_report_generate` | Aggregate a date's receipts into a Markdown report under `AI Wiki/reports/`. |
+| `payment_report_generate` | Aggregate a date's receipts into a Markdown report under `Brain/payments/reports/`. |
 | `payment_policy_check` | Evaluate a prospective paid call against `policies/spending.json`. |
 | `payment_request_approval` | Create a pending-payment-request the user must approve. |
 | `payment_request_status` | Look up a pending request by id (agent uses this to poll). |

@@ -43,7 +43,7 @@ o2b brain export              Read-only dump of active preferences (--format jso
 o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence. Double-click a node to open it in Obsidian (live mode).
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, ...)
 o2b brain backlinks           List inbound references to a Brain artifact id
-o2b brain scan-inline         Capture `@osb` markers from vault markdown files (Daily/, project notes, ...)
+o2b brain scan-inline         Capture `@osb` markers from folders listed under `notes.read_paths` in _brain.yaml
 o2b brain import-session      Replay signals from a Claude / Codex / Hermes session .jsonl (or directory)
 o2b brain import-claude-memory (CLI-only) Import metadata.type=feedback entries from a Claude Code memory directory into Brain/preferences/. --dry-run / --apply, sidecar manifest for idempotency, UPDATE preserves accumulated evidence
 o2b brain migrate-frontmatter (CLI-only) Rewrite legacy `status:` keys to `_status:`
@@ -95,7 +95,7 @@ See [`hermes-cron.md`](hermes-cron.md) for the cron envelope and Telegram delive
 ## Pay Memory
 
 ```text
-o2b init-pay-memory           Bootstrap AI Wiki/{policies,payments,assets,drafts,reports}/
+o2b init-pay-memory           Bootstrap Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)
 o2b append-payment-receipt    Save a Markdown receipt for a paid API call
 o2b capture-asset             Save a Markdown note for a generated asset
 o2b payment-report            Aggregate a date's receipts into a Markdown report

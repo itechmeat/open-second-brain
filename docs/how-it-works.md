@@ -22,13 +22,14 @@ no surprise, no hallucinated memory.
 
 ## Vault layout
 
-The vault holds three top-level agent-facing directories. Brain owns
-its own, plus a sibling derived-index directory.
+The agent owns one top-level directory in the vault: `Brain/`. Pay
+Memory writes nest under `Brain/payments/`, so the agent's entire
+write contract is "I touch only `Brain/`".
 
 ```text
 <vault>/
-├── Brain/                          # observing memory (agent-writable)
-│   ├── _brain.yaml                 # schema, thresholds, retention, vault.ignore_paths
+├── Brain/                          # agent-writable
+│   ├── _brain.yaml                 # schema, thresholds, retention, vault.ignore_paths, notes.read_paths
 │   ├── _BRAIN.md                   # operating manual for agents
 │   ├── active.md                   # derived: confirmed + quarantine + recently retired
 │   ├── inbox/                      # raw taste signals
@@ -40,20 +41,21 @@ its own, plus a sibling derived-index directory.
 │   │   └── ret-<slug>.md           # retired_reason: stale-no-evidence | expired-unconfirmed | rebutted | user-rejected | quarantine-violated | superseded-by-context
 │   ├── log/                        # daily event log
 │   │   └── YYYY-MM-DD.md           # append-only, typed events
+│   ├── payments/                   # Pay Memory (optional, paid-action audit)
+│   │   ├── policies/spending.md
+│   │   ├── <YYYY-MM-DD>/<slug>.md  # dated receipts
+│   │   ├── assets/                 # generated-asset notes
+│   │   ├── drafts/                 # draft artefacts
+│   │   ├── reports/                # daily reports
+│   │   └── _pending/               # approval workflow
 │   └── .snapshots/                 # pre-dream snapshots
 │       └── dream-<run-id>.tar.zst
 │
 ├── .open-second-brain/             # derived search index (rebuildable)
 │   └── brain.sqlite                # SQLite + FTS5 + optional sqlite-vec
 │
-├── AI Wiki/                        # curated knowledge surface
-│   ├── identity/                   # user.md, agents.md
-│   ├── index.md / hot.md
-│   ├── payments/ / assets/ / drafts/ / reports/ / policies/   ← Pay Memory subtree
-│   └── system/                     # config snapshots, etc.
-│
-└── Daily/                          # chronological event log + human narrative
-    └── YYYY.MM.DD.md
+└── Daily/                          # OPERATOR-OWNED user notes (any folder name)
+    └── 2026-05-14.md               # listed in notes.read_paths for @osb scanning
 ```
 
 `Brain/active.md` and `.open-second-brain/brain.sqlite` are **derived** —
@@ -66,21 +68,19 @@ flowchart LR
     Agent[Agent / MCP client]
     subgraph Vault
         Brain[Brain/]
-        Wiki[AI Wiki/]
-        Daily[Daily/]
-        PayMem[(Pay Memory subtree<br/>under AI Wiki/)]
+        Notes[("Operator notes<br/>(any folder)")]
     end
 
     Agent -- "brain_* (read + write)" --> Brain
-    Agent -- "second_brain_query (read)" --> Wiki
-    Agent -- "second_brain_query (read)" --> Daily
-    Agent -- "payment_* (read + write)" --> PayMem
+    Agent -- "payment_* (read + write)" --> Brain
+    Agent -- "scan-inline (read-only)" --> Notes
 ```
 
-`Brain/` is the only area where the agent records its observing
-memory. `AI Wiki/` and `Daily/` are read surfaces for the agent (the
-Pay Memory subtree under `AI Wiki/` is the exception: agents write
-there through the `payment_*` tools).
+`Brain/` is the only area where the agent writes. User-authored notes
+(daily journals, weekly notes, etc.) live in folders the operator
+names — wherever they want them. List those folders under
+`notes.read_paths` in `_brain.yaml` to opt the agent into scanning
+them for `@osb` markers.
 
 ## A preference's lifecycle
 
@@ -755,7 +755,6 @@ flowchart LR
     Init --> Skel["Create Brain/inbox, preferences, retired, log, .snapshots"]
     Init --> Yaml[Render Brain/_brain.yaml with defaults]
     Init --> Manual[Render Brain/_BRAIN.md operating manual]
-    Init --> Overview[Write AI Wiki/_OPEN_SECOND_BRAIN.md vault overview]
 ```
 
 `Brain/_brain.yaml` defaults are sensible for most uses; tune them in

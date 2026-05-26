@@ -135,7 +135,6 @@ runtime: hermes
 environment_name: <hostname>
 vault:
   path: <absolute-path-to-Obsidian-vault>
-  agent_dir: AI Wiki
 identity:
   agent_name: <chosen-agent-name>
   user_language: <BCP-47 tag, e.g. en or ru>
@@ -147,24 +146,13 @@ Machine-local config may contain absolute paths. It must not contain secrets.
 
 ### Vault-portable config
 
-Vault-portable config lives inside the vault and travels with backup/sync.
+Vault-portable config lives at `<vault>/Brain/_brain.yaml` and travels
+with backup/sync. It describes:
 
-Suggested paths:
-
-```text
-<vault>/<agent_dir>/_open-second-brain.yaml
-<vault>/<agent_dir>/_OPEN_SECOND_BRAIN.md
-```
-
-It describes:
-
-- owner identity;
-- language/timezone preferences;
-- vault schema;
-- write boundaries;
-- known agents;
-- event log backend;
-- durable operating rules.
+- schema version + dream / retire / confidence / snapshot thresholds;
+- optional `notes.read_paths` (user-authored folders the agent may read);
+- optional `temporal:`, `link_graph:`, `guardrails:`, `discipline_report:` tuning blocks;
+- `vault.ignore_paths` (exclusion policy for every vault walker).
 
 It must not contain secrets.
 
@@ -181,42 +169,37 @@ Recommended behavior:
 
 ## Vault layout
 
-A default vault layout may look like:
-
-```text
-AI Wiki/
-  _OPEN_SECOND_BRAIN.md
-  _open-second-brain.yaml
-  index.md
-  hot.md
-  log.md
-  identity/
-    user.md
-    agents.md
-  system/
-    config-snapshots/
-  events/
-```
-
-This layout is intentionally agent-owned. The project should not mix agent-generated wiki pages into a user's personal notes without clear boundaries.
-
-`AI Wiki/` holds the static agent-facing wiki: identity, index, hot list, and the Pay Memory subtree (`payments/`, `assets/`, `drafts/`, `reports/`, `policies/`). Agents read it through `second_brain_query` and write into Pay Memory subdirectories via the `payment_*` tools. Durable observing memory — taste signals, accreted preferences, evidence, snapshots — lives in a separate top-level `Brain/` directory described in the next section.
-
-## Brain layer
-
-`Brain/` is a top-level directory parallel to `AI Wiki/` and `Daily/`. It is the observing-memory layer: where agents record taste signals, the `dream` pass accretes them into rules, and pre-run snapshots provide reversibility.
+The agent owns one directory in the vault: `Brain/`. Pay Memory nests
+under `Brain/payments/` so the write contract stays simple ("agent
+writes only under `Brain/`"). User-authored notes (daily journals,
+weekly notes) live wherever the operator names them; the agent reads
+those paths only when they are listed in `notes.read_paths`.
 
 ```text
 Brain/
-  _brain.yaml              # schema + thresholds (validated by o2b brain doctor)
+  _brain.yaml              # schema + thresholds + notes.read_paths (validated by o2b brain doctor)
   _BRAIN.md                # operating manual for agents (rendered by o2b brain init)
+  active.md                # derived digest, auto-regenerated
   inbox/                   # raw taste signals, sig-<date>-<slug>.md
-    processed/            # signals already folded into a preference
+    processed/             # signals already folded into a preference
   preferences/             # active rules: pref-<slug>.md, status unconfirmed | confirmed
   retired/                 # ret-<slug>.md with retired_reason
   log/                     # YYYY-MM-DD.md, append-only event log (dream / apply-evidence / etc.)
+  payments/                # Pay Memory (optional, paid-action audit)
+    policies/spending.md   # spending policy + optional spending.json
+    <YYYY-MM-DD>/<slug>.md # dated receipts
+    assets/                # generated-asset notes
+    drafts/                # draft artefacts
+    reports/               # daily reports
+    _pending/              # approval workflow
   .snapshots/              # <run_id>.tar.zst, pre-run snapshots for o2b brain rollback
 ```
+
+This layout is intentionally agent-owned: every artefact Open Second
+Brain writes lives under `Brain/`. User-authored content elsewhere in
+the vault is read-only to the agent and stays under operator control.
+
+## Brain layer
 
 Three architectural invariants:
 
@@ -231,7 +214,7 @@ Agent runtime
   -> runtime adapter/plugin
     -> skills and commands (brain-memory skill, open-second-brain skill)
       -> CLI/core library (src/core/brain/*)
-        -> vault files: Brain/ (observing memory), AI Wiki/ + Daily/ (wiki + event log), Pay Memory (paid-action audit)
+        -> vault files: Brain/ (observing memory) + Brain/payments/ (paid-action audit)
 ```
 
 Full design: [`docs/plans/2026-05-15-brain-observing-memory.md`](plans/2026-05-15-brain-observing-memory.md).

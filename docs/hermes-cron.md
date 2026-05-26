@@ -56,7 +56,7 @@ hermes cron remove pay-memory-daily-digest
 💳 Оплачено сервисов: **2**
 💰 Сумма: **0.07 USDC**
 📁 Файлы чеков: **2**
-🔗 Отчёт: `/root/vault/AI Wiki/reports/payment-report-2026-05-09.md`
+🔗 Отчёт: `/root/vault/Brain/payments/reports/payment-report-2026-05-09.md`
 ```
 
 When there were no receipts the day before, the literal token `[SILENT]` is emitted (or empty / a one-line summary, per `--empty-mode`).
@@ -119,7 +119,7 @@ hermes cron remove brain-digest-daily
 
 ## Confirmed
 
-- [[pref-prefer-typed-errors]] — coding, first applied in [[Daily/2026.05.14]]
+- [[pref-prefer-typed-errors]] — coding, first applied in [[src/cli/main.ts]]
 
 ## Retired
 

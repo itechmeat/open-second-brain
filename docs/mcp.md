@@ -22,22 +22,18 @@ in Open Second Brain depends on the MCP server being running.
 | --- | --- | --- |
 | `second_brain_status` | Report config and vault status, with secrets redacted. | — |
 | `second_brain_query` | List vault pages with an optional case-insensitive title substring. | — |
-| `second_brain_capture` | Write a Markdown note under `AI Wiki/notes/` with frontmatter. | `title`, `content` |
-| `event_log_append` | Append a single-line event to the daily Markdown event log. | `message` |
 | `vault_health` | Run vault, config, and plugin manifest health checks. | — |
-| `payment_memory_init` | Bootstrap `AI Wiki/{policies,payments,assets,drafts,reports}/` and write the spending policy template. | — |
+| `payment_memory_init` | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template. | — |
 | `payment_receipt_append` | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting. | `service`, `status`, `reason` |
 | `asset_capture` | Save a Markdown note for an asset produced by a paid call, linked to its receipt. | `title`, `service`, `result_url` |
-| `payment_report_generate` | Aggregate a date's receipts into a Markdown report under `AI Wiki/reports/`. | `date` |
+| `payment_report_generate` | Aggregate a date's receipts into a Markdown report under `Brain/payments/reports/`. | `date` |
 | `payment_policy_check` | Evaluate a prospective paid call against `policies/spending.json` (allowed / approval_required / denied). | `service` |
 | `payment_request_approval` | Create a pending-payment-request the user must approve before the agent runs `pay`. | `service`, `reason` |
 | `payment_request_status` | Look up a pending request by id; agent uses this to poll for approval. | `id` |
 | `payment_request_consume` | Mark an `approved` request as `consumed` and link the resulting receipt. | `id`, `receipt` |
 
 `second_brain_query` accepts `pattern` (string) and `limit` (1–500, default 50).
-`second_brain_capture` also accepts `tags` (array of strings) and `overwrite`
-(boolean). `event_log_append` accepts `agent`, `date` (YYYY.MM.DD), and `time`
-(HH:MM). `vault_health` accepts `repo` (string) for plugin manifest validation.
+`vault_health` accepts `repo` (string) for plugin manifest validation.
 
 `payment_memory_init` accepts `agent` (string) and `overwrite` (boolean — to
 refresh the policy template). `payment_receipt_append` accepts the same
@@ -48,12 +44,9 @@ optional fields as the CLI: `agent`, `category`, `endpoint`, `expected_cost`,
 `overwrite`. `payment_report_generate` accepts `title`, `task`, `slug`,
 `overwrite`.
 
-> **Date format note.** `event_log_append` uses `YYYY.MM.DD` to match the
-> `Daily/<date>.md` filename convention; Pay Memory tools (`payment_receipt_append`,
-> `payment_report_generate`, `payment_policy_check`, `payment_request_approval`)
-> use ISO 8601 `YYYY-MM-DD` because the `AI Wiki/payments/<date>/`
-> subdirectory layout is independent of `Daily/`. Both accept the matching
-> `--date` form on the CLI.
+> **Date format note.** Brain and Pay Memory tools use ISO 8601
+> `YYYY-MM-DD` throughout; the `Brain/log/<date>.md` and
+> `Brain/payments/<date>/` subdirectory layouts share that convention.
 
 `payment_policy_check` accepts `expected_amount` (number or numeric
 string), `currency`, `category`, and `date`. `payment_request_approval`
@@ -161,8 +154,6 @@ mcp_servers:
       include:
         - second_brain_status
         - second_brain_query
-        - second_brain_capture
-        - event_log_append
         - vault_health
         # Pay Memory tools (v0.8.0+); drop any line below to disable a
         # specific tool, or remove the whole `tools.include` block to
@@ -262,8 +253,7 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
 
 - The vault path is bound to the server instance at startup. Tools cannot
   escape it.
-- `second_brain_capture` writes only under `<vault>/AI Wiki/notes/` and rejects
-  collisions unless `overwrite: true` is supplied.
 - `second_brain_status` reuses the same redaction logic as `o2b export-config`.
-- `event_log_append` appends below the `## Raw events` section using the same
-  locking strategy as the CLI.
+- Brain writers (`brain_feedback`, `brain_apply_evidence`, `brain_note`)
+  go through atomic-rename writes so an interrupted call leaves either
+  the prior or the new file, never a torn hybrid.
