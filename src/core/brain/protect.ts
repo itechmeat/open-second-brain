@@ -187,7 +187,7 @@ function inferVault(rules: ReadonlyArray<ProtectRule>): string {
       { code: "EMPTY_RULES" },
     );
   }
-  return first.path.split("/Brain/")[0]!;
+  return first.path.split(`/${BRAIN_ROOT_REL}/`)[0]!;
 }
 
 // ─── Codex rendering ──────────────────────────────────────────────────

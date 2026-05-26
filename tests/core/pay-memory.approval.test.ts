@@ -47,7 +47,7 @@ describe("writePendingRequest", () => {
   test("creates a pending-payment-request artifact with frontmatter and body", () => {
     const out = writePendingRequest(tmp, baseInput);
     expect(out.status).toBe("pending");
-    expect(out.relativePath.startsWith("Brain/payments/_pending/")).toBe(true);
+    expect(out.relativePath.startsWith(`${PAY_MEMORY_PENDING_REL}/`)).toBe(true);
     expect(out.id.startsWith("req-2026-05-10-1000-fal-")).toBe(true);
     expect(out.policyDecision.hasPolicy).toBe(false);
 
@@ -65,12 +65,12 @@ describe("writePendingRequest", () => {
       currency: "USDC",
       endpoint: "https://gateway.example/v1/fal",
       expectedOutput: "PNG image, 1024×512",
-      vaultFiles: ["Brain/payments/drafts/post.md", "Brain/payments/assets/header.md"],
+      vaultFiles: [`${PAY_MEMORY_DRAFTS_REL}/post.md`, `${PAY_MEMORY_ASSETS_REL}/header.md`],
     });
     const text = readFileSync(out.path, "utf8");
     expect(text).toContain("expected_amount: 0.05");
     expect(text).toContain("currency: USDC");
-    expect(text).toContain("- `Brain/payments/drafts/post.md`");
+    expect(text).toContain(`- \`${PAY_MEMORY_DRAFTS_REL}/post.md\``);
     expect(text).toContain("PNG image, 1024×512");
   });
 
@@ -147,11 +147,11 @@ describe("state transitions", () => {
     ).rejects.toThrow(/cannot transition request t-3 from pending to consumed/);
     await approvePendingRequest(tmp, "t-3", { approvedBy: "sergey" });
     const out = await consumePendingRequest(tmp, "t-3", {
-      receiptPath: "Brain/payments/2026-05-10/x.md",
+      receiptPath: `${PAY_MEMORY_ROOT_REL}/2026-05-10/x.md`,
     });
     expect(out.status).toBe("consumed");
     const reloaded = loadPendingRequest(tmp, "t-3")!;
-    expect(reloaded.metadata["receipt"]).toBe("Brain/payments/2026-05-10/x.md");
+    expect(reloaded.metadata["receipt"]).toBe(`${PAY_MEMORY_ROOT_REL}/2026-05-10/x.md`);
   });
 
   test("rejected and consumed are terminal", async () => {

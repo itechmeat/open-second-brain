@@ -216,7 +216,7 @@ export function createSnapshot(
   // Build `tar -c -C <vault> Brain/<entry> Brain/<entry>...` so paths
   // inside the archive start at `Brain/` — matching the rollback
   // contract that the archive is "the Brain/ tree".
-  const tarArgs = ["-c", "-C", vault, "--", ...topEntries.map((e) => `Brain/${e}`)];
+  const tarArgs = ["-c", "-C", vault, "--", ...topEntries.map((e) => `${BRAIN_ROOT_REL}/${e}`)];
 
   if (tools.zstd) {
     runArchivePipeline(["tar", tarArgs], ["zstd", ["-19", "-q", "-o", outPath, "-"]], runId);
