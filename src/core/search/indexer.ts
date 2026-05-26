@@ -28,6 +28,7 @@ import { basename, dirname } from "node:path";
 import { chunkMarkdown } from "./chunker.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { extractLinks } from "./links.ts";
+import { extractEntities } from "./entities.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
@@ -201,7 +202,8 @@ async function indexInto(
         const links: LinkInput[] = [];
         for (let i = 0; i < chunkResult.chunks.length; i++) {
           const cid = chunkIds[i]!;
-          const extracted = extractLinks(chunkResult.chunks[i]!.content);
+          const content = chunkResult.chunks[i]!.content;
+          const extracted = extractLinks(content);
           for (const l of extracted) {
             links.push({
               sourceChunkId: cid,
@@ -210,6 +212,9 @@ async function indexInto(
               linkType: l.linkType,
             });
           }
+          // Entity-boosted retrieval (v0.13.0): persist the chunk's
+          // deterministic entity set alongside its links.
+          store.replaceEntities(cid, extractEntities(content));
         }
         store.replaceLinks(docId, links);
 

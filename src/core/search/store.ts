@@ -978,6 +978,54 @@ export class Store {
     return out;
   }
 
+  // ── entities ─────────────────────────────────────────────────────────────
+
+  /**
+   * Replace a chunk's entity set (v0.13.0). Deletes any prior entries
+   * for the chunk, then inserts the deduped list. Entities are expected
+   * pre-normalised (lowercased) by the extractor.
+   */
+  replaceEntities(chunkId: number, entities: ReadonlyArray<string>): void {
+    this.db.exec("BEGIN");
+    try {
+      this.db.run("DELETE FROM chunk_entities WHERE chunk_id = ?", [chunkId]);
+      if (entities.length > 0) {
+        const insert = this.db.prepare<undefined, [number, string]>(
+          "INSERT OR IGNORE INTO chunk_entities(chunk_id, entity) VALUES (?, ?)",
+        );
+        for (const e of entities) insert.run(chunkId, e);
+      }
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  /**
+   * For each candidate chunk, the count of distinct query entities it
+   * also carries. Empty `queryEntities` yields an empty map (no work).
+   * Pure read; used by the ranker to add a capped entity boost.
+   */
+  chunkEntityMatches(
+    candidateChunkIds: ReadonlyArray<number>,
+    queryEntities: ReadonlyArray<string>,
+  ): Map<number, number> {
+    const out = new Map<number, number>();
+    if (candidateChunkIds.length === 0 || queryEntities.length === 0) return out;
+    const chunkPlaceholders = candidateChunkIds.map(() => "?").join(",");
+    const entityPlaceholders = queryEntities.map(() => "?").join(",");
+    const rows = this.db
+      .query<{ chunk_id: number; c: number }, (number | string)[]>(
+        "SELECT chunk_id, COUNT(DISTINCT entity) AS c FROM chunk_entities " +
+          `WHERE chunk_id IN (${chunkPlaceholders}) AND entity IN (${entityPlaceholders}) ` +
+          "GROUP BY chunk_id",
+      )
+      .all(...(candidateChunkIds as number[]), ...(queryEntities as string[]));
+    for (const r of rows) out.set(r.chunk_id, r.c);
+    return out;
+  }
+
   /**
    * For each chunk id, the set of tag link_text values associated with
    * its document. Two chunks "share a tag" iff their tag sets intersect.

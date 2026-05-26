@@ -32,6 +32,12 @@ export interface RankerInputs {
    * bit-identically to pre-tier behaviour.
    */
   readonly tierByDoc?: ReadonlyMap<number, PageTier>;
+  /**
+   * Optional per-chunk count of query entities the chunk also carries
+   * (v0.13.0). Missing entries (and the absent map) contribute zero
+   * boost, so a vault with no entity index ranks bit-identically.
+   */
+  readonly entityMatchByChunk?: ReadonlyMap<number, number>;
 }
 
 export interface RankerOptions {
@@ -230,7 +236,12 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // `supporting` → 1.0 keeps untagged vaults bit-identical.
     const tier = inputs.tierByDoc?.get(c.documentId) ?? PAGE_TIER_DEFAULT;
     const tierMul = tierWeight(tier);
-    const score = clamp01(weighted * tierMul + linkBoost + recency);
+    // Entity boost: capped contribution from shared query entities.
+    // Per-match 0.02, capped at 0.04 so it only re-ranks an already
+    // relevant set - never enough to float an irrelevant chunk.
+    const entityMatches = inputs.entityMatchByChunk?.get(c.chunkId) ?? 0;
+    const entityBoost = Math.min(0.04, entityMatches * 0.02);
+    const score = clamp01(weighted * tierMul + linkBoost + recency + entityBoost);
 
     ranked.push(
       Object.freeze({
@@ -253,6 +264,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           linkBoost,
           recency,
           tierMul,
+          entityBoost,
         }),
       }),
     );

@@ -16,7 +16,7 @@ import { SearchError } from "./types.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 1;
+export const LATEST_SCHEMA_VERSION = 2;
 
 const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS documents (
@@ -107,11 +107,32 @@ interface Migration {
   readonly up: (db: Database) => void;
 }
 
+/**
+ * v2 (v0.13.0) - recall-quality backing store. Adds the parallel
+ * `chunk_entities` table feeding entity-boosted retrieval. Existing
+ * rows carry no entities until a reindex repopulates them, so a
+ * pre-migration index ranks bit-identically until then.
+ */
+const DDL_V2 = `
+CREATE TABLE IF NOT EXISTS chunk_entities (
+  chunk_id   INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  entity     TEXT NOT NULL,
+  PRIMARY KEY (chunk_id, entity)
+);
+CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity ON chunk_entities(entity);
+`;
+
 export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
   {
     version: 1,
     up(db) {
       db.exec(DDL_V1);
+    },
+  },
+  {
+    version: 2,
+    up(db) {
+      db.exec(DDL_V2);
     },
   },
 ]);

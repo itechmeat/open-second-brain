@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { makeProvider } from "./embeddings/provider.ts";
+import { extractEntities } from "./entities.ts";
 import { runFtsQuery } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
 import { filterByProperties } from "./property-filter.ts";
@@ -106,6 +107,15 @@ export async function search(
     const inboundLinkSources = store.inboundLinkSources(idsList);
     const tagsByDoc = store.tagsByChunkDocument(idsList);
 
+    // Entity-boosted retrieval (v0.13.0): extract entities from the
+    // query and count overlaps with each candidate chunk. Empty when the
+    // query names no entities or the index predates the entity store.
+    const queryEntities = extractEntities(query);
+    const entityMatchByChunk =
+      queryEntities.length > 0
+        ? store.chunkEntityMatches(idsList, queryEntities)
+        : undefined;
+
     // When a property filter is active, overfetch the ranked
     // candidates so the post-filter result set still has a chance
     // of producing `limit` matching rows. Without this, the
@@ -130,6 +140,7 @@ export async function search(
         hydrated,
         inboundLinkSources,
         tagsByDoc,
+        ...(entityMatchByChunk !== undefined ? { entityMatchByChunk } : {}),
       },
       {
         keywordWeight: opts.keywordWeight ?? config.keywordWeight,
