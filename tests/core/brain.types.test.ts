@@ -81,6 +81,10 @@ describe("BRAIN_* const enums", () => {
       "import-claude-memory",
       // §32B (v0.10.8) brain_note narrative milestones
       "note",
+      // v0.12.0 Brain Integrity Suite: content-hash drift on a
+      // confirmed preference whose stored _content_hash no longer
+      // matches the recomputed hash of its live (principle, scope).
+      "drift-detected",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

@@ -189,6 +189,17 @@ export const BRAIN_LOG_EVENT_KIND = {
    * surface.
    */
   note: "note",
+  /**
+   * `drift-detected` (v0.12.0, Brain Integrity Suite) — a confirmed
+   * preference's `_content_hash` did not match the recomputed hash of
+   * its live `(principle, scope)`. Surfaces both in `brain_doctor`
+   * and as an event in `Brain/log/<today>.md` so the operator has an
+   * audit trail of hand-edits / write races / source-of-truth
+   * mutations. Payload: `preference` (wikilink), `expected` (hash
+   * recomputed from live content), `observed` (hash stored in
+   * frontmatter).
+   */
+  driftDetected: "drift-detected",
 } as const;
 export type BrainLogEventKind =
   (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];

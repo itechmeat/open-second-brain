@@ -42,6 +42,7 @@ import { join } from "node:path";
 import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
+import { verifyContentHash } from "./content-hash.ts";
 import { parseLogDay } from "./log.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
@@ -282,6 +283,13 @@ export function runDoctor(
       checkPinnedWithoutRecentEvidence(prefRecords, issues, cfg, now);
     } catch { /* doctor never throws */ }
   }
+  // v0.12.0 Brain Integrity Suite: surface preferences whose live
+  // (principle, scope) does not hash to the value stored in
+  // `_content_hash`. Hand-edits remain legal; the warning makes them
+  // observable.
+  try {
+    checkContentHashDrift(prefRecords, issues);
+  } catch { /* doctor never throws */ }
   try {
     checkMalformedEvidenceRange(logRecords, issues);
   } catch { /* doctor never throws */ }
@@ -907,6 +915,43 @@ function checkPinnedWithoutRecentEvidence(
         `[[${pref.id}]] is pinned but last_evidence_at=${pref.last_evidence_at} is older than ` +
         `stale_evidence_days=${cfg.retire.stale_evidence_days}. Pin may be outdated.`,
     });
+  }
+}
+
+/**
+ * `content-hash-drift` (v0.12.0, Brain Integrity Suite): walks every
+ * confirmed preference, recomputes the content hash from the live
+ * `(principle, scope)`, and surfaces a warning whenever the stored
+ * `_content_hash` no longer matches. Legacy preferences without a
+ * stored hash are silent - drift detection is opt-in via the
+ * promotion-time hash write.
+ *
+ * Hand-edits stay legal: this is observability, not enforcement. The
+ * operator sees the divergence and decides whether to re-promote the
+ * preference (which writes a fresh hash) or accept the drift.
+ */
+function checkContentHashDrift(
+  prefs: ReadonlyArray<PreferenceRecord>,
+  issues: DoctorIssue[],
+): void {
+  for (const { path, pref } of prefs) {
+    if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
+    if (!pref.content_hash) continue;
+    const v = verifyContentHash({
+      principle: pref.principle,
+      scope: pref.scope,
+      content_hash: pref.content_hash,
+    });
+    if (!v.ok) {
+      issues.push({
+        severity: "warning",
+        code: "content-hash-drift",
+        path,
+        message:
+          `content-hash drift on ${pref.id}: stored ${v.observed} ` +
+          `does not match recomputed ${v.expected}`,
+      });
+    }
   }
 }
 
