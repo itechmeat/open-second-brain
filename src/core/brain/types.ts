@@ -658,6 +658,18 @@ export interface BrainDreamConfig {
 export interface BrainRetireConfig {
   /** Days without evidence after which a confirmed pref retires. */
   readonly stale_evidence_days: number;
+  /**
+   * Brain Integrity Suite (v0.12.0). Destructive-from-confirmed gate.
+   * When set to a positive integer, the dream pass refuses to retire
+   * a confirmed (and unpinned) preference whose accumulated
+   * `applied_count + violated_count` is below this threshold. Skipped
+   * retires surface in `DreamRunSummary.gated_retires` and stay in
+   * `preferences/`. Operator-initiated retires (`user-rejected`,
+   * `merged-into`) are never gated. `undefined` (default) preserves
+   * pre-v0.12.0 behaviour where any retire that the plan computed
+   * lands on disk.
+   */
+  readonly confirmed_evidence_min_threshold?: number;
 }
 
 export interface BrainConfidenceConfig {

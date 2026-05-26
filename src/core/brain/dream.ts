@@ -134,6 +134,25 @@ export interface DreamQuarantinedEntry {
   readonly failed_gates: ReadonlyArray<string>;
 }
 
+/**
+ * Brain Integrity Suite (v0.12.0). Entry for a retire that the dream
+ * pass declined because `retire.confirmed_evidence_min_threshold` was
+ * set and the source preference's accumulated evidence count fell
+ * below it. The pref stays in `preferences/`; the operator can lift
+ * the gate by raising the evidence count, lowering the threshold, or
+ * running `o2b brain reject` explicitly.
+ */
+export interface DreamGatedRetireEntry {
+  readonly pref_id: string;
+  readonly topic: string;
+  readonly applied_count: number;
+  readonly violated_count: number;
+  /** Configured threshold the pref's evidence count fell below. */
+  readonly threshold: number;
+  /** The retire reason the plan computed before the gate fired. */
+  readonly attempted_reason: BrainRetiredReason;
+}
+
 export interface DreamRunSummary {
   /** `dream-YYYY-MM-DD-HHMMSS`. */
   readonly run_id: string;
@@ -177,6 +196,13 @@ export interface DreamRunSummary {
    * match pre-v0.10.16 behaviour.
    */
   readonly quarantined: ReadonlyArray<DreamQuarantinedEntry>;
+  /**
+   * Brain Integrity Suite (v0.12.0). Retires the dream pass planned
+   * but declined to execute because the source preference's evidence
+   * count fell below `retire.confirmed_evidence_min_threshold`. Empty
+   * when the config field is absent (the default).
+   */
+  readonly gated_retires: ReadonlyArray<DreamGatedRetireEntry>;
   /** Snapshot file (absent on a no-op run). */
   readonly snapshot_path?: string;
   /** Log file the run summary landed in (absent on a no-op run). */
@@ -332,6 +358,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       warnings: Object.freeze([...warnings]),
       uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
       quarantined: Object.freeze([...plan.quarantined]),
+      gated_retires: Object.freeze([] as ReadonlyArray<DreamGatedRetireEntry>),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -358,6 +385,10 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   //   5. Emit log entries (noted-redundant, retain-pinned,
   //      skip-corrupted-frontmatter, dream summary).
   const moved: string[] = [];
+  // v0.12.0 Brain Integrity Suite: declined retires accumulate here.
+  // Always declared (even when no gate is configured) so the eventual
+  // DreamRunSummary.gated_retires field is consistently an array.
+  const gatedRetires: DreamGatedRetireEntry[] = [];
 
   if (!dryRun) {
     for (const np of plan.newUnconfirmed) {
@@ -426,6 +457,31 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     for (const r of plan.retires) {
       const fromPath = preferencePath(vault, r.slug);
       if (!existsSync(fromPath)) continue;
+      // v0.12.0 Brain Integrity Suite: destructive-from-confirmed gate.
+      // When the operator has set retire.confirmed_evidence_min_threshold,
+      // refuse to retire a confirmed (unpinned) pref whose accumulated
+      // evidence count is below the configured floor. Operator-initiated
+      // retires bypass.
+      const gateThreshold = cfg.retire.confirmed_evidence_min_threshold;
+      if (gateThreshold !== undefined && gateThreshold > 0) {
+        try {
+          const existing = parsePreference(fromPath);
+          if (shouldGateRetireFromConfirmed(existing, r.reason, gateThreshold)) {
+            gatedRetires.push({
+              pref_id: existing.id,
+              topic: existing.topic,
+              applied_count: existing.applied_count,
+              violated_count: existing.violated_count,
+              threshold: gateThreshold,
+              attempted_reason: r.reason,
+            });
+            continue;
+          }
+        } catch {
+          // Parse failure - fall through to the normal retire path
+          // (moveToRetired will surface the error through stderr below).
+        }
+      }
       try {
         moveToRetired(vault, fromPath, r.reason, {
           now,
@@ -624,11 +680,36 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     warnings: Object.freeze([...warnings]),
     uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
     quarantined: Object.freeze([...plan.quarantined]),
+    gated_retires: Object.freeze([...gatedRetires]),
     ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
     ...(dryRun
       ? { dry_run: true }
       : { log_path: join(brainDirs(vault).log, `${isoDate(now)}.md`) }),
   } satisfies DreamRunSummary);
+}
+
+/**
+ * Brain Integrity Suite (v0.12.0). Pure decision function for the
+ * destructive-from-confirmed gate. Exported so the gate logic can be
+ * unit-tested without driving a full dream run.
+ *
+ * Returns `true` when the candidate retire MUST be held back. The
+ * caller is responsible for recording a {@link DreamGatedRetireEntry}
+ * and skipping the actual `moveToRetired` call.
+ */
+export function shouldGateRetireFromConfirmed(
+  existing: BrainPreference,
+  reason: BrainRetiredReason,
+  threshold: number | undefined,
+): boolean {
+  if (threshold === undefined || threshold <= 0) return false;
+  if (reason === BRAIN_RETIRED_REASON.userRejected) return false;
+  if (reason === BRAIN_RETIRED_REASON.mergedInto) return false;
+  if (existing.status !== BRAIN_PREFERENCE_STATUS.confirmed) return false;
+  if (existing.pinned) return false;
+  const evidenceCount =
+    (existing.applied_count ?? 0) + (existing.violated_count ?? 0);
+  return evidenceCount < threshold;
 }
 
 // ----- Scan ---------------------------------------------------------------
