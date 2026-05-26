@@ -92,8 +92,8 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "real patterns from repeat events, so prefer precision over " +
     "coverage.\n\n" +
     "Other tools: second_brain_status (config status), " +
-    "vault_health (verify vault), second_brain_query (look up legacy " +
-    "AI Wiki / Daily notes — read-only).\n\n" +
+    "vault_health (verify vault), second_brain_query (list vault pages " +
+    "by title - read-only).\n\n" +
     "Pay Memory tools record paid agent actions as inspectable Markdown:\n" +
     "  - payment_memory_init bootstraps the layout and writes the " +
     "spending policy template (run once per vault).\n" +

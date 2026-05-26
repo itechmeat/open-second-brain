@@ -151,7 +151,7 @@ export function renderPlan(plan: UninstallPlan): string {
   } else {
     lines.push("  (no vault path recorded in config; check your runtime settings)");
   }
-  lines.push("  Your Markdown notes, Daily/, and AI Wiki/ stay exactly as they are.");
+  lines.push("  Your Markdown notes stay exactly as they are.");
   lines.push("");
 
   if (plan.applyLocal) {

@@ -193,8 +193,7 @@ describe("renderPlan", () => {
   test("states vault is preserved", () => {
     const text = basicPlan(false);
     expect(text).toMatch(/Vault \(NEVER removed by this tool\)/);
-    expect(text).toContain("Daily/");
-    expect(text).toContain("AI Wiki/");
+    expect(text).toContain("Your Markdown notes stay exactly as they are");
   });
 
   test("states Hermes config is not edited", () => {

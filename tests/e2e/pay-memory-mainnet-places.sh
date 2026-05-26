@@ -153,7 +153,7 @@ bun run "$ROOT/src/cli/main.ts" capture-asset \
   --title "Places searchText: $QUERY" \
   --service "solana-foundation/google/places" \
   --result-url "${ENDPOINT}" \
-  --source-receipt "AI Wiki/payments/$DATE/$SLUG.md" \
+  --source-receipt "Brain/payments/$DATE/$SLUG.md" \
   --slug "$SLUG"
 
 echo
@@ -166,7 +166,7 @@ bun run "$ROOT/src/cli/main.ts" payment-report \
 
 echo
 echo "==> generated files"
-find "$VAULT/AI Wiki" -type f | sort
+find "$VAULT/Brain/payments" -type f | sort
 
 echo
 echo "==> done: vault preserved at $VAULT"

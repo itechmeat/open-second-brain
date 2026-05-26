@@ -19,9 +19,9 @@ import {
   resolveTimezone,
   setConfigValue,
 } from "../core/config.ts";
+import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
 import { doctor } from "../core/doctor.ts";
 import { appendEvent } from "../core/event-log.ts";
-import { bootstrapVault } from "../core/init.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { handleBrainSubcommand } from "./brain.ts";
@@ -136,28 +136,13 @@ async function cmdInit(argv: string[]): Promise<number> {
     }
   }
 
-  let created: string[];
-  try {
-    created = bootstrapVault(vault, {
-      name: String(flags["name"] ?? "Second Brain"),
-      agentName,
-      force: Boolean(flags["force"]),
-    });
-  } catch (exc) {
-    process.stderr.write(`error: failed to initialize vault: ${(exc as Error).message ?? exc}\n`);
-    return 1;
-  }
-
-  if (created.length > 0) {
-    process.stdout.write(`initialized vault: ${vault}\n`);
-    for (const p of created) process.stdout.write(`  created: ${p}\n`);
-  } else {
-    process.stdout.write(`vault already initialized: ${vault}\n`);
-    process.stdout.write("use --force to overwrite existing files\n");
-  }
-  // Persist vault/agent/timezone in one guarded block so a write failure
-  // (read-only config dir, disk full) surfaces as a clean CLI exit instead
-  // of an uncaught exception after the vault scaffolding is already on disk.
+  // v0.11.0: `o2b init` no longer writes content into the vault.
+  // Content scaffolding belongs to `o2b brain init` (the Brain layer).
+  // This verb persists machine-local config (vault path, agent name,
+  // timezone) so other CLI verbs default to the right vault without
+  // a --vault flag.
+  void flags["force"]; // accepted for backward CLI compat; unused
+  void flags["name"]; // accepted for backward CLI compat; unused
   let configPath: string;
   try {
     configPath = setConfigValue("vault", resolve(vault));
@@ -169,6 +154,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     );
     return 1;
   }
+  process.stdout.write(`initialized vault: ${resolve(vault)}\n`);
   process.stdout.write(`vault path persisted to: ${configPath}\n`);
   if (agentName) {
     process.stdout.write(`agent name registered: ${agentName}\n`);
@@ -353,7 +339,7 @@ async function cmdIndex(argv: string[]): Promise<number> {
     const rel = p.path.startsWith(vault) ? p.path.slice(vault.length).replace(/^\/+/, "") : p.path;
     lines.push(`- [[${p.title}]]  \`${rel}\``);
   }
-  const indexPath = resolve(vault, "AI Wiki", "index.md");
+  const indexPath = resolve(vault, BRAIN_INDEX_REL);
   try {
     writeFrontmatter(indexPath, { title: "Index", type: "index" }, lines.join("\n"));
   } catch (exc) {
@@ -601,8 +587,8 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         "Read-only by default. Prints the Hermes commands you must run yourself " +
           "(this tool never touches ~/.hermes/config.yaml or the installed plugin). " +
           "With --apply-local it may remove the machine-local Open Second Brain " +
-          "config directory only. Your vault, Daily/, AI Wiki/, and Markdown notes " +
-          "are never removed. With --remove-cli it also removes the o2b/vault-log " +
+          "config directory only. Your vault and Markdown notes are never removed. " +
+          "With --remove-cli it also removes the o2b/vault-log " +
           "symlinks created by 'o2b install-cli'.\n",
       );
     }

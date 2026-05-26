@@ -2,23 +2,15 @@
  * Brain layer bootstrap.
  *
  * Creates the `<vault>/Brain/` directory tree, drops the default
- * `_brain.yaml`, and renders the two Markdown templates the agent reads
- * each session: `Brain/_BRAIN.md` (operating manual for the writable
- * layer) and `AI Wiki/_OPEN_SECOND_BRAIN.md` (Brain-first vault
- * overview that replaces the legacy file).
+ * `_brain.yaml`, and renders the operating manual the agent reads each
+ * session at `Brain/_BRAIN.md`.
  *
- * Behaviour summary (design doc §15 Task 5, §12.1):
+ * Behaviour summary:
  *
  *   - Directory creation is idempotent.
  *   - `Brain/_brain.yaml` and `Brain/_BRAIN.md` are written on first
  *     run; subsequent runs without `force` skip them. `force: true`
  *     overwrites both.
- *   - `AI Wiki/_OPEN_SECOND_BRAIN.md` is **always** overwritten on every
- *     bootstrap, regardless of `force`. The design owner accepted this
- *     trade-off at near-zero current user count: the file is the
- *     instruction surface agents read first; stale copy hurts more
- *     than the (negligible) risk of overwriting a manual edit. The
- *     legacy file's prior content is not backed up.
  *   - Bootstrap refuses to run if the machine-level plugin config (the
  *     one `o2b init` writes) is missing, since callers must register
  *     the vault before any Brain operation. The error message names
@@ -50,11 +42,7 @@ import {
   DEFAULT_BRAIN_CONFIG_YAML,
   formatPrimaryAgentYamlValue,
 } from "./policy.ts";
-import {
-  LEGACY_OVERVIEW_REL_PATH,
-  renderBrainManual,
-  renderLegacyOverview,
-} from "./templates.ts";
+import { renderBrainManual } from "./templates.ts";
 
 const STARTER_TARGETS = ["preferences", "retired", "inbox", "log"] as const;
 
@@ -295,24 +283,6 @@ export function bootstrapBrain(
   } else {
     atomicWriteFileSync(manualPath, manualBody);
     created.push(manualRel);
-  }
-
-  // 4. `AI Wiki/_OPEN_SECOND_BRAIN.md` — always overwritten. The
-  //    parent directory may not exist if the caller never ran
-  //    `o2b init` against this vault directly (e.g. they registered a
-  //    different vault path in the machine config and ran Brain init
-  //    elsewhere). We create it on demand: the file is meaningful even
-  //    without the rest of `AI Wiki/`.
-  const overviewPath = join(vault, LEGACY_OVERVIEW_REL_PATH);
-  const overviewRel = LEGACY_OVERVIEW_REL_PATH;
-  mkdirSync(dirname(overviewPath), { recursive: true });
-  const overviewBody = renderLegacyOverview(vault);
-  const overviewExisted = existsSync(overviewPath);
-  atomicWriteFileSync(overviewPath, overviewBody);
-  if (overviewExisted) {
-    overwritten.push(overviewRel);
-  } else {
-    created.push(overviewRel);
   }
 
   if (opts.starter === true) {

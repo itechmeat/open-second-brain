@@ -187,9 +187,9 @@ export const VERB_HELP: Record<string, string> = {
   upgrade:
     "usage: o2b brain upgrade [--vault <path>] [--dry-run | --apply | --check]\n" +
     "                          [--yes] [--json]\n" +
-    "Migrate the three release-owned files (`Brain/_brain.yaml`,\n" +
-    "`Brain/_BRAIN.md`, `AI Wiki/_OPEN_SECOND_BRAIN.md`) forward to the\n" +
-    "shape the installed open-second-brain release ships.\n" +
+    "Migrate the release-owned files (`Brain/_brain.yaml`,\n" +
+    "`Brain/_BRAIN.md`) forward to the shape the installed\n" +
+    "open-second-brain release ships.\n" +
     "User-owned content (preferences/, retired/, inbox/, log/) is\n" +
     "never touched.\n" +
     "--dry-run (default) prints a per-file plan with a unified diff\n" +
@@ -200,9 +200,8 @@ export const VERB_HELP: Record<string, string> = {
     "via run_id) and rewrites every pending file. Requires --yes in\n" +
     "non-interactive mode (--json or non-TTY stdin).\n" +
     "_brain.yaml merge is purely additive: missing schema-keys are\n" +
-    "appended, existing values stay. _BRAIN.md and\n" +
-    "_OPEN_SECOND_BRAIN.md are byte-compared against the rendered\n" +
-    "template and overwritten when they differ.\n",
+    "appended, existing values stay. _BRAIN.md is byte-compared\n" +
+    "against the rendered template and overwritten when it differs.\n",
   explorer:
     "usage: o2b brain explorer [--port <n>] [--vault <path>]\n" +
     "       o2b brain explorer --export <path> [--force] [--vault <path>]\n" +

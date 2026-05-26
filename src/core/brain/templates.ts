@@ -29,20 +29,6 @@ const TEMPLATE_DIR = resolve(
 export const BRAIN_MANUAL_TEMPLATE_PATH = join(TEMPLATE_DIR, "_BRAIN.md.tpl");
 
 /**
- * Brain-first overview rendered at `AI Wiki/_OPEN_SECOND_BRAIN.md`.
- * The legacy file's prior content is not preserved on render — the
- * file is the agent's first-read surface and must match the
- * release.
- */
-export const LEGACY_OVERVIEW_TEMPLATE_PATH = join(
-  TEMPLATE_DIR,
-  "_OPEN_SECOND_BRAIN.md.tpl",
-);
-
-/** Vault-relative path of the legacy-overview target file. */
-export const LEGACY_OVERVIEW_REL_PATH = join("AI Wiki", "_OPEN_SECOND_BRAIN.md");
-
-/**
  * Read a template file from disk. A missing template would indicate a
  * broken open-second-brain install — the message names the canonical
  * cause so the operator does not chase an opaque `ENOENT`.
@@ -106,20 +92,6 @@ export function renderBrainManual(
 ): string {
   return renderTemplate(
     readTemplate(BRAIN_MANUAL_TEMPLATE_PATH),
-    buildSubstitutions(vault, config),
-  );
-}
-
-/**
- * Render the Brain-first overview the way the current release ships
- * it for `vault`. Used by both `bootstrapBrain` and `planUpgrade`.
- */
-export function renderLegacyOverview(
-  vault: string,
-  config: BrainConfig = DEFAULT_BRAIN_CONFIG,
-): string {
-  return renderTemplate(
-    readTemplate(LEGACY_OVERVIEW_TEMPLATE_PATH),
     buildSubstitutions(vault, config),
   );
 }

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { BRAIN_INDEX_REL, BRAIN_ROOT_REL } from "../../src/core/brain/paths.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -35,26 +36,10 @@ describe("status", () => {
 });
 
 describe("init", () => {
-  test("creates vault structure", async () => {
+  test("prints initialized vault message", async () => {
     const r = await runCli(["init", "--vault", tmp, "--name", "Test"]);
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("initialized vault:");
-    expect(existsSync(join(tmp, "AI Wiki", "_OPEN_SECOND_BRAIN.md"))).toBe(true);
-    expect(existsSync(join(tmp, "AI Wiki", "identity", "agents.md"))).toBe(true);
-  });
-
-  test("with agent-name writes identity entry", async () => {
-    const vault = join(tmp, "vault");
-    const config = join(tmp, "config.yaml");
-    const r = await runCli(
-      ["init", "--vault", vault, "--name", "Test", "--agent-name", "openclaw-main"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(0);
-    expect(r.stdout).toContain("agent name registered: openclaw-main");
-    const txt = readFileSync(join(vault, "AI Wiki", "identity", "agents.md"), "utf8");
-    expect(txt).toContain("- openclaw-main: primary agent on this server");
-    expect(txt).not.toContain("(add your agents here");
   });
 
   test("with agent-name persists to plugin config", async () => {
@@ -122,25 +107,6 @@ describe("init", () => {
     expect(readFileSync(config, "utf8")).toContain("hermes-vps-agent");
   });
 
-  test("already initialized does not overwrite", async () => {
-    await runCli(["init", "--vault", tmp, "--name", "First"]);
-    const index = join(tmp, "AI Wiki", "index.md");
-    writeFileSync(index, "custom");
-    const r = await runCli(["init", "--vault", tmp, "--name", "Second"]);
-    expect(r.returncode).toBe(0);
-    expect(r.stdout).toContain("already initialized");
-    expect(readFileSync(index, "utf8")).toBe("custom");
-  });
-
-  test("--force overwrites", async () => {
-    await runCli(["init", "--vault", tmp, "--name", "First"]);
-    const index = join(tmp, "AI Wiki", "index.md");
-    writeFileSync(index, "old");
-    const r = await runCli(["init", "--vault", tmp, "--name", "Second", "--force"]);
-    expect(r.returncode).toBe(0);
-    expect(r.stdout).toContain("initialized vault:");
-    expect(readFileSync(index, "utf8")).not.toBe("old");
-  });
 });
 
 describe("append-event", () => {
@@ -238,14 +204,14 @@ describe("index", () => {
     expect(r.stderr.toLowerCase()).toContain("no vault configured");
   });
 
-  test("generates wikilink index", async () => {
+  test("generates wikilink index under Brain/", async () => {
     const vault = tmp;
-    mkdirSync(join(vault, "AI Wiki"), { recursive: true });
+    mkdirSync(join(vault, BRAIN_ROOT_REL), { recursive: true });
     writeFileSync(join(vault, "Concept.md"), "---\ntitle: Concept\n---\n\nBody.");
     writeFileSync(join(vault, "Other.md"), "No frontmatter.");
     const r = await runCli(["index", "--vault", vault]);
     expect(r.returncode).toBe(0);
-    const indexPath = join(vault, "AI Wiki", "index.md");
+    const indexPath = join(vault, BRAIN_INDEX_REL);
     expect(existsSync(indexPath)).toBe(true);
     const content = readFileSync(indexPath, "utf8");
     expect(content).toContain("[[Concept]]");

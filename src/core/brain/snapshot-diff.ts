@@ -300,7 +300,6 @@ function scanFile(_root: string, abs: string, rel: string): ScannedFile {
     rel === "_brain.yaml"
     || rel === "_BRAIN.md"
     || rel === "active.md"
-    || rel === "_OPEN_SECOND_BRAIN.md"
   ) {
     return {
       entry: {

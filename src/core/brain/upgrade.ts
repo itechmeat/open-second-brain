@@ -1,6 +1,6 @@
 /**
  * Brain managed-file upgrade for the three release-owned files in
- * `Brain/` (`_brain.yaml`, `_BRAIN.md`, `_OPEN_SECOND_BRAIN.md`).
+ * `Brain/` (`_brain.yaml`, `_BRAIN.md`).
  * User-owned content (`preferences/`, `retired/`, `inbox/`, `log/`)
  * is never touched.
  *
@@ -29,11 +29,7 @@ import {
   loadBrainConfig,
 } from "./policy.ts";
 import { createSnapshot } from "./snapshot.ts";
-import {
-  LEGACY_OVERVIEW_REL_PATH,
-  renderBrainManual,
-  renderLegacyOverview,
-} from "./templates.ts";
+import { renderBrainManual } from "./templates.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 
@@ -93,9 +89,8 @@ export class BrainUpgradeError extends Error {
  * Compute the upgrade plan for `vault` without touching disk.
  *
  * Order of files in `plan.files` is fixed: `_brain.yaml`,
- * `_BRAIN.md`, `_OPEN_SECOND_BRAIN.md`. This is the order the CLI
- * renders the per-file diff so the operator's eye lands at the same
- * spot on every run.
+ * `_BRAIN.md`. This is the order the CLI renders the per-file diff
+ * so the operator's eye lands at the same spot on every run.
  */
 export function planUpgrade(vault: string): UpgradePlan {
   const files: UpgradeFilePlan[] = [
@@ -105,12 +100,6 @@ export function planUpgrade(vault: string): UpgradePlan {
       brainManualPath(vault),
       vaultRelative(brainManualPath(vault), vault),
       () => renderBrainManual(vault),
-    ),
-    planManagedPath(
-      vault,
-      join(vault, LEGACY_OVERVIEW_REL_PATH),
-      LEGACY_OVERVIEW_REL_PATH,
-      () => renderLegacyOverview(vault),
     ),
   ];
   const pending = files.filter((f) => f.status === "update").length;

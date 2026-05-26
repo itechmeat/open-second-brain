@@ -52,6 +52,10 @@ export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
 export const BRAIN_CONFIG_FILE = "_brain.yaml";
 export const BRAIN_MANUAL_FILE = "_BRAIN.md";
 export const BRAIN_ACTIVE_FILE = "active.md";
+export const BRAIN_INDEX_FILE = "_INDEX.md";
+
+/** Vault-relative path of the `o2b index` output file. */
+export const BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
