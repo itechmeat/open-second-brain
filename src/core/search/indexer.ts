@@ -196,6 +196,7 @@ async function indexInto(
           startLine: c.startLine,
           endLine: c.endLine,
           tokenCount: c.tokenCount,
+          headingPath: c.headingPath,
         }));
         const chunkIds = store.replaceChunks(docId, chunkInputs);
 

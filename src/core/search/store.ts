@@ -61,6 +61,12 @@ export interface ChunkInput {
   readonly startLine: number;
   readonly endLine: number;
   readonly tokenCount: number;
+  /**
+   * Heading breadcrumb in effect at the chunk (v0.13.0). Indexed in the
+   * dedicated FTS column; defaults to "" so callers that do not supply
+   * it (and pre-v0.13.0 fixtures) index an empty heading column.
+   */
+  readonly headingPath?: string;
 }
 
 export interface ChunkRow {
@@ -486,10 +492,10 @@ export class Store {
       this.db.run("DELETE FROM chunks WHERE document_id = ?", [documentId]);
       const insert = this.db.prepare<
         { id: number },
-        [number, number, string, string, number, number, number, string, string]
+        [number, number, string, string, number, number, number, string, string, string]
       >(
-        "INSERT INTO chunks(document_id, chunk_index, content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO chunks(document_id, chunk_index, content, content_hash, start_line, end_line, token_count, heading_path, created_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       );
       const now = nowIso();
       for (const c of chunks) {
@@ -501,6 +507,7 @@ export class Store {
           c.startLine,
           c.endLine,
           c.tokenCount,
+          c.headingPath ?? "",
           now,
           now,
         );
@@ -752,7 +759,7 @@ export class Store {
           { chunk_id: number; document_id: number; bm25: number },
           [string, string, string, number]
         >(
-          "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts) AS bm25 " +
+          "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts, 1.0, 0.3) AS bm25 " +
             "FROM chunk_fts " +
             "JOIN chunks c ON c.id = chunk_fts.rowid " +
             "JOIN documents d ON d.id = c.document_id " +
@@ -765,7 +772,7 @@ export class Store {
 
     const rows = this.db
       .query<{ chunk_id: number; document_id: number; bm25: number }, [string, number]>(
-        "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts) AS bm25 " +
+        "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts, 1.0, 0.3) AS bm25 " +
           "FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid " +
           "WHERE chunk_fts MATCH ? ORDER BY bm25 ASC LIMIT ?",
       )
