@@ -11,8 +11,8 @@
  *     every consumer that did not opt in to the gate.
  */
 
-import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -169,6 +169,10 @@ describe("dream() gated_retires field", () => {
     const configPath = join(configHome, "config.yaml");
     atomicWriteFileSync(configPath, `vault: ${vault}\n`);
     bootstrapBrain(vault, { configPath });
+  });
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+    rmSync(configHome, { recursive: true, force: true });
   });
 
   test("a fresh-bootstrap dream run returns gated_retires as an empty array", () => {

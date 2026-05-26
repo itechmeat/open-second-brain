@@ -25,6 +25,7 @@
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -117,6 +118,14 @@ export function scanDanglingWorkruns(vault: string): string[] {
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".jsonl")) continue;
     const path = join(dir, name);
+    // Skip non-regular files (a directory named `*.jsonl` would
+    // otherwise be reported as dangling on the very first readFileSync
+    // failure). lstat ignores symlinks the same way.
+    try {
+      if (!lstatSync(path).isFile()) continue;
+    } catch {
+      continue;
+    }
     try {
       const text = readFileSync(path, "utf8");
       const lines = text.split("\n").filter((l) => l.trim().length > 0);

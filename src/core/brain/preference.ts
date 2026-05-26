@@ -130,10 +130,10 @@ export interface WritePreferenceInput {
   readonly pinned?: boolean;
   /**
    * Brain Integrity Suite (v0.12.0). Optional monotonic write counter
-   * persisted as `_revision`. The dream pass / `writePreferenceTxn`
-   * supplies the next value; direct callers may omit, in which case
-   * the writer emits `_revision: 0` so the field is always present
-   * on disk.
+   * persisted as `_revision`. `writePreferenceTxn` auto-stamps the
+   * next value when callers omit. Direct `writePreference` callers
+   * that omit the field skip the emission entirely - legacy fixtures
+   * stay byte-identical (the reader treats absent as `0`).
    */
   readonly revision?: number;
   /**

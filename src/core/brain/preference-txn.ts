@@ -226,6 +226,11 @@ export function expectRevision(
  * refreshing a confirmed preference.
  */
 export function noUnsafeShrink(minRatio: number): WritePreferenceExpectation {
+  if (!Number.isFinite(minRatio) || minRatio <= 0 || minRatio > 1) {
+    throw new RangeError(
+      `noUnsafeShrink(minRatio) expects a finite value in (0, 1]; got ${String(minRatio)}`,
+    );
+  }
   return (ctx) => {
     if (!ctx.existing) return;
     const existingLen = ctx.existing.principle.length;

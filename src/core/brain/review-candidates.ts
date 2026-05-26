@@ -75,31 +75,37 @@ export function buildReviewCandidates(
     would_create: Object.freeze([...summary.new_unconfirmed]),
     would_promote: Object.freeze([...summary.confirmed]),
     would_retire: Object.freeze(
-      summary.retired.map((r) => ({ id: r.id, reason: r.reason })),
+      summary.retired.map((r) =>
+        Object.freeze({ id: r.id, reason: r.reason }),
+      ),
     ),
     would_supersede: Object.freeze(
       summary.retired
         .filter((r) => r.reason === BRAIN_RETIRED_REASON.supersededByContext)
-        .map((r) => ({ id: r.id, reason: r.reason })),
+        .map((r) => Object.freeze({ id: r.id, reason: r.reason })),
     ),
     clusters_below_threshold: Object.freeze(
-      summary.quarantined.map((q) => ({
-        topic: q.topic,
-        signal_count: q.signal_count,
-        distinct_agents: q.distinct_agents,
-        age_days: q.age_days,
-        failed_gates: Object.freeze([...q.failed_gates]),
-      })),
+      summary.quarantined.map((q) =>
+        Object.freeze({
+          topic: q.topic,
+          signal_count: q.signal_count,
+          distinct_agents: q.distinct_agents,
+          age_days: q.age_days,
+          failed_gates: Object.freeze([...q.failed_gates]),
+        }),
+      ),
     ),
     gated_retires: Object.freeze(
-      summary.gated_retires.map((g) => ({
-        pref_id: g.pref_id,
-        topic: g.topic,
-        applied_count: g.applied_count,
-        violated_count: g.violated_count,
-        threshold: g.threshold,
-        attempted_reason: g.attempted_reason,
-      })),
+      summary.gated_retires.map((g) =>
+        Object.freeze({
+          pref_id: g.pref_id,
+          topic: g.topic,
+          applied_count: g.applied_count,
+          violated_count: g.violated_count,
+          threshold: g.threshold,
+          attempted_reason: g.attempted_reason,
+        }),
+      ),
     ),
   } satisfies ReviewCandidatesReport);
 }

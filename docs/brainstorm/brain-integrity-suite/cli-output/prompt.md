@@ -42,8 +42,8 @@ Today `dream(vault, opts)` runs synchronously, returns `DreamRunSummary`. If the
 ## Feature 5: `brain_review_candidates` - read-only dream-pass projection
 
 A new MCP tool that surfaces what the next `brain_dream` invocation *would* do, without applying anything. Backed by the existing `dream(vault, { dryRun: true })` path (which already exists but is not exposed as a separate tool). Output shape:
-```
-{ would_promote: [...], would_retire: [...], would_supersede: [...], clusters_below_threshold: [...] }
+```json
+{ "would_promote": [], "would_retire": [], "would_supersede": [], "clusters_below_threshold": [] }
 ```
 Pure projection over current inbox + active preferences + retired/. No persistent state added.
 
@@ -95,7 +95,8 @@ Pure projection over current inbox + active preferences + retired/. No persisten
 
 Produce exactly 3 distinct architectural variants. For each variant:
 
-### Variant N: <short name>
+## Variant N: <short name>
+
 - **Approach**: 2-3 sentences describing the variant.
 - **Trade-offs**: bullet list of pros and cons.
 - **Complexity**: small | medium | large
@@ -103,7 +104,8 @@ Produce exactly 3 distinct architectural variants. For each variant:
 
 After the three variants, add exactly one recommendation:
 
-### Recommended: Variant N
+## Recommended: Variant N
+
 **Rationale**: 2-3 sentences explaining why this variant over the others, considering the project context and constraints above.
 
 Output nothing outside of these sections.

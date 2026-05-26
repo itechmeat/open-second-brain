@@ -552,6 +552,15 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     workrun.checkpoint(WORKRUN_PHASE.retireComplete);
   }
 
+  // v0.12.0 Brain Integrity Suite: build the gated-slug set once so the
+  // log body and the DreamRunSummary stay consistent — both views must
+  // exclude retires the destructive-from-confirmed gate skipped, or
+  // the next dream pass would parse a `pref-foo` log claiming the
+  // pref was retired while the file is still in `preferences/`.
+  const gatedSlugs = new Set(
+    gatedRetires.map((g) => g.pref_id.replace(/^pref-/, "")),
+  );
+
   // Emit log entries: skip-corrupted-frontmatter first (chronological
   // sense: corruption was detected during planning), then per-topic
   // events (noted-redundant), then run summary last.
@@ -636,10 +645,12 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           ?? "",
       }),
     );
-    const retiredEntries = plan.retires.map(
-      (r) =>
-        `${renderPrefLink({ id: `ret-${r.slug}`, principle: r.principle })} (${r.reason})`,
-    );
+    const retiredEntries = plan.retires
+      .filter((r) => !gatedSlugs.has(r.slug))
+      .map(
+        (r) =>
+          `${renderPrefLink({ id: `ret-${r.slug}`, principle: r.principle })} (${r.reason})`,
+      );
     const summaryBody: Record<string, string | ReadonlyArray<string>> = {
       run_id: runId,
     };
@@ -704,14 +715,6 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // the summary leaves the workrun dangling for the next pass to
   // spot. `workrun` is null on dry-run / pre-mutation paths.
   workrun?.finalize();
-
-  // v0.12.0 Brain Integrity Suite: when the destructive-from-confirmed
-  // gate fires, the corresponding plan.retires entry stays in the plan
-  // but did NOT move to retired/ - it would be a data-truth lie to
-  // claim it in DreamRunSummary.retired. Filter by slug.
-  const gatedSlugs = new Set(
-    gatedRetires.map((g) => g.pref_id.replace(/^pref-/, "")),
-  );
 
   return Object.freeze({
     run_id: runId,
