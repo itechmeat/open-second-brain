@@ -17,7 +17,7 @@ import {
 import { join, relative } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { brainDirs } from "./paths.ts";
+import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 
 export const BRAIN_MANIFEST_SCHEMA_VERSION = 1 as const;
@@ -31,7 +31,7 @@ export interface BrainManifest {
   readonly schema_version: typeof BRAIN_MANIFEST_SCHEMA_VERSION;
   /** ISO-8601 UTC, second precision. */
   readonly generated_at: string;
-  readonly brain_root: "Brain";
+  readonly brain_root: typeof BRAIN_ROOT_REL;
   /** Keys are vault-relative paths under `Brain/`, sorted lexicographically. */
   readonly files: Readonly<Record<string, BrainManifestEntry>>;
 }
@@ -133,7 +133,7 @@ function freezeManifest(
   return Object.freeze({
     schema_version: BRAIN_MANIFEST_SCHEMA_VERSION,
     generated_at,
-    brain_root: "Brain",
+    brain_root: BRAIN_ROOT_REL,
     files: Object.freeze(files),
   });
 }
@@ -281,7 +281,7 @@ export function readManifestSidecar(
   if (parsed === null || typeof parsed !== "object") return null;
   const obj = parsed as Record<string, unknown>;
   if (obj["schema_version"] !== BRAIN_MANIFEST_SCHEMA_VERSION) return null;
-  if (obj["brain_root"] !== "Brain") return null;
+  if (obj["brain_root"] !== BRAIN_ROOT_REL) return null;
   if (typeof obj["generated_at"] !== "string") return null;
   const files = obj["files"];
   if (files === null || typeof files !== "object") return null;
@@ -306,7 +306,7 @@ export function readManifestSidecar(
   return Object.freeze({
     schema_version: BRAIN_MANIFEST_SCHEMA_VERSION,
     generated_at: obj["generated_at"],
-    brain_root: "Brain",
+    brain_root: BRAIN_ROOT_REL,
     files: Object.freeze(entries),
   });
 }

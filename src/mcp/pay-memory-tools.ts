@@ -24,6 +24,8 @@ import {
   consumePendingRequest,
   loadPendingRequest,
   payMemoryDirs,
+  PAY_MEMORY_REPORTS_REL,
+  PAY_MEMORY_SPENDING_JSON_REL,
   vaultRelativePath,
   writeAsset,
   writePendingRequest,
@@ -493,7 +495,7 @@ export const PAY_MEMORY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "payment_policy_check",
     description:
-      "Evaluate a prospective paid call against Brain/payments/policies/spending.json. Returns allowed / approval_required / denied + the rule that fired.",
+      `Evaluate a prospective paid call against ${PAY_MEMORY_SPENDING_JSON_REL}. Returns allowed / approval_required / denied + the rule that fired.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -514,7 +516,7 @@ export const PAY_MEMORY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "payment_report_generate",
     description:
-      "Aggregate a date's payment receipts into a Markdown report under Brain/payments/reports/.",
+      `Aggregate a date's payment receipts into a Markdown report under ${PAY_MEMORY_REPORTS_REL}/.`,
     inputSchema: {
       type: "object",
       properties: {

@@ -15,7 +15,7 @@ import {
   atomicCreateFileSyncExclusive,
   atomicWriteFileSync,
 } from "../fs-atomic.ts";
-import { policyPath } from "./paths.ts";
+import { PAY_MEMORY_ROOT_REL, policyPath } from "./paths.ts";
 
 export const DEFAULT_POLICY_TEMPLATE = `# Agent Spending Policy
 
@@ -65,7 +65,7 @@ The agent must save:
 - payment amount, if available
 - service endpoint, if available
 - generated asset URL or response identifier
-- payment receipt note in \`Brain/payments/<date>/\`
+- payment receipt note in \`${PAY_MEMORY_ROOT_REL}/<date>/\`
 - daily event log entry referencing the receipt
 `;
 

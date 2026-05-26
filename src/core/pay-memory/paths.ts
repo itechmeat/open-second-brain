@@ -13,12 +13,41 @@
  * calendar date).
  */
 
-import { join } from "node:path";
+import { join, posix } from "node:path";
+
+import { BRAIN_ROOT_REL } from "../brain/paths.ts";
 
 export {
   ensureInsideVault,
   vaultRelative,
 } from "../path-safety.ts";
+
+// ----- Canonical Pay Memory path constants ----------------------------------
+//
+// Every path the Pay Memory layer writes to is named here. Other
+// modules (receipt, report, approval, policy, MCP tool descriptions,
+// CLI help text) import these instead of repeating the literal so a
+// future rename cascades from one edit.
+
+/** Vault-relative root of Pay Memory under the Brain layer. */
+export const PAY_MEMORY_ROOT_REL = posix.join(BRAIN_ROOT_REL, "payments");
+
+/** Vault-relative Pay Memory subdirectory names. */
+export const PAY_MEMORY_POLICIES_REL = posix.join(PAY_MEMORY_ROOT_REL, "policies");
+export const PAY_MEMORY_ASSETS_REL = posix.join(PAY_MEMORY_ROOT_REL, "assets");
+export const PAY_MEMORY_DRAFTS_REL = posix.join(PAY_MEMORY_ROOT_REL, "drafts");
+export const PAY_MEMORY_REPORTS_REL = posix.join(PAY_MEMORY_ROOT_REL, "reports");
+export const PAY_MEMORY_PENDING_REL = posix.join(PAY_MEMORY_ROOT_REL, "_pending");
+
+/** Spending-policy file paths (vault-relative). */
+export const PAY_MEMORY_SPENDING_MD_REL = posix.join(
+  PAY_MEMORY_POLICIES_REL,
+  "spending.md",
+);
+export const PAY_MEMORY_SPENDING_JSON_REL = posix.join(
+  PAY_MEMORY_POLICIES_REL,
+  "spending.json",
+);
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const HHMM_RE = /^(\d{2}):(\d{2})$/;
@@ -32,13 +61,12 @@ export interface PayMemoryDirs {
 }
 
 export function payMemoryDirs(vault: string): PayMemoryDirs {
-  const root = join(vault, "Brain", "payments");
   return {
-    policies: join(root, "policies"),
-    payments: root,
-    assets: join(root, "assets"),
-    drafts: join(root, "drafts"),
-    reports: join(root, "reports"),
+    policies: join(vault, PAY_MEMORY_POLICIES_REL),
+    payments: join(vault, PAY_MEMORY_ROOT_REL),
+    assets: join(vault, PAY_MEMORY_ASSETS_REL),
+    drafts: join(vault, PAY_MEMORY_DRAFTS_REL),
+    reports: join(vault, PAY_MEMORY_REPORTS_REL),
   };
 }
 

@@ -15,6 +15,8 @@
 import { existsSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { resolve } from "node:path";
 
+import { BRAIN_ROOT_REL } from "../../core/brain/paths.ts";
+
 export interface DiffSummary {
   readonly preferences: number;
   readonly retired: number;
@@ -22,7 +24,7 @@ export interface DiffSummary {
 }
 
 export function diffSummary(vault: string): DiffSummary {
-  const root = resolve(vault, "Brain");
+  const root = resolve(vault, BRAIN_ROOT_REL);
   const safeCount = (p: string): number => {
     if (!existsSync(p)) return 0;
     try {

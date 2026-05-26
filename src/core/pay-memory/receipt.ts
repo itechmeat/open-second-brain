@@ -23,6 +23,9 @@ import {
   isoDateNow,
   isoTimeNow,
   isoTimestampZ,
+  PAY_MEMORY_PENDING_REL,
+  PAY_MEMORY_SPENDING_JSON_REL,
+  PAY_MEMORY_SPENDING_MD_REL,
   receiptPath,
   validateIsoDate,
   validateIsoTime,
@@ -141,7 +144,7 @@ function renderPolicySection(input: ReceiptInput): string[] {
     default:
       out.push(
         "Not checked. The receipt was created without a policy decision —",
-        "either no `Brain/payments/policies/spending.json` is configured, or the",
+        `either no \`${PAY_MEMORY_SPENDING_JSON_REL}\` is configured, or the`,
         "caller chose not to evaluate the policy. This is *not* a claim",
         "that the call was allowed.",
       );
@@ -166,7 +169,7 @@ function renderPolicySection(input: ReceiptInput): string[] {
     if (input.approvalRequestId?.trim()) {
       out.push(
         "",
-        `Request: [[Brain/payments/_pending/${input.approvalRequestId.trim()}]]`,
+        `Request: [[${PAY_MEMORY_PENDING_REL}/${input.approvalRequestId.trim()}]]`,
       );
     }
     if (input.approvalStatus?.trim()) {
@@ -209,7 +212,7 @@ function renderReceiptBody(input: ReceiptInput): string {
     "",
     "Policy file:",
     "",
-    "[[Brain/payments/policies/spending]]",
+    `[[${stripMarkdownExt(PAY_MEMORY_SPENDING_MD_REL)}]]`,
     "",
     ...renderPolicySection(input),
     "## Expected cost",

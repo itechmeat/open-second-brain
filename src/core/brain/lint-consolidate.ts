@@ -28,7 +28,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
-import { brainDirs } from "./paths.ts";
+import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import {
   PAGE_LIFECYCLE,
   PAGE_STALE_DAYS_DEFAULT,
@@ -196,7 +196,7 @@ export function lintConsolidate(
   const fixes: LintFix[] = [];
   let scanned = 0;
   let filesWritten = 0;
-  const brainRoot = join(vault, "Brain");
+  const brainRoot = join(vault, BRAIN_ROOT_REL);
   if (existsSync(brainRoot)) {
     const stack: string[] = [brainRoot];
     while (stack.length > 0) {

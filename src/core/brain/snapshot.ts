@@ -54,7 +54,12 @@ import {
   manifestSidecarPath,
   writeManifestSidecar,
 } from "./manifest.ts";
-import { brainDirs, snapshotPath, validateRunId } from "./paths.ts";
+import {
+  BRAIN_ROOT_REL,
+  brainDirs,
+  snapshotPath,
+  validateRunId,
+} from "./paths.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -580,10 +585,10 @@ export function extractSnapshotToTemp(
       }
     }
 
-    const extractedBrain = join(tmp, "Brain");
+    const extractedBrain = join(tmp, BRAIN_ROOT_REL);
     if (!existsSync(extractedBrain)) {
       throw new BrainSnapshotError(
-        "archive does not contain a Brain/ root",
+        `archive does not contain a ${BRAIN_ROOT_REL}/ root`,
         runId,
       );
     }

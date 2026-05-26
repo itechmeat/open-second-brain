@@ -42,7 +42,7 @@ import {
   isoDateNow,
   isoTimeNow,
   isoTimestampZ,
-  payMemoryDirs,
+  PAY_MEMORY_PENDING_REL,
   validateIsoDate,
   validateIsoTime,
   validateSlug,
@@ -109,7 +109,7 @@ export interface PendingRequestSummary {
 }
 
 export function pendingDir(vault: string): string {
-  return join(payMemoryDirs(vault).payments, "_pending");
+  return join(vault, PAY_MEMORY_PENDING_REL);
 }
 
 export function pendingRequestPath(vault: string, id: string): string {

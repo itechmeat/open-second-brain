@@ -40,6 +40,8 @@ import {
   writeReceipt,
   writeReport,
   payMemoryDirs,
+  PAY_MEMORY_REPORTS_REL,
+  PAY_MEMORY_SPENDING_JSON_REL,
 } from "../core/pay-memory/index.ts";
 import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import { mkdirSync } from "node:fs";
@@ -468,7 +470,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "payment_report_generate",
       description:
-        "Aggregate a date's payment receipts into a Markdown report under Brain/payments/reports/.",
+        `Aggregate a date's payment receipts into a Markdown report under ${PAY_MEMORY_REPORTS_REL}/.`,
       parameters: {
         type: "object",
         properties: {
@@ -502,7 +504,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "payment_policy_check",
       description:
-        "Evaluate a prospective paid call against Brain/payments/policies/spending.json. Returns allowed / approval_required / denied + the rule that fired.",
+        `Evaluate a prospective paid call against ${PAY_MEMORY_SPENDING_JSON_REL}. Returns allowed / approval_required / denied + the rule that fired.`,
       parameters: {
         type: "object",
         properties: {

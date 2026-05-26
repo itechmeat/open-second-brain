@@ -40,6 +40,7 @@ import {
 } from "./dedup-hash.ts";
 import { discoverMarkersDetailed } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
+import { BRAIN_ROOT_REL } from "./paths.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
@@ -118,7 +119,7 @@ export async function scanInline(
     // `path` (not `name`) so the hard-skip targets only the top-level
     // `<vault>/Brain/` directory; a project file like
     // `projects/Brain/notes.md` keeps being scanned.
-    { raw: "Brain", kind: "path" },
+    { raw: BRAIN_ROOT_REL, kind: "path" },
     ...(opts.exclude ?? []).map(
       (raw): VaultIgnoreRule => ({ raw: normalisePrefix(raw), kind: "path" }),
     ),
