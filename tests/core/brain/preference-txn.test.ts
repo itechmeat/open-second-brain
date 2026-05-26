@@ -184,9 +184,9 @@ describe("writePreferenceTxn", () => {
       {},
     );
 
-    let observedExistingPrinciple: string | null = null;
+    const observed: { principle: string | null } = { principle: null };
     const inspect: WritePreferenceExpectation = (ctx) => {
-      observedExistingPrinciple = ctx.existing?.principle ?? null;
+      observed.principle = ctx.existing?.principle ?? null;
     };
 
     writePreferenceTxn(
@@ -195,16 +195,16 @@ describe("writePreferenceTxn", () => {
       [inspect],
       { overwrite: true },
     );
-    expect(observedExistingPrinciple).toBe("original principle text");
+    expect(observed.principle).toBe("original principle text");
   });
 
   test("expectation context shows existing=null on first write", () => {
-    let observedExisting: unknown = "unset";
+    const observed: { existing: unknown } = { existing: "unset" };
     const inspect: WritePreferenceExpectation = (ctx) => {
-      observedExisting = ctx.existing;
+      observed.existing = ctx.existing;
     };
     writePreferenceTxn(vault, baseInput({ slug: "first-rule" }), [inspect], {});
-    expect(observedExisting).toBeNull();
+    expect(observed.existing).toBeNull();
   });
 
   test("file bytes match what writePreference would have produced (no txn overhead)", () => {

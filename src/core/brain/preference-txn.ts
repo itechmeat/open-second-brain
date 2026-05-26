@@ -29,6 +29,7 @@
 
 import { existsSync } from "node:fs";
 
+import { computeContentHash } from "./content-hash.ts";
 import {
   preferencePath,
   validateSlug,
@@ -146,4 +147,95 @@ export function writePreferenceTxn(
   } finally {
     handle.release();
   }
+}
+
+// ----- Expectation factories -----------------------------------------------
+//
+// Each factory returns a {@link WritePreferenceExpectation} ready to be
+// dropped into the txn's expectations array. Callers compose them
+// declaratively at the call site; the txn runs them in order under the
+// lock, before delegating to {@link writePreference}.
+
+/**
+ * StaleUpdate gate. The writer must declare which revision it read;
+ * the txn rejects the write if the on-disk revision has moved.
+ *
+ * Treats a missing on-disk `_revision` field as 0 - the absent-as-zero
+ * convention from {@link BrainPreference.revision}'s reader.
+ */
+export function expectRevision(
+  expected: number,
+): WritePreferenceExpectation {
+  return (ctx) => {
+    const current = ctx.existing?.revision ?? 0;
+    if (current !== expected) {
+      throw new BrainCollisionError(
+        BRAIN_COLLISION_KIND.staleUpdate,
+        `stale update: expected revision ${expected}, found ${current} (path=${ctx.path})`,
+      );
+    }
+  };
+}
+
+/**
+ * UnsafeShrink gate. The new principle's length must stay at or above
+ * `minRatio * existingPrinciple.length`. A first-time write (no
+ * existing preference) is always allowed.
+ *
+ * `minRatio` should be a value in `(0, 1]`. The dream pass passes
+ * `cfg.confidence.unsafe_shrink_min_ratio` here when promoting or
+ * refreshing a confirmed preference.
+ */
+export function noUnsafeShrink(minRatio: number): WritePreferenceExpectation {
+  return (ctx) => {
+    if (!ctx.existing) return;
+    const existingLen = ctx.existing.principle.length;
+    if (existingLen <= 0) return;
+    const newLen = ctx.input.principle.length;
+    const ratio = newLen / existingLen;
+    if (ratio < minRatio) {
+      throw new BrainCollisionError(
+        BRAIN_COLLISION_KIND.unsafeShrink,
+        `unsafe shrink: new principle ${newLen} chars is below ${minRatio} * ${existingLen} (ratio=${ratio.toFixed(3)})`,
+      );
+    }
+  };
+}
+
+/**
+ * DuplicateWrite gate. Triggers when the proposed content's
+ * {@link computeContentHash} matches the existing `content_hash`
+ * AND the existing `last_evidence_at` is within `windowMs` of `now()`.
+ *
+ * Use case: an agent re-fires a `dream` refresh for the same pref
+ * while a previous write is still settling. The gate stays silent on
+ * legacy preferences (no `content_hash`) so backfills are never
+ * mis-classified as duplicates.
+ *
+ * `now` is injectable so tests do not depend on wall-clock.
+ */
+export function noDuplicateWriteWithin(
+  windowMs: number,
+  now: () => Date = () => new Date(),
+): WritePreferenceExpectation {
+  return (ctx) => {
+    const existing = ctx.existing;
+    if (!existing) return;
+    const existingHash = existing.content_hash;
+    if (!existingHash) return;
+    const proposedHash = computeContentHash(
+      ctx.input.principle,
+      ctx.input.scope,
+    );
+    if (existingHash !== proposedHash) return;
+    const lastEv = existing.last_evidence_at;
+    if (!lastEv) return;
+    const ageMs = now().getTime() - new Date(lastEv).getTime();
+    if (ageMs >= 0 && ageMs < windowMs) {
+      throw new BrainCollisionError(
+        BRAIN_COLLISION_KIND.duplicateWrite,
+        `duplicate write: identical content hash within ${windowMs}ms window (age=${ageMs}ms)`,
+      );
+    }
+  };
 }
