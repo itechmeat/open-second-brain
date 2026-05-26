@@ -242,6 +242,22 @@ export function resolveNotes(cfg: BrainConfig): ResolvedBrainNotesConfig {
 }
 
 /**
+ * Load + resolve the `notes:` block, falling back to
+ * `BRAIN_NOTES_DEFAULTS` when the config file is missing, malformed,
+ * or otherwise unreadable. Same pattern as `loadTemporalConfigSafe`.
+ * Used by `scan-inline` and any future scanner so a freshly-cloned
+ * vault that has not been `brain init`-ed still produces a clean
+ * "no user folders to read" result.
+ */
+export function loadNotesConfigSafe(vault: string): ResolvedBrainNotesConfig {
+  try {
+    return resolveNotes(loadBrainConfig(vault));
+  } catch {
+    return BRAIN_NOTES_DEFAULTS;
+  }
+}
+
+/**
  * Load + resolve the `temporal:` block, falling back to
  * `BRAIN_TEMPORAL_DEFAULTS` when the config file is missing,
  * malformed, or otherwise unreadable. Used by every temporal

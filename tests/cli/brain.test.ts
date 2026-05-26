@@ -1206,7 +1206,7 @@ describe("brain scan-inline", () => {
       "utf8",
     );
 
-    const r = await runCli(["brain", "scan-inline", "--vault", vault], {
+    const r = await runCli(["brain", "scan-inline", "--vault", vault, "--path", "Daily"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     expect(r.returncode).toBe(0);
@@ -1232,7 +1232,7 @@ describe("brain scan-inline", () => {
     const before = readFileSync(notePath, "utf8");
 
     const r = await runCli(
-      ["brain", "scan-inline", "--vault", vault, "--dry-run"],
+      ["brain", "scan-inline", "--vault", vault, "--dry-run", "--path", "Daily"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
@@ -1250,7 +1250,7 @@ describe("brain scan-inline", () => {
       "utf8",
     );
     const r = await runCli(
-      ["brain", "scan-inline", "--vault", vault, "--json"],
+      ["brain", "scan-inline", "--vault", vault, "--json", "--path", "Daily"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
@@ -1269,7 +1269,7 @@ describe("brain scan-inline", () => {
       "utf8",
     );
     const r = await runCli(
-      ["brain", "scan-inline", "--vault", vault, "--strict"],
+      ["brain", "scan-inline", "--vault", vault, "--strict", "--path", "Daily"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(2);

@@ -82,7 +82,7 @@ describe("capture + migration end-to-end", () => {
     );
 
     // Step 3: scan-inline captures + rewrites
-    r = await runCli(["brain", "scan-inline", "--vault", vault], {
+    r = await runCli(["brain", "scan-inline", "--vault", vault, "--path", "Daily"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     expect(r.returncode).toBe(0);
