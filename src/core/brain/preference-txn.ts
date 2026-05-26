@@ -37,12 +37,16 @@ import {
 import {
   parsePreference,
   writePreference,
+  wouldRewritePreference,
   type WritePreferenceInput,
   type WritePreferenceOptions,
   type WritePreferenceResult,
 } from "./preference.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
-import type { BrainPreference } from "./types.ts";
+import {
+  BRAIN_PREFERENCE_STATUS,
+  type BrainPreference,
+} from "./types.ts";
 
 /**
  * Machine-friendly discriminants for the four collision modes covered
@@ -143,7 +147,42 @@ export function writePreferenceTxn(
     for (const expectation of expectations) {
       expectation(ctx);
     }
-    return writePreference(vault, input, options);
+    // Brain Integrity Suite smart defaults (v0.12.0). The txn owns
+    // two pieces of bookkeeping for callers that opt in:
+    //
+    //   - `_content_hash` lands automatically on promotion to
+    //     `confirmed` so the doctor's drift check has something to
+    //     compare against. Skipped when the caller supplies a hash
+    //     of their own.
+    //   - `_revision` is a monotonic write counter that increments
+    //     ONLY when the proposed content would actually change the
+    //     on-disk bytes. A dream-pass no-op rerun must stay
+    //     byte-identical, so the txn pre-renders the would-be write
+    //     with the existing revision and bumps only when
+    //     `wouldRewritePreference` says the file would change.
+    //
+    // Callers that bypass the txn keep pre-v0.12.0 semantics.
+    const autoHash =
+      input.content_hash === undefined
+      && input.status === BRAIN_PREFERENCE_STATUS.confirmed
+        ? { content_hash: computeContentHash(input.principle, input.scope) }
+        : {};
+    const candidate: WritePreferenceInput = {
+      ...input,
+      ...autoHash,
+      revision: input.revision ?? (existing?.revision ?? 0),
+    };
+    const willChange =
+      input.revision !== undefined
+      || existing === null
+      || wouldRewritePreference(vault, candidate);
+    const inputWithDefaults: WritePreferenceInput = willChange
+      ? {
+          ...candidate,
+          revision: input.revision ?? ((existing?.revision ?? 0) + 1),
+        }
+      : candidate;
+    return writePreference(vault, inputWithDefaults, options);
   } finally {
     handle.release();
   }

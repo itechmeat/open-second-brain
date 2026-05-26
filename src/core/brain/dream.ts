@@ -45,6 +45,7 @@ import {
   type WorkrunHandle,
 } from "./dream-workrun.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
+import { writePreferenceTxn } from "./preference-txn.ts";
 import {
   appendLogEvent,
   parseLogDay,
@@ -54,7 +55,6 @@ import {
   moveToRetired,
   parsePreference,
   wouldRewritePreference,
-  writePreference,
 } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
 import { isPinned } from "./pin.ts";
@@ -410,7 +410,12 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       // Fresh pref has no apply-evidence yet; recentApplied/recentViolated
       // start empty and stay so until the next dream pass after the
       // first `brain_apply_evidence` event.
-      writePreference(
+      // v0.12.0 Brain Integrity Suite: route every dream-pass write
+      // through writePreferenceTxn so _revision auto-stamps and
+      // _content_hash lands automatically on confirmed promotions.
+      // Empty expectations array - dream's plan-time logic has
+      // already decided to proceed; the txn just owns the bookkeeping.
+      writePreferenceTxn(
         vault,
         {
           slug: np.slug,
@@ -432,6 +437,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           ...(np.scope ? { scope: np.scope } : {}),
           ...(np.supersedes ? { supersedes: np.supersedes } : {}),
         },
+        [],
         { overwrite: false },
       );
     }
@@ -444,7 +450,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       const ev = collectEvidenceForSlug(vault, update.slug, {
         sinceIso: update.created_at,
       });
-      writePreference(
+      // Same txn route as the newUnconfirmed loop: auto-stamps
+      // _revision (existing+1) and _content_hash on confirmed status.
+      writePreferenceTxn(
         vault,
         {
           slug: update.slug,
@@ -465,6 +473,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           recentViolated: ev.violated,
           ...(update.scope ? { scope: update.scope } : {}),
         },
+        [],
         { overwrite: true },
       );
     }
@@ -696,12 +705,22 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // spot. `workrun` is null on dry-run / pre-mutation paths.
   workrun?.finalize();
 
+  // v0.12.0 Brain Integrity Suite: when the destructive-from-confirmed
+  // gate fires, the corresponding plan.retires entry stays in the plan
+  // but did NOT move to retired/ - it would be a data-truth lie to
+  // claim it in DreamRunSummary.retired. Filter by slug.
+  const gatedSlugs = new Set(
+    gatedRetires.map((g) => g.pref_id.replace(/^pref-/, "")),
+  );
+
   return Object.freeze({
     run_id: runId,
     changed: true,
     new_unconfirmed: plan.newUnconfirmed.map((p) => `pref-${p.slug}`),
     confirmed: Array.from(refresh.confirmed.values()).map((s) => `pref-${s}`),
-    retired: plan.retires.map((r) => ({ id: `ret-${r.slug}`, reason: r.reason })),
+    retired: plan.retires
+      .filter((r) => !gatedSlugs.has(r.slug))
+      .map((r) => ({ id: `ret-${r.slug}`, reason: r.reason })),
     contradictions: Array.from(plan.contradictionTopics),
     moved_to_processed: moved,
     suppressed: plan.signalsSuppressed.map((s) =>
@@ -1603,6 +1622,24 @@ function planRefresh(
           ...prospective,
           recentApplied: ev2.applied,
           recentViolated: ev2.violated,
+          // v0.12.0 Brain Integrity Suite: feed the existing
+          // _revision and _content_hash into the pre-flight render
+          // so the byte comparison matches the writePreferenceTxn
+          // no-op semantic. Otherwise a refreshed pref written by a
+          // prior pass (with _revision: N stamped) would look like
+          // "needs rewrite" against a prospective render that omits
+          // those fields, flipping changed=false runs into spurious
+          // updates.
+          // parsePreference defaults absent _revision to 0; treat 0
+          // the same as "absent" for the pre-flight render so the
+          // bytes-compare matches existing legacy starter files that
+          // never had the field on disk.
+          ...(rec.pref.revision !== undefined && rec.pref.revision > 0
+            ? { revision: rec.pref.revision }
+            : {}),
+          ...(rec.pref.content_hash !== undefined
+            ? { content_hash: rec.pref.content_hash }
+            : {}),
         })
       ) {
         // Counters and body both unchanged — true no-op for this pref.

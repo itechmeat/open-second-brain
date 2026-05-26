@@ -15,6 +15,7 @@ import {
   brainDirs,
   preferencePath,
 } from "../../../src/core/brain/paths.ts";
+import { writePreference } from "../../../src/core/brain/preference.ts";
 import {
   BRAIN_COLLISION_KIND,
   BrainCollisionError,
@@ -83,12 +84,18 @@ describe("expectRevision", () => {
     expect((caught as BrainCollisionError).kind).toBe("StaleUpdate");
   });
 
-  test("treats a missing on-disk revision as 0", () => {
-    writePreferenceTxn(vault, baseInput({}), [], {}); // no revision field on disk
-    // expected=0 matches the absent-as-zero reader semantic.
+  test("expectRevision treats a writePreference-baseline file (no revision stamp) as 0", () => {
+    // Bypass the txn for the baseline so the smart-default auto-stamp
+    // does not kick in. This mirrors a legacy preference written by a
+    // pre-v0.12.0 dream pass.
+    writePreference(vault, baseInput({}));
     writePreferenceTxn(
       vault,
-      baseInput({ revision: 1, principle: "edited principle text after the no-revision baseline" }),
+      baseInput({
+        revision: 1,
+        principle:
+          "edited principle text after the no-revision baseline",
+      }),
       [expectRevision(0)],
       { overwrite: true },
     );
