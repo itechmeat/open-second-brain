@@ -601,8 +601,10 @@ flowchart LR
         Chunker --> Store[(SQLite store<br/>documents / chunks / links / embeddings)]
         Chunker --> Links[extract wikilinks /<br/>markdown links / tags]
         Links --> Store
-        Store --> FTS[(chunk_fts<br/>FTS5 BM25)]
+        Store --> FTS[(chunk_fts<br/>FTS5 BM25<br/>content + heading_path)]
         Store -.optional.-> Vec[(chunk_vec<br/>sqlite-vec)]
+        Chunker --> Ents[extract entities<br/>structural / Unicode]
+        Ents --> Store
         Texts[chunk content] -. on --embeddings .-> Provider[OpenAI-compat<br/>embeddings provider]
         Provider --> Vec
     end
@@ -612,9 +614,11 @@ flowchart LR
         Q["o2b search '<q>'<br/>brain_search"] --> KW[FTS5 keyword<br/>limit × 3 candidates]
         Q -. semantic on .-> SemQ[provider.embed query]
         SemQ --> SemS[vec_search<br/>limit × 5 candidates]
-        KW --> Ranker[ranker<br/>min-max BM25 + cosine<br/>+ link boost + recency boost]
+        KW --> Ranker[ranker<br/>BM25 + cosine + link<br/>+ recency + entity boost<br/>+ why_retrieved]
         SemS --> Ranker
-        Ranker --> Results[ranked results]
+        Ranker --> Trav[link-graph traversal<br/>retrieve-then-walk]
+        Trav --> MMR[MMR diversity rerank]
+        MMR --> Results[ranked results]
     end
 ```
 
@@ -632,12 +636,23 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   writer exclusivity (three attempts, 1 s backoff, then
   `INDEX_LOCKED`).
 - **Ranking.** `final_score = clamp01(keyword_weight·norm_BM25 +
-  semantic_weight·cosine + link_boost + recency_boost)`. BM25 is
-  min-max-normalised within the candidate set; cosine is
+  semantic_weight·cosine + link_boost + recency_boost + entity_boost)`.
+  BM25 is min-max-normalised within the candidate set; cosine is
   `1 - L2² / 2` on unit-normalised vectors; link boost rewards
   candidates that other candidates reference via `[[wikilink]]` /
   markdown link (capped at 0.03) or share a tag with (capped at
-  0.02); recency is a step function on `mtime`.
+  0.02); recency is a step function on `mtime`; entity boost (capped
+  at 0.04) rewards proper-noun overlap between query and chunk. Every
+  result carries a `why_retrieved` list of the layers that fired.
+- **Recall layers (v0.13.0).** After ranking, link-graph traversal
+  walks outbound wikilinks from the top hits and merges in related
+  documents scored `parent·hop_decay^hop` (bounded by `search_max_hops`
+  / `search_max_expansion_per_hit`); then MMR reranks the pool with a
+  deterministic token-set similarity so near-duplicates do not crowd
+  the top (`search_mmr_lambda`, `1` disables). Header-anchored chunking
+  indexes each chunk's heading breadcrumb in a dedicated FTS column
+  (weighted below content) so a mid-document chunk keeps its topical
+  anchor. Entity and heading layers populate on the next reindex.
 - **Semantic policy.** Implicit semantic (config default) warns and
   falls back to keyword-only when sqlite-vec is unavailable, the key
   is missing, the provider is down, or no embeddings exist yet.
