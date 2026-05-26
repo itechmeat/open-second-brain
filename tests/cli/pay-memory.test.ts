@@ -28,17 +28,18 @@ describe("init-pay-memory", () => {
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("pay-memory layout initialized:");
     expect(r.stdout).toContain("agent: hermes-vps-agent");
-    for (const sub of ["policies", "payments", "assets", "drafts", "reports"]) {
-      expect(existsSync(join(vault, "AI Wiki", sub))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "payments"))).toBe(true);
+    for (const sub of ["policies", "assets", "drafts", "reports"]) {
+      expect(existsSync(join(vault, "Brain", "payments", sub))).toBe(true);
     }
-    expect(existsSync(join(vault, "AI Wiki", "policies", "spending.md"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "payments", "policies", "spending.md"))).toBe(true);
   });
 
   test("re-running is idempotent and skips the policy by default", async () => {
     await runCli(["init-pay-memory", "--vault", vault], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
-    const policy = join(vault, "AI Wiki", "policies", "spending.md");
+    const policy = join(vault, "Brain", "payments", "policies", "spending.md");
     writeFileSync(policy, "edited\n", "utf8");
     const r = await runCli(["init-pay-memory", "--vault", vault], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
@@ -52,7 +53,7 @@ describe("init-pay-memory", () => {
     await runCli(["init-pay-memory", "--vault", vault], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
-    const policy = join(vault, "AI Wiki", "policies", "spending.md");
+    const policy = join(vault, "Brain", "payments", "policies", "spending.md");
     writeFileSync(policy, "stale\n", "utf8");
     const r = await runCli(["init-pay-memory", "--vault", vault, "--overwrite"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
@@ -69,9 +70,9 @@ describe("init-pay-memory", () => {
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout);
     expect(payload.vault_path).toBe(vault);
-    expect(payload.policy_path).toBe("AI Wiki/policies/spending.md");
+    expect(payload.policy_path).toBe("Brain/payments/policies/spending.md");
     expect(payload.policy_status).toBe("created");
-    expect(payload.created).toContain("AI Wiki/policies");
+    expect(payload.created).toContain("Brain/payments/policies");
   });
 });
 
@@ -101,7 +102,7 @@ describe("append-payment-receipt", () => {
         "--actual-amount", "0.05",
         "--currency", "USDC",
         "--result-ref", "https://fal-cdn.example/img.png",
-        "--result-note", "AI Wiki/assets/blog-header.md",
+        "--result-note", "Brain/payments/assets/blog-header.md",
         "--raw-output-file", rawFile,
         "--date", "2026-05-10",
         "--time", "17:20",
@@ -109,7 +110,7 @@ describe("append-payment-receipt", () => {
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
-    expect(r.stdout).toContain("receipt: AI Wiki/payments/2026-05-10/");
+    expect(r.stdout).toContain("receipt: Brain/payments/2026-05-10/");
     const receiptPath = r.stdout.match(/^receipt: (.+)$/m)![1]!.trim();
     const text = readFileSync(join(vault, receiptPath), "utf8");
     expect(text).toContain("paysponge/fal");
@@ -168,19 +169,19 @@ describe("capture-asset", () => {
         "--title", "Blog Header: Pay Memory",
         "--service", "paysponge/fal",
         "--result-url", "https://fal-cdn.example/img.png",
-        "--source-receipt", "AI Wiki/payments/2026-05-10/fal-blog.md",
+        "--source-receipt", "Brain/payments/2026-05-10/fal-blog.md",
         "--prompt-file", promptFile,
-        "--used-in", "AI Wiki/drafts/blog-post.md",
+        "--used-in", "Brain/payments/drafts/blog-post.md",
       ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
-    expect(r.stdout).toContain("asset: AI Wiki/assets/");
+    expect(r.stdout).toContain("asset: Brain/payments/assets/");
     const assetPath = r.stdout.match(/^asset: (.+)$/m)![1]!.trim();
     const text = readFileSync(join(vault, assetPath), "utf8");
     expect(text).toContain("# Blog Header: Pay Memory");
     expect(text).toContain("> A recursive technical illustration");
-    expect(text).toContain('source_receipt: "[[AI Wiki/payments/2026-05-10/fal-blog]]"');
+    expect(text).toContain('source_receipt: "[[Brain/payments/2026-05-10/fal-blog]]"');
   });
 });
 
@@ -219,7 +220,7 @@ describe("payment-report", () => {
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(report.returncode).toBe(0);
-    expect(report.stdout).toContain("report: AI Wiki/reports/");
+    expect(report.stdout).toContain("report: Brain/payments/reports/");
     expect(report.stdout).toContain("receipts: 2");
     const reportPath = report.stdout.match(/^report: (.+)$/m)![1]!.trim();
     const text = readFileSync(join(vault, reportPath), "utf8");
@@ -262,7 +263,7 @@ describe("check-payment-policy", () => {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     writeFileSync(
-      join(vault, "AI Wiki", "policies", "spending.json"),
+      join(vault, "Brain", "payments", "policies", "spending.json"),
       JSON.stringify({ allowed_services: ["paysponge/fal"] }),
       "utf8",
     );
@@ -280,7 +281,7 @@ describe("check-payment-policy", () => {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     writeFileSync(
-      join(vault, "AI Wiki", "policies", "spending.json"),
+      join(vault, "Brain", "payments", "policies", "spending.json"),
       JSON.stringify({
         allowed_services: ["x/y"],
         require_approval_above: 0.05,
@@ -317,7 +318,7 @@ describe("check-payment-policy", () => {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     writeFileSync(
-      join(vault, "AI Wiki", "policies", "spending.json"),
+      join(vault, "Brain", "payments", "policies", "spending.json"),
       JSON.stringify({
         allowed_services: ["x/y"],
         max_single_call: 0.05,
@@ -357,7 +358,7 @@ describe("approval workflow (request → approve → consume)", () => {
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(req.returncode).toBe(0);
-    expect(req.stdout).toContain("pending: AI Wiki/payments/_pending/demo-1.md");
+    expect(req.stdout).toContain("pending: Brain/payments/_pending/demo-1.md");
 
     const approve = await runCli(
       [
@@ -377,7 +378,7 @@ describe("approval workflow (request → approve → consume)", () => {
         "consume-payment-request",
         "--vault", vault,
         "--id", "demo-1",
-        "--receipt", "AI Wiki/payments/2026-05-10/fal-1.md",
+        "--receipt", "Brain/payments/2026-05-10/fal-1.md",
       ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
@@ -385,12 +386,12 @@ describe("approval workflow (request → approve → consume)", () => {
     expect(consume.stdout).toContain("status: consumed");
 
     const text = readFileSync(
-      join(vault, "AI Wiki", "payments", "_pending", "demo-1.md"),
+      join(vault, "Brain", "payments", "_pending", "demo-1.md"),
       "utf8",
     );
     expect(text).toContain("status: consumed");
     expect(text).toContain("approved_by: sergey");
-    expect(text).toContain("receipt: AI Wiki/payments/2026-05-10/fal-1.md");
+    expect(text).toContain("receipt: Brain/payments/2026-05-10/fal-1.md");
   });
 
   test("reject blocks subsequent approve", async () => {

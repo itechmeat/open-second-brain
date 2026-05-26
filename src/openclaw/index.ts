@@ -468,7 +468,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "payment_report_generate",
       description:
-        "Aggregate a date's payment receipts into a Markdown report under AI Wiki/reports/.",
+        "Aggregate a date's payment receipts into a Markdown report under Brain/payments/reports/.",
       parameters: {
         type: "object",
         properties: {
@@ -502,7 +502,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "payment_policy_check",
       description:
-        "Evaluate a prospective paid call against AI Wiki/policies/spending.json. Returns allowed / approval_required / denied + the rule that fired.",
+        "Evaluate a prospective paid call against Brain/payments/policies/spending.json. Returns allowed / approval_required / denied + the rule that fired.",
       parameters: {
         type: "object",
         properties: {

@@ -31,7 +31,7 @@ describe("writeReceipt", () => {
     expect(out.date).toBe("2026-05-10");
     expect(out.created).toBe("2026-05-10T17:20:00Z");
     expect(out.slug.startsWith("fal-")).toBe(true);
-    expect(out.relativePath.startsWith("AI Wiki/payments/2026-05-10/")).toBe(true);
+    expect(out.relativePath.startsWith("Brain/payments/2026-05-10/")).toBe(true);
 
     const [meta, body] = parseFrontmatter(out.path);
     expect(meta["type"]).toBe("agent-payment-receipt");
@@ -42,7 +42,7 @@ describe("writeReceipt", () => {
     expect(meta["network"]).toBe("solana");
     expect(meta["created"]).toBe("2026-05-10T17:20:00Z");
     expect(body).toContain("# Payment Receipt: Generate one original blog header image");
-    expect(body).toContain("[[AI Wiki/policies/spending]]");
+    expect(body).toContain("[[Brain/payments/policies/spending]]");
   });
 
   test("respects an explicit slug", () => {
@@ -68,7 +68,7 @@ describe("writeReceipt", () => {
       currency: "USDC",
       paymentProof: "5G3...sig",
       resultRef: "https://fal-cdn.example/abc.png",
-      resultNote: "AI Wiki/assets/blog-header.md",
+      resultNote: "Brain/payments/assets/blog-header.md",
       rawOutput: "{\"ok\": true}",
     });
     const [meta, body] = parseFrontmatter(out.path);
@@ -79,8 +79,8 @@ describe("writeReceipt", () => {
     expect(meta["currency"]).toBe("USDC");
     expect(meta["payment_proof"]).toBe("5G3...sig");
     expect(meta["result_ref"]).toBe("https://fal-cdn.example/abc.png");
-    expect(meta["result_note"]).toBe("AI Wiki/assets/blog-header.md");
-    expect(body).toContain("[[AI Wiki/assets/blog-header]]");
+    expect(meta["result_note"]).toBe("Brain/payments/assets/blog-header.md");
+    expect(body).toContain("[[Brain/payments/assets/blog-header]]");
     expect(body).toContain("`USDC`");
     expect(body).not.toContain("_(not provided)_");
   });
@@ -117,10 +117,10 @@ describe("writeReceipt", () => {
   test("sanitizes brackets in resultNote wikilink", () => {
     const out = writeReceipt(tmp, {
       ...baseInput,
-      resultNote: "AI Wiki/assets/blog [draft].md",
+      resultNote: "Brain/payments/assets/blog [draft].md",
     });
     const text = readFileSync(out.path, "utf8");
-    expect(text).toContain("[[AI Wiki/assets/blog draft]]");
+    expect(text).toContain("[[Brain/payments/assets/blog draft]]");
     expect(text).not.toContain("[draft]]]");
   });
 
@@ -176,7 +176,7 @@ describe("writeReceipt", () => {
     expect(body).toContain("Policy returned `approval_required`");
     expect(body).toContain("Rule fired: `max_single_call`");
     expect(body).toContain("expected amount 0.10 USDC exceeds max_single_call 0.07 USDC");
-    expect(body).toContain("[[AI Wiki/payments/_pending/req-2026-05-10-fal]]");
+    expect(body).toContain("[[Brain/payments/_pending/req-2026-05-10-fal]]");
     expect(body).toContain("Approved by: sergey");
   });
 

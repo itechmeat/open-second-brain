@@ -1,5 +1,5 @@
 /**
- * Machine-readable spending policy (`AI Wiki/policies/spending.json`).
+ * Machine-readable spending policy (`Brain/payments/policies/spending.json`).
  *
  * Optional, opt-in companion to `spending.md`. When the JSON file is present,
  * it can be evaluated by the agent (or by `o2b check-payment-policy`) before
@@ -22,7 +22,7 @@ import { isoDateNow, payMemoryDirs, validateIsoDate } from "./paths.ts";
 export const POLICY_SCHEMA_VERSION = 1;
 
 /**
- * Schema for `AI Wiki/policies/spending.json`. All fields are optional —
+ * Schema for `Brain/payments/policies/spending.json`. All fields are optional —
  * unspecified rules are interpreted as "no constraint".
  */
 export interface PolicyRules {

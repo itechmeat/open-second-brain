@@ -57,11 +57,13 @@ describe("payment_memory_init", () => {
     const r = await call(server, "payment_memory_init");
     expect(r.result.isError).toBe(false);
     const s = r.result.structuredContent;
-    expect(s.policy_path).toBe("AI Wiki/policies/spending.md");
+    expect(s.policy_path).toBe("Brain/payments/policies/spending.md");
     expect(s.policy_status).toBe("created");
-    expect(s.created).toContain("AI Wiki/policies");
-    for (const sub of ["policies", "payments", "assets", "drafts", "reports"]) {
-      expect(existsSync(join(vault, "AI Wiki", sub))).toBe(true);
+    expect(s.created).toContain("Brain/payments/policies");
+    // Receipts go DIRECTLY under Brain/payments/ (no nested payments subdir).
+    expect(existsSync(join(vault, "Brain", "payments"))).toBe(true);
+    for (const sub of ["policies", "assets", "drafts", "reports"]) {
+      expect(existsSync(join(vault, "Brain", "payments", sub))).toBe(true);
     }
   });
 
@@ -95,14 +97,14 @@ describe("payment_receipt_append", () => {
       actual_amount: "0.05",
       currency: "USDC",
       result_ref: "https://fal-cdn.example/img.png",
-      result_note: "AI Wiki/assets/blog-header.md",
+      result_note: "Brain/payments/assets/blog-header.md",
       raw_output: 'Authorization: Bearer SECRET\n{"api_key": "sk_live_abc"}',
       date: "2026-05-10",
       time: "17:20",
     });
     expect(r.result.isError).toBe(false);
     const s = r.result.structuredContent;
-    expect(s.path.startsWith("AI Wiki/payments/2026-05-10/")).toBe(true);
+    expect(s.path.startsWith("Brain/payments/2026-05-10/")).toBe(true);
     expect(s.date).toBe("2026-05-10");
     expect(s.created).toBe("2026-05-10T17:20:00Z");
     const text = readFileSync(join(vault, s.path), "utf8");
@@ -155,15 +157,15 @@ describe("asset_capture", () => {
       title: "Blog Header: Pay Memory",
       service: "paysponge/fal",
       result_url: "https://fal-cdn.example/img.png",
-      source_receipt: "AI Wiki/payments/2026-05-10/fal-blog.md",
+      source_receipt: "Brain/payments/2026-05-10/fal-blog.md",
       prompt: "A recursive technical illustration",
-      used_in: "AI Wiki/drafts/blog-post.md",
+      used_in: "Brain/payments/drafts/blog-post.md",
     });
     expect(r.result.isError).toBe(false);
     const s = r.result.structuredContent;
     const text = readFileSync(join(vault, s.path), "utf8");
     expect(text).toContain("# Blog Header: Pay Memory");
-    expect(text).toContain('source_receipt: "[[AI Wiki/payments/2026-05-10/fal-blog]]"');
+    expect(text).toContain('source_receipt: "[[Brain/payments/2026-05-10/fal-blog]]"');
     expect(text).toContain("> A recursive technical illustration");
   });
 });
@@ -228,7 +230,7 @@ describe("payment_policy_check", () => {
     await call(server, "payment_memory_init");
     const { writeFileSync } = await import("node:fs");
     writeFileSync(
-      join(vault, "AI Wiki", "policies", "spending.json"),
+      join(vault, "Brain", "payments", "policies", "spending.json"),
       JSON.stringify({ allowed_services: ["paysponge/fal"] }),
       "utf8",
     );
@@ -279,7 +281,7 @@ describe("approval workflow MCP tools", () => {
     const s = r.result.structuredContent;
     expect(s.id).toBe("mcp-1");
     expect(s.status).toBe("pending");
-    expect(s.path).toBe("AI Wiki/payments/_pending/mcp-1.md");
+    expect(s.path).toBe("Brain/payments/_pending/mcp-1.md");
   });
 
   test("payment_request_status surfaces metadata", async () => {
@@ -309,7 +311,7 @@ describe("approval workflow MCP tools", () => {
     });
     const r = await call(server, "payment_request_consume", {
       id: "mcp-3",
-      receipt: "AI Wiki/payments/2026-05-10/x.md",
+      receipt: "Brain/payments/2026-05-10/x.md",
     });
     expect(r.result.isError).toBe(true);
     expect((r.result.content[0] as { text: string }).text).toContain("cannot transition");

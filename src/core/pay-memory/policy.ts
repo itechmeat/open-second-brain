@@ -65,7 +65,7 @@ The agent must save:
 - payment amount, if available
 - service endpoint, if available
 - generated asset URL or response identifier
-- payment receipt note in \`AI Wiki/payments/<date>/\`
+- payment receipt note in \`Brain/payments/<date>/\`
 - daily event log entry referencing the receipt
 `;
 

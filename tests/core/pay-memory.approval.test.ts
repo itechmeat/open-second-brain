@@ -36,7 +36,7 @@ describe("writePendingRequest", () => {
   test("creates a pending-payment-request artifact with frontmatter and body", () => {
     const out = writePendingRequest(tmp, baseInput);
     expect(out.status).toBe("pending");
-    expect(out.relativePath.startsWith("AI Wiki/payments/_pending/")).toBe(true);
+    expect(out.relativePath.startsWith("Brain/payments/_pending/")).toBe(true);
     expect(out.id.startsWith("req-2026-05-10-1000-fal-")).toBe(true);
     expect(out.policyDecision.hasPolicy).toBe(false);
 
@@ -54,17 +54,17 @@ describe("writePendingRequest", () => {
       currency: "USDC",
       endpoint: "https://gateway.example/v1/fal",
       expectedOutput: "PNG image, 1024×512",
-      vaultFiles: ["AI Wiki/drafts/post.md", "AI Wiki/assets/header.md"],
+      vaultFiles: ["Brain/payments/drafts/post.md", "Brain/payments/assets/header.md"],
     });
     const text = readFileSync(out.path, "utf8");
     expect(text).toContain("expected_amount: 0.05");
     expect(text).toContain("currency: USDC");
-    expect(text).toContain("- `AI Wiki/drafts/post.md`");
+    expect(text).toContain("- `Brain/payments/drafts/post.md`");
     expect(text).toContain("PNG image, 1024×512");
   });
 
   test("records the policy decision when policies/spending.json is present", () => {
-    mkdirSync(join(tmp, "AI Wiki", "policies"), { recursive: true });
+    mkdirSync(join(tmp, "Brain", "payments", "policies"), { recursive: true });
     writeFileSync(
       policyJsonPath(tmp),
       JSON.stringify({ allowed_services: ["paysponge/fal"], require_approval_above: 0.04 }),
@@ -78,7 +78,7 @@ describe("writePendingRequest", () => {
   });
 
   test("enforcePolicy=true blocks creation when policy denies", () => {
-    mkdirSync(join(tmp, "AI Wiki", "policies"), { recursive: true });
+    mkdirSync(join(tmp, "Brain", "payments", "policies"), { recursive: true });
     writeFileSync(
       policyJsonPath(tmp),
       JSON.stringify({ allowed_services: ["paysponge/fal"] }),
@@ -136,11 +136,11 @@ describe("state transitions", () => {
     ).rejects.toThrow(/cannot transition request t-3 from pending to consumed/);
     await approvePendingRequest(tmp, "t-3", { approvedBy: "sergey" });
     const out = await consumePendingRequest(tmp, "t-3", {
-      receiptPath: "AI Wiki/payments/2026-05-10/x.md",
+      receiptPath: "Brain/payments/2026-05-10/x.md",
     });
     expect(out.status).toBe("consumed");
     const reloaded = loadPendingRequest(tmp, "t-3")!;
-    expect(reloaded.metadata["receipt"]).toBe("AI Wiki/payments/2026-05-10/x.md");
+    expect(reloaded.metadata["receipt"]).toBe("Brain/payments/2026-05-10/x.md");
   });
 
   test("rejected and consumed are terminal", async () => {

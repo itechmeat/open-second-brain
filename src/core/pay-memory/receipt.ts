@@ -141,7 +141,7 @@ function renderPolicySection(input: ReceiptInput): string[] {
     default:
       out.push(
         "Not checked. The receipt was created without a policy decision —",
-        "either no `AI Wiki/policies/spending.json` is configured, or the",
+        "either no `Brain/payments/policies/spending.json` is configured, or the",
         "caller chose not to evaluate the policy. This is *not* a claim",
         "that the call was allowed.",
       );
@@ -166,7 +166,7 @@ function renderPolicySection(input: ReceiptInput): string[] {
     if (input.approvalRequestId?.trim()) {
       out.push(
         "",
-        `Request: [[AI Wiki/payments/_pending/${input.approvalRequestId.trim()}]]`,
+        `Request: [[Brain/payments/_pending/${input.approvalRequestId.trim()}]]`,
       );
     }
     if (input.approvalStatus?.trim()) {
@@ -209,7 +209,7 @@ function renderReceiptBody(input: ReceiptInput): string {
     "",
     "Policy file:",
     "",
-    "[[AI Wiki/policies/spending]]",
+    "[[Brain/payments/policies/spending]]",
     "",
     ...renderPolicySection(input),
     "## Expected cost",

@@ -1,7 +1,7 @@
 /**
  * Approval workflow for paid agent actions (spec §17.6).
  *
- * Adds a `pending-payment-request` artifact under `AI Wiki/payments/_pending/`.
+ * Adds a `pending-payment-request` artifact under `Brain/payments/_pending/`.
  * The flow is:
  *
  *   1. Agent creates a pending request (`writePendingRequest`).

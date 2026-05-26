@@ -97,7 +97,7 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "  - payment_memory_init bootstraps the layout and writes the " +
     "spending policy template (run once per vault).\n" +
     "  - payment_policy_check evaluates a prospective paid call against " +
-    "`AI Wiki/policies/spending.json` (allowed / approval_required / denied).\n" +
+    "`Brain/payments/policies/spending.json` (allowed / approval_required / denied).\n" +
     "  - payment_request_approval creates a pending-payment-request the " +
     "user must approve before you run `pay`; payment_request_status polls " +
     "for approval; payment_request_consume links the eventual receipt.\n" +

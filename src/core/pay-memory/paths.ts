@@ -1,16 +1,16 @@
 /**
  * Filesystem paths and date utilities for the Pay Memory layout.
  *
- * The layout sits inside `<vault>/AI Wiki/`:
+ * The layout sits inside `<vault>/Brain/payments/`:
  *   - policies/spending.md
- *   - payments/YYYY-MM-DD/<slug>.md
+ *   - YYYY-MM-DD/<slug>.md       (receipts go directly under the root)
  *   - assets/<slug>.md
- *   - drafts/<slug>.md       (written by other tools — kept here for completeness)
+ *   - drafts/<slug>.md           (written by other tools)
  *   - reports/<slug>.md
+ *   - _pending/<id>.md           (approval workflow)
  *
- * Date subdirectories use the hyphenated `YYYY-MM-DD` form (ISO 8601 calendar
- * date). This intentionally differs from the dotted `YYYY.MM.DD` used by the
- * Daily event log — the two systems are independent.
+ * Date subdirectories use the hyphenated `YYYY-MM-DD` form (ISO 8601
+ * calendar date).
  */
 
 import { join } from "node:path";
@@ -32,10 +32,10 @@ export interface PayMemoryDirs {
 }
 
 export function payMemoryDirs(vault: string): PayMemoryDirs {
-  const root = join(vault, "AI Wiki");
+  const root = join(vault, "Brain", "payments");
   return {
     policies: join(root, "policies"),
-    payments: join(root, "payments"),
+    payments: root,
     assets: join(root, "assets"),
     drafts: join(root, "drafts"),
     reports: join(root, "reports"),
