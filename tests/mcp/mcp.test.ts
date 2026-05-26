@@ -165,6 +165,7 @@ describe("tool listing", () => {
         // brain_daily_brief / brain_weekly_synthesis added in v0.10.18).
         "brain_feedback",
         "brain_dream",
+        "brain_review_candidates",
         "brain_apply_evidence",
         "brain_note",
         "brain_context",
@@ -381,11 +382,12 @@ describe("stdio loop", () => {
     const list = JSON.parse(lines[1]!);
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
-    // v0.10.18: 3 core + 19 Brain (brain_timeline /
+    // v0.12.0: 3 core + 20 Brain (brain_review_candidates added in
+    // v0.12.0 Brain Integrity Suite, brain_timeline /
     // brain_belief_evolution / brain_stale_scan / brain_daily_brief /
     // brain_weekly_synthesis added v0.10.18)
-    // + 8 Pay Memory + 1 Search = 31.
-    expect(list.result.tools.length).toBe(31);
+    // + 8 Pay Memory + 1 Search = 32.
+    expect(list.result.tools.length).toBe(32);
   });
 
   test("returns parse error for invalid JSON", async () => {

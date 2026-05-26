@@ -78,6 +78,12 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "  - brain_dream — runs the deterministic learning pass " +
     "(clusters signals, promotes preferences, retires stale rules). " +
     "Usually scheduled via cron, not invoked interactively.\n" +
+    "  - brain_review_candidates — read-only preview of what the " +
+    "next `brain_dream` invocation would do. Returns `would_create`, " +
+    "`would_promote`, `would_retire`, `would_supersede`, " +
+    "`clusters_below_threshold`, and `gated_retires` without mutating " +
+    "any files. Use it when you want to be deliberate before " +
+    "triggering the learning pass.\n" +
     "  - brain_digest — read-only summary of the last activity " +
     "window. Default format is Markdown; pass `format: \"json\"` for " +
     "programmatic use.\n" +

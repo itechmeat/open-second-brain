@@ -76,6 +76,7 @@ import {
   type DigestFormat,
 } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
+import { buildReviewCandidates } from "../core/brain/review-candidates.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
 import { buildOperatorSummary } from "../core/brain/trust/operator-summary.ts";
 import { BRAIN_ROLES } from "../core/brain/trust/role.ts";
@@ -296,6 +297,45 @@ async function toolBrainDream(
     log_path: summary.log_path
       ? vaultRelativeSafe(ctx.vault, summary.log_path)
       : null,
+  };
+}
+
+// ----- brain_review_candidates --------------------------------------------
+
+async function toolBrainReviewCandidates(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const nowDate = coerceIsoDate(args, "now");
+  const report = buildReviewCandidates(ctx.vault, {
+    ...(nowDate ? { now: nowDate } : {}),
+  });
+  return {
+    would_create: [...report.would_create],
+    would_promote: [...report.would_promote],
+    would_retire: report.would_retire.map((r) => ({
+      id: r.id,
+      reason: r.reason,
+    })),
+    would_supersede: report.would_supersede.map((r) => ({
+      id: r.id,
+      reason: r.reason,
+    })),
+    clusters_below_threshold: report.clusters_below_threshold.map((c) => ({
+      topic: c.topic,
+      signal_count: c.signal_count,
+      distinct_agents: c.distinct_agents,
+      age_days: c.age_days,
+      failed_gates: [...c.failed_gates],
+    })),
+    gated_retires: report.gated_retires.map((g) => ({
+      pref_id: g.pref_id,
+      topic: g.topic,
+      applied_count: g.applied_count,
+      violated_count: g.violated_count,
+      threshold: g.threshold,
+      attempted_reason: g.attempted_reason,
+    })),
   };
 }
 
@@ -1427,6 +1467,23 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainDream,
+  },
+  {
+    name: "brain_review_candidates",
+    description:
+      "Read-only preview of what the next `brain_dream` invocation would do. Returns `would_create`, `would_promote`, `would_retire`, `would_supersede`, `clusters_below_threshold`, and `gated_retires` without mutating any files. Useful for agents that want to be deliberate before triggering the learning pass, or for operators inspecting the dream pass intent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        now: {
+          type: "string",
+          description:
+            "Optional ISO-8601 timestamp used as the wall clock for the dry-run (testing / replay).",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainReviewCandidates,
   },
   {
     name: "brain_apply_evidence",
