@@ -39,6 +39,11 @@ import { basename, join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { regenerateActiveQuiet } from "./active.ts";
+import {
+  openWorkrun,
+  WORKRUN_PHASE,
+  type WorkrunHandle,
+} from "./dream-workrun.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
 import {
   appendLogEvent,
@@ -390,6 +395,16 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // DreamRunSummary.gated_retires field is consistently an array.
   const gatedRetires: DreamGatedRetireEntry[] = [];
 
+  // v0.12.0 Brain Integrity Suite: durable workrun for the dream pass.
+  // Opened lazily on the mutation path (no workrun on dry-run or
+  // no-op early-return). The handle is null until the exec branch
+  // claims it; `finally` finalises if non-null.
+  let workrun: WorkrunHandle | null = null;
+  if (!dryRun) {
+    workrun = openWorkrun(vault, runId);
+    workrun.checkpoint(WORKRUN_PHASE.clusterComplete);
+  }
+
   if (!dryRun) {
     for (const np of plan.newUnconfirmed) {
       // Fresh pref has no apply-evidence yet; recentApplied/recentViolated
@@ -517,6 +532,15 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     // Dry-run still reports the move list so the caller's summary is
     // accurate, but it does not touch disk.
     for (const sig of plan.signalsToMove.values()) moved.push(sig.id);
+  }
+
+  // v0.12.0 Brain Integrity Suite: mark promote + retire phases. The
+  // dream.ts execution loop runs promote (writePreference) then retire
+  // (moveToRetired) sequentially; one checkpoint covers both
+  // mutations so the workrun stays compact yet recovery-meaningful.
+  if (workrun !== null) {
+    workrun.checkpoint(WORKRUN_PHASE.promoteComplete);
+    workrun.checkpoint(WORKRUN_PHASE.retireComplete);
   }
 
   // Emit log entries: skip-corrupted-frontmatter first (chronological
@@ -665,6 +689,12 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     }
     regenerateActiveQuiet(vault, { now });
   }
+
+  // v0.12.0 Brain Integrity Suite: finalise the durable workrun
+  // immediately before constructing the summary. Any crash building
+  // the summary leaves the workrun dangling for the next pass to
+  // spot. `workrun` is null on dry-run / pre-mutation paths.
+  workrun?.finalize();
 
   return Object.freeze({
     run_id: runId,

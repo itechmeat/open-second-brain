@@ -186,6 +186,26 @@ export function logJsonlPath(vault: string, date: string): string {
   return ensureInsideVault(join(brainDirs(vault).log, `${d}.jsonl`), vault);
 }
 
+/**
+ * Brain Integrity Suite (v0.12.0). Workrun directory used by the
+ * durable dream-pass checkpoint surface: `Brain/log/dream-runs/`.
+ * Lives under the log dir so backups already include it.
+ */
+export function dreamRunsDir(vault: string): string {
+  return join(brainDirs(vault).log, "dream-runs");
+}
+
+/**
+ * Brain Integrity Suite (v0.12.0). Durable workrun JSONL for a
+ * single dream invocation: `Brain/log/dream-runs/<run-id>.jsonl`.
+ * The run id is validated through {@link validateRunId} so it stays
+ * inside the canonical directory.
+ */
+export function dreamWorkrunPath(vault: string, runId: string): string {
+  const id = validateRunId(runId);
+  return ensureInsideVault(join(dreamRunsDir(vault), `${id}.jsonl`), vault);
+}
+
 /** Snapshots directory: `Brain/.snapshots/`. */
 export function snapshotsDir(vault: string): string {
   return brainDirs(vault).snapshots;

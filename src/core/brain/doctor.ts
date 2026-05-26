@@ -43,6 +43,7 @@ import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
 import { verifyContentHash } from "./content-hash.ts";
+import { scanDanglingWorkruns } from "./dream-workrun.ts";
 import { parseLogDay } from "./log.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
@@ -289,6 +290,14 @@ export function runDoctor(
   // observable.
   try {
     checkContentHashDrift(prefRecords, issues);
+  } catch { /* doctor never throws */ }
+  // v0.12.0 Brain Integrity Suite: surface every dream workrun file
+  // whose last phase is neither `finalized` nor `interrupted`. A
+  // dangling workrun is forensic evidence that a previous dream
+  // invocation crashed - the operator can inspect the file to see
+  // how far the run got.
+  try {
+    checkDanglingWorkruns(vault, issues);
   } catch { /* doctor never throws */ }
   try {
     checkMalformedEvidenceRange(logRecords, issues);
@@ -952,6 +961,32 @@ function checkContentHashDrift(
           `does not match recomputed ${v.expected}`,
       });
     }
+  }
+}
+
+/**
+ * `dangling-workrun` (v0.12.0, Brain Integrity Suite): surfaces every
+ * dream-pass workrun JSONL whose last event is neither `finalized`
+ * nor `interrupted`. A non-empty result means at least one previous
+ * dream invocation died before it could declare a terminal phase,
+ * usually because the host process was killed mid-run. The next
+ * dream pass starts fresh - this check is purely observational so
+ * the operator notices the failed run.
+ */
+function checkDanglingWorkruns(
+  vault: string,
+  issues: DoctorIssue[],
+): void {
+  for (const path of scanDanglingWorkruns(vault)) {
+    issues.push({
+      severity: "warning",
+      code: "dangling-workrun",
+      path,
+      message:
+        `dream-pass workrun did not reach a terminal phase: ${path}. ` +
+        "A previous dream run was likely killed mid-execution; " +
+        "subsequent dream invocations will continue normally.",
+    });
   }
 }
 
