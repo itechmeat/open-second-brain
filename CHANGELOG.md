@@ -5,6 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-05-26
+
+Brain Integrity Suite: the write path for confirmed preferences is now
+auditable, gated, and survivable. Promotion to `confirmed` stamps a
+content-hash so the doctor can detect silent hand-edits. Every brain
+write goes through `writePreferenceTxn`, a sync chokepoint that wraps
+`fs.openSync(target + '.lock', 'wx')` for cross-process safety and a
+chain of typed-error expectations (`StaleUpdate`, `UnsafeShrink`,
+`SourceLock`, `DuplicateWrite`). Dream pass invocations open a durable
+JSONL workrun so a crash mid-run leaves an inspectable trail. A new
+`brain_review_candidates` MCP tool projects the next dream invocation
+without mutating anything. The destructive-from-confirmed retire gate
+refuses to retire a high-evidence confirmed pref through a single
+weak signal when the operator opts in via config.
+
+### Added
+
+- `src/core/brain/sync-lockfile.ts` (`acquireLockSync`, `scanStaleLocks`)
+  - a sync exclusive-create primitive for the brain write path. Pay
+  Memory keeps its async `proper-lockfile` recipe; the brain ships
+  its own sync variant to avoid migrating every caller signature.
+- `src/core/brain/preference-txn.ts` (`writePreferenceTxn`,
+  `BrainCollisionError`, `BRAIN_COLLISION_KIND`, plus three
+  expectation factories: `expectRevision`, `noUnsafeShrink`,
+  `noDuplicateWriteWithin`). Single chokepoint for every preference
+  write. Auto-stamps `_revision` and (on confirmed promotions)
+  `_content_hash` for callers that opt in.
+- `src/core/brain/content-hash.ts` (`computeContentHash`,
+  `verifyContentHash`). sha256 over the trimmed `(principle, scope)`
+  pair, neutral when no stored hash is available.
+- `_revision: number` and `_content_hash: string` optional fields on
+  `BrainPreference`. Both emitted only when the writer supplies them;
+  pre-v0.12.0 fixtures and the starter bundle stay byte-identical.
+- `src/core/brain/dream-workrun.ts` (`openWorkrun`,
+  `scanDanglingWorkruns`, `WORKRUN_PHASE`). One JSONL workrun at
+  `Brain/log/dream-runs/<run-id>.jsonl` per mutation-path dream
+  invocation; phase markers at `started`, `cluster_complete`,
+  `promote_complete`, `retire_complete`, `finalized` (or
+  `interrupted` on caught crash). Dry-runs skip workrun emission.
+- `DreamRunSummary.gated_retires` carrying `DreamGatedRetireEntry`
+  records for retires the destructive-from-confirmed gate skipped.
+- `DreamGatedRetireEntry` interface exposing `pref_id`, `topic`,
+  `applied_count`, `violated_count`, `threshold`, `attempted_reason`.
+- `shouldGateRetireFromConfirmed` exported pure decision helper.
+- `retire.confirmed_evidence_min_threshold?: number` optional config
+  field on `BrainRetireConfig`. Default-off; when set, the dream
+  pass refuses to retire a confirmed (unpinned) pref whose
+  `applied_count + violated_count` is below the threshold.
+- New `brain_doctor` checks: `content-hash-drift` (warning when the
+  stored hash diverges from the recomputed hash of a confirmed
+  pref's live principle / scope) and `dangling-workrun` (warning
+  for workrun files whose last phase is neither `finalized` nor
+  `interrupted`).
+- `brain_review_candidates` MCP tool, a read-only projection over
+  `dream({ dryRun: true })`. Returns `would_create`,
+  `would_promote`, `would_retire`, `would_supersede`,
+  `clusters_below_threshold`, `gated_retires`. No state mutates.
+- Path helpers `dreamRunsDir(vault)` and `dreamWorkrunPath(vault,
+  runId)` in `src/core/brain/paths.ts`.
+
+### Changed
+
+- `dream()` routes its two `writePreference` call sites through
+  `writePreferenceTxn`. Promotion writes now produce `_content_hash`
+  automatically; refresh writes auto-stamp `_revision` only when the
+  proposed bytes would change (idempotent dream reruns stay
+  byte-identical with the existing `wouldRewritePreference` shortcut).
+- `DreamRunSummary.retired` is filtered to exclude entries that the
+  destructive-from-confirmed gate skipped. The public summary now
+  matches what actually landed on disk.
+
 ## [0.11.0] - 2026-05-26
 
 Brain-centric vault layout. The agent now owns one top-level
@@ -2884,6 +2955,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.12.0]: https://github.com/itechmeat/open-second-brain/compare/v0.11.0...v0.12.0
 [0.10.9]: https://github.com/itechmeat/open-second-brain/compare/v0.10.8...v0.10.9
 [0.10.8]: https://github.com/itechmeat/open-second-brain/compare/v0.10.7...v0.10.8
 [0.10.7]: https://github.com/itechmeat/open-second-brain/compare/v0.10.6...v0.10.7

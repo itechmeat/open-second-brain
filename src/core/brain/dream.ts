@@ -39,7 +39,13 @@ import { basename, join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { regenerateActiveQuiet } from "./active.ts";
+import {
+  openWorkrun,
+  WORKRUN_PHASE,
+  type WorkrunHandle,
+} from "./dream-workrun.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
+import { writePreferenceTxn } from "./preference-txn.ts";
 import {
   appendLogEvent,
   parseLogDay,
@@ -49,7 +55,6 @@ import {
   moveToRetired,
   parsePreference,
   wouldRewritePreference,
-  writePreference,
 } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
 import { isPinned } from "./pin.ts";
@@ -134,6 +139,25 @@ export interface DreamQuarantinedEntry {
   readonly failed_gates: ReadonlyArray<string>;
 }
 
+/**
+ * Brain Integrity Suite (v0.12.0). Entry for a retire that the dream
+ * pass declined because `retire.confirmed_evidence_min_threshold` was
+ * set and the source preference's accumulated evidence count fell
+ * below it. The pref stays in `preferences/`; the operator can lift
+ * the gate by raising the evidence count, lowering the threshold, or
+ * running `o2b brain reject` explicitly.
+ */
+export interface DreamGatedRetireEntry {
+  readonly pref_id: string;
+  readonly topic: string;
+  readonly applied_count: number;
+  readonly violated_count: number;
+  /** Configured threshold the pref's evidence count fell below. */
+  readonly threshold: number;
+  /** The retire reason the plan computed before the gate fired. */
+  readonly attempted_reason: BrainRetiredReason;
+}
+
 export interface DreamRunSummary {
   /** `dream-YYYY-MM-DD-HHMMSS`. */
   readonly run_id: string;
@@ -177,6 +201,13 @@ export interface DreamRunSummary {
    * match pre-v0.10.16 behaviour.
    */
   readonly quarantined: ReadonlyArray<DreamQuarantinedEntry>;
+  /**
+   * Brain Integrity Suite (v0.12.0). Retires the dream pass planned
+   * but declined to execute because the source preference's evidence
+   * count fell below `retire.confirmed_evidence_min_threshold`. Empty
+   * when the config field is absent (the default).
+   */
+  readonly gated_retires: ReadonlyArray<DreamGatedRetireEntry>;
   /** Snapshot file (absent on a no-op run). */
   readonly snapshot_path?: string;
   /** Log file the run summary landed in (absent on a no-op run). */
@@ -332,6 +363,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       warnings: Object.freeze([...warnings]),
       uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
       quarantined: Object.freeze([...plan.quarantined]),
+      gated_retires: Object.freeze([] as ReadonlyArray<DreamGatedRetireEntry>),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -358,13 +390,32 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   //   5. Emit log entries (noted-redundant, retain-pinned,
   //      skip-corrupted-frontmatter, dream summary).
   const moved: string[] = [];
+  // v0.12.0 Brain Integrity Suite: declined retires accumulate here.
+  // Always declared (even when no gate is configured) so the eventual
+  // DreamRunSummary.gated_retires field is consistently an array.
+  const gatedRetires: DreamGatedRetireEntry[] = [];
+
+  // v0.12.0 Brain Integrity Suite: durable workrun for the dream pass.
+  // Opened lazily on the mutation path (no workrun on dry-run or
+  // no-op early-return). The handle is null until the exec branch
+  // claims it; `finally` finalises if non-null.
+  let workrun: WorkrunHandle | null = null;
+  if (!dryRun) {
+    workrun = openWorkrun(vault, runId);
+    workrun.checkpoint(WORKRUN_PHASE.clusterComplete);
+  }
 
   if (!dryRun) {
     for (const np of plan.newUnconfirmed) {
       // Fresh pref has no apply-evidence yet; recentApplied/recentViolated
       // start empty and stay so until the next dream pass after the
       // first `brain_apply_evidence` event.
-      writePreference(
+      // v0.12.0 Brain Integrity Suite: route every dream-pass write
+      // through writePreferenceTxn so _revision auto-stamps and
+      // _content_hash lands automatically on confirmed promotions.
+      // Empty expectations array - dream's plan-time logic has
+      // already decided to proceed; the txn just owns the bookkeeping.
+      writePreferenceTxn(
         vault,
         {
           slug: np.slug,
@@ -386,6 +437,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           ...(np.scope ? { scope: np.scope } : {}),
           ...(np.supersedes ? { supersedes: np.supersedes } : {}),
         },
+        [],
         { overwrite: false },
       );
     }
@@ -398,7 +450,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       const ev = collectEvidenceForSlug(vault, update.slug, {
         sinceIso: update.created_at,
       });
-      writePreference(
+      // Same txn route as the newUnconfirmed loop: auto-stamps
+      // _revision (existing+1) and _content_hash on confirmed status.
+      writePreferenceTxn(
         vault,
         {
           slug: update.slug,
@@ -419,6 +473,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           recentViolated: ev.violated,
           ...(update.scope ? { scope: update.scope } : {}),
         },
+        [],
         { overwrite: true },
       );
     }
@@ -426,6 +481,31 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     for (const r of plan.retires) {
       const fromPath = preferencePath(vault, r.slug);
       if (!existsSync(fromPath)) continue;
+      // v0.12.0 Brain Integrity Suite: destructive-from-confirmed gate.
+      // When the operator has set retire.confirmed_evidence_min_threshold,
+      // refuse to retire a confirmed (unpinned) pref whose accumulated
+      // evidence count is below the configured floor. Operator-initiated
+      // retires bypass.
+      const gateThreshold = cfg.retire.confirmed_evidence_min_threshold;
+      if (gateThreshold !== undefined && gateThreshold > 0) {
+        try {
+          const existing = parsePreference(fromPath);
+          if (shouldGateRetireFromConfirmed(existing, r.reason, gateThreshold)) {
+            gatedRetires.push({
+              pref_id: existing.id,
+              topic: existing.topic,
+              applied_count: existing.applied_count,
+              violated_count: existing.violated_count,
+              threshold: gateThreshold,
+              attempted_reason: r.reason,
+            });
+            continue;
+          }
+        } catch {
+          // Parse failure - fall through to the normal retire path
+          // (moveToRetired will surface the error through stderr below).
+        }
+      }
       try {
         moveToRetired(vault, fromPath, r.reason, {
           now,
@@ -462,6 +542,24 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     // accurate, but it does not touch disk.
     for (const sig of plan.signalsToMove.values()) moved.push(sig.id);
   }
+
+  // v0.12.0 Brain Integrity Suite: mark promote + retire phases. The
+  // dream.ts execution loop runs promote (writePreference) then retire
+  // (moveToRetired) sequentially; one checkpoint covers both
+  // mutations so the workrun stays compact yet recovery-meaningful.
+  if (workrun !== null) {
+    workrun.checkpoint(WORKRUN_PHASE.promoteComplete);
+    workrun.checkpoint(WORKRUN_PHASE.retireComplete);
+  }
+
+  // v0.12.0 Brain Integrity Suite: build the gated-slug set once so the
+  // log body and the DreamRunSummary stay consistent — both views must
+  // exclude retires the destructive-from-confirmed gate skipped, or
+  // the next dream pass would parse a `pref-foo` log claiming the
+  // pref was retired while the file is still in `preferences/`.
+  const gatedSlugs = new Set(
+    gatedRetires.map((g) => g.pref_id.replace(/^pref-/, "")),
+  );
 
   // Emit log entries: skip-corrupted-frontmatter first (chronological
   // sense: corruption was detected during planning), then per-topic
@@ -547,10 +645,12 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           ?? "",
       }),
     );
-    const retiredEntries = plan.retires.map(
-      (r) =>
-        `${renderPrefLink({ id: `ret-${r.slug}`, principle: r.principle })} (${r.reason})`,
-    );
+    const retiredEntries = plan.retires
+      .filter((r) => !gatedSlugs.has(r.slug))
+      .map(
+        (r) =>
+          `${renderPrefLink({ id: `ret-${r.slug}`, principle: r.principle })} (${r.reason})`,
+      );
     const summaryBody: Record<string, string | ReadonlyArray<string>> = {
       run_id: runId,
     };
@@ -610,12 +710,20 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     regenerateActiveQuiet(vault, { now });
   }
 
+  // v0.12.0 Brain Integrity Suite: finalise the durable workrun
+  // immediately before constructing the summary. Any crash building
+  // the summary leaves the workrun dangling for the next pass to
+  // spot. `workrun` is null on dry-run / pre-mutation paths.
+  workrun?.finalize();
+
   return Object.freeze({
     run_id: runId,
     changed: true,
     new_unconfirmed: plan.newUnconfirmed.map((p) => `pref-${p.slug}`),
     confirmed: Array.from(refresh.confirmed.values()).map((s) => `pref-${s}`),
-    retired: plan.retires.map((r) => ({ id: `ret-${r.slug}`, reason: r.reason })),
+    retired: plan.retires
+      .filter((r) => !gatedSlugs.has(r.slug))
+      .map((r) => ({ id: `ret-${r.slug}`, reason: r.reason })),
     contradictions: Array.from(plan.contradictionTopics),
     moved_to_processed: moved,
     suppressed: plan.signalsSuppressed.map((s) =>
@@ -624,11 +732,36 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     warnings: Object.freeze([...warnings]),
     uncertain: Object.freeze([] as ReadonlyArray<DreamUncertainEntry>),
     quarantined: Object.freeze([...plan.quarantined]),
+    gated_retires: Object.freeze([...gatedRetires]),
     ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
     ...(dryRun
       ? { dry_run: true }
       : { log_path: join(brainDirs(vault).log, `${isoDate(now)}.md`) }),
   } satisfies DreamRunSummary);
+}
+
+/**
+ * Brain Integrity Suite (v0.12.0). Pure decision function for the
+ * destructive-from-confirmed gate. Exported so the gate logic can be
+ * unit-tested without driving a full dream run.
+ *
+ * Returns `true` when the candidate retire MUST be held back. The
+ * caller is responsible for recording a {@link DreamGatedRetireEntry}
+ * and skipping the actual `moveToRetired` call.
+ */
+export function shouldGateRetireFromConfirmed(
+  existing: BrainPreference,
+  reason: BrainRetiredReason,
+  threshold: number | undefined,
+): boolean {
+  if (threshold === undefined || threshold <= 0) return false;
+  if (reason === BRAIN_RETIRED_REASON.userRejected) return false;
+  if (reason === BRAIN_RETIRED_REASON.mergedInto) return false;
+  if (existing.status !== BRAIN_PREFERENCE_STATUS.confirmed) return false;
+  if (existing.pinned) return false;
+  const evidenceCount =
+    (existing.applied_count ?? 0) + (existing.violated_count ?? 0);
+  return evidenceCount < threshold;
 }
 
 // ----- Scan ---------------------------------------------------------------
@@ -1492,6 +1625,24 @@ function planRefresh(
           ...prospective,
           recentApplied: ev2.applied,
           recentViolated: ev2.violated,
+          // v0.12.0 Brain Integrity Suite: feed the existing
+          // _revision and _content_hash into the pre-flight render
+          // so the byte comparison matches the writePreferenceTxn
+          // no-op semantic. Otherwise a refreshed pref written by a
+          // prior pass (with _revision: N stamped) would look like
+          // "needs rewrite" against a prospective render that omits
+          // those fields, flipping changed=false runs into spurious
+          // updates.
+          // parsePreference defaults absent _revision to 0; treat 0
+          // the same as "absent" for the pre-flight render so the
+          // bytes-compare matches existing legacy starter files that
+          // never had the field on disk.
+          ...(rec.pref.revision !== undefined && rec.pref.revision > 0
+            ? { revision: rec.pref.revision }
+            : {}),
+          ...(rec.pref.content_hash !== undefined
+            ? { content_hash: rec.pref.content_hash }
+            : {}),
         })
       ) {
         // Counters and body both unchanged — true no-op for this pref.

@@ -42,6 +42,8 @@ import { join } from "node:path";
 import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
+import { verifyContentHash } from "./content-hash.ts";
+import { scanDanglingWorkruns } from "./dream-workrun.ts";
 import { parseLogDay } from "./log.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
@@ -282,6 +284,21 @@ export function runDoctor(
       checkPinnedWithoutRecentEvidence(prefRecords, issues, cfg, now);
     } catch { /* doctor never throws */ }
   }
+  // v0.12.0 Brain Integrity Suite: surface preferences whose live
+  // (principle, scope) does not hash to the value stored in
+  // `_content_hash`. Hand-edits remain legal; the warning makes them
+  // observable.
+  try {
+    checkContentHashDrift(prefRecords, issues);
+  } catch { /* doctor never throws */ }
+  // v0.12.0 Brain Integrity Suite: surface every dream workrun file
+  // whose last phase is neither `finalized` nor `interrupted`. A
+  // dangling workrun is forensic evidence that a previous dream
+  // invocation crashed - the operator can inspect the file to see
+  // how far the run got.
+  try {
+    checkDanglingWorkruns(vault, issues);
+  } catch { /* doctor never throws */ }
   try {
     checkMalformedEvidenceRange(logRecords, issues);
   } catch { /* doctor never throws */ }
@@ -906,6 +923,69 @@ function checkPinnedWithoutRecentEvidence(
       message:
         `[[${pref.id}]] is pinned but last_evidence_at=${pref.last_evidence_at} is older than ` +
         `stale_evidence_days=${cfg.retire.stale_evidence_days}. Pin may be outdated.`,
+    });
+  }
+}
+
+/**
+ * `content-hash-drift` (v0.12.0, Brain Integrity Suite): walks every
+ * confirmed preference, recomputes the content hash from the live
+ * `(principle, scope)`, and surfaces a warning whenever the stored
+ * `_content_hash` no longer matches. Legacy preferences without a
+ * stored hash are silent - drift detection is opt-in via the
+ * promotion-time hash write.
+ *
+ * Hand-edits stay legal: this is observability, not enforcement. The
+ * operator sees the divergence and decides whether to re-promote the
+ * preference (which writes a fresh hash) or accept the drift.
+ */
+function checkContentHashDrift(
+  prefs: ReadonlyArray<PreferenceRecord>,
+  issues: DoctorIssue[],
+): void {
+  for (const { path, pref } of prefs) {
+    if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
+    if (!pref.content_hash) continue;
+    const v = verifyContentHash({
+      principle: pref.principle,
+      scope: pref.scope,
+      content_hash: pref.content_hash,
+    });
+    if (!v.ok) {
+      issues.push({
+        severity: "warning",
+        code: "content-hash-drift",
+        path,
+        message:
+          `content-hash drift on ${pref.id}: stored ${v.observed} ` +
+          `does not match recomputed ${v.expected}`,
+      });
+    }
+  }
+}
+
+/**
+ * `dangling-workrun` (v0.12.0, Brain Integrity Suite): surfaces every
+ * dream-pass workrun JSONL whose last event is neither `finalized`
+ * nor `interrupted`. A non-empty result means at least one previous
+ * dream invocation died before it could declare a terminal phase,
+ * usually because the host process was killed mid-run. The next
+ * dream pass starts fresh - this check is purely observational so
+ * the operator notices the failed run.
+ */
+function checkDanglingWorkruns(
+  vault: string,
+  issues: DoctorIssue[],
+): void {
+  for (const path of scanDanglingWorkruns(vault)) {
+    issues.push({
+      severity: "warning",
+      code: "dangling-workrun",
+      path,
+      message:
+        `dream-pass workrun did not reach a terminal phase: ${path}. ` +
+        "A previous dream run was likely killed mid-execution; " +
+        "subsequent dream invocations will continue normally.",
     });
   }
 }

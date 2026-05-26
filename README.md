@@ -112,7 +112,7 @@ The capabilities you actually feel day to day:
 | 9 | Full-text search across the whole vault | `o2b search "<query>" --property type=decision --property status=open` — SQLite + FTS5 plus frontmatter property filters. Faster and more precise than Obsidian's built-in search when you need to grep across thousands of notes. |
 | 10 | Pay Memory — audit every paid action | When the agent spends money (Solana-Foundation `pay`, third-party APIs) every receipt lands in `Brain/payments/<date>/`. Spending policy, approval gate, daily Telegram report. The agent never holds wallet keys. |
 
-These are the headline capabilities. The full surface also includes: importing Claude Code memory directories, daily logging-discipline cron, cross-project pointers for shared vaults, the codegraph partner skill, vault hygiene lints, per-MOC coverage audit, concept synthesis, and an operator dashboard. Browse [`docs/cli-reference.md`](docs/cli-reference.md) for every verb and [`docs/how-it-works.md`](docs/how-it-works.md) for the mental model.
+These are the headline capabilities. The full surface also includes: importing Claude Code memory directories, daily logging-discipline cron, cross-project pointers for shared vaults, the codegraph partner skill, vault hygiene lints, per-MOC coverage audit, concept synthesis, an operator dashboard, the v0.12.0 Brain Integrity Suite (content-hash drift detection, durable workrun checkpoints, destructive-from-confirmed retire gate, and the `brain_review_candidates` MCP tool that previews what the next dream pass would do without writing anything). Browse [`docs/cli-reference.md`](docs/cli-reference.md) for every verb and [`docs/how-it-works.md`](docs/how-it-works.md) for the mental model.
 
 ## CLI
 

@@ -1,5 +1,5 @@
 name: open-second-brain
-version: "0.11.0"
+version: "0.12.0"
 description: "Hermes plugin entrypoint for OpenSecondBrain vault health checks and the optional MCP tool server."
 author: "OpenSecondBrain contributors"
 kind: standalone

@@ -330,6 +330,22 @@ export interface BrainPreference {
    * to `false`.
    */
   readonly pinned: boolean;
+  /**
+   * Brain Integrity Suite: monotonic write counter (v0.12.0). Starts
+   * at 0; incremented by `writePreferenceTxn` on every mutation.
+   * `StaleUpdate` collision fires when a writer's `expected_revision`
+   * does not match this on-disk value. Absent on pre-v0.12.0 files;
+   * readers must tolerate `undefined` and coerce to `0`.
+   */
+  readonly revision?: number;
+  /**
+   * Brain Integrity Suite: sha256 of the canonical `(principle,
+   * scope)` pair (v0.12.0). Written on promotion to `confirmed`;
+   * absent for unconfirmed and quarantine preferences. Recomputed on
+   * read by {@link verifyContentHash}; a mismatch surfaces as a
+   * `drift_detected` event in the log.
+   */
+  readonly content_hash?: string;
   /** Optional wikilink to a retired pref this one replaces. */
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
@@ -631,6 +647,18 @@ export interface BrainDreamConfig {
 export interface BrainRetireConfig {
   /** Days without evidence after which a confirmed pref retires. */
   readonly stale_evidence_days: number;
+  /**
+   * Brain Integrity Suite (v0.12.0). Destructive-from-confirmed gate.
+   * When set to a positive integer, the dream pass refuses to retire
+   * a confirmed (and unpinned) preference whose accumulated
+   * `applied_count + violated_count` is below this threshold. Skipped
+   * retires surface in `DreamRunSummary.gated_retires` and stay in
+   * `preferences/`. Operator-initiated retires (`user-rejected`,
+   * `merged-into`) are never gated. `undefined` (default) preserves
+   * pre-v0.12.0 behaviour where any retire that the plan computed
+   * lands on disk.
+   */
+  readonly confirmed_evidence_min_threshold?: number;
 }
 
 export interface BrainConfidenceConfig {
