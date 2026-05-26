@@ -32,8 +32,7 @@ Brain verbs (observing memory):
                    --dry-run previews via the same diff renderer)
   doctor              Validate Brain invariants (--strict promotes warnings to exit 2)
   backlinks           List inbound references to a Brain artifact id
-  migrate-frontmatter Rewrite legacy 'status:' / 'applied_count:' keys to '_status:' / '_applied_count:'
-  scan-inline         Capture @osb markers from vault markdown files (Daily/, project notes, etc.)
+  scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a Claude/Codex/Hermes session .jsonl (or directory)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
@@ -123,12 +122,6 @@ export const VERB_HELP: Record<string, string> = {
   backlinks:
     "usage: o2b brain backlinks <id> [--vault <path>] [--json]\n" +
     "List inbound references to the given Brain artifact id (preference, retired, signal).\n",
-  "migrate-frontmatter":
-    "usage: o2b brain migrate-frontmatter [--vault <path>] [--apply] [--yes] [--json]\n" +
-    "Rewrite legacy Group C frontmatter keys ('status:', 'applied_count:', ...)\n" +
-    "to the '_'-prefixed shape across Brain/preferences/ and Brain/retired/.\n" +
-    "Default is --dry-run; --apply takes a pre-run snapshot (rollback via run_id).\n" +
-    "--apply requires --yes in non-interactive mode (--json or non-TTY stdin).\n",
   "set-primary":
     "usage: o2b brain set-primary <name> [--vault <path>] [--json]\n" +
     "       o2b brain set-primary --clear [--vault <path>] [--json]\n" +

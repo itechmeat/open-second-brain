@@ -70,10 +70,9 @@ describe("BRAIN_* const enums", () => {
       "pin",
       "unpin",
       "rollback",
-      // capture extensions + frontmatter migration
+      // capture extensions
       "scan-inline",
       "import-session",
-      "migrate-frontmatter",
       // §12 merge (v0.10.5)
       "merge",
       // §22 upgrade (v0.10.6)

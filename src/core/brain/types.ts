@@ -161,13 +161,6 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   importSession: "import-session",
   /**
-   * `migrate-frontmatter` (§24) — operator ran
-   * `o2b brain migrate-frontmatter --apply` to rewrite legacy
-   * frontmatter to the `_`-prefixed shape. Payload carries the run
-   * id, snapshot path, and counters.
-   */
-  migrateFrontmatter: "migrate-frontmatter",
-  /**
    * `merge` (§12) — operator ran `o2b brain merge <keep> <drop>`.
    * Payload carries both wikilinks plus union-size of `evidenced_by`
    * and the summed counters as raw integers for audit grepping.
@@ -559,16 +552,6 @@ export interface BrainImportSessionLogEvent extends BrainLogEventBase {
 }
 
 /**
- * `migrate-frontmatter` entry — operator ran
- * `o2b brain migrate-frontmatter --apply`. Payload carries the run
- * id, snapshot path, and per-bucket counters.
- */
-export interface BrainMigrateFrontmatterLogEvent extends BrainLogEventBase {
-  readonly kind: typeof BRAIN_LOG_EVENT_KIND.migrateFrontmatter;
-  readonly run_id: string;
-}
-
-/**
  * `merge` entry — operator ran `o2b brain merge <keep> <drop>`.
  * Payload carries the titled wikilinks to both prefs plus the
  * union-size of `evidenced_by` and the summed counters as raw
@@ -629,7 +612,6 @@ export type BrainLogEvent =
   | BrainRollbackLogEvent
   | BrainScanInlineLogEvent
   | BrainImportSessionLogEvent
-  | BrainMigrateFrontmatterLogEvent
   | BrainMergeLogEvent
   | BrainUpgradeLogEvent
   | BrainImportClaudeMemoryLogEvent

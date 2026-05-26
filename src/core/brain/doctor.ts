@@ -518,9 +518,8 @@ function checkPreferences(
           message: err.message,
         });
       } else if (err instanceof BrainDoubleShapeError) {
-        // §24 dual-shape parser collision is operator-actionable
-        // (run `o2b brain migrate-frontmatter --apply` or hand-edit
-        // the file). Surface as warning, not error, so the dream
+        // Dual-shape collision is operator-actionable — hand-edit
+        // the file. Surface as warning, not error, so the dream
         // loop still proceeds for the rest of the vault.
         issues.push({
           severity: "warning",

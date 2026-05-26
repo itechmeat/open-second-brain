@@ -30,10 +30,6 @@ import {
 } from "./policy.ts";
 import { createSnapshot } from "./snapshot.ts";
 import { renderBrainManual } from "./templates.ts";
-import {
-  migrateLegacyAiwiki,
-  type LegacyAiwikiMigrationResult,
-} from "./upgrade-migrations/legacy-aiwiki.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 
@@ -69,8 +65,6 @@ export interface UpgradeApplyResult {
   readonly snapshot_path: string;
   /** Vault-relative paths of files rewritten by this run. */
   readonly files_updated: ReadonlyArray<string>;
-  /** Legacy-layout migration summary; empty when nothing was migrated. */
-  readonly legacy_migration: LegacyAiwikiMigrationResult;
 }
 
 export class BrainUpgradeError extends Error {
@@ -150,28 +144,17 @@ export function applyUpgrade(
       `upgrade aborted: ${plan.errors} file(s) failed to plan — ${messages}`,
     );
   }
-  // Plan the v0.11.0 legacy-layout migration (dry-run) alongside the
-  // file-update plan so we can short-circuit cleanly when there is
-  // nothing for either pass to do.
-  const migrationPlan = migrateLegacyAiwiki(vault, { dryRun: true });
-  const hasMigration =
-    migrationPlan.moved.length > 0 || migrationPlan.removed.length > 0;
-  if (plan.pending === 0 && !hasMigration) {
+  if (plan.pending === 0) {
     return Object.freeze({
       run_id: "",
       snapshot_path: "",
       files_updated: Object.freeze([] as ReadonlyArray<string>),
-      legacy_migration: migrationPlan,
     });
   }
 
   const now = opts.now ?? new Date();
   const runId = `upgrade-${isoSecondCompact(now)}`;
   const snap = createSnapshot(vault, runId);
-
-  const migration = hasMigration
-    ? migrateLegacyAiwiki(vault, { dryRun: false })
-    : migrationPlan;
 
   const updated: string[] = [];
   for (const file of plan.files) {
@@ -221,7 +204,6 @@ export function applyUpgrade(
     run_id: runId,
     snapshot_path: snap.path,
     files_updated: Object.freeze(updated),
-    legacy_migration: migration,
   });
 }
 

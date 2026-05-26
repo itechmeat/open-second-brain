@@ -68,16 +68,15 @@ import type { PageTier } from "./page-meta/tier.ts";
  * Raised when a preference / retired file carries the same Group C
  * field in both legacy (`status:`) and `_`-prefixed (`_status:`)
  * shapes. The doctor downgrades this to a `frontmatter-double-shape`
- * warning; `o2b brain migrate-frontmatter` aborts on it. Doing the
- * dispatch by typed class (rather than regex-matching the message)
- * keeps the contract stable across error-text rewording.
+ * warning. Dispatch by typed class (rather than regex-matching the
+ * message) keeps the contract stable across error-text rewording.
  */
 export class BrainDoubleShapeError extends Error {
   readonly field: string;
   constructor(field: string) {
     super(
       `preference field collision: both '_${field}' and legacy '${field}' present; ` +
-        `pick one (run \`o2b brain migrate-frontmatter --apply\` or hand-edit)`,
+        "hand-edit the file to keep only the '_'-prefixed key",
     );
     this.name = "BrainDoubleShapeError";
     this.field = field;

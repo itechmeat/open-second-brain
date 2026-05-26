@@ -1,24 +1,19 @@
 /**
- * End-to-end scenario for the capture extensions + frontmatter migration.
+ * End-to-end scenario for the capture extensions.
  *
- * Exercises the full chain across CLI invocations:
+ * Exercises the chain across CLI invocations:
  *   1. `o2b init` + `o2b brain init` bootstrap a fresh vault.
  *   2. A Daily note with an `@osb` marker is dropped on disk.
  *   3. `o2b brain scan-inline` captures the marker into Brain/inbox/
- *      and annotates the Daily note with `@osb✓ [[sig-...]]`.
+ *      and annotates the source note with `@osb✓ [[sig-...]]`.
  *   4. The session import path picks up the same marker shape from a
  *      transcript fixture (different topic to confirm independence).
- *   5. `o2b brain migrate-frontmatter --apply --yes` rewrites a
- *      hand-crafted legacy-shape pref file into the `_`-prefixed
- *      form and lands a snapshot under Brain/.snapshots/.
- *   6. `o2b brain rollback <run_id>` restores the pre-migration shape.
  *
  * If any step fails, the chain breaks and we see which seam is broken.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -109,67 +104,5 @@ describe("capture + migration end-to-end", () => {
     const sigsAfterImport = readdirSync(inbox).filter((n) => n.startsWith("sig-"));
     expect(sigsAfterImport.length).toBeGreaterThan(inlineSigs.length);
 
-    // Step 5: hand-write a legacy-shape preference, then migrate.
-    const legacyPrefPath = join(vault, "Brain", "preferences", "pref-legacy-e2e.md");
-    writeFileSync(
-      legacyPrefPath,
-      [
-        "---",
-        "kind: brain-preference",
-        "id: pref-legacy-e2e",
-        "created_at: 2026-05-14T10:42:00Z",
-        "unconfirmed_until: 2026-05-28T10:42:00Z",
-        "tags: [brain, brain/preference, brain/topic/legacy-e2e]",
-        "topic: legacy-e2e",
-        "principle: Some rule",
-        "pinned: false",
-        "status: confirmed",
-        "confirmed_at: 2026-05-15T10:00:00Z",
-        "evidenced_by: []",
-        "applied_count: 1",
-        "violated_count: 0",
-        "last_evidence_at: null",
-        "confidence: low",
-        "---",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    r = await runCli(
-      ["brain", "migrate-frontmatter", "--vault", vault, "--apply", "--yes"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(0);
-    const afterMigrate = readFileSync(legacyPrefPath, "utf8");
-    expect(afterMigrate).toMatch(/^_status: confirmed$/m);
-    expect(afterMigrate).not.toMatch(/^status: confirmed$/m);
-
-    const snapDir = join(vault, "Brain", ".snapshots");
-    const snaps = readdirSync(snapDir).filter(
-      (n) => n.startsWith("migrate-") && n.endsWith(".tar.zst"),
-    );
-    expect(snaps.length).toBe(1);
-
-    // Step 6: rollback restores the legacy shape. The migration
-    // intentionally drifted the live tree from the snapshot moment,
-    // so v0.10.6 rollback requires `--force-rollback` to overwrite.
-    const runId = snaps[0]!.replace(/\.tar\.zst$/, "");
-    r = await runCli(
-      [
-        "brain",
-        "rollback",
-        runId,
-        "--vault",
-        vault,
-        "--yes",
-        "--force-rollback",
-      ],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(0);
-    expect(existsSync(legacyPrefPath)).toBe(true);
-    const afterRollback = readFileSync(legacyPrefPath, "utf8");
-    expect(afterRollback).toMatch(/^status: confirmed$/m);
-    expect(afterRollback).not.toMatch(/^_status: confirmed$/m);
   }, 60_000);
 });
