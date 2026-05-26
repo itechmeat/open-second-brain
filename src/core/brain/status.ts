@@ -162,24 +162,12 @@ function countZst(dir: string): number {
 
 function readFrontmatterStatus(path: string): string {
   // Use the canonical frontmatter parser instead of a regex sniff so
-  // quoted values (`status: "confirmed"`) and other legal YAML
+  // quoted values (`_status: "confirmed"`) and other legal YAML
   // shapes round-trip correctly. Files we can't parse bucket under
   // `unknown` — doctor surfaces them as schema errors elsewhere.
-  //
-  // Read both legacy `status:` and the `_status:` shape (§24).
-  // When both shapes are present we treat the file as `unknown` —
-  // same collision policy as `normalizeDerivedKeys` (doctor flags
-  // it as `frontmatter-double-shape`). Counting it as the modern
-  // value here would silently mask the corruption.
   try {
     const [meta] = parseFrontmatter(path);
-    // Presence-based collision detection so an empty `_status:`
-    // alongside a populated `status:` (or vice versa) is still flagged
-    // as a double-shape file — matches `normalizeDerivedKeys`.
-    const hasLegacy = "status" in meta && meta["status"] !== undefined;
-    const hasModern = "_status" in meta && meta["_status"] !== undefined;
-    if (hasLegacy && hasModern) return "unknown";
-    const value = hasModern ? meta["_status"] : meta["status"];
+    const value = meta["_status"];
     if (typeof value !== "string") return "unknown";
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : "unknown";

@@ -248,7 +248,7 @@ describe("MCP resources — read osb://preference/{id}", () => {
       `---
 kind: brain-retired
 id: ret-old-thing
-status: retired
+_status: retired
 retired_at: 2026-05-10T00:00:00Z
 retired_reason: rebutted
 retired_by: "[[Brain/log/2026-05-10]]"
@@ -376,41 +376,6 @@ describe("MCP resources — read osb://status", () => {
     expect(text).toContain("## Activity");
   });
 
-  test("file with both 'status:' and '_status:' counts as unknown (collision policy)", async () => {
-    // Hand-write a file carrying both shapes — same collision policy
-    // as parsePreference / brain_doctor, so the status reader must
-    // not silently pick one and hide the corruption.
-    const path = `${vault}/Brain/preferences/pref-double-shape.md`;
-    const { writeFileSync } = await import("node:fs");
-    writeFileSync(
-      path,
-      [
-        "---",
-        "kind: brain-preference",
-        "id: pref-double-shape",
-        "created_at: 2026-05-01T00:00:00Z",
-        "unconfirmed_until: 2026-05-30T00:00:00Z",
-        "tags: [brain, brain/preference, brain/topic/double]",
-        "topic: double",
-        "principle: Rule",
-        "pinned: false",
-        "status: confirmed",
-        "_status: confirmed",
-        "evidenced_by: []",
-        "---",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    const server = makeServer();
-    await initialize(server);
-    const r = await read(server, "osb://status");
-    const text = r.result.contents[0].text as string;
-    expect(text).toContain("preferences: 1");
-    expect(text).toContain("unknown: 1");
-    expect(text).not.toContain("confirmed: 1");
-  });
 });
 
 describe("MCP resources — read osb://backlinks/{id}", () => {

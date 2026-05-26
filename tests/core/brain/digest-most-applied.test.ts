@@ -35,7 +35,7 @@ confirmed_at: 2026-04-05T00:00:00Z
 unconfirmed_until: 2026-04-08T00:00:00Z
 tags: []
 topic: a
-status: confirmed
+_status: confirmed
 principle: principle a
 evidenced_by: []
 applied_count: 0
