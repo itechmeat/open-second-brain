@@ -94,7 +94,7 @@ test("indexStatus reports accurate counts after an index run", async () => {
 
   const status = await indexStatus(cfg);
   expect(status.exists).toBe(true);
-  expect(status.schemaVersion).toBe(1);
+  expect(status.schemaVersion).toBe(2);
   expect(status.documents).toBe(2);
   expect(status.chunks).toBeGreaterThanOrEqual(2);
   expect(status.lastIndexedAt).toBeTruthy();

@@ -69,7 +69,7 @@ test("search status --json after an index returns documents count", async () => 
   const obj = JSON.parse(out.stdout);
   expect(obj.exists).toBe(true);
   expect(obj.documents).toBe(2);
-  expect(obj.schema_version).toBe(1);
+  expect(obj.schema_version).toBe(2);
 });
 
 test("search query returns a human-readable hit for indexed content", async () => {

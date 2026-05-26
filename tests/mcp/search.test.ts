@@ -172,7 +172,7 @@ test("second_brain_status includes search block after indexing", async () => {
   expect(search).toBeDefined();
   expect(search!["exists"]).toBe(true);
   expect(search!["documents"]).toBe(1);
-  expect(search!["schema_version"]).toBe(1);
+  expect(search!["schema_version"]).toBe(2);
 });
 
 test("second_brain_status reports search.exists=false when index missing", async () => {

@@ -31,6 +31,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     keywordWeight: 0.6,
     semanticWeight: 0.4,
     semantic,
+    recall: Object.freeze({ mmrLambda: 0.7, maxHops: 1, hopDecay: 0.5, maxExpansionPerHit: 3 }),
     ...(overrides ?? {}),
   });
 }
@@ -47,7 +48,7 @@ afterEach(() => {
 test("open in write mode creates file and applies migrations", async () => {
   const store = await Store.open(makeConfig(), { mode: "write", loadVec: false });
   expect(existsSync(dbPath)).toBe(true);
-  expect(store.schemaVersion()).toBe(1);
+  expect(store.schemaVersion()).toBe(2);
   await store.close();
 });
 
@@ -65,7 +66,7 @@ test("open in read mode succeeds after writer creates the file", async () => {
   const w = await Store.open(makeConfig(), { mode: "write", loadVec: false });
   await w.close();
   const r = await Store.open(makeConfig(), { mode: "read", loadVec: false });
-  expect(r.schemaVersion()).toBe(1);
+  expect(r.schemaVersion()).toBe(2);
   await r.close();
 });
 

@@ -61,6 +61,12 @@ export interface ChunkInput {
   readonly startLine: number;
   readonly endLine: number;
   readonly tokenCount: number;
+  /**
+   * Heading breadcrumb in effect at the chunk (v0.13.0). Indexed in the
+   * dedicated FTS column; defaults to "" so callers that do not supply
+   * it (and pre-v0.13.0 fixtures) index an empty heading column.
+   */
+  readonly headingPath?: string;
 }
 
 export interface ChunkRow {
@@ -486,10 +492,10 @@ export class Store {
       this.db.run("DELETE FROM chunks WHERE document_id = ?", [documentId]);
       const insert = this.db.prepare<
         { id: number },
-        [number, number, string, string, number, number, number, string, string]
+        [number, number, string, string, number, number, number, string, string, string]
       >(
-        "INSERT INTO chunks(document_id, chunk_index, content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO chunks(document_id, chunk_index, content, content_hash, start_line, end_line, token_count, heading_path, created_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       );
       const now = nowIso();
       for (const c of chunks) {
@@ -501,6 +507,7 @@ export class Store {
           c.startLine,
           c.endLine,
           c.tokenCount,
+          c.headingPath ?? "",
           now,
           now,
         );
@@ -752,7 +759,7 @@ export class Store {
           { chunk_id: number; document_id: number; bm25: number },
           [string, string, string, number]
         >(
-          "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts) AS bm25 " +
+          "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts, 1.0, 0.3) AS bm25 " +
             "FROM chunk_fts " +
             "JOIN chunks c ON c.id = chunk_fts.rowid " +
             "JOIN documents d ON d.id = c.document_id " +
@@ -765,7 +772,7 @@ export class Store {
 
     const rows = this.db
       .query<{ chunk_id: number; document_id: number; bm25: number }, [string, number]>(
-        "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts) AS bm25 " +
+        "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts, 1.0, 0.3) AS bm25 " +
           "FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid " +
           "WHERE chunk_fts MATCH ? ORDER BY bm25 ASC LIMIT ?",
       )
@@ -889,6 +896,140 @@ export class Store {
       }
       set.add(r.source_document_id);
     }
+    return out;
+  }
+
+  /**
+   * For each source document id, the list of resolved outbound link
+   * target document ids (wikilink / markdown_link only; tags and
+   * unresolved targets excluded; self-links dropped). Used by the
+   * recall traversal layer to walk one or more hops out from a hit.
+   */
+  outboundLinkTargets(sourceDocumentIds: ReadonlyArray<number>): Map<number, number[]> {
+    const out = new Map<number, number[]>();
+    if (sourceDocumentIds.length === 0) return out;
+    const placeholders = sourceDocumentIds.map(() => "?").join(",");
+    const rows = this.db
+      .query<
+        { source_document_id: number; target_document_id: number },
+        number[]
+      >(
+        "SELECT DISTINCT l.source_document_id, l.target_document_id " +
+          `FROM links l ` +
+          `WHERE l.source_document_id IN (${placeholders}) ` +
+          `  AND l.target_document_id IS NOT NULL ` +
+          `  AND l.target_document_id != l.source_document_id ` +
+          `  AND l.link_type IN ('wikilink','markdown_link') ` +
+          `ORDER BY l.source_document_id, l.target_document_id`,
+      )
+      .all(...(sourceDocumentIds as number[]));
+    for (const r of rows) {
+      let list = out.get(r.source_document_id);
+      if (!list) {
+        list = [];
+        out.set(r.source_document_id, list);
+      }
+      list.push(r.target_document_id);
+    }
+    return out;
+  }
+
+  /**
+   * One representative chunk per document - the lowest `chunk_index`,
+   * which for markdown is the document head (title / opening section).
+   * The traversal layer surfaces this when a linked document is not
+   * already a relevance hit.
+   */
+  representativeChunks(documentIds: ReadonlyArray<number>): Map<number, HydratedChunk> {
+    const out = new Map<number, HydratedChunk>();
+    if (documentIds.length === 0) return out;
+    const placeholders = documentIds.map(() => "?").join(",");
+    const rows = this.db
+      .query<
+        {
+          chunk_id: number;
+          document_id: number;
+          path: string;
+          title: string | null;
+          content: string;
+          start_line: number;
+          end_line: number;
+          mtime: number;
+        },
+        number[]
+      >(
+        "SELECT c.id AS chunk_id, c.document_id AS document_id, d.path AS path, " +
+          "d.title AS title, c.content AS content, c.start_line AS start_line, " +
+          "c.end_line AS end_line, d.mtime AS mtime " +
+          "FROM chunks c JOIN documents d ON d.id = c.document_id " +
+          `WHERE c.document_id IN (${placeholders}) ` +
+          "ORDER BY c.document_id, c.chunk_index ASC",
+      )
+      .all(...(documentIds as number[]));
+    for (const r of rows) {
+      if (out.has(r.document_id)) continue; // first row per doc = lowest chunk_index
+      out.set(
+        r.document_id,
+        Object.freeze({
+          chunkId: r.chunk_id,
+          documentId: r.document_id,
+          path: r.path,
+          title: r.title,
+          content: r.content,
+          startLine: r.start_line,
+          endLine: r.end_line,
+          mtime: r.mtime,
+        }),
+      );
+    }
+    return out;
+  }
+
+  // ── entities ─────────────────────────────────────────────────────────────
+
+  /**
+   * Replace a chunk's entity set (v0.13.0). Deletes any prior entries
+   * for the chunk, then inserts the deduped list. Entities are expected
+   * pre-normalised (lowercased) by the extractor.
+   */
+  replaceEntities(chunkId: number, entities: ReadonlyArray<string>): void {
+    this.db.exec("BEGIN");
+    try {
+      this.db.run("DELETE FROM chunk_entities WHERE chunk_id = ?", [chunkId]);
+      if (entities.length > 0) {
+        const insert = this.db.prepare<undefined, [number, string]>(
+          "INSERT OR IGNORE INTO chunk_entities(chunk_id, entity) VALUES (?, ?)",
+        );
+        for (const e of entities) insert.run(chunkId, e);
+      }
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  /**
+   * For each candidate chunk, the count of distinct query entities it
+   * also carries. Empty `queryEntities` yields an empty map (no work).
+   * Pure read; used by the ranker to add a capped entity boost.
+   */
+  chunkEntityMatches(
+    candidateChunkIds: ReadonlyArray<number>,
+    queryEntities: ReadonlyArray<string>,
+  ): Map<number, number> {
+    const out = new Map<number, number>();
+    if (candidateChunkIds.length === 0 || queryEntities.length === 0) return out;
+    const chunkPlaceholders = candidateChunkIds.map(() => "?").join(",");
+    const entityPlaceholders = queryEntities.map(() => "?").join(",");
+    const rows = this.db
+      .query<{ chunk_id: number; c: number }, (number | string)[]>(
+        "SELECT chunk_id, COUNT(DISTINCT entity) AS c FROM chunk_entities " +
+          `WHERE chunk_id IN (${chunkPlaceholders}) AND entity IN (${entityPlaceholders}) ` +
+          "GROUP BY chunk_id",
+      )
+      .all(...(candidateChunkIds as number[]), ...(queryEntities as string[]));
+    for (const r of rows) out.set(r.chunk_id, r.c);
     return out;
   }
 

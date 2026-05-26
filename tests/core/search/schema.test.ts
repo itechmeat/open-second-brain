@@ -64,7 +64,7 @@ test("applyMigrations on a fresh db creates the v1 schema", () => {
   // FTS5 virtual table is registered as type 'table'.
   expect(tables.has("chunk_fts")).toBe(true);
 
-  expect(readSchemaVersion(db)).toBe(1);
+  expect(readSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
   db.close();
 });
 
@@ -75,7 +75,7 @@ test("applyMigrations is idempotent", () => {
   applyMigrations(db);
   applyMigrations(db);
   expect(tableNames(db).size).toBe(first);
-  expect(readSchemaVersion(db)).toBe(1);
+  expect(readSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
   db.close();
 });
 

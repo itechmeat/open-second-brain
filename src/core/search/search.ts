@@ -13,9 +13,12 @@ import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { makeProvider } from "./embeddings/provider.ts";
+import { extractEntities } from "./entities.ts";
 import { runFtsQuery } from "./fts.ts";
+import { mmrRerank } from "./mmr.ts";
 import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
+import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import type {
@@ -104,6 +107,15 @@ export async function search(
     const inboundLinkSources = store.inboundLinkSources(idsList);
     const tagsByDoc = store.tagsByChunkDocument(idsList);
 
+    // Entity-boosted retrieval (v0.13.0): extract entities from the
+    // query and count overlaps with each candidate chunk. Empty when the
+    // query names no entities or the index predates the entity store.
+    const queryEntities = extractEntities(query);
+    const entityMatchByChunk =
+      queryEntities.length > 0
+        ? store.chunkEntityMatches(idsList, queryEntities)
+        : undefined;
+
     // When a property filter is active, overfetch the ranked
     // candidates so the post-filter result set still has a chance
     // of producing `limit` matching rows. Without this, the
@@ -112,15 +124,28 @@ export async function search(
     // matches exist deeper in the rank.
     const hasPropertyFilter =
       opts.properties !== undefined && opts.properties.size > 0;
-    const rankLimit = hasPropertyFilter ? Math.max(limit * 5, 50) : limit;
 
-    const ranked = rankResults(
+    // MMR and traversal both need a candidate pool wider than `limit`:
+    // MMR diversifies from it, and traversal seeds expansion from it (a
+    // narrow pool lets a high-parent expansion crowd a genuine but
+    // lower-ranked hit out of the final window). When both are disabled
+    // the pool collapses back to the historical rankLimit.
+    const mmrLambda = opts.mmrLambda ?? config.recall.mmrLambda;
+    const mmrActive = mmrLambda < 1;
+    const maxHops = opts.maxHops ?? config.recall.maxHops;
+    const traversalActive = maxHops > 0;
+    const baseRankLimit = hasPropertyFilter ? Math.max(limit * 5, 50) : limit;
+    const rankLimit =
+      mmrActive || traversalActive ? Math.max(baseRankLimit, limit * 3, 30) : baseRankLimit;
+
+    let ranked = rankResults(
       {
         keyword: kwHits,
         semantic: semHits,
         hydrated,
         inboundLinkSources,
         tagsByDoc,
+        ...(entityMatchByChunk !== undefined ? { entityMatchByChunk } : {}),
       },
       {
         keywordWeight: opts.keywordWeight ?? config.keywordWeight,
@@ -129,6 +154,23 @@ export async function search(
         semanticEnabled: policy.wantSemantic && semanticAttempted,
       },
     );
+
+    // Link-graph traversal (v0.13.0): walk outbound links from the top
+    // hits and surface related documents not already matched, scored by
+    // decay. No-op when maxHops == 0. Runs before MMR so expansions are
+    // subject to the same diversity pass.
+    if (traversalActive && ranked.length > 0) {
+      ranked = applyTraversal(store, ranked, {
+        maxHops,
+        hopDecay: config.recall.hopDecay,
+        maxExpansionPerHit: config.recall.maxExpansionPerHit,
+      });
+    }
+
+    // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
+    if (mmrActive) {
+      ranked = mmrRerank(ranked, { lambda: mmrLambda });
+    }
 
     // Optional post-rank property filter (v0.10.17). Reads each
     // result's source frontmatter and drops rows whose scalars do
@@ -150,6 +192,66 @@ export async function search(
   } finally {
     await store.close();
   }
+}
+
+/**
+ * Walk outbound links from the ranked hits and merge in related
+ * documents. Fetches the outbound adjacency level-by-level (each
+ * document fetched once) up to `maxHops`, then delegates the bounded
+ * scoring to the pure `expandByTraversal`.
+ */
+function applyTraversal(
+  store: Store,
+  ranked: BrainSearchResult[],
+  opts: TraversalOptions,
+): BrainSearchResult[] {
+  const seedDocIds = Array.from(new Set(ranked.map((r) => r.documentId)));
+  const present = new Set(seedDocIds);
+  const outbound = new Map<number, ReadonlyArray<number>>();
+  const seen = new Set<number>(seedDocIds);
+  let level = new Set<number>(seedDocIds);
+
+  for (let hop = 0; hop < opts.maxHops && level.size > 0; hop++) {
+    const toFetch = Array.from(level).filter((id) => !outbound.has(id));
+    if (toFetch.length === 0) break;
+    const adjacency = store.outboundLinkTargets(toFetch);
+    const next = new Set<number>();
+    for (const [src, targets] of adjacency) {
+      outbound.set(src, targets);
+      for (const t of targets) {
+        if (!seen.has(t)) {
+          seen.add(t);
+          next.add(t);
+        }
+      }
+    }
+    level = next;
+  }
+
+  const expansionIds = Array.from(seen).filter((id) => !present.has(id));
+  if (expansionIds.length === 0) return ranked;
+  const reps = store.representativeChunks(expansionIds);
+
+  return expandByTraversal(
+    {
+      ranked,
+      outbound,
+      expansionDoc: (docId) => {
+        const h = reps.get(docId);
+        if (!h) return null;
+        return {
+          documentId: h.documentId,
+          chunkId: h.chunkId,
+          path: h.path,
+          title: h.title,
+          content: h.content,
+          startLine: h.startLine,
+          endLine: h.endLine,
+        };
+      },
+    },
+    opts,
+  );
 }
 
 function applyPropertyFilter(

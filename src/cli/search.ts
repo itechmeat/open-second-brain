@@ -216,6 +216,7 @@ function jsonForOutcome(o: SearchOutcome): unknown {
       start_line: r.startLine,
       end_line: r.endLine,
       search_type: r.searchType,
+      reasons: r.reasons,
       document_id: r.documentId,
       chunk_id: r.chunkId,
     })),
@@ -240,6 +241,9 @@ function renderOutcomeHuman(o: SearchOutcome, verbose: boolean): string {
     );
     const snippet = r.content.trim().replace(/\s+/g, " ").slice(0, 140);
     lines.push(`    ${snippet}${r.content.length > 140 ? "…" : ""}`);
+    if (verbose && r.reasons.length > 0) {
+      lines.push(`    why: ${r.reasons.join(", ")}`);
+    }
     lines.push("");
   });
   for (const w of o.warnings) lines.push(`warning: ${w}`);

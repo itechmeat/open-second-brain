@@ -32,6 +32,13 @@ export interface RankerInputs {
    * bit-identically to pre-tier behaviour.
    */
   readonly tierByDoc?: ReadonlyMap<number, PageTier>;
+  /**
+   * Optional per-chunk count of query entities the chunk also carries
+   * (v0.13.0). Missing entries (and the absent map) contribute zero
+   * boost, so the entity layer adds nothing until the index is
+   * populated by a reindex.
+   */
+  readonly entityMatchByChunk?: ReadonlyMap<number, number>;
 }
 
 export interface RankerOptions {
@@ -94,6 +101,38 @@ interface Candidate {
   semanticScore: number;
   searchType: "keyword" | "semantic" | "hybrid";
   mtime: number;
+}
+
+/** Fixed-precision so the same vault yields the same reason strings. */
+function fmt(x: number): string {
+  return x.toFixed(3);
+}
+
+/**
+ * Assemble the explainable-recall `reasons` array from the per-layer
+ * values the ranker already computed. One entry per layer that fired;
+ * a layer contributing exactly zero is omitted so the array stays
+ * meaningful. The tier layer is reported only when it is not the
+ * neutral 1.0 multiplier.
+ */
+function buildReasons(parts: {
+  keywordScore: number;
+  semanticScore: number;
+  linkBoost: number;
+  recency: number;
+  tierMul: number;
+  entityBoost?: number;
+}): ReadonlyArray<string> {
+  const reasons: string[] = [];
+  if (parts.keywordScore > 0) reasons.push(`fts5_bm25: ${fmt(parts.keywordScore)}`);
+  if (parts.semanticScore > 0) reasons.push(`semantic_cos: ${fmt(parts.semanticScore)}`);
+  if (parts.entityBoost && parts.entityBoost > 0) {
+    reasons.push(`entity_match: ${fmt(parts.entityBoost)}`);
+  }
+  if (parts.linkBoost > 0) reasons.push(`link_boost: ${fmt(parts.linkBoost)}`);
+  if (parts.recency > 0) reasons.push(`recency: ${fmt(parts.recency)}`);
+  if (parts.tierMul !== 1) reasons.push(`tier: ${fmt(parts.tierMul)}`);
+  return Object.freeze(reasons);
 }
 
 export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSearchResult[] {
@@ -198,7 +237,12 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // `supporting` → 1.0 keeps untagged vaults bit-identical.
     const tier = inputs.tierByDoc?.get(c.documentId) ?? PAGE_TIER_DEFAULT;
     const tierMul = tierWeight(tier);
-    const score = clamp01(weighted * tierMul + linkBoost + recency);
+    // Entity boost: capped contribution from shared query entities.
+    // Per-match 0.02, capped at 0.04 so it only re-ranks an already
+    // relevant set - never enough to float an irrelevant chunk.
+    const entityMatches = inputs.entityMatchByChunk?.get(c.chunkId) ?? 0;
+    const entityBoost = Math.min(0.04, entityMatches * 0.02);
+    const score = clamp01(weighted * tierMul + linkBoost + recency + entityBoost);
 
     ranked.push(
       Object.freeze({
@@ -215,6 +259,14 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         linkBoost,
         recencyBoost: recency,
         searchType: c.searchType,
+        reasons: buildReasons({
+          keywordScore: c.keywordScore,
+          semanticScore: semanticEnabled ? c.semanticScore : 0,
+          linkBoost,
+          recency,
+          tierMul,
+          entityBoost,
+        }),
       }),
     );
   }

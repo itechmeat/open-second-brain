@@ -112,12 +112,28 @@ Full Pay Memory walkthrough: [`pay-memory.md`](pay-memory.md).
 ## Search
 
 ```text
-o2b search "<query>"          FTS5 full-text search across the vault
+o2b search "<query>"          Hybrid full-text + semantic search across the vault
                               --property type=decision --property status=open
                               filters on frontmatter scalars (post-FTS phase)
-                              --json for structured output
+                              --verbose adds per-result why_retrieved reasons
+                              --json for structured output (includes reasons[])
 o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
+                              (required after upgrading to the v0.13.0 schema)
 ```
+
+The fused ranking is sharpened by a recall-quality suite (v0.13.0), each
+layer config-tunable and bounded:
+
+| Config key | Env var | Default | Effect |
+|---|---|---|---|
+| `search_mmr_lambda` | `OPEN_SECOND_BRAIN_SEARCH_MMR_LAMBDA` | `0.7` | MMR relevance-vs-diversity tradeoff; `1` disables diversification |
+| `search_max_hops` | `OPEN_SECOND_BRAIN_SEARCH_MAX_HOPS` | `1` | Link-graph traversal depth during recall; `0` disables |
+| `search_hop_decay` | `OPEN_SECOND_BRAIN_SEARCH_HOP_DECAY` | `0.5` | Per-hop score multiplier for traversal-surfaced docs |
+| `search_max_expansion_per_hit` | `OPEN_SECOND_BRAIN_SEARCH_MAX_EXPANSION_PER_HIT` | `3` | Cap on outbound links followed per node |
+
+Entity-boosted retrieval and header-anchored chunking populate on the
+next reindex and need no configuration. Every result carries a
+`why_retrieved` list naming the scoring layers that ranked it.
 
 ## Helpers
 

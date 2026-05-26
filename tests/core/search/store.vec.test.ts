@@ -30,6 +30,7 @@ function semanticConfig(model: string, dim: number, overrides?: Partial<Resolved
     keywordWeight: 0.6,
     semanticWeight: 0.4,
     semantic,
+    recall: Object.freeze({ mmrLambda: 0.7, maxHops: 1, hopDecay: 0.5, maxExpansionPerHit: 3 }),
     ...(overrides ?? {}),
   });
 }

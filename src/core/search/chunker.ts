@@ -24,6 +24,15 @@ export interface MarkdownChunk {
   readonly startLine: number;
   readonly endLine: number;
   readonly tokenCount: number;
+  /**
+   * Breadcrumb of headings the chunk falls under, joined by " > "
+   * (e.g. "Top > Section A"). Computed at the chunk's end so a chunk
+   * spanning into a deeper subsection is anchored to the deepest
+   * heading it covers. Empty when no heading precedes the chunk.
+   * Indexed in a dedicated FTS column so a mid-document chunk keeps its
+   * topical anchor; never part of the display content.
+   */
+  readonly headingPath: string;
 }
 
 export interface ChunkResult {
@@ -282,6 +291,7 @@ function emitChunk(
     startLine: bodyLines[0]?.num ?? overlap[0]?.num ?? 1,
     endLine: bodyLines[bodyLines.length - 1]?.num ?? overlap[overlap.length - 1]?.num ?? 1,
     tokenCount,
+    headingPath: "",
   });
 }
 
@@ -317,6 +327,7 @@ function packBlocks(
           startLine: block.lines[0]!.num,
           endLine: block.lines[block.lines.length - 1]!.num,
           tokenCount: countTokens(fmContent),
+          headingPath: "",
         }),
       );
       // The next chunk should NOT include frontmatter text as overlap.
@@ -395,6 +406,42 @@ function resolveTitle(
   return null;
 }
 
+interface HeadingMark {
+  readonly line: number;
+  readonly level: number;
+  readonly text: string;
+}
+
+/** Collect heading marks (line, level, text) in document order. */
+function collectHeadings(blocks: ReadonlyArray<Block>): HeadingMark[] {
+  const out: HeadingMark[] = [];
+  for (const b of blocks) {
+    if (b.kind !== "heading") continue;
+    const raw = b.lines[0]!.text;
+    const hashes = raw.match(/^#{1,6}/);
+    const level = hashes ? hashes[0].length : 1;
+    const text = raw.replace(/^#{1,6}\s+/, "").trim();
+    if (text) out.push({ line: b.lines[0]!.num, level, text });
+  }
+  return out;
+}
+
+/**
+ * Breadcrumb of headings in effect at `atLine` (the chunk's end line):
+ * replay heading marks at or before the line, maintaining a level-stack
+ * (a heading pops every entry at its level or deeper). Returns the stack
+ * texts joined " > ".
+ */
+function headingPathAt(headings: ReadonlyArray<HeadingMark>, atLine: number): string {
+  const stack: HeadingMark[] = [];
+  for (const h of headings) {
+    if (h.line > atLine) break;
+    while (stack.length > 0 && stack[stack.length - 1]!.level >= h.level) stack.pop();
+    stack.push(h);
+  }
+  return stack.map((h) => h.text).join(" > ");
+}
+
 /**
  * Two-pass markdown chunker. Pure function: same input → same output.
  *
@@ -422,7 +469,17 @@ export function chunkMarkdown(
   const { blocks, warnings } = splitIntoBlocks(allLines);
   const frontmatter = blocks.find((b) => b.kind === "frontmatter") ?? null;
   const title = resolveTitle(frontmatter, blocks, filenameBase);
-  const chunks = packBlocks(blocks, { maxTokens, minTokens, overlapTokens });
+  const packed = packBlocks(blocks, { maxTokens, minTokens, overlapTokens });
+
+  // Anchor each chunk to the heading breadcrumb active at its end (the
+  // deepest section it spans).
+  const headings = collectHeadings(blocks);
+  const chunks =
+    headings.length === 0
+      ? packed
+      : packed.map((c) =>
+          Object.freeze({ ...c, headingPath: headingPathAt(headings, c.endLine) }),
+        );
 
   return Object.freeze({
     title,

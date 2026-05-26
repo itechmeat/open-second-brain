@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-05-26
+
+Hybrid Search and Recall Quality suite: the fused FTS5 + semantic
+ranking is now completed by four scoring/expansion layers and made
+introspectable. Every search result carries a `why_retrieved` list of
+the layers that ranked it. Maximal Marginal Relevance diversifies the
+top pool so near-identical paraphrases stop crowding out complementary
+notes. Link-graph traversal walks outbound wikilinks from the top hits
+and surfaces related documents one or more hops away, decayed by
+distance. A deterministic, language-agnostic entity signal boosts
+proper-noun overlaps between query and note. Header-anchored chunking
+keeps a mid-document chunk's section context searchable. MMR and
+traversal are enabled by default and tunable via config; entity-boosting
+and header anchoring populate on the next reindex - so v0.13.0 is a
+deliberate ranking change and requires `o2b search reindex`.
+
+### Added
+
+- `src/core/search/mmr.ts` (`mmrRerank`) - greedy Maximal Marginal
+  Relevance with deterministic token-set Jaccard similarity. Config
+  `search_mmr_lambda` (default `0.7`; `1` disables).
+- `src/core/search/traversal.ts` (`expandByTraversal`) - pure two-stage
+  retrieve-then-walk expansion. Config `search_max_hops` (default `1`;
+  `0` disables), `search_hop_decay` (`0.5`), `search_max_expansion_per_hit`
+  (`3`). Backed by store `outboundLinkTargets` + `representativeChunks`.
+- `src/core/search/entities.ts` (`extractEntities`) - structural,
+  language-agnostic entity extraction (wikilink targets/aliases, quoted
+  spans, capitalized runs, CamelCase, ALLCAPS, digit tokens). No NER
+  dependency, no per-language word list.
+- `reasons: string[]` on `BrainSearchResult` (explainable recall),
+  surfaced in `brain_search` MCP output and `o2b search --verbose`/`--json`.
+- `headingPath` on chunks plus a searchable `chunks.heading_path` FTS
+  column (header-anchored chunking), weighted below content in bm25.
+- Recall config block (`ResolvedRecallConfig`) on `ResolvedSearchConfig`,
+  with matching env vars and per-query `mmrLambda` / `maxHops` overrides.
+
+### Changed
+
+- Search index schema migrated to version 2: adds the `chunk_entities`
+  table and the `chunks.heading_path` column, and rebuilds `chunk_fts`
+  as a two-column external-content FTS (`content`, `heading_path`).
+  Requires `o2b search reindex`.
+- The fused ranker now accepts an optional entity-match map and adds a
+  capped (`0.04`) entity boost; the rank pool widens when MMR or
+  traversal is active so expansions cannot displace genuine hits.
+
 ## [0.12.0] - 2026-05-26
 
 Brain Integrity Suite: the write path for confirmed preferences is now
@@ -2955,6 +3001,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.13.0]: https://github.com/itechmeat/open-second-brain/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/itechmeat/open-second-brain/compare/v0.11.0...v0.12.0
 [0.10.9]: https://github.com/itechmeat/open-second-brain/compare/v0.10.8...v0.10.9
 [0.10.8]: https://github.com/itechmeat/open-second-brain/compare/v0.10.7...v0.10.8

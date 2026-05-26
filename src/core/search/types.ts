@@ -45,7 +45,14 @@ export interface BrainSearchResult {
   readonly semanticScore: number;
   readonly linkBoost: number;
   readonly recencyBoost: number;
-  readonly searchType: "keyword" | "semantic" | "hybrid";
+  readonly searchType: "keyword" | "semantic" | "hybrid" | "link";
+  /**
+   * Explainable recall: one entry per scoring layer that contributed
+   * to `score`, formatted `"<layer>: <fixed-precision value>"`. Layers
+   * that did not fire (zero contribution) are omitted. Always present;
+   * never empty for a result that surfaced.
+   */
+  readonly reasons: ReadonlyArray<string>;
 }
 
 export interface IndexStats {
@@ -122,6 +129,16 @@ export interface SearchOptions {
    * filter (existing behaviour).
    */
   readonly properties?: ReadonlyMap<string, ReadonlyArray<string>>;
+  /**
+   * Per-query MMR override (v0.13.0). Absent uses the resolved config
+   * default; `1` disables diversification for this query.
+   */
+  readonly mmrLambda?: number;
+  /**
+   * Per-query link-graph traversal depth (v0.13.0). Absent uses the
+   * resolved config default; `0` disables traversal for this query.
+   */
+  readonly maxHops?: number;
 }
 
 export interface SearchOutcome {
@@ -142,6 +159,23 @@ export interface ResolvedEmbeddingConfig {
   readonly batchSize: number;
 }
 
+/**
+ * Recall-quality tunables (v0.13.0). Each layer is bounded and
+ * deterministic; the defaults enable the layer while leaving a clear
+ * off switch (`mmrLambda = 1`, `maxHops = 0`). A vault that never opts
+ * out ranks by the documented defaults.
+ */
+export interface ResolvedRecallConfig {
+  /** MMR relevance-vs-diversity tradeoff in [0, 1]; 1 disables MMR. */
+  readonly mmrLambda: number;
+  /** Link-graph traversal hop depth during recall; 0 disables. */
+  readonly maxHops: number;
+  /** Per-hop score multiplier in (0, 1]. */
+  readonly hopDecay: number;
+  /** Cap on outbound links followed per node. */
+  readonly maxExpansionPerHit: number;
+}
+
 export interface ResolvedSearchConfig {
   readonly vault: string;
   readonly dbPath: string;
@@ -160,4 +194,5 @@ export interface ResolvedSearchConfig {
   readonly keywordWeight: number;
   readonly semanticWeight: number;
   readonly semantic: ResolvedEmbeddingConfig;
+  readonly recall: ResolvedRecallConfig;
 }
