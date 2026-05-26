@@ -26,12 +26,14 @@ import type {
   BrainConfig,
   BrainGuardrailConfig,
   BrainLinkGraphConfig,
+  BrainNotesConfig,
   BrainMostAppliedConfig,
   BrainTemporalConfig,
   BrainVaultConfig,
   DisciplineReportConfig,
   ResolvedBrainGuardrailConfig,
   ResolvedBrainLinkGraphConfig,
+  ResolvedBrainNotesConfig,
   ResolvedBrainTemporalConfig,
 } from "./types.ts";
 // Imported from `defaults.ts` (not from `vault-scope/index.ts`) to
@@ -213,6 +215,30 @@ export function resolveTemporal(
       tp.daily_window_offset_hours ??
       BRAIN_TEMPORAL_DEFAULTS.daily_window_offset_hours,
   };
+}
+
+/**
+ * Default `notes:` block (v0.11.0). Empty `read_paths` list means
+ * the agent does not scan any user-authored notes. The operator
+ * opts in by listing folders in `_brain.yaml`.
+ */
+export const BRAIN_NOTES_DEFAULTS: ResolvedBrainNotesConfig = Object.freeze(
+  { read_paths: Object.freeze([]) as ReadonlyArray<string> },
+) as ResolvedBrainNotesConfig;
+
+/**
+ * Merge a parsed `notes` block (or `undefined`) with
+ * `BRAIN_NOTES_DEFAULTS`. The resulting struct (and its inner array)
+ * are frozen so consumers can pass the slice around without copying.
+ */
+export function resolveNotes(cfg: BrainConfig): ResolvedBrainNotesConfig {
+  const block = cfg.notes;
+  if (block === undefined || block.read_paths === undefined) {
+    return BRAIN_NOTES_DEFAULTS;
+  }
+  return Object.freeze({
+    read_paths: Object.freeze([...block.read_paths]) as ReadonlyArray<string>,
+  }) as ResolvedBrainNotesConfig;
 }
 
 /**
@@ -1128,6 +1154,90 @@ export function validateBrainConfigDetailed(
         : {};
   }
 
+  // Optional `notes:` block (v0.11.0). Shape:
+  //   notes:
+  //     read_paths:
+  //       - Daily
+  //       - Journal/Weekly
+  // Absent block → `cfg.notes` undefined; resolveNotes returns the
+  // bit-identical defaults (empty `read_paths`). The list is purely
+  // a READ surface; agents never write to these paths.
+  let notes: BrainNotesConfig | undefined;
+  if ("notes" in obj) {
+    const rawNotes = obj["notes"];
+    if (
+      typeof rawNotes !== "object" ||
+      rawNotes === null ||
+      Array.isArray(rawNotes)
+    ) {
+      throw new BrainConfigError(
+        "notes must be a mapping",
+        "notes",
+        source,
+      );
+    }
+    const notesObj = rawNotes as Record<string, unknown>;
+    const partialNotes: Record<string, unknown> = {};
+    if ("read_paths" in notesObj) {
+      const v = notesObj["read_paths"];
+      if (!Array.isArray(v)) {
+        throw new BrainConfigError(
+          "must be an array of vault-relative folder paths",
+          "notes.read_paths",
+          source,
+        );
+      }
+      const cleaned: string[] = [];
+      v.forEach((entry, idx) => {
+        if (typeof entry !== "string") {
+          throw new BrainConfigError(
+            `must be a string; got ${describe(entry)}`,
+            `notes.read_paths[${idx}]`,
+            source,
+          );
+        }
+        const trimmed = entry.trim();
+        if (trimmed.length === 0) {
+          throw new BrainConfigError(
+            "must be a non-empty string",
+            `notes.read_paths[${idx}]`,
+            source,
+          );
+        }
+        if (trimmed.startsWith("/") || trimmed.startsWith("\\")) {
+          throw new BrainConfigError(
+            "must be a vault-relative path (no leading slash)",
+            `notes.read_paths[${idx}]`,
+            source,
+          );
+        }
+        const segments = trimmed.split(/[\\/]/);
+        if (segments.some((s) => s === "..")) {
+          throw new BrainConfigError(
+            "must not contain '..' segments",
+            `notes.read_paths[${idx}]`,
+            source,
+          );
+        }
+        cleaned.push(trimmed);
+      });
+      partialNotes["read_paths"] = cleaned;
+    }
+    // Forward-compat: unknown sub-keys under `notes:` → warning.
+    for (const key of Object.keys(notesObj)) {
+      if (key !== "read_paths") {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `notes.${key}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
+    notes =
+      Object.keys(partialNotes).length > 0
+        ? (partialNotes as BrainNotesConfig)
+        : {};
+  }
+
   // Forward-compat: unknown top-level keys → warning, not error.
   const known = new Set([
     "schema_version",
@@ -1142,6 +1252,7 @@ export function validateBrainConfigDetailed(
     "guardrails",
     "link_graph",
     "temporal",
+    "notes",
   ]);
   for (const key of Object.keys(obj)) {
     if (!known.has(key)) {
@@ -1179,6 +1290,7 @@ export function validateBrainConfigDetailed(
     ...(guardrails !== undefined ? { guardrails } : {}),
     ...(linkGraph !== undefined ? { link_graph: linkGraph } : {}),
     ...(temporal !== undefined ? { temporal } : {}),
+    ...(notes !== undefined ? { notes } : {}),
   };
 
   return { config, warnings };

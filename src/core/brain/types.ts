@@ -825,6 +825,33 @@ export interface BrainConfig {
    * `resolveTemporal`.
    */
   readonly temporal?: BrainTemporalConfig;
+  /**
+   * Optional `notes:` block (v0.11.0). Declares vault-relative
+   * folders the agent may READ user-authored notes from (daily
+   * journal, weekly notes, ...). Absent or empty list means the
+   * agent does not read any user-authored notes. Agents never write
+   * to these paths - the type is `read_paths` for a reason.
+   */
+  readonly notes?: BrainNotesConfig;
+}
+
+/**
+ * Optional `notes:` block (v0.11.0). User-authored notes the agent
+ * may read from. The list is purely a READ surface: `scan-inline`
+ * and session-import scan these roots for `@osb` markers. The agent
+ * never writes here; user-named folders (`Daily/`, `Journal/`, ...)
+ * stay user-owned.
+ */
+export interface BrainNotesConfig {
+  /**
+   * Vault-relative folders the agent may read from. Empty or absent
+   * list means "no user-authored notes to scan".
+   */
+  readonly read_paths?: ReadonlyArray<string>;
+}
+
+export interface ResolvedBrainNotesConfig {
+  readonly read_paths: ReadonlyArray<string>;
 }
 
 /**
