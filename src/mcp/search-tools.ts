@@ -191,6 +191,7 @@ async function toolBrainSearch(
       startLine: r.startLine,
       endLine: r.endLine,
       searchType: r.searchType,
+      reasons: r.reasons,
     })),
     warnings: outcome.warnings,
     total: outcome.total,

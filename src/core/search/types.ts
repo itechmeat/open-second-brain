@@ -46,6 +46,13 @@ export interface BrainSearchResult {
   readonly linkBoost: number;
   readonly recencyBoost: number;
   readonly searchType: "keyword" | "semantic" | "hybrid";
+  /**
+   * Explainable recall: one entry per scoring layer that contributed
+   * to `score`, formatted `"<layer>: <fixed-precision value>"`. Layers
+   * that did not fire (zero contribution) are omitted. Always present;
+   * never empty for a result that surfaced.
+   */
+  readonly reasons: ReadonlyArray<string>;
 }
 
 export interface IndexStats {

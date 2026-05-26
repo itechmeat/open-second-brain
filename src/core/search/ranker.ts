@@ -96,6 +96,38 @@ interface Candidate {
   mtime: number;
 }
 
+/** Fixed-precision so the same vault yields the same reason strings. */
+function fmt(x: number): string {
+  return x.toFixed(3);
+}
+
+/**
+ * Assemble the explainable-recall `reasons` array from the per-layer
+ * values the ranker already computed. One entry per layer that fired;
+ * a layer contributing exactly zero is omitted so the array stays
+ * meaningful. The tier layer is reported only when it is not the
+ * neutral 1.0 multiplier.
+ */
+function buildReasons(parts: {
+  keywordScore: number;
+  semanticScore: number;
+  linkBoost: number;
+  recency: number;
+  tierMul: number;
+  entityBoost?: number;
+}): ReadonlyArray<string> {
+  const reasons: string[] = [];
+  if (parts.keywordScore > 0) reasons.push(`fts5_bm25: ${fmt(parts.keywordScore)}`);
+  if (parts.semanticScore > 0) reasons.push(`semantic_cos: ${fmt(parts.semanticScore)}`);
+  if (parts.entityBoost && parts.entityBoost > 0) {
+    reasons.push(`entity_match: ${fmt(parts.entityBoost)}`);
+  }
+  if (parts.linkBoost > 0) reasons.push(`link_boost: ${fmt(parts.linkBoost)}`);
+  if (parts.recency > 0) reasons.push(`recency: ${fmt(parts.recency)}`);
+  if (parts.tierMul !== 1) reasons.push(`tier: ${fmt(parts.tierMul)}`);
+  return Object.freeze(reasons);
+}
+
 export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSearchResult[] {
   const nowMs = opts.nowMs ?? Date.now();
   const semanticEnabled = opts.semanticEnabled !== false;
@@ -215,6 +247,13 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         linkBoost,
         recencyBoost: recency,
         searchType: c.searchType,
+        reasons: buildReasons({
+          keywordScore: c.keywordScore,
+          semanticScore: semanticEnabled ? c.semanticScore : 0,
+          linkBoost,
+          recency,
+          tierMul,
+        }),
       }),
     );
   }
