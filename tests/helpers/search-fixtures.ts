@@ -56,6 +56,8 @@ export function makeConfig(opts: {
   semantic?: Partial<ResolvedEmbeddingConfig>;
   /** MMR tradeoff; defaults to 0.7. Pass 1 to disable diversification. */
   mmrLambda?: number;
+  /** Link-graph traversal depth; defaults to 1. Pass 0 to disable. */
+  maxHops?: number;
 }): ResolvedSearchConfig {
   const baseSemantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: false,
@@ -85,6 +87,11 @@ export function makeConfig(opts: {
     keywordWeight: 0.6,
     semanticWeight: 0.4,
     semantic,
-    recall: Object.freeze({ mmrLambda: opts.mmrLambda ?? 0.7 }),
+    recall: Object.freeze({
+      mmrLambda: opts.mmrLambda ?? 0.7,
+      maxHops: opts.maxHops ?? 1,
+      hopDecay: 0.5,
+      maxExpansionPerHit: 3,
+    }),
   });
 }

@@ -45,7 +45,7 @@ export interface BrainSearchResult {
   readonly semanticScore: number;
   readonly linkBoost: number;
   readonly recencyBoost: number;
-  readonly searchType: "keyword" | "semantic" | "hybrid";
+  readonly searchType: "keyword" | "semantic" | "hybrid" | "link";
   /**
    * Explainable recall: one entry per scoring layer that contributed
    * to `score`, formatted `"<layer>: <fixed-precision value>"`. Layers
@@ -134,6 +134,11 @@ export interface SearchOptions {
    * default; `1` disables diversification for this query.
    */
   readonly mmrLambda?: number;
+  /**
+   * Per-query link-graph traversal depth (v0.13.0). Absent uses the
+   * resolved config default; `0` disables traversal for this query.
+   */
+  readonly maxHops?: number;
 }
 
 export interface SearchOutcome {
@@ -163,6 +168,12 @@ export interface ResolvedEmbeddingConfig {
 export interface ResolvedRecallConfig {
   /** MMR relevance-vs-diversity tradeoff in [0, 1]; 1 disables MMR. */
   readonly mmrLambda: number;
+  /** Link-graph traversal hop depth during recall; 0 disables. */
+  readonly maxHops: number;
+  /** Per-hop score multiplier in (0, 1]. */
+  readonly hopDecay: number;
+  /** Cap on outbound links followed per node. */
+  readonly maxExpansionPerHit: number;
 }
 
 export interface ResolvedSearchConfig {

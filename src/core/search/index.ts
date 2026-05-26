@@ -61,6 +61,9 @@ const DEFAULTS = {
   concurrency: 4,
   batchSize: 32,
   mmrLambda: 0.7,
+  maxHops: 1,
+  hopDecay: 0.5,
+  maxExpansionPerHit: 3,
 };
 
 type IntegerRange = { readonly min?: number; readonly max?: number };
@@ -246,7 +249,34 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.mmrLambda,
     "search_mmr_lambda",
   );
-  const recall: ResolvedRecallConfig = Object.freeze({ mmrLambda });
+  const maxHops = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_MAX_HOPS", "search_max_hops"),
+    DEFAULTS.maxHops,
+    "search_max_hops",
+    { min: 0 },
+  );
+  const hopDecay = parseFloat01(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_HOP_DECAY", "search_hop_decay"),
+    DEFAULTS.hopDecay,
+    "search_hop_decay",
+  );
+  const maxExpansionPerHit = parseInteger(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_MAX_EXPANSION_PER_HIT",
+      "search_max_expansion_per_hit",
+    ),
+    DEFAULTS.maxExpansionPerHit,
+    "search_max_expansion_per_hit",
+    { min: 0 },
+  );
+  const recall: ResolvedRecallConfig = Object.freeze({
+    mmrLambda,
+    maxHops,
+    hopDecay,
+    maxExpansionPerHit,
+  });
 
   const base: ResolvedSearchConfig = Object.freeze({
     vault: opts.vault,

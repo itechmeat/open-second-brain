@@ -893,6 +893,92 @@ export class Store {
   }
 
   /**
+   * For each source document id, the list of resolved outbound link
+   * target document ids (wikilink / markdown_link only; tags and
+   * unresolved targets excluded; self-links dropped). Used by the
+   * recall traversal layer to walk one or more hops out from a hit.
+   */
+  outboundLinkTargets(sourceDocumentIds: ReadonlyArray<number>): Map<number, number[]> {
+    const out = new Map<number, number[]>();
+    if (sourceDocumentIds.length === 0) return out;
+    const placeholders = sourceDocumentIds.map(() => "?").join(",");
+    const rows = this.db
+      .query<
+        { source_document_id: number; target_document_id: number },
+        number[]
+      >(
+        "SELECT DISTINCT l.source_document_id, l.target_document_id " +
+          `FROM links l ` +
+          `WHERE l.source_document_id IN (${placeholders}) ` +
+          `  AND l.target_document_id IS NOT NULL ` +
+          `  AND l.target_document_id != l.source_document_id ` +
+          `  AND l.link_type IN ('wikilink','markdown_link') ` +
+          `ORDER BY l.source_document_id, l.target_document_id`,
+      )
+      .all(...(sourceDocumentIds as number[]));
+    for (const r of rows) {
+      let list = out.get(r.source_document_id);
+      if (!list) {
+        list = [];
+        out.set(r.source_document_id, list);
+      }
+      list.push(r.target_document_id);
+    }
+    return out;
+  }
+
+  /**
+   * One representative chunk per document - the lowest `chunk_index`,
+   * which for markdown is the document head (title / opening section).
+   * The traversal layer surfaces this when a linked document is not
+   * already a relevance hit.
+   */
+  representativeChunks(documentIds: ReadonlyArray<number>): Map<number, HydratedChunk> {
+    const out = new Map<number, HydratedChunk>();
+    if (documentIds.length === 0) return out;
+    const placeholders = documentIds.map(() => "?").join(",");
+    const rows = this.db
+      .query<
+        {
+          chunk_id: number;
+          document_id: number;
+          path: string;
+          title: string | null;
+          content: string;
+          start_line: number;
+          end_line: number;
+          mtime: number;
+        },
+        number[]
+      >(
+        "SELECT c.id AS chunk_id, c.document_id AS document_id, d.path AS path, " +
+          "d.title AS title, c.content AS content, c.start_line AS start_line, " +
+          "c.end_line AS end_line, d.mtime AS mtime " +
+          "FROM chunks c JOIN documents d ON d.id = c.document_id " +
+          `WHERE c.document_id IN (${placeholders}) ` +
+          "ORDER BY c.document_id, c.chunk_index ASC",
+      )
+      .all(...(documentIds as number[]));
+    for (const r of rows) {
+      if (out.has(r.document_id)) continue; // first row per doc = lowest chunk_index
+      out.set(
+        r.document_id,
+        Object.freeze({
+          chunkId: r.chunk_id,
+          documentId: r.document_id,
+          path: r.path,
+          title: r.title,
+          content: r.content,
+          startLine: r.start_line,
+          endLine: r.end_line,
+          mtime: r.mtime,
+        }),
+      );
+    }
+    return out;
+  }
+
+  /**
    * For each chunk id, the set of tag link_text values associated with
    * its document. Two chunks "share a tag" iff their tag sets intersect.
    */
