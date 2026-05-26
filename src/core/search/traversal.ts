@@ -122,7 +122,6 @@ export function expandByTraversal(
     for (const targetId of targets) {
       if (expanded >= perHit) break;
       if (targetId === node.documentId || present.has(targetId)) continue;
-      expanded++;
       const hopScore = node.score * decay;
       const existing = added.get(targetId);
       if (existing && existing.score >= hopScore) {
@@ -132,6 +131,10 @@ export function expandByTraversal(
       }
       const doc = inputs.expansionDoc(targetId);
       if (!doc) continue;
+      // Count only expansions that actually surface a document, so a
+      // skipped target (dup / weaker path / missing chunk) does not burn
+      // the per-hit budget and starve a valid later target.
+      expanded++;
       added.set(
         targetId,
         makeLinkResult(doc, hopScore, node.hop + 1, node.fromPath),

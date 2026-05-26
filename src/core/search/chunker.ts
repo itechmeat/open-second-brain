@@ -471,7 +471,8 @@ export function chunkMarkdown(
   const title = resolveTitle(frontmatter, blocks, filenameBase);
   const packed = packBlocks(blocks, { maxTokens, minTokens, overlapTokens });
 
-  // Anchor each chunk to the heading breadcrumb active at its start.
+  // Anchor each chunk to the heading breadcrumb active at its end (the
+  // deepest section it spans).
   const headings = collectHeadings(blocks);
   const chunks =
     headings.length === 0

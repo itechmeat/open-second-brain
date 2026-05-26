@@ -63,7 +63,7 @@ confined to `store.ts`; the new ranking math stays pure and unit-testable.
 
 Pipeline after the change (`search.ts`):
 
-```
+```text
 fts candidates -> semantic candidates -> hydrate
   -> rankResults (keyword + semantic + link + recency + tier + ENTITY)   [F1 reasons, F4 boost]
   -> traversal expand (outbound links, decayed) -> re-merge + re-sort     [F3]
