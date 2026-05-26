@@ -109,50 +109,6 @@ describe("init", () => {
 
 });
 
-describe("append-event", () => {
-  test("errors when no vault anywhere", async () => {
-    const cfg = join(tmp, "config.yaml");
-    const r = await runCli(["append-event", "msg", "--as", "tester"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: cfg },
-    });
-    expect(r.returncode).not.toBe(0);
-    expect(r.stderr.toLowerCase()).toContain("no vault configured");
-  });
-
-  test("prints absolute path on success", async () => {
-    const vault = join(tmp, "vault");
-    mkdirSync(vault);
-    const cfg = join(tmp, "config.yaml");
-    const r = await runCli(
-      ["append-event", "absolute-path-test", "--vault", vault, "--as", "tester"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: cfg } },
-    );
-    expect(r.returncode).toBe(0);
-    expect(r.stdout).toContain("appended: ");
-    const printed = r.stdout.split("appended: ")[1]!.trim().split("\n")[0]!;
-    expect(printed.startsWith("/")).toBe(true);
-    expect(printed.startsWith(resolve(vault))).toBe(true);
-  });
-
-  test("writes daily note", async () => {
-    const r = await runCli([
-      "append-event",
-      "created CLI",
-      "--vault",
-      tmp,
-      "--as",
-      "test-agent",
-      "--date",
-      "2026.05.06",
-      "--time",
-      "10:15",
-    ]);
-    expect(r.returncode).toBe(0);
-    const daily = join(tmp, "Daily", "2026.05.06.md");
-    expect(readFileSync(daily, "utf8")).toContain("- 10:15 — @test-agent — created CLI");
-  });
-});
-
 describe("doctor", () => {
   test("errors when no vault anywhere", async () => {
     const cfg = join(tmp, "config.yaml");
@@ -229,26 +185,6 @@ describe("export-config", () => {
     const data = JSON.parse(readFileSync(out, "utf8"));
     expect(data.config.api_key).toBe("[REDACTED]");
     expect(data.config.vault_path).toBe("/tmp/vault");
-  });
-});
-
-describe("vault-log compat command (append-event under another name)", () => {
-  test("produces same daily note as append-event", async () => {
-    const r = await runCli([
-      "append-event",
-      "compat entry",
-      "--as",
-      "compat-agent",
-      "--vault",
-      tmp,
-      "--date",
-      "2026.05.06",
-      "--time",
-      "10:30",
-    ]);
-    expect(r.returncode).toBe(0);
-    const daily = join(tmp, "Daily", "2026.05.06.md");
-    expect(readFileSync(daily, "utf8")).toContain("- 10:30 — @compat-agent — compat entry");
   });
 });
 

@@ -603,10 +603,9 @@ export interface BrainImportClaudeMemoryLogEvent extends BrainLogEventBase {
 }
 
 /**
- * `note` entry (§32B, v0.10.8) — one narrative-milestone line. Not
- * consumed by the dream pass; it exists so an agent has a Brain-native
- * home for "I shipped X" / "PR Y merged" lines instead of falling back
- * to the deprecated Daily/ event log.
+ * `note` entry — one narrative-milestone line. Not consumed by the
+ * dream pass; it exists so an agent has a Brain-native home for
+ * "I shipped X" / "PR Y merged" lines.
  */
 export interface BrainNoteLogEvent extends BrainLogEventBase {
   readonly kind: typeof BRAIN_LOG_EVENT_KIND.note;

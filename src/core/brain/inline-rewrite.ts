@@ -15,8 +15,7 @@
  *     interpret HTML comments inside fenced blocks).
  *
  * Concurrency: a `proper-lockfile` lock on the parent directory
- * serialises rewrites — the same shared-lock pattern as
- * {@link appendEvent}. Per-file locks would race against the temp
+ * serialises rewrites. Per-file locks would race against the temp
  * file `atomicWriteFileSync` itself creates next to the target.
  *
  * Atomicity: writes go through {@link atomicWriteFileSync}, which
@@ -52,7 +51,7 @@ export async function rewriteMarkers(
   if (ops.length === 0) return;
 
   // proper-lockfile requires the target to exist; locking the parent
-  // dir mirrors what `appendEvent` does for Daily/.
+  // directory serialises concurrent rewrites of the same file.
   const parent = dirname(path);
   mkdirSync(parent, { recursive: true });
 

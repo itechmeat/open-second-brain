@@ -24,10 +24,6 @@ import {
   resolveTimezone,
 } from "../core/config.ts";
 import { doctor } from "../core/doctor.ts";
-// §32G (v0.10.8): `appendEvent` / `validateEventTime` are no longer
-// needed by the OpenClaw bundle — the `event_log_append` tool was
-// retired from this runtime. The functions still live in
-// `src/core/event-log.ts` for the human-side `o2b append-event` CLI.
 import { buildReminder } from "../core/identity-reminder.ts";
 import {
   checkPolicy,
@@ -216,12 +212,9 @@ export default definePluginEntry({
       },
     );
 
-    // §32G (v0.10.8): the OpenClaw `second_brain_capture` and
-    // `event_log_append` registrations are gone. Agents on this runtime
-    // now record via the Brain writer tools served by the MCP server
-    // (`brain_feedback`, `brain_apply_evidence`, `brain_note`); the
-    // human-side `o2b append-event` CLI is the only remaining caller of
-    // `appendEvent`.
+    // Agents on this runtime record observations via the Brain writer
+    // tools served by the MCP server (`brain_feedback`,
+    // `brain_apply_evidence`, `brain_note`).
 
     api.registerTool(
       {
