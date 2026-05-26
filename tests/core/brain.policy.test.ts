@@ -537,11 +537,11 @@ describe("parseBrainYaml", () => {
 
   test("parses inline scalar arrays", () => {
     const parsed = parseBrainYaml(
-      `schema_version: 1\nvault:\n  ignore_paths: [Drafts, "AI Wiki/cache"]\n`,
+      `schema_version: 1\nvault:\n  ignore_paths: [Drafts, "Drafts/cache"]\n`,
     );
     expect((parsed["vault"] as { ignore_paths: unknown }).ignore_paths).toEqual([
       "Drafts",
-      "AI Wiki/cache",
+      "Drafts/cache",
     ]);
   });
 

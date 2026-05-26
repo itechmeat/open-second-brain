@@ -726,16 +726,13 @@ function checkWikilinks(
 }
 
 /**
- * Build the universe of valid wikilink targets inside `Brain/`. We
- * deliberately do NOT pull in legacy `AI Wiki/` or `Daily/` notes — a
- * Brain artifact pointing at a Daily entry (artifact wikilink in a
- * `apply-evidence` event) is valid, but those targets sit outside the
- * Brain layer and are out of scope for this doctor pass.
+ * Build the universe of valid wikilink targets inside `Brain/`. The
+ * doctor pass is scoped to Brain content; cross-layer wikilinks
+ * pointing at user-authored notes outside Brain/ are out of scope
+ * and stay accepted.
  *
- * To keep the check honest for cross-layer wikilinks (e.g. a
- * `retired_by: [[Brain/log/2026-05-14]]`), we accept *any* `.md` file
- * inside `Brain/`. The set is keyed by basename (without `.md`) so
- * Obsidian's basename match works.
+ * Set is keyed by basename (without `.md`) so Obsidian's basename
+ * match works.
  */
 function checkBrokenBacklinks(
   vault: string,

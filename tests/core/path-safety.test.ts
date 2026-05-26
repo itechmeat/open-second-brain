@@ -19,7 +19,7 @@ describe("ensureInsideVault", () => {
   });
 
   test("accepts descendants", () => {
-    const target = join(VAULT, "AI Wiki", "notes", "x.md");
+    const target = join(VAULT, "Notes", "notes", "x.md");
     expect(ensureInsideVault(target, VAULT)).toBe(target);
   });
 
@@ -38,7 +38,7 @@ describe("ensureInsideVault", () => {
   });
 
   test("returns the resolved absolute path", () => {
-    const target = join(VAULT, "AI Wiki", "x.md");
+    const target = join(VAULT, "Notes", "x.md");
     expect(ensureInsideVault(target, VAULT)).toBe(target);
   });
 });
@@ -71,7 +71,7 @@ describe("ensureInsideVault — realpath / symlink escape", () => {
   });
 
   test("accepts a target inside a real subdirectory", () => {
-    const sub = join(vault, "AI Wiki");
+    const sub = join(vault, "Notes");
     mkdirSync(sub, { recursive: true });
     expect(ensureInsideVault(join(sub, "x.md"), vault)).toBe(join(sub, "x.md"));
   });
@@ -81,17 +81,17 @@ describe("ensureInsideVault — realpath / symlink escape", () => {
     // protection should not crash on a path component that doesn't exist
     // yet (the writer creates it after this check passes).
     expect(
-      ensureInsideVault(join(vault, "AI Wiki", "payments", "2026-05-10", "x.md"), vault),
-    ).toBe(join(vault, "AI Wiki", "payments", "2026-05-10", "x.md"));
+      ensureInsideVault(join(vault, "Notes", "payments", "2026-05-10", "x.md"), vault),
+    ).toBe(join(vault, "Notes", "payments", "2026-05-10", "x.md"));
   });
 });
 
 describe("vaultRelative", () => {
   test("renders descendant paths with forward slashes", () => {
-    const target = join(VAULT, "AI Wiki", "notes", "x.md");
+    const target = join(VAULT, "Notes", "notes", "x.md");
     // The renderer always emits forward slashes, even when the host
     // separator is `\`, so wikilinks/Obsidian behave consistently.
-    expect(vaultRelative(target, VAULT)).toBe("AI Wiki/notes/x.md");
+    expect(vaultRelative(target, VAULT)).toBe("Notes/notes/x.md");
   });
 
   test("returns empty string for the vault root itself", () => {

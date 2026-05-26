@@ -137,10 +137,10 @@ describe("planUninstall", () => {
 describe("safety invariants", () => {
   test("apply-local never touches vault", () => {
     const vault = join(tmp, "vault");
-    mkdirSync(join(vault, "AI Wiki"), { recursive: true });
-    mkdirSync(join(vault, "Daily"), { recursive: true });
-    writeFileSync(join(vault, "AI Wiki", "page.md"), "# Page\n");
-    writeFileSync(join(vault, "Daily", "2026.05.06.md"), "# Daily\n");
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    mkdirSync(join(vault, "Journal"), { recursive: true });
+    writeFileSync(join(vault, "Notes", "page.md"), "# Page\n");
+    writeFileSync(join(vault, "Journal", "2026-05-06.md"), "# Journal\n");
 
     const configDir = join(tmp, "open-second-brain");
     mkdirSync(configDir);
@@ -150,8 +150,8 @@ describe("safety invariants", () => {
     planUninstall({ configPath: config, applyLocal: true });
 
     expect(existsSync(vault)).toBe(true);
-    expect(existsSync(join(vault, "AI Wiki", "page.md"))).toBe(true);
-    expect(existsSync(join(vault, "Daily", "2026.05.06.md"))).toBe(true);
+    expect(existsSync(join(vault, "Notes", "page.md"))).toBe(true);
+    expect(existsSync(join(vault, "Journal", "2026-05-06.md"))).toBe(true);
   });
 
   test("apply-local never touches the Hermes config file", async () => {

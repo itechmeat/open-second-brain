@@ -54,7 +54,7 @@ export interface BrainManifestDiff {
  * Walk `brainRoot` (the `<vault>/Brain/` directory) and hash every
  * regular file. The caller is responsible for pointing at the
  * `Brain/` directory itself — passing a vault root would silently
- * include sibling content like `Daily/` or `AI Wiki/`.
+ * include sibling user content the Brain layer does not own.
  *
  * The walker is iterative (explicit stack) to keep recursion depth
  * predictable on deeply-nested vault trees. Files are hashed
