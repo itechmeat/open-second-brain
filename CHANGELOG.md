@@ -5,6 +5,109 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-05-26
+
+Brain-centric vault layout. The agent now owns one top-level
+directory in the vault: `Brain/`. The legacy `AI Wiki/` subtree is
+gone; Pay Memory writes nest under `Brain/payments/`. User-authored
+notes (daily journals, weekly notes, etc.) live wherever the
+operator names them and become read-only inputs to the agent only
+when listed under a new `notes.read_paths` config block. The
+`appendEvent` / `o2b append-event` writer that previously touched
+`Daily/<date>.md` is removed entirely; agents record narrative
+milestones through `brain_note` into `Brain/log/<today>.md`.
+
+This release also clears every pre-1.0 backward-compat shim from
+the codebase. Open Second Brain has no public users yet — keeping
+dual-shape parsers, legacy migration verbs, or "lift-only" band
+overlays just to honour an unpublished contract was pure dead
+weight.
+
+### Added
+
+- `_brain.yaml` gains a `notes:` block with `read_paths` - the
+  vault-relative folders the agent may READ user-authored notes
+  from. Empty (or absent) means no scanning; the agent never writes
+  to those paths.
+- Path constants module (`src/core/brain/paths.ts`,
+  `src/core/pay-memory/paths.ts`): every vault-relative path used
+  by Brain or Pay Memory now lives behind a named constant
+  (`BRAIN_ROOT_REL`, `PAY_MEMORY_*_REL`, etc.). Future renames are
+  a one-line edit.
+- README poster at `docs/images/readme-poster.jpg`, rendered under
+  the H1.
+
+### Changed
+
+- `o2b init` no longer scaffolds vault content. Vault bootstrap is
+  `o2b brain init`'s job; `o2b init` now only persists machine-local
+  config (vault path, agent name, timezone).
+- `o2b brain init` no longer writes `AI Wiki/_OPEN_SECOND_BRAIN.md`.
+  The operating manual lives at `Brain/_BRAIN.md` only.
+- `o2b index` writes to `<vault>/Brain/_INDEX.md` instead of
+  `<vault>/AI Wiki/index.md`.
+- `o2b brain scan-inline` walks only folders listed under
+  `notes.read_paths` (or `--path` overrides). Default is "no folders
+  to scan"; the agent never crawls the vault without an operator
+  opt-in.
+- Pay Memory writes under `Brain/payments/` (receipts go directly
+  into `Brain/payments/<YYYY-MM-DD>/<slug>.md`, no nested
+  `payments/` subdir).
+- Brain upgrade plan: only `Brain/_brain.yaml` and `Brain/_BRAIN.md`
+  (the legacy overview file is gone from the plan and from the
+  release entirely).
+- `computeConfidence` (the `dream` band derivation) uses only the
+  numeric Wilson-lower-bound × freshness thresholds. The
+  step-function band and the max-with-numeric overlay are deleted;
+  the bands now move strictly with the numeric value.
+- README quick start leads with the agent-delegated path: paste a
+  one-liner into your agent, the agent reads `install/hermes.md`
+  and runs every command. The hand-run command sequence stays as a
+  fallback.
+- README top-features table re-curated around human impact: each
+  row is "what this means for you", not "what this does in code".
+
+### Removed
+
+- `o2b append-event` CLI verb, the `appendEvent` core function,
+  and `src/core/event-log.ts`. Use `o2b brain note` or the
+  `brain_note` MCP tool instead.
+- `o2b brain migrate-frontmatter` CLI verb and its core module.
+  Files with the legacy un-prefixed Group C frontmatter (`status:`,
+  `applied_count:`, ...) no longer parse — the only shape on disk
+  is `_status:`, `_applied_count:`, ... `BrainDoubleShapeError` and
+  the dual-shape detection in `normalizeDerivedKeys` are gone.
+- `src/core/init.ts` (the legacy `bootstrapVault` scaffolder).
+- `src/core/brain/templates/_OPEN_SECOND_BRAIN.md.tpl` and the
+  `LEGACY_OVERVIEW_*` exports.
+- Legacy step-function band derivation in `computeConfidence`. The
+  `legacyBand` / `max(legacy, numeric)` "lift-only" overlay is
+  gone; numeric thresholds win outright. The dead config fields
+  `confidence.high_min_applied` and `confidence.high_freshness_factor`
+  that fed the step-function are removed from the schema, validator,
+  default YAML, and type declarations.
+- Historical inline comments referencing the retired
+  `second_brain_capture` / `event_log_append` / `appendEvent` /
+  AI Wiki/ / Daily/ surfaces, and the pre-v0.10.3 / pre-v0.10.6
+  fallback notes that documented them.
+
+### Breaking changes
+
+- Shell scripts and cron jobs that piped messages into
+  `Daily/<date>.md` via `o2b append-event` must migrate to
+  `o2b brain note` (writes into `Brain/log/<today>.md` + JSONL
+  sidecar).
+- Operators who relied on scan-inline's old "scan everything"
+  default must add the desired folders under `notes.read_paths` in
+  `_brain.yaml`, or pass `--path` explicitly on every invocation.
+- Preference / retired files using the legacy un-prefixed
+  frontmatter keys (`status:`, `applied_count:`, ...) no longer
+  parse. Rename them to the `_`-prefixed shape (`_status:`, ...).
+- Confidence bands move stricter on stale prefs and on prefs with
+  fewer than ~15 applied events. Anyone tuning thresholds may want
+  to revisit `confidence.high_min` / `medium_min` against the new
+  numeric semantics.
+
 ## [0.10.18] - 2026-05-25
 
 Temporal + synthesis layer: seven related features that add time as
@@ -542,8 +645,8 @@ Operational friction reduction: one-command update across all
 runtimes, weekly brain digest with agent quality summary, Cursor
 SQLite deep parsing for accurate transcript activity, and Obsidian
 deep-links in the live explorer. Companion design and impl plan at
-`docs/superpowers/specs/2026-05-20-v0.10.12-design.md` and
-`docs/plans/2026-05-20-v0.10.12-impl.md`.
+`docs/brainstorm/operational-friction-reduction/{design.md,plan.md}`
+and `docs/plans/2026-05-20-v0.10.12-impl.md`.
 
 ### Added
 
@@ -2793,6 +2896,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 [0.10.0]: https://github.com/itechmeat/open-second-brain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/itechmeat/open-second-brain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/itechmeat/open-second-brain/compare/v0.8.1...v0.9.0
+[0.11.0]: https://github.com/itechmeat/open-second-brain/compare/v0.10.18...v0.11.0
 [0.10.18]: https://github.com/itechmeat/open-second-brain/compare/v0.10.17...v0.10.18
 [0.10.17]: https://github.com/itechmeat/open-second-brain/compare/v0.10.16...v0.10.17
 [0.10.16]: https://github.com/itechmeat/open-second-brain/compare/v0.10.15...v0.10.16

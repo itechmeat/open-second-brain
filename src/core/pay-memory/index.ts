@@ -10,6 +10,14 @@
 // pay-memory package — adapters only need to know about the directory
 // roots and the vault-relative renderer.
 export {
+  PAY_MEMORY_ASSETS_REL,
+  PAY_MEMORY_DRAFTS_REL,
+  PAY_MEMORY_PENDING_REL,
+  PAY_MEMORY_POLICIES_REL,
+  PAY_MEMORY_REPORTS_REL,
+  PAY_MEMORY_ROOT_REL,
+  PAY_MEMORY_SPENDING_JSON_REL,
+  PAY_MEMORY_SPENDING_MD_REL,
   payMemoryDirs,
   policyPath,
   vaultRelative as vaultRelativePath,

@@ -1206,7 +1206,7 @@ describe("brain scan-inline", () => {
       "utf8",
     );
 
-    const r = await runCli(["brain", "scan-inline", "--vault", vault], {
+    const r = await runCli(["brain", "scan-inline", "--vault", vault, "--path", "Daily"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     expect(r.returncode).toBe(0);
@@ -1232,7 +1232,7 @@ describe("brain scan-inline", () => {
     const before = readFileSync(notePath, "utf8");
 
     const r = await runCli(
-      ["brain", "scan-inline", "--vault", vault, "--dry-run"],
+      ["brain", "scan-inline", "--vault", vault, "--dry-run", "--path", "Daily"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
@@ -1250,7 +1250,7 @@ describe("brain scan-inline", () => {
       "utf8",
     );
     const r = await runCli(
-      ["brain", "scan-inline", "--vault", vault, "--json"],
+      ["brain", "scan-inline", "--vault", vault, "--json", "--path", "Daily"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
@@ -1269,7 +1269,7 @@ describe("brain scan-inline", () => {
       "utf8",
     );
     const r = await runCli(
-      ["brain", "scan-inline", "--vault", vault, "--strict"],
+      ["brain", "scan-inline", "--vault", vault, "--strict", "--path", "Daily"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(2);
@@ -1353,130 +1353,6 @@ describe("brain vault resolution", () => {
     });
     expect(r.returncode).toBe(1);
     expect(r.stderr.toLowerCase()).toContain("vault");
-  });
-});
-
-// ── §24 migrate-frontmatter CLI ─────────────────────────────────────────────
-
-describe("brain migrate-frontmatter", () => {
-  /** Write a legacy-shape pref file under the bootstrapped vault. */
-  function writeLegacyPref(slug: string): string {
-    const path = join(vault, "Brain", "preferences", `pref-${slug}.md`);
-    writeFileSync(
-      path,
-      [
-        "---",
-        "kind: brain-preference",
-        `id: pref-${slug}`,
-        "created_at: 2026-05-14T10:42:00Z",
-        "unconfirmed_until: 2026-05-28T10:42:00Z",
-        `tags: [brain, brain/preference, brain/topic/${slug}]`,
-        `topic: ${slug}`,
-        "principle: Some rule",
-        "pinned: false",
-        "status: confirmed",
-        "confirmed_at: 2026-05-15T10:00:00Z",
-        "evidenced_by: []",
-        "applied_count: 1",
-        "violated_count: 0",
-        "last_evidence_at: null",
-        "confidence: low",
-        "---",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    return path;
-  }
-
-  test("--dry-run (default) prints plan and modifies no files", async () => {
-    await bootstrap();
-    const prefPath = writeLegacyPref("dry-rule");
-    const before = readFileSync(prefPath, "utf8");
-
-    const r = await runCli(
-      ["brain", "migrate-frontmatter", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(0);
-    expect(r.stdout).toMatch(/files_to_migrate: 1/);
-    expect(readFileSync(prefPath, "utf8")).toBe(before);
-  });
-
-  test("--apply --yes rewrites files and takes a snapshot", async () => {
-    await bootstrap();
-    const prefPath = writeLegacyPref("apply-rule");
-
-    const r = await runCli(
-      ["brain", "migrate-frontmatter", "--vault", vault, "--apply", "--yes"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(0);
-
-    const raw = readFileSync(prefPath, "utf8");
-    expect(raw).toMatch(/^_status: confirmed$/m);
-    expect(raw).not.toMatch(/^status: /m);
-
-    const snapDir = join(vault, "Brain", ".snapshots");
-    const snaps = readdirSync(snapDir).filter((n) => n.startsWith("migrate-"));
-    expect(snaps.length).toBeGreaterThan(0);
-  });
-
-  test("--apply without --yes in non-interactive mode exits 1", async () => {
-    await bootstrap();
-    writeLegacyPref("no-yes");
-    const r = await runCli(
-      ["brain", "migrate-frontmatter", "--vault", vault, "--apply"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(1);
-    expect(r.stderr.toLowerCase()).toMatch(/--yes/);
-  });
-
-  test("--json emits machine-readable summary", async () => {
-    await bootstrap();
-    writeLegacyPref("json-rule");
-    const r = await runCli(
-      ["brain", "migrate-frontmatter", "--vault", vault, "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(0);
-    const parsed = JSON.parse(r.stdout);
-    expect(parsed.ok).toBe(true);
-    expect(parsed.files_scanned).toBe(1);
-    expect(parsed.files_to_migrate).toBe(1);
-  });
-
-  test("--apply on collision file aborts with exit 1", async () => {
-    await bootstrap();
-    // Write a file with both shapes
-    const path = join(vault, "Brain", "preferences", "pref-collision.md");
-    writeFileSync(
-      path,
-      [
-        "---",
-        "kind: brain-preference",
-        "id: pref-collision",
-        "created_at: 2026-05-14T10:42:00Z",
-        "unconfirmed_until: 2026-05-28T10:42:00Z",
-        "tags: [brain, brain/preference, brain/topic/collision]",
-        "topic: collision",
-        "principle: Some rule",
-        "pinned: false",
-        "status: confirmed",
-        "_status: confirmed",
-        "evidenced_by: []",
-        "---",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    const r = await runCli(
-      ["brain", "migrate-frontmatter", "--vault", vault, "--apply", "--yes"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(1);
-    expect(r.stderr).toMatch(/collision/i);
   });
 });
 

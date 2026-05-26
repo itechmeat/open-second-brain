@@ -13,7 +13,7 @@ pinned: false
 scope: coding
 kind: brain-retired
 id: ret-tabs-over-spaces
-status: retired
+_status: retired
 retired_at: "2026-05-16T11:00:00.000Z"
 retired_reason: user-rejected
 retired_by: "[[Brain/log/2026-05-16]]"

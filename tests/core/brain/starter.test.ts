@@ -138,8 +138,8 @@ describe("bootstrapBrain --starter", () => {
       configPath: config,
       starter: true,
     });
-    // 3 baseline file entries (_brain.yaml, _BRAIN.md, AI Wiki overview)
-    // plus 18 from the starter bundle.
+    // 2 baseline file entries (_brain.yaml, _BRAIN.md) plus 18 from
+    // the starter bundle.
     const starterEntries = r.created.filter((p) =>
       p.startsWith("Brain/preferences/")
       || p.startsWith("Brain/retired/")

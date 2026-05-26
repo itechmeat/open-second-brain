@@ -161,13 +161,6 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   importSession: "import-session",
   /**
-   * `migrate-frontmatter` (§24) — operator ran
-   * `o2b brain migrate-frontmatter --apply` to rewrite legacy
-   * frontmatter to the `_`-prefixed shape. Payload carries the run
-   * id, snapshot path, and counters.
-   */
-  migrateFrontmatter: "migrate-frontmatter",
-  /**
    * `merge` (§12) — operator ran `o2b brain merge <keep> <drop>`.
    * Payload carries both wikilinks plus union-size of `evidenced_by`
    * and the summed counters as raw integers for audit grepping.
@@ -315,11 +308,11 @@ export interface BrainPreference {
   /** ISO-8601 UTC of most recent `apply-evidence` entry. */
   readonly last_evidence_at: string | null;
   /**
-   * Categorical band — `low | medium | high`. Derived from
-   * {@link confidence_value} after the count-based hard floors
-   * (`applied <= low_max_applied`, `violated >= applied`, etc.) are
-   * applied. Stays on the public type so MCP / digest consumers that
-   * predate the numeric field keep working unchanged.
+   * Categorical band — `low | medium | high`. Derived directly from
+   * {@link confidence_value} via the `confidence.medium_min` and
+   * `confidence.high_min` thresholds. Stays on the public type so
+   * MCP / digest consumers that predate the numeric field keep
+   * working unchanged.
    */
   readonly confidence: BrainConfidence;
   /**
@@ -559,16 +552,6 @@ export interface BrainImportSessionLogEvent extends BrainLogEventBase {
 }
 
 /**
- * `migrate-frontmatter` entry — operator ran
- * `o2b brain migrate-frontmatter --apply`. Payload carries the run
- * id, snapshot path, and per-bucket counters.
- */
-export interface BrainMigrateFrontmatterLogEvent extends BrainLogEventBase {
-  readonly kind: typeof BRAIN_LOG_EVENT_KIND.migrateFrontmatter;
-  readonly run_id: string;
-}
-
-/**
  * `merge` entry — operator ran `o2b brain merge <keep> <drop>`.
  * Payload carries the titled wikilinks to both prefs plus the
  * union-size of `evidenced_by` and the summed counters as raw
@@ -603,10 +586,9 @@ export interface BrainImportClaudeMemoryLogEvent extends BrainLogEventBase {
 }
 
 /**
- * `note` entry (§32B, v0.10.8) — one narrative-milestone line. Not
- * consumed by the dream pass; it exists so an agent has a Brain-native
- * home for "I shipped X" / "PR Y merged" lines instead of falling back
- * to the deprecated Daily/ event log.
+ * `note` entry — one narrative-milestone line. Not consumed by the
+ * dream pass; it exists so an agent has a Brain-native home for
+ * "I shipped X" / "PR Y merged" lines.
  */
 export interface BrainNoteLogEvent extends BrainLogEventBase {
   readonly kind: typeof BRAIN_LOG_EVENT_KIND.note;
@@ -630,7 +612,6 @@ export type BrainLogEvent =
   | BrainRollbackLogEvent
   | BrainScanInlineLogEvent
   | BrainImportSessionLogEvent
-  | BrainMigrateFrontmatterLogEvent
   | BrainMergeLogEvent
   | BrainUpgradeLogEvent
   | BrainImportClaudeMemoryLogEvent
@@ -653,26 +634,23 @@ export interface BrainRetireConfig {
 }
 
 export interface BrainConfidenceConfig {
-  /** `applied_count <= low_max_applied` → confidence `low`. */
-  readonly low_max_applied: number;
-  /** `applied_count >= high_min_applied` is required for `high`. */
-  readonly high_min_applied: number;
   /**
-   * Fresh-evidence factor: `now - last_evidence_at <
-   * stale_evidence_days * high_freshness_factor`. Must be in `(0, 1]`.
+   * Gate for the "low-evidence-confirmed" doctor warning and the
+   * auto-promotion of unconfirmed preferences to confirmed.
+   * `applied_count <= low_max_applied` keeps a confirmed pref on the
+   * doctor watch-list.
    */
-  readonly high_freshness_factor: number;
+  readonly low_max_applied: number;
   /**
    * Lower threshold on the numeric `confidence_value` for the
-   * derived `medium` band. Anything below this lands as `low` after
-   * the legacy count-based hard floors. Must be in `[0, 1]` and
-   * strictly less than {@link high_min}.
+   * `medium` band. Must be in `[0, 1]` and strictly less than
+   * {@link high_min}.
    */
   readonly medium_min: number;
   /**
    * Lower threshold on the numeric `confidence_value` for the
-   * derived `high` band. Must be in `[0, 1]` and strictly greater
-   * than {@link medium_min}.
+   * `high` band. Must be in `[0, 1]` and strictly greater than
+   * {@link medium_min}.
    */
   readonly high_min: number;
 }
@@ -825,6 +803,33 @@ export interface BrainConfig {
    * `resolveTemporal`.
    */
   readonly temporal?: BrainTemporalConfig;
+  /**
+   * Optional `notes:` block (v0.11.0). Declares vault-relative
+   * folders the agent may READ user-authored notes from (daily
+   * journal, weekly notes, ...). Absent or empty list means the
+   * agent does not read any user-authored notes. Agents never write
+   * to these paths - the type is `read_paths` for a reason.
+   */
+  readonly notes?: BrainNotesConfig;
+}
+
+/**
+ * Optional `notes:` block (v0.11.0). User-authored notes the agent
+ * may read from. The list is purely a READ surface: `scan-inline`
+ * and session-import scan these roots for `@osb` markers. The agent
+ * never writes here; user-named folders (`Daily/`, `Journal/`, ...)
+ * stay user-owned.
+ */
+export interface BrainNotesConfig {
+  /**
+   * Vault-relative folders the agent may read from. Empty or absent
+   * list means "no user-authored notes to scan".
+   */
+  readonly read_paths?: ReadonlyArray<string>;
+}
+
+export interface ResolvedBrainNotesConfig {
+  readonly read_paths: ReadonlyArray<string>;
 }
 
 /**

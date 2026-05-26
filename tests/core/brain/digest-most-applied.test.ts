@@ -31,18 +31,18 @@ beforeEach(() => {
 kind: brain-preference
 id: pref-a
 created_at: 2026-04-01T00:00:00Z
-confirmed_at: 2026-04-05T00:00:00Z
+_confirmed_at: 2026-04-05T00:00:00Z
 unconfirmed_until: 2026-04-08T00:00:00Z
 tags: []
 topic: a
-status: confirmed
+_status: confirmed
 principle: principle a
-evidenced_by: []
-applied_count: 0
-violated_count: 0
-last_evidence_at: null
-confidence: medium
-confidence_value: 0.5
+_evidenced_by: []
+_applied_count: 0
+_violated_count: 0
+_last_evidence_at: null
+_confidence: medium
+_confidence_value: 0.5
 pinned: false
 ---
 body

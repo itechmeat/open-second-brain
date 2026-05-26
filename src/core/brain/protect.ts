@@ -37,7 +37,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { escapeRegex } from "../strings.ts";
-import { brainConfigPath, brainDirs } from "./paths.ts";
+import { BRAIN_ROOT_REL, brainConfigPath, brainDirs } from "./paths.ts";
 
 /** Bumped on any structural change to manifest / fence layout. */
 export const PROTECT_SCHEMA_VERSION = 1;
@@ -187,7 +187,7 @@ function inferVault(rules: ReadonlyArray<ProtectRule>): string {
       { code: "EMPTY_RULES" },
     );
   }
-  return first.path.split("/Brain/")[0]!;
+  return first.path.split(`/${BRAIN_ROOT_REL}/`)[0]!;
 }
 
 // ─── Codex rendering ──────────────────────────────────────────────────
@@ -390,9 +390,9 @@ export function removeManifestEntry(
 // ─── Apply / unprotect ────────────────────────────────────────────────
 
 function ensureVaultBootstrapped(vault: string): void {
-  if (!existsSync(join(vault, "Brain"))) {
+  if (!existsSync(join(vault, BRAIN_ROOT_REL))) {
     throw new BrainProtectError(
-      `vault at ${vault} has no Brain/ directory; run \`o2b brain init\` first`,
+      `vault at ${vault} has no ${BRAIN_ROOT_REL}/ directory; run \`o2b brain init\` first`,
       { code: "VAULT_NOT_BOOTSTRAPPED" },
     );
   }

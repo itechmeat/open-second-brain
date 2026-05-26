@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { parseFrontmatter } from "../../src/core/vault.ts";
 import { writeAsset } from "../../src/core/pay-memory/asset.ts";
 
+
 let tmp: string;
 
 beforeEach(() => {
@@ -25,7 +26,7 @@ const base = {
 describe("writeAsset", () => {
   test("creates the note with derived slug and frontmatter", () => {
     const out = writeAsset(tmp, base);
-    expect(out.relativePath.startsWith("AI Wiki/assets/")).toBe(true);
+    expect(out.relativePath.startsWith("Brain/payments/assets/")).toBe(true);
     expect(out.slug).toContain("blog-header");
 
     const [meta, body] = parseFrontmatter(out.path);
@@ -40,13 +41,13 @@ describe("writeAsset", () => {
   test("links to source receipt and used-in draft as wikilinks", () => {
     const out = writeAsset(tmp, {
       ...base,
-      sourceReceipt: "AI Wiki/payments/2026-05-10/fal-blog.md",
-      usedIn: "AI Wiki/drafts/blog-post.md",
+      sourceReceipt: "Brain/payments/2026-05-10/fal-blog.md",
+      usedIn: "Brain/payments/drafts/blog-post.md",
       prompt: "A recursive technical blog illustration\nNo logos\nNo text",
     });
     const text = readFileSync(out.path, "utf8");
-    expect(text).toContain('source_receipt: "[[AI Wiki/payments/2026-05-10/fal-blog]]"');
-    expect(text).toContain('used_in: "[[AI Wiki/drafts/blog-post]]"');
+    expect(text).toContain('source_receipt: "[[Brain/payments/2026-05-10/fal-blog]]"');
+    expect(text).toContain('used_in: "[[Brain/payments/drafts/blog-post]]"');
     expect(text).toContain("> A recursive technical blog illustration");
     expect(text).toContain("> No logos");
   });
@@ -72,11 +73,11 @@ describe("writeAsset", () => {
   test("sanitizes brackets in source_receipt wikilink", () => {
     const out = writeAsset(tmp, {
       ...base,
-      sourceReceipt: "AI Wiki/payments/2026-05-10/fal[v2].md",
+      sourceReceipt: "Brain/payments/2026-05-10/fal[v2].md",
     });
     const text = readFileSync(out.path, "utf8");
-    expect(text).toContain('source_receipt: "[[AI Wiki/payments/2026-05-10/falv2]]"');
-    expect(text).toContain("Receipt: [[AI Wiki/payments/2026-05-10/falv2]]");
+    expect(text).toContain('source_receipt: "[[Brain/payments/2026-05-10/falv2]]"');
+    expect(text).toContain("Receipt: [[Brain/payments/2026-05-10/falv2]]");
   });
 
   test("escapes backticks in service name", () => {

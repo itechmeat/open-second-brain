@@ -70,10 +70,9 @@ describe("BRAIN_* const enums", () => {
       "pin",
       "unpin",
       "rollback",
-      // capture extensions + frontmatter migration
+      // capture extensions
       "scan-inline",
       "import-session",
-      "migrate-frontmatter",
       // §12 merge (v0.10.5)
       "merge",
       // §22 upgrade (v0.10.6)
@@ -192,8 +191,6 @@ describe("interface shape smoke (compile-time)", () => {
       retire: { stale_evidence_days: 90 },
       confidence: {
         low_max_applied: 2,
-        high_min_applied: 10,
-        high_freshness_factor: 0.8,
         medium_min: 0.40,
         high_min: 0.75,
       },

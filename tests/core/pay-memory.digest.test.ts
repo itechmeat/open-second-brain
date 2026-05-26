@@ -10,6 +10,7 @@ import {
 } from "../../src/core/pay-memory/digest.ts";
 import { writeReceipt } from "../../src/core/pay-memory/receipt.ts";
 
+
 let tmp: string;
 
 beforeEach(() => {
@@ -90,13 +91,13 @@ describe("renderPaymentDigestTelegram", () => {
       receipts: 3,
       totalAmount: 0.08,
       currency: "USDC",
-      reportPath: "AI Wiki/reports/payment-report-2026-05-10.md",
+      reportPath: "Brain/payments/reports/payment-report-2026-05-10.md",
     });
     expect(text).toContain("💳 Оплачено сервисов: **2**");
     expect(text).toContain("💰 Сумма: **0.08 USDC**");
     expect(text).toContain("📁 Файлы чеков: **3**");
     expect(text).toContain(
-      "🔗 Отчёт: `AI Wiki/reports/payment-report-2026-05-10.md`",
+      "🔗 Отчёт: `Brain/payments/reports/payment-report-2026-05-10.md`",
     );
   });
 

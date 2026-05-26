@@ -10,6 +10,7 @@ import {
 } from "../../src/core/pay-memory/report.ts";
 import { writeReceipt } from "../../src/core/pay-memory/receipt.ts";
 
+
 let tmp: string;
 
 beforeEach(() => {
@@ -41,7 +42,7 @@ describe("aggregateReceipts", () => {
       actualAmount: "0.05",
       currency: "USDC",
       resultRef: "https://fal/img1",
-      resultNote: "AI Wiki/assets/img1.md",
+      resultNote: "Brain/payments/assets/img1.md",
     });
     writeReceipt(tmp, {
       ...baseReceipt,
@@ -57,12 +58,12 @@ describe("aggregateReceipts", () => {
     expect(summaries[1]!.service).toBe("paysponge/fal");
     expect(summaries[1]!.actualAmount).toBe("0.05");
     expect(summaries[1]!.resultRef).toBe("https://fal/img1");
-    expect(summaries[1]!.resultNote).toBe("AI Wiki/assets/img1.md");
+    expect(summaries[1]!.resultNote).toBe("Brain/payments/assets/img1.md");
   });
 
   test("ignores files without the receipt frontmatter type", () => {
     writeReceipt(tmp, { ...baseReceipt, slug: "real-1" });
-    const dir = join(tmp, "AI Wiki", "payments", "2026-05-10");
+    const dir = join(tmp, "Brain", "payments", "2026-05-10");
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "stray.md"),
@@ -84,7 +85,7 @@ describe("writeReport", () => {
       actualAmount: "0.05",
       currency: "USDC",
       resultRef: "https://fal/img1",
-      resultNote: "AI Wiki/assets/img1.md",
+      resultNote: "Brain/payments/assets/img1.md",
     });
     const out = writeReport(tmp, {
       date: "2026-05-10",
@@ -92,7 +93,7 @@ describe("writeReport", () => {
       task: "Blog post about Pay Memory",
     });
     expect(out.receiptsUsed).toBe(1);
-    expect(out.relativePath.startsWith("AI Wiki/reports/")).toBe(true);
+    expect(out.relativePath.startsWith("Brain/payments/reports/")).toBe(true);
 
     const [meta, body] = parseFrontmatter(out.path);
     expect(meta["type"]).toBe("payment-report");
@@ -102,8 +103,8 @@ describe("writeReport", () => {
     expect(meta["task"]).toBe("Blog post about Pay Memory");
     expect(body).toContain("### paysponge/fal");
     expect(body).toContain("Amount: `0.05 USDC`");
-    expect(body).toContain("[[AI Wiki/payments/2026-05-10/fal-1]]");
-    expect(body).toContain("[[AI Wiki/assets/img1]]");
+    expect(body).toContain("[[Brain/payments/2026-05-10/fal-1]]");
+    expect(body).toContain("[[Brain/payments/assets/img1]]");
   });
 
   test("renders gracefully when there are no receipts", () => {

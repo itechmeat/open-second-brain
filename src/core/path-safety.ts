@@ -24,7 +24,7 @@ import { dirname, posix, relative, resolve, sep } from "node:path";
  *      ancestor of the target, then re-runs the prefix check on the
  *      resolved real paths. This blocks the case where a directory
  *      *inside* the vault is itself a symlink to somewhere outside it
- *      (`<vault>/AI Wiki/payments/escape -> /tmp/outside`) — without
+ *      (`<vault>/Brain/payments/escape -> /tmp/outside`) — without
  *      realpath, the lexical check would happily admit the path.
  *
  * Returns the resolved (lexical) absolute path of `target`. Callers that

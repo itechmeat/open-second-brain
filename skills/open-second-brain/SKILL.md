@@ -1,24 +1,24 @@
 ---
 name: open-second-brain
-description: Use Open Second Brain to read, write, and maintain an agent-owned second brain in an Obsidian-compatible Markdown vault. The writable agent-facing surface is the `Brain/` layer (see the `brain-memory` skill for signal/evidence recording). `AI Wiki/` and `Daily/` are read surfaces; Pay Memory is a separate orthogonal layer for paid-action audit.
+description: Use Open Second Brain to read, write, and maintain an agent-owned second brain in an Obsidian-compatible Markdown vault. The agent owns one top-level directory (`Brain/`); Pay Memory nests under `Brain/payments/`. User-authored notes live wherever the operator names them and are read-only inputs when listed in `notes.read_paths`.
 ---
 
 # Open Second Brain
 
 Use this skill when a user asks an agent to use, configure, inspect, or maintain Open Second Brain.
 
-## Layers
+## Layout
 
-Open Second Brain organises the vault into three agent-facing layers. Know which one to touch and when.
+Open Second Brain owns one top-level directory in the vault: `Brain/`. Everything the agent writes lives under it.
 
-- **`Brain/`** — agent-writable observing memory. Taste signals, accreted preferences (unconfirmed → confirmed → retired), evidence log, snapshots. This is where you record what the user prefers and how you applied those preferences in real work. Operations go through MCP tools `brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_digest`, `brain_query`, `brain_doctor` — see the `brain-memory` skill for the calling protocol. CLI counterparts: `o2b brain *` (11 verbs).
-- **`AI Wiki/`** and **`Daily/`** — read surfaces. `AI Wiki/` holds identity files, index/hot list, system snapshots, and the Pay Memory subtree. `Daily/` holds the chronological event log and human narrative. Read through `second_brain_query` and `vault_health`. Brain operations do not write here; the only writes into `AI Wiki/` come from the Pay Memory tools (next bullet).
-- **Pay Memory** — orthogonal audit layer for paid agent actions (`AI Wiki/payments/`, `assets/`, `drafts/`, `reports/`, `policies/`). Agents use `payment_*` MCP tools when they make paid API calls. Pay Memory operates independently of Brain.
+- **`Brain/`** - agent-writable observing memory. Taste signals, accreted preferences (unconfirmed → confirmed → retired), evidence log, snapshots. Operations go through MCP tools `brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_digest`, `brain_query`, `brain_doctor` - see the `brain-memory` skill for the calling protocol. CLI counterparts: `o2b brain *`.
+- **`Brain/payments/`** - Pay Memory subtree (optional). Receipts, generated-asset notes, drafts, reports, policies, pending-approval requests. Agents use `payment_*` MCP tools when they make paid API calls. Same write contract as the rest of `Brain/` - one root.
+- **User-authored notes** - the operator's daily journal, weekly notes, project notes, etc. Folder names are operator-chosen. The agent reads these paths only when they appear under `notes.read_paths` in `Brain/_brain.yaml`; the agent never writes to them.
 
 ## Core principles
 
 - Treat the vault as user-owned durable knowledge.
-- Write only into the `Brain/` layer (signals and evidence) or, for paid actions, into the Pay Memory subtree under `AI Wiki/`. Do not write into `AI Wiki/notes/`, `AI Wiki/identity/`, `Daily/`, or any non-Pay-Memory area under `AI Wiki/`.
+- Write only into `Brain/` (covers both the observing-memory layer and the optional Pay Memory subtree). Never write to user-authored note folders.
 - Keep raw operational evidence separate from synthesized knowledge: per-event records go to `Brain/log/`, preferences live in `Brain/preferences/`.
 - Never write secrets, tokens, passwords, private keys, or credential-bearing connection strings.
 - Prefer deterministic CLI commands (`o2b brain ...`, `o2b doctor`, `o2b status`) over guessing file paths.
@@ -27,14 +27,14 @@ Open Second Brain organises the vault into three agent-facing layers. Know which
 
 1. Check whether Open Second Brain is configured: `o2b status` or `second_brain_status` MCP tool.
 2. Read the machine-local config if available (vault path, agent identity, timezone).
-3. Read the vault-local operating manual `Brain/_BRAIN.md` — this is the per-vault contract for agents.
+3. Read the vault-local operating manual `Brain/_BRAIN.md` - this is the per-vault contract for agents.
 4. Record taste signals as they arrive in dialogue via `brain_feedback` (see the `brain-memory` skill).
 5. After producing a durable artifact, check applicable preferences and record evidence via `brain_apply_evidence` (see the `brain-memory` skill).
-6. For read access to `AI Wiki/` or `Daily/` content, use `second_brain_query`.
+6. For read access to vault pages by title, use `second_brain_query`.
 
 ## Safety
 
-If a write operation might affect personal notes or anything outside the `Brain/` layer (and not Pay Memory), ask for explicit confirmation. When in doubt, prefer `Brain/`.
+If a write operation might affect anything outside the `Brain/` directory, ask for explicit confirmation. When in doubt, prefer `Brain/`.
 
 ## See also
 

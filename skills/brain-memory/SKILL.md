@@ -36,7 +36,7 @@ Optional but **strongly recommended**:
 Optional:
 
 - `scope`: soft category for later application-scope matching — `writing`, `coding`, `process`, `design`, `infra`, `docs`. Pick the narrowest accurate one.
-- `source`: array of wikilinks to the artifacts or notes that triggered the signal — `[[Daily/2026.05.14]]`, `[[blog-header-draft]]`. Improves later auditability.
+- `source`: array of wikilinks to the artifacts or notes that triggered the signal — `[[src/cli/main.ts]]`, `[[docs/release-notes/v0.11.0]]`. Improves later auditability.
 
 The server creates `Brain/inbox/sig-<date>-<slug>.md` and resolves collisions deterministically.
 
@@ -53,7 +53,7 @@ Discover applicable preferences first. Options:
 Parameters:
 
 - `pref_id`: id of the preference you are recording against (`pref-no-internal-abbrev`).
-- `artifact`: wikilink identifying what you produced — `[[Daily/2026.05.14#section-blog-post]]`, `[[src/cli/main.ts]]`, `[[docs/release-notes/v0.9.0.md]]`. The wikilink resolves in Obsidian; use `#anchor` to point at a specific section when relevant.
+- `artifact`: wikilink identifying what you produced — `[[src/cli/main.ts]]`, `[[docs/release-notes/v0.11.0.md]]`, `[[Brain/preferences/pref-no-internal-abbrev]]`. The wikilink resolves in Obsidian; use `#anchor` to point at a specific section when relevant.
 - `result`: `applied` if the rule held in this artifact, `violated` if you (or another agent) broke it. Recording a `violated` event is not a failure — it is what trains the system.
 - `agent`: your runtime identity.
 
@@ -99,7 +99,7 @@ o2b brain feedback \
 
 o2b brain apply-evidence \
   --pref pref-no-internal-abbrev \
-  --artifact "[[Daily/2026.05.14#blog-post]]" \
+  --artifact "[[src/cli/main.ts#L120]]" \
   --result applied \
   --agent claude
 ```

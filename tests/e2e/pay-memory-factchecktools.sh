@@ -110,7 +110,7 @@ bun run "$ROOT/src/cli/main.ts" capture-asset \
   --title "Fact-check claims: $QUERY" \
   --service "solana-foundation/google/factchecktools" \
   --result-url "${RESULT_URL:-https://factchecktools.google.com/}" \
-  --source-receipt "AI Wiki/payments/$DATE/factcheck-${ENCODED_QUERY//+/-}.md" \
+  --source-receipt "Brain/payments/$DATE/factcheck-${ENCODED_QUERY//+/-}.md" \
   --slug "factcheck-${ENCODED_QUERY//+/-}"
 
 echo
@@ -123,7 +123,7 @@ bun run "$ROOT/src/cli/main.ts" payment-report \
 
 echo
 echo "==> generated files"
-find "$VAULT/AI Wiki" -type f | sort
+find "$VAULT/Brain/payments" -type f | sort
 
 echo
 echo "==> done: vault preserved at $VAULT"

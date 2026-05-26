@@ -115,17 +115,17 @@ describe("writePreference + parsePreference", () => {
       "kind: brain-preference",
       "id: pref-no-pin-field",
       "created_at: 2026-05-14T10:42:00Z",
-      "confirmed_at: null",
+      "_confirmed_at: null",
       "unconfirmed_until: 2026-05-28T10:42:00Z",
       "tags: [brain, brain/preference, brain/topic/no-pin-field]",
       "topic: no-pin-field",
-      "status: unconfirmed",
+      "_status: unconfirmed",
       "principle: Some rule",
-      "evidenced_by: []",
-      "applied_count: 0",
-      "violated_count: 0",
-      "last_evidence_at: null",
-      "confidence: low",
+      "_evidenced_by: []",
+      "_applied_count: 0",
+      "_violated_count: 0",
+      "_last_evidence_at: null",
+      "_confidence: low",
       "---",
       "",
       "## Principle",
@@ -236,17 +236,17 @@ describe("status-vs-folder mismatch", () => {
       "kind: brain-preference",
       "id: pref-broken",
       "created_at: 2026-05-14T10:42:00Z",
-      "confirmed_at: null",
+      "_confirmed_at: null",
       "unconfirmed_until: 2026-05-28T10:42:00Z",
       "tags: [brain, brain/preference]",
       "topic: broken",
-      "status: retired",
+      "_status: retired",
       "principle: Hand-crafted mismatch",
-      "evidenced_by: []",
-      "applied_count: 0",
-      "violated_count: 0",
-      "last_evidence_at: null",
-      "confidence: low",
+      "_evidenced_by: []",
+      "_applied_count: 0",
+      "_violated_count: 0",
+      "_last_evidence_at: null",
+      "_confidence: low",
       "pinned: false",
       "---",
       "",
@@ -282,7 +282,7 @@ describe("status-vs-folder mismatch", () => {
       "created_at: 2026-05-14T10:42:00Z",
       "tags: [brain, brain/preference]",
       "topic: broken",
-      "status: retired",
+      "_status: retired",
       "principle: Hand-crafted mismatch",
       "---",
       "",
@@ -306,17 +306,17 @@ describe("status enum validation", () => {
       "kind: brain-preference",
       "id: pref-invalid-status",
       "created_at: 2026-05-14T10:42:00Z",
-      "confirmed_at: null",
+      "_confirmed_at: null",
       "unconfirmed_until: 2026-05-28T10:42:00Z",
       "tags: [brain, brain/preference]",
       "topic: invalid-status",
-      "status: hilarious",
+      "_status: hilarious",
       "principle: Hand-crafted invalid status",
-      "evidenced_by: []",
-      "applied_count: 0",
-      "violated_count: 0",
-      "last_evidence_at: null",
-      "confidence: low",
+      "_evidenced_by: []",
+      "_applied_count: 0",
+      "_violated_count: 0",
+      "_last_evidence_at: null",
+      "_confidence: low",
       "pinned: false",
       "---",
       "",
@@ -380,31 +380,12 @@ const RET_BASE_FM = (slug: string): string[] => [
   `tags: [brain, brain/retired, brain/topic/${slug}]`,
   `topic: ${slug}`,
   "principle: Some rule",
-  "status: retired",
+  "_status: retired",
   "pinned: false",
 ];
 
-describe("parsePreference accepts both legacy and _-prefixed shapes (§24)", () => {
-  test("reads legacy 'status:' form", () => {
-    const path = writeRawPref(tmp, "legacy-status", [
-      ...PREF_BASE_FM("legacy-status"),
-      "status: confirmed",
-      "confirmed_at: 2026-05-15T10:00:00Z",
-      "evidenced_by: []",
-      "applied_count: 1",
-      "violated_count: 0",
-      "last_evidence_at: 2026-05-20T10:00:00Z",
-      "confidence: low",
-    ]);
-    const parsed = parsePreference(path);
-    expect(parsed.status).toBe("confirmed");
-    expect(parsed.confirmed_at).toBe("2026-05-15T10:00:00Z");
-    expect(parsed.applied_count).toBe(1);
-    expect(parsed.confidence).toBe("low");
-    expect(parsed.last_evidence_at).toBe("2026-05-20T10:00:00Z");
-  });
-
-  test("reads new '_status:' form", () => {
+describe("parsePreference Group C frontmatter (§24)", () => {
+  test("reads '_status:' and other '_'-prefixed Group C fields", () => {
     const path = writeRawPref(tmp, "new-status", [
       ...PREF_BASE_FM("new-status"),
       "_status: confirmed",
@@ -422,64 +403,10 @@ describe("parsePreference accepts both legacy and _-prefixed shapes (§24)", () 
     expect(parsed.confidence).toBe("low");
     expect(parsed.last_evidence_at).toBe("2026-05-20T10:00:00Z");
   });
-
-  test("throws when both 'status' and '_status' are present", () => {
-    const path = writeRawPref(tmp, "collision", [
-      ...PREF_BASE_FM("collision"),
-      "status: confirmed",
-      "_status: confirmed",
-      "evidenced_by: []",
-    ]);
-    expect(() => parsePreference(path)).toThrow(
-      /both '_status' and legacy 'status' present/,
-    );
-  });
-
-  test("throws when both 'applied_count' and '_applied_count' are present", () => {
-    const path = writeRawPref(tmp, "applied-collision", [
-      ...PREF_BASE_FM("applied-collision"),
-      "_status: confirmed",
-      "applied_count: 3",
-      "_applied_count: 3",
-      "evidenced_by: []",
-    ]);
-    expect(() => parsePreference(path)).toThrow(
-      /both '_applied_count' and legacy 'applied_count' present/,
-    );
-  });
-
-  test("reads mixed (some legacy, some new) shape without collision", () => {
-    const path = writeRawPref(tmp, "mixed", [
-      ...PREF_BASE_FM("mixed"),
-      "_status: confirmed", // new form
-      "confirmed_at: 2026-05-15T10:00:00Z", // legacy form
-      "evidenced_by: []", // legacy form
-      "_applied_count: 2", // new form
-    ]);
-    const parsed = parsePreference(path);
-    expect(parsed.status).toBe("confirmed");
-    expect(parsed.confirmed_at).toBe("2026-05-15T10:00:00Z");
-    expect(parsed.applied_count).toBe(2);
-  });
 });
 
-describe("parseRetired accepts both legacy and _-prefixed shapes (§24)", () => {
-  test("reads legacy form", () => {
-    const path = writeRawRetired(tmp, "legacy-ret", [
-      ...RET_BASE_FM("legacy-ret"),
-      "evidenced_by: ['[[sig-x]]']",
-      "applied_count: 5",
-      "violated_count: 1",
-      "last_evidence_at: 2026-05-20T10:00:00Z",
-      "confidence: medium",
-    ]);
-    const parsed = parseRetired(path);
-    expect(parsed.applied_count).toBe(5);
-    expect(parsed.confidence).toBe("medium");
-    expect(parsed.evidenced_by).toEqual(["[[sig-x]]"]);
-  });
-
-  test("reads new '_'-prefixed form", () => {
+describe("parseRetired Group C frontmatter (§24)", () => {
+  test("reads '_'-prefixed Group C fields", () => {
     const path = writeRawRetired(tmp, "new-ret", [
       ...RET_BASE_FM("new-ret"),
       "_evidenced_by: ['[[sig-x]]']",
@@ -492,17 +419,6 @@ describe("parseRetired accepts both legacy and _-prefixed shapes (§24)", () => 
     expect(parsed.applied_count).toBe(5);
     expect(parsed.confidence).toBe("medium");
     expect(parsed.evidenced_by).toEqual(["[[sig-x]]"]);
-  });
-
-  test("throws on legacy+new collision", () => {
-    const path = writeRawRetired(tmp, "ret-collision", [
-      ...RET_BASE_FM("ret-collision"),
-      "applied_count: 3",
-      "_applied_count: 3",
-    ]);
-    expect(() => parseRetired(path)).toThrow(
-      /both '_applied_count' and legacy 'applied_count' present/,
-    );
   });
 });
 
@@ -592,6 +508,6 @@ describe("moveToRetired carries _-prefixed shape forward (§24)", () => {
     expect(raw).toMatch(/^_applied_count: 3$/m);
     expect(raw).not.toMatch(/^applied_count: /m);
     // 'status:' on the retired file is identity (always 'retired'), not derived.
-    expect(raw).toMatch(/^status: retired$/m);
+    expect(raw).toMatch(/^_status: retired$/m);
   });
 });

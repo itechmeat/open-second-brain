@@ -26,12 +26,14 @@ import type {
   BrainConfig,
   BrainGuardrailConfig,
   BrainLinkGraphConfig,
+  BrainNotesConfig,
   BrainMostAppliedConfig,
   BrainTemporalConfig,
   BrainVaultConfig,
   DisciplineReportConfig,
   ResolvedBrainGuardrailConfig,
   ResolvedBrainLinkGraphConfig,
+  ResolvedBrainNotesConfig,
   ResolvedBrainTemporalConfig,
 } from "./types.ts";
 // Imported from `defaults.ts` (not from `vault-scope/index.ts`) to
@@ -216,6 +218,46 @@ export function resolveTemporal(
 }
 
 /**
+ * Default `notes:` block (v0.11.0). Empty `read_paths` list means
+ * the agent does not scan any user-authored notes. The operator
+ * opts in by listing folders in `_brain.yaml`.
+ */
+export const BRAIN_NOTES_DEFAULTS: ResolvedBrainNotesConfig = Object.freeze(
+  { read_paths: Object.freeze([]) as ReadonlyArray<string> },
+) as ResolvedBrainNotesConfig;
+
+/**
+ * Merge a parsed `notes` block (or `undefined`) with
+ * `BRAIN_NOTES_DEFAULTS`. The resulting struct (and its inner array)
+ * are frozen so consumers can pass the slice around without copying.
+ */
+export function resolveNotes(cfg: BrainConfig): ResolvedBrainNotesConfig {
+  const block = cfg.notes;
+  if (block === undefined || block.read_paths === undefined) {
+    return BRAIN_NOTES_DEFAULTS;
+  }
+  return Object.freeze({
+    read_paths: Object.freeze([...block.read_paths]) as ReadonlyArray<string>,
+  }) as ResolvedBrainNotesConfig;
+}
+
+/**
+ * Load + resolve the `notes:` block, falling back to
+ * `BRAIN_NOTES_DEFAULTS` when the config file is missing, malformed,
+ * or otherwise unreadable. Same pattern as `loadTemporalConfigSafe`.
+ * Used by `scan-inline` and any future scanner so a freshly-cloned
+ * vault that has not been `brain init`-ed still produces a clean
+ * "no user folders to read" result.
+ */
+export function loadNotesConfigSafe(vault: string): ResolvedBrainNotesConfig {
+  try {
+    return resolveNotes(loadBrainConfig(vault));
+  } catch {
+    return BRAIN_NOTES_DEFAULTS;
+  }
+}
+
+/**
  * Load + resolve the `temporal:` block, falling back to
  * `BRAIN_TEMPORAL_DEFAULTS` when the config file is missing,
  * malformed, or otherwise unreadable. Used by every temporal
@@ -251,8 +293,6 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = Object.freeze({
   }),
   confidence: Object.freeze({
     low_max_applied: 2,
-    high_min_applied: 10,
-    high_freshness_factor: 0.8,
     medium_min: 0.40,
     high_min: 0.75,
   }),
@@ -286,14 +326,12 @@ retire:
   stale_evidence_days: 90
 
 confidence:
+  # low_max_applied gates the "low-evidence-confirmed" doctor warning
+  # and the auto-promotion of unconfirmed preferences to confirmed.
   low_max_applied: 2
-  high_min_applied: 10
-  high_freshness_factor: 0.8
-  # Derived-band thresholds on the numeric confidence_value (Wilson
-  # lower bound × freshness decay). The count-based hard floors
-  # above still take precedence: low_max_applied / violated >=
-  # applied / missing-fresh keep a rule at low / medium regardless
-  # of the numeric value.
+  # Band thresholds on the numeric confidence_value (Wilson lower
+  # bound times freshness decay). value >= high_min ⇒ high;
+  # value >= medium_min ⇒ medium; else low.
   medium_min: 0.40
   high_min: 0.75
 
@@ -395,7 +433,6 @@ export interface LoadBrainConfigResult {
  *   - YAML shape errors
  *   - unsupported `schema_version`
  *   - non-integer / out-of-range thresholds
- *   - `high_freshness_factor` outside `(0, 1]`
  *   - non-integer / non-positive `snapshots.retention_count`
  *
  * Unknown top-level keys are reported as warnings, not errors.
@@ -569,23 +606,6 @@ export function validateBrainConfigDetailed(
     confidence.low_max_applied,
     source,
   );
-  requirePositiveInteger(
-    "confidence.high_min_applied",
-    confidence.high_min_applied,
-    source,
-  );
-  if (
-    typeof confidence.high_freshness_factor !== "number" ||
-    !Number.isFinite(confidence.high_freshness_factor) ||
-    confidence.high_freshness_factor <= 0 ||
-    confidence.high_freshness_factor > 1
-  ) {
-    throw new BrainConfigError(
-      `must be a number in (0, 1]; got ${JSON.stringify(confidence.high_freshness_factor)}`,
-      "confidence.high_freshness_factor",
-      source,
-    );
-  }
   requireUnitInterval(
     "confidence.medium_min",
     confidence.medium_min,
@@ -1128,6 +1148,90 @@ export function validateBrainConfigDetailed(
         : {};
   }
 
+  // Optional `notes:` block (v0.11.0). Shape:
+  //   notes:
+  //     read_paths:
+  //       - Daily
+  //       - Journal/Weekly
+  // Absent block → `cfg.notes` undefined; resolveNotes returns the
+  // bit-identical defaults (empty `read_paths`). The list is purely
+  // a READ surface; agents never write to these paths.
+  let notes: BrainNotesConfig | undefined;
+  if ("notes" in obj) {
+    const rawNotes = obj["notes"];
+    if (
+      typeof rawNotes !== "object" ||
+      rawNotes === null ||
+      Array.isArray(rawNotes)
+    ) {
+      throw new BrainConfigError(
+        "notes must be a mapping",
+        "notes",
+        source,
+      );
+    }
+    const notesObj = rawNotes as Record<string, unknown>;
+    const partialNotes: Record<string, unknown> = {};
+    if ("read_paths" in notesObj) {
+      const v = notesObj["read_paths"];
+      if (!Array.isArray(v)) {
+        throw new BrainConfigError(
+          "must be an array of vault-relative folder paths",
+          "notes.read_paths",
+          source,
+        );
+      }
+      const cleaned: string[] = [];
+      v.forEach((entry, idx) => {
+        if (typeof entry !== "string") {
+          throw new BrainConfigError(
+            `must be a string; got ${describe(entry)}`,
+            `notes.read_paths[${idx}]`,
+            source,
+          );
+        }
+        const trimmed = entry.trim();
+        if (trimmed.length === 0) {
+          throw new BrainConfigError(
+            "must be a non-empty string",
+            `notes.read_paths[${idx}]`,
+            source,
+          );
+        }
+        if (trimmed.startsWith("/") || trimmed.startsWith("\\")) {
+          throw new BrainConfigError(
+            "must be a vault-relative path (no leading slash)",
+            `notes.read_paths[${idx}]`,
+            source,
+          );
+        }
+        const segments = trimmed.split(/[\\/]/);
+        if (segments.some((s) => s === "..")) {
+          throw new BrainConfigError(
+            "must not contain '..' segments",
+            `notes.read_paths[${idx}]`,
+            source,
+          );
+        }
+        cleaned.push(trimmed);
+      });
+      partialNotes["read_paths"] = cleaned;
+    }
+    // Forward-compat: unknown sub-keys under `notes:` → warning.
+    for (const key of Object.keys(notesObj)) {
+      if (key !== "read_paths") {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `notes.${key}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
+    notes =
+      Object.keys(partialNotes).length > 0
+        ? (partialNotes as BrainNotesConfig)
+        : {};
+  }
+
   // Forward-compat: unknown top-level keys → warning, not error.
   const known = new Set([
     "schema_version",
@@ -1142,6 +1246,7 @@ export function validateBrainConfigDetailed(
     "guardrails",
     "link_graph",
     "temporal",
+    "notes",
   ]);
   for (const key of Object.keys(obj)) {
     if (!known.has(key)) {
@@ -1165,8 +1270,6 @@ export function validateBrainConfigDetailed(
     },
     confidence: {
       low_max_applied: confidence.low_max_applied as number,
-      high_min_applied: confidence.high_min_applied as number,
-      high_freshness_factor: confidence.high_freshness_factor as number,
       medium_min: confidence.medium_min as number,
       high_min: confidence.high_min as number,
     },
@@ -1179,6 +1282,7 @@ export function validateBrainConfigDetailed(
     ...(guardrails !== undefined ? { guardrails } : {}),
     ...(linkGraph !== undefined ? { link_graph: linkGraph } : {}),
     ...(temporal !== undefined ? { temporal } : {}),
+    ...(notes !== undefined ? { notes } : {}),
   };
 
   return { config, warnings };

@@ -1478,12 +1478,12 @@ var require_adapter = __commonJS((exports, module) => {
     return newFs;
   }
   function toPromise(method) {
-    return (...args) => new Promise((resolve3, reject) => {
+    return (...args) => new Promise((resolve4, reject) => {
       args.push((err, result) => {
         if (err) {
           reject(err);
         } else {
-          resolve3(result);
+          resolve4(result);
         }
       });
       method(...args);
@@ -1554,7 +1554,7 @@ var require_proper_lockfile = __commonJS((exports, module) => {
 
 // src/openclaw/index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { existsSync as existsSync5 } from "node:fs";
+import { existsSync as existsSync6 } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 
 // src/core/config.ts
@@ -1737,7 +1737,7 @@ function expandTilde(p) {
 
 // src/core/doctor.ts
 import {
-  existsSync as existsSync2,
+  existsSync as existsSync3,
   mkdirSync as mkdirSync2,
   openSync as openSync2,
   readFileSync as readFileSync2,
@@ -1745,12 +1745,172 @@ import {
   writeSync as writeSync2,
   closeSync as closeSync2
 } from "node:fs";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
+
+// src/core/partner/codegraph.ts
+import { existsSync as existsSync2, readdirSync, statSync as statSync2 } from "node:fs";
+import { dirname as dirname2, join as join3, resolve } from "node:path";
+var CODE_MANIFESTS = [
+  "package.json",
+  "pyproject.toml",
+  "Cargo.toml",
+  "go.mod",
+  "tsconfig.json",
+  "Gemfile",
+  "composer.json",
+  "build.gradle",
+  "pom.xml"
+];
+var DEFAULT_LIMIT = 50;
+var CODEGRAPH_REPO = "https://github.com/colbymchenry/codegraph";
+function isDir(path) {
+  try {
+    return statSync2(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function isCodeProject(dir) {
+  try {
+    if (!existsSync2(dir))
+      return false;
+    if (!isDir(join3(dir, ".git")))
+      return false;
+    return CODE_MANIFESTS.some((m) => existsSync2(join3(dir, m)));
+  } catch {
+    return false;
+  }
+}
+function findCodeProjects(opts) {
+  const limit = opts.limit ?? DEFAULT_LIMIT;
+  const seen = new Set;
+  const found = [];
+  let scanned = 0;
+  const consider = (raw) => {
+    if (scanned >= limit)
+      return;
+    const path = resolve(raw);
+    if (seen.has(path))
+      return;
+    seen.add(path);
+    if (!isDir(path))
+      return;
+    scanned += 1;
+    if (isCodeProject(path))
+      found.push(path);
+  };
+  consider(opts.cwd);
+  const vaultParent = dirname2(resolve(opts.vault));
+  if (isDir(vaultParent)) {
+    let entries = [];
+    try {
+      entries = readdirSync(vaultParent);
+    } catch {
+      entries = [];
+    }
+    entries.sort((a, b) => a.localeCompare(b));
+    for (const name of entries) {
+      if (scanned >= limit)
+        break;
+      consider(join3(vaultParent, name));
+    }
+  }
+  for (const extra of opts.scanExtraPaths ?? []) {
+    if (scanned >= limit)
+      break;
+    consider(extra);
+  }
+  return found;
+}
+function defaultWhichCodegraph() {
+  if (typeof Bun !== "undefined" && typeof Bun.which === "function") {
+    const found = Bun.which("codegraph");
+    return found ?? null;
+  }
+  return null;
+}
+function defaultRunStatusJson(projectPath) {
+  try {
+    const proc = Bun.spawnSync({
+      cmd: ["codegraph", "status", "-j", projectPath],
+      stdout: "pipe",
+      stderr: "pipe"
+    });
+    const stdout = new TextDecoder().decode(proc.stdout).trim();
+    const stderr = new TextDecoder().decode(proc.stderr).trim();
+    if (!proc.success) {
+      if (stdout) {
+        try {
+          const parsed2 = JSON.parse(stdout);
+          return { ok: true, data: parsed2 };
+        } catch {}
+      }
+      return { ok: false, error: stderr || `codegraph status exited ${proc.exitCode}` };
+    }
+    if (!stdout) {
+      return { ok: false, error: stderr || "empty status output" };
+    }
+    const parsed = JSON.parse(stdout);
+    return { ok: true, data: parsed };
+  } catch (exc) {
+    return { ok: false, error: exc.message ?? String(exc) };
+  }
+}
+function checkCodegraph(opts, deps) {
+  if (opts.disabled)
+    return null;
+  const projects = findCodeProjects(opts);
+  if (projects.length === 0)
+    return null;
+  const project = projects[0];
+  const whichFn = deps?.whichCodegraph ?? defaultWhichCodegraph;
+  const cliPath = whichFn();
+  if (!cliPath) {
+    return {
+      name: "code_graph",
+      ok: false,
+      message: `code project at ${project}: codegraph not installed (install: ${CODEGRAPH_REPO})`
+    };
+  }
+  const indexDir = join3(project, ".codegraph");
+  if (!isDir(indexDir)) {
+    return {
+      name: "code_graph",
+      ok: false,
+      message: `code project at ${project}: not indexed (run: codegraph init ${project})`
+    };
+  }
+  const runFn = deps?.runStatusJson ?? defaultRunStatusJson;
+  const status = runFn(project);
+  if (!status.ok) {
+    return {
+      name: "code_graph",
+      ok: false,
+      message: `code project at ${project}: codegraph status failed: ${status.error}`
+    };
+  }
+  if (!status.data.initialized) {
+    return {
+      name: "code_graph",
+      ok: false,
+      message: `code project at ${project}: not indexed (run: codegraph init ${project})`
+    };
+  }
+  const nodes = status.data.nodeCount ?? 0;
+  const files = status.data.fileCount ?? 0;
+  return {
+    name: "code_graph",
+    ok: true,
+    message: `code project at ${project}: indexed (${nodes} nodes, ${files} files)`
+  };
+}
+
+// src/core/doctor.ts
 function checkVaultWriteable(vault) {
-  if (!existsSync2(vault)) {
+  if (!existsSync3(vault)) {
     return { name: "vault_writeable", ok: false, message: `vault directory missing: ${vault}` };
   }
-  const probe = join3(vault, ".open-second-brain-doctor-test");
+  const probe = join4(vault, ".open-second-brain-doctor-test");
   try {
     const fd = openSync2(probe, "w");
     closeSync2(fd);
@@ -1767,8 +1927,8 @@ function checkVaultWriteable(vault) {
 function checkConfigWriteable(config) {
   let createdForCheck = false;
   try {
-    mkdirSync2(dirname2(config), { recursive: true });
-    if (!existsSync2(config))
+    mkdirSync2(dirname3(config), { recursive: true });
+    if (!existsSync3(config))
       createdForCheck = true;
     const fd = openSync2(config, "a");
     writeSync2(fd, "");
@@ -1945,7 +2105,7 @@ function checkOpenclawManifest(path) {
 }
 function checkOpenclawInstallability(repoRoot) {
   const results = [];
-  const pkgPath = join3(repoRoot, "package.json");
+  const pkgPath = join4(repoRoot, "package.json");
   const { result, data } = loadJsonManifest(pkgPath, "openclaw_package_json");
   results.push(result);
   if (!data)
@@ -1974,7 +2134,7 @@ function checkOpenclawInstallability(repoRoot) {
       });
       continue;
     }
-    const entryPath = join3(repoRoot, entry);
+    const entryPath = join4(repoRoot, entry);
     if (isFile(entryPath)) {
       results.push({
         name: `openclaw_entry_${entry}`,
@@ -1998,20 +2158,28 @@ function doctor(opts) {
     results.push(checkConfigWriteable(opts.config));
   if (opts.repoRoot) {
     const root = opts.repoRoot;
-    results.push(checkClaudeManifest(join3(root, ".claude-plugin", "plugin.json")));
-    results.push(checkCodexManifest(join3(root, ".codex-plugin", "plugin.json")));
-    results.push(checkHermesManifest(join3(root, "plugins", "hermes", "plugin.yaml")));
-    results.push(checkOpenclawManifest(join3(root, "openclaw.plugin.json")));
+    results.push(checkClaudeManifest(join4(root, ".claude-plugin", "plugin.json")));
+    results.push(checkCodexManifest(join4(root, ".codex-plugin", "plugin.json")));
+    results.push(checkHermesManifest(join4(root, "plugins", "hermes", "plugin.yaml")));
+    results.push(checkOpenclawManifest(join4(root, "openclaw.plugin.json")));
     results.push(...checkOpenclawInstallability(root));
   }
+  const cg = checkCodegraph({
+    cwd: opts.cwd ?? process.cwd(),
+    vault: opts.vault,
+    scanExtraPaths: opts.partner?.codegraph?.scanExtraPaths,
+    disabled: opts.partner?.codegraph?.disabled
+  });
+  if (cg)
+    results.push(cg);
   return results;
 }
 
 // src/core/identity-reminder.ts
 import { readFileSync as readFileSync3 } from "node:fs";
-import { dirname as dirname3, resolve } from "node:path";
+import { dirname as dirname4, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
-var TEMPLATE_PATH = resolve(dirname3(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
+var TEMPLATE_PATH = resolve2(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
 var KNOWN_RUNTIME_TARGETS = ["hermes", "openclaw"];
 function isRuntimeTarget(value) {
   return typeof value === "string" && KNOWN_RUNTIME_TARGETS.includes(value);
@@ -2028,10 +2196,10 @@ function loadReminderTemplate() {
     throw new Error(`Failed to load identity reminder template from ${TEMPLATE_PATH}: ${message}`);
   }
 }
-var TEMPLATES_DIR = resolve(dirname3(fileURLToPath(import.meta.url)), "..", "..", "templates");
+var TEMPLATES_DIR = resolve2(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates");
 var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [
   t,
-  resolve(TEMPLATES_DIR, `identity-reminder.${t}.txt`)
+  resolve2(TEMPLATES_DIR, `identity-reminder.${t}.txt`)
 ])));
 var TEMPLATE_CACHE = new Map;
 function tryReadTargetTemplate(target) {
@@ -2074,18 +2242,21 @@ function buildReminder(agent, target) {
 }
 
 // src/core/pay-memory/paths.ts
-import { join as join4 } from "node:path";
+import { join as join6, posix as posix3 } from "node:path";
+
+// src/core/brain/paths.ts
+import { join as join5, posix as posix2 } from "node:path";
 
 // src/core/path-safety.ts
-import { existsSync as existsSync3, realpathSync } from "node:fs";
-import { dirname as dirname4, posix, relative, resolve as resolve2, sep } from "node:path";
+import { existsSync as existsSync4, realpathSync } from "node:fs";
+import { dirname as dirname5, posix, relative, resolve as resolve3, sep } from "node:path";
 function ensureInsideVault(target, vault) {
-  const resolvedTarget = resolve2(target);
-  const resolvedVault = resolve2(vault);
+  const resolvedTarget = resolve3(target);
+  const resolvedVault = resolve3(vault);
   if (!isLexicallyInside(resolvedTarget, resolvedVault)) {
     throw new Error(`path escapes vault: ${target}`);
   }
-  if (existsSync3(resolvedVault)) {
+  if (existsSync4(resolvedVault)) {
     const realVault = safeRealpath(resolvedVault);
     const realAncestor = safeRealpath(deepestExistingAncestor(resolvedTarget));
     if (!isLexicallyInside(realAncestor, realVault)) {
@@ -2101,8 +2272,8 @@ function isLexicallyInside(target, root) {
 }
 function deepestExistingAncestor(target) {
   let cur = target;
-  while (!existsSync3(cur)) {
-    const parent = dirname4(cur);
+  while (!existsSync4(cur)) {
+    const parent = dirname5(cur);
     if (parent === cur)
       return cur;
     cur = parent;
@@ -2119,37 +2290,56 @@ function safeRealpath(p) {
   }
 }
 function vaultRelative(target, vault) {
-  const rel = relative(resolve2(vault), resolve2(target));
+  const rel = relative(resolve3(vault), resolve3(target));
   return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix.sep);
 }
 
+// src/core/brain/paths.ts
+var BRAIN_ROOT_REL = "Brain";
+var BRAIN_INBOX_REL = posix2.join(BRAIN_ROOT_REL, "inbox");
+var BRAIN_PROCESSED_REL = posix2.join(BRAIN_INBOX_REL, "processed");
+var BRAIN_PREFERENCES_REL = posix2.join(BRAIN_ROOT_REL, "preferences");
+var BRAIN_RETIRED_REL = posix2.join(BRAIN_ROOT_REL, "retired");
+var BRAIN_LOG_REL = posix2.join(BRAIN_ROOT_REL, "log");
+var BRAIN_SNAPSHOTS_REL = posix2.join(BRAIN_ROOT_REL, ".snapshots");
+var BRAIN_INDEX_FILE = "_INDEX.md";
+var BRAIN_INDEX_REL = posix2.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
+
 // src/core/pay-memory/paths.ts
+var PAY_MEMORY_ROOT_REL = posix3.join(BRAIN_ROOT_REL, "payments");
+var PAY_MEMORY_POLICIES_REL = posix3.join(PAY_MEMORY_ROOT_REL, "policies");
+var PAY_MEMORY_ASSETS_REL = posix3.join(PAY_MEMORY_ROOT_REL, "assets");
+var PAY_MEMORY_DRAFTS_REL = posix3.join(PAY_MEMORY_ROOT_REL, "drafts");
+var PAY_MEMORY_REPORTS_REL = posix3.join(PAY_MEMORY_ROOT_REL, "reports");
+var PAY_MEMORY_PENDING_REL = posix3.join(PAY_MEMORY_ROOT_REL, "_pending");
+var PAY_MEMORY_SPENDING_MD_REL = posix3.join(PAY_MEMORY_POLICIES_REL, "spending.md");
+var PAY_MEMORY_SPENDING_JSON_REL = posix3.join(PAY_MEMORY_POLICIES_REL, "spending.json");
 var ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 var HHMM_RE = /^(\d{2}):(\d{2})$/;
 function payMemoryDirs(vault) {
-  const root = join4(vault, "AI Wiki");
   return {
-    policies: join4(root, "policies"),
-    payments: join4(root, "payments"),
-    assets: join4(root, "assets"),
-    drafts: join4(root, "drafts"),
-    reports: join4(root, "reports")
+    policies: join6(vault, PAY_MEMORY_POLICIES_REL),
+    payments: join6(vault, PAY_MEMORY_ROOT_REL),
+    assets: join6(vault, PAY_MEMORY_ASSETS_REL),
+    drafts: join6(vault, PAY_MEMORY_DRAFTS_REL),
+    reports: join6(vault, PAY_MEMORY_REPORTS_REL),
+    pending: join6(vault, PAY_MEMORY_PENDING_REL)
   };
 }
 function policyPath(vault) {
-  return join4(payMemoryDirs(vault).policies, "spending.md");
+  return join6(vault, PAY_MEMORY_SPENDING_MD_REL);
 }
 function paymentsDateDir(vault, date) {
-  return join4(payMemoryDirs(vault).payments, validateIsoDate(date));
+  return join6(payMemoryDirs(vault).payments, validateIsoDate(date));
 }
 function receiptPath(vault, date, slug) {
-  return join4(paymentsDateDir(vault, date), `${validateSlug(slug)}.md`);
+  return join6(paymentsDateDir(vault, date), `${validateSlug(slug)}.md`);
 }
 function assetPath(vault, slug) {
-  return join4(payMemoryDirs(vault).assets, `${validateSlug(slug)}.md`);
+  return join6(payMemoryDirs(vault).assets, `${validateSlug(slug)}.md`);
 }
 function reportPath(vault, slug) {
-  return join4(payMemoryDirs(vault).reports, `${validateSlug(slug)}.md`);
+  return join6(payMemoryDirs(vault).reports, `${validateSlug(slug)}.md`);
 }
 var WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 function validateSlug(slug) {
@@ -2301,8 +2491,8 @@ function redactRawOutput(text) {
   return out;
 }
 // src/core/pay-memory/policy.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname5 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname6 } from "node:path";
 var DEFAULT_POLICY_TEMPLATE = `# Agent Spending Policy
 
 This file is read by the agent before any paid action. The agent MUST cite
@@ -2351,15 +2541,15 @@ The agent must save:
 - payment amount, if available
 - service endpoint, if available
 - generated asset URL or response identifier
-- payment receipt note in \`AI Wiki/payments/<date>/\`
+- payment receipt note in \`${PAY_MEMORY_ROOT_REL}/<date>/\`
 - daily event log entry referencing the receipt
 `;
 function writePolicyIfMissing(vault, opts = {}) {
   const target = policyPath(vault);
   const overwrite = opts.overwrite ?? false;
-  mkdirSync3(dirname5(target), { recursive: true });
+  mkdirSync3(dirname6(target), { recursive: true });
   if (overwrite) {
-    const existed = existsSync4(target);
+    const existed = existsSync5(target);
     atomicWriteFileSync(target, DEFAULT_POLICY_TEMPLATE);
     return existed ? buildPolicyResult(target, "overwritten") : buildPolicyResult(target, "created");
   }
@@ -2383,8 +2573,8 @@ function buildPolicyResult(path, status) {
   };
 }
 // src/core/vault.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync, writeFileSync } from "node:fs";
-import { dirname as dirname6, join as join5, relative as relative2 } from "node:path";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync2, writeFileSync } from "node:fs";
+import { dirname as dirname7, join as join7, relative as relative2 } from "node:path";
 var FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 var KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
 var PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
@@ -2497,12 +2687,12 @@ function listVaultPages(vaultDir, opts = {}) {
 function walk(root, dir, skipDirs, skipFiles, out) {
   let entries;
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    entries = readdirSync2(dir, { withFileTypes: true });
   } catch {
     return;
   }
   for (const entry of entries) {
-    const full = join5(dir, entry.name);
+    const full = join7(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name))
         continue;
@@ -2703,7 +2893,7 @@ function renderPolicySection(input) {
       break;
     case "not_checked":
     default:
-      out.push("Not checked. The receipt was created without a policy decision —", "either no `AI Wiki/policies/spending.json` is configured, or the", "caller chose not to evaluate the policy. This is *not* a claim", "that the call was allowed.");
+      out.push("Not checked. The receipt was created without a policy decision —", `either no \`${PAY_MEMORY_SPENDING_JSON_REL}\` is configured, or the`, "caller chose not to evaluate the policy. This is *not* a claim", "that the call was allowed.");
       break;
   }
   if (input.policyRule?.trim()) {
@@ -2720,7 +2910,7 @@ function renderPolicySection(input) {
   if (input.approvalRequestId?.trim() || input.approvalStatus?.trim() || input.approvedBy?.trim()) {
     out.push("", "Approval:");
     if (input.approvalRequestId?.trim()) {
-      out.push("", `Request: [[AI Wiki/payments/_pending/${input.approvalRequestId.trim()}]]`);
+      out.push("", `Request: [[${PAY_MEMORY_PENDING_REL}/${input.approvalRequestId.trim()}]]`);
     }
     if (input.approvalStatus?.trim()) {
       out.push(`Status: \`${input.approvalStatus.trim()}\``);
@@ -2758,7 +2948,7 @@ function renderReceiptBody(input) {
     "",
     "Policy file:",
     "",
-    "[[AI Wiki/policies/spending]]",
+    `[[${stripMarkdownExt(PAY_MEMORY_SPENDING_MD_REL)}]]`,
     "",
     ...renderPolicySection(input),
     "## Expected cost",
@@ -2888,14 +3078,14 @@ function renderAssetBody(input) {
 `);
 }
 // src/core/pay-memory/report.ts
-import { readdirSync as readdirSync2 } from "node:fs";
-import { join as join6 } from "node:path";
+import { readdirSync as readdirSync3 } from "node:fs";
+import { join as join8 } from "node:path";
 var REPORT_FRONTMATTER_TYPE = "payment-report";
 function aggregateReceipts(vault, date) {
   const dir = paymentsDateDir(vault, date);
   let entries;
   try {
-    entries = readdirSync2(dir, { withFileTypes: true });
+    entries = readdirSync3(dir, { withFileTypes: true });
   } catch (err) {
     if (err?.code === "ENOENT")
       return [];
@@ -2907,7 +3097,7 @@ function aggregateReceipts(vault, date) {
       continue;
     if (!entry.name.toLowerCase().endsWith(".md"))
       continue;
-    const full = join6(dir, entry.name);
+    const full = join8(dir, entry.name);
     let meta;
     try {
       [meta] = parseFrontmatter(full);
@@ -3008,10 +3198,10 @@ function renderReportBody(date, title, task, summaries) {
 }
 // src/core/pay-memory/policy-rules.ts
 import { readFileSync as readFileSync6 } from "node:fs";
-import { join as join7 } from "node:path";
+import { join as join9 } from "node:path";
 var POLICY_SCHEMA_VERSION = 1;
 function policyJsonPath(vault) {
-  return join7(payMemoryDirs(vault).policies, "spending.json");
+  return join9(payMemoryDirs(vault).policies, "spending.json");
 }
 function loadPolicyRules(vault) {
   const target = policyJsonPath(vault);
@@ -3173,13 +3363,13 @@ function checkPolicy(vault, request) {
 }
 // src/core/pay-memory/approval.ts
 var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
-import { join as join8 } from "node:path";
+import { join as join10 } from "node:path";
 var PENDING_REQUEST_FRONTMATTER_TYPE = "pending-payment-request";
 function pendingDir(vault) {
-  return join8(payMemoryDirs(vault).payments, "_pending");
+  return join10(vault, PAY_MEMORY_PENDING_REL);
 }
 function pendingRequestPath(vault, id) {
-  return join8(pendingDir(vault), `${validateSlug(id)}.md`);
+  return join10(pendingDir(vault), `${validateSlug(id)}.md`);
 }
 function writePendingRequest(vault, input) {
   if (!input.service?.trim())
@@ -3490,7 +3680,7 @@ var openclaw_default = definePluginEntry({
           config_keys: Object.keys(discovery.data).sort(),
           config: redactMapping(discovery.data),
           vault_path: vault,
-          vault_exists: existsSync5(vault)
+          vault_exists: existsSync6(vault)
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -3516,7 +3706,7 @@ var openclaw_default = definePluginEntry({
       },
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
-        if (!existsSync5(vault))
+        if (!existsSync6(vault))
           throw new Error(`vault directory missing: ${vault}`);
         const pattern = params["pattern"] ?? null;
         const limit = typeof params["limit"] === "number" ? params["limit"] : 50;
@@ -3580,7 +3770,7 @@ var openclaw_default = definePluginEntry({
         const created = [];
         const skipped = [];
         for (const dir of [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports]) {
-          const existed = existsSync5(dir);
+          const existed = existsSync6(dir);
           mkdirSync5(dir, { recursive: true });
           (existed ? skipped : created).push(vaultRelative(dir, vault));
         }
@@ -3758,7 +3948,7 @@ var openclaw_default = definePluginEntry({
     });
     api.registerTool({
       name: "payment_report_generate",
-      description: "Aggregate a date's payment receipts into a Markdown report under AI Wiki/reports/.",
+      description: `Aggregate a date's payment receipts into a Markdown report under ${PAY_MEMORY_REPORTS_REL}/.`,
       parameters: {
         type: "object",
         properties: {
@@ -3790,7 +3980,7 @@ var openclaw_default = definePluginEntry({
     });
     api.registerTool({
       name: "payment_policy_check",
-      description: "Evaluate a prospective paid call against AI Wiki/policies/spending.json. Returns allowed / approval_required / denied + the rule that fired.",
+      description: `Evaluate a prospective paid call against ${PAY_MEMORY_SPENDING_JSON_REL}. Returns allowed / approval_required / denied + the rule that fired.`,
       parameters: {
         type: "object",
         properties: {

@@ -17,7 +17,6 @@ export { cmdBrainExplorer } from "./explorer.ts";
 export { cmdBrainExport } from "./export.ts";
 export { cmdBrainUpgrade } from "./upgrade.ts";
 export { cmdBrainSnapshotDiff, handleBrainSnapshotSubcommand } from "./snapshot.ts";
-export { cmdBrainMigrateFrontmatter } from "./migrate-frontmatter.ts";
 export { cmdBrainScanInline } from "./scan-inline.ts";
 export { cmdBrainImportSession } from "./import-session.ts";
 export { cmdBrainImportClaudeMemory } from "./import-claude-memory.ts";

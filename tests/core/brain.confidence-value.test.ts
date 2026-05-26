@@ -62,57 +62,45 @@ describe("computeConfidence — numeric value", () => {
     expect(Math.round(r.value * 10000) / 10000).toBe(r.value);
   });
 
-  test("hard floor: applied <= low_max_applied keeps band low", () => {
+  test("applied=2, violated=0, fresh → low (Wilson ≈ 0.34, below medium_min)", () => {
     const r = computeConfidence(2, 0, iso("2026-05-15"), cfg, NOW);
     expect(r.band).toBe("low");
   });
 
-  test("hard floor: violated >= applied keeps band low", () => {
+  test("violated >= applied → low (Wilson collapses on noisy signal)", () => {
     const r = computeConfidence(5, 5, iso("2026-05-15"), cfg, NOW);
     expect(r.band).toBe("low");
   });
 
-  test("step-function eligibility: 10 applied / no violated / fresh → high", () => {
+  test("applied=10, violated=0, fresh → medium (Wilson ≈ 0.72, below high_min)", () => {
     const r = computeConfidence(10, 0, iso("2026-05-15"), cfg, NOW);
-    expect(r.band).toBe("high");
-  });
-
-  test("step-function eligibility lost when stale → falls to medium", () => {
-    // last evidence ~78 days ago — past high_freshness_factor cutoff
-    // but not past stale_evidence_days.
-    const r = computeConfidence(10, 0, iso("2026-02-26"), cfg, NOW);
     expect(r.band).toBe("medium");
   });
 
-  test("numeric band max-lift: legacy=medium + numeric=high → high", () => {
-    // Lower high_min so a 9-applied / 0-violated / fresh pref crosses
-    // the numeric threshold even though legacy step-function would
-    // cap it at medium (needs applied >= 10).
-    const tunedCfg = {
-      ...cfg,
-      confidence: {
-        ...cfg.confidence,
-        high_min: 0.5,
-        medium_min: 0.30,
-      },
-    };
-    const r = computeConfidence(9, 0, iso("2026-05-15"), tunedCfg, NOW);
+  test("applied=20, violated=0, fresh → high (Wilson ≈ 0.84, crosses high_min)", () => {
+    const r = computeConfidence(20, 0, iso("2026-05-15"), cfg, NOW);
     expect(r.band).toBe("high");
   });
 
-  test("numeric never demotes a legacy-high band", () => {
-    // Legacy step → high; tighten numeric thresholds to demand
-    // 0.99. Max-with-legacy keeps band at high.
-    const strictCfg = {
+  test("applied=10, violated=0, stale → low (freshness collapses the value)", () => {
+    // last evidence ~78 days ago — freshness multiplier near zero
+    // but not past stale_evidence_days. Wilson ≈ 0.72 * freshness ≈
+    // 0.13 yields value ≈ 0.10 — squarely in the low band.
+    const r = computeConfidence(10, 0, iso("2026-02-26"), cfg, NOW);
+    expect(r.band).toBe("low");
+  });
+
+  test("threshold tuning lifts the band on the same evidence", () => {
+    // The same 9-applied / 0-violated / fresh pref reads as medium
+    // under the default thresholds and high once we lower high_min.
+    const r1 = computeConfidence(9, 0, iso("2026-05-15"), cfg, NOW);
+    expect(r1.band).toBe("medium");
+    const tunedCfg = {
       ...cfg,
-      confidence: {
-        ...cfg.confidence,
-        high_min: 0.99,
-        medium_min: 0.99,
-      },
+      confidence: { ...cfg.confidence, high_min: 0.5, medium_min: 0.30 },
     };
-    const r = computeConfidence(10, 0, iso("2026-05-15"), strictCfg, NOW);
-    expect(r.band).toBe("high");
+    const r2 = computeConfidence(9, 0, iso("2026-05-15"), tunedCfg, NOW);
+    expect(r2.band).toBe("high");
   });
 
   test("value is in [0, 1]", () => {

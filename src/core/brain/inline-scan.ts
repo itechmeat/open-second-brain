@@ -40,6 +40,8 @@ import {
 } from "./dedup-hash.ts";
 import { discoverMarkersDetailed } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
+import { BRAIN_ROOT_REL } from "./paths.ts";
+import { loadNotesConfigSafe } from "./policy.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
@@ -92,20 +94,40 @@ export async function scanInline(
   const errors: ScanInlineErrorEntry[] = [];
   const filesWithMarkers: ScanInlineFileSummary[] = [];
 
-  // Build dedup index once per run. Parse failures get surfaced
-  // through the per-file errors array so the JSON report exposes
-  // them; doctor flags malformed signals separately.
-  const dedupIndex: Map<string, DedupIndexEntry> = buildDedupIndex(vault, {
-    onError: (path, message) => errors.push({ path, message }),
-  });
-
   let scanned = 0;
   let found = 0;
   let created = 0;
   let deduped = 0;
   let malformed = 0; // reserved — not surfaced separately yet
 
-  const includePrefixes = (opts.paths ?? []).map((p) => normalisePrefix(p));
+  // v0.11.0: explicit `opts.paths` always wins. When absent or empty,
+  // fall back to `notes.read_paths` from `_brain.yaml`. An empty
+  // resolved list means "no folders to scan" — return immediately so
+  // the agent never walks the vault without an operator opt-in.
+  const explicitPaths = (opts.paths ?? []).filter((p) => p.trim().length > 0);
+  const resolvedPaths =
+    explicitPaths.length > 0
+      ? explicitPaths
+      : [...loadNotesConfigSafe(vault).read_paths];
+  if (resolvedPaths.length === 0) {
+    return Object.freeze({
+      scanned: 0,
+      found: 0,
+      created: 0,
+      deduped: 0,
+      malformed: 0,
+      errors: Object.freeze([]) as ReadonlyArray<ScanInlineErrorEntry>,
+      filesWithMarkers: Object.freeze([]) as ReadonlyArray<ScanInlineFileSummary>,
+    });
+  }
+  const includePrefixes = resolvedPaths.map((p) => normalisePrefix(p));
+
+  // Build dedup index once per run. Parse failures get surfaced
+  // through the per-file errors array so the JSON report exposes
+  // them; doctor flags malformed signals separately.
+  const dedupIndex: Map<string, DedupIndexEntry> = buildDedupIndex(vault, {
+    onError: (path, message) => errors.push({ path, message }),
+  });
 
   // Effective rule set (v0.10.9):
   //   - shared `vault.ignore_paths` from Brain/_brain.yaml (or defaults)
@@ -118,7 +140,7 @@ export async function scanInline(
     // `path` (not `name`) so the hard-skip targets only the top-level
     // `<vault>/Brain/` directory; a project file like
     // `projects/Brain/notes.md` keeps being scanned.
-    { raw: "Brain", kind: "path" },
+    { raw: BRAIN_ROOT_REL, kind: "path" },
     ...(opts.exclude ?? []).map(
       (raw): VaultIgnoreRule => ({ raw: normalisePrefix(raw), kind: "path" }),
     ),

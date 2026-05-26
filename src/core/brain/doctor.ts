@@ -57,7 +57,6 @@ import {
 import { checkInstructionFileCeiling } from "./trust/instruction-file-ceiling.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
 import {
-  BrainDoubleShapeError,
   BrainStatusFolderMismatchError,
   parsePreference,
   parseRetired,
@@ -517,17 +516,6 @@ function checkPreferences(
           path,
           message: err.message,
         });
-      } else if (err instanceof BrainDoubleShapeError) {
-        // §24 dual-shape parser collision is operator-actionable
-        // (run `o2b brain migrate-frontmatter --apply` or hand-edit
-        // the file). Surface as warning, not error, so the dream
-        // loop still proceeds for the rest of the vault.
-        issues.push({
-          severity: "warning",
-          code: "frontmatter-double-shape",
-          path,
-          message: err.message,
-        });
       } else {
         // Distinguish field-missing errors (write-time contract) from
         // unexpected throws so the CLI report stays useful.
@@ -599,13 +587,6 @@ function checkRetired(
         issues.push({
           severity: "warning",
           code: "status-folder-mismatch",
-          path,
-          message: err.message,
-        });
-      } else if (err instanceof BrainDoubleShapeError) {
-        issues.push({
-          severity: "warning",
-          code: "frontmatter-double-shape",
           path,
           message: err.message,
         });
@@ -726,16 +707,13 @@ function checkWikilinks(
 }
 
 /**
- * Build the universe of valid wikilink targets inside `Brain/`. We
- * deliberately do NOT pull in legacy `AI Wiki/` or `Daily/` notes — a
- * Brain artifact pointing at a Daily entry (artifact wikilink in a
- * `apply-evidence` event) is valid, but those targets sit outside the
- * Brain layer and are out of scope for this doctor pass.
+ * Build the universe of valid wikilink targets inside `Brain/`. The
+ * doctor pass is scoped to Brain content; cross-layer wikilinks
+ * pointing at user-authored notes outside Brain/ are out of scope
+ * and stay accepted.
  *
- * To keep the check honest for cross-layer wikilinks (e.g. a
- * `retired_by: [[Brain/log/2026-05-14]]`), we accept *any* `.md` file
- * inside `Brain/`. The set is keyed by basename (without `.md`) so
- * Obsidian's basename match works.
+ * Set is keyed by basename (without `.md`) so Obsidian's basename
+ * match works.
  */
 function checkBrokenBacklinks(
   vault: string,

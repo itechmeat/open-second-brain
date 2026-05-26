@@ -56,7 +56,7 @@ hermes cron remove pay-memory-daily-digest
 💳 Оплачено сервисов: **2**
 💰 Сумма: **0.07 USDC**
 📁 Файлы чеков: **2**
-🔗 Отчёт: `/root/vault/AI Wiki/reports/payment-report-2026-05-09.md`
+🔗 Отчёт: `/root/vault/Brain/payments/reports/payment-report-2026-05-09.md`
 ```
 
 When there were no receipts the day before, the literal token `[SILENT]` is emitted (or empty / a one-line summary, per `--empty-mode`).
@@ -119,7 +119,7 @@ hermes cron remove brain-digest-daily
 
 ## Confirmed
 
-- [[pref-prefer-typed-errors]] — coding, first applied in [[Daily/2026.05.14]]
+- [[pref-prefer-typed-errors]] — coding, first applied in [[src/cli/main.ts]]
 
 ## Retired
 
@@ -141,3 +141,25 @@ When `--silent-if-empty` is set and the window has no changes, the command write
 ```
 
 `dream` is itself idempotent — running it on top of an unchanged Brain is a no-op (no log entry written, no snapshot taken). The chained form is safe at any cadence.
+
+## Discipline report (daily logging-discipline sanity-check)
+
+`o2b discipline report` renders a deterministic Telegram MarkdownV2 block comparing brain-event counts per agent (parsed from `Brain/log/<yesterday>.md`) against runtime-agnostic activity proxies (git on watched repos + mtime walk on watched non-repo paths + vault delta on `Brain/inbox|preferences|retired/`). Status is binary - `alert` if taste events (`feedback`+`apply_evidence`) are zero while activity is non-zero, `info` for a quiet day, `ok` otherwise. No LLM in the report path.
+
+`o2b discipline install --vault <v> --telegram-target <target>` writes one cron entry into the Hermes scheduler (job id derived from `sha256(vault)` so multiple vaults on one host do not collide). The configuration block lives in `Brain/_brain.yaml`:
+
+```yaml
+discipline_report:
+  enabled: true
+  timezone: "Europe/Belgrade"
+  watched_paths:
+    - "/srv/projects/open-second-brain"
+    - "/root/.hermes/plugins"
+  known_agents:
+    - "@claude-vps-agent"
+    - "@codex-vps-agent"
+```
+
+When the section is absent or `enabled: false`, the report exits `0` with a stderr note and the cron job stays silent.
+
+A weekly digest variant ships under `--weekly` (Monday 08:59 local timezone by default); `o2b discipline uninstall --weekly` removes only the weekly job, without the flag removes both.

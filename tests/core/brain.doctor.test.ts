@@ -93,17 +93,17 @@ describe("status-vs-folder mismatch", () => {
         "kind: brain-preference",
         "id: pref-broken",
         "created_at: 2026-05-14T10:42:00Z",
-        "confirmed_at: null",
+        "_confirmed_at: null",
         "unconfirmed_until: 2026-05-28T10:42:00Z",
         "tags: [brain, brain/preference]",
         "topic: broken",
-        "status: retired",
+        "_status: retired",
         "principle: Hand-crafted mismatch",
-        "evidenced_by: []",
-        "applied_count: 0",
-        "violated_count: 0",
-        "last_evidence_at: null",
-        "confidence: low",
+        "_evidenced_by: []",
+        "_applied_count: 0",
+        "_violated_count: 0",
+        "_last_evidence_at: null",
+        "_confidence: low",
         "pinned: false",
         "---",
         "",
@@ -192,17 +192,17 @@ describe("duplicate id", () => {
         "kind: brain-preference",
         "id: pref-alpha", // intentional duplicate
         "created_at: 2026-05-14T10:00:00Z",
-        "confirmed_at: null",
+        "_confirmed_at: null",
         "unconfirmed_until: 2026-05-28T10:00:00Z",
         "tags: [brain, brain/preference]",
         "topic: alpha",
-        "status: unconfirmed",
+        "_status: unconfirmed",
         "principle: Duplicate id",
-        "evidenced_by: []",
-        "applied_count: 0",
-        "violated_count: 0",
-        "last_evidence_at: null",
-        "confidence: low",
+        "_evidenced_by: []",
+        "_applied_count: 0",
+        "_violated_count: 0",
+        "_last_evidence_at: null",
+        "_confidence: low",
         "pinned: false",
         "---",
         "",
@@ -224,17 +224,17 @@ describe("invalid ISO", () => {
         "kind: brain-preference",
         "id: pref-bad-iso",
         "created_at: 2026-05-14T10:42:00Z",
-        "confirmed_at: null",
+        "_confirmed_at: null",
         "unconfirmed_until: not-a-real-iso",
         "tags: [brain, brain/preference]",
         "topic: bad-iso",
-        "status: unconfirmed",
+        "_status: unconfirmed",
         "principle: Hand-crafted",
-        "evidenced_by: []",
-        "applied_count: 0",
-        "violated_count: 0",
-        "last_evidence_at: null",
-        "confidence: low",
+        "_evidenced_by: []",
+        "_applied_count: 0",
+        "_violated_count: 0",
+        "_last_evidence_at: null",
+        "_confidence: low",
         "pinned: false",
         "---",
         "",
@@ -293,8 +293,8 @@ describe("schema_version", () => {
         "",
         "confidence:",
         "  low_max_applied: 2",
-        "  high_min_applied: 10",
-        "  high_freshness_factor: 0.8",
+        "  medium_min: 0.40",
+        "  high_min: 0.75",
         "",
         "snapshots:",
         "  retention_count: 10",
@@ -375,7 +375,7 @@ describe("retired entries", () => {
         "---",
         "kind: brain-retired",
         "id: ret-alpha",
-        "status: retired",
+        "_status: retired",
         "retired_at: 2026-08-12T05:00:00Z",
         "retired_reason: stale-no-evidence",
         'retired_by: "[[2026-08-12]]"',
@@ -383,11 +383,11 @@ describe("retired entries", () => {
         "tags: [brain, brain/retired]",
         "topic: alpha",
         "principle: rule",
-        "evidenced_by: []",
-        "applied_count: 0",
-        "violated_count: 0",
-        "last_evidence_at: null",
-        "confidence: low",
+        "_evidenced_by: []",
+        "_applied_count: 0",
+        "_violated_count: 0",
+        "_last_evidence_at: null",
+        "_confidence: low",
         "pinned: false",
         "---",
         "",
@@ -734,79 +734,6 @@ describe("broken backlinks", () => {
     });
     const res = runDoctor(tmp);
     expect(res.warnings.filter((w) => w.code === "broken-backlinks")).toHaveLength(0);
-  });
-});
-
-// ── §24 dual-shape lint ─────────────────────────────────────────────────────
-
-describe("frontmatter-double-shape lint (§24)", () => {
-  test("flags a preference with both 'status:' and '_status:'", () => {
-    const path = preferencePath(tmp, "double-shape");
-    const content = [
-      "---",
-      "kind: brain-preference",
-      "id: pref-double-shape",
-      "created_at: 2026-05-14T10:42:00Z",
-      "unconfirmed_until: 2026-05-28T10:42:00Z",
-      "tags: [brain, brain/preference, brain/topic/double-shape]",
-      "topic: double-shape",
-      "principle: Some rule",
-      "pinned: false",
-      "status: confirmed",
-      "_status: confirmed",
-      "evidenced_by: []",
-      "---",
-      "",
-    ].join("\n");
-    writeFileSync(path, content, "utf8");
-
-    const res = runDoctor(tmp);
-    const found = res.warnings.find((w) => w.code === "frontmatter-double-shape");
-    expect(found).toBeDefined();
-    expect(found!.path).toBe(path);
-    expect(found!.message).toMatch(/_status.*legacy 'status'/);
-  });
-
-  test("flags a retired with both 'applied_count:' and '_applied_count:'", () => {
-    const path = retiredPath(tmp, "double-shape-ret");
-    const content = [
-      "---",
-      "kind: brain-retired",
-      "id: ret-double-shape-ret",
-      "created_at: 2026-05-14T10:42:00Z",
-      "retired_at: 2026-08-12T05:00:00Z",
-      "retired_reason: stale-no-evidence",
-      "retired_by: '[[Brain/log/2026-08-12]]'",
-      "tags: [brain, brain/retired, brain/topic/double-shape-ret]",
-      "topic: double-shape-ret",
-      "principle: Some rule",
-      "status: retired",
-      "pinned: false",
-      "applied_count: 3",
-      "_applied_count: 3",
-      "---",
-      "",
-    ].join("\n");
-    writeFileSync(path, content, "utf8");
-
-    const res = runDoctor(tmp);
-    const found = res.warnings.find((w) => w.code === "frontmatter-double-shape");
-    expect(found).toBeDefined();
-    expect(found!.message).toMatch(/_applied_count.*legacy 'applied_count'/);
-  });
-
-  test("does NOT flag a file using only the new '_status:' shape", () => {
-    writePreference(tmp, {
-      slug: "clean-new",
-      topic: "clean-new",
-      principle: "Some rule",
-      created_at: "2026-05-14T10:42:00Z",
-      unconfirmed_until: "2026-05-28T10:42:00Z",
-      status: "unconfirmed",
-      evidenced_by: [],
-    });
-    const res = runDoctor(tmp);
-    expect(res.warnings.filter((w) => w.code === "frontmatter-double-shape")).toHaveLength(0);
   });
 });
 

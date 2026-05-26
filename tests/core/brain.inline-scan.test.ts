@@ -37,7 +37,14 @@ beforeEach(() => {
   ]) {
     mkdirSync(d, { recursive: true });
   }
-  atomicWriteFileSync(join(dirs.brain, "_brain.yaml"), DEFAULT_BRAIN_CONFIG_YAML);
+  // v0.11.0: scanInline walks only folders listed under
+  // `notes.read_paths`. All existing tests use Daily/ as the marker
+  // container, so we declare it here once; specific tests that need
+  // a different shape override this file.
+  atomicWriteFileSync(
+    join(dirs.brain, "_brain.yaml"),
+    `${DEFAULT_BRAIN_CONFIG_YAML}\nnotes:\n  read_paths:\n    - Daily\n`,
+  );
 });
 
 afterEach(() => {
@@ -50,6 +57,74 @@ function writeMd(rel: string, content: string): string {
   writeFileSync(path, content, "utf8");
   return path;
 }
+
+describe("scanInline empty notes.read_paths", () => {
+  test("no notes config + no opts.paths -> scanInline does no work", async () => {
+    // Override the beforeEach config to drop notes.read_paths entirely.
+    atomicWriteFileSync(
+      join(brainDirs(tmp).brain, "_brain.yaml"),
+      DEFAULT_BRAIN_CONFIG_YAML,
+    );
+    // Plant a marker in Daily/ — old behaviour would find it.
+    writeMd(
+      "Daily/2026-05-16.md",
+      "@osb feedback negative topic=should-be-skipped principle=p\n",
+    );
+    const result = await scanInline(tmp, { agent: "test" });
+    expect(result.scanned).toBe(0);
+    expect(result.found).toBe(0);
+    expect(result.created).toBe(0);
+  });
+
+  test("opts.paths still overrides absent config (explicit > config)", async () => {
+    atomicWriteFileSync(
+      join(brainDirs(tmp).brain, "_brain.yaml"),
+      DEFAULT_BRAIN_CONFIG_YAML,
+    );
+    writeMd(
+      "Journal/2026-05-16.md",
+      "@osb feedback negative topic=explicit-override principle=p\n",
+    );
+    const result = await scanInline(tmp, {
+      agent: "test",
+      paths: ["Journal"],
+    });
+    expect(result.found).toBe(1);
+    expect(result.created).toBe(1);
+  });
+
+  test("notes.read_paths with multiple entries walks each root", async () => {
+    atomicWriteFileSync(
+      join(brainDirs(tmp).brain, "_brain.yaml"),
+      `${DEFAULT_BRAIN_CONFIG_YAML}\nnotes:\n  read_paths:\n    - Daily\n    - Journal\n`,
+    );
+    writeMd(
+      "Daily/2026-05-16.md",
+      "@osb feedback negative topic=daily-one principle=p\n",
+    );
+    writeMd(
+      "Journal/2026-05-16.md",
+      "@osb feedback negative topic=journal-one principle=p\n",
+    );
+    const result = await scanInline(tmp, { agent: "test" });
+    expect(result.found).toBe(2);
+    expect(result.created).toBe(2);
+  });
+
+  test("read_path that does not exist on disk is skipped silently", async () => {
+    atomicWriteFileSync(
+      join(brainDirs(tmp).brain, "_brain.yaml"),
+      `${DEFAULT_BRAIN_CONFIG_YAML}\nnotes:\n  read_paths:\n    - Daily\n    - Missing\n`,
+    );
+    writeMd(
+      "Daily/2026-05-16.md",
+      "@osb feedback negative topic=found-here principle=p\n",
+    );
+    const result = await scanInline(tmp, { agent: "test" });
+    expect(result.found).toBe(1);
+    expect(result.errors.length).toBe(0);
+  });
+});
 
 describe("scanInline", () => {
   test("finds an inline marker in Daily/ and creates a signal in inbox/", async () => {
@@ -142,6 +217,10 @@ describe("scanInline", () => {
   });
 
   test("processes a fenced 'osb' block and writes signal + rewrites info-string", async () => {
+    atomicWriteFileSync(
+      join(brainDirs(tmp).brain, "_brain.yaml"),
+      `${DEFAULT_BRAIN_CONFIG_YAML}\nnotes:\n  read_paths:\n    - Projects\n`,
+    );
     const notePath = writeMd(
       "Projects/foo.md",
       [
@@ -205,6 +284,10 @@ describe("scanInline", () => {
   });
 
   test("skips files larger than 1 MiB", async () => {
+    atomicWriteFileSync(
+      join(brainDirs(tmp).brain, "_brain.yaml"),
+      `${DEFAULT_BRAIN_CONFIG_YAML}\nnotes:\n  read_paths:\n    - Big\n`,
+    );
     // Build a marker preceded by 1.5 MiB of filler.
     const filler = "x".repeat(1_500_000);
     writeMd(
@@ -262,6 +345,10 @@ describe("scanInline", () => {
   });
 
   test("v0.10.9: hardcoded Brain rule is path-scoped — nested 'Brain' dirs keep being scanned", async () => {
+    atomicWriteFileSync(
+      join(brainDirs(tmp).brain, "_brain.yaml"),
+      `${DEFAULT_BRAIN_CONFIG_YAML}\nnotes:\n  read_paths:\n    - projects\n`,
+    );
     // The hard-skip targets `<vault>/Brain` specifically. A project
     // directory like `projects/Brain/notes.md` is unrelated to the
     // derived layer and must still be discoverable by scan-inline.
@@ -280,7 +367,7 @@ describe("scanInline", () => {
   test("v0.10.9: vault.ignore_paths additions are respected", async () => {
     atomicWriteFileSync(
       join(brainDirs(tmp).brain, "_brain.yaml"),
-      `schema_version: 1\nvault:\n  ignore_paths:\n    - Drafts\n`,
+      `schema_version: 1\nvault:\n  ignore_paths:\n    - Drafts\nnotes:\n  read_paths:\n    - Drafts\n    - Daily\n`,
     );
     writeMd(
       "Drafts/x.md",

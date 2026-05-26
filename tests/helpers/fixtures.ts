@@ -6,16 +6,20 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import {
+  BRAIN_MANUAL_FILE,
+  BRAIN_ROOT_REL,
+} from "../../src/core/brain/paths.ts";
+
 export function createSandboxVault(root: string, name = "Sandbox Brain"): string {
   const vault = join(root, "sandbox-vault");
-  mkdirSync(join(vault, "AI Wiki"), { recursive: true });
-  mkdirSync(join(vault, "Daily"), { recursive: true });
+  mkdirSync(join(vault, BRAIN_ROOT_REL), { recursive: true });
   writeFileSync(
-    join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"),
+    join(vault, BRAIN_ROOT_REL, BRAIN_MANUAL_FILE),
     `---\ntitle: ${name}\ntype: operating-manual\n---\n\n# ${name}\n`,
   );
   writeFileSync(
-    join(vault, "AI Wiki", "Concept.md"),
+    join(vault, "Concept.md"),
     "---\ntitle: Sandbox Concept\n---\n\nLinked to [[Other]].\n",
   );
   writeFileSync(join(vault, "Other.md"), "# Other\n");

@@ -391,9 +391,8 @@ describe("dream — unconfirmed → confirmed promotion on first applied evidenc
 describe("dream — confidence formula at boundaries", () => {
   // We exercise the formula indirectly: seed evidence, run dream, read
   // pref.confidence. Default config (from policy.ts):
-  //   low_max_applied: 2, high_min_applied: 10
-  //   stale_evidence_days: 90, high_freshness_factor: 0.8
-  // → "fresh" means last_evidence_at < 72 days ago.
+  //   low_max_applied: 2, stale_evidence_days: 90,
+  //   medium_min: 0.40, high_min: 0.75.
   function setupForConfidence(slug: string, applied: number, violated: number, fresh: boolean): void {
     writePreference(vault, {
       slug,
@@ -405,8 +404,10 @@ describe("dream — confidence formula at boundaries", () => {
       evidenced_by: [],
     });
     // Generate apply-evidence entries spread over days. The most
-    // recent one drives `last_evidence_at`.
-    const baseDate = fresh ? "2026-05-01" : "2026-01-01";
+    // recent one drives `last_evidence_at`. "fresh" anchors near
+    // `now` so freshness ≈ 1.0; "stale" puts evidence ~78 days back
+    // so the freshness multiplier collapses confidence_value.
+    const baseDate = fresh ? "2026-05-14" : "2026-01-01";
     for (let i = 0; i < applied; i++) {
       const d = new Date(`${baseDate}T10:00:0${i % 10}Z`);
       appendApplyEvidence(
@@ -448,8 +449,15 @@ describe("dream — confidence formula at boundaries", () => {
     expect(p.confidence).toBe("medium");
   });
 
-  test("applied=10, violated=0, fresh → high", () => {
-    setupForConfidence("c-high", 10, 0, true);
+  test("applied=10, violated=0, fresh → medium (Wilson ≈ 0.72, below high_min)", () => {
+    setupForConfidence("c-medium-10", 10, 0, true);
+    dream(vault, { now: new Date("2026-05-15T00:00:00Z") });
+    const p = parsePreference(preferencePath(vault, "c-medium-10"));
+    expect(p.confidence).toBe("medium");
+  });
+
+  test("applied=20, violated=0, fresh → high (Wilson ≈ 0.84, crosses high_min)", () => {
+    setupForConfidence("c-high", 20, 0, true);
     dream(vault, { now: new Date("2026-05-15T00:00:00Z") });
     const p = parsePreference(preferencePath(vault, "c-high"));
     expect(p.confidence).toBe("high");
@@ -462,14 +470,15 @@ describe("dream — confidence formula at boundaries", () => {
     expect(p.confidence).toBe("low");
   });
 
-  test("applied=10, violated=0, stale → medium (not high — freshness fails)", () => {
+  test("applied=10, violated=0, stale → low (freshness collapses the numeric value)", () => {
     setupForConfidence("c-stale", 10, 0, false);
-    // now is well beyond freshness boundary (72 days from 2026-01-01)
-    // but BEFORE the stale_evidence_days retire boundary (90 days).
-    // 2026-04-01 = 90 days after 2026-01-01, so we use 2026-03-20.
+    // Now is well beyond the freshness boundary but BEFORE the
+    // stale_evidence_days retire boundary (90 days). 2026-03-20 sits
+    // 78 days after the seeded evidence; freshness ≈ 0.13 multiplied
+    // by Wilson ≈ 0.72 yields value ≈ 0.10 — squarely in the low band.
     dream(vault, { now: new Date("2026-03-20T00:00:00Z") });
     const p = parsePreference(preferencePath(vault, "c-stale"));
-    expect(p.confidence).toBe("medium");
+    expect(p.confidence).toBe("low");
   });
 });
 

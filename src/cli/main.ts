@@ -15,13 +15,10 @@ import {
   defaultConfigPath,
   discoverConfig,
   redactMapping,
-  resolveAgentName,
-  resolveTimezone,
   setConfigValue,
 } from "../core/config.ts";
+import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
 import { doctor } from "../core/doctor.ts";
-import { appendEvent } from "../core/event-log.ts";
-import { bootstrapVault } from "../core/init.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { handleBrainSubcommand } from "./brain.ts";
@@ -30,7 +27,6 @@ import { handleSearchSubcommand } from "./search.ts";
 import { handleVaultSubcommand } from "./vault.ts";
 import {
   NoVaultConfiguredError,
-  normalizeFlagString,
   requireVault,
   resolveSemanticConfigState,
   sortedReplacer,
@@ -136,28 +132,13 @@ async function cmdInit(argv: string[]): Promise<number> {
     }
   }
 
-  let created: string[];
-  try {
-    created = bootstrapVault(vault, {
-      name: String(flags["name"] ?? "Second Brain"),
-      agentName,
-      force: Boolean(flags["force"]),
-    });
-  } catch (exc) {
-    process.stderr.write(`error: failed to initialize vault: ${(exc as Error).message ?? exc}\n`);
-    return 1;
-  }
-
-  if (created.length > 0) {
-    process.stdout.write(`initialized vault: ${vault}\n`);
-    for (const p of created) process.stdout.write(`  created: ${p}\n`);
-  } else {
-    process.stdout.write(`vault already initialized: ${vault}\n`);
-    process.stdout.write("use --force to overwrite existing files\n");
-  }
-  // Persist vault/agent/timezone in one guarded block so a write failure
-  // (read-only config dir, disk full) surfaces as a clean CLI exit instead
-  // of an uncaught exception after the vault scaffolding is already on disk.
+  // v0.11.0: `o2b init` no longer writes content into the vault.
+  // Content scaffolding belongs to `o2b brain init` (the Brain layer).
+  // This verb persists machine-local config (vault path, agent name,
+  // timezone) so other CLI verbs default to the right vault without
+  // a --vault flag.
+  void flags["force"]; // accepted for backward CLI compat; unused
+  void flags["name"]; // accepted for backward CLI compat; unused
   let configPath: string;
   try {
     configPath = setConfigValue("vault", resolve(vault));
@@ -169,6 +150,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     );
     return 1;
   }
+  process.stdout.write(`initialized vault: ${resolve(vault)}\n`);
   process.stdout.write(`vault path persisted to: ${configPath}\n`);
   if (agentName) {
     process.stdout.write(`agent name registered: ${agentName}\n`);
@@ -262,50 +244,6 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   return allOk ? 0 : 1;
 }
 
-async function cmdAppendEvent(argv: string[]): Promise<number> {
-  const { flags, positional } = parseFlags(argv, {
-    vault: { type: "string" },
-    as: { type: "string" },
-    date: { type: "string" },
-    time: { type: "string" },
-    config: { type: "string" },
-  });
-  if (positional.length < 1) {
-    process.stderr.write("error: append-event requires a message argument\n");
-    return 2;
-  }
-  const message = positional[0]!;
-  // §32F (v0.10.8): resolve the agent identity through the shared
-  // resolver instead of the literal `"agent"` fallback. The resolver
-  // chain honours `--as` -> `VAULT_AGENT_NAME` env -> `agent_name`
-  // from the plugin config -> the placeholder `"agent"` (only as the
-  // very last resort). Cron-jobs and shell scripts get the
-  // config-declared identity instead of corrupted `@agent` entries.
-  const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
-  const vault = requireVault(flags["vault"] as string | undefined, config);
-  const tz = resolveTimezone(config);
-  const explicit = normalizeFlagString(flags["as"]);
-  if (flags["as"] !== undefined && explicit === null) {
-    process.stderr.write("error: --as must be a non-empty string when provided\n");
-    return 2;
-  }
-  const agent = explicit ?? resolveAgentName(config);
-
-  let path: string;
-  try {
-    path = await appendEvent(vault, agent, message, {
-      date: (flags["date"] as string | undefined) ?? null,
-      time: (flags["time"] as string | undefined) ?? null,
-      tz,
-    });
-  } catch (exc) {
-    process.stderr.write(`error: failed to append event: ${(exc as Error).message ?? exc}\n`);
-    return 1;
-  }
-  process.stdout.write(`appended: ${resolve(path)}\n`);
-  return 0;
-}
-
 async function cmdExportConfig(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, {
     config: { type: "string" },
@@ -353,7 +291,7 @@ async function cmdIndex(argv: string[]): Promise<number> {
     const rel = p.path.startsWith(vault) ? p.path.slice(vault.length).replace(/^\/+/, "") : p.path;
     lines.push(`- [[${p.title}]]  \`${rel}\``);
   }
-  const indexPath = resolve(vault, "AI Wiki", "index.md");
+  const indexPath = resolve(vault, BRAIN_INDEX_REL);
   try {
     writeFrontmatter(indexPath, { title: "Index", type: "index" }, lines.join("\n"));
   } catch (exc) {
@@ -526,7 +464,6 @@ Commands:
   status                    Show Open Second Brain configuration status
   init                      Initialize a vault profile with required files
   doctor                    Run health checks on vault, config, and plugins
-  append-event              Append an event to the configured event log backend
   export-config             Write a redacted config snapshot
   index                     Regenerate the vault index from discovered pages
   mcp                       Run the optional MCP tool server (stdio JSON-RPC)
@@ -601,8 +538,8 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         "Read-only by default. Prints the Hermes commands you must run yourself " +
           "(this tool never touches ~/.hermes/config.yaml or the installed plugin). " +
           "With --apply-local it may remove the machine-local Open Second Brain " +
-          "config directory only. Your vault, Daily/, AI Wiki/, and Markdown notes " +
-          "are never removed. With --remove-cli it also removes the o2b/vault-log " +
+          "config directory only. Your vault and Markdown notes are never removed. " +
+          "With --remove-cli it also removes the o2b/vault-log " +
           "symlinks created by 'o2b install-cli'.\n",
       );
     }
@@ -617,8 +554,6 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
         return await cmdInit(rest);
       case "doctor":
         return await cmdDoctor(rest);
-      case "append-event":
-        return await cmdAppendEvent(rest);
       case "export-config":
         return await cmdExportConfig(rest);
       case "index":

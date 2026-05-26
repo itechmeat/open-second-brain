@@ -14,18 +14,17 @@ Agent runtime
 
 ## Core responsibilities
 
-The core should eventually provide deterministic operations for:
+The core (`src/core/`) provides deterministic operations for:
 
-- locating configuration;
-- validating configuration;
-- initializing a vault profile;
-- appending event log entries;
+- locating and validating configuration;
+- initializing a vault profile (`o2b brain init`);
+- recording taste signals, applied-evidence, and narrative milestones into `Brain/log/<YYYY-MM-DD>.md` (plus a JSONL sidecar);
+- running the nightly `dream` learning pass (deterministic, no LLM calls);
 - exporting redacted config snapshots;
-- checking vault health;
-- running migrations;
-- querying known indexes where available.
+- checking vault health (`o2b brain doctor`);
+- querying preferences, signals, and link-graph relationships through the MCP and CLI surface.
 
-The core should not depend on Hermes, Claude Code, Codex, OpenClaw, or Obsidian internals.
+The core does not depend on Hermes, Claude Code, Codex, OpenClaw, or Obsidian internals.
 
 ## Runtime adapters
 
@@ -76,32 +75,12 @@ v0 should keep Codex support simple: plugin manifest plus shared skills and scri
 
 ### OpenClaw adapter
 
-OpenClaw recognizes two plugin formats: **Native** (JS runtime module with `package.json` + `openclaw.plugin.json`) and **Bundle** (adapter directories like `.codex-plugin/`, `.claude-plugin/` mapped to OpenClaw features).
-
-Open Second Brain uses the **Native format** with a pure JavaScript entry that operates directly on the vault filesystem — no Python subprocess, no `child_process`:
-
-```text
-package.json             # openclaw.extensions → ./openclaw/index.js
-openclaw/
-  index.js               # JS entry: definePluginEntry + api.registerTool (two-arg)
-  vault.js               # Pure JS: frontmatter parse/write, slugify, wikilinks, page listing
-  event-log.js           # Pure JS: daily note creation, chronological event insertion
-openclaw.plugin.json     # Static discovery metadata (id, configSchema, contracts.tools)
-src/open_second_brain/
-  cli.py                 # Python CLI (for Hermes/standalone usage)
-  mcp.py                 # MCP server (optional, for runtimes that prefer MCP)
-.claude-plugin/          # Auto-detected by OpenClaw Bundle format
-.codex-plugin/           # Auto-detected by OpenClaw Bundle format
-```
-
-The integration flow:
-
-1. **Discovery**: OpenClaw reads `package.json`, finds `openclaw.extensions`, and loads `openclaw/index.js`.
-2. **Tool registration**: The JS entry calls `api.registerTool(tool, { name })` for each of the five tools (`second_brain_status`, `second_brain_query`, `second_brain_capture`, `event_log_append`, `vault_health`).
-3. **Pure JS execution**: Each tool's `execute()` runs entirely in the Node.js process using `node:fs/promises` and `node:path` to read/write the vault directory. No subprocess is spawned — this passes the OpenClaw security scanner which blocks `child_process` imports.
-4. **Config**: `api.pluginConfig` provides the vault path and instance name from OpenClaw's plugin config.
-
-The Python CLI (`o2b`) and MCP server (`o2b mcp`) remain available for Hermes and standalone usage, but the OpenClaw runtime is self-contained JavaScript.
+OpenClaw discovers Open Second Brain as a Native plugin via the
+`openclaw.extensions` entry in `package.json`. The entry
+(`src/openclaw/index.ts`) reads and writes the vault directory
+directly with `node:fs` / `node:path`; no subprocess is spawned, so
+the OpenClaw security scanner (which blocks `child_process` imports)
+accepts the plugin.
 
 Installation (always installs the latest from `main`; do not append `@v...`):
 
@@ -109,7 +88,9 @@ Installation (always installs the latest from `main`; do not append `@v...`):
 openclaw plugins install git:github.com/itechmeat/open-second-brain
 ```
 
-The OpenClaw adapter must remain compatible with the Hermes, Claude Code, and Codex adapters. The `o2b mcp` MCP server is still available for runtimes that prefer the MCP protocol.
+The OpenClaw adapter must remain compatible with the Hermes, Claude
+Code, and Codex adapters. The `o2b mcp` MCP server is the canonical
+way for any runtime to reach the writer / reader tools.
 
 ## Configuration model
 
@@ -135,7 +116,6 @@ runtime: hermes
 environment_name: <hostname>
 vault:
   path: <absolute-path-to-Obsidian-vault>
-  agent_dir: AI Wiki
 identity:
   agent_name: <chosen-agent-name>
   user_language: <BCP-47 tag, e.g. en or ru>
@@ -147,24 +127,13 @@ Machine-local config may contain absolute paths. It must not contain secrets.
 
 ### Vault-portable config
 
-Vault-portable config lives inside the vault and travels with backup/sync.
+Vault-portable config lives at `<vault>/Brain/_brain.yaml` and travels
+with backup/sync. It describes:
 
-Suggested paths:
-
-```text
-<vault>/<agent_dir>/_open-second-brain.yaml
-<vault>/<agent_dir>/_OPEN_SECOND_BRAIN.md
-```
-
-It describes:
-
-- owner identity;
-- language/timezone preferences;
-- vault schema;
-- write boundaries;
-- known agents;
-- event log backend;
-- durable operating rules.
+- schema version + dream / retire / confidence / snapshot thresholds;
+- optional `notes.read_paths` (user-authored folders the agent may read);
+- optional `temporal:`, `link_graph:`, `guardrails:`, `discipline_report:` tuning blocks;
+- `vault.ignore_paths` (exclusion policy for every vault walker).
 
 It must not contain secrets.
 
@@ -181,42 +150,37 @@ Recommended behavior:
 
 ## Vault layout
 
-A default vault layout may look like:
-
-```text
-AI Wiki/
-  _OPEN_SECOND_BRAIN.md
-  _open-second-brain.yaml
-  index.md
-  hot.md
-  log.md
-  identity/
-    user.md
-    agents.md
-  system/
-    config-snapshots/
-  events/
-```
-
-This layout is intentionally agent-owned. The project should not mix agent-generated wiki pages into a user's personal notes without clear boundaries.
-
-`AI Wiki/` holds the static agent-facing wiki: identity, index, hot list, and the Pay Memory subtree (`payments/`, `assets/`, `drafts/`, `reports/`, `policies/`). Agents read it through `second_brain_query` and write into Pay Memory subdirectories via the `payment_*` tools. Durable observing memory — taste signals, accreted preferences, evidence, snapshots — lives in a separate top-level `Brain/` directory described in the next section.
-
-## Brain layer
-
-`Brain/` is a top-level directory parallel to `AI Wiki/` and `Daily/`. It is the observing-memory layer: where agents record taste signals, the `dream` pass accretes them into rules, and pre-run snapshots provide reversibility.
+The agent owns one directory in the vault: `Brain/`. Pay Memory nests
+under `Brain/payments/` so the write contract stays simple ("agent
+writes only under `Brain/`"). User-authored notes (daily journals,
+weekly notes) live wherever the operator names them; the agent reads
+those paths only when they are listed in `notes.read_paths`.
 
 ```text
 Brain/
-  _brain.yaml              # schema + thresholds (validated by o2b brain doctor)
+  _brain.yaml              # schema + thresholds + notes.read_paths (validated by o2b brain doctor)
   _BRAIN.md                # operating manual for agents (rendered by o2b brain init)
+  active.md                # derived digest, auto-regenerated
   inbox/                   # raw taste signals, sig-<date>-<slug>.md
-    processed/            # signals already folded into a preference
+    processed/             # signals already folded into a preference
   preferences/             # active rules: pref-<slug>.md, status unconfirmed | confirmed
   retired/                 # ret-<slug>.md with retired_reason
   log/                     # YYYY-MM-DD.md, append-only event log (dream / apply-evidence / etc.)
+  payments/                # Pay Memory (optional, paid-action audit)
+    policies/spending.md   # spending policy + optional spending.json
+    <YYYY-MM-DD>/<slug>.md # dated receipts
+    assets/                # generated-asset notes
+    drafts/                # draft artefacts
+    reports/               # daily reports
+    _pending/              # approval workflow
   .snapshots/              # <run_id>.tar.zst, pre-run snapshots for o2b brain rollback
 ```
+
+This layout is intentionally agent-owned: every artefact Open Second
+Brain writes lives under `Brain/`. User-authored content elsewhere in
+the vault is read-only to the agent and stays under operator control.
+
+## Brain layer
 
 Three architectural invariants:
 
@@ -231,7 +195,7 @@ Agent runtime
   -> runtime adapter/plugin
     -> skills and commands (brain-memory skill, open-second-brain skill)
       -> CLI/core library (src/core/brain/*)
-        -> vault files: Brain/ (observing memory), AI Wiki/ + Daily/ (wiki + event log), Pay Memory (paid-action audit)
+        -> vault files: Brain/ (observing memory) + Brain/payments/ (paid-action audit)
 ```
 
 Full design: [`docs/plans/2026-05-15-brain-observing-memory.md`](plans/2026-05-15-brain-observing-memory.md).
@@ -249,18 +213,14 @@ scope.
 
 ## Event log
 
-The event log is append-only. It records operational events, not polished knowledge.
+The Brain event log is append-only. It records operational events,
+not polished knowledge.
 
-Default backend:
-
-```yaml
-event_log:
-  backend: daily-markdown
-  daily_dir: Daily
-  section: Agent Events
-```
-
-Later backends may include JSONL, SQLite, or both.
+Storage: `<vault>/Brain/log/<YYYY-MM-DD>.md` (Markdown for human
+reading) plus a JSONL sidecar at `<vault>/Brain/log/<YYYY-MM-DD>.jsonl`
+(machine-friendly for downstream tooling). Each event kind is one
+line per row, written through atomic temp+rename. The shared
+redactor strips secret-shaped tokens before write.
 
 ## Security rules
 

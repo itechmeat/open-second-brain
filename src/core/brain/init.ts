@@ -2,23 +2,15 @@
  * Brain layer bootstrap.
  *
  * Creates the `<vault>/Brain/` directory tree, drops the default
- * `_brain.yaml`, and renders the two Markdown templates the agent reads
- * each session: `Brain/_BRAIN.md` (operating manual for the writable
- * layer) and `AI Wiki/_OPEN_SECOND_BRAIN.md` (Brain-first vault
- * overview that replaces the legacy file).
+ * `_brain.yaml`, and renders the operating manual the agent reads each
+ * session at `Brain/_BRAIN.md`.
  *
- * Behaviour summary (design doc §15 Task 5, §12.1):
+ * Behaviour summary:
  *
  *   - Directory creation is idempotent.
  *   - `Brain/_brain.yaml` and `Brain/_BRAIN.md` are written on first
  *     run; subsequent runs without `force` skip them. `force: true`
  *     overwrites both.
- *   - `AI Wiki/_OPEN_SECOND_BRAIN.md` is **always** overwritten on every
- *     bootstrap, regardless of `force`. The design owner accepted this
- *     trade-off at near-zero current user count: the file is the
- *     instruction surface agents read first; stale copy hurts more
- *     than the (negligible) risk of overwriting a manual edit. The
- *     legacy file's prior content is not backed up.
  *   - Bootstrap refuses to run if the machine-level plugin config (the
  *     one `o2b init` writes) is missing, since callers must register
  *     the vault before any Brain operation. The error message names
@@ -41,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { defaultConfigPath } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import {
+  BRAIN_ROOT_REL,
   brainConfigPath,
   brainDirs,
   brainManualPath,
@@ -50,11 +43,7 @@ import {
   DEFAULT_BRAIN_CONFIG_YAML,
   formatPrimaryAgentYamlValue,
 } from "./policy.ts";
-import {
-  LEGACY_OVERVIEW_REL_PATH,
-  renderBrainManual,
-  renderLegacyOverview,
-} from "./templates.ts";
+import { renderBrainManual } from "./templates.ts";
 
 const STARTER_TARGETS = ["preferences", "retired", "inbox", "log"] as const;
 
@@ -111,7 +100,7 @@ export function copyStarterBundle(
     throw err;
   }
   for (const sub of STARTER_TARGETS) {
-    const dir = join(vault, "Brain", sub);
+    const dir = join(vault, BRAIN_ROOT_REL, sub);
     let entries;
     try {
       // `withFileTypes` returns Dirent objects so we avoid a `statSync`
@@ -150,7 +139,7 @@ export function copyStarterBundle(
   for (const sub of STARTER_TARGETS) {
     const srcDir = join(src, sub);
     if (!existsSync(srcDir)) continue;
-    const destDir = join(vault, "Brain", sub);
+    const destDir = join(vault, BRAIN_ROOT_REL, sub);
     // Single recursive copy per subdir — orders of magnitude fewer
     // syscalls than file-by-file. The filter rejects dotfiles
     // (`.gitkeep`, `.DS_Store`) so the bundle stays focused on
@@ -165,7 +154,7 @@ export function copyStarterBundle(
     // that we did not copy and should not surface as starter entries.
     for (const name of readdirSync(srcDir)) {
       if (name.startsWith(".")) continue;
-      copied.push(join("Brain", sub, name));
+      copied.push(join(BRAIN_ROOT_REL, sub, name));
     }
   }
   return Object.freeze({ copied });
@@ -295,24 +284,6 @@ export function bootstrapBrain(
   } else {
     atomicWriteFileSync(manualPath, manualBody);
     created.push(manualRel);
-  }
-
-  // 4. `AI Wiki/_OPEN_SECOND_BRAIN.md` — always overwritten. The
-  //    parent directory may not exist if the caller never ran
-  //    `o2b init` against this vault directly (e.g. they registered a
-  //    different vault path in the machine config and ran Brain init
-  //    elsewhere). We create it on demand: the file is meaningful even
-  //    without the rest of `AI Wiki/`.
-  const overviewPath = join(vault, LEGACY_OVERVIEW_REL_PATH);
-  const overviewRel = LEGACY_OVERVIEW_REL_PATH;
-  mkdirSync(dirname(overviewPath), { recursive: true });
-  const overviewBody = renderLegacyOverview(vault);
-  const overviewExisted = existsSync(overviewPath);
-  atomicWriteFileSync(overviewPath, overviewBody);
-  if (overviewExisted) {
-    overwritten.push(overviewRel);
-  } else {
-    created.push(overviewRel);
   }
 
   if (opts.starter === true) {

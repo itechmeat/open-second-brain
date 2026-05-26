@@ -1,24 +1,53 @@
 /**
  * Filesystem paths and date utilities for the Pay Memory layout.
  *
- * The layout sits inside `<vault>/AI Wiki/`:
+ * The layout sits inside `<vault>/Brain/payments/`:
  *   - policies/spending.md
- *   - payments/YYYY-MM-DD/<slug>.md
+ *   - YYYY-MM-DD/<slug>.md       (receipts go directly under the root)
  *   - assets/<slug>.md
- *   - drafts/<slug>.md       (written by other tools — kept here for completeness)
+ *   - drafts/<slug>.md           (written by other tools)
  *   - reports/<slug>.md
+ *   - _pending/<id>.md           (approval workflow)
  *
- * Date subdirectories use the hyphenated `YYYY-MM-DD` form (ISO 8601 calendar
- * date). This intentionally differs from the dotted `YYYY.MM.DD` used by the
- * Daily event log — the two systems are independent.
+ * Date subdirectories use the hyphenated `YYYY-MM-DD` form (ISO 8601
+ * calendar date).
  */
 
-import { join } from "node:path";
+import { join, posix } from "node:path";
+
+import { BRAIN_ROOT_REL } from "../brain/paths.ts";
 
 export {
   ensureInsideVault,
   vaultRelative,
 } from "../path-safety.ts";
+
+// ----- Canonical Pay Memory path constants ----------------------------------
+//
+// Every path the Pay Memory layer writes to is named here. Other
+// modules (receipt, report, approval, policy, MCP tool descriptions,
+// CLI help text) import these instead of repeating the literal so a
+// future rename cascades from one edit.
+
+/** Vault-relative root of Pay Memory under the Brain layer. */
+export const PAY_MEMORY_ROOT_REL = posix.join(BRAIN_ROOT_REL, "payments");
+
+/** Vault-relative Pay Memory subdirectory names. */
+export const PAY_MEMORY_POLICIES_REL = posix.join(PAY_MEMORY_ROOT_REL, "policies");
+export const PAY_MEMORY_ASSETS_REL = posix.join(PAY_MEMORY_ROOT_REL, "assets");
+export const PAY_MEMORY_DRAFTS_REL = posix.join(PAY_MEMORY_ROOT_REL, "drafts");
+export const PAY_MEMORY_REPORTS_REL = posix.join(PAY_MEMORY_ROOT_REL, "reports");
+export const PAY_MEMORY_PENDING_REL = posix.join(PAY_MEMORY_ROOT_REL, "_pending");
+
+/** Spending-policy file paths (vault-relative). */
+export const PAY_MEMORY_SPENDING_MD_REL = posix.join(
+  PAY_MEMORY_POLICIES_REL,
+  "spending.md",
+);
+export const PAY_MEMORY_SPENDING_JSON_REL = posix.join(
+  PAY_MEMORY_POLICIES_REL,
+  "spending.json",
+);
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const HHMM_RE = /^(\d{2}):(\d{2})$/;
@@ -29,21 +58,22 @@ export interface PayMemoryDirs {
   readonly assets: string;
   readonly drafts: string;
   readonly reports: string;
+  readonly pending: string;
 }
 
 export function payMemoryDirs(vault: string): PayMemoryDirs {
-  const root = join(vault, "AI Wiki");
   return {
-    policies: join(root, "policies"),
-    payments: join(root, "payments"),
-    assets: join(root, "assets"),
-    drafts: join(root, "drafts"),
-    reports: join(root, "reports"),
+    policies: join(vault, PAY_MEMORY_POLICIES_REL),
+    payments: join(vault, PAY_MEMORY_ROOT_REL),
+    assets: join(vault, PAY_MEMORY_ASSETS_REL),
+    drafts: join(vault, PAY_MEMORY_DRAFTS_REL),
+    reports: join(vault, PAY_MEMORY_REPORTS_REL),
+    pending: join(vault, PAY_MEMORY_PENDING_REL),
   };
 }
 
 export function policyPath(vault: string): string {
-  return join(payMemoryDirs(vault).policies, "spending.md");
+  return join(vault, PAY_MEMORY_SPENDING_MD_REL);
 }
 
 export function paymentsDateDir(vault: string, date: string): string {

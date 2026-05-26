@@ -15,7 +15,7 @@ import {
 import { planAction, type PlannedFile } from "./claude-memory-plan.ts";
 import { renderPreferenceFromMemory, slugifyMemoryName } from "./claude-memory-render.ts";
 import { assertSafeMemoryPath } from "./claude-memory-paths.ts";
-import { preferencePath } from "./paths.ts";
+import { BRAIN_PREFERENCES_REL, preferencePath } from "./paths.ts";
 
 export interface ImportClaudeMemoryOpts {
   readonly vault: string;
@@ -175,7 +175,7 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
 
   const applied: PlannedFile[] = [];
   if (filesToWrite.length > 0) {
-    mkdirSync(join(opts.vault, "Brain", "preferences"), { recursive: true });
+    mkdirSync(join(opts.vault, BRAIN_PREFERENCES_REL), { recursive: true });
   }
   for (const { plan, body: freshBody, sha256, slug } of filesToWrite) {
     const prefFile = preferencePath(opts.vault, slug);

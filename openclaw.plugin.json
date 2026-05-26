@@ -2,7 +2,7 @@
   "id": "open-second-brain",
   "name": "Open Second Brain",
   "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults.",
-  "version": "0.10.18",
+  "version": "0.11.0",
   "activation": { "onStartup": true },
   "skills": ["./skills"],
   "contracts": {
@@ -28,11 +28,11 @@
       },
       "agentName": {
         "type": "string",
-        "description": "Identity used in Daily/*.md event log entries (e.g. 'openclaw-main'). Falls back to VAULT_AGENT_NAME env, then to '@agent'."
+        "description": "Identity used in Brain/log/*.md event log entries (e.g. 'openclaw-main'). Falls back to VAULT_AGENT_NAME env, then to '@agent'."
       },
       "timezone": {
         "type": "string",
-        "description": "IANA timezone name (e.g. 'Europe/Belgrade', 'America/New_York', 'UTC') used to stamp Daily/*.md entries in the user's local time. Falls back to VAULT_TIMEZONE env, then to the host's local clock."
+        "description": "IANA timezone name (e.g. 'Europe/Belgrade', 'America/New_York', 'UTC') used to stamp Brain/log/*.md entries in the user's local time. Falls back to VAULT_TIMEZONE env, then to the host's local clock."
       },
       "mcpEnabled": {
         "type": "boolean",
@@ -52,11 +52,11 @@
     },
     "agentName": {
       "label": "Agent Name",
-      "help": "Identity used in Daily/*.md as @agent-name for event log entries."
+      "help": "Identity used in Brain/log/*.md as @agent-name for event log entries."
     },
     "timezone": {
       "label": "Timezone",
-      "help": "IANA timezone name (e.g. Europe/Belgrade) for HH:MM stamps in Daily/*.md."
+      "help": "IANA timezone name (e.g. Europe/Belgrade) for HH:MM stamps in Brain/log/*.md."
     },
     "mcpEnabled": {
       "label": "Enable MCP Server",

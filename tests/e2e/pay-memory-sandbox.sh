@@ -97,7 +97,7 @@ bun run "$ROOT/src/cli/main.ts" capture-asset \
   --title "AAPL Quote (sandbox)" \
   --service "debugger.pay.sh/mpp" \
   --result-url "https://debugger.pay.sh/mpp/quote/AAPL" \
-  --source-receipt "AI Wiki/payments/$DATE/aapl-quote-sandbox.md" \
+  --source-receipt "Brain/payments/$DATE/aapl-quote-sandbox.md" \
   --slug "aapl-quote-sandbox"
 
 echo
@@ -110,7 +110,7 @@ bun run "$ROOT/src/cli/main.ts" payment-report \
 
 echo
 echo "==> generated files"
-find "$VAULT/AI Wiki" -type f | sort
+find "$VAULT/Brain/payments" -type f | sort
 
 echo
 echo "==> done: vault preserved at $VAULT"

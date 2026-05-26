@@ -13,7 +13,7 @@ pinned: false
 scope: infra
 kind: brain-retired
 id: ret-prefer-curl-over-wget
-status: retired
+_status: retired
 retired_at: "2026-05-15T18:00:00.000Z"
 retired_reason: stale-no-evidence
 retired_by: "[[Brain/log/2026-05-15]]"

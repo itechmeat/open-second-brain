@@ -71,6 +71,6 @@ describe("DEFAULT_POLICY_TEMPLATE", () => {
 
   test("documents the post-call evidence the agent must save", () => {
     expect(DEFAULT_POLICY_TEMPLATE).toContain("raw payment-tool output");
-    expect(DEFAULT_POLICY_TEMPLATE).toContain("AI Wiki/payments/<date>/");
+    expect(DEFAULT_POLICY_TEMPLATE).toContain("Brain/payments/<date>/");
   });
 });

@@ -1,10 +1,10 @@
 /**
  * Daily payment report aggregator.
  *
- * `aggregateReceipts` walks `<vault>/AI Wiki/payments/<date>/`, parses each
+ * `aggregateReceipts` walks `<vault>/Brain/payments/<date>/`, parses each
  * `.md` file's frontmatter, and returns the receipts that match the expected
  * `type: agent-payment-receipt` shape. `writeReport` then renders a Markdown
- * summary into `<vault>/AI Wiki/reports/<slug>.md`.
+ * summary into `<vault>/Brain/payments/reports/<slug>.md`.
  *
  * Receipts whose frontmatter cannot be parsed (or whose `type` is missing)
  * are silently skipped — the report is best-effort and meant to surface

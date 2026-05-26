@@ -54,7 +54,12 @@ import {
   manifestSidecarPath,
   writeManifestSidecar,
 } from "./manifest.ts";
-import { brainDirs, snapshotPath, validateRunId } from "./paths.ts";
+import {
+  BRAIN_ROOT_REL,
+  brainDirs,
+  snapshotPath,
+  validateRunId,
+} from "./paths.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -101,8 +106,8 @@ export interface SnapshotInfo {
   readonly size_bytes: number;
   /**
    * Absolute path of the sidecar manifest, or `null` when the
-   * archive predates v0.10.6 (legacy snapshot without drift-check
-   * support). Rollback gracefully degrades on `null`.
+   * sidecar write failed at snapshot time (read-only directory or
+   * similar). Rollback gracefully degrades on `null`.
    */
   readonly manifest_path: string | null;
 }
@@ -211,7 +216,7 @@ export function createSnapshot(
   // Build `tar -c -C <vault> Brain/<entry> Brain/<entry>...` so paths
   // inside the archive start at `Brain/` — matching the rollback
   // contract that the archive is "the Brain/ tree".
-  const tarArgs = ["-c", "-C", vault, "--", ...topEntries.map((e) => `Brain/${e}`)];
+  const tarArgs = ["-c", "-C", vault, "--", ...topEntries.map((e) => `${BRAIN_ROOT_REL}/${e}`)];
 
   if (tools.zstd) {
     runArchivePipeline(["tar", tarArgs], ["zstd", ["-19", "-q", "-o", outPath, "-"]], runId);
@@ -234,13 +239,13 @@ export function createSnapshot(
     );
   }
 
-  // Sidecar manifest (§22 + §5-tail). Failure is non-fatal: the
-  // archive is the load-bearing artifact, and a snapshot without a
-  // manifest just degrades rollback's drift detection to the
-  // pre-v0.10.6 silent-overwrite path (with a warning at rollback
-  // time). The alternative — failing the whole snapshot because the
-  // sidecar could not be written — would block dream from making any
-  // progress on a read-only `.snapshots/` directory.
+  // Sidecar manifest. Failure is non-fatal: the archive is the
+  // load-bearing artifact, and a snapshot without a manifest just
+  // degrades rollback's drift detection to a silent-overwrite path
+  // (with a warning at rollback time). The alternative — failing
+  // the whole snapshot because the sidecar could not be written —
+  // would block dream from making any progress on a read-only
+  // `.snapshots/` directory.
   try {
     writeManifestSidecar(vault, runId, buildManifest(dirs.brain));
   } catch (err) {
@@ -438,8 +443,9 @@ export function pruneSnapshots(
       // stays put. The next dream run will try again.
     }
     // Remove the matching sidecar manifest if present. Independent
-    // try/catch: a missing sidecar (legacy snapshot from pre-v0.10.6)
-    // must not abort the prune of subsequent victims.
+    // try/catch so a missing sidecar (snapshot whose sidecar write
+    // failed at creation time) must not abort the prune of
+    // subsequent victims.
     if (v.manifest_path !== null) {
       try {
         rmSync(v.manifest_path, { force: true });
@@ -580,10 +586,10 @@ export function extractSnapshotToTemp(
       }
     }
 
-    const extractedBrain = join(tmp, "Brain");
+    const extractedBrain = join(tmp, BRAIN_ROOT_REL);
     if (!existsSync(extractedBrain)) {
       throw new BrainSnapshotError(
-        "archive does not contain a Brain/ root",
+        `archive does not contain a ${BRAIN_ROOT_REL}/ root`,
         runId,
       );
     }

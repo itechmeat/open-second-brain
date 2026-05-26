@@ -19,6 +19,19 @@ import { renderDigest } from "../../../src/core/brain/digest.ts";
 
 let vault: string;
 
+const DERIVED_KEYS = new Set([
+  "status",
+  "applied_count",
+  "violated_count",
+  "last_evidence_at",
+  "confidence",
+  "confidence_value",
+  "evidenced_by",
+  "contradicted_by",
+  "lifecycle",
+  "confirmed_at",
+]);
+
 function writePref(slug: string, fields: Record<string, string>) {
   const lines = [
     "---",
@@ -26,7 +39,10 @@ function writePref(slug: string, fields: Record<string, string>) {
     `id: pref-${slug}`,
     "tags: [brain, brain/preference]",
   ];
-  for (const [k, v] of Object.entries(fields)) lines.push(`${k}: ${v}`);
+  for (const [k, v] of Object.entries(fields)) {
+    const key = DERIVED_KEYS.has(k) ? `_${k}` : k;
+    lines.push(`${key}: ${v}`);
+  }
   lines.push("---", "");
   writeFileSync(
     join(vault, "Brain", "preferences", `pref-${slug}.md`),

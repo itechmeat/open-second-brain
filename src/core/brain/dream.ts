@@ -1449,12 +1449,10 @@ function planRefresh(
     // still has the v0.9.x placeholder will fail the body check and
     // get rewritten on the next pass.
     const previousValue = rec.pref.confidence_value;
-    // For numeric drift, `null` on disk (legacy pre-v0.10.3 file) is
-    // treated as "matches whatever we just computed" so a no-op
-    // rerun stays a no-op. The body-bytes check in
-    // `wouldRewritePreference` below still triggers the one-off
-    // migration write because the legacy frontmatter shape will not
-    // match the new one byte-for-byte.
+    // A `null` previous value (file not yet touched by dream) is
+    // treated as "matches whatever we just computed" — the
+    // body-bytes check in `wouldRewritePreference` is what triggers
+    // the write that populates the field.
     const valueDifferent =
       previousValue !== null
       && Math.abs(previousValue - confidence.value) > 1e-6;
@@ -1528,35 +1526,20 @@ function planRefresh(
 }
 
 /**
- * Confidence computation. Returns both the categorical band (the
- * existing agent-visible contract) and the numeric value behind it
- * (§10 Tier-A addition).
+ * Confidence computation. Returns both the numeric value and the
+ * categorical band derived from it.
  *
- * The numeric value is `Wilson 95% lower bound × freshness decay`:
+ * `value = wilson_low(applied, n) * freshness`:
  *
- *   - `wilson_low(applied, n)` where `n = applied + violated` —
- *     a conservative lower bound on the application rate. `n == 0`
- *     yields `0`.
+ *   - `wilson_low(applied, n)` where `n = applied + violated` -
+ *     a conservative 95% lower bound on the application rate.
+ *     `n == 0` yields `0`.
  *   - `freshness` linearly decays from `1.0` at age 0 to `0.0` at
  *     `retire.stale_evidence_days`. `null` last_evidence_at → `0`.
  *
- * Band derivation is the **max** of two views:
- *
- *   1. The legacy step-function (kept verbatim) — preserves every
- *      published boundary so existing tests and agent contracts stay
- *      intact: `applied <= low_max_applied` ⇒ `low`,
- *      `violated >= applied` ⇒ `low`, `applied >= high_min_applied ∧
- *      violated == 0 ∧ fresh` ⇒ `high`, else `medium`.
- *   2. The numeric thresholds (`medium_min`, `high_min`) applied to
- *      `value` — gives a `low | medium | high` view that can only
- *      lift the legacy band, never lower it.
- *
- * Taking the max means a future operator can lower `high_min` to
- * promote `medium` prefs to `high` based on observed performance,
- * without ever demoting a pref that the legacy view already calls
- * `high` (because the legacy floor sticks). The numeric value is
- * always returned and is what the digest's drop tracker compares
- * across runs.
+ * Band thresholds (`confidence.medium_min`, `confidence.high_min`)
+ * are applied to `value` directly. The numeric value is what the
+ * digest's drop tracker compares across runs.
  */
 export interface ConfidenceComputeResult {
   readonly value: number;
@@ -1601,47 +1584,14 @@ export function computeConfidence(
   const rawValue = wilsonLow * freshness;
   const value = Math.round(rawValue * 10000) / 10000;
 
-  // Legacy step-function band (the published contract).
-  let legacyBand: BrainConfidence = BRAIN_CONFIDENCE.medium;
-  if (applied <= cfg.confidence.low_max_applied) {
-    legacyBand = BRAIN_CONFIDENCE.low;
-  } else if (applied > 0 && violated >= applied) {
-    legacyBand = BRAIN_CONFIDENCE.low;
-  } else {
-    let highEligibleFresh = false;
-    if (lastEvidenceAt) {
-      const ageMs = now.getTime() - Date.parse(lastEvidenceAt);
-      const freshLimitMs =
-        cfg.retire.stale_evidence_days *
-        cfg.confidence.high_freshness_factor *
-        24 *
-        3600 *
-        1000;
-      highEligibleFresh = Number.isFinite(ageMs) && ageMs < freshLimitMs;
-    }
-    if (
-      applied >= cfg.confidence.high_min_applied
-      && violated === 0
-      && highEligibleFresh
-    ) {
-      legacyBand = BRAIN_CONFIDENCE.high;
-    } else {
-      legacyBand = BRAIN_CONFIDENCE.medium;
-    }
-  }
-
-  // Numeric-threshold band (can only lift legacy when paired via max).
-  let numericBand: BrainConfidence;
+  let band: BrainConfidence;
   if (value >= cfg.confidence.high_min) {
-    numericBand = BRAIN_CONFIDENCE.high;
+    band = BRAIN_CONFIDENCE.high;
   } else if (value >= cfg.confidence.medium_min) {
-    numericBand = BRAIN_CONFIDENCE.medium;
+    band = BRAIN_CONFIDENCE.medium;
   } else {
-    numericBand = BRAIN_CONFIDENCE.low;
+    band = BRAIN_CONFIDENCE.low;
   }
-
-  const band =
-    BAND_RANK[numericBand] > BAND_RANK[legacyBand] ? numericBand : legacyBand;
   return Object.freeze({ value, band });
 }
 

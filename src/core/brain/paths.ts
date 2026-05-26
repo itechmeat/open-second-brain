@@ -25,11 +25,37 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 import { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 
 export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
+
+// ----- Canonical vault-relative path constants ------------------------------
+//
+// Single source of truth. Every module that builds a path inside the
+// Brain layer imports these instead of repeating the literal. A
+// future rename ("Brain" → something else) is a one-line change here.
+
+/** Vault-relative root of the Brain layer. */
+export const BRAIN_ROOT_REL = "Brain";
+
+/** Vault-relative Brain subdirectory names. */
+export const BRAIN_INBOX_REL = posix.join(BRAIN_ROOT_REL, "inbox");
+export const BRAIN_PROCESSED_REL = posix.join(BRAIN_INBOX_REL, "processed");
+export const BRAIN_PREFERENCES_REL = posix.join(BRAIN_ROOT_REL, "preferences");
+export const BRAIN_RETIRED_REL = posix.join(BRAIN_ROOT_REL, "retired");
+export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
+export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
+
+/** Brain-internal artefact filenames at the root of `Brain/`. */
+export const BRAIN_CONFIG_FILE = "_brain.yaml";
+export const BRAIN_MANUAL_FILE = "_BRAIN.md";
+export const BRAIN_ACTIVE_FILE = "active.md";
+export const BRAIN_INDEX_FILE = "_INDEX.md";
+
+/** Vault-relative path of the `o2b index` output file. */
+export const BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
@@ -59,26 +85,32 @@ export interface BrainDirs {
  * `readdirSync`. Each path is verified to resolve inside the vault.
  */
 export function brainDirs(vault: string): BrainDirs {
-  const brain = ensureInsideVault(join(vault, "Brain"), vault);
+  const brain = ensureInsideVault(join(vault, BRAIN_ROOT_REL), vault);
   return {
     brain,
-    inbox: ensureInsideVault(join(brain, "inbox"), vault),
-    processed: ensureInsideVault(join(brain, "inbox", "processed"), vault),
-    preferences: ensureInsideVault(join(brain, "preferences"), vault),
-    retired: ensureInsideVault(join(brain, "retired"), vault),
-    log: ensureInsideVault(join(brain, "log"), vault),
-    snapshots: ensureInsideVault(join(brain, ".snapshots"), vault),
+    inbox: ensureInsideVault(join(vault, BRAIN_INBOX_REL), vault),
+    processed: ensureInsideVault(join(vault, BRAIN_PROCESSED_REL), vault),
+    preferences: ensureInsideVault(join(vault, BRAIN_PREFERENCES_REL), vault),
+    retired: ensureInsideVault(join(vault, BRAIN_RETIRED_REL), vault),
+    log: ensureInsideVault(join(vault, BRAIN_LOG_REL), vault),
+    snapshots: ensureInsideVault(join(vault, BRAIN_SNAPSHOTS_REL), vault),
   };
 }
 
 /** Path of `Brain/_brain.yaml`. */
 export function brainConfigPath(vault: string): string {
-  return ensureInsideVault(join(brainDirs(vault).brain, "_brain.yaml"), vault);
+  return ensureInsideVault(
+    join(brainDirs(vault).brain, BRAIN_CONFIG_FILE),
+    vault,
+  );
 }
 
 /** Path of the Brain operating manual rendered into the vault. */
 export function brainManualPath(vault: string): string {
-  return ensureInsideVault(join(brainDirs(vault).brain, "_BRAIN.md"), vault);
+  return ensureInsideVault(
+    join(brainDirs(vault).brain, BRAIN_MANUAL_FILE),
+    vault,
+  );
 }
 
 /**
@@ -88,7 +120,10 @@ export function brainManualPath(vault: string): string {
  * `osb://preferences/active`.
  */
 export function brainActivePath(vault: string): string {
-  return ensureInsideVault(join(brainDirs(vault).brain, "active.md"), vault);
+  return ensureInsideVault(
+    join(brainDirs(vault).brain, BRAIN_ACTIVE_FILE),
+    vault,
+  );
 }
 
 /** Active-signal path: `Brain/inbox/sig-<date>-<slug>.md`. */

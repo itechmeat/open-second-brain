@@ -57,15 +57,13 @@ describe("bootstrapBrain — empty vault", () => {
       expect(statSync(dir).isDirectory()).toBe(true);
     }
 
-    // Files: _brain.yaml, _BRAIN.md, AI Wiki/_OPEN_SECOND_BRAIN.md.
+    // Files: _brain.yaml, _BRAIN.md. (No more AI Wiki/_OPEN_SECOND_BRAIN.md
+    // in v0.11.0; the operating manual lives at Brain/_BRAIN.md only.)
     expect(existsSync(join(vault, "Brain", "_brain.yaml"))).toBe(true);
     expect(existsSync(join(vault, "Brain", "_BRAIN.md"))).toBe(true);
-    expect(existsSync(join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"))).toBe(
-      true,
-    );
 
-    // Counts: three created, none overwritten, none skipped.
-    expect(result.created.length).toBe(3);
+    // Counts: two created, none overwritten, none skipped.
+    expect(result.created.length).toBe(2);
     expect(result.overwritten.length).toBe(0);
     expect(result.skipped.length).toBe(0);
 
@@ -78,20 +76,11 @@ describe("bootstrapBrain — empty vault", () => {
     // wrong-template / no-substitution regression cheaply.
     const manual = readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8");
     expect(manual).toContain("# Brain — operating manual");
-
-    // Legacy overview carries the Brain-first heading and mentions the
-    // two writable surfaces.
-    const overview = readFileSync(
-      join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"),
-      "utf8",
-    );
-    expect(overview).toContain("Open Second Brain");
-    expect(overview).toContain("Brain/");
   });
 });
 
 describe("bootstrapBrain — idempotent rerun", () => {
-  test("second invocation without force skips Brain/ files and overwrites the legacy overview", () => {
+  test("second invocation without force skips both Brain/ files", () => {
     // First run sets the baseline.
     bootstrapBrain(vault, { configPath });
 
@@ -112,19 +101,9 @@ describe("bootstrapBrain — idempotent rerun", () => {
       "user manual edits\n",
     );
 
-    // Legacy overview is ALWAYS overwritten by design (zero-active-users
-    // trade-off; see §12.1 of the design doc and the init.ts comment).
-    expect(second.overwritten).toContain(
-      join("AI Wiki", "_OPEN_SECOND_BRAIN.md"),
-    );
-    const overview = readFileSync(
-      join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"),
-      "utf8",
-    );
-    expect(overview).toContain("Open Second Brain");
-
-    // Nothing newly created on the second run.
+    // Nothing newly created or overwritten on the second run.
     expect(second.created.length).toBe(0);
+    expect(second.overwritten.length).toBe(0);
   });
 
   test("directories are recreated idempotently with no error", () => {
@@ -135,25 +114,17 @@ describe("bootstrapBrain — idempotent rerun", () => {
 });
 
 describe("bootstrapBrain — force overwrite", () => {
-  test("force: true rewrites all three managed files", () => {
+  test("force: true rewrites both managed files", () => {
     bootstrapBrain(vault, { configPath });
 
     // Stomp on the canonical content so we can detect the rewrite.
     writeFileSync(join(vault, "Brain", "_brain.yaml"), "stale\n", "utf8");
     writeFileSync(join(vault, "Brain", "_BRAIN.md"), "stale\n", "utf8");
-    writeFileSync(
-      join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"),
-      "stale\n",
-      "utf8",
-    );
 
     const result = bootstrapBrain(vault, { configPath, force: true });
 
     expect(result.overwritten).toContain(join("Brain", "_brain.yaml"));
     expect(result.overwritten).toContain(join("Brain", "_BRAIN.md"));
-    expect(result.overwritten).toContain(
-      join("AI Wiki", "_OPEN_SECOND_BRAIN.md"),
-    );
     expect(result.skipped.length).toBe(0);
 
     expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
@@ -161,9 +132,6 @@ describe("bootstrapBrain — force overwrite", () => {
     );
     expect(
       readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8"),
-    ).not.toBe("stale\n");
-    expect(
-      readFileSync(join(vault, "AI Wiki", "_OPEN_SECOND_BRAIN.md"), "utf8"),
     ).not.toBe("stale\n");
   });
 });

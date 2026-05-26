@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { brainDirs } from "./paths.ts";
+import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 
 export const TOKEN_WARN_THRESHOLD_DEFAULT = 200_000;
@@ -112,7 +112,7 @@ export function computeTokenFootprint(
   // already accounted for. We do not recurse into unknown subdirs
   // so a runaway plugin dropping junk under Brain/exotic-thing/ is
   // not silently included; the digest action list flags it instead.
-  const brainRoot = join(vault, "Brain");
+  const brainRoot = join(vault, BRAIN_ROOT_REL);
   if (existsSync(brainRoot)) {
     let otherTokens = 0;
     let otherFiles = 0;

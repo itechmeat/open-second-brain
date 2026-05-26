@@ -17,12 +17,6 @@
  *
  * Each slice owns its own handlers and tool definitions; this file
  * only assembles them in a stable order and applies scope filtering.
- *
- * §32 (v0.10.8) retires `event_log_append` and `second_brain_capture`
- * from every runtime. The `appendEvent` function in
- * `src/core/event-log.ts` stays for the human-side CLI verb
- * (`o2b append-event`) and cron-jobs; the MCP surface no longer
- * advertises either tool.
  */
 
 import {
@@ -162,11 +156,6 @@ async function toolQuery(ctx: ServerContext, args: Record<string, unknown>): Pro
     pages: matched,
   };
 }
-
-// §32G (v0.10.8): the `event_log_append` MCP handler is gone. The
-// bare `appendEvent` function in `src/core/event-log.ts` stays for
-// the CLI verb (`o2b append-event`) and cron-jobs that target the
-// human-side `Daily/` log; the MCP surface no longer advertises it.
 
 async function toolVaultHealth(
   ctx: ServerContext,

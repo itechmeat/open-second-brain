@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { BRAIN_ROOT_REL } from "./paths.ts";
 
 export interface ClaudeMemoryManifestEntry {
   readonly pref_id: string;
@@ -15,7 +16,7 @@ export interface ClaudeMemoryManifest {
 }
 
 function manifestPath(vault: string): string {
-  return join(vault, "Brain", ".imports", "claude-memory.json");
+  return join(vault, BRAIN_ROOT_REL, ".imports", "claude-memory.json");
 }
 
 /**

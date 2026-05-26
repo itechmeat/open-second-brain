@@ -43,8 +43,8 @@ describe("DEFAULT_BRAIN_CONFIG", () => {
     expect(DEFAULT_BRAIN_CONFIG.dream.contradiction_window_days).toBe(14);
     expect(DEFAULT_BRAIN_CONFIG.retire.stale_evidence_days).toBe(90);
     expect(DEFAULT_BRAIN_CONFIG.confidence.low_max_applied).toBe(2);
-    expect(DEFAULT_BRAIN_CONFIG.confidence.high_min_applied).toBe(10);
-    expect(DEFAULT_BRAIN_CONFIG.confidence.high_freshness_factor).toBe(0.8);
+    expect(DEFAULT_BRAIN_CONFIG.confidence.medium_min).toBe(0.40);
+    expect(DEFAULT_BRAIN_CONFIG.confidence.high_min).toBe(0.75);
     expect(DEFAULT_BRAIN_CONFIG.snapshots.retention_count).toBe(10);
   });
 
@@ -79,7 +79,7 @@ describe("validateBrainConfig — happy path", () => {
     const config = validateBrainConfig({ schema_version: 1 }, "<test>");
     expect(config.dream.candidate_threshold).toBe(3);
     expect(config.retire.stale_evidence_days).toBe(90);
-    expect(config.confidence.high_freshness_factor).toBe(0.8);
+    expect(config.confidence.medium_min).toBe(0.40);
     expect(config.snapshots.retention_count).toBe(10);
   });
 
@@ -232,38 +232,6 @@ describe("validateBrainConfig — error cases", () => {
         "<test>",
       ),
     ).toThrow(/positive integer/);
-  });
-
-  test("high_freshness_factor <= 0 → error", () => {
-    expect(() =>
-      validateBrainConfig(
-        { schema_version: 1, confidence: { high_freshness_factor: 0 } },
-        "<test>",
-      ),
-    ).toThrow(/\(0, 1\]/);
-    expect(() =>
-      validateBrainConfig(
-        { schema_version: 1, confidence: { high_freshness_factor: -0.1 } },
-        "<test>",
-      ),
-    ).toThrow(/\(0, 1\]/);
-  });
-
-  test("high_freshness_factor > 1 → error", () => {
-    expect(() =>
-      validateBrainConfig(
-        { schema_version: 1, confidence: { high_freshness_factor: 1.5 } },
-        "<test>",
-      ),
-    ).toThrow(/\(0, 1\]/);
-  });
-
-  test("high_freshness_factor == 1 is accepted (inclusive upper bound)", () => {
-    const cfg = validateBrainConfig(
-      { schema_version: 1, confidence: { high_freshness_factor: 1 } },
-      "<test>",
-    );
-    expect(cfg.confidence.high_freshness_factor).toBe(1);
   });
 
   test("snapshots.retention_count must be positive integer", () => {
@@ -537,11 +505,11 @@ describe("parseBrainYaml", () => {
 
   test("parses inline scalar arrays", () => {
     const parsed = parseBrainYaml(
-      `schema_version: 1\nvault:\n  ignore_paths: [Drafts, "AI Wiki/cache"]\n`,
+      `schema_version: 1\nvault:\n  ignore_paths: [Drafts, "Drafts/cache"]\n`,
     );
     expect((parsed["vault"] as { ignore_paths: unknown }).ignore_paths).toEqual([
       "Drafts",
-      "AI Wiki/cache",
+      "Drafts/cache",
     ]);
   });
 

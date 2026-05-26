@@ -17,21 +17,21 @@ fallback exists.
 
 `o2b init` persists two values into `~/.config/open-second-brain/config.yaml`:
 
-- **`agent_name`** — prefix used in every `Daily/` entry and every
-  `Brain/log/` event written by an MCP server pointing at this vault.
-  Pick a deliberate value (`<runtime>-<host>` is a good default).
+- **`agent_name`** — prefix attached to every `Brain/log/` event the
+  MCP server records against this vault. Pick a deliberate value
+  (`<runtime>-<host>` is a good default).
 - **`timezone`** — IANA name (`Europe/Belgrade`, `America/New_York`,
-  `UTC`). Used to stamp `Daily/` entries regardless of the host's
+  `UTC`). Used to stamp event timestamps regardless of the host's
   local clock.
 
 If the vault was initialized previously, check the registry first:
 
 - `~/.config/open-second-brain/config.yaml` `agent_name` (authoritative)
-- `<vault>/AI Wiki/identity/agents.md` (human-readable list)
-- `<vault>/Daily/*.md` (recurring `@<name>` lines)
+- `<vault>/Brain/_brain.yaml` `primary_agent` (when set)
+- `<vault>/Brain/log/*.{md,jsonl}` (recurring `agent` field)
 
-A repeat `o2b init --agent-name X` is safe: it appends `X` to the
-registry without removing the previous agents.
+A repeat `o2b init --agent-name X` is safe — it updates the
+machine-local config in place.
 
 ## Vault path discovery
 
@@ -57,9 +57,9 @@ o2b install --check
 (per-target managed-block / MCP-ping verification). `o2b doctor`
 covers vault invariants — they are complementary, not substitutes.
 
-Then send one event without an explicit `agent` argument and confirm
-that the new `Daily/YYYY.MM.DD.md` line begins with the chosen
-`@<agent_name>` prefix, not the literal `@agent` placeholder.
+Then call `brain_note` once (via MCP or `o2b brain note "..."` on the
+CLI) and confirm that the new line in `Brain/log/<today>.md` carries
+the chosen `agent` value, not the literal `agent` placeholder.
 
 ## Plays well with codegraph
 

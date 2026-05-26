@@ -362,11 +362,9 @@ async function toolBrainApplyEvidence(
 // ----- brain_note (§32B, v0.10.8) ------------------------------------------
 
 /**
- * Append one narrative-milestone line to today's Brain log. This is the
- * Brain-native replacement for the deprecated `event_log_append` tool:
- * agents now record release / merged-PR / discovered-fact lines under
- * the `note` event kind in `Brain/log/<today>.md` (and the JSONL
- * sidecar) instead of falling back to `Daily/`.
+ * Append one narrative-milestone line to today's Brain log. Agents
+ * record release / merged-PR / discovered-fact lines under the `note`
+ * event kind in `Brain/log/<today>.md` (and the JSONL sidecar).
  *
  * The body lives in `appendBrainNote` so the CLI verb (`o2b brain
  * note`) and this MCP handler share one code path. Validation errors

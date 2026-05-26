@@ -32,8 +32,7 @@ Brain verbs (observing memory):
                    --dry-run previews via the same diff renderer)
   doctor              Validate Brain invariants (--strict promotes warnings to exit 2)
   backlinks           List inbound references to a Brain artifact id
-  migrate-frontmatter Rewrite legacy 'status:' / 'applied_count:' keys to '_status:' / '_applied_count:'
-  scan-inline         Capture @osb markers from vault markdown files (Daily/, project notes, etc.)
+  scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a Claude/Codex/Hermes session .jsonl (or directory)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
@@ -123,12 +122,6 @@ export const VERB_HELP: Record<string, string> = {
   backlinks:
     "usage: o2b brain backlinks <id> [--vault <path>] [--json]\n" +
     "List inbound references to the given Brain artifact id (preference, retired, signal).\n",
-  "migrate-frontmatter":
-    "usage: o2b brain migrate-frontmatter [--vault <path>] [--apply] [--yes] [--json]\n" +
-    "Rewrite legacy Group C frontmatter keys ('status:', 'applied_count:', ...)\n" +
-    "to the '_'-prefixed shape across Brain/preferences/ and Brain/retired/.\n" +
-    "Default is --dry-run; --apply takes a pre-run snapshot (rollback via run_id).\n" +
-    "--apply requires --yes in non-interactive mode (--json or non-TTY stdin).\n",
   "set-primary":
     "usage: o2b brain set-primary <name> [--vault <path>] [--json]\n" +
     "       o2b brain set-primary --clear [--vault <path>] [--json]\n" +
@@ -187,9 +180,9 @@ export const VERB_HELP: Record<string, string> = {
   upgrade:
     "usage: o2b brain upgrade [--vault <path>] [--dry-run | --apply | --check]\n" +
     "                          [--yes] [--json]\n" +
-    "Migrate the three release-owned files (`Brain/_brain.yaml`,\n" +
-    "`Brain/_BRAIN.md`, `AI Wiki/_OPEN_SECOND_BRAIN.md`) forward to the\n" +
-    "shape the installed open-second-brain release ships.\n" +
+    "Migrate the release-owned files (`Brain/_brain.yaml`,\n" +
+    "`Brain/_BRAIN.md`) forward to the shape the installed\n" +
+    "open-second-brain release ships.\n" +
     "User-owned content (preferences/, retired/, inbox/, log/) is\n" +
     "never touched.\n" +
     "--dry-run (default) prints a per-file plan with a unified diff\n" +
@@ -200,9 +193,8 @@ export const VERB_HELP: Record<string, string> = {
     "via run_id) and rewrites every pending file. Requires --yes in\n" +
     "non-interactive mode (--json or non-TTY stdin).\n" +
     "_brain.yaml merge is purely additive: missing schema-keys are\n" +
-    "appended, existing values stay. _BRAIN.md and\n" +
-    "_OPEN_SECOND_BRAIN.md are byte-compared against the rendered\n" +
-    "template and overwritten when they differ.\n",
+    "appended, existing values stay. _BRAIN.md is byte-compared\n" +
+    "against the rendered template and overwritten when it differs.\n",
   explorer:
     "usage: o2b brain explorer [--port <n>] [--vault <path>]\n" +
     "       o2b brain explorer --export <path> [--force] [--vault <path>]\n" +

@@ -65,26 +65,6 @@ import type { PageTier } from "./page-meta/tier.ts";
 // ----- Errors ---------------------------------------------------------------
 
 /**
- * Raised when a preference / retired file carries the same Group C
- * field in both legacy (`status:`) and `_`-prefixed (`_status:`)
- * shapes. The doctor downgrades this to a `frontmatter-double-shape`
- * warning; `o2b brain migrate-frontmatter` aborts on it. Doing the
- * dispatch by typed class (rather than regex-matching the message)
- * keeps the contract stable across error-text rewording.
- */
-export class BrainDoubleShapeError extends Error {
-  readonly field: string;
-  constructor(field: string) {
-    super(
-      `preference field collision: both '_${field}' and legacy '${field}' present; ` +
-        `pick one (run \`o2b brain migrate-frontmatter --apply\` or hand-edit)`,
-    );
-    this.name = "BrainDoubleShapeError";
-    this.field = field;
-  }
-}
-
-/**
  * Raised when a preference / retired file disagrees with the folder
  * it lives in. Surfaces both pieces of information so the caller (and
  * `o2b brain doctor`) can render an actionable message.
@@ -482,26 +462,23 @@ export const DERIVED_FIELDS: ReadonlyArray<string> = Object.freeze([
 ]);
 
 /**
- * Resolve dual-shape Group C keys to their canonical (un-prefixed)
- * form so every downstream `meta[name]` call site keeps working. When
- * both `name` and `_name` are present in the same file, throws
- * {@link BrainDoubleShapeError} — the manual-edit corruption case
- * `brain_doctor` surfaces as `frontmatter-double-shape`.
- *
- * Returns a shallow copy of `meta`; original is untouched. Exported
- * because the backlink index and other raw-frontmatter consumers
- * need the same normalisation rules.
+ * Rename `_`-prefixed Group C keys (`_status`, `_applied_count`, ...)
+ * to their canonical un-prefixed form so every downstream
+ * `meta[name]` call site keeps working. Returns a shallow copy of
+ * `meta`; original is untouched. Exported because the backlink
+ * index and other raw-frontmatter consumers need the same rule.
  */
 export function normalizeDerivedKeys(meta: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...meta };
   for (const name of DERIVED_FIELDS) {
-    const prefixed = `_${name}`;
-    const hasLegacy = name in out && out[name] !== undefined;
-    const hasModern = prefixed in out && out[prefixed] !== undefined;
-    if (hasLegacy && hasModern) {
-      throw new BrainDoubleShapeError(name);
+    if (name in out && out[name] !== undefined) {
+      throw new Error(
+        `frontmatter field '${name}' must use the '_'-prefixed shape ('_${name}'); ` +
+          "un-prefixed Group C keys are no longer accepted",
+      );
     }
-    if (hasModern) {
+    const prefixed = `_${name}`;
+    if (prefixed in out && out[prefixed] !== undefined) {
       out[name] = out[prefixed];
       delete out[prefixed];
     }
@@ -515,10 +492,9 @@ export function normalizeDerivedKeys(meta: Record<string, unknown>): Record<stri
  * the file lives in `preferences/` but its `status` reads `retired`
  * (or any other state outside `unconfirmed` / `confirmed`).
  *
- * Accepts both the legacy frontmatter shape (`status:`,
- * `applied_count:`, …) and the new `_`-prefixed shape (`_status:`,
- * `_applied_count:`, …). Presence of both forms for the same field
- * is a hard error — see {@link normalizeDerivedKeys}.
+ * Derived Group C fields use the `_`-prefixed shape on disk
+ * (`_status:`, `_applied_count:`, ...); {@link normalizeDerivedKeys}
+ * renames them to the un-prefixed form for downstream readers.
  */
 export function parsePreference(path: string): BrainPreference {
   const [rawMeta, _body] = parseFrontmatter(path);
@@ -756,6 +732,7 @@ export function moveToRetired(
   // verbatim (`topic`, `principle`, `evidenced_by`, counters, …), drop
   // the active-state fields that no longer apply (`unconfirmed_until`,
   // `confirmed_at`), and stamp the retire metadata on top.
+  const derivedSet = new Set<string>(DERIVED_FIELDS);
   const newMeta: FrontmatterMap = {};
   for (const [k, v] of Object.entries(meta)) {
     // Identity keys overwritten below.
@@ -771,11 +748,19 @@ export function moveToRetired(
       );
       continue;
     }
+    // Group C derived fields go to disk in the `_`-prefixed shape so
+    // parseRetired's `normalizeDerivedKeys` accepts the file. `meta`
+    // is the normalised in-memory view, so the keys here are still
+    // un-prefixed and need re-prefixing on write.
+    if (derivedSet.has(k)) {
+      newMeta[`_${k}`] = v as never;
+      continue;
+    }
     newMeta[k] = v as never;
   }
   newMeta["kind"] = "brain-retired";
   newMeta["id"] = newId;
-  newMeta["status"] = "retired";
+  newMeta["_status"] = "retired";
   newMeta["retired_at"] = opts.now.toISOString();
   newMeta["retired_reason"] = reason;
   newMeta["retired_by"] = opts.retired_by;

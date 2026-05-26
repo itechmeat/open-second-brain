@@ -9,6 +9,8 @@
  * Anchored in docs/plans/2026-05-19-vault-scope-design.md §5.
  */
 
+import { BRAIN_SNAPSHOTS_REL } from "../brain/paths.ts";
+
 export interface VaultIgnoreRule {
   /** Entry exactly as written in `Brain/_brain.yaml`. */
   readonly raw: string;
@@ -27,7 +29,7 @@ export const DEFAULT_VAULT_IGNORE_PATHS: ReadonlyArray<string> = Object.freeze([
   ".obsidian",
   ".trash",
   ".stversions",
-  "Brain/.snapshots",
+  BRAIN_SNAPSHOTS_REL,
 ]);
 
 /**

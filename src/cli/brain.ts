@@ -30,7 +30,6 @@ import {
   cmdBrainExport,
   cmdBrainUpgrade,
   handleBrainSnapshotSubcommand,
-  cmdBrainMigrateFrontmatter,
   cmdBrainScanInline,
   cmdBrainImportSession,
   cmdBrainImportClaudeMemory,
@@ -84,7 +83,6 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
       case "rollback": return await cmdBrainRollback(rest);
       case "doctor": return await cmdBrainDoctor(rest);
       case "backlinks": return await cmdBrainBacklinks(rest);
-      case "migrate-frontmatter": return await cmdBrainMigrateFrontmatter(rest);
       case "scan-inline": return await cmdBrainScanInline(rest);
       case "import-session": return await cmdBrainImportSession(rest);
       case "import-claude-memory": return await cmdBrainImportClaudeMemory(rest);

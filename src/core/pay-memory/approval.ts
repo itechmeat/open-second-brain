@@ -1,7 +1,7 @@
 /**
  * Approval workflow for paid agent actions (spec §17.6).
  *
- * Adds a `pending-payment-request` artifact under `AI Wiki/payments/_pending/`.
+ * Adds a `pending-payment-request` artifact under `Brain/payments/_pending/`.
  * The flow is:
  *
  *   1. Agent creates a pending request (`writePendingRequest`).
@@ -42,7 +42,7 @@ import {
   isoDateNow,
   isoTimeNow,
   isoTimestampZ,
-  payMemoryDirs,
+  PAY_MEMORY_PENDING_REL,
   validateIsoDate,
   validateIsoTime,
   validateSlug,
@@ -109,7 +109,7 @@ export interface PendingRequestSummary {
 }
 
 export function pendingDir(vault: string): string {
-  return join(payMemoryDirs(vault).payments, "_pending");
+  return join(vault, PAY_MEMORY_PENDING_REL);
 }
 
 export function pendingRequestPath(vault: string, id: string): string {

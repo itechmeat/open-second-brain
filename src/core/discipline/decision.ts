@@ -41,7 +41,7 @@ export function decideStatus(
   activity: ActivitySummary,
 ): DisciplineStatus {
   // Taste events only: feedback + apply_evidence. The `other` bucket
-  // (snapshot / dream-pass / import-claude-memory / migrate-frontmatter)
+  // (snapshot / dream-pass / import-claude-memory)
   // would otherwise mask a real "agent shipped artifacts but recorded
   // zero taste signals" day — exactly the regression §D exists to catch.
   let tasteEvents = 0;

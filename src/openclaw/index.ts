@@ -1,15 +1,11 @@
 /**
  * OpenClaw native plugin entry for Open Second Brain.
  *
- * Pure TypeScript that delegates to `src/core/*` so the JS implementation
- * is no longer a hand-translated copy of the Python original — both runtimes
- * share the same source of truth.
+ * Pure TypeScript that delegates to `src/core/*` so the OpenClaw runtime
+ * shares the same source of truth as the CLI and MCP server.
  *
- * The plugin exposes the current Open Second Brain tool surface:
- * `second_brain_status`, `second_brain_query`, `vault_health`, plus the
- * eight Pay Memory tools added in v0.8.0. Legacy write tools
- * (`second_brain_capture`, `event_log_append`) are retired from this
- * agent-facing runtime.
+ * Exposes the current tool surface: `second_brain_status`,
+ * `second_brain_query`, `vault_health`, plus the eight Pay Memory tools.
  * No subprocess creation; passes the OpenClaw security scanner.
  */
 
@@ -24,10 +20,6 @@ import {
   resolveTimezone,
 } from "../core/config.ts";
 import { doctor } from "../core/doctor.ts";
-// §32G (v0.10.8): `appendEvent` / `validateEventTime` are no longer
-// needed by the OpenClaw bundle — the `event_log_append` tool was
-// retired from this runtime. The functions still live in
-// `src/core/event-log.ts` for the human-side `o2b append-event` CLI.
 import { buildReminder } from "../core/identity-reminder.ts";
 import {
   checkPolicy,
@@ -40,6 +32,8 @@ import {
   writeReceipt,
   writeReport,
   payMemoryDirs,
+  PAY_MEMORY_REPORTS_REL,
+  PAY_MEMORY_SPENDING_JSON_REL,
 } from "../core/pay-memory/index.ts";
 import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import { mkdirSync } from "node:fs";
@@ -214,12 +208,9 @@ export default definePluginEntry({
       },
     );
 
-    // §32G (v0.10.8): the OpenClaw `second_brain_capture` and
-    // `event_log_append` registrations are gone. Agents on this runtime
-    // now record via the Brain writer tools served by the MCP server
-    // (`brain_feedback`, `brain_apply_evidence`, `brain_note`); the
-    // human-side `o2b append-event` CLI is the only remaining caller of
-    // `appendEvent`.
+    // Agents on this runtime record observations via the Brain writer
+    // tools served by the MCP server (`brain_feedback`,
+    // `brain_apply_evidence`, `brain_note`).
 
     api.registerTool(
       {
@@ -468,7 +459,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "payment_report_generate",
       description:
-        "Aggregate a date's payment receipts into a Markdown report under AI Wiki/reports/.",
+        `Aggregate a date's payment receipts into a Markdown report under ${PAY_MEMORY_REPORTS_REL}/.`,
       parameters: {
         type: "object",
         properties: {
@@ -502,7 +493,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "payment_policy_check",
       description:
-        "Evaluate a prospective paid call against AI Wiki/policies/spending.json. Returns allowed / approval_required / denied + the rule that fired.",
+        `Evaluate a prospective paid call against ${PAY_MEMORY_SPENDING_JSON_REL}. Returns allowed / approval_required / denied + the rule that fired.`,
       parameters: {
         type: "object",
         properties: {

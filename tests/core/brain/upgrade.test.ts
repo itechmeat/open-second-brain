@@ -27,7 +27,6 @@ import {
 } from "../../../src/core/brain/upgrade.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { brainConfigPath, brainManualPath } from "../../../src/core/brain/paths.ts";
-import { LEGACY_OVERVIEW_REL_PATH } from "../../../src/core/brain/templates.ts";
 import { listSnapshots } from "../../../src/core/brain/snapshot.ts";
 
 let vault: string;
@@ -61,8 +60,6 @@ retire:
 
 confidence:
   low_max_applied: 2
-  high_min_applied: 10
-  high_freshness_factor: 0.8
   medium_min: 0.40
   high_min: 0.75
 
@@ -111,8 +108,6 @@ retire:
 
 confidence:
   low_max_applied: 2
-  high_min_applied: 10
-  high_freshness_factor: 0.8
   medium_min: 0.40
 
 snapshots:
@@ -142,8 +137,6 @@ retire:
 
 confidence:
   low_max_applied: 2
-  high_min_applied: 10
-  high_freshness_factor: 0.8
   medium_min: 0.40
   high_min: 0.75
 
@@ -167,12 +160,11 @@ describe("planUpgrade", () => {
     }
   });
 
-  test("file ordering is _brain.yaml, _BRAIN.md, _OPEN_SECOND_BRAIN.md", () => {
+  test("file ordering is _brain.yaml, _BRAIN.md", () => {
     const plan = planUpgrade(vault);
     expect(plan.files.map((f) => f.path)).toEqual([
       "Brain/_brain.yaml",
       "Brain/_BRAIN.md",
-      LEGACY_OVERVIEW_REL_PATH,
     ]);
   });
 
@@ -224,15 +216,6 @@ describe("planUpgrade", () => {
     expect(manualPlan.after).toContain("Brain");
   });
 
-  test("missing _OPEN_SECOND_BRAIN.md → status update with empty before", () => {
-    const overviewPath = join(vault, LEGACY_OVERVIEW_REL_PATH);
-    rmSync(overviewPath, { force: true });
-    const plan = planUpgrade(vault);
-    const ovPlan = plan.files.find((f) => f.path === LEGACY_OVERVIEW_REL_PATH)!;
-    expect(ovPlan.status).toBe("update");
-    expect(ovPlan.before).toBe("");
-    expect(ovPlan.after.length).toBeGreaterThan(0);
-  });
 });
 
 describe("applyUpgrade", () => {

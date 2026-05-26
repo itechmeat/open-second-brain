@@ -116,10 +116,11 @@ Schedule it on a cron with confidence — duplicate runs do not pollute.
 - Do not edit files in `retired/` to undo a retirement. The reason is
   preserved on purpose; a rule that should return becomes a new
   preference with `supersedes: [[ret-...]]`.
-- Do not write into `AI Wiki/` or `Daily/` through Brain tools. Those
-  layers serve different purposes (curated wiki / event log) and Brain
-  operations stay scoped to `Brain/`. Pay Memory is the dedicated
-  writer of `AI Wiki/payments/` and `AI Wiki/assets/`.
+- Brain operations stay scoped to `Brain/`. Pay Memory writes under
+  `Brain/payments/` (receipts, policies, assets, drafts, reports) -
+  the same root, different subtree. User-authored notes (daily
+  journals, etc.) are read-only inputs whose folders are listed in
+  `_brain.yaml:notes.read_paths`; the agent never writes there.
 - Do not invent topics. Reuse an existing topic slug if the rule space
   is the same; `dream` collapses near-duplicates only by exact match.
 
@@ -139,7 +140,7 @@ them as part of normal agent work.
 - `o2b brain pin <pref-id>` / `unpin <pref-id>` — protect a preference
   from automatic retirement (still subject to explicit reject).
 - `o2b brain upgrade` — migrate the release-owned files (`_brain.yaml`,
-  `_BRAIN.md`, `_OPEN_SECOND_BRAIN.md`) forward when a new
+  `_BRAIN.md`) forward when a new
   open-second-brain version ships. `--dry-run` (default) prints a
   per-file plan; `--apply` rewrites the files after taking a snapshot
   named `upgrade-<ts>`.
