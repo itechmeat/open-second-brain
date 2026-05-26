@@ -542,8 +542,8 @@ Operational friction reduction: one-command update across all
 runtimes, weekly brain digest with agent quality summary, Cursor
 SQLite deep parsing for accurate transcript activity, and Obsidian
 deep-links in the live explorer. Companion design and impl plan at
-`docs/superpowers/specs/2026-05-20-v0.10.12-design.md` and
-`docs/plans/2026-05-20-v0.10.12-impl.md`.
+`docs/brainstorm/operational-friction-reduction/{design.md,plan.md}`
+and `docs/plans/2026-05-20-v0.10.12-impl.md`.
 
 ### Added
 
