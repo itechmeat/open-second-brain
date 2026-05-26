@@ -17,6 +17,12 @@ when listed under a new `notes.read_paths` config block. The
 `Daily/<date>.md` is removed entirely; agents record narrative
 milestones through `brain_note` into `Brain/log/<today>.md`.
 
+This release also clears every pre-1.0 backward-compat shim from
+the codebase. Open Second Brain has no public users yet — keeping
+dual-shape parsers, legacy migration verbs, or "lift-only" band
+overlays just to honour an unpublished contract was pure dead
+weight.
+
 ### Added
 
 - `_brain.yaml` gains a `notes:` block with `read_paths` - the
@@ -24,16 +30,12 @@ milestones through `brain_note` into `Brain/log/<today>.md`.
   from. Empty (or absent) means no scanning; the agent never writes
   to those paths.
 - Path constants module (`src/core/brain/paths.ts`,
-  `src/core/pay-memory/paths.ts`): every vault-relative path used by
-  Brain or Pay Memory now lives behind a named constant
-  (`BRAIN_ROOT_REL`, `PAY_MEMORY_*_REL`, etc.). Future renames are a
-  one-line edit.
-- `o2b brain upgrade` learned a legacy-AI-Wiki migration step. On
-  `--apply` it moves `AI Wiki/{payments,policies,assets,drafts,reports}/`
-  into `Brain/payments/` and removes seven Open-Second-Brain-managed
-  scaffolding files from the legacy root. Idempotent; never clobbers
-  an existing target file; preserves user-authored content elsewhere
-  under `AI Wiki/`. Covered by `tests/core/brain/upgrade-aiwiki-migration.test.ts`.
+  `src/core/pay-memory/paths.ts`): every vault-relative path used
+  by Brain or Pay Memory now lives behind a named constant
+  (`BRAIN_ROOT_REL`, `PAY_MEMORY_*_REL`, etc.). Future renames are
+  a one-line edit.
+- README poster at `docs/images/readme-poster.jpg`, rendered under
+  the H1.
 
 ### Changed
 
@@ -51,34 +53,57 @@ milestones through `brain_note` into `Brain/log/<today>.md`.
 - Pay Memory writes under `Brain/payments/` (receipts go directly
   into `Brain/payments/<YYYY-MM-DD>/<slug>.md`, no nested
   `payments/` subdir).
-- Brain upgrade plan order: `Brain/_brain.yaml`, `Brain/_BRAIN.md`
-  (drops the legacy overview file from the plan).
+- Brain upgrade plan: only `Brain/_brain.yaml` and `Brain/_BRAIN.md`
+  (the legacy overview file is gone from the plan and from the
+  release entirely).
+- `computeConfidence` (the `dream` band derivation) uses only the
+  numeric Wilson-lower-bound × freshness thresholds. The
+  step-function band and the max-with-numeric overlay are deleted;
+  the bands now move strictly with the numeric value.
+- README quick start leads with the agent-delegated path: paste a
+  one-liner into your agent, the agent reads `install/hermes.md`
+  and runs every command. The hand-run command sequence stays as a
+  fallback.
+- README top-features table re-curated around human impact: each
+  row is "what this means for you", not "what this does in code".
 
 ### Removed
 
-- `o2b append-event` CLI verb and the `appendEvent` core function.
-- `src/core/event-log.ts`, `tests/core/event-log.test.ts`, and the
-  concurrent-append helper.
-- `tests/cli/append-event.test.ts` and the vault-log compat block.
+- `o2b append-event` CLI verb, the `appendEvent` core function,
+  and `src/core/event-log.ts`. Use `o2b brain note` or the
+  `brain_note` MCP tool instead.
+- `o2b brain migrate-frontmatter` CLI verb and its core module.
+  Files with the legacy un-prefixed Group C frontmatter (`status:`,
+  `applied_count:`, ...) no longer parse — the only shape on disk
+  is `_status:`, `_applied_count:`, ... `BrainDoubleShapeError` and
+  the dual-shape detection in `normalizeDerivedKeys` are gone.
 - `src/core/init.ts` (the legacy `bootstrapVault` scaffolder).
 - `src/core/brain/templates/_OPEN_SECOND_BRAIN.md.tpl` and the
   `LEGACY_OVERVIEW_*` exports.
+- Legacy step-function band derivation in `computeConfidence`. The
+  `legacyBand` / `max(legacy, numeric)` "lift-only" overlay is
+  gone; numeric thresholds win outright.
 - Historical inline comments referencing the retired
-  `second_brain_capture` / `event_log_append` MCP tools, the
-  `appendEvent` function, and the AI Wiki/ Daily/ folders.
+  `second_brain_capture` / `event_log_append` / `appendEvent` /
+  AI Wiki/ / Daily/ surfaces, and the pre-v0.10.3 / pre-v0.10.6
+  fallback notes that documented them.
 
 ### Breaking changes
 
-- Existing v0.10.x vaults with content under `AI Wiki/` should run
-  `o2b brain upgrade --apply` to migrate Pay Memory artefacts into
-  `Brain/payments/`. The migration is idempotent and non-destructive.
 - Shell scripts and cron jobs that piped messages into
   `Daily/<date>.md` via `o2b append-event` must migrate to
   `o2b brain note` (writes into `Brain/log/<today>.md` + JSONL
   sidecar).
-- Operators who relied on scan-inline's old "scan everything" default
-  must add the desired folders under `notes.read_paths` in
+- Operators who relied on scan-inline's old "scan everything"
+  default must add the desired folders under `notes.read_paths` in
   `_brain.yaml`, or pass `--path` explicitly on every invocation.
+- Preference / retired files using the legacy un-prefixed
+  frontmatter keys (`status:`, `applied_count:`, ...) no longer
+  parse. Rename them to the `_`-prefixed shape (`_status:`, ...).
+- Confidence bands move stricter on stale prefs and on prefs with
+  fewer than ~15 applied events. Anyone tuning thresholds may want
+  to revisit `confidence.high_min` / `medium_min` against the new
+  numeric semantics.
 
 ## [0.10.18] - 2026-05-25
 
