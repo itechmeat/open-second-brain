@@ -70,6 +70,7 @@ import {
   processedSignalPath,
   vaultRelative,
 } from "./paths.ts";
+import { countSigns, dominantSignOf } from "./sign.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { parseWikilink, renderPrefLink } from "./wikilink.ts";
 import {
@@ -1172,28 +1173,22 @@ function handleSignalsOnActivePref(
   //      conservative, fail-loud choice: the operator gets a clear
   //      rebut/retire signal and can manually intervene if the system
   //      misread their intent.
-  const signCounts = (records: ReadonlyArray<SignalRecord>): { pos: number; neg: number } => {
-    let pos = 0;
-    let neg = 0;
-    for (const r of records) {
-      if (r.signal.signal === BRAIN_SIGNAL_SIGN.positive) pos++;
-      else if (r.signal.signal === BRAIN_SIGNAL_SIGN.negative) neg++;
-    }
-    return { pos, neg };
-  };
+  const signCounts = (records: ReadonlyArray<SignalRecord>): { pos: number; neg: number } =>
+    countSigns(records.map((r) => r.signal.signal));
 
-  const evidenceIds = new Set(
-    active.pref.evidenced_by
-      .map((wl) => parseWikilink(wl))
-      .filter((s): s is string => !!s),
-  );
-  const evidenceRecords = allSignals.filter((r) => evidenceIds.has(r.signal.id));
+  // Tier-1 derivation now lives in the shared `sign.ts` helper so the
+  // semantic-health contradiction detector and this pass agree on one
+  // definition. `dominantSignOf` returning a concrete sign is exactly
+  // the old `evidenceRecords.length > 0` branch (every signal carries a
+  // polarity, so a resolved evidence link always counts); `"unknown"`
+  // is the old "no evidenced signal resolved" fall-through.
+  const signSignById = new Map(allSignals.map((r) => [r.signal.id, r.signal.signal]));
   const topicRecords = allSignals.filter((r) => r.signal.topic === active.pref.topic);
 
+  const evidenceSign = dominantSignOf(active.pref.evidenced_by, signSignById);
   let activeSign: BrainSignalSign;
-  if (evidenceRecords.length > 0) {
-    const c = signCounts(evidenceRecords);
-    activeSign = c.pos >= c.neg ? BRAIN_SIGNAL_SIGN.positive : BRAIN_SIGNAL_SIGN.negative;
+  if (evidenceSign !== "unknown") {
+    activeSign = evidenceSign;
   } else if (topicRecords.length > sigs.length) {
     // There are processed signals for this topic that are NOT among
     // the active inbox set — use them.
