@@ -30,6 +30,7 @@
 import { existsSync } from "node:fs";
 
 import { computeContentHash } from "./content-hash.ts";
+import { appendEditHistory, type EditHistoryEntry } from "./health/edit-history.ts";
 import {
   preferencePath,
   validateSlug,
@@ -80,6 +81,62 @@ export class BrainCollisionError extends Error {
 }
 
 /**
+ * Opt-in edit-history recording for the txn (v0.14.0, F4). When
+ * supplied AND the write actually changes bytes, the txn appends one
+ * {@link EditHistoryEntry} per changed tracked field (`principle`,
+ * `scope`, `status`) to the preference's `.history.jsonl` sidecar,
+ * keyed by the resulting revision. Callers that omit this leave the
+ * pre-v0.14.0 behaviour untouched - no sidecar is created.
+ */
+export interface EditHistoryOptions {
+  /** Agent identity recorded on each entry. */
+  readonly agent: string;
+  /** Clock for the entry timestamp; defaults to `new Date()`. */
+  readonly now?: () => Date;
+}
+
+/**
+ * Frontmatter fields whose before/after the edit-history trail records.
+ * Kept to the content-bearing fields plus lifecycle status; derived
+ * counters and timestamps are intentionally excluded so the trail
+ * stays a record of meaning, not bookkeeping churn.
+ */
+const HISTORY_TRACKED_FIELDS = ["principle", "scope", "status"] as const;
+
+function editHistoryEntries(
+  existing: BrainPreference | null,
+  proposed: WritePreferenceInput,
+  revision: number,
+  opts: EditHistoryOptions,
+): EditHistoryEntry[] {
+  const ts = (opts.now?.() ?? new Date()).toISOString();
+  const reader: Record<(typeof HISTORY_TRACKED_FIELDS)[number], {
+    before: string | null;
+    after: string | null;
+  }> = {
+    principle: {
+      before: existing?.principle ?? null,
+      after: proposed.principle ?? null,
+    },
+    scope: {
+      before: existing?.scope ?? null,
+      after: proposed.scope ?? null,
+    },
+    status: {
+      before: existing?.status ?? null,
+      after: proposed.status ?? null,
+    },
+  };
+  const out: EditHistoryEntry[] = [];
+  for (const field of HISTORY_TRACKED_FIELDS) {
+    const { before, after } = reader[field];
+    if (before === after) continue;
+    out.push({ ts, agent: opts.agent, revision, field, before, after });
+  }
+  return out;
+}
+
+/**
  * Context passed to every expectation. Carries the resolved path, the
  * existing preference (if any), and the proposed input. Expectations
  * must be pure relative to the txn's own state - they can throw
@@ -118,6 +175,7 @@ export function writePreferenceTxn(
   input: WritePreferenceInput,
   expectations: ReadonlyArray<WritePreferenceExpectation>,
   options: WritePreferenceOptions = {},
+  history?: EditHistoryOptions,
 ): WritePreferenceResult {
   const slug = validateSlug(input.slug);
   const path = preferencePath(vault, slug);
@@ -182,7 +240,20 @@ export function writePreferenceTxn(
           revision: input.revision ?? ((existing?.revision ?? 0) + 1),
         }
       : candidate;
-    return writePreference(vault, inputWithDefaults, options);
+    const result = writePreference(vault, inputWithDefaults, options);
+    // Edit-history (opt-in): record field-level before/after only when
+    // the write actually changed bytes, keyed by the resulting
+    // revision. Idempotent appends keep Syncthing peers convergent.
+    if (history && willChange) {
+      const entries = editHistoryEntries(
+        existing,
+        inputWithDefaults,
+        inputWithDefaults.revision ?? 1,
+        history,
+      );
+      appendEditHistory(vault, slug, entries);
+    }
+    return result;
   } finally {
     handle.release();
   }

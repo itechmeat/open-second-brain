@@ -407,6 +407,10 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   }
 
   if (!dryRun) {
+    // Edit-history (F4): every dream-pass write records its content
+    // before/after so a preference's evolution stays auditable. The
+    // agent of record is whoever invoked the dream run.
+    const historyOpts = { agent: opts.agentName ?? "dream", now: () => now };
     for (const np of plan.newUnconfirmed) {
       // Fresh pref has no apply-evidence yet; recentApplied/recentViolated
       // start empty and stay so until the next dream pass after the
@@ -440,6 +444,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
         },
         [],
         { overwrite: false },
+        historyOpts,
       );
     }
 
@@ -476,6 +481,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
         },
         [],
         { overwrite: true },
+        historyOpts,
       );
     }
 
