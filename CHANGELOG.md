@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-05-27
+
+Semantic Brain Health and Self-Maintenance suite: `brain_doctor` grows
+from a structural well-formedness checker into a semantic quality gate,
+and gains a bounded, deterministic self-maintenance path. It now surfaces
+confirmed preferences that contradict each other (same subject, opposite
+sign of record), concepts that recur across the vault with no dedicated
+preference, and confirmed rules running on stale evidence. Every
+preference write through the dream pass leaves an append-only edit-history
+trail, so a rule's wording can be replayed from first signal to current
+form. A new reconciliation surface folds the three detectors into one
+clean/watch/investigate verdict, and `doctor --remediate` plans a
+dependency-ordered repair and applies the auto-safe fixes (with a
+dry-run preview). Every detector is dependency-free, deterministic,
+language-agnostic, and config-tunable.
+
+### Added
+
+- `src/core/brain/health/contradiction.ts` (`detectContradictions`) -
+  pairs confirmed preferences by principle token overlap and keeps only
+  opposite-sign pairs. Polarity comes from the shared sign-of-record
+  helper; no negation word list.
+- `src/core/brain/health/concept-gap.ts` (`detectConceptGaps`) -
+  recurring entities (via the v0.13.0 entity extractor) with no covering
+  preference topic. Frequency-only, language-agnostic.
+- `src/core/brain/health/stale-claim.ts` (`detectStaleClaims`) -
+  confirmed preferences whose newest evidence is older than a window
+  (injected clock).
+- `src/core/brain/health/edit-history.ts` - append-only
+  `pref-<slug>.history.jsonl` sidecar (`appendEditHistory` /
+  `readEditHistory` / `renderEditHistory`), idempotent on
+  `(revision, field, after)` so Syncthing peers converge. Recorded from
+  the `writePreferenceTxn` chokepoint (opt-in); the dream pass threads it.
+- `src/core/brain/health/remediation.ts` - `planRemediation` (ordered,
+  auto-safe vs needs-review classification) and `applyRemediation`
+  (dry-run safe, applies only auto-safe content-hash re-stamps under the
+  sync lock, bounded by a step cap).
+- `src/core/brain/health/reconcile.ts` (`reconcileSemanticHealth`) -
+  runs the three detectors as domains in one deterministic pass and
+  returns a `clean | watch | investigate` verdict.
+- `src/core/brain/sign.ts` - shared sign-of-record helper extracted from
+  `dream.ts` (behaviour-preserving).
+- `brain_health` MCP tool; `o2b brain health`, `o2b brain history <slug>`,
+  and `o2b brain doctor --remediate [--dry-run]` CLI surfaces.
+- Optional `health:` config block (`contradiction_jaccard`,
+  `concept_gap_min_frequency`, `stale_claim_max_age_days`,
+  `remediation_step_cap`) with `BRAIN_HEALTH_DEFAULTS` + `resolveHealth`.
+
+### Changed
+
+- `runDoctor` now runs the semantic-health reconciliation best-effort,
+  merges findings as warnings (`contradictory-preferences`,
+  `concept-gap`, `stale-claim`), and attaches a `semantic_health` report
+  to `RunDoctorResult`. The doctor remains non-mutating.
+- `writePreferenceTxn` accepts an optional edit-history option; the dream
+  pass passes its agent + run clock so promotions, refreshes, and
+  retirements are recorded.
+
 ## [0.13.0] - 2026-05-26
 
 Hybrid Search and Recall Quality suite: the fused FTS5 + semantic
@@ -3001,6 +3059,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.14.0]: https://github.com/itechmeat/open-second-brain/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/itechmeat/open-second-brain/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/itechmeat/open-second-brain/compare/v0.11.0...v0.12.0
 [0.10.9]: https://github.com/itechmeat/open-second-brain/compare/v0.10.8...v0.10.9
