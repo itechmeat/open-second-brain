@@ -18,11 +18,12 @@
  * judgment).
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
-import { computeContentHash } from "../content-hash.ts";
-import { preferencePath } from "../paths.ts";
+import { computeContentHash, verifyContentHash } from "../content-hash.ts";
+import { brainDirs, preferencePath } from "../paths.ts";
 import { parsePreference } from "../preference.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
 
@@ -78,6 +79,34 @@ const CODE_ORDER: ReadonlyMap<string, number> = new Map([
   ["stale-claim", 2],
   ["concept-gap", 3],
 ]);
+
+/**
+ * Scan `Brain/preferences/` for confirmed preferences whose stored
+ * `_content_hash` no longer matches their live (principle, scope) -
+ * the auto-safe re-stamp targets. Returns slug stems (no `pref-`
+ * prefix), sorted for determinism. Files that fail to parse are
+ * skipped (their schema errors surface through the doctor).
+ */
+export function collectDriftedSlugs(vault: string): string[] {
+  const dir = brainDirs(vault).preferences;
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".md") || !name.startsWith("pref-")) continue;
+    try {
+      const pref = parsePreference(join(dir, name));
+      const check = verifyContentHash({
+        principle: pref.principle,
+        scope: pref.scope,
+        content_hash: pref.content_hash,
+      });
+      if (!check.ok) out.push(pref.id.replace(/^pref-/, ""));
+    } catch {
+      // schema error - reported by the doctor
+    }
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
 
 export function planRemediation(
   findings: RemediationFindings,

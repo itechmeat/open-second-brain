@@ -11,6 +11,8 @@ export { cmdBrainSetPrimary } from "./set-primary.ts";
 export { cmdBrainProtect, cmdBrainUnprotect } from "./protect.ts";
 export { cmdBrainRollback } from "./rollback.ts";
 export { cmdBrainDoctor } from "./doctor.ts";
+export { cmdBrainHealth } from "./health.ts";
+export { cmdBrainHistory } from "./history.ts";
 export { cmdBrainBacklinks } from "./backlinks.ts";
 export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";

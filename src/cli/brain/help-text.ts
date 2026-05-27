@@ -30,7 +30,9 @@ Brain verbs (observing memory):
   snapshot diff    Read-only diff between two snapshots, or snapshot vs live
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
-  doctor              Validate Brain invariants (--strict promotes warnings to exit 2)
+  doctor              Validate Brain invariants (--strict; --remediate [--dry-run])
+  health              Semantic-health report: contradictions, concept gaps, stale claims
+  history             Render a preference's edit-history timeline
   backlinks           List inbound references to a Brain artifact id
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a Claude/Codex/Hermes session .jsonl (or directory)
@@ -118,7 +120,19 @@ export const VERB_HELP: Record<string, string> = {
     "the live Brain/ tree (when <run_id_b> is omitted).\n",
   doctor:
     "usage: o2b brain doctor [--vault <path>] [--json] [--strict]\n" +
-    "Validate invariants. Warnings exit 0 (or 2 with --strict). Errors always exit 1.\n",
+    "                        [--remediate [--dry-run]]\n" +
+    "Validate invariants. Warnings exit 0 (or 2 with --strict). Errors always exit 1.\n" +
+    "--remediate builds a dependency-ordered repair plan and applies the\n" +
+    "auto-safe steps (content-hash re-stamp); --dry-run previews without writing.\n",
+  health:
+    "usage: o2b brain health [--vault <path>] [--json]\n" +
+    "Semantic-health report: contradictory confirmed preferences, recurring\n" +
+    "concepts with no dedicated preference, and confirmed preferences on stale\n" +
+    "evidence, plus a clean/watch/investigate verdict. Read-only.\n",
+  history:
+    "usage: o2b brain history <slug> [--vault <path>] [--json]\n" +
+    "Render a preference's edit-history timeline (one entry per content\n" +
+    "mutation: principle/scope/status before -> after). Read-only.\n",
   backlinks:
     "usage: o2b brain backlinks <id> [--vault <path>] [--json]\n" +
     "List inbound references to the given Brain artifact id (preference, retired, signal).\n",
