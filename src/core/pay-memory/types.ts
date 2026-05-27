@@ -7,11 +7,7 @@
  * delegate, so the helpers stay pure and easy to test.
  */
 
-export type ReceiptPolicyStatus =
-  | "allowed"
-  | "approval_required"
-  | "denied"
-  | "not_checked";
+export type ReceiptPolicyStatus = "allowed" | "approval_required" | "denied" | "not_checked";
 
 export interface ReceiptInput {
   readonly agent: string;
@@ -55,12 +51,7 @@ export interface ReceiptInput {
   readonly policyReasons?: ReadonlyArray<string> | null;
   readonly policyCheckedAt?: string | null;
   readonly approvalRequestId?: string | null;
-  readonly approvalStatus?:
-    | "pending"
-    | "approved"
-    | "rejected"
-    | "consumed"
-    | null;
+  readonly approvalStatus?: "pending" | "approved" | "rejected" | "consumed" | null;
   readonly approvedBy?: string | null;
   readonly approvedAt?: string | null;
 }

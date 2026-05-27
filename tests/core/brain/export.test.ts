@@ -73,10 +73,7 @@ describe("exportPreferencesJson", () => {
   });
 
   test("mixed-status preferences are all included, retired/signal are excluded", () => {
-    writePreference(
-      vault,
-      basePref("alpha", { status: BRAIN_PREFERENCE_STATUS.confirmed }),
-    );
+    writePreference(vault, basePref("alpha", { status: BRAIN_PREFERENCE_STATUS.confirmed }));
     writePreference(
       vault,
       basePref("beta", {
@@ -106,18 +103,11 @@ describe("exportPreferencesJson", () => {
     );
 
     const out = exportPreferencesJson(vault);
-    expect(out.preferences.map((p) => p.id)).toEqual([
-      "pref-alpha",
-      "pref-beta",
-      "pref-gamma",
-    ]);
+    expect(out.preferences.map((p) => p.id)).toEqual(["pref-alpha", "pref-beta", "pref-gamma"]);
   });
 
   test("row carries the canonical field set", () => {
-    writePreference(
-      vault,
-      basePref("alpha", { scope: "writing", pinned: true }),
-    );
+    writePreference(vault, basePref("alpha", { scope: "writing", pinned: true }));
     const out = exportPreferencesJson(vault);
     const r = out.preferences[0]!;
     expect(r.id).toBe("pref-alpha");
@@ -163,11 +153,7 @@ describe("exportPreferencesJson", () => {
     writePreference(vault, basePref("alpha"));
     writePreference(vault, basePref("mu"));
     const out = exportPreferencesJson(vault);
-    expect(out.preferences.map((p) => p.id)).toEqual([
-      "pref-alpha",
-      "pref-mu",
-      "pref-zeta",
-    ]);
+    expect(out.preferences.map((p) => p.id)).toEqual(["pref-alpha", "pref-mu", "pref-zeta"]);
   });
 });
 
@@ -183,10 +169,7 @@ describe("exportPreferencesLlmsTxt", () => {
   });
 
   test("mixed statuses render in fixed Confirmed → Unconfirmed → Quarantine order", () => {
-    writePreference(
-      vault,
-      basePref("alpha", { status: BRAIN_PREFERENCE_STATUS.confirmed }),
-    );
+    writePreference(vault, basePref("alpha", { status: BRAIN_PREFERENCE_STATUS.confirmed }));
     writePreference(
       vault,
       basePref("beta", {
@@ -194,10 +177,7 @@ describe("exportPreferencesLlmsTxt", () => {
         confirmed_at: null,
       }),
     );
-    writePreference(
-      vault,
-      basePref("gamma", { status: BRAIN_PREFERENCE_STATUS.quarantine }),
-    );
+    writePreference(vault, basePref("gamma", { status: BRAIN_PREFERENCE_STATUS.quarantine }));
     const txt = exportPreferencesLlmsTxt(vault);
     const idxConfirmed = txt.indexOf("## Confirmed");
     const idxUnconfirmed = txt.indexOf("## Unconfirmed");
@@ -219,9 +199,7 @@ describe("exportPreferencesLlmsTxt", () => {
     writePreference(vault, basePref("scoped", { scope: "writing" }));
     writePreference(vault, basePref("unscoped"));
     const txt = exportPreferencesLlmsTxt(vault);
-    expect(txt).toContain(
-      "- pref-scoped (topic: scoped, scope: writing): Principle for scoped",
-    );
+    expect(txt).toContain("- pref-scoped (topic: scoped, scope: writing): Principle for scoped");
     expect(txt).toContain("- pref-unscoped (topic: unscoped): Principle for unscoped");
   });
 });

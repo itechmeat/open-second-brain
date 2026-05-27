@@ -90,9 +90,7 @@ describe("createSnapshot", () => {
       expect(existsSync(extracted)).toBe(true);
       expect(existsSync(join(extracted, "_brain.yaml"))).toBe(true);
       expect(existsSync(join(extracted, "_BRAIN.md"))).toBe(true);
-      expect(
-        existsSync(join(extracted, "inbox", "sig-2026-05-14-foo.md")),
-      ).toBe(true);
+      expect(existsSync(join(extracted, "inbox", "sig-2026-05-14-foo.md"))).toBe(true);
       expect(existsSync(join(extracted, "preferences", "pref-foo.md"))).toBe(true);
       // The .snapshots/ directory MUST NOT be inside the archive.
       expect(existsSync(join(extracted, ".snapshots"))).toBe(false);
@@ -215,11 +213,7 @@ describe("pruneSnapshots", () => {
 
   test("removes sidecar manifest alongside the archive", () => {
     const labels = ["a", "b", "c"];
-    const ts = [
-      "2026-05-10T00:00:00Z",
-      "2026-05-11T00:00:00Z",
-      "2026-05-12T00:00:00Z",
-    ];
+    const ts = ["2026-05-10T00:00:00Z", "2026-05-11T00:00:00Z", "2026-05-12T00:00:00Z"];
     for (let i = 0; i < labels.length; i++) {
       const runId = `dream-prune-${labels[i]}`;
       createSnapshot(vault, runId);

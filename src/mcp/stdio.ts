@@ -43,13 +43,20 @@ export async function serveStdio(
     try {
       request = JSON.parse(line);
     } catch (exc) {
-      writeFrame(stdout, errorResponse(null, PARSE_ERROR, `invalid JSON: ${(exc as Error).message}`));
+      writeFrame(
+        stdout,
+        errorResponse(null, PARSE_ERROR, `invalid JSON: ${(exc as Error).message}`),
+      );
       continue;
     }
     if (Array.isArray(request)) {
       writeFrame(
         stdout,
-        errorResponse(null, INVALID_REQUEST, "batch requests are not supported by the 2025-06-18 spec"),
+        errorResponse(
+          null,
+          INVALID_REQUEST,
+          "batch requests are not supported by the 2025-06-18 spec",
+        ),
       );
       continue;
     }
@@ -90,13 +97,19 @@ export async function serveStdioFromString(
     try {
       request = JSON.parse(line);
     } catch (exc) {
-      out.push(JSON.stringify(errorResponse(null, PARSE_ERROR, `invalid JSON: ${(exc as Error).message}`)));
+      out.push(
+        JSON.stringify(errorResponse(null, PARSE_ERROR, `invalid JSON: ${(exc as Error).message}`)),
+      );
       continue;
     }
     if (Array.isArray(request)) {
       out.push(
         JSON.stringify(
-          errorResponse(null, INVALID_REQUEST, "batch requests are not supported by the 2025-06-18 spec"),
+          errorResponse(
+            null,
+            INVALID_REQUEST,
+            "batch requests are not supported by the 2025-06-18 spec",
+          ),
         ),
       );
       continue;

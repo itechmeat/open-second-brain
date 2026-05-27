@@ -28,15 +28,9 @@ interface FixtureEvent {
   readonly body: Record<string, string | ReadonlyArray<string>>;
 }
 
-function writeJsonl(
-  vault: string,
-  date: string,
-  events: ReadonlyArray<FixtureEvent>,
-): void {
+function writeJsonl(vault: string, date: string, events: ReadonlyArray<FixtureEvent>): void {
   const lines = events
-    .map((e) =>
-      JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }),
-    )
+    .map((e) => JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }))
     .join("\n");
   writeFileSync(join(vault, "Brain", "log", `${date}.jsonl`), lines + "\n");
 }
@@ -49,12 +43,7 @@ beforeEach(() => {
 describe("buildWeeklySynthesis", () => {
   test("empty window - frozen empty-counts envelope", () => {
     const idx = buildTimelineIndex(VAULT, {});
-    const brief = buildWeeklySynthesis(
-      idx,
-      VAULT,
-      "2026-05-25",
-      BRAIN_TEMPORAL_DEFAULTS,
-    );
+    const brief = buildWeeklySynthesis(idx, VAULT, "2026-05-25", BRAIN_TEMPORAL_DEFAULTS);
     expect(brief.windowEnd).toBe("2026-05-25T00:00:00Z");
     expect(brief.retired.length).toBe(0);
     expect(brief.contradictions.length).toBe(0);
@@ -63,12 +52,7 @@ describe("buildWeeklySynthesis", () => {
 
   test("window covers exactly 7 days back from weekEnd", () => {
     const idx = buildTimelineIndex(VAULT, {});
-    const brief = buildWeeklySynthesis(
-      idx,
-      VAULT,
-      "2026-05-25",
-      BRAIN_TEMPORAL_DEFAULTS,
-    );
+    const brief = buildWeeklySynthesis(idx, VAULT, "2026-05-25", BRAIN_TEMPORAL_DEFAULTS);
     expect(brief.windowEnd).toBe("2026-05-25T00:00:00Z");
     expect(brief.windowStart).toBe("2026-05-18T00:00:00Z");
   });
@@ -107,15 +91,10 @@ describe("buildWeeklySynthesis", () => {
       },
     ]);
     const idx = buildTimelineIndex(VAULT, {});
-    const brief = buildWeeklySynthesis(
-      idx,
-      VAULT,
-      "2026-05-25",
-      BRAIN_TEMPORAL_DEFAULTS,
-    );
+    const brief = buildWeeklySynthesis(idx, VAULT, "2026-05-25", BRAIN_TEMPORAL_DEFAULTS);
     expect(brief.contradictions.length).toBe(2);
     // signal-suppressed contributes one; apply-evidence violated one.
-    const kinds = brief.contradictions.map((c) => c.kind).sort();
+    const kinds = brief.contradictions.map((c) => c.kind).toSorted();
     expect(kinds).toEqual(["evidence-violated", "signal-suppressed"]);
   });
 
@@ -131,12 +110,7 @@ describe("buildWeeklySynthesis", () => {
       },
     ]);
     const idx = buildTimelineIndex(VAULT, {});
-    const brief = buildWeeklySynthesis(
-      idx,
-      VAULT,
-      "2026-05-25",
-      BRAIN_TEMPORAL_DEFAULTS,
-    );
+    const brief = buildWeeklySynthesis(idx, VAULT, "2026-05-25", BRAIN_TEMPORAL_DEFAULTS);
     expect(brief.retired.length).toBe(1);
     expect(brief.retired[0]!.prefId).toBe("ret-foo");
   });
@@ -167,12 +141,7 @@ describe("buildWeeklySynthesis", () => {
       },
     ]);
     const idx = buildTimelineIndex(VAULT, {});
-    const brief = buildWeeklySynthesis(
-      idx,
-      VAULT,
-      "2026-05-25",
-      BRAIN_TEMPORAL_DEFAULTS,
-    );
+    const brief = buildWeeklySynthesis(idx, VAULT, "2026-05-25", BRAIN_TEMPORAL_DEFAULTS);
     expect(brief.vaultDelta.newFeedback).toBe(1);
     expect(brief.vaultDelta.evidenceApplied).toBe(1);
   });

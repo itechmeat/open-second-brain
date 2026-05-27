@@ -13,10 +13,12 @@ export async function cmdBrainSetPrimary(argv: string[]): Promise<number> {
 
   let name: string | null;
   if (flags["clear"]) {
-    if (positional.length > 0) return fail("brain set-primary --clear takes no positional argument");
+    if (positional.length > 0)
+      return fail("brain set-primary --clear takes no positional argument");
     name = null;
   } else {
-    if (positional.length < 1) return fail("brain set-primary requires <name> or --clear; see `o2b brain help set-primary`");
+    if (positional.length < 1)
+      return fail("brain set-primary requires <name> or --clear; see `o2b brain help set-primary`");
     if (positional.length > 1) return fail("brain set-primary accepts a single <name> argument");
     const supplied = positional[0]!.trim();
     if (supplied.length === 0) return fail("brain set-primary <name> must be non-empty");
@@ -24,13 +26,22 @@ export async function cmdBrainSetPrimary(argv: string[]): Promise<number> {
   }
 
   let result;
-  try { result = setPrimaryAgent(vault, name); }
-  catch (exc) { return fail(`set-primary failed: ${(exc as Error).message ?? exc}`); }
+  try {
+    result = setPrimaryAgent(vault, name);
+  } catch (exc) {
+    return fail(`set-primary failed: ${(exc as Error).message ?? exc}`);
+  }
 
-  if (flags["json"]) { okJson({ previous: result.previous, next: result.next, changed: result.changed }); return 0; }
+  if (flags["json"]) {
+    okJson({ previous: result.previous, next: result.next, changed: result.changed });
+    return 0;
+  }
 
   const fmt = (v: string | null): string => v ?? "null";
-  if (!result.changed) { ok(`primary_agent already set to ${fmt(result.next)}`); }
-  else { ok(`primary_agent: ${fmt(result.previous)} → ${fmt(result.next)}`); }
+  if (!result.changed) {
+    ok(`primary_agent already set to ${fmt(result.next)}`);
+  } else {
+    ok(`primary_agent: ${fmt(result.previous)} → ${fmt(result.next)}`);
+  }
   return 0;
 }

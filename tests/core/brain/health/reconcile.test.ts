@@ -13,10 +13,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  BRAIN_PREFERENCE_STATUS,
-  BRAIN_SIGNAL_SIGN,
-} from "../../../../src/core/brain/types.ts";
+import { BRAIN_PREFERENCE_STATUS, BRAIN_SIGNAL_SIGN } from "../../../../src/core/brain/types.ts";
 import {
   reconcileSemanticHealth,
   type PreferenceForHealth,
@@ -24,7 +21,9 @@ import {
 
 const NOW = new Date("2026-05-27T00:00:00Z");
 
-function pref(over: Partial<PreferenceForHealth> & Pick<PreferenceForHealth, "id">): PreferenceForHealth {
+function pref(
+  over: Partial<PreferenceForHealth> & Pick<PreferenceForHealth, "id">,
+): PreferenceForHealth {
   return {
     status: BRAIN_PREFERENCE_STATUS.confirmed,
     scope: "coding",

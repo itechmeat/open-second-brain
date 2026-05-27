@@ -5,6 +5,7 @@ import { search } from "../../../src/core/search/search.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 
 let vault: string;
 let dbPath: string;
@@ -85,7 +86,11 @@ test("path_prefix filter scopes results", async () => {
   await indexVault(cfg);
   const all = await search(cfg, { query: "quick", limit: 5 });
   expect(all.results.length).toBe(1);
-  const scoped = await search(cfg, { query: "quick", limit: 5, pathPrefix: "Other/" });
+  const scoped = await search(cfg, {
+    query: "quick",
+    limit: 5,
+    pathPrefix: "Other/",
+  });
   expect(scoped.results.length).toBe(0);
 });
 
@@ -126,6 +131,7 @@ test("missing index throws INDEX_MISSING", async () => {
 });
 
 test("hybrid search combines keyword and semantic when both contribute", async () => {
+  if (!sqliteVecLoadable()) return;
   writeMd(vault, "A/foo.md", "alpha beta gamma");
   writeMd(vault, "A/bar.md", "delta epsilon zeta");
   const cfg = semanticConfig();

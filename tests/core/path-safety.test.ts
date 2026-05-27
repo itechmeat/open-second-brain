@@ -27,9 +27,7 @@ describe("ensureInsideVault", () => {
     // Without using `path.sep`, the naive `startsWith(vault + "/")` check
     // would happily admit `/v-evil/...` because `/v-evil` starts with `/v`
     // when concatenated. The fixed implementation rejects it.
-    expect(() => ensureInsideVault(join(SIBLING, "x.md"), VAULT)).toThrow(
-      /escapes vault/,
-    );
+    expect(() => ensureInsideVault(join(SIBLING, "x.md"), VAULT)).toThrow(/escapes vault/);
   });
 
   test("rejects paths that resolve outside the vault", () => {
@@ -80,9 +78,9 @@ describe("ensureInsideVault — realpath / symlink escape", () => {
     // No symlink involved; just a fresh slug on a real vault. realpath
     // protection should not crash on a path component that doesn't exist
     // yet (the writer creates it after this check passes).
-    expect(
-      ensureInsideVault(join(vault, "Notes", "payments", "2026-05-10", "x.md"), vault),
-    ).toBe(join(vault, "Notes", "payments", "2026-05-10", "x.md"));
+    expect(ensureInsideVault(join(vault, "Notes", "payments", "2026-05-10", "x.md"), vault)).toBe(
+      join(vault, "Notes", "payments", "2026-05-10", "x.md"),
+    );
   });
 });
 

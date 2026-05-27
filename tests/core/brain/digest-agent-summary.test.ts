@@ -5,10 +5,7 @@ import { join } from "node:path";
 
 import { computeAgentSummary } from "../../../src/core/brain/digest-agent-summary.ts";
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
-import {
-  BRAIN_LOG_EVENT_KIND,
-  BRAIN_APPLY_RESULT,
-} from "../../../src/core/brain/types.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_APPLY_RESULT } from "../../../src/core/brain/types.ts";
 
 let vault: string;
 
@@ -20,7 +17,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(vault, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(vault, { recursive: true, force: true });
+  } catch {}
 });
 
 describe("computeAgentSummary", () => {

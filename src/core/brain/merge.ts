@@ -28,16 +28,9 @@ import { join } from "node:path";
 import { regenerateActiveQuiet } from "./active.ts";
 import { appendLogEvent } from "./log.ts";
 import { brainDirs, preferencePath } from "./paths.ts";
-import {
-  moveToRetired,
-  parsePreference,
-  writePreference,
-} from "./preference.ts";
+import { moveToRetired, parsePreference, writePreference } from "./preference.ts";
 import { isoDate, isoSecond } from "./time.ts";
-import {
-  BRAIN_LOG_EVENT_KIND,
-  BRAIN_RETIRED_REASON,
-} from "./types.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_RETIRED_REASON } from "./types.ts";
 import { renderPrefLink } from "./wikilink.ts";
 
 export type BrainMergeErrorCode =
@@ -87,10 +80,7 @@ export function mergePreferences(
   opts: MergeOptions = {},
 ): MergePlan {
   if (keepId === dropId) {
-    throw new BrainMergeError(
-      "same-id",
-      `keep and drop refer to the same preference '${keepId}'`,
-    );
+    throw new BrainMergeError("same-id", `keep and drop refer to the same preference '${keepId}'`);
   }
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun === true;
@@ -144,9 +134,9 @@ export function mergePreferences(
   if (keep.topic !== drop.topic) {
     throw new BrainMergeError(
       "topic-mismatch",
-      `topic mismatch: keep='${keep.topic}', drop='${drop.topic}'.`
-      + " Merge is for near-duplicate rules in the same bucket;"
-      + " use `o2b brain reject` if drop is wrong rather than redundant.",
+      `topic mismatch: keep='${keep.topic}', drop='${drop.topic}'.` +
+        " Merge is for near-duplicate rules in the same bucket;" +
+        " use `o2b brain reject` if drop is wrong rather than redundant.",
     );
   }
   const keepScope = keep.scope ?? null;
@@ -154,22 +144,19 @@ export function mergePreferences(
   if (keepScope !== dropScope) {
     throw new BrainMergeError(
       "scope-mismatch",
-      `scope mismatch: keep='${keepScope ?? "(none)"}', drop='${dropScope ?? "(none)"}'.`
-      + " Use `o2b brain reject` instead.",
+      `scope mismatch: keep='${keepScope ?? "(none)"}', drop='${dropScope ?? "(none)"}'.` +
+        " Use `o2b brain reject` instead.",
     );
   }
   if (keep.pinned !== drop.pinned && drop.pinned) {
     throw new BrainMergeError(
       "pin-parity",
-      `drop '${dropId}' is pinned but keep '${keepId}' is not;`
-      + " put the pinned pref first as <keep> if you want to merge.",
+      `drop '${dropId}' is pinned but keep '${keepId}' is not;` +
+        " put the pinned pref first as <keep> if you want to merge.",
     );
   }
 
-  const merged_evidenced_by = mergeEvidencedBy(
-    keep.evidenced_by,
-    drop.evidenced_by,
-  );
+  const merged_evidenced_by = mergeEvidencedBy(keep.evidenced_by, drop.evidenced_by);
   const applied_sum = keep.applied_count + drop.applied_count;
   const violated_sum = keep.violated_count + drop.violated_count;
   const last_evidence_at = maxIso(keep.last_evidence_at, drop.last_evidence_at);
@@ -252,10 +239,7 @@ export function mergePreferences(
 
 function stripPrefPrefix(id: string): string {
   if (!id.startsWith("pref-") || id.length <= "pref-".length) {
-    throw new BrainMergeError(
-      "keep-not-found",
-      `expected a 'pref-…' id; got '${id}'`,
-    );
+    throw new BrainMergeError("keep-not-found", `expected a 'pref-…' id; got '${id}'`);
   }
   return id.slice("pref-".length);
 }

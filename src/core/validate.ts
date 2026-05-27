@@ -43,11 +43,7 @@ export function parseInteger(
  * Parse a string into a number in `[0, 1]`, falling back to `default_` when
  * `raw` is null. Throws `Error` on out-of-range or non-finite input.
  */
-export function parseFloat01(
-  raw: string | null,
-  default_: number,
-  fieldName: string,
-): number {
+export function parseFloat01(raw: string | null, default_: number, fieldName: string): number {
   if (raw === null) return default_;
   if (raw.trim() === "") {
     throw new Error(`${fieldName} must be a number in [0, 1], got empty string`);
@@ -59,15 +55,38 @@ export function parseFloat01(
   return n;
 }
 
+export type OptionalFiniteNumberInputError = "finite-number" | "number-or-numeric-string";
+
+export interface OptionalFiniteNumberInputResult {
+  readonly value: number | null;
+  readonly error: OptionalFiniteNumberInputError | null;
+}
+
+/**
+ * Parse an optional finite number accepted at external API boundaries.
+ * `null`, `undefined`, and blank strings mean "not provided".
+ */
+export function parseOptionalFiniteNumberInput(raw: unknown): OptionalFiniteNumberInputResult {
+  if (raw === undefined || raw === null) return { value: null, error: null };
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) return { value: null, error: "finite-number" };
+    return { value: raw, error: null };
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "") return { value: null, error: null };
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) return { value: null, error: "number-or-numeric-string" };
+    return { value: parsed, error: null };
+  }
+  return { value: null, error: "number-or-numeric-string" };
+}
+
 /**
  * Parse a string into a boolean. Accepts `"true"`/`"1"` → `true`,
  * `"false"`/`"0"` → `false`. Throws `Error` on any other value.
  */
-export function parseBool(
-  raw: string | null,
-  default_: boolean,
-  fieldName: string,
-): boolean {
+export function parseBool(raw: string | null, default_: boolean, fieldName: string): boolean {
   if (raw === null) return default_;
   if (raw === "true" || raw === "1") return true;
   if (raw === "false" || raw === "0") return false;

@@ -17,20 +17,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
-import {
-  JSONRPC_VERSION,
-  MCPServer,
-  PROTOCOL_VERSION,
-} from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
 let tmp: string;
 let vault: string;
@@ -62,10 +54,9 @@ describe("v0.10.10 pull-channels e2e", () => {
 
     // 2. CLI mirror of brain_note lands one event in Brain/log/<today>.md
     //    plus the JSONL sidecar, with the configured identity.
-    r = await runCli(
-      ["brain", "note", "v0.10.10 released", "--vault", vault, "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config, VAULT_AGENT_NAME: "" } },
-    );
+    r = await runCli(["brain", "note", "v0.10.10 released", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config, VAULT_AGENT_NAME: "" },
+    });
     expect(r.returncode).toBe(0);
     const noteResult = JSON.parse(r.stdout);
     expect(noteResult.agent).toBe("tester");

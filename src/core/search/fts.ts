@@ -26,11 +26,7 @@ export interface RunFtsOptions {
   readonly pathPrefix?: string | null;
 }
 
-export function runFtsQuery(
-  store: Store,
-  rawQuery: string,
-  opts: RunFtsOptions,
-): KeywordHit[] {
+export function runFtsQuery(store: Store, rawQuery: string, opts: RunFtsOptions): KeywordHit[] {
   const match = buildFtsMatch(rawQuery);
   if (match === "") return [];
   return store.keywordTopK(match, opts);

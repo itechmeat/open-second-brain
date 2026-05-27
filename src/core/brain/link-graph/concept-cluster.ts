@@ -21,10 +21,7 @@ import { buildBacklinkIndex, type BacklinkRef } from "../backlinks.ts";
 import { brainDirs } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
-import {
-  findUnlinkedMentions,
-  type MentionRef,
-} from "./unlinked-mentions.ts";
+import { findUnlinkedMentions, type MentionRef } from "./unlinked-mentions.ts";
 
 /** One linker pointing at the target. */
 export interface ConceptLinker {
@@ -82,18 +79,18 @@ export function buildConceptCluster(
         ...(r.aliasSource !== undefined ? { aliasSource: r.aliasSource } : {}),
       }),
     )
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const sa = a.source.localeCompare(b.source);
       if (sa !== 0) return sa;
       return a.field.localeCompare(b.field);
     });
 
   const unlinkedMentions = opts.includeUnlinked
-    ? findUnlinkedMentions(vault, normalised, {
-        ...(opts.unlinkedLimit !== undefined
-          ? { limit: opts.unlinkedLimit }
-          : {}),
-      })
+    ? findUnlinkedMentions(
+        vault,
+        normalised,
+        opts.unlinkedLimit !== undefined ? { limit: opts.unlinkedLimit } : {},
+      )
     : Object.freeze([] as MentionRef[]);
 
   return Object.freeze({

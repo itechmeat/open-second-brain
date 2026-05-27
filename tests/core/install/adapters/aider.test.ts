@@ -30,7 +30,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const p of [vault, home]) {
-    try { rmSync(p, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(p, { recursive: true, force: true });
+    } catch {}
   }
 });
 
@@ -39,9 +41,14 @@ function env(now = new Date("2026-05-20T12:00:00.000Z"), envVars: Record<string,
 }
 
 function applyOpts(overrides: Record<string, unknown> = {}) {
-  const sink = new Writable({ write(_c, _e, cb) { cb(); } });
+  const sink = new Writable({
+    write(_c, _e, cb) {
+      cb();
+    },
+  });
   return {
-    dryRun: false, force: false,
+    dryRun: false,
+    force: false,
     stdout: sink as unknown as NodeJS.WriteStream,
     stderr: sink as unknown as NodeJS.WriteStream,
     ...overrides,
@@ -87,8 +94,7 @@ describe("aider adapter", () => {
   });
 
   test("preserves user-authored config above and below the managed block", () => {
-    const userConf =
-      "# user config\nmodel: gpt-4o-mini\nedit-format: diff\n";
+    const userConf = "# user config\nmodel: gpt-4o-mini\nedit-format: diff\n";
     writeFileSync(aiderConfPath(), userConf);
     aiderAdapter.apply(aiderAdapter.plan(payload, env()), payload, env(), applyOpts());
     const conf = readFileSync(aiderConfPath(), "utf8");
@@ -160,6 +166,8 @@ describe("aider adapter", () => {
     const e = env(new Date(), { AIDER_CONFIG: customConf });
     aiderAdapter.apply(aiderAdapter.plan(payload, e), payload, e, applyOpts());
     expect(existsSync(customConf)).toBe(true);
-    try { rmSync(custom, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(custom, { recursive: true, force: true });
+    } catch {}
   });
 });

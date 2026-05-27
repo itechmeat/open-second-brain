@@ -18,16 +18,21 @@ describe("decideStatus", () => {
     total: 4,
   } as any;
   const noActivity = {
-    repo: [], nonRepo: [], vaultDelta: { newSignals: 0, newPreferences: 0, newRetired: 0, total: 0 },
+    repo: [],
+    nonRepo: [],
+    vaultDelta: { newSignals: 0, newPreferences: 0, newRetired: 0, total: 0 },
   } as any;
   const someRepoActivity = {
-    ...noActivity, repo: [{ path: "/a", git: { commits: 2, filesChanged: 1, insertions: 1, deletions: 0 } }],
+    ...noActivity,
+    repo: [{ path: "/a", git: { commits: 2, filesChanged: 1, insertions: 1, deletions: 0 } }],
   };
   const someMtimeActivity = {
-    ...noActivity, nonRepo: [{ path: "/b", modifiedFiles: 5 }],
+    ...noActivity,
+    nonRepo: [{ path: "/b", modifiedFiles: 5 }],
   };
   const someVaultDelta = {
-    ...noActivity, vaultDelta: { newSignals: 0, newPreferences: 1, newRetired: 0, total: 1 },
+    ...noActivity,
+    vaultDelta: { newSignals: 0, newPreferences: 1, newRetired: 0, total: 1 },
   };
 
   test("0 events + 0 activity → info", () => {

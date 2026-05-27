@@ -78,7 +78,7 @@ describe("install registry", () => {
     reg.register(makeFakeAdapter("a"));
     reg.register(makeFakeAdapter("b"));
     const out = reg.detectAll(makeEnv());
-    expect(out.map((d) => d.target).sort()).toEqual(["a", "b"]);
+    expect(out.map((d) => d.target).toSorted()).toEqual(["a", "b"]);
   });
 
   test("list returns adapters in registration order", () => {

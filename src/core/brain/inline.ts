@@ -32,7 +32,7 @@
  * misses as warnings separately; the parser itself is silent.
  */
 
-const KNOWN_KINDS: ReadonlyArray<string> = ["feedback"];
+const KNOWN_KINDS: ReadonlySet<string> = new Set(["feedback"]);
 const KNOWN_SIGNALS: ReadonlyArray<string> = ["positive", "negative"];
 
 export type MarkerKind = "feedback";
@@ -98,7 +98,7 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
 
   // Positional `kind`.
   const kindToken = readBareToken();
-  if (kindToken === null || !KNOWN_KINDS.includes(kindToken)) return null;
+  if (kindToken === null || !KNOWN_KINDS.has(kindToken)) return null;
   skipWs();
 
   // Positional `signal`.
@@ -126,8 +126,7 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
   }
 
   const topic = typeof fields["topic"] === "string" ? fields["topic"] : null;
-  const principle =
-    typeof fields["principle"] === "string" ? fields["principle"] : null;
+  const principle = typeof fields["principle"] === "string" ? fields["principle"] : null;
   if (!topic || !principle) return null;
 
   const out: ParsedMarker = {
@@ -265,12 +264,11 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
   }
 
   const kind = typeof fields["kind"] === "string" ? fields["kind"] : null;
-  if (kind === null || !KNOWN_KINDS.includes(kind)) return null;
+  if (kind === null || !KNOWN_KINDS.has(kind)) return null;
   const signal = typeof fields["signal"] === "string" ? fields["signal"] : null;
   if (signal === null || !KNOWN_SIGNALS.includes(signal)) return null;
   const topic = typeof fields["topic"] === "string" ? fields["topic"] : null;
-  const principle =
-    typeof fields["principle"] === "string" ? fields["principle"] : null;
+  const principle = typeof fields["principle"] === "string" ? fields["principle"] : null;
   if (!topic || !principle) return null;
 
   return {
@@ -353,10 +351,7 @@ export function discoverMarkersDetailed(content: string): MarkerDiscoveryResult 
           malformed++;
           continue;
         }
-        const parsed = parseBlockMarker(
-          bodyLines.join("\n"),
-          fenceStartLineNumber,
-        );
+        const parsed = parseBlockMarker(bodyLines.join("\n"), fenceStartLineNumber);
         if (parsed) out.push(parsed);
         else malformed++;
       }
@@ -392,5 +387,5 @@ function looksLikeInlineMarkerAttempt(trimmedLine: string): boolean {
   const rest = trimmedLine.slice(4);
   if (rest.length > 0 && rest[0] !== " " && rest[0] !== "\t") return false;
   const kind = rest.trimStart().split(/[ \t=]/, 1)[0] ?? "";
-  return KNOWN_KINDS.includes(kind);
+  return KNOWN_KINDS.has(kind);
 }

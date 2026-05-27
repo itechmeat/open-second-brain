@@ -10,10 +10,7 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
-import {
-  atomicCreateFileSyncExclusive,
-  atomicWriteFileSync,
-} from "./fs-atomic.ts";
+import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "./fs-atomic.ts";
 import { stem } from "./fs-utils.ts";
 import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 
@@ -26,9 +23,26 @@ const SLUG_INVALID_RE = /[^a-z0-9]+/g;
 const SLUG_MAX_LEN = 64;
 
 const MEDIA_EXTENSIONS = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".tiff", ".avif",
-  ".mp4", ".webm", ".ogv", ".mov", ".mkv", ".avi",
-  ".mp3", ".wav", ".ogg", ".flac", ".m4a",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".svg",
+  ".webp",
+  ".bmp",
+  ".tiff",
+  ".avif",
+  ".mp4",
+  ".webm",
+  ".ogv",
+  ".mov",
+  ".mkv",
+  ".avi",
+  ".mp3",
+  ".wav",
+  ".ogg",
+  ".flac",
+  ".m4a",
   ".pdf",
 ]);
 
@@ -162,16 +176,13 @@ export function writeFrontmatterAtomic(
   try {
     atomicCreateFileSyncExclusive(path, contents);
   } catch (err) {
-    if (
-      opts.existsErrorKind &&
-      (err as NodeJS.ErrnoException)?.code === "EEXIST"
-    ) {
+    if (opts.existsErrorKind && (err as NodeJS.ErrnoException)?.code === "EEXIST") {
       const rel = opts.vaultForRelativePath
         ? path.startsWith(opts.vaultForRelativePath + "/")
           ? path.slice(opts.vaultForRelativePath.length + 1)
           : path
         : path;
-      throw new Error(`${opts.existsErrorKind} already exists: ${rel}`);
+      throw new Error(`${opts.existsErrorKind} already exists: ${rel}`, { cause: err });
     }
     throw err;
   }
@@ -373,12 +384,7 @@ function splitInlineArray(inner: string): string[] {
 
 function formatYamlScalar(value: FrontmatterValue): string {
   const text = typeof value === "string" ? value : String(value);
-  if (
-    text &&
-    PLAIN_SCALAR_RE.test(text) &&
-    !text.includes(": ") &&
-    !text.includes(" #")
-  ) {
+  if (text && PLAIN_SCALAR_RE.test(text) && !text.includes(": ") && !text.includes(" #")) {
     return text;
   }
   const escaped = text

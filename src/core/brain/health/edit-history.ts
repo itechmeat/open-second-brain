@@ -49,10 +49,7 @@ function isEntry(value: unknown): value is EditHistoryEntry {
 }
 
 /** Read the sidecar, skipping malformed lines. Missing file -> `[]`. */
-export function readEditHistory(
-  vault: string,
-  slug: string,
-): EditHistoryEntry[] {
+export function readEditHistory(vault: string, slug: string): EditHistoryEntry[] {
   const path = preferenceHistoryPath(vault, slug);
   if (!existsSync(path)) return [];
   const out: EditHistoryEntry[] = [];
@@ -100,13 +97,11 @@ export function appendEditHistory(
  * by revision then field; values are quoted so empty/whitespace edits
  * stay visible.
  */
-export function renderEditHistory(
-  entries: ReadonlyArray<EditHistoryEntry>,
-): string {
+export function renderEditHistory(entries: ReadonlyArray<EditHistoryEntry>): string {
   if (entries.length === 0) return "(no recorded edits)";
   const sorted = entries
     .slice()
-    .sort((a, b) => a.revision - b.revision || a.field.localeCompare(b.field));
+    .toSorted((a, b) => a.revision - b.revision || a.field.localeCompare(b.field));
   const lines = sorted.map((e) => {
     const before = e.before === null ? "(absent)" : `"${e.before}"`;
     const after = e.after === null ? "(removed)" : `"${e.after}"`;

@@ -28,15 +28,9 @@ interface FixtureEvent {
   readonly body: Record<string, string | ReadonlyArray<string>>;
 }
 
-function writeJsonlDay(
-  vault: string,
-  date: string,
-  events: ReadonlyArray<FixtureEvent>,
-): void {
+function writeJsonlDay(vault: string, date: string, events: ReadonlyArray<FixtureEvent>): void {
   const lines = events
-    .map((e) =>
-      JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }),
-    )
+    .map((e) => JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }))
     .join("\n");
   writeFileSync(join(vault, "Brain", "log", `${date}.jsonl`), lines + "\n");
 }

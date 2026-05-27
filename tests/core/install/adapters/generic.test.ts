@@ -22,29 +22,45 @@ beforeEach(() => {
   stdoutBuf = [];
   stderrBuf = [];
   stdout = new Writable({
-    write(chunk, _enc, cb) { stdoutBuf.push(chunk.toString()); cb(); },
+    write(chunk, _enc, cb) {
+      stdoutBuf.push(chunk.toString());
+      cb();
+    },
   });
   stderr = new Writable({
-    write(chunk, _enc, cb) { stderrBuf.push(chunk.toString()); cb(); },
+    write(chunk, _enc, cb) {
+      stderrBuf.push(chunk.toString());
+      cb();
+    },
   });
   env = {
-    vault, home, cwd: home,
-    env: {}, now: new Date("2026-05-20T12:00:00.000Z"),
+    vault,
+    home,
+    cwd: home,
+    env: {},
+    now: new Date("2026-05-20T12:00:00.000Z"),
   };
 });
 
 afterEach(() => {
-  try { rmSync(vault, { recursive: true, force: true }); } catch {}
-  try { rmSync(home, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(vault, { recursive: true, force: true });
+  } catch {}
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {}
 });
 
 const payload = buildPayload({
-  vault: "/home/u/vault", agent_name: "a", timezone: "UTC",
+  vault: "/home/u/vault",
+  agent_name: "a",
+  timezone: "UTC",
 });
 
 function applyOpts(extra: Partial<Parameters<typeof genericAdapter.apply>[3]> = {}) {
   return {
-    dryRun: false, force: false,
+    dryRun: false,
+    force: false,
     stdout: stdout as unknown as NodeJS.WriteStream,
     stderr: stderr as unknown as NodeJS.WriteStream,
     ...extra,
@@ -101,7 +117,7 @@ describe("generic adapter", () => {
     const out = stdoutBuf.join("");
     expect(out).toContain("mcpServers:");
     expect(out).toContain("open-second-brain:");
-    expect(() => JSON.parse(out)).toThrow();   // not JSON
+    expect(() => JSON.parse(out)).toThrow(); // not JSON
   });
 
   test("apply dryRun does not write the output file", () => {

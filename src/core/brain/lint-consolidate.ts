@@ -18,12 +18,7 @@
  * snapshot-test the report independently of writes.
  */
 
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -82,10 +77,7 @@ function buildMergeMap(vault: string): MergeMap {
         const [meta] = parseFrontmatter(full);
         const target = readMergedInto(meta);
         if (target !== null) {
-          const id =
-            typeof meta["id"] === "string"
-              ? meta["id"]
-              : name.replace(/\.md$/, "");
+          const id = typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
           forward.set(id, target);
         }
       } catch {
@@ -113,11 +105,7 @@ function scanFileForMergedLinks(
   return { fixes, rewritten };
 }
 
-function detectStaleStable(
-  vault: string,
-  now: Date,
-  staleDays: number,
-): LintDemotion[] {
+function detectStaleStable(vault: string, now: Date, staleDays: number): LintDemotion[] {
   const out: LintDemotion[] = [];
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.preferences)) return out;
@@ -142,12 +130,10 @@ function detectStaleStable(
       const evAge = ageDaysFromIso(lastEv, now);
       if (evAge < staleDays) continue;
     }
-    const createdAt =
-      typeof meta["created_at"] === "string" ? meta["created_at"] : "";
+    const createdAt = typeof meta["created_at"] === "string" ? meta["created_at"] : "";
     const age = ageDaysFromIso(createdAt, now);
     if (age < staleDays) continue;
-    const id =
-      typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
+    const id = typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
     out.push({
       kind: "demote-stale-stable",
       id,
@@ -175,19 +161,13 @@ function applyDemotion(path: string): boolean {
   const tail = raw.slice(close);
   // Replace `_lifecycle: stable` (or legacy `lifecycle: stable`) with draft.
   // Preserve indentation/spacing.
-  const updatedHead = head.replace(
-    /^(_?lifecycle:\s+)stable\s*$/m,
-    `$1draft`,
-  );
+  const updatedHead = head.replace(/^(_?lifecycle:\s+)stable\s*$/m, `$1draft`);
   if (updatedHead === head) return false;
   atomicWriteFileSync(path, updatedHead + tail);
   return true;
 }
 
-export function lintConsolidate(
-  vault: string,
-  opts: LintOptions,
-): LintReport {
+export function lintConsolidate(vault: string, opts: LintOptions): LintReport {
   const now = opts.now ?? new Date();
   const staleDays = opts.staleDays ?? PAGE_STALE_DAYS_DEFAULT;
   const merge = buildMergeMap(vault);
@@ -227,11 +207,7 @@ export function lintConsolidate(
         } catch {
           continue;
         }
-        const { fixes: fileFixes, rewritten } = scanFileForMergedLinks(
-          full,
-          raw,
-          merge,
-        );
+        const { fixes: fileFixes, rewritten } = scanFileForMergedLinks(full, raw, merge);
         if (fileFixes.length === 0) continue;
         fixes.push(...fileFixes);
         if (opts.apply && rewritten !== raw) {

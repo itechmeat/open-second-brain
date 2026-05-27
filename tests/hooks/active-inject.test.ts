@@ -32,10 +32,7 @@ interface RunResult {
   readonly exit: number;
 }
 
-async function runHook(
-  payload: unknown,
-  env: Record<string, string> = {},
-): Promise<RunResult> {
+async function runHook(payload: unknown, env: Record<string, string> = {}): Promise<RunResult> {
   // Bun.spawn env replaces (does not merge with) process.env when
   // provided. We explicitly forward PATH so `bun run` can resolve its
   // own toolchain on $PATH-only systems.
@@ -102,10 +99,7 @@ describe("active-inject hook", () => {
   });
 
   test("stays silent when Brain/active.md does not exist", async () => {
-    const r = await runHook(
-      { hook_event_name: "SessionStart" },
-      { VAULT_DIR: vault },
-    );
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
   });
@@ -118,9 +112,7 @@ describe("active-inject hook", () => {
   });
 
   test("stays silent on empty payload", async () => {
-    writeActive(
-      "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\nbody\n",
-    );
+    writeActive("---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\nbody\n");
     const proc = Bun.spawn(["bun", "run", HOOK], {
       stdin: "pipe",
       stdout: "pipe",
@@ -146,10 +138,7 @@ describe("active-inject hook", () => {
 
   test("stays silent when active.md is empty whitespace only", async () => {
     writeActive("   \n  \n");
-    const r = await runHook(
-      { hook_event_name: "SessionStart" },
-      { VAULT_DIR: vault },
-    );
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
   });

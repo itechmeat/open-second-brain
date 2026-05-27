@@ -13,12 +13,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import {
-  mergeMcpServers,
-  removeMcpServers,
-  OSB_KEY_FULL,
-  OSB_KEY_WRITER,
-} from "../json-merge.ts";
+import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { recordEntry, readManifest, removeEntry } from "../manifest.ts";
 import { expectedPayloadFromEnv, payloadKeyEquals } from "../payload-equals.ts";
 import {
@@ -105,17 +100,38 @@ interface OnDiskState {
 function readOnDisk(spec: JsonMcpAdapterSpec, env: InstallEnv, payload: McpPayload): OnDiskState {
   const path = spec.resolveConfigPath(env);
   if (!existsSync(path)) {
-    return { exists: false, canonical: false, full: undefined, writer: undefined, raw: "", mtimeMs: null };
+    return {
+      exists: false,
+      canonical: false,
+      full: undefined,
+      writer: undefined,
+      raw: "",
+      mtimeMs: null,
+    };
   }
   const raw = readFileOrEmpty(path);
   const topKey = spec.topLevelKey ?? "mcpServers";
   const parsed = parseJsonObject(raw);
   if (parsed === null) {
-    return { exists: true, canonical: false, full: undefined, writer: undefined, raw, mtimeMs: fileMtimeMs(path) };
+    return {
+      exists: true,
+      canonical: false,
+      full: undefined,
+      writer: undefined,
+      raw,
+      mtimeMs: fileMtimeMs(path),
+    };
   }
   const block = readMcpBlock(parsed, topKey);
   if (block === null) {
-    return { exists: true, canonical: false, full: undefined, writer: undefined, raw, mtimeMs: fileMtimeMs(path) };
+    return {
+      exists: true,
+      canonical: false,
+      full: undefined,
+      writer: undefined,
+      raw,
+      mtimeMs: fileMtimeMs(path),
+    };
   }
   const full = block[OSB_KEY_FULL] as Record<string, unknown> | undefined;
   const writer = block[OSB_KEY_WRITER] as Record<string, unknown> | undefined;
@@ -192,7 +208,8 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
 
     plan(payload: McpPayload, env: InstallEnv): InstallPlan {
       const path = spec.resolveConfigPath(env);
-      const preview = `json-merge two keys into ${topKey} at ${path}: ` +
+      const preview =
+        `json-merge two keys into ${topKey} at ${path}: ` +
         `${OSB_KEY_FULL} → ${payload.full.command} ${payload.full.args.join(" ")}; ` +
         `${OSB_KEY_WRITER} → ${payload.writer.command} ${payload.writer.args.join(" ")}`;
       return {
@@ -202,12 +219,7 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       };
     },
 
-    apply(
-      _plan: InstallPlan,
-      payload: McpPayload,
-      env: InstallEnv,
-      opts: ApplyOpts,
-    ): ApplyResult {
+    apply(_plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
       const path = spec.resolveConfigPath(env);
       const onDisk = readOnDisk(spec, env, payload);
       const manifestEntry = readManifest(env.vault).installs[spec.target];
@@ -252,9 +264,7 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       // compare disk mtime against the actual install moment, not the
       // current wall clock.
       const existing = readManifest(env.vault).installs[spec.target];
-      const appliedAt = !contentChanged && existing
-        ? existing.applied_at
-        : env.now.toISOString();
+      const appliedAt = !contentChanged && existing ? existing.applied_at : env.now.toISOString();
       const manifest: ManifestEntry = {
         target: spec.target,
         applied_at: appliedAt,
@@ -273,10 +283,7 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       };
     },
 
-    uninstall(
-      env: InstallEnv,
-      opts: ApplyOpts & { fromSnippet?: boolean },
-    ): UninstallResult {
+    uninstall(env: InstallEnv, opts: ApplyOpts & { fromSnippet?: boolean }): UninstallResult {
       const path = spec.resolveConfigPath(env);
       const stored = readManifest(env.vault).installs[spec.target];
       const skipped: Array<readonly [string, string]> = [];
@@ -361,8 +368,14 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       }
       const expected = expectedPayloadFromEnv(env);
       if (
-        !payloadKeyEquals(block[OSB_KEY_FULL] as Record<string, unknown> | undefined, expected.full) ||
-        !payloadKeyEquals(block[OSB_KEY_WRITER] as Record<string, unknown> | undefined, expected.writer)
+        !payloadKeyEquals(
+          block[OSB_KEY_FULL] as Record<string, unknown> | undefined,
+          expected.full,
+        ) ||
+        !payloadKeyEquals(
+          block[OSB_KEY_WRITER] as Record<string, unknown> | undefined,
+          expected.writer,
+        )
       ) {
         return {
           target: spec.target,

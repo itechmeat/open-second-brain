@@ -10,11 +10,7 @@ import {
 
 describe("PAGE_TIER", () => {
   test("exposes exactly three tiers", () => {
-    expect(Object.values(PAGE_TIER).sort()).toEqual([
-      "core",
-      "peripheral",
-      "supporting",
-    ]);
+    expect(Object.values(PAGE_TIER).toSorted()).toEqual(["core", "peripheral", "supporting"]);
   });
 
   test("default is supporting", () => {

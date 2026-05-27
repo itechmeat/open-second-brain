@@ -23,9 +23,7 @@ export const cursorAdapter = createJsonMcpAdapter({
   target: "cursor",
   label: "Cursor",
   resolveConfigPath: configPath,
-  postNotes: [
-    "Restart the Cursor app to load the new MCP servers.",
-  ],
+  postNotes: ["Restart the Cursor app to load the new MCP servers."],
   notes: ["scope: user-global (~/.cursor/mcp.json)"],
 });
 

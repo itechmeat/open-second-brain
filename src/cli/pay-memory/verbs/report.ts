@@ -26,9 +26,7 @@ export async function cmdPaymentReport(argv: string[]): Promise<number> {
       overwrite: Boolean(flags["overwrite"]),
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to write report: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to write report: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
 

@@ -30,17 +30,25 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 async function runShim(env: Record<string, string>): Promise<string> {
   // Source the shim, then echo DYLD_LIBRARY_PATH. The shim returns 0
   // even on no-op, so we always read the echoed value (possibly empty).
+  const hasDyld = Object.prototype.hasOwnProperty.call(env, "DYLD_LIBRARY_PATH");
+  const dyldValue: string = hasDyld ? String(env["DYLD_LIBRARY_PATH"] ?? "") : "";
+  const dyldSetup = hasDyld ? `export DYLD_LIBRARY_PATH=${shellQuote(dyldValue)}; ` : "";
+  const spawnEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key !== "DYLD_LIBRARY_PATH") spawnEnv[key] = value;
+  }
+  spawnEnv["PATH"] = process.env.PATH ?? "/usr/bin:/bin";
   const proc = Bun.spawn(
-    [
-      "bash",
-      "-c",
-      `. "${SHIM}"; echo "DYLD=\${DYLD_LIBRARY_PATH-}"`,
-    ],
+    ["bash", "-c", `${dyldSetup}. "${SHIM}"; echo "DYLD=\${DYLD_LIBRARY_PATH-}"`],
     {
-      env: { ...env, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      env: spawnEnv,
       stdout: "pipe",
       stderr: "pipe",
     },

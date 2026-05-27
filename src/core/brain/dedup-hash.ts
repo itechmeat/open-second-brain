@@ -76,10 +76,7 @@ export function buildDedupIndex(
           out.set(hash, { id, path });
         }
       } catch (err) {
-        opts.onError?.(
-          path,
-          `dedup-index parse failed: ${(err as Error).message ?? String(err)}`,
-        );
+        opts.onError?.(path, `dedup-index parse failed: ${(err as Error).message ?? String(err)}`);
       }
     }
   }

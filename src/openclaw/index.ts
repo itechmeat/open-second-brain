@@ -18,6 +18,7 @@ import {
   redactMapping,
   resolveAgentName,
   resolveTimezone,
+  validateTimezoneName,
 } from "../core/config.ts";
 import { doctor } from "../core/doctor.ts";
 import { buildReminder } from "../core/identity-reminder.ts";
@@ -39,6 +40,7 @@ import type { ReceiptPolicyStatus } from "../core/pay-memory/types.ts";
 import { mkdirSync } from "node:fs";
 import { listVaultPages } from "../core/vault.ts";
 import { normalizeAgentArgument } from "../core/agent-identity.ts";
+import { parseOptionalFiniteNumberInput } from "../core/validate.ts";
 
 interface PluginConfig {
   vault?: string;
@@ -56,12 +58,7 @@ function resolveOpenclawTimezone(api: { pluginConfig?: Record<string, unknown> }
   const cfg = (api.pluginConfig ?? {}) as PluginConfig;
   const candidate = cfg.timezone || process.env["VAULT_TIMEZONE"] || null;
   if (!candidate) return null;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: candidate });
-    return candidate;
-  } catch {
-    return null;
-  }
+  return validateTimezoneName(candidate).ok ? candidate : null;
 }
 
 function resolveOpenclawAgent(
@@ -84,23 +81,14 @@ function resolveOpenclawAgent(
  * silently change a policy decision.
  */
 function coerceExpectedAmount(value: unknown): number | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error("expected_amount must be a finite number");
-    }
-    return value;
+  const parsed = parseOptionalFiniteNumberInput(value);
+  if (parsed.error === "finite-number") {
+    throw new Error("expected_amount must be a finite number");
   }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed === "") return null;
-    const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed)) {
-      throw new Error("expected_amount must be a number or numeric string");
-    }
-    return parsed;
+  if (parsed.error === "number-or-numeric-string") {
+    throw new Error("expected_amount must be a number or numeric string");
   }
-  throw new Error("expected_amount must be a number or numeric string");
+  return parsed.value;
 }
 
 function strOrNull(value: unknown): string | null {
@@ -110,7 +98,9 @@ function strOrNull(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
-function asJson(payload: unknown): { content: Array<{ type: "text"; text: string }> } {
+function asJson(payload: unknown): {
+  content: Array<{ type: "text"; text: string }>;
+} {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
   };
@@ -138,107 +128,118 @@ export default definePluginEntry({
       return { prependContext: buildReminder(agent, "openclaw") };
     });
 
-    api.registerTool(
-      {
-        name: "second_brain_status",
-        description: "Report Open Second Brain configuration and vault status.",
-        parameters: { type: "object", properties: {}, additionalProperties: false },
-        async execute(): Promise<unknown> {
-          const vault = resolveVaultPath(api);
-          const discovery = discoverConfig();
-          const result = {
-            config_path: discovery.path,
-            config_exists: discovery.exists,
-            config_keys: Object.keys(discovery.data).sort(),
-            config: redactMapping(discovery.data),
-            vault_path: vault,
-            vault_exists: existsSync(vault),
-          };
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-        },
+    api.registerTool({
+      name: "second_brain_status",
+      description: "Report Open Second Brain configuration and vault status.",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
       },
-    );
+      async execute(): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const discovery = discoverConfig();
+        const result = {
+          config_path: discovery.path,
+          config_exists: discovery.exists,
+          config_keys: Object.keys(discovery.data).toSorted(),
+          config: redactMapping(discovery.data),
+          vault_path: vault,
+          vault_exists: existsSync(vault),
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      },
+    });
 
-    api.registerTool(
-      {
-        name: "second_brain_query",
-        description: "List vault pages with optional title substring filter.",
-        parameters: {
-          type: "object",
-          properties: {
-            pattern: {
-              type: "string",
-              description: "Optional case-insensitive substring matched against page titles.",
-            },
-            limit: {
-              type: "integer",
-              minimum: 1,
-              maximum: 500,
-              description: "Maximum number of matched pages to return (default 50).",
-            },
+    api.registerTool({
+      name: "second_brain_query",
+      description: "List vault pages with optional title substring filter.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: {
+            type: "string",
+            description: "Optional case-insensitive substring matched against page titles.",
           },
-          additionalProperties: false,
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 500,
+            description: "Maximum number of matched pages to return (default 50).",
+          },
         },
-        async execute(_id, params): Promise<unknown> {
-          const vault = resolveVaultPath(api);
-          if (!existsSync(vault)) throw new Error(`vault directory missing: ${vault}`);
-          const pattern = (params["pattern"] as string | undefined) ?? null;
-          const limit = typeof params["limit"] === "number" ? (params["limit"] as number) : 50;
-          if (limit < 1 || limit > 500) throw new Error("argument 'limit' must be between 1 and 500");
-
-          const pages = listVaultPages(vault);
-          const needle = pattern ? pattern.toLowerCase() : null;
-          const matched = (needle === null
-            ? pages
-            : pages.filter((p) => p.title.toLowerCase().includes(needle))
-          )
-            .slice(0, limit)
-            .map((p) => ({ title: p.title, path: vaultRelativePath(p.path, vault), metadata: p.metadata }));
-
-          const result = {
-            vault_path: vault,
-            total_pages: pages.length,
-            returned: matched.length,
-            limit,
-            pattern,
-            pages: matched,
-          };
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-        },
+        additionalProperties: false,
       },
-    );
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        if (!existsSync(vault)) throw new Error(`vault directory missing: ${vault}`);
+        const pattern = (params["pattern"] as string | undefined) ?? null;
+        const limit = typeof params["limit"] === "number" ? (params["limit"] as number) : 50;
+        if (limit < 1 || limit > 500) throw new Error("argument 'limit' must be between 1 and 500");
+
+        const pages = listVaultPages(vault);
+        const needle = pattern ? pattern.toLowerCase() : null;
+        const matched = (
+          needle === null ? pages : pages.filter((p) => p.title.toLowerCase().includes(needle))
+        )
+          .slice(0, limit)
+          .map((p) => ({
+            title: p.title,
+            path: vaultRelativePath(p.path, vault),
+            metadata: p.metadata,
+          }));
+
+        const result = {
+          vault_path: vault,
+          total_pages: pages.length,
+          returned: matched.length,
+          limit,
+          pattern,
+          pages: matched,
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      },
+    });
 
     // Agents on this runtime record observations via the Brain writer
     // tools served by the MCP server (`brain_feedback`,
     // `brain_apply_evidence`, `brain_note`).
 
-    api.registerTool(
-      {
-        name: "vault_health",
-        description: "Run vault, config, and plugin manifest health checks.",
-        parameters: {
-          type: "object",
-          properties: {
-            repo: {
-              type: "string",
-              description: "Optional repository root to validate plugin manifests.",
-            },
+    api.registerTool({
+      name: "vault_health",
+      description: "Run vault, config, and plugin manifest health checks.",
+      parameters: {
+        type: "object",
+        properties: {
+          repo: {
+            type: "string",
+            description: "Optional repository root to validate plugin manifests.",
           },
-          additionalProperties: false,
         },
-        async execute(_id, params): Promise<unknown> {
-          const vault = resolveVaultPath(api);
-          const repoRoot = (params["repo"] as string | undefined) ?? null;
-          const results = doctor({ vault, repoRoot });
-          const result = {
-            vault_path: vault,
-            ok: results.every((r) => r.ok),
-            checks: results.map((r) => ({ name: r.name, ok: r.ok, message: r.message })),
-          };
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-        },
+        additionalProperties: false,
       },
-    );
+      async execute(_id, params): Promise<unknown> {
+        const vault = resolveVaultPath(api);
+        const repoRoot = (params["repo"] as string | undefined) ?? null;
+        const results = doctor({ vault, repoRoot });
+        const result = {
+          vault_path: vault,
+          ok: results.every((r) => r.ok),
+          checks: results.map((r) => ({
+            name: r.name,
+            ok: r.ok,
+            message: r.message,
+          })),
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      },
+    });
 
     // ── Pay Memory tools ───────────────────────────────────────────────────
 
@@ -322,9 +323,7 @@ export default definePluginEntry({
         const tz = resolveOpenclawTimezone(api) ?? resolveTimezone();
         const agent = resolveOpenclawAgent(api, (params["agent"] as string | undefined) ?? null);
 
-        let policyStatus = strOrNull(params["policy_status"]) as
-          | ReceiptPolicyStatus
-          | null;
+        let policyStatus = strOrNull(params["policy_status"]) as ReceiptPolicyStatus | null;
         let policyRule = strOrNull(params["policy_rule"]);
         const policyReasonsRaw = params["policy_reasons"];
         let policyReasons: string[] | null = null;
@@ -338,12 +337,7 @@ export default definePluginEntry({
           policyReasons = [...policyReasonsRaw] as string[];
         }
         let policyCheckedAt = strOrNull(params["policy_checked_at"]);
-        let approvalStatus:
-          | "pending"
-          | "approved"
-          | "rejected"
-          | "consumed"
-          | null = null;
+        let approvalStatus: "pending" | "approved" | "rejected" | "consumed" | null = null;
         let approvedBy: string | null = null;
         let approvedAt: string | null = null;
         const fromRequest = strOrNull(params["from_request"]);
@@ -370,9 +364,7 @@ export default definePluginEntry({
             "not_checked",
           ];
           if (!allowed.includes(policyStatus)) {
-            throw new Error(
-              `policy_status must be one of: ${allowed.join(", ")}`,
-            );
+            throw new Error(`policy_status must be one of: ${allowed.join(", ")}`);
           }
         }
 
@@ -458,8 +450,7 @@ export default definePluginEntry({
 
     api.registerTool({
       name: "payment_report_generate",
-      description:
-        `Aggregate a date's payment receipts into a Markdown report under ${PAY_MEMORY_REPORTS_REL}/.`,
+      description: `Aggregate a date's payment receipts into a Markdown report under ${PAY_MEMORY_REPORTS_REL}/.`,
       parameters: {
         type: "object",
         properties: {
@@ -492,8 +483,7 @@ export default definePluginEntry({
 
     api.registerTool({
       name: "payment_policy_check",
-      description:
-        `Evaluate a prospective paid call against ${PAY_MEMORY_SPENDING_JSON_REL}. Returns allowed / approval_required / denied + the rule that fired.`,
+      description: `Evaluate a prospective paid call against ${PAY_MEMORY_SPENDING_JSON_REL}. Returns allowed / approval_required / denied + the rule that fired.`,
       parameters: {
         type: "object",
         properties: {
@@ -525,9 +515,7 @@ export default definePluginEntry({
           reasons: decision.reasons,
           has_policy: decision.hasPolicy,
           policy_path:
-            decision.policyPath !== null
-              ? vaultRelativePath(decision.policyPath, vault)
-              : null,
+            decision.policyPath !== null ? vaultRelativePath(decision.policyPath, vault) : null,
           currency: decision.currency,
         });
       },
@@ -564,10 +552,7 @@ export default definePluginEntry({
         const vaultFilesRaw = params["vault_files"];
         let vaultFiles: string[] | null = null;
         if (vaultFilesRaw !== undefined && vaultFilesRaw !== null) {
-          if (
-            !Array.isArray(vaultFilesRaw) ||
-            !vaultFilesRaw.every((s) => typeof s === "string")
-          ) {
+          if (!Array.isArray(vaultFilesRaw) || !vaultFilesRaw.every((s) => typeof s === "string")) {
             throw new Error("vault_files must be an array of strings");
           }
           vaultFiles = [...vaultFilesRaw] as string[];

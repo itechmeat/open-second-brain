@@ -63,11 +63,8 @@ describe("planRemediation", () => {
     const plan = planRemediation(allFindings, { stepCap: 10 });
     const auto = plan.steps.filter((s) => s.classification === "auto-safe");
     const review = plan.steps.filter((s) => s.classification === "needs-review");
-    expect(auto.map((s) => s.code)).toEqual([
-      "content-hash-drift",
-      "content-hash-drift",
-    ]);
-    expect(review.map((s) => s.code).sort()).toEqual([
+    expect(auto.map((s) => s.code)).toEqual(["content-hash-drift", "content-hash-drift"]);
+    expect(review.map((s) => s.code).toSorted()).toEqual([
       "concept-gap",
       "contradictory-preferences",
       "stale-claim",
@@ -117,7 +114,12 @@ describe("applyRemediation", () => {
     writeDriftedPref("a-drift");
     writeDriftedPref("b-drift");
     const plan = planRemediation(
-      { driftedSlugs: ["a-drift", "b-drift"], contradictions: [], staleClaims: [], conceptGaps: [] },
+      {
+        driftedSlugs: ["a-drift", "b-drift"],
+        contradictions: [],
+        staleClaims: [],
+        conceptGaps: [],
+      },
       { stepCap: 1 },
     );
     const outcome = applyRemediation(vault, plan, { dryRun: false });

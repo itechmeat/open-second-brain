@@ -10,12 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,17 +20,11 @@ import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 let vault: string;
 
 function writePref(slug: string, body: string): void {
-  writeFileSync(
-    join(vault, "Brain", "preferences", `${slug}.md`),
-    `${body}\n`,
-  );
+  writeFileSync(join(vault, "Brain", "preferences", `${slug}.md`), `${body}\n`);
 }
 
 function writeRetired(slug: string, body: string): void {
-  writeFileSync(
-    join(vault, "Brain", "retired", `${slug}.md`),
-    `${body}\n`,
-  );
+  writeFileSync(join(vault, "Brain", "retired", `${slug}.md`), `${body}\n`);
 }
 
 beforeEach(() => {
@@ -145,9 +134,7 @@ describe("buildAliasIndex - normalisation", () => {
     const idx = buildAliasIndex(vault);
     // Lookup with composed form should hit (NFC normalises both
     // sides).
-    expect(idx.get(composed.normalize("NFC").toLowerCase())).toBe(
-      "pref-cafe",
-    );
+    expect(idx.get(composed.normalize("NFC").toLowerCase())).toBe("pref-cafe");
   });
 
   test("trims whitespace from alias entries", () => {
@@ -238,14 +225,9 @@ describe("buildAliasIndex - collision handling", () => {
     );
     writePref(
       "pref-bar",
-      [
-        "---",
-        "kind: preference",
-        "topic: bar",
-        "status: confirmed",
-        "principle: y",
-        "---",
-      ].join("\n"),
+      ["---", "kind: preference", "topic: bar", "status: confirmed", "principle: y", "---"].join(
+        "\n",
+      ),
     );
     const idx = buildAliasIndex(vault);
     expect(idx.get("pref-bar")).toBeUndefined();
@@ -262,14 +244,9 @@ describe("buildAliasIndex - degenerate inputs", () => {
   test("artifact without aliases is skipped", () => {
     writePref(
       "pref-noalias",
-      [
-        "---",
-        "kind: preference",
-        "topic: x",
-        "status: confirmed",
-        "principle: y",
-        "---",
-      ].join("\n"),
+      ["---", "kind: preference", "topic: x", "status: confirmed", "principle: y", "---"].join(
+        "\n",
+      ),
     );
     const idx = buildAliasIndex(vault);
     expect(idx.size).toBe(0);
@@ -293,13 +270,7 @@ describe("buildAliasIndex - degenerate inputs", () => {
   });
 
   test("malformed frontmatter row is silently skipped", () => {
-    writePref(
-      "pref-bad",
-      [
-        "no frontmatter here",
-        "just body content",
-      ].join("\n"),
-    );
+    writePref("pref-bad", ["no frontmatter here", "just body content"].join("\n"));
     writePref(
       "pref-good",
       [

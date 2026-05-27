@@ -39,9 +39,7 @@ export async function cmdBrainDaily(argv: string[]): Promise<number> {
   }
 
   process.stdout.write(`Daily brief ${brief.date}\n`);
-  process.stdout.write(
-    `  window: ${brief.window.since} .. ${brief.window.until}\n`,
-  );
+  process.stdout.write(`  window: ${brief.window.since} .. ${brief.window.until}\n`);
   process.stdout.write(`  events by kind:\n`);
   for (const [kind, count] of Object.entries(brief.eventsByKind)) {
     process.stdout.write(`    ${kind}: ${count}\n`);

@@ -21,9 +21,7 @@ export const kiroAdapter = createJsonMcpAdapter({
   target: "kiro",
   label: "kiro",
   resolveConfigPath: configPath,
-  postNotes: [
-    "Restart kiro to load the new MCP servers.",
-  ],
+  postNotes: ["Restart kiro to load the new MCP servers."],
 });
 
 defaultRegistry.register(kiroAdapter);

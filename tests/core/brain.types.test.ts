@@ -191,7 +191,7 @@ describe("interface shape smoke (compile-time)", () => {
       retire: { stale_evidence_days: 90 },
       confidence: {
         low_max_applied: 2,
-        medium_min: 0.40,
+        medium_min: 0.4,
         high_min: 0.75,
       },
       snapshots: { retention_count: 10 },

@@ -47,10 +47,10 @@ describe("detectStaleClaims", () => {
   });
 
   test("skips preferences with no evidence date", () => {
-    const stale = detectStaleClaims(
-      [pref({ id: "pref-none", last_evidence_at: null })],
-      { maxAgeDays: 90, now: NOW },
-    );
+    const stale = detectStaleClaims([pref({ id: "pref-none", last_evidence_at: null })], {
+      maxAgeDays: 90,
+      now: NOW,
+    });
     expect(stale).toEqual([]);
   });
 
@@ -81,9 +81,7 @@ describe("detectStaleClaims", () => {
       [pref({ id: "pref-dateonly", last_evidence_at: "2026-01-01" })],
       { maxAgeDays: 90, now: NOW },
     );
-    expect(stale).toEqual([
-      { id: "pref-dateonly", lastEvidenceAt: "2026-01-01", ageDays: 146 },
-    ]);
+    expect(stale).toEqual([{ id: "pref-dateonly", lastEvidenceAt: "2026-01-01", ageDays: 146 }]);
   });
 
   test("orders findings by age descending", () => {

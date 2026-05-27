@@ -177,9 +177,7 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
     version: 2,
     up(db) {
       db.exec(DDL_V2_ENTITIES);
-      const cols = db
-        .query<{ name: string }, []>("PRAGMA table_info(chunks)")
-        .all();
+      const cols = db.query<{ name: string }, []>("PRAGMA table_info(chunks)").all();
       if (!cols.some((c) => c.name === "heading_path")) {
         db.exec("ALTER TABLE chunks ADD COLUMN heading_path TEXT NOT NULL DEFAULT ''");
       }

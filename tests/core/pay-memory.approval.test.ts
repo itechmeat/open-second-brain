@@ -142,9 +142,9 @@ describe("state transitions", () => {
 
   test("approve then consume requires the approved state", async () => {
     writePendingRequest(tmp, { ...baseInput, slug: "t-3" });
-    await expect(
-      consumePendingRequest(tmp, "t-3", { receiptPath: "x" }),
-    ).rejects.toThrow(/cannot transition request t-3 from pending to consumed/);
+    await expect(consumePendingRequest(tmp, "t-3", { receiptPath: "x" })).rejects.toThrow(
+      /cannot transition request t-3 from pending to consumed/,
+    );
     await approvePendingRequest(tmp, "t-3", { approvedBy: "sergey" });
     const out = await consumePendingRequest(tmp, "t-3", {
       receiptPath: `${PAY_MEMORY_ROOT_REL}/2026-05-10/x.md`,
@@ -157,22 +157,18 @@ describe("state transitions", () => {
   test("rejected and consumed are terminal", async () => {
     writePendingRequest(tmp, { ...baseInput, slug: "t-4" });
     await rejectPendingRequest(tmp, "t-4", { rejectedBy: "sergey" });
-    await expect(
-      approvePendingRequest(tmp, "t-4", { approvedBy: "x" }),
-    ).rejects.toThrow();
+    await expect(approvePendingRequest(tmp, "t-4", { approvedBy: "x" })).rejects.toThrow();
 
     writePendingRequest(tmp, { ...baseInput, slug: "t-5" });
     await approvePendingRequest(tmp, "t-5", { approvedBy: "sergey" });
     await consumePendingRequest(tmp, "t-5", { receiptPath: "x" });
-    await expect(
-      consumePendingRequest(tmp, "t-5", { receiptPath: "y" }),
-    ).rejects.toThrow();
+    await expect(consumePendingRequest(tmp, "t-5", { receiptPath: "y" })).rejects.toThrow();
   });
 
   test("transitioning a non-existent request throws", async () => {
-    await expect(
-      approvePendingRequest(tmp, "nope", { approvedBy: "x" }),
-    ).rejects.toThrow(/not found/);
+    await expect(approvePendingRequest(tmp, "nope", { approvedBy: "x" })).rejects.toThrow(
+      /not found/,
+    );
   });
 
   test("concurrent approve+reject on the same id: exactly one transition wins", async () => {
@@ -204,7 +200,7 @@ describe("listPendingRequests", () => {
     const pending = listPendingRequests(tmp);
     expect(pending.map((s) => s.id)).toEqual(["p-1"]);
     const all = listPendingRequests(tmp, { status: "all" });
-    expect(all.map((s) => s.id).sort()).toEqual(["p-1", "p-2"]);
+    expect(all.map((s) => s.id).toSorted()).toEqual(["p-1", "p-2"]);
     const rejected = listPendingRequests(tmp, { status: "rejected" });
     expect(rejected.map((s) => s.id)).toEqual(["p-2"]);
   });

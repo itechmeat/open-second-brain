@@ -27,13 +27,7 @@ import type { BrainPreference, BrainRetired } from "./types.ts";
 
 // ----- Public types --------------------------------------------------------
 
-export type BrainTreeEntryKind =
-  | "preference"
-  | "retired"
-  | "signal"
-  | "log"
-  | "config"
-  | "other";
+export type BrainTreeEntryKind = "preference" | "retired" | "signal" | "log" | "config" | "other";
 
 export interface BrainTreeEntry {
   /** Vault-relative path under `Brain/<…>`. */
@@ -100,10 +94,7 @@ const TRACKED_RETIRED_FIELDS: ReadonlyArray<keyof BrainRetired> = Object.freeze(
  * treated as "not present", not as errors. The function never
  * mutates either tree. Returned arrays are frozen for caller safety.
  */
-export function diffBrainTrees(
-  rootA: string,
-  rootB: string,
-): BrainTreeDiff {
+export function diffBrainTrees(rootA: string, rootB: string): BrainTreeDiff {
   const a = walkBrain(rootA);
   const b = walkBrain(rootB);
 
@@ -269,10 +260,7 @@ function scanFile(_root: string, abs: string, rel: string): ScannedFile {
       };
     }
   }
-  if (
-    (rel.startsWith("inbox/") || rel.startsWith("processed/"))
-    && baseName.startsWith("sig-")
-  ) {
+  if ((rel.startsWith("inbox/") || rel.startsWith("processed/")) && baseName.startsWith("sig-")) {
     return {
       entry: {
         path: `Brain/${rel}`,
@@ -296,11 +284,7 @@ function scanFile(_root: string, abs: string, rel: string): ScannedFile {
       bytes: readFileSafe(abs),
     };
   }
-  if (
-    rel === "_brain.yaml"
-    || rel === "_BRAIN.md"
-    || rel === "active.md"
-  ) {
+  if (rel === "_brain.yaml" || rel === "_BRAIN.md" || rel === "active.md") {
     return {
       entry: {
         path: `Brain/${rel}`,
@@ -388,9 +372,7 @@ function diffRetired(a: ScannedFile, b: ScannedFile): BrainTreeChange {
   return { entry: b.entry, fields, bodyChanged };
 }
 
-function normaliseValue(
-  v: unknown,
-): string | number | boolean | null {
+function normaliseValue(v: unknown): string | number | boolean | null {
   if (v === undefined) return null;
   if (v === null) return null;
   if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {

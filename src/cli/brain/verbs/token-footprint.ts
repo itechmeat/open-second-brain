@@ -49,9 +49,7 @@ export async function cmdBrainTokenFootprint(argv: string[]): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(
-    `total tokens: ${report.total} (across ${report.files} file(s))\n`,
-  );
+  process.stdout.write(`total tokens: ${report.total} (across ${report.files} file(s))\n`);
   process.stdout.write(`warn threshold: ${report.warnThreshold}\n`);
   if (report.exceeded) {
     process.stdout.write(`WARN: vault exceeds ${report.warnThreshold} tokens\n`);

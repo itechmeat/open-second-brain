@@ -111,7 +111,7 @@ export function collectDriftedSlugs(vault: string): string[] {
       // schema error - reported by the doctor
     }
   }
-  return out.sort((a, b) => a.localeCompare(b));
+  return out.toSorted((a, b) => a.localeCompare(b));
 }
 
 export function planRemediation(
@@ -228,9 +228,7 @@ export function applyRemediation(
       continue;
     }
     const didWrite =
-      step.action === "restamp-content-hash"
-        ? restampContentHash(vault, step.target)
-        : false;
+      step.action === "restamp-content-hash" ? restampContentHash(vault, step.target) : false;
     if (didWrite) {
       applied.push(step);
       budget--;

@@ -4,8 +4,12 @@ import { planAction } from "../../../src/core/brain/claude-memory-plan.ts";
 describe("planAction", () => {
   const make = (overrides: Partial<Parameters<typeof planAction>[0]>) =>
     planAction({
-      basename: "x.md", prefId: "pref-x", sha256: "h",
-      inManifest: null, prefExists: false, ...overrides,
+      basename: "x.md",
+      prefId: "pref-x",
+      sha256: "h",
+      inManifest: null,
+      prefExists: false,
+      ...overrides,
     });
 
   test("no manifest + no pref → CREATE", () => {

@@ -1,8 +1,5 @@
 import { defaultConfigPath } from "../../../core/config.ts";
-import {
-  auditMoc,
-  MocAuditError,
-} from "../../../core/brain/link-graph/moc-audit.ts";
+import { auditMoc, MocAuditError } from "../../../core/brain/link-graph/moc-audit.ts";
 import { normaliseWikilinkTarget } from "../../../core/brain/wikilink.ts";
 import { parse, fail, resolveBrainVault } from "../helpers.ts";
 
@@ -42,9 +39,7 @@ export async function cmdBrainMocAudit(argv: string[]): Promise<number> {
           well_covered: report.wellCovered,
           fragile: report.fragile,
           candidate_missing: report.candidateMissing,
-          ...(report.suggestedNext
-            ? { suggested_next: report.suggestedNext }
-            : {}),
+          ...(report.suggestedNext ? { suggested_next: report.suggestedNext } : {}),
         },
         null,
         2,
@@ -53,9 +48,7 @@ export async function cmdBrainMocAudit(argv: string[]): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(
-    `MOC audit for ${report.hubId} (${report.outboundCount} outbound):\n`,
-  );
+  process.stdout.write(`MOC audit for ${report.hubId} (${report.outboundCount} outbound):\n`);
   process.stdout.write(`  well-covered: ${report.wellCovered.length}\n`);
   for (const m of report.wellCovered) {
     process.stdout.write(`    ${m.id}  (backlinks=${m.backlinkCount}, body=${m.bodyChars})\n`);

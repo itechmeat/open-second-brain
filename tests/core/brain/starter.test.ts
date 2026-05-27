@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,8 +28,8 @@ function withRegisteredConfig(): { vault: string; config: string } {
   writeFileSync(
     config,
     [
-      'kind: open-second-brain-config',
-      'schema_version: 1',
+      "kind: open-second-brain-config",
+      "schema_version: 1",
       `vault: ${JSON.stringify(vault)}`,
       'agent_name: "starter-test-agent"',
       "",
@@ -90,10 +84,7 @@ describe("copyStarterBundle", () => {
     for (const sub of ["preferences", "retired", "inbox", "log"]) {
       mkdirSync(join(vault, "Brain", sub), { recursive: true });
     }
-    writeFileSync(
-      join(vault, "Brain", "log", "2026-05-01.md"),
-      "---\ndate: 2026-05-01\n---\n",
-    );
+    writeFileSync(join(vault, "Brain", "log", "2026-05-01.md"), "---\ndate: 2026-05-01\n---\n");
     expect(() => copyStarterBundle(vault)).toThrow(BrainStarterError);
   });
 
@@ -113,9 +104,7 @@ describe("copyStarterBundle", () => {
     );
     const result = copyStarterBundle(vault, { starterPath: custom });
     expect(result.copied).toHaveLength(1);
-    expect(readdirSync(join(vault, "Brain", "preferences"))).toEqual([
-      "pref-x.md",
-    ]);
+    expect(readdirSync(join(vault, "Brain", "preferences"))).toEqual(["pref-x.md"]);
   });
 
   test("rejects a starter path that does not exist", () => {
@@ -140,11 +129,12 @@ describe("bootstrapBrain --starter", () => {
     });
     // 2 baseline file entries (_brain.yaml, _BRAIN.md) plus 18 from
     // the starter bundle.
-    const starterEntries = r.created.filter((p) =>
-      p.startsWith("Brain/preferences/")
-      || p.startsWith("Brain/retired/")
-      || p.startsWith("Brain/inbox/")
-      || p.startsWith("Brain/log/"),
+    const starterEntries = r.created.filter(
+      (p) =>
+        p.startsWith("Brain/preferences/") ||
+        p.startsWith("Brain/retired/") ||
+        p.startsWith("Brain/inbox/") ||
+        p.startsWith("Brain/log/"),
     );
     expect(starterEntries).toHaveLength(18);
 

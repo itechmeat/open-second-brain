@@ -34,8 +34,7 @@ export function selectEvents(
   // Pick the narrowest pre-grouped bucket the filter set permits to
   // avoid scanning the full event list when the caller has already
   // committed to a kind / prefId / topic.
-  const source =
-    pickNarrowSource(index, filters) ?? index.events;
+  const source = pickNarrowSource(index, filters) ?? index.events;
   const out: TemporalEvent[] = [];
   for (const ev of source) {
     if (!matchesFilters(ev, filters)) continue;
@@ -60,10 +59,7 @@ function pickNarrowSource(
   return undefined;
 }
 
-function matchesFilters(
-  ev: TemporalEvent,
-  filters: SelectEventsFilters,
-): boolean {
+function matchesFilters(ev: TemporalEvent, filters: SelectEventsFilters): boolean {
   if (filters.prefId !== undefined && ev.prefId !== filters.prefId) return false;
   if (filters.topic !== undefined && ev.topic !== filters.topic) return false;
   if (filters.kind !== undefined && ev.kind !== filters.kind) return false;

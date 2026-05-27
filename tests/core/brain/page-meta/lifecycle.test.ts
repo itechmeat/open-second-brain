@@ -11,7 +11,7 @@ import {
 
 describe("PAGE_LIFECYCLE", () => {
   test("enumerates exactly the six documented values", () => {
-    expect(Object.values(PAGE_LIFECYCLE).sort()).toEqual([
+    expect(Object.values(PAGE_LIFECYCLE).toSorted()).toEqual([
       "archived",
       "deprecated",
       "disputed",
@@ -56,9 +56,7 @@ describe("readLifecycle", () => {
   });
 
   test("modern shape wins over legacy", () => {
-    expect(
-      readLifecycle({ _lifecycle: "verified", lifecycle: "draft" }),
-    ).toBe("verified");
+    expect(readLifecycle({ _lifecycle: "verified", lifecycle: "draft" })).toBe("verified");
   });
 });
 

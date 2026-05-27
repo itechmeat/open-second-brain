@@ -1,12 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -393,7 +386,12 @@ describe("dream — confidence formula at boundaries", () => {
   // pref.confidence. Default config (from policy.ts):
   //   low_max_applied: 2, stale_evidence_days: 90,
   //   medium_min: 0.40, high_min: 0.75.
-  function setupForConfidence(slug: string, applied: number, violated: number, fresh: boolean): void {
+  function setupForConfidence(
+    slug: string,
+    applied: number,
+    violated: number,
+    fresh: boolean,
+  ): void {
     writePreference(vault, {
       slug,
       topic: slug,
@@ -493,19 +491,13 @@ describe("dream — idempotency and determinism", () => {
     const first = dream(vault, { now: new Date("2026-05-14T20:00:00Z") });
     expect(first.changed).toBe(true);
 
-    const logBefore = readFileSync(
-      join(brainDirs(vault).log, "2026-05-14.md"),
-      "utf8",
-    );
+    const logBefore = readFileSync(join(brainDirs(vault).log, "2026-05-14.md"), "utf8");
 
     // Second run on a fresh `now` so the run_id would be different.
     const second = dream(vault, { now: new Date("2026-05-14T20:01:00Z") });
     expect(second.changed).toBe(false);
 
-    const logAfter = readFileSync(
-      join(brainDirs(vault).log, "2026-05-14.md"),
-      "utf8",
-    );
+    const logAfter = readFileSync(join(brainDirs(vault).log, "2026-05-14.md"), "utf8");
     expect(logAfter).toBe(logBefore);
   });
 
@@ -561,11 +553,9 @@ describe("dream — dryRun mode", () => {
     seedSignal({ topic: "dry", slug: "b", signal: "negative", date: "2026-05-14" });
     seedSignal({ topic: "dry", slug: "c", signal: "negative", date: "2026-05-14" });
 
-    const beforeInbox = listInboxActive().sort();
-    const beforePrefs = listPreferences().sort();
-    const beforeLog = existsSync(
-      join(brainDirs(vault).log, "2026-05-14.md"),
-    );
+    const beforeInbox = listInboxActive().toSorted();
+    const beforePrefs = listPreferences().toSorted();
+    const beforeLog = existsSync(join(brainDirs(vault).log, "2026-05-14.md"));
 
     const res = dream(vault, {
       now: new Date("2026-05-14T20:00:00Z"),
@@ -580,8 +570,8 @@ describe("dream — dryRun mode", () => {
     expect(res.log_path).toBeUndefined();
 
     // Nothing actually changed on disk.
-    expect(listInboxActive().sort()).toEqual(beforeInbox);
-    expect(listPreferences().sort()).toEqual(beforePrefs);
+    expect(listInboxActive().toSorted()).toEqual(beforeInbox);
+    expect(listPreferences().toSorted()).toEqual(beforePrefs);
     expect(existsSync(join(brainDirs(vault).log, "2026-05-14.md"))).toBe(beforeLog);
   });
 });

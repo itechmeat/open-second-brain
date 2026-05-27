@@ -14,20 +14,8 @@
  * lock that contract.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-  readFileSync,
-} from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -103,8 +91,7 @@ describe("dream — non-primary warning channel", () => {
     setPrimaryAgent(vault, "hermes-vps");
     seedSignals();
     const r = dream(vault, { agentName: "hermes-vps", now: NOW });
-    expect(r.warnings.find((w) => w.code === "non-primary-dream-run"))
-      .toBeUndefined();
+    expect(r.warnings.find((w) => w.code === "non-primary-dream-run")).toBeUndefined();
   });
 
   test("primary_agent: null never warns regardless of caller agent", () => {

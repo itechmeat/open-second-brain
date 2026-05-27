@@ -9,8 +9,4 @@
  * `src/core/redactor.ts` directly.
  */
 
-export {
-  MAX_REDACTOR_INPUT,
-  SECRET_KEYS,
-  redactRawOutput,
-} from "../redactor.ts";
+export { MAX_REDACTOR_INPUT, SECRET_KEYS, redactRawOutput } from "../redactor.ts";

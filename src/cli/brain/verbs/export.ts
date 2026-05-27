@@ -21,14 +21,26 @@ export async function cmdBrainExport(argv: string[]): Promise<number> {
 
   let body: string;
   try {
-    body = format === "json" ? JSON.stringify(exportPreferencesJson(vault)) + "\n" : exportPreferencesLlmsTxt(vault);
-  } catch (exc) { return fail(`export failed: ${(exc as Error).message ?? exc}`); }
+    body =
+      format === "json"
+        ? JSON.stringify(exportPreferencesJson(vault)) + "\n"
+        : exportPreferencesLlmsTxt(vault);
+  } catch (exc) {
+    return fail(`export failed: ${(exc as Error).message ?? exc}`);
+  }
 
   const outPath = flags["out"] as string | undefined;
-  if (outPath === undefined) { process.stdout.write(body); return 0; }
-  if (existsSync(outPath) && !flags["force"]) return fail(`${outPath} exists; pass --force to overwrite`);
-  try { atomicWriteFileSync(outPath, body); }
-  catch (exc) { return fail(`failed to write ${outPath}: ${(exc as Error).message ?? exc}`); }
+  if (outPath === undefined) {
+    process.stdout.write(body);
+    return 0;
+  }
+  if (existsSync(outPath) && !flags["force"])
+    return fail(`${outPath} exists; pass --force to overwrite`);
+  try {
+    atomicWriteFileSync(outPath, body);
+  } catch (exc) {
+    return fail(`failed to write ${outPath}: ${(exc as Error).message ?? exc}`);
+  }
   ok(`wrote ${outPath}`);
   return 0;
 }

@@ -52,12 +52,8 @@ test("semantic enabled, no key → recipe mentions the env var and the provider"
     semantic: { enabled: true, apiKey: null, model: "text-embedding-3-small" },
   });
   const r = await indexCheck(cfg);
-  expect(
-    r.recommendations.some((s) => s.includes("OPEN_SECOND_BRAIN_EMBEDDING_KEY")),
-  ).toBe(true);
-  expect(
-    r.recommendations.some((s) => s.includes("text-embedding-3-small")),
-  ).toBe(true);
+  expect(r.recommendations.some((s) => s.includes("OPEN_SECOND_BRAIN_EMBEDDING_KEY"))).toBe(true);
+  expect(r.recommendations.some((s) => s.includes("text-embedding-3-small"))).toBe(true);
 });
 
 test("vec unavailable on Darwin → brew sqlite recipe", async () => {
@@ -74,9 +70,7 @@ test("vec unavailable on Darwin → brew sqlite recipe", async () => {
   // host. The Darwin recommendation only appears when vec didn't
   // load — assert conditional on the report's own field.
   if (r.vecExtension === "unavailable") {
-    expect(
-      r.recommendations.some((s) => s.includes("brew install sqlite")),
-    ).toBe(true);
+    expect(r.recommendations.some((s) => s.includes("brew install sqlite"))).toBe(true);
   }
 });
 
@@ -89,12 +83,8 @@ test("vec unavailable on Linux → bun pm hint, no brew mention", async () => {
   });
   const r = await indexCheck(cfg);
   if (r.vecExtension === "unavailable") {
-    expect(
-      r.recommendations.some((s) => s.includes("bun pm ls")),
-    ).toBe(true);
-    expect(
-      r.recommendations.every((s) => !s.includes("brew install")),
-    ).toBe(true);
+    expect(r.recommendations.some((s) => s.includes("bun pm ls"))).toBe(true);
+    expect(r.recommendations.every((s) => !s.includes("brew install"))).toBe(true);
   }
 });
 

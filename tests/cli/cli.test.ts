@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  readdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -73,7 +81,17 @@ describe("init", () => {
     const vault = join(tmp, "vault");
     const config = join(tmp, "config.yaml");
     const r = await runCli(
-      ["init", "--vault", vault, "--name", "Test", "--agent-name", "hermes-vps-agent", "--timezone", "Europe/Belgrade"],
+      [
+        "init",
+        "--vault",
+        vault,
+        "--name",
+        "Test",
+        "--agent-name",
+        "hermes-vps-agent",
+        "--timezone",
+        "Europe/Belgrade",
+      ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
@@ -106,7 +124,6 @@ describe("init", () => {
     expect(r.stdout).toContain("agent name persisted to:");
     expect(readFileSync(config, "utf8")).toContain("hermes-vps-agent");
   });
-
 });
 
 describe("doctor", () => {

@@ -69,9 +69,7 @@ describe("post-write-reminder hook", () => {
     expect(r.exit).toBe(0);
     const out = JSON.parse(r.stdout);
     expect(out.hookSpecificOutput.additionalContext).toContain("apply_patch");
-    expect(out.hookSpecificOutput.additionalContext).toContain(
-      "/srv/projects/x/src/index.ts",
-    );
+    expect(out.hookSpecificOutput.additionalContext).toContain("/srv/projects/x/src/index.ts");
   });
 
   test("stays silent when Claude's tool_response reports an error", async () => {
@@ -128,14 +126,11 @@ describe("post-write-reminder hook", () => {
     });
     expect(r.exit).toBe(0);
     const out = JSON.parse(r.stdout);
-    expect(out.hookSpecificOutput.additionalContext).toContain(
-      "Claude Code session",
-    );
+    expect(out.hookSpecificOutput.additionalContext).toContain("Claude Code session");
   });
 
   test("Codex apply_patch shape triggers the codex cadence line", async () => {
-    const patch =
-      "*** Begin Patch\n*** Update File: /tmp/x\n*** End Patch\n";
+    const patch = "*** Begin Patch\n*** Update File: /tmp/x\n*** End Patch\n";
     const r = await runHook({
       hook_event_name: "PostToolUse",
       tool_name: "apply_patch",

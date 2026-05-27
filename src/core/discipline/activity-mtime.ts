@@ -3,11 +3,18 @@ import { join } from "node:path";
 import type { ActivityWindow } from "./activity-git.ts";
 
 const EXCLUDE_DIRS: ReadonlySet<string> = new Set([
-  ".git", ".hg", ".svn",
-  "node_modules", ".cache",
-  "__pycache__", ".venv", "venv",
+  ".git",
+  ".hg",
+  ".svn",
+  "node_modules",
+  ".cache",
+  "__pycache__",
+  ".venv",
+  "venv",
   ".snapshots",
-  "dist", "build", "out",
+  "dist",
+  "build",
+  "out",
 ]);
 
 export interface MtimeActivity {

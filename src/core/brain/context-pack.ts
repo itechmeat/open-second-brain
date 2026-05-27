@@ -13,11 +13,7 @@
  * are reported in `pagesSkipped` with their estimated cost.
  */
 
-import {
-  existsSync,
-  readdirSync,
-  statSync,
-} from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
@@ -118,10 +114,7 @@ function collectCandidates(vault: string): Candidate[] {
   return out;
 }
 
-export function packContext(
-  vault: string,
-  opts: ContextPackOptions,
-): ContextPackReport {
+export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport {
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
     return Object.freeze({
       maxTokens: 0,
@@ -130,9 +123,7 @@ export function packContext(
       skipped: Object.freeze([]),
     });
   }
-  const query = opts.query
-    ? normalizeForDedup(opts.query)
-    : null;
+  const query = opts.query ? normalizeForDedup(opts.query) : null;
   const candidates = collectCandidates(vault);
 
   candidates.sort((a, b) => {

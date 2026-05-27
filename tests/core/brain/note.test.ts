@@ -70,9 +70,9 @@ describe("appendBrainNote", () => {
   });
 
   test("rejects whitespace-only text", () => {
-    expect(() =>
-      appendBrainNote({ vault, text: "   ", agent: "tester", now: new Date() }),
-    ).toThrow(/text is required/);
+    expect(() => appendBrainNote({ vault, text: "   ", agent: "tester", now: new Date() })).toThrow(
+      /text is required/,
+    );
   });
 
   test("rejects text that becomes empty after sanitising", () => {

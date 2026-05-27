@@ -7,13 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -83,10 +77,9 @@ describe("o2b brain explorer --export", () => {
     await bootstrap();
     seedOnePref();
     const out = join(tmp, "brain.html");
-    const r = await runCli(
-      ["brain", "explorer", "--vault", vault, "--export", out],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "explorer", "--vault", vault, "--export", out], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("exported");
     expect(existsSync(out)).toBe(true);
@@ -105,10 +98,9 @@ describe("o2b brain explorer --export", () => {
     seedOnePref();
     const out = join(tmp, "brain.html");
     writeFileSync(out, "pre-existing");
-    const r = await runCli(
-      ["brain", "explorer", "--vault", vault, "--export", out],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "explorer", "--vault", vault, "--export", out], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(1);
     expect(r.stderr).toContain("exists");
     expect(readFileSync(out, "utf8")).toBe("pre-existing");
@@ -119,35 +111,22 @@ describe("o2b brain explorer --export", () => {
     seedOnePref();
     const out = join(tmp, "brain.html");
     writeFileSync(out, "pre-existing");
-    const r = await runCli(
-      [
-        "brain", "explorer", "--vault", vault,
-        "--export", out, "--force",
-      ],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "explorer", "--vault", vault, "--export", out, "--force"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(readFileSync(out, "utf8").startsWith("<!doctype html>")).toBe(true);
   });
 
-  test("invalid --port value exits 1", async () => {
+  test("invalid --port values exit 1", async () => {
     await bootstrap();
-    const r = await runCli(
-      ["brain", "explorer", "--vault", vault, "--port", "garbage"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(1);
-    expect(r.stderr).toContain("invalid --port");
-  });
-
-  test("partially numeric --port value exits 1", async () => {
-    await bootstrap();
-    const r = await runCli(
-      ["brain", "explorer", "--vault", vault, "--port", "123abc"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(r.returncode).toBe(1);
-    expect(r.stderr).toContain("invalid --port");
+    for (const port of ["garbage", "123abc"]) {
+      const r = await runCli(["brain", "explorer", "--vault", vault, "--port", port], {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      });
+      expect(r.returncode).toBe(1);
+      expect(r.stderr).toContain("invalid --port");
+    }
   });
 });
 
@@ -162,10 +141,15 @@ describe("o2b brain explorer (live)", () => {
     const isolatedConfig = config;
     const proc = Bun.spawn(
       [
-        "bun", "run", "src/cli/main.ts",
-        "brain", "explorer",
-        "--vault", vault,
-        "--port", String(port),
+        "bun",
+        "run",
+        "src/cli/main.ts",
+        "brain",
+        "explorer",
+        "--vault",
+        vault,
+        "--port",
+        String(port),
       ],
       {
         cwd: process.cwd(),
@@ -223,10 +207,9 @@ describe("o2b brain explorer (live)", () => {
       fetch: () => new Response("blocker"),
     });
     try {
-      const r = await runCli(
-        ["brain", "explorer", "--vault", vault, "--port", String(port)],
-        { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-      );
+      const r = await runCli(["brain", "explorer", "--vault", vault, "--port", String(port)], {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      });
       expect(r.returncode).toBe(1);
       expect(r.stderr).toMatch(/already in use|in use/);
     } finally {

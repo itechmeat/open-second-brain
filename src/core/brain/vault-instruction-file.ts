@@ -12,13 +12,7 @@
  * surface.
  */
 
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 import { loadBrainConfig, resolveLinkGraph } from "./policy.ts";
@@ -56,9 +50,7 @@ export function readVaultInstructionFile(
     throw new Error("vault_instruction_file must not be empty");
   }
   if (resolvedName.split(/[\\/]/).includes("..")) {
-    throw new Error(
-      `vault_instruction_file must not contain '..' segments: ${resolvedName}`,
-    );
+    throw new Error(`vault_instruction_file must not contain '..' segments: ${resolvedName}`);
   }
   const full = join(vault, resolvedName);
   if (!existsSync(full)) return null;

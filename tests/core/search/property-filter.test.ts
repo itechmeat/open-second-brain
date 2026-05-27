@@ -46,26 +46,18 @@ describe("filterByProperties - shape", () => {
 
 describe("filterByProperties - single-key filter", () => {
   test("scalar match: type=decision", () => {
-    const r = filterByProperties(
-      ROWS,
-      new Map([["type", ["decision"]]]),
-      reader,
-    );
-    expect(r.map((x) => x.path).sort()).toEqual(["a.md", "b.md"]);
+    const r = filterByProperties(ROWS, new Map([["type", ["decision"]]]), reader);
+    expect(r.map((x) => x.path).toSorted()).toEqual(["a.md", "b.md"]);
   });
 
   test("multi-value filter (OR within key): status=open|closed", () => {
-    const r = filterByProperties(
-      ROWS,
-      new Map([["status", ["open", "closed"]]]),
-      reader,
-    );
-    expect(r.map((x) => x.path).sort()).toEqual(["a.md", "b.md", "c.md"]);
+    const r = filterByProperties(ROWS, new Map([["status", ["open", "closed"]]]), reader);
+    expect(r.map((x) => x.path).toSorted()).toEqual(["a.md", "b.md", "c.md"]);
   });
 
   test("array frontmatter value intersects requested set: tags=urgent", () => {
     const r = filterByProperties(ROWS, new Map([["tags", ["urgent"]]]), reader);
-    expect(r.map((x) => x.path).sort()).toEqual(["a.md", "c.md"]);
+    expect(r.map((x) => x.path).toSorted()).toEqual(["a.md", "c.md"]);
   });
 });
 
@@ -99,7 +91,7 @@ describe("filterByProperties - missing keys + null frontmatter", () => {
   test("missing key in row's frontmatter excludes the row", () => {
     const r = filterByProperties(ROWS, new Map([["tags", ["urgent"]]]), reader);
     // d.md has no `tags`, should be dropped.
-    expect(r.map((x) => x.path).sort()).toEqual(["a.md", "c.md"]);
+    expect(r.map((x) => x.path).toSorted()).toEqual(["a.md", "c.md"]);
   });
 
   test("frontmatter reader returning null excludes the row", () => {

@@ -205,7 +205,7 @@ describe("appendApplyEvidence — sanitisation (§7)", () => {
         artifact: "[[file]] token: abcdef",
         result: "applied",
         agent: "claude",
-        note: 'logged with api_key=hunter2 here',
+        note: "logged with api_key=hunter2 here",
       },
       { now: new Date("2026-05-15T10:00:00Z") },
     );

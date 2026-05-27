@@ -20,7 +20,9 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
     return fail("brain reject missing required flag: --id");
   }
   if (typeof flags["reason"] !== "string" || (flags["reason"] as string).trim() === "") {
-    return fail("brain reject missing required flag: --reason (free-form text; persisted on the retired file)");
+    return fail(
+      "brain reject missing required flag: --reason (free-form text; persisted on the retired file)",
+    );
   }
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
@@ -34,8 +36,11 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
     return 2;
   }
   let pref;
-  try { pref = parsePreference(path); }
-  catch (exc) { return fail(`failed to parse preference: ${(exc as Error).message ?? exc}`); }
+  try {
+    pref = parsePreference(path);
+  } catch (exc) {
+    return fail(`failed to parse preference: ${(exc as Error).message ?? exc}`);
+  }
 
   if (pref.pinned && !flags["yes"]) {
     process.stderr.write(`warning: preference '${pref.id}' is pinned; pass --yes to override\n`);
@@ -48,7 +53,11 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
   const reasonText = String(flags["reason"]).trim();
 
   try {
-    moveToRetired(vault, path, "user-rejected", { now, retired_by: retiredBy, user_rejected_reason: reasonText });
+    moveToRetired(vault, path, "user-rejected", {
+      now,
+      retired_by: retiredBy,
+      user_rejected_reason: reasonText,
+    });
   } catch (exc) {
     return fail(`failed to retire preference: ${(exc as Error).message ?? exc}`);
   }
@@ -60,12 +69,19 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
     };
     if (flags["reason"]) body["reason"] = String(flags["reason"]);
     if (pref.pinned) body["was_pinned"] = "true";
-    appendLogEvent(vault, { timestamp: isoSecond(now), eventType: BRAIN_LOG_EVENT_KIND.reject, body });
+    appendLogEvent(vault, {
+      timestamp: isoSecond(now),
+      eventType: BRAIN_LOG_EVENT_KIND.reject,
+      body,
+    });
   } catch (err) {
     process.stderr.write(`warning: append reject log failed: ${(err as Error).message}\n`);
   }
 
-  if (flags["json"]) { okJson({ id: `ret-${slug}`, reason: "user-rejected" }); }
-  else { ok(`retired: ret-${slug} (user-rejected)`); }
+  if (flags["json"]) {
+    okJson({ id: `ret-${slug}`, reason: "user-rejected" });
+  } else {
+    ok(`retired: ret-${slug} (user-rejected)`);
+  }
   return 0;
 }

@@ -23,13 +23,13 @@ describe("discipline_report config", () => {
   test("populated section is parsed verbatim", () => {
     const v = vaultWith(
       "schema_version: 1\n" +
-      "discipline_report:\n" +
-      "  enabled: true\n" +
-      "  timezone: Europe/Belgrade\n" +
-      "  watched_paths:\n" +
-      "    - /srv/projects/foo\n" +
-      "  known_agents:\n" +
-      "    - '@claude-vps-agent'\n",
+        "discipline_report:\n" +
+        "  enabled: true\n" +
+        "  timezone: Europe/Belgrade\n" +
+        "  watched_paths:\n" +
+        "    - /srv/projects/foo\n" +
+        "  known_agents:\n" +
+        "    - '@claude-vps-agent'\n",
     );
     const cfg = loadBrainConfig(v);
     expect(cfg.discipline_report).toEqual({

@@ -135,10 +135,7 @@ export function writeSignal(
       `signal field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(sanitised.signal)}`,
     );
   }
-  if (
-    sanitised.source_type !== undefined &&
-    !isBrainSignalSourceType(sanitised.source_type)
-  ) {
+  if (sanitised.source_type !== undefined && !isBrainSignalSourceType(sanitised.source_type)) {
     throw new Error(
       `signal field 'source_type' must be 'live', 'inline', or 'session'; got ${JSON.stringify(sanitised.source_type)}`,
     );
@@ -225,9 +222,7 @@ function sanitiseSignalInput(input: WriteSignalInput): WriteSignalInput {
   const scope = input.scope
     ? sanitiseTextField(input.scope, { maxLen: SCOPE_MAX_LEN, singleLine: true })
     : input.scope;
-  const raw = input.raw
-    ? sanitiseTextField(input.raw, { maxLen: RAW_MAX_LEN })
-    : input.raw;
+  const raw = input.raw ? sanitiseTextField(input.raw, { maxLen: RAW_MAX_LEN }) : input.raw;
   const source = input.source
     ? input.source.map((s) =>
         sanitiseTextField(s, { maxLen: SOURCE_ITEM_MAX_LEN, singleLine: true }),
@@ -265,10 +260,7 @@ export function parseSignal(path: string): BrainSignal {
   const tags = requireStringArray(meta, "tags");
   const topic = requireString(meta, "topic");
   const signalValue = requireString(meta, "signal");
-  if (
-    signalValue !== BRAIN_SIGNAL_SIGN.positive &&
-    signalValue !== BRAIN_SIGNAL_SIGN.negative
-  ) {
+  if (signalValue !== BRAIN_SIGNAL_SIGN.positive && signalValue !== BRAIN_SIGNAL_SIGN.negative) {
     throw new Error(
       `signal field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(signalValue)} (${path})`,
     );
@@ -295,9 +287,7 @@ export function parseSignal(path: string): BrainSignal {
     }
     for (const item of meta["source"]) {
       if (typeof item !== "string") {
-        throw new Error(
-          `signal field 'source' must be an array of strings (${path})`,
-        );
+        throw new Error(`signal field 'source' must be an array of strings (${path})`);
       }
     }
     source = [...(meta["source"] as ReadonlyArray<string>)];
@@ -431,10 +421,7 @@ function composeSignalTags(input: WriteSignalInput): string[] {
   // Non-default source_type gets its own tag so Obsidian users can
   // filter `tag:brain/source/inline` etc. `live` is the implicit
   // default and stays tag-less.
-  if (
-    input.source_type !== undefined &&
-    input.source_type !== BRAIN_SIGNAL_SOURCE_TYPE.live
-  ) {
+  if (input.source_type !== undefined && input.source_type !== BRAIN_SIGNAL_SOURCE_TYPE.live) {
     push(`brain/source/${input.source_type}`);
   }
   for (const t of input.extraTags ?? []) {
@@ -494,10 +481,7 @@ function requireString(meta: Record<string, unknown>, field: string): string {
   return v;
 }
 
-function requireStringArray(
-  meta: Record<string, unknown>,
-  field: string,
-): ReadonlyArray<string> {
+function requireStringArray(meta: Record<string, unknown>, field: string): ReadonlyArray<string> {
   requireField(meta, field);
   const v = meta[field];
   if (!Array.isArray(v)) {
@@ -505,9 +489,7 @@ function requireStringArray(
   }
   for (const item of v) {
     if (typeof item !== "string") {
-      throw new Error(
-        `signal field '${field}' must be an array of strings`,
-      );
+      throw new Error(`signal field '${field}' must be an array of strings`);
     }
   }
   return [...(v as ReadonlyArray<string>)];

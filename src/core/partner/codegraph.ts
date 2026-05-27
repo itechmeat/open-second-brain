@@ -136,9 +136,7 @@ export interface CodegraphCheckOptions {
 
 function defaultWhichCodegraph(): string | null {
   if (typeof Bun !== "undefined" && typeof (Bun as { which?: unknown }).which === "function") {
-    const found = (Bun as unknown as { which: (cmd: string) => string | null }).which(
-      "codegraph",
-    );
+    const found = (Bun as unknown as { which: (cmd: string) => string | null }).which("codegraph");
     return found ?? null;
   }
   return null;

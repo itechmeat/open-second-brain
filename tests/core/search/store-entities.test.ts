@@ -27,7 +27,13 @@ async function open() {
 }
 
 async function seedChunk(store: Store): Promise<number> {
-  const doc = store.upsertDocument({ path: "a.md", title: "A", contentHash: "h", mtime: 1, size: 1 });
+  const doc = store.upsertDocument({
+    path: "a.md",
+    title: "A",
+    contentHash: "h",
+    mtime: 1,
+    size: 1,
+  });
   const ids = store.replaceChunks(doc, [
     { chunkIndex: 0, content: "body", contentHash: "c0", startLine: 1, endLine: 1, tokenCount: 1 },
   ]);

@@ -68,9 +68,7 @@ export interface ContentHashVerification {
  * the result is neutral (`ok: true`, no expected/observed) - the
  * caller MUST NOT log a drift event in that case.
  */
-export function verifyContentHash(
-  input: ContentHashInput,
-): ContentHashVerification {
+export function verifyContentHash(input: ContentHashInput): ContentHashVerification {
   if (!input.content_hash) {
     return { ok: true };
   }

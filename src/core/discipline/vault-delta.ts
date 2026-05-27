@@ -1,11 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import {
-  BRAIN_INBOX_REL,
-  BRAIN_PREFERENCES_REL,
-  BRAIN_RETIRED_REL,
-} from "../brain/paths.ts";
+import { BRAIN_INBOX_REL, BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "../brain/paths.ts";
 import type { ActivityWindow } from "./activity-git.ts";
 
 export interface VaultDelta {
@@ -47,7 +43,9 @@ export function vaultDelta(vault: string, win: ActivityWindow): VaultDelta {
   const newPreferences = countInWindow(join(vault, BRAIN_PREFERENCES_REL), win);
   const newRetired = countInWindow(join(vault, BRAIN_RETIRED_REL), win);
   return {
-    newSignals, newPreferences, newRetired,
+    newSignals,
+    newPreferences,
+    newRetired,
     total: newSignals + newPreferences + newRetired,
   };
 }

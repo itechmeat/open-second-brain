@@ -179,8 +179,7 @@ describe("stop-log-guardrail hook", () => {
               id: "toolu_b",
               name: "Bash",
               input: {
-                command:
-                  "o2b brain feedback --topic x --signal positive --principle p",
+                command: "o2b brain feedback --topic x --signal positive --principle p",
               },
             },
           ],
@@ -231,10 +230,9 @@ describe("stop-log-guardrail hook", () => {
     const transcript_path = writeTranscript([
       ccUser("add a file"),
       ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
-      ccAssistantToolUse(
-        "mcp__plugin_open-second-brain_open-second-brain__event_log_append",
-        { message: "added /tmp/x.md" },
-      ),
+      ccAssistantToolUse("mcp__plugin_open-second-brain_open-second-brain__event_log_append", {
+        message: "added /tmp/x.md",
+      }),
     ]);
     const r = await runHook({
       hook_event_name: "Stop",
@@ -271,19 +269,13 @@ describe("stop-log-guardrail hook", () => {
 
   test("Claude Code transcript path adds the claudecode cadence line", async () => {
     // Reuse the per-test `tmp` so afterEach cleans this up too.
-    const transcript_path = join(
-      tmp,
-      ".claude",
-      "projects",
-      "session.jsonl",
-    );
+    const transcript_path = join(tmp, ".claude", "projects", "session.jsonl");
     mkdirSync(dirname(transcript_path), { recursive: true });
     writeFileSync(
       transcript_path,
-      [
-        ccUser("write something"),
-        ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
-      ].join("\n") + "\n",
+      [ccUser("write something"), ccAssistantToolUse("Write", { file_path: "/tmp/x.md" })].join(
+        "\n",
+      ) + "\n",
     );
     const r = await runHook({
       hook_event_name: "Stop",
@@ -297,12 +289,7 @@ describe("stop-log-guardrail hook", () => {
 
   test("Codex transcript path adds the codex cadence line", async () => {
     // Reuse the per-test `tmp` so afterEach cleans this up too.
-    const transcript_path = join(
-      tmp,
-      ".codex",
-      "sessions",
-      "session.jsonl",
-    );
+    const transcript_path = join(tmp, ".codex", "sessions", "session.jsonl");
     mkdirSync(dirname(transcript_path), { recursive: true });
     writeFileSync(
       transcript_path,

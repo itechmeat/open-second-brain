@@ -20,10 +20,7 @@ import type { BrainConfig } from "./types.ts";
 // Template files ship in the same directory as the source so a future
 // bundled build that keeps assets alongside the JS output keeps
 // working without path surgery.
-const TEMPLATE_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "templates",
-);
+const TEMPLATE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "templates");
 
 /** Operating manual rendered at `Brain/_BRAIN.md`. */
 export const BRAIN_MANUAL_TEMPLATE_PATH = join(TEMPLATE_DIR, "_BRAIN.md.tpl");
@@ -42,6 +39,7 @@ export function readTemplate(path: string): string {
       `Failed to load Brain template at ${path}: ${message}. ` +
         "This indicates a broken open-second-brain install — the " +
         "src/core/brain/templates/ directory must ship alongside templates.ts.",
+      { cause: err },
     );
   }
 }

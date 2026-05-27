@@ -7,22 +7,12 @@
  *   - brain_unlinked_mentions
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  JSONRPC_VERSION,
-  MCPServer,
-  PROTOCOL_VERSION,
-} from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
@@ -42,12 +32,7 @@ beforeEach(() => {
   writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n");
   configHome = mkdtempSync(join(tmpdir(), "o2b-mcp-link-graph-cfg-"));
   configPath = join(configHome, "config.yaml");
-  for (const k of [
-    "VAULT_AGENT_NAME",
-    "VAULT_TIMEZONE",
-    "VAULT_DIR",
-    "OPEN_SECOND_BRAIN_CONFIG",
-  ]) {
+  for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -86,13 +71,19 @@ async function callTool(
   name: string,
   args: Record<string, unknown>,
   id = 9,
-): Promise<{ result?: { content: ReadonlyArray<{ type: string; text: string }> }; error?: { code: number; message: string } }> {
+): Promise<{
+  result?: { content: ReadonlyArray<{ type: string; text: string }> };
+  error?: { code: number; message: string };
+}> {
   return server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id,
     method: "tools/call",
     params: { name, arguments: args },
-  }) as Promise<{ result?: { content: ReadonlyArray<{ type: string; text: string }> }; error?: { code: number; message: string } }>;
+  }) as Promise<{
+    result?: { content: ReadonlyArray<{ type: string; text: string }> };
+    error?: { code: number; message: string };
+  }>;
 }
 
 const DERIVED_KEYS = new Set([
@@ -108,11 +99,7 @@ const DERIVED_KEYS = new Set([
   "confirmed_at",
 ]);
 
-function writePref(
-  slug: string,
-  frontmatter: Record<string, string>,
-  body = "",
-): void {
+function writePref(slug: string, frontmatter: Record<string, string>, body = ""): void {
   const lines = ["---"];
   for (const [k, v] of Object.entries(frontmatter)) {
     const key = DERIVED_KEYS.has(k) ? `_${k}` : k;
@@ -148,11 +135,36 @@ describe("brain_moc_audit registration", () => {
 
 describe("brain_moc_audit round trip", () => {
   test("returns bucketed envelope for a qualifying hub", async () => {
-    writePref("pref-a", { kind: "preference", topic: "a", status: "confirmed", principle: "p" });
-    writePref("pref-b", { kind: "preference", topic: "b", status: "confirmed", principle: "p" });
-    writePref("pref-c", { kind: "preference", topic: "c", status: "confirmed", principle: "p" });
-    writePref("pref-d", { kind: "preference", topic: "d", status: "confirmed", principle: "p" });
-    writePref("pref-e", { kind: "preference", topic: "e", status: "confirmed", principle: "p" });
+    writePref("pref-a", {
+      kind: "preference",
+      topic: "a",
+      status: "confirmed",
+      principle: "p",
+    });
+    writePref("pref-b", {
+      kind: "preference",
+      topic: "b",
+      status: "confirmed",
+      principle: "p",
+    });
+    writePref("pref-c", {
+      kind: "preference",
+      topic: "c",
+      status: "confirmed",
+      principle: "p",
+    });
+    writePref("pref-d", {
+      kind: "preference",
+      topic: "d",
+      status: "confirmed",
+      principle: "p",
+    });
+    writePref("pref-e", {
+      kind: "preference",
+      topic: "e",
+      status: "confirmed",
+      principle: "p",
+    });
     writePref(
       "pref-hub",
       { kind: "preference", topic: "hub", status: "confirmed", principle: "p" },
@@ -165,9 +177,7 @@ describe("brain_moc_audit round trip", () => {
     expect(out["hub_id"]).toBe("pref-hub");
     expect(out["outbound_count"]).toBe(6);
     expect(
-      (out["candidate_missing"] as Array<{ id: string }>).some(
-        (c) => c.id === "pref-missing",
-      ),
+      (out["candidate_missing"] as Array<{ id: string }>).some((c) => c.id === "pref-missing"),
     ).toBe(true);
   });
 
@@ -255,36 +265,25 @@ describe("brain_concept_synthesis round trip", () => {
     expect(out["unlinked_mentions"].length).toBe(1);
   });
 
-  test("rejects empty id with INVALID_PARAMS", async () => {
+  test("rejects invalid concept synthesis arguments with INVALID_PARAMS", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
-    const r = await callTool(server, "brain_concept_synthesis", { id: "" });
-    expect(r.error?.code).toBe(-32602);
-  });
-
-  test("rejects non-boolean include_unlinked", async () => {
-    const server = new MCPServer({ vault, configPath });
-    await initialize(server);
-    const r = await callTool(server, "brain_concept_synthesis", {
-      id: "pref-x",
-      include_unlinked: "yes",
-    });
-    expect(r.error?.code).toBe(-32602);
+    for (const args of [{ id: "" }, { id: "pref-x", include_unlinked: "yes" }]) {
+      const r = await callTool(server, "brain_concept_synthesis", args);
+      expect(r.error?.code).toBe(-32602);
+    }
   });
 });
 
 describe("brain_unlinked_mentions round trip", () => {
   test("returns mention list for matching prose", async () => {
-    writePref(
-      "pref-target",
-      {
-        kind: "preference",
-        topic: "t",
-        status: "confirmed",
-        principle: "p",
-        title: "Subject Line",
-      },
-    );
+    writePref("pref-target", {
+      kind: "preference",
+      topic: "t",
+      status: "confirmed",
+      principle: "p",
+      title: "Subject Line",
+    });
     writePref(
       "pref-linker",
       {
@@ -318,30 +317,16 @@ describe("brain_unlinked_mentions round trip", () => {
     expect(out["mentions"]).toEqual([]);
   });
 
-  test("rejects empty id with INVALID_PARAMS", async () => {
+  test("rejects invalid unlinked mention arguments with INVALID_PARAMS", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
-    const r = await callTool(server, "brain_unlinked_mentions", { id: "" });
-    expect(r.error?.code).toBe(-32602);
-  });
-
-  test("rejects negative limit with INVALID_PARAMS", async () => {
-    const server = new MCPServer({ vault, configPath });
-    await initialize(server);
-    const r = await callTool(server, "brain_unlinked_mentions", {
-      id: "pref-foo",
-      limit: -1,
-    });
-    expect(r.error?.code).toBe(-32602);
-  });
-
-  test("rejects non-numeric limit with INVALID_PARAMS", async () => {
-    const server = new MCPServer({ vault, configPath });
-    await initialize(server);
-    const r = await callTool(server, "brain_unlinked_mentions", {
-      id: "pref-foo",
-      limit: "many",
-    });
-    expect(r.error?.code).toBe(-32602);
+    for (const args of [
+      { id: "" },
+      { id: "pref-foo", limit: -1 },
+      { id: "pref-foo", limit: "many" },
+    ]) {
+      const r = await callTool(server, "brain_unlinked_mentions", args);
+      expect(r.error?.code).toBe(-32602);
+    }
   });
 });

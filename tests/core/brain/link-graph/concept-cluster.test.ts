@@ -9,12 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -143,7 +138,7 @@ describe("buildConceptCluster - linkers", () => {
     );
     const r = buildConceptCluster(vault, "pref-tgt");
     expect(r.linkers.length).toBe(2);
-    const sources = r.linkers.map((l: { source: string }) => l.source).sort();
+    const sources = r.linkers.map((l: { source: string }) => l.source).toSorted();
     expect(sources).toEqual(["pref-a", "pref-b"]);
   });
 

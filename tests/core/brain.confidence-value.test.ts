@@ -7,10 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  computeConfidence,
-  type ConfidenceComputeResult,
-} from "../../src/core/brain/dream.ts";
+import { computeConfidence, type ConfidenceComputeResult } from "../../src/core/brain/dream.ts";
 import { DEFAULT_BRAIN_CONFIG } from "../../src/core/brain/policy.ts";
 
 const cfg = DEFAULT_BRAIN_CONFIG;
@@ -37,20 +34,8 @@ describe("computeConfidence — numeric value", () => {
   });
 
   test("freshness decays linearly to 0 at retire.stale_evidence_days", () => {
-    const half = computeConfidence(
-      10,
-      0,
-      iso("2026-03-31"),
-      cfg,
-      NOW,
-    ).value;
-    const stale = computeConfidence(
-      10,
-      0,
-      iso("2026-02-14"),
-      cfg,
-      NOW,
-    ).value;
+    const half = computeConfidence(10, 0, iso("2026-03-31"), cfg, NOW).value;
+    const stale = computeConfidence(10, 0, iso("2026-02-14"), cfg, NOW).value;
     // 45 days vs 90 days at 90-day decay → 0.5x vs 0.0x freshness.
     expect(half).toBeGreaterThan(stale + 0.001);
   });
@@ -97,7 +82,7 @@ describe("computeConfidence — numeric value", () => {
     expect(r1.band).toBe("medium");
     const tunedCfg = {
       ...cfg,
-      confidence: { ...cfg.confidence, high_min: 0.5, medium_min: 0.30 },
+      confidence: { ...cfg.confidence, high_min: 0.5, medium_min: 0.3 },
     };
     const r2 = computeConfidence(9, 0, iso("2026-05-15"), tunedCfg, NOW);
     expect(r2.band).toBe("high");

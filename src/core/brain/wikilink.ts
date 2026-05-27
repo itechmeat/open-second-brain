@@ -226,7 +226,7 @@ export function renderPrefLink(input: {
     // in Obsidian: zero-width space/joiner, LRM/RLM, BiDi embedding +
     // override + isolates, soft hyphen, BOM.
     .replace(/[​-‏‪-‮⁦-⁩­﻿]/g, " ")
-    .replace(/[\[\]|]/g, " ")
+    .replace(/[[\]|]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (title.length === 0) return `[[${input.id}]]`;

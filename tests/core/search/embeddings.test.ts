@@ -55,10 +55,10 @@ test("embed() preserves input order across batches", async () => {
 
 test("embed() sorts response.data by `index` even if server returns shuffled", async () => {
   server.setHandler((req) => {
-    const body = (req.body as { input: string[]; model: string });
+    const body = req.body as { input: string[]; model: string };
     const indices = body.input.map((_, i) => i);
     // Shuffle: reverse.
-    const shuffled = [...indices].reverse();
+    const shuffled = [...indices].toReversed();
     const data = shuffled.map((origIdx) => {
       const text = body.input[origIdx]!;
       const v = [text.length, origIdx, 1, 1];

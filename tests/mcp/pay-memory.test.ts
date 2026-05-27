@@ -47,7 +47,11 @@ async function initialize(server: MCPServer) {
     jsonrpc: JSONRPC_VERSION,
     id: 1,
     method: "initialize",
-    params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "t", version: "0" },
+    },
   });
   await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
 }
@@ -336,7 +340,11 @@ describe("instructions include the Pay Memory paragraph", () => {
       jsonrpc: JSONRPC_VERSION,
       id: 1,
       method: "initialize",
-      params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "t", version: "0" } },
+      params: {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "t", version: "0" },
+      },
     })) as any;
     const text = r.result.instructions as string;
     for (const name of [

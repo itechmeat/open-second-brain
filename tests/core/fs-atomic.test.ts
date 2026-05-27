@@ -3,10 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  atomicCreateFileSyncExclusive,
-  atomicWriteFileSync,
-} from "../../src/core/fs-atomic.ts";
+import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
 let tmp: string;
 

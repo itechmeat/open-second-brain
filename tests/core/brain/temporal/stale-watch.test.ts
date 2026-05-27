@@ -98,16 +98,8 @@ describe("findStaleEntries", () => {
   });
 
   test("log file stale when mtime older than stale_log_days", () => {
-    writeFileMtime(
-      join(VAULT, "Brain", "log", "2025-08-01.jsonl"),
-      "",
-      "2025-08-01T00:00:00Z",
-    );
-    writeFileMtime(
-      join(VAULT, "Brain", "log", "2026-05-20.jsonl"),
-      "",
-      "2026-05-20T00:00:00Z",
-    );
+    writeFileMtime(join(VAULT, "Brain", "log", "2025-08-01.jsonl"), "", "2025-08-01T00:00:00Z");
+    writeFileMtime(join(VAULT, "Brain", "log", "2026-05-20.jsonl"), "", "2026-05-20T00:00:00Z");
     const idx = buildTimelineIndex(VAULT, {});
     const out = findStaleEntries(idx, VAULT, BRAIN_TEMPORAL_DEFAULTS, {
       now: NOW,

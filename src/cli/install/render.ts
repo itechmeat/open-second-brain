@@ -22,10 +22,7 @@ export interface DetectTableRow {
 
 export function renderDetectTable(rows: ReadonlyArray<DetectResult>): string {
   if (rows.length === 0) return "o2b install — no adapters registered\n";
-  const lines: string[] = [
-    "o2b install — detected runtimes",
-    "-".repeat(35),
-  ];
+  const lines: string[] = ["o2b install — detected runtimes", "-".repeat(35)];
   let installed = 0;
   let drift = 0;
   let notInstalled = 0;
@@ -42,8 +39,7 @@ export function renderDetectTable(rows: ReadonlyArray<DetectResult>): string {
     else if (r.status === "not-installed") notInstalled += 1;
   }
   lines.push("");
-  const summary =
-    `${rows.length} runtime(s) in registry; ${installed} installed, ${drift} drift, ${notInstalled} not-installed.`;
+  const summary = `${rows.length} runtime(s) in registry; ${installed} installed, ${drift} drift, ${notInstalled} not-installed.`;
   lines.push(summary);
   if (drift > 0 || notInstalled > 0) {
     lines.push("");
@@ -114,10 +110,7 @@ export function renderApplyJson(result: ApplyResult): string {
 
 export function renderVerifyTable(rows: ReadonlyArray<VerifyResult>): string {
   if (rows.length === 0) return "o2b install --check — no targets verified\n";
-  const lines: string[] = [
-    "o2b install --check",
-    "-".repeat(20),
-  ];
+  const lines: string[] = ["o2b install --check", "-".repeat(20)];
   for (const v of rows) {
     const status = v.status.padEnd(18);
     lines.push(`  ${v.target.padEnd(14)}${status}${v.details.join("; ")}`);

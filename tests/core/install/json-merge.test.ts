@@ -74,7 +74,9 @@ describe("mergeMcpServers", () => {
     const out = mergeMcpServers(before, OSB_PAYLOAD);
     const parsed = JSON.parse(out);
     expect(parsed.mcpServers["open-second-brain"].args).toEqual([
-      "mcp", "--vault", "/home/u/vault",
+      "mcp",
+      "--vault",
+      "/home/u/vault",
     ]);
   });
 

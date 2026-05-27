@@ -10,10 +10,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  acquireLockSync,
-  scanStaleLocks,
-} from "../../../src/core/brain/sync-lockfile.ts";
+import { acquireLockSync, scanStaleLocks } from "../../../src/core/brain/sync-lockfile.ts";
 
 let tmpRoot: string;
 
@@ -103,7 +100,7 @@ describe("scanStaleLocks", () => {
     require("node:fs").mkdirSync(subDir, { recursive: true });
     writeFileSync(b + ".lock", "");
 
-    const found = scanStaleLocks(tmpRoot).sort();
+    const found = scanStaleLocks(tmpRoot).toSorted();
     expect(found).toContain(a + ".lock");
     expect(found).toContain(b + ".lock");
 

@@ -37,9 +37,7 @@ describe("rewriteMarkers (inline form)", () => {
     const markers = discoverMarkers(readFileSync(path, "utf8"));
     expect(markers.length).toBe(1);
 
-    await rewriteMarkers(path, [
-      { marker: markers[0]!, signalId: "sig-2026-05-16-t" },
-    ]);
+    await rewriteMarkers(path, [{ marker: markers[0]!, signalId: "sig-2026-05-16-t" }]);
 
     const after = readFileSync(path, "utf8");
     expect(after).toMatch(
@@ -50,14 +48,9 @@ describe("rewriteMarkers (inline form)", () => {
   });
 
   test("re-running discoverMarkers after rewrite returns zero matches", async () => {
-    const path = writeTmp(
-      "note.md",
-      "@osb feedback negative topic=t principle=p\n",
-    );
+    const path = writeTmp("note.md", "@osb feedback negative topic=t principle=p\n");
     const first = discoverMarkers(readFileSync(path, "utf8"));
-    await rewriteMarkers(path, [
-      { marker: first[0]!, signalId: "sig-x" },
-    ]);
+    await rewriteMarkers(path, [{ marker: first[0]!, signalId: "sig-x" }]);
     const second = discoverMarkers(readFileSync(path, "utf8"));
     expect(second.length).toBe(0);
   });
@@ -82,9 +75,7 @@ describe("rewriteMarkers (block form)", () => {
     const markers = discoverMarkers(readFileSync(path, "utf8"));
     expect(markers.length).toBe(1);
 
-    await rewriteMarkers(path, [
-      { marker: markers[0]!, signalId: "sig-2026-05-16-t" },
-    ]);
+    await rewriteMarkers(path, [{ marker: markers[0]!, signalId: "sig-2026-05-16-t" }]);
 
     const after = readFileSync(path, "utf8");
     expect(after).toMatch(/^```osb-checked$/m);
@@ -99,20 +90,12 @@ describe("rewriteMarkers (block form)", () => {
   test("block rewrite is idempotent (re-run yields no new markers)", async () => {
     const path = writeTmp(
       "note.md",
-      [
-        "```osb",
-        "kind: feedback",
-        "signal: positive",
-        "topic: t",
-        "principle: p",
-        "```",
-        "",
-      ].join("\n"),
+      ["```osb", "kind: feedback", "signal: positive", "topic: t", "principle: p", "```", ""].join(
+        "\n",
+      ),
     );
     const first = discoverMarkers(readFileSync(path, "utf8"));
-    await rewriteMarkers(path, [
-      { marker: first[0]!, signalId: "sig-x" },
-    ]);
+    await rewriteMarkers(path, [{ marker: first[0]!, signalId: "sig-x" }]);
     const second = discoverMarkers(readFileSync(path, "utf8"));
     expect(second.length).toBe(0);
   });

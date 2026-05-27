@@ -29,7 +29,7 @@ export function assertSafeMemoryPath(path: string, override: boolean): void {
   if (!norm.startsWith(root)) {
     throw new Error(
       `refusing to import from ${path}: it is not under ~/.claude/projects/.\n` +
-      `Pass --allow-arbitrary-memory-path to override.`,
+        `Pass --allow-arbitrary-memory-path to override.`,
     );
   }
 }

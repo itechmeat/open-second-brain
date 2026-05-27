@@ -5,7 +5,11 @@
 import { existsSync, mkdirSync } from "node:fs";
 
 import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
-import { payMemoryDirs, vaultRelativePath, writePolicyIfMissing } from "../../../core/pay-memory/index.ts";
+import {
+  payMemoryDirs,
+  vaultRelativePath,
+  writePolicyIfMissing,
+} from "../../../core/pay-memory/index.ts";
 import { requireVault, sortedReplacer } from "../../helpers.ts";
 import { parseFlags } from "../../argparse.ts";
 
@@ -18,8 +22,7 @@ export async function cmdInitPayMemory(argv: string[]): Promise<number> {
   });
   const config = defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
-  const agent =
-    (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
 
   const dirs = payMemoryDirs(vault);
   const dirList = [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports];
@@ -30,9 +33,7 @@ export async function cmdInitPayMemory(argv: string[]): Promise<number> {
     try {
       mkdirSync(dir, { recursive: true });
     } catch (exc) {
-      process.stderr.write(
-        `error: failed to create ${dir}: ${(exc as Error).message ?? exc}\n`,
-      );
+      process.stderr.write(`error: failed to create ${dir}: ${(exc as Error).message ?? exc}\n`);
       return 1;
     }
     (existed ? skipped : created).push(vaultRelativePath(dir, vault));
@@ -42,9 +43,7 @@ export async function cmdInitPayMemory(argv: string[]): Promise<number> {
   try {
     policy = writePolicyIfMissing(vault, { overwrite: Boolean(flags["overwrite"]) });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to write policy: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to write policy: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
   const policyRel = vaultRelativePath(policy.path, vault);

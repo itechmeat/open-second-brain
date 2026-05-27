@@ -48,7 +48,12 @@ async function initialize(server: MCPServer) {
   return r;
 }
 
-async function callTool(server: MCPServer, name: string, args: Record<string, unknown> = {}, id = 99) {
+async function callTool(
+  server: MCPServer,
+  name: string,
+  args: Record<string, unknown> = {},
+  id = 99,
+) {
   return server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id,
@@ -116,7 +121,11 @@ describe("handshake", () => {
       jsonrpc: JSONRPC_VERSION,
       id: 1,
       method: "initialize",
-      params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "old", version: "0" } },
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "old", version: "0" },
+      },
     })) as any;
     expect(r.result.protocolVersion).toBe("2024-11-05");
   });
@@ -255,9 +264,7 @@ describe("tool calls", () => {
     expect(s.vault.ignore_source).toBeDefined();
     expect(["_brain.yaml", "defaults"]).toContain(s.vault.ignore_source);
     expect(Array.isArray(s.vault.rules)).toBe(true);
-    expect(s.vault.rules.some(
-      (r: { raw: string }) => r.raw === ".obsidian",
-    )).toBe(true);
+    expect(s.vault.rules.some((r: { raw: string }) => r.raw === ".obsidian")).toBe(true);
     expect(typeof s.vault.included.files).toBe("number");
     expect(typeof s.vault.included.dirs).toBe("number");
     expect(typeof s.vault.excluded.dirs).toBe("number");
@@ -311,7 +318,10 @@ describe("tool calls", () => {
     const vault = createSandboxVault(tmp);
     const server = new MCPServer({ vault });
     await initialize(server);
-    const r = (await callTool(server, "second_brain_query", { pattern: "Sandbox", limit: 5 })) as any;
+    const r = (await callTool(server, "second_brain_query", {
+      pattern: "Sandbox",
+      limit: 5,
+    })) as any;
     const s = r.result.structuredContent;
     expect(s.limit).toBe(5);
     expect(s.total_pages).toBeGreaterThanOrEqual(1);
@@ -431,21 +441,29 @@ describe("serveStdioFromString respects scope+name", () => {
   test("writer scope filters tools/list response", async () => {
     const ctx = { vault: "/tmp/x", configPath: null, repoRoot: null };
     const initReq = JSON.stringify({
-      jsonrpc: "2.0", id: 1, method: "initialize",
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
       params: { protocolVersion: "2025-06-18", capabilities: {} },
     });
     const listReq = JSON.stringify({
-      jsonrpc: "2.0", id: 2, method: "tools/list", params: {},
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: {},
     });
-    const out = await serveStdioFromString(
-      ctx,
-      `${initReq}\n${listReq}\n`,
-      { scope: "writer", serverName: "open-second-brain-writer" },
-    );
-    const lines = out.trim().split("\n").map((l) => JSON.parse(l));
+    const out = await serveStdioFromString(ctx, `${initReq}\n${listReq}\n`, {
+      scope: "writer",
+      serverName: "open-second-brain-writer",
+    });
+    const lines = out
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
     expect(lines[0].result.serverInfo.name).toBe("open-second-brain-writer");
     const toolNames = (lines[1].result.tools as Array<{ name: string }>)
-      .map((t) => t.name).sort();
+      .map((t) => t.name)
+      .toSorted();
     expect(toolNames).toEqual([
       "brain_apply_evidence",
       "brain_context",

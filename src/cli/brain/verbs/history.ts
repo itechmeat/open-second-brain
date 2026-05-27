@@ -1,8 +1,5 @@
 import { defaultConfigPath } from "../../../core/config.ts";
-import {
-  readEditHistory,
-  renderEditHistory,
-} from "../../../core/brain/health/edit-history.ts";
+import { readEditHistory, renderEditHistory } from "../../../core/brain/health/edit-history.ts";
 import { fail, parse, resolveBrainVault } from "../helpers.ts";
 
 /**

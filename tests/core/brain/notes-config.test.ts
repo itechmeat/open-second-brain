@@ -44,9 +44,7 @@ describe("notes config block", () => {
   });
 
   test("present with a single read_path", () => {
-    const { config } = validate(
-      HEAD + `notes:\n  read_paths:\n    - Daily\n`,
-    );
+    const { config } = validate(HEAD + `notes:\n  read_paths:\n    - Daily\n`);
     expect(config.notes).toEqual({ read_paths: ["Daily"] });
     expect(resolveNotes(config).read_paths).toEqual(["Daily"]);
   });
@@ -60,11 +58,7 @@ describe("notes config block", () => {
         `    - Journal/Weekly\n` +
         `    - Notes\n`,
     );
-    expect(resolveNotes(config).read_paths).toEqual([
-      "Daily",
-      "Journal/Weekly",
-      "Notes",
-    ]);
+    expect(resolveNotes(config).read_paths).toEqual(["Daily", "Journal/Weekly", "Notes"]);
   });
 
   test("explicit empty array preserves the empty-list intent", () => {
@@ -74,65 +68,48 @@ describe("notes config block", () => {
   });
 
   test("rejects non-mapping notes", () => {
-    expect(() => validate(HEAD + `notes: Daily\n`)).toThrow(
+    expect(() => validate(HEAD + `notes: Daily\n`)).toThrow(BrainConfigError);
+  });
+
+  test("rejects non-array read_paths", () => {
+    expect(() => validate(HEAD + `notes:\n  read_paths: Daily\n`)).toThrow(BrainConfigError);
+  });
+
+  test("rejects non-string entries", () => {
+    expect(() => validate(HEAD + `notes:\n  read_paths:\n    - 42\n`)).toThrow(BrainConfigError);
+  });
+
+  test("rejects empty / whitespace-only string entries", () => {
+    expect(() => validate(HEAD + `notes:\n  read_paths:\n    - ""\n`)).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `notes:\n  read_paths:\n    - "   "\n`)).toThrow(BrainConfigError);
+  });
+
+  test("rejects absolute paths", () => {
+    expect(() => validate(HEAD + `notes:\n  read_paths:\n    - /etc/daily\n`)).toThrow(
       BrainConfigError,
     );
   });
 
-  test("rejects non-array read_paths", () => {
-    expect(() =>
-      validate(HEAD + `notes:\n  read_paths: Daily\n`),
-    ).toThrow(BrainConfigError);
-  });
-
-  test("rejects non-string entries", () => {
-    expect(() =>
-      validate(HEAD + `notes:\n  read_paths:\n    - 42\n`),
-    ).toThrow(BrainConfigError);
-  });
-
-  test("rejects empty / whitespace-only string entries", () => {
-    expect(() =>
-      validate(HEAD + `notes:\n  read_paths:\n    - ""\n`),
-    ).toThrow(BrainConfigError);
-    expect(() =>
-      validate(HEAD + `notes:\n  read_paths:\n    - "   "\n`),
-    ).toThrow(BrainConfigError);
-  });
-
-  test("rejects absolute paths", () => {
-    expect(() =>
-      validate(HEAD + `notes:\n  read_paths:\n    - /etc/daily\n`),
-    ).toThrow(BrainConfigError);
-  });
-
   test("rejects parent-traversal", () => {
-    expect(() =>
-      validate(HEAD + `notes:\n  read_paths:\n    - ../escape\n`),
-    ).toThrow(BrainConfigError);
-    expect(() =>
-      validate(HEAD + `notes:\n  read_paths:\n    - Daily/../etc\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `notes:\n  read_paths:\n    - ../escape\n`)).toThrow(
+      BrainConfigError,
+    );
+    expect(() => validate(HEAD + `notes:\n  read_paths:\n    - Daily/../etc\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("trims surrounding whitespace on each entry", () => {
-    const { config } = validate(
-      HEAD + `notes:\n  read_paths:\n    - "  Daily  "\n`,
-    );
+    const { config } = validate(HEAD + `notes:\n  read_paths:\n    - "  Daily  "\n`);
     expect(resolveNotes(config).read_paths).toEqual(["Daily"]);
   });
 
   test("unknown sub-keys emit a forward-compat warning, not an error", () => {
     const { config, warnings } = validate(
-      HEAD +
-        `notes:\n` +
-        `  read_paths:\n    - Daily\n` +
-        `  future_field: hello\n`,
+      HEAD + `notes:\n` + `  read_paths:\n    - Daily\n` + `  future_field: hello\n`,
     );
     expect(config.notes).toEqual({ read_paths: ["Daily"] });
-    expect(
-      warnings.some((w) => w.message.includes("notes.future_field")),
-    ).toBe(true);
+    expect(warnings.some((w) => w.message.includes("notes.future_field"))).toBe(true);
   });
 
   test("resolveNotes returns frozen output", () => {

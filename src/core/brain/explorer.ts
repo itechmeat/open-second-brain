@@ -35,11 +35,7 @@ import {
 export const EXPLORER_SCHEMA_VERSION = 1 as const;
 
 export type ExplorerNodeKind = "preference" | "retired";
-export type ExplorerNodeStatus =
-  | "unconfirmed"
-  | "confirmed"
-  | "quarantine"
-  | "retired";
+export type ExplorerNodeStatus = "unconfirmed" | "confirmed" | "quarantine" | "retired";
 export type ExplorerEdgeKind = "supersedes" | "wikilink";
 
 export interface ExplorerNode {
@@ -87,8 +83,7 @@ export function collectExplorerData(
   // final count in one pass — avoids the prior write-then-overwrite
   // shape that left a transient `backlink_count: 0` on every node.
   const backlinkIndex = buildBacklinkIndex(vault);
-  const countFor = (id: string): number =>
-    (backlinkIndex.get(id) ?? []).length;
+  const countFor = (id: string): number => (backlinkIndex.get(id) ?? []).length;
 
   const nodes: ExplorerNode[] = [];
   const knownIds = new Set<string>();
@@ -155,10 +150,7 @@ export function collectExplorerData(
   });
 }
 
-function nodeFromPreference(
-  pref: BrainPreference,
-  backlinkCount: number,
-): ExplorerNode {
+function nodeFromPreference(pref: BrainPreference, backlinkCount: number): ExplorerNode {
   return {
     id: pref.id,
     kind: "preference",
@@ -177,10 +169,7 @@ function nodeFromPreference(
   };
 }
 
-function nodeFromRetired(
-  ret: BrainRetired,
-  backlinkCount: number,
-): ExplorerNode {
+function nodeFromRetired(ret: BrainRetired, backlinkCount: number): ExplorerNode {
   return {
     id: ret.id,
     kind: "retired",
@@ -243,21 +232,19 @@ function loadTemplate(): string {
     raw = readFileSync(TEMPLATE_PATH, "utf8");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Failed to load brain-explorer template from ${TEMPLATE_PATH}: ${msg}`,
-    );
+    throw new Error(`Failed to load brain-explorer template from ${TEMPLATE_PATH}: ${msg}`, {
+      cause: err,
+    });
   }
   const first = raw.indexOf(PLACEHOLDER);
   const last = raw.lastIndexOf(PLACEHOLDER);
   if (first === -1) {
-    throw new Error(
-      `brain-explorer.html template is missing the ${PLACEHOLDER} marker`,
-    );
+    throw new Error(`brain-explorer.html template is missing the ${PLACEHOLDER} marker`);
   }
   if (first !== last) {
     throw new Error(
-      `brain-explorer.html template carries ${PLACEHOLDER} more than once;`
-      + ` substitution must be unique to keep the output deterministic`,
+      `brain-explorer.html template carries ${PLACEHOLDER} more than once;` +
+        ` substitution must be unique to keep the output deterministic`,
     );
   }
   templateCache = raw;
@@ -273,10 +260,7 @@ function loadTemplate(): string {
  * / `$1` injection through the JSON body (principle bodies are free
  * text and may contain `$`).
  */
-export function renderExportedHtml(
-  graph: ExplorerGraph,
-  vaultPath?: string,
-): string {
+export function renderExportedHtml(graph: ExplorerGraph, vaultPath?: string): string {
   const json = JSON.stringify(graph).replace(/[<>&]/g, (c) => {
     switch (c) {
       case "<":
@@ -366,10 +350,7 @@ export function buildLiveServer(vault: string, port: number): LiveServerHandle {
 
 // ---- Helpers ------------------------------------------------------------
 
-function deriveEdges(
-  index: BacklinkIndex,
-  knownIds: ReadonlySet<string>,
-): ExplorerEdge[] {
+function deriveEdges(index: BacklinkIndex, knownIds: ReadonlySet<string>): ExplorerEdge[] {
   const edges: ExplorerEdge[] = [];
   const seen = new Set<string>();
   for (const [target, refs] of index) {
@@ -378,9 +359,7 @@ function deriveEdges(
       if (!knownIds.has(ref.source)) continue; // logs / signals
       if (ref.source === target) continue;
       const kind: ExplorerEdgeKind =
-        ref.field === "supersedes" || ref.field === "superseded_by"
-          ? "supersedes"
-          : "wikilink";
+        ref.field === "supersedes" || ref.field === "superseded_by" ? "supersedes" : "wikilink";
       const key = `${ref.source}\x00${target}\x00${kind}`;
       if (seen.has(key)) continue;
       seen.add(key);

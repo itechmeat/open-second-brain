@@ -13,15 +13,8 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import { logJsonlPath, logPath, validateIsoDate } from "./paths.ts";
-import {
-  parseLogDay,
-  type BrainLogEntry,
-  type BrainLogParseWarning,
-} from "./log.ts";
-import {
-  BRAIN_LOG_EVENT_KIND_SET,
-  type BrainLogEventKind,
-} from "./types.ts";
+import { parseLogDay, type BrainLogEntry, type BrainLogParseWarning } from "./log.ts";
+import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
 export interface ReadLogDayResult {
   readonly entries: ReadonlyArray<BrainLogEntry>;

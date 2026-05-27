@@ -45,11 +45,7 @@ import {
 import { parsePreference, parseRetired } from "./preference.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
-import {
-  BRAIN_PREFERENCE_STATUS,
-  type BrainPreference,
-  type BrainRetired,
-} from "./types.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainPreference, type BrainRetired } from "./types.ts";
 
 const RECENTLY_RETIRED_COUNT = 3;
 
@@ -105,10 +101,10 @@ export function regenerateActive(
 
   const confirmed = preferences
     .filter((p) => p.status === BRAIN_PREFERENCE_STATUS.confirmed)
-    .sort(sortByConfidenceThenId);
+    .toSorted(sortByConfidenceThenId);
   const quarantine = preferences
     .filter((p) => p.status === BRAIN_PREFERENCE_STATUS.quarantine)
-    .sort(sortByIdAscending);
+    .toSorted(sortByIdAscending);
 
   // Read window/limit from `_brain.yaml:active.most_applied_*`. The
   // loader throws on a malformed `_brain.yaml`; we fall back to
@@ -175,16 +171,11 @@ export function regenerateActive(
  * Exported as the single source of truth for fire-and-warn semantics
  * so the same swallow shape isn't copy-pasted at each call site.
  */
-export function regenerateActiveQuiet(
-  vault: string,
-  opts: RegenerateActiveOptions = {},
-): void {
+export function regenerateActiveQuiet(vault: string, opts: RegenerateActiveOptions = {}): void {
   try {
     regenerateActive(vault, opts);
   } catch (err) {
-    process.stderr.write(
-      `warning: regenerate active.md failed: ${(err as Error).message}\n`,
-    );
+    process.stderr.write(`warning: regenerate active.md failed: ${(err as Error).message}\n`);
   }
 }
 

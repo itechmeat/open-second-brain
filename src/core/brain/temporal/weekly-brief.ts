@@ -17,10 +17,7 @@
  */
 
 import { isoSecond } from "./../time.ts";
-import type {
-  BrainLogEventKind,
-  ResolvedBrainTemporalConfig,
-} from "./../types.ts";
+import type { BrainLogEventKind, ResolvedBrainTemporalConfig } from "./../types.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./../types.ts";
 import { selectEvents } from "./select-events.ts";
 import {
@@ -81,9 +78,7 @@ export function buildWeeklySynthesis(
   // index and does not re-touch disk.
   const windowEndMs = Date.parse(`${weekEnd}T00:00:00Z`);
   if (!Number.isFinite(windowEndMs)) {
-    throw new Error(
-      `buildWeeklySynthesis: invalid weekEnd ${JSON.stringify(weekEnd)}`,
-    );
+    throw new Error(`buildWeeklySynthesis: invalid weekEnd ${JSON.stringify(weekEnd)}`);
   }
   const windowStartMs = windowEndMs - 7 * ONE_DAY_MS;
   const windowStart = isoSecond(new Date(windowStartMs));
@@ -99,9 +94,7 @@ export function buildWeeklySynthesis(
   const vaultDelta = computeVaultDelta(events, transitions);
   const retired = transitions
     .filter((t) => t.kind === "retirement")
-    .map((t) =>
-      Object.freeze({ at: t.at, prefId: t.prefId, link: t.link }),
-    );
+    .map((t) => Object.freeze({ at: t.at, prefId: t.prefId, link: t.link }));
   const contradictions = collectContradictions(events);
 
   return Object.freeze({
@@ -117,17 +110,12 @@ export function buildWeeklySynthesis(
   });
 }
 
-function collectContradictions(
-  events: ReadonlyArray<TemporalEvent>,
-): WeeklyContradiction[] {
+function collectContradictions(events: ReadonlyArray<TemporalEvent>): WeeklyContradiction[] {
   const out: WeeklyContradiction[] = [];
   for (const ev of events) {
     if (ev.kind === BRAIN_LOG_EVENT_KIND.signalSuppressed) {
       out.push(makeContradiction("signal-suppressed", ev));
-    } else if (
-      ev.kind === BRAIN_LOG_EVENT_KIND.applyEvidence &&
-      ev.result === "violated"
-    ) {
+    } else if (ev.kind === BRAIN_LOG_EVENT_KIND.applyEvidence && ev.result === "violated") {
       out.push(makeContradiction("evidence-violated", ev));
     }
   }

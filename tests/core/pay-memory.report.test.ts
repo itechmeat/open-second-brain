@@ -4,12 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../../src/core/vault.ts";
-import {
-  aggregateReceipts,
-  writeReport,
-} from "../../src/core/pay-memory/report.ts";
+import { aggregateReceipts, writeReport } from "../../src/core/pay-memory/report.ts";
 import { writeReceipt } from "../../src/core/pay-memory/receipt.ts";
-
 
 let tmp: string;
 
@@ -65,11 +61,7 @@ describe("aggregateReceipts", () => {
     writeReceipt(tmp, { ...baseReceipt, slug: "real-1" });
     const dir = join(tmp, "Brain", "payments", "2026-05-10");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, "stray.md"),
-      "---\ntype: note\n---\n\nNot a receipt.\n",
-      "utf8",
-    );
+    writeFileSync(join(dir, "stray.md"), "---\ntype: note\n---\n\nNot a receipt.\n", "utf8");
     writeFileSync(join(dir, "no-frontmatter.md"), "Just a note.\n", "utf8");
     const summaries = aggregateReceipts(tmp, "2026-05-10");
     expect(summaries.length).toBe(1);

@@ -7,10 +7,7 @@ describe("applySelfApprovalGuardrail - default config", () => {
   const cfg = BRAIN_GUARDRAIL_DEFAULTS;
 
   test("promotes when all thresholds met (defaults)", () => {
-    const r = applySelfApprovalGuardrail(
-      { signal_count: 2, distinct_agents: 1, age_days: 0 },
-      cfg,
-    );
+    const r = applySelfApprovalGuardrail({ signal_count: 2, distinct_agents: 1, age_days: 0 }, cfg);
     expect(r.decision).toBe("promote");
     expect(r.failed_gates).toEqual([]);
   });
@@ -28,10 +25,7 @@ describe("applySelfApprovalGuardrail - default config", () => {
   });
 
   test("default min_age_days: 0 means the age gate never fails", () => {
-    const r = applySelfApprovalGuardrail(
-      { signal_count: 5, distinct_agents: 1, age_days: 0 },
-      cfg,
-    );
+    const r = applySelfApprovalGuardrail({ signal_count: 5, distinct_agents: 1, age_days: 0 }, cfg);
     expect(r.decision).toBe("promote");
   });
 });
@@ -55,10 +49,7 @@ describe("applySelfApprovalGuardrail - tighter config", () => {
       ...BRAIN_GUARDRAIL_DEFAULTS,
       promotion_min_age_days: 7,
     };
-    const r = applySelfApprovalGuardrail(
-      { signal_count: 5, distinct_agents: 2, age_days: 3 },
-      cfg,
-    );
+    const r = applySelfApprovalGuardrail({ signal_count: 5, distinct_agents: 2, age_days: 3 }, cfg);
     expect(r.decision).toBe("quarantine");
     expect(r.failed_gates).toContain("min_age_days");
   });
@@ -70,12 +61,9 @@ describe("applySelfApprovalGuardrail - tighter config", () => {
       promotion_min_distinct_agents: 3,
       promotion_min_age_days: 10,
     };
-    const r = applySelfApprovalGuardrail(
-      { signal_count: 1, distinct_agents: 1, age_days: 0 },
-      cfg,
-    );
+    const r = applySelfApprovalGuardrail({ signal_count: 1, distinct_agents: 1, age_days: 0 }, cfg);
     expect(r.decision).toBe("quarantine");
-    expect([...r.failed_gates].sort()).toEqual([
+    expect([...r.failed_gates].toSorted()).toEqual([
       "min_age_days",
       "min_distinct_agents",
       "min_signals",

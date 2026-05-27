@@ -20,14 +20,16 @@ function writePref(
   slug: string,
   fields: { topic: string; principle: string; tier?: string; created_at?: string },
 ) {
-  const lines = ["---", `id: pref-${slug}`, `topic: ${fields.topic}`, `principle: ${fields.principle}`];
+  const lines = [
+    "---",
+    `id: pref-${slug}`,
+    `topic: ${fields.topic}`,
+    `principle: ${fields.principle}`,
+  ];
   if (fields.tier) lines.push(`tier: ${fields.tier}`);
   if (fields.created_at) lines.push(`created_at: ${fields.created_at}`);
   lines.push("---", "");
-  writeFileSync(
-    join(vault, "Brain", "preferences", `pref-${slug}.md`),
-    lines.join("\n"),
-  );
+  writeFileSync(join(vault, "Brain", "preferences", `pref-${slug}.md`), lines.join("\n"));
 }
 
 describe("packContext", () => {

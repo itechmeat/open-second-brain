@@ -5,10 +5,7 @@
  */
 
 import { defaultConfigPath } from "../../../core/config.ts";
-import {
-  inspectPath,
-  resolveVaultScope,
-} from "../../../core/vault-scope/index.ts";
+import { inspectPath, resolveVaultScope } from "../../../core/vault-scope/index.ts";
 import { CliError, parseFlags } from "../../argparse.ts";
 import { resolveBrainVault } from "../../brain/helpers.ts";
 import { fail, info, writeJson } from "../../output.ts";
@@ -20,9 +17,7 @@ export async function cmdVaultInspect(argv: ReadonlyArray<string>): Promise<numb
   });
   const relpath = positional[0];
   if (!relpath) {
-    process.stderr.write(
-      "error: usage: o2b vault inspect <relpath> [--vault <path>] [--json]\n",
-    );
+    process.stderr.write("error: usage: o2b vault inspect <relpath> [--vault <path>] [--json]\n");
     return 2;
   }
   const config = defaultConfigPath();
@@ -51,9 +46,7 @@ export async function cmdVaultInspect(argv: ReadonlyArray<string>): Promise<numb
       relpath: result.relPath,
       status: result.excluded ? "excluded" : "included",
       exists_on_disk: result.existsOnDisk,
-      matched_rule: result.rule
-        ? { raw: result.rule.raw, kind: result.rule.kind }
-        : null,
+      matched_rule: result.rule ? { raw: result.rule.raw, kind: result.rule.kind } : null,
       matched_at: result.matchedAt,
       source: result.source,
     });

@@ -20,8 +20,14 @@ describe("o2b brain import-claude-memory CLI", () => {
     );
     const res = await runCli(
       [
-        "brain", "import-claude-memory", "--vault", vault,
-        "--memory", mem, "--dry-run", "--allow-arbitrary-memory-path",
+        "brain",
+        "import-claude-memory",
+        "--vault",
+        vault,
+        "--memory",
+        mem,
+        "--dry-run",
+        "--allow-arbitrary-memory-path",
       ],
       { env },
     );
@@ -48,8 +54,15 @@ describe("o2b brain import-claude-memory CLI", () => {
     );
     const res = await runCli(
       [
-        "brain", "import-claude-memory", "--vault", vault,
-        "--memory", mem, "--apply", "--yes", "--allow-arbitrary-memory-path",
+        "brain",
+        "import-claude-memory",
+        "--vault",
+        vault,
+        "--memory",
+        mem,
+        "--apply",
+        "--yes",
+        "--allow-arbitrary-memory-path",
       ],
       { env },
     );
@@ -61,7 +74,12 @@ describe("o2b brain import-claude-memory CLI", () => {
 
   test("--apply + --dry-run is rejected", async () => {
     const res = await runCli([
-      "brain", "import-claude-memory", "--vault", "/tmp", "--apply", "--dry-run",
+      "brain",
+      "import-claude-memory",
+      "--vault",
+      "/tmp",
+      "--apply",
+      "--dry-run",
     ]);
     expect(res.returncode).toBe(2);
     expect(res.stderr).toMatch(/--apply.*--dry-run|--dry-run.*--apply/);

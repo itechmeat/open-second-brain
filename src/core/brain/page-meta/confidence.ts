@@ -22,9 +22,7 @@ export function isPageConfidence(value: unknown): value is PageConfidence {
  * Unknown / absent values fall back to `low` so a page that has not
  * yet earned a confidence stamp does not get one for free.
  */
-export function readConfidence(
-  meta: Readonly<Record<string, unknown>>,
-): PageConfidence {
+export function readConfidence(meta: Readonly<Record<string, unknown>>): PageConfidence {
   const modern = meta["_confidence"];
   if (isPageConfidence(modern)) return modern;
   const legacy = meta["confidence"];

@@ -27,10 +27,7 @@ describe("countBrainEvents", () => {
       "## 11:00:00Z — promote\n- agent: @claude-vps-agent\n- promoted: 0\n\n" +
       "## 12:00:00Z — rollback\n- run_id: x\n";
     const v = vaultWithLog(body);
-    const out = countBrainEvents(v, "2026-05-17", [
-      "@claude-vps-agent",
-      "@codex-vps-agent",
-    ]);
+    const out = countBrainEvents(v, "2026-05-17", ["@claude-vps-agent", "@codex-vps-agent"]);
     expect(out.byAgent["@claude-vps-agent"]).toEqual({
       feedback: 1,
       apply_evidence: 1,
@@ -51,8 +48,7 @@ describe("countBrainEvents", () => {
   });
 
   test("agent missing from known_agents shows under unknownAgents", () => {
-    const body =
-      "## 08:00:00Z — feedback\n- agent: @stranger\n- topic: foo\n\n";
+    const body = "## 08:00:00Z — feedback\n- agent: @stranger\n- topic: foo\n\n";
     const v = vaultWithLog(body);
     const out = countBrainEvents(v, "2026-05-17", ["@claude-vps-agent"]);
     expect(out.byAgent["@claude-vps-agent"]).toEqual({
@@ -138,8 +134,7 @@ describe("countBrainEvents", () => {
   test("falls back to markdown for historical pre-v0.10.8 days", () => {
     // Pure-markdown fixture (no JSONL sidecar) - simulates a day from
     // before the JSONL writer existed.
-    const body =
-      "## 09:00:00Z — feedback\n- agent: @a-legacy\n- topic: old\n";
+    const body = "## 09:00:00Z — feedback\n- agent: @a-legacy\n- topic: old\n";
     const v = vaultWithLog(body);
     const out = countBrainEvents(v, "2026-05-17", ["@a-legacy"]);
     expect(out.byAgent["@a-legacy"]!.feedback).toBe(1);

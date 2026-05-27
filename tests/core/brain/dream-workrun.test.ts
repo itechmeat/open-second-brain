@@ -14,14 +14,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -30,10 +23,7 @@ import {
   scanDanglingWorkruns,
   WORKRUN_PHASE,
 } from "../../../src/core/brain/dream-workrun.ts";
-import {
-  dreamRunsDir,
-  dreamWorkrunPath,
-} from "../../../src/core/brain/paths.ts";
+import { dreamRunsDir, dreamWorkrunPath } from "../../../src/core/brain/paths.ts";
 
 let vault: string;
 
@@ -151,7 +141,7 @@ describe("scanDanglingWorkruns", () => {
     const b = openWorkrun(vault, "dream-2026-05-27-200005");
     b.finalize();
 
-    const dangling = scanDanglingWorkruns(vault).sort();
+    const dangling = scanDanglingWorkruns(vault).toSorted();
     expect(dangling).toEqual([a.path]);
   });
 

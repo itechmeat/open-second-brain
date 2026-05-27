@@ -160,17 +160,10 @@ function renderPolicySection(input: ReceiptInput): string[] {
   if (input.policyCheckedAt?.trim()) {
     out.push("", `Policy checked at: \`${input.policyCheckedAt.trim()}\``);
   }
-  if (
-    input.approvalRequestId?.trim() ||
-    input.approvalStatus?.trim() ||
-    input.approvedBy?.trim()
-  ) {
+  if (input.approvalRequestId?.trim() || input.approvalStatus?.trim() || input.approvedBy?.trim()) {
     out.push("", "Approval:");
     if (input.approvalRequestId?.trim()) {
-      out.push(
-        "",
-        `Request: [[${PAY_MEMORY_PENDING_REL}/${input.approvalRequestId.trim()}]]`,
-      );
+      out.push("", `Request: [[${PAY_MEMORY_PENDING_REL}/${input.approvalRequestId.trim()}]]`);
     }
     if (input.approvalStatus?.trim()) {
       out.push(`Status: \`${input.approvalStatus.trim()}\``);
@@ -272,4 +265,3 @@ function renderReceiptBody(input: ReceiptInput): string {
   );
   return lines.join("\n");
 }
-

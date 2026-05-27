@@ -15,7 +15,9 @@ beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "osb-manifest-"));
 });
 afterEach(() => {
-  try { rmSync(vault, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(vault, { recursive: true, force: true });
+  } catch {}
 });
 
 describe("install manifest sidecar", () => {
@@ -102,10 +104,7 @@ describe("install manifest sidecar", () => {
 
   test("readManifest rejects unknown schema_version", () => {
     mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
-    writeFileSync(
-      manifestPath(vault),
-      JSON.stringify({ schema_version: 999, installs: {} }),
-    );
+    writeFileSync(manifestPath(vault), JSON.stringify({ schema_version: 999, installs: {} }));
     expect(() => readManifest(vault)).toThrow(/schema_version/);
   });
 

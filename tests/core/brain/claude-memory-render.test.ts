@@ -20,7 +20,9 @@ describe("renderPreferenceFromMemory", () => {
     expect(out).toContain("scope: writing");
     expect(out).toContain("confidence: high");
     expect(out).toContain("_force_confirmed_via: claude-memory");
-    expect(out).toContain("_imported_from: \"/root/.claude/projects/-root/memory/feedback_no_em_dashes.md\"");
+    expect(out).toContain(
+      '_imported_from: "/root/.claude/projects/-root/memory/feedback_no_em_dashes.md"',
+    );
     expect(out).toContain("Body text.");
     expect(out).toContain("**Why:**");
     expect(out).toContain("## Origin");
@@ -29,9 +31,11 @@ describe("renderPreferenceFromMemory", () => {
 
   test("body scope marker overrides default writing scope", () => {
     const out = renderPreferenceFromMemory({
-      name: "x", description: "x",
+      name: "x",
+      description: "x",
       body: "First line.\nscope: testing\nrest.",
-      memoryPath: "/m.md", importedAt: "2026-05-18T10:00:00Z",
+      memoryPath: "/m.md",
+      importedAt: "2026-05-18T10:00:00Z",
       bodySha256: "a".repeat(64),
     });
     expect(out).toContain("scope: testing");
@@ -48,15 +52,15 @@ describe("slugifyMemoryName", () => {
   });
 
   test("punctuation and spaces collapse to single dash", () => {
-    expect(
-      slugifyMemoryName("Phase-by-phase approval: don't conflate plan/code"),
-    ).toBe("phase-by-phase-approval-don-t-conflate-plan-code");
+    expect(slugifyMemoryName("Phase-by-phase approval: don't conflate plan/code")).toBe(
+      "phase-by-phase-approval-don-t-conflate-plan-code",
+    );
   });
 
   test("em-dashes do not produce runs of dashes in the slug", () => {
-    expect(
-      slugifyMemoryName("Daily/ event log — append after every artifact"),
-    ).toBe("daily-event-log-append-after-every-artifact");
+    expect(slugifyMemoryName("Daily/ event log — append after every artifact")).toBe(
+      "daily-event-log-append-after-every-artifact",
+    );
   });
 
   test("leading and trailing dashes are trimmed", () => {

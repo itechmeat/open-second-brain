@@ -10,28 +10,14 @@
  *     unknown URIs / missing files / malformed slug-or-date arguments.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  JSONRPC_VERSION,
-  MCPServer,
-  PROTOCOL_VERSION,
-} from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import {
-  brainActivePath,
-  logPath,
-  preferencePath,
-} from "../../src/core/brain/paths.ts";
+import { brainActivePath, logPath, preferencePath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { regenerateActive } from "../../src/core/brain/active.ts";
@@ -124,12 +110,8 @@ describe("MCP resources — capabilities and discovery", () => {
     const server = makeServer();
     await initialize(server);
     const r = await listResources(server);
-    const uris = r.result.resources.map((x: any) => x.uri).sort();
-    expect(uris).toEqual([
-      "osb://digest/latest",
-      "osb://preferences/active",
-      "osb://status",
-    ]);
+    const uris = r.result.resources.map((x: any) => x.uri).toSorted();
+    expect(uris).toEqual(["osb://digest/latest", "osb://preferences/active", "osb://status"]);
     for (const desc of r.result.resources) {
       expect(desc.mimeType).toBe("text/markdown");
       expect(typeof desc.name).toBe("string");
@@ -141,7 +123,7 @@ describe("MCP resources — capabilities and discovery", () => {
     const server = makeServer();
     await initialize(server);
     const r = await listTemplates(server);
-    const templates = r.result.resourceTemplates.map((t: any) => t.uriTemplate).sort();
+    const templates = r.result.resourceTemplates.map((t: any) => t.uriTemplate).toSorted();
     expect(templates).toEqual([
       "osb://backlinks/{id}",
       "osb://log/{date}",
@@ -375,7 +357,6 @@ describe("MCP resources — read osb://status", () => {
     expect(text).toContain("confirmed: 1");
     expect(text).toContain("## Activity");
   });
-
 });
 
 describe("MCP resources — read osb://backlinks/{id}", () => {

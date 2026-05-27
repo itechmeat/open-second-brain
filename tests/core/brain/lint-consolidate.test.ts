@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,20 +21,14 @@ function writePref(slug: string, fields: Record<string, string>) {
   const lines = ["---", `id: pref-${slug}`];
   for (const [k, v] of Object.entries(fields)) lines.push(`${k}: ${v}`);
   lines.push("---", "");
-  writeFileSync(
-    join(vault, "Brain", "preferences", `pref-${slug}.md`),
-    lines.join("\n"),
-  );
+  writeFileSync(join(vault, "Brain", "preferences", `pref-${slug}.md`), lines.join("\n"));
 }
 
 describe("lintConsolidate — fix-merged-link", () => {
   test("rewrites wikilinks pointing at a secondary", () => {
     writePref("canon", { topic: "x", principle: "y" });
     writePref("dup", { topic: "x", principle: "y", merged_into: "pref-canon" });
-    writeFileSync(
-      join(vault, "Brain", "log", "2026-05-25.md"),
-      "saw [[pref-dup]] today\n",
-    );
+    writeFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "saw [[pref-dup]] today\n");
 
     const dry = lintConsolidate(vault, { apply: false });
     expect(dry.fixes.length).toBe(1);
@@ -48,16 +36,16 @@ describe("lintConsolidate — fix-merged-link", () => {
     expect(dry.fixes[0]!.to).toBe("pref-canon");
     expect(dry.applied).toBe(false);
     // dry-run does not write
-    expect(
-      readFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "utf8"),
-    ).toContain("[[pref-dup]]");
+    expect(readFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "utf8")).toContain(
+      "[[pref-dup]]",
+    );
 
     const apply = lintConsolidate(vault, { apply: true });
     expect(apply.applied).toBe(true);
     expect(apply.filesWritten).toBeGreaterThan(0);
-    expect(
-      readFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "utf8"),
-    ).toContain("[[pref-canon]]");
+    expect(readFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "utf8")).toContain(
+      "[[pref-canon]]",
+    );
   });
 
   test("preserves wikilink aliases and anchors when rewriting", () => {
@@ -68,10 +56,7 @@ describe("lintConsolidate — fix-merged-link", () => {
       "[[pref-dup|the rule]] and [[pref-dup#section]]\n",
     );
     lintConsolidate(vault, { apply: true });
-    const content = readFileSync(
-      join(vault, "Brain", "log", "2026-05-25.md"),
-      "utf8",
-    );
+    const content = readFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "utf8");
     expect(content).toContain("[[pref-canon|the rule]]");
     expect(content).toContain("[[pref-canon#section]]");
   });
@@ -85,10 +70,7 @@ describe("lintConsolidate — fix-merged-link", () => {
     );
     const report = lintConsolidate(vault, { apply: true });
     expect(report.fixes.length).toBe(1);
-    const content = readFileSync(
-      join(vault, "Brain", "log", "2026-05-25.md"),
-      "utf8",
-    );
+    const content = readFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "utf8");
     expect(content).toContain("[[pref-canon]]");
     expect(content).toContain("[[pref-dup-extra]]");
     expect(content).toContain("[[pref-duplicate]]");
@@ -143,10 +125,7 @@ describe("lintConsolidate — demote-stale-stable", () => {
       apply: true,
       now: new Date("2026-05-25T00:00:00Z"),
     });
-    const yaml = readFileSync(
-      join(vault, "Brain", "preferences", "pref-old.md"),
-      "utf8",
-    );
+    const yaml = readFileSync(join(vault, "Brain", "preferences", "pref-old.md"), "utf8");
     expect(yaml).toContain("_lifecycle: draft");
     expect(yaml).not.toContain("_lifecycle: stable");
   });

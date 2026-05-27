@@ -40,9 +40,7 @@ describe("hermesAdapter.detect", () => {
 
   test("requires 'tools' array on the meta line", () => {
     expect(hermesAdapter.detect('{"role":"session_meta"}')).toBe(false);
-    expect(
-      hermesAdapter.detect('{"role":"session_meta","tools":"not-an-array"}'),
-    ).toBe(false);
+    expect(hermesAdapter.detect('{"role":"session_meta","tools":"not-an-array"}')).toBe(false);
   });
 });
 

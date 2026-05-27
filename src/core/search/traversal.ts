@@ -135,10 +135,7 @@ export function expandByTraversal(
       // skipped target (dup / weaker path / missing chunk) does not burn
       // the per-hit budget and starve a valid later target.
       expanded++;
-      added.set(
-        targetId,
-        makeLinkResult(doc, hopScore, node.hop + 1, node.fromPath),
-      );
+      added.set(targetId, makeLinkResult(doc, hopScore, node.hop + 1, node.fromPath));
       queue.push({
         documentId: targetId,
         hop: node.hop + 1,

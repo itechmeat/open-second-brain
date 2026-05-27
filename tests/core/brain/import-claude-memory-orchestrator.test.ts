@@ -38,10 +38,13 @@ describe("importClaudeMemory", () => {
     const vault = setupVault();
     const mem = setupMemory();
     const res = importClaudeMemory({
-      vault, memoryDir: mem, mode: "dry-run", allowArbitraryMemoryPath: true,
+      vault,
+      memoryDir: mem,
+      mode: "dry-run",
+      allowArbitraryMemoryPath: true,
     });
-    expect(res.plans.map((p) => p.action).sort()).toEqual(["CREATE", "CREATE"]);
-    expect(res.skipped.length).toBe(1);  // user_who.md; MEMORY.md is filtered earlier
+    expect(res.plans.map((p) => p.action).toSorted()).toEqual(["CREATE", "CREATE"]);
+    expect(res.skipped.length).toBe(1); // user_who.md; MEMORY.md is filtered earlier
     expect(existsSync(join(vault, "Brain", "preferences", "pref-rule-a.md"))).toBe(false);
     rmSync(vault, { recursive: true });
     rmSync(mem, { recursive: true });
@@ -51,14 +54,19 @@ describe("importClaudeMemory", () => {
     const vault = setupVault();
     const mem = setupMemory();
     const res = importClaudeMemory({
-      vault, memoryDir: mem, mode: "apply", allowArbitraryMemoryPath: true,
+      vault,
+      memoryDir: mem,
+      mode: "apply",
+      allowArbitraryMemoryPath: true,
       now: new Date("2026-05-18T10:00:00Z"),
     });
     expect(res.applied.length).toBe(2);
     expect(existsSync(join(vault, "Brain", "preferences", "pref-rule-a.md"))).toBe(true);
     expect(existsSync(join(vault, "Brain", "preferences", "pref-rule-b.md"))).toBe(true);
-    const manifest = JSON.parse(readFileSync(join(vault, "Brain", ".imports", "claude-memory.json"), "utf8"));
-    expect(Object.keys(manifest.imports).sort()).toEqual(["feedback_a.md", "feedback_b.md"]);
+    const manifest = JSON.parse(
+      readFileSync(join(vault, "Brain", ".imports", "claude-memory.json"), "utf8"),
+    );
+    expect(Object.keys(manifest.imports).toSorted()).toEqual(["feedback_a.md", "feedback_b.md"]);
     const log = readFileSync(join(vault, "Brain", "log", res.localDate + ".md"), "utf8");
     expect(log).toContain("import-claude-memory");
     expect(log).toContain("created: 2");
@@ -71,7 +79,12 @@ describe("importClaudeMemory", () => {
     const mem = setupMemory();
     importClaudeMemory({ vault, memoryDir: mem, mode: "apply", allowArbitraryMemoryPath: true });
     const before = readFileSync(join(vault, "Brain", "preferences", "pref-rule-a.md"), "utf8");
-    const res2 = importClaudeMemory({ vault, memoryDir: mem, mode: "apply", allowArbitraryMemoryPath: true });
+    const res2 = importClaudeMemory({
+      vault,
+      memoryDir: mem,
+      mode: "apply",
+      allowArbitraryMemoryPath: true,
+    });
     expect(res2.applied.length).toBe(0);
     expect(res2.skippedUnchanged.length).toBe(2);
     const after = readFileSync(join(vault, "Brain", "preferences", "pref-rule-a.md"), "utf8");

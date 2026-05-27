@@ -7,13 +7,7 @@
 
 import { defaultConfigPath } from "../../../core/config.ts";
 import { appendBrainNote } from "../../../core/brain/note.ts";
-import {
-  normalizeFlagString,
-  ok,
-  okJson,
-  parse,
-  resolveBrainVault,
-} from "../helpers.ts";
+import { normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 const USAGE_ERROR_EXIT = 2;
 
@@ -31,14 +25,10 @@ export async function cmdBrainNote(argv: string[]): Promise<number> {
   });
 
   if (positional.length === 0) {
-    return usageError(
-      'brain note requires a text argument: o2b brain note "<text>"',
-    );
+    return usageError('brain note requires a text argument: o2b brain note "<text>"');
   }
   if (positional.length > 1) {
-    return usageError(
-      "brain note takes exactly one positional argument — quote multi-word text",
-    );
+    return usageError("brain note takes exactly one positional argument — quote multi-word text");
   }
   const text = positional[0]!;
   // Pre-validate empty / whitespace-only text at the CLI surface so a
@@ -47,9 +37,7 @@ export async function cmdBrainNote(argv: string[]): Promise<number> {
   // the catch arm below maps to exit 1 — that drift is on the spec
   // (design §7.2: "Empty / whitespace only → exit 2").
   if (text.trim().length === 0) {
-    return usageError(
-      'brain note requires non-empty text: o2b brain note "<text>"',
-    );
+    return usageError('brain note requires non-empty text: o2b brain note "<text>"');
   }
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();

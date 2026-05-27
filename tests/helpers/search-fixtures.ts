@@ -11,10 +11,7 @@ import {
   DEFAULT_VAULT_IGNORE_PATHS,
   type VaultIgnoreRule,
 } from "../../src/core/vault-scope/defaults.ts";
-import type {
-  ResolvedSearchConfig,
-  ResolvedEmbeddingConfig,
-} from "../../src/core/search/types.ts";
+import type { ResolvedSearchConfig, ResolvedEmbeddingConfig } from "../../src/core/search/types.ts";
 
 export function createTempVault(prefix: string): {
   vault: string;
@@ -72,7 +69,7 @@ export function makeConfig(opts: {
   });
   const semantic: ResolvedEmbeddingConfig = Object.freeze({
     ...baseSemantic,
-    ...(opts.semantic ?? {}),
+    ...opts.semantic,
   });
   const paths = opts.ignorePaths ?? DEFAULT_VAULT_IGNORE_PATHS;
   const ignoreRules: ReadonlyArray<VaultIgnoreRule> = Object.freeze(

@@ -30,29 +30,15 @@ describe("BRAIN_ROOT_REL", () => {
 describe("PAY_MEMORY_*_REL constants", () => {
   test("compose under BRAIN_ROOT_REL so a Brain rename cascades", () => {
     expect(PAY_MEMORY_ROOT_REL).toBe(posix.join(BRAIN_ROOT_REL, "payments"));
-    expect(PAY_MEMORY_POLICIES_REL).toBe(
-      posix.join(PAY_MEMORY_ROOT_REL, "policies"),
-    );
-    expect(PAY_MEMORY_ASSETS_REL).toBe(
-      posix.join(PAY_MEMORY_ROOT_REL, "assets"),
-    );
-    expect(PAY_MEMORY_DRAFTS_REL).toBe(
-      posix.join(PAY_MEMORY_ROOT_REL, "drafts"),
-    );
-    expect(PAY_MEMORY_REPORTS_REL).toBe(
-      posix.join(PAY_MEMORY_ROOT_REL, "reports"),
-    );
-    expect(PAY_MEMORY_PENDING_REL).toBe(
-      posix.join(PAY_MEMORY_ROOT_REL, "_pending"),
-    );
+    expect(PAY_MEMORY_POLICIES_REL).toBe(posix.join(PAY_MEMORY_ROOT_REL, "policies"));
+    expect(PAY_MEMORY_ASSETS_REL).toBe(posix.join(PAY_MEMORY_ROOT_REL, "assets"));
+    expect(PAY_MEMORY_DRAFTS_REL).toBe(posix.join(PAY_MEMORY_ROOT_REL, "drafts"));
+    expect(PAY_MEMORY_REPORTS_REL).toBe(posix.join(PAY_MEMORY_ROOT_REL, "reports"));
+    expect(PAY_MEMORY_PENDING_REL).toBe(posix.join(PAY_MEMORY_ROOT_REL, "_pending"));
   });
 
   test("spending policy file constants compose under policies", () => {
-    expect(PAY_MEMORY_SPENDING_MD_REL).toBe(
-      posix.join(PAY_MEMORY_POLICIES_REL, "spending.md"),
-    );
-    expect(PAY_MEMORY_SPENDING_JSON_REL).toBe(
-      posix.join(PAY_MEMORY_POLICIES_REL, "spending.json"),
-    );
+    expect(PAY_MEMORY_SPENDING_MD_REL).toBe(posix.join(PAY_MEMORY_POLICIES_REL, "spending.md"));
+    expect(PAY_MEMORY_SPENDING_JSON_REL).toBe(posix.join(PAY_MEMORY_POLICIES_REL, "spending.json"));
   });
 });

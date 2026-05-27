@@ -17,10 +17,7 @@ import {
 } from "../../../src/core/brain/preference.ts";
 import { readLifecycle } from "../../../src/core/brain/page-meta/lifecycle.ts";
 import { parseFrontmatter } from "../../../src/core/vault.ts";
-import {
-  BRAIN_CONFIDENCE,
-  BRAIN_PREFERENCE_STATUS,
-} from "../../../src/core/brain/types.ts";
+import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 
 let vault: string;
 
@@ -90,16 +87,9 @@ describe("writePreference — _lifecycle emission", () => {
   });
 
   test("byte-identical second write when lifecycle is supplied both times", () => {
-    const res = writePreference(
-      vault,
-      basePref("idem-mod", { lifecycle: "verified" }),
-    );
+    const res = writePreference(vault, basePref("idem-mod", { lifecycle: "verified" }));
     const first = readFileSync(res.path, "utf8");
-    writePreference(
-      vault,
-      basePref("idem-mod", { lifecycle: "verified" }),
-      { overwrite: true },
-    );
+    writePreference(vault, basePref("idem-mod", { lifecycle: "verified" }), { overwrite: true });
     const second = readFileSync(res.path, "utf8");
     expect(second).toBe(first);
   });

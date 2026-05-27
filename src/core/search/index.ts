@@ -97,11 +97,7 @@ function parseBool(raw: string | null, fallback: boolean, fieldName: string): bo
   }
 }
 
-function validateIntegerRange(
-  n: number,
-  fieldName: string,
-  range?: IntegerRange,
-): void {
+function validateIntegerRange(n: number, fieldName: string, range?: IntegerRange): void {
   if (range?.min !== undefined && n < range.min) {
     throw new SearchError("INVALID_INPUT", `${fieldName} must be >= ${range.min}, got ${n}`);
   }
@@ -297,7 +293,7 @@ export function resolveSearchConfig(opts: {
   const merged = Object.freeze({
     ...base,
     ...opts.overrides,
-    semantic: Object.freeze({ ...base.semantic, ...(opts.overrides.semantic ?? {}) }),
+    semantic: Object.freeze({ ...base.semantic, ...opts.overrides.semantic }),
     ignoreRules: opts.overrides.ignoreRules
       ? Object.freeze([...opts.overrides.ignoreRules])
       : base.ignoreRules,

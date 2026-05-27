@@ -1,21 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { regenerateActive } from "../../src/core/brain/active.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainActivePath, preferencePath } from "../../src/core/brain/paths.ts";
-import {
-  moveToRetired,
-  writePreference,
-} from "../../src/core/brain/preference.ts";
+import { moveToRetired, writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
 let vault: string;
@@ -39,7 +30,11 @@ function readActive(): string {
   return readFileSync(brainActivePath(vault), "utf8");
 }
 
-function seedConfirmed(slug: string, principle: string, confidence: "low" | "medium" | "high"): void {
+function seedConfirmed(
+  slug: string,
+  principle: string,
+  confidence: "low" | "medium" | "high",
+): void {
   writePreference(vault, {
     slug,
     topic: slug,

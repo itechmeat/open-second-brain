@@ -1,6 +1,6 @@
 import { defaultConfigPath } from "../../../core/config.ts";
 import { renderDigest, type RenderDigestOptions } from "../../../core/brain/digest.ts";
-import { parse, fail, resolveBrainVault, ISO_8601_RE } from "../helpers.ts";
+import { parse, fail, resolveBrainVault, parseOptionalIsoDate } from "../helpers.ts";
 
 export function parseWindow(raw: string): number {
   const m = /^(\d+)(?:d)?$/.exec(raw);
@@ -22,22 +22,11 @@ export async function cmdBrainDigest(argv: string[]): Promise<number> {
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
 
-  let sinceDate: Date | undefined;
-  if (flags["since"]) {
-    const raw = String(flags["since"]);
-    if (!ISO_8601_RE.test(raw)) return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
-    const d = new Date(raw);
-    if (!Number.isFinite(d.getTime())) return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
-    sinceDate = d;
-  }
-  let untilDate: Date | undefined;
-  if (flags["until"]) {
-    const raw = String(flags["until"]);
-    if (!ISO_8601_RE.test(raw)) return fail(`--until must be a valid ISO-8601 timestamp; got ${raw}`);
-    const d = new Date(raw);
-    if (!Number.isFinite(d.getTime())) return fail(`--until must be a valid ISO-8601 timestamp; got ${raw}`);
-    untilDate = d;
-  }
+  const { value: parsedSinceDate, error: sinceErr } = parseOptionalIsoDate(flags, "since");
+  if (sinceErr) return fail(sinceErr);
+  let sinceDate = parsedSinceDate;
+  const { value: untilDate, error: untilErr } = parseOptionalIsoDate(flags, "until");
+  if (untilErr) return fail(untilErr);
   if (flags["window"]) {
     if (flags["since"]) {
       return fail("--since and --window are mutually exclusive");

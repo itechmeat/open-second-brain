@@ -18,16 +18,8 @@ import { join } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { defaultConfigPath, resolveAgentName } from "../config.ts";
 import { appendLogEvent } from "./log.ts";
-import {
-  brainConfigPath,
-  brainManualPath,
-  vaultRelative,
-} from "./paths.ts";
-import {
-  BrainConfigError,
-  DEFAULT_BRAIN_CONFIG_YAML,
-  loadBrainConfig,
-} from "./policy.ts";
+import { brainConfigPath, brainManualPath, vaultRelative } from "./paths.ts";
+import { BrainConfigError, DEFAULT_BRAIN_CONFIG_YAML, loadBrainConfig } from "./policy.ts";
 import { createSnapshot } from "./snapshot.ts";
 import { renderBrainManual } from "./templates.ts";
 import { isoSecond } from "./time.ts";
@@ -179,8 +171,7 @@ export function applyUpgrade(
     updated.push(file.path);
   }
 
-  const agent =
-    opts.agent ?? resolveAgentName(defaultConfigPathOrEmpty());
+  const agent = opts.agent ?? resolveAgentName(defaultConfigPathOrEmpty());
   try {
     appendLogEvent(vault, {
       timestamp: isoSecond(now),
@@ -195,9 +186,7 @@ export function applyUpgrade(
   } catch (err) {
     // Audit-only failure — the files are already on disk. Surface so
     // the operator can record manually if needed.
-    process.stderr.write(
-      `warning: append upgrade log failed: ${(err as Error).message}\n`,
-    );
+    process.stderr.write(`warning: append upgrade log failed: ${(err as Error).message}\n`);
   }
 
   return Object.freeze({
@@ -284,11 +273,7 @@ function makeNoop(path: string): UpgradeFilePlan {
   });
 }
 
-function makeUpdate(
-  path: string,
-  before: string,
-  after: string,
-): UpgradeFilePlan {
+function makeUpdate(path: string, before: string, after: string): UpgradeFilePlan {
   return Object.freeze({
     path,
     status: "update" as const,
@@ -362,13 +347,9 @@ export function mergeBrainYaml(live: string, target: string): string {
   const targetBlocks = parseYamlBlocks(target);
   const liveBlocks = parseYamlBlocks(live);
   const liveByName = new Map(liveBlocks.map((b) => [b.name, b]));
-  const liveScalars = new Set(
-    liveBlocks.filter((b) => b.kind === "scalar").map((b) => b.name),
-  );
+  const liveScalars = new Set(liveBlocks.filter((b) => b.kind === "scalar").map((b) => b.name));
   const liveSections = new Map(
-    liveBlocks
-      .filter((b) => b.kind === "section")
-      .map((b) => [b.name, b] as const),
+    liveBlocks.filter((b) => b.kind === "section").map((b) => [b.name, b] as const),
   );
 
   let result = live;
@@ -460,17 +441,14 @@ function parseYamlBlocks(yaml: string): YamlBlock[] {
           }
           break;
         }
-        const text =
-          [...preface, lines[start]!, ...nestedLines].join("\n") + "\n";
+        const text = [...preface, lines[start]!, ...nestedLines].join("\n") + "\n";
         preface = [];
         blocks.push({
           kind: "section",
           name: key,
           text,
           nestedLines: nestedLines.filter((l) => l.trim() !== ""),
-          nestedKeys: nestedLines
-            .filter((l) => /^\s+[A-Za-z_]/.test(l))
-            .map(extractKey),
+          nestedKeys: nestedLines.filter((l) => /^\s+[A-Za-z_]/.test(l)).map(extractKey),
         });
         continue;
       }

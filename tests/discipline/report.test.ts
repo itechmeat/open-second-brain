@@ -13,9 +13,11 @@ describe("runDisciplineReport", () => {
     writeFileSync(
       join(vault, "Brain", "_brain.yaml"),
       "schema_version: 1\ndiscipline_report:\n" +
-      "  enabled: true\n  timezone: UTC\n" +
-      "  watched_paths:\n    - " + vault + "/repo\n" +
-      "  known_agents:\n    - '@claude-vps-agent'\n",
+        "  enabled: true\n  timezone: UTC\n" +
+        "  watched_paths:\n    - " +
+        vault +
+        "/repo\n" +
+        "  known_agents:\n    - '@claude-vps-agent'\n",
       "utf8",
     );
 
@@ -26,7 +28,11 @@ describe("runDisciplineReport", () => {
     writeFileSync(join(repo, "a.txt"), "hi\n");
     execSync("git add . && git commit -q -m c1", {
       cwd: repo,
-      env: { ...process.env, GIT_COMMITTER_DATE: "2026-05-17T10:00:00Z", GIT_AUTHOR_DATE: "2026-05-17T10:00:00Z" },
+      env: {
+        ...process.env,
+        GIT_COMMITTER_DATE: "2026-05-17T10:00:00Z",
+        GIT_AUTHOR_DATE: "2026-05-17T10:00:00Z",
+      },
     });
 
     const res = runDisciplineReport({

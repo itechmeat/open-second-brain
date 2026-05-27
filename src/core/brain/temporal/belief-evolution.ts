@@ -25,19 +25,13 @@ import { join } from "node:path";
 
 import { parseFrontmatter } from "../../vault.ts";
 import { brainDirs } from "./../paths.ts";
-import {
-  BRAIN_APPLY_RESULT,
-  BRAIN_LOG_EVENT_KIND,
-  type BrainApplyResult,
-} from "./../types.ts";
+import { BRAIN_APPLY_RESULT, BRAIN_LOG_EVENT_KIND, type BrainApplyResult } from "./../types.ts";
 import { extractId } from "./period-common.ts";
 import { selectEvents } from "./select-events.ts";
 import type { TemporalEvent, TimelineIndex } from "./types.ts";
 
 /** What the caller wants the evolution for. */
-export type BeliefEvolutionTarget =
-  | { readonly prefId: string }
-  | { readonly topic: string };
+export type BeliefEvolutionTarget = { readonly prefId: string } | { readonly topic: string };
 
 /** One status-change row. */
 export interface BeliefTransition {
@@ -179,27 +173,9 @@ function collectTransitions(
   for (const ev of dreamEvents) {
     const summary = ev.dreamSummary;
     if (summary === undefined) continue;
-    appendTransitionsFromLinks(
-      ev.at,
-      summary.newUnconfirmed,
-      "creation",
-      targetIds,
-      out,
-    );
-    appendTransitionsFromLinks(
-      ev.at,
-      summary.confirmed,
-      "promotion",
-      targetIds,
-      out,
-    );
-    appendTransitionsFromLinks(
-      ev.at,
-      summary.retired,
-      "retirement",
-      targetIds,
-      out,
-    );
+    appendTransitionsFromLinks(ev.at, summary.newUnconfirmed, "creation", targetIds, out);
+    appendTransitionsFromLinks(ev.at, summary.confirmed, "promotion", targetIds, out);
+    appendTransitionsFromLinks(ev.at, summary.retired, "retirement", targetIds, out);
   }
   out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   return out;
@@ -228,10 +204,7 @@ function appendTransitionsFromLinks(
   }
 }
 
-function matchesTarget(
-  candidateId: string,
-  targetIds: ReadonlySet<string>,
-): boolean {
+function matchesTarget(candidateId: string, targetIds: ReadonlySet<string>): boolean {
   if (targetIds.has(candidateId)) return true;
   // pref-foo / ret-foo share lifecycle; treat the alternate prefix as
   // matching too so a `retirement` entry against `ret-foo` resolves
@@ -321,13 +294,9 @@ function collectRetirements(
     const retiredAt = readScalar(meta["retired_at"]);
     if (retiredAt === undefined) continue;
     const supersededByLink = readScalar(meta["superseded_by"]);
-    const supersededBy = supersededByLink !== undefined
-      ? extractId(supersededByLink)
-      : undefined;
+    const supersededBy = supersededByLink !== undefined ? extractId(supersededByLink) : undefined;
     const supersedesLink = readScalar(meta["supersedes"]);
-    const supersedes = supersedesLink !== undefined
-      ? extractId(supersedesLink)
-      : undefined;
+    const supersedes = supersedesLink !== undefined ? extractId(supersedesLink) : undefined;
     const row: BeliefRetirement = {
       prefId: id,
       retiredAt,
@@ -339,9 +308,7 @@ function collectRetirements(
         : {}),
       ...(supersededBy !== undefined ? { supersededBy } : {}),
       ...(supersedes !== undefined ? { supersedes } : {}),
-      ...(readScalar(meta["topic"]) !== undefined
-        ? { topic: readScalar(meta["topic"])! }
-        : {}),
+      ...(readScalar(meta["topic"]) !== undefined ? { topic: readScalar(meta["topic"])! } : {}),
     };
     out.push(Object.freeze(row));
     // Walk the chain: `supersedes` points to the previous retired

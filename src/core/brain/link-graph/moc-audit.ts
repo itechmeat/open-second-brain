@@ -68,11 +68,7 @@ export interface AuditMocOptions {
   readonly minLinkRatio?: number;
 }
 
-export function auditMoc(
-  vault: string,
-  hubId: string,
-  opts: AuditMocOptions = {},
-): MocAuditReport {
+export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {}): MocAuditReport {
   const hubCanonical = normaliseWikilinkTarget(hubId);
   const hubPath = locateArtifact(vault, hubCanonical);
   if (!hubPath) {
@@ -103,9 +99,7 @@ export function auditMoc(
   const bodyChars = hubBody.replace(/\s+/g, "").length;
   const ratio = bodyChars > 0 ? linkChars / bodyChars : 0;
   if (ratio < minRatio) {
-    throw new MocAuditError(
-      `not a MOC: link ratio ${ratio.toFixed(2)} < threshold ${minRatio}`,
-    );
+    throw new MocAuditError(`not a MOC: link ratio ${ratio.toFixed(2)} < threshold ${minRatio}`);
   }
 
   // Backlink index + cluster member metadata.
@@ -126,9 +120,7 @@ export function auditMoc(
     // Don't count the hub's own outbound reference toward the
     // bucket assignment; the bucket measures coverage by OTHER
     // notes, not by the hub itself.
-    const inboundFromOthers = backlinks.filter(
-      (r) => r.source !== hubCanonical,
-    ).length;
+    const inboundFromOthers = backlinks.filter((r) => r.source !== hubCanonical).length;
     const member: MocClusterMember = Object.freeze({
       id: target,
       backlinkCount: inboundFromOthers,
@@ -186,10 +178,7 @@ export function auditMoc(
 
 function locateArtifact(vault: string, id: string): string | null {
   const dirs = brainDirs(vault);
-  const candidates = [
-    join(dirs.preferences, `${id}.md`),
-    join(dirs.retired, `${id}.md`),
-  ];
+  const candidates = [join(dirs.preferences, `${id}.md`), join(dirs.retired, `${id}.md`)];
   for (const c of candidates) if (existsSync(c)) return c;
   return null;
 }
@@ -215,10 +204,7 @@ function resolveThresholds(
   vault: string,
   opts: AuditMocOptions,
 ): { minOutbound: number; minRatio: number } {
-  if (
-    opts.minOutboundLinks !== undefined &&
-    opts.minLinkRatio !== undefined
-  ) {
+  if (opts.minOutboundLinks !== undefined && opts.minLinkRatio !== undefined) {
     return {
       minOutbound: opts.minOutboundLinks,
       minRatio: opts.minLinkRatio,
@@ -232,11 +218,7 @@ function resolveThresholds(
   }
   const lg = cfg ? resolveLinkGraph(cfg) : null;
   return {
-    minOutbound:
-      opts.minOutboundLinks ??
-      (lg ? lg.moc_min_outbound_links : 5),
-    minRatio:
-      opts.minLinkRatio ?? (lg ? lg.moc_min_link_ratio : 0.3),
+    minOutbound: opts.minOutboundLinks ?? (lg ? lg.moc_min_outbound_links : 5),
+    minRatio: opts.minLinkRatio ?? (lg ? lg.moc_min_link_ratio : 0.3),
   };
 }
-

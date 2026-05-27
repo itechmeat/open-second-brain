@@ -48,10 +48,7 @@ describe("parseInlineMarker", () => {
   });
 
   test("accepts unquoted single-word values", () => {
-    const m = parseInlineMarker(
-      "@osb feedback positive topic=foo principle=bar scope=writing",
-      1,
-    );
+    const m = parseInlineMarker("@osb feedback positive topic=foo principle=bar scope=writing", 1);
     expect(m).not.toBeNull();
     if (m === null) return;
     expect(m.topic).toBe("foo");
@@ -64,9 +61,7 @@ describe("parseInlineMarker", () => {
   });
 
   test("returns null when '@osb' is in the middle of a line", () => {
-    expect(
-      parseInlineMarker(`This is @osb feedback positive topic=t principle=p`, 1),
-    ).toBeNull();
+    expect(parseInlineMarker(`This is @osb feedback positive topic=t principle=p`, 1)).toBeNull();
   });
 
   test("returns null when required field is missing", () => {
@@ -77,16 +72,11 @@ describe("parseInlineMarker", () => {
   });
 
   test("returns null when signal value is not in the enum", () => {
-    expect(
-      parseInlineMarker(`@osb feedback maybe topic=t principle=p`, 1),
-    ).toBeNull();
+    expect(parseInlineMarker(`@osb feedback maybe topic=t principle=p`, 1)).toBeNull();
   });
 
   test("accepts leading whitespace before '@osb'", () => {
-    const m = parseInlineMarker(
-      `   @osb feedback negative topic=t principle=p`,
-      1,
-    );
+    const m = parseInlineMarker(`   @osb feedback negative topic=t principle=p`, 1);
     expect(m).not.toBeNull();
   });
 
@@ -125,12 +115,7 @@ describe("parseBlockMarker", () => {
   });
 
   test("returns null on unknown kind", () => {
-    const body = [
-      "kind: lol",
-      "signal: negative",
-      "topic: t",
-      "principle: p",
-    ].join("\n");
+    const body = ["kind: lol", "signal: negative", "topic: t", "principle: p"].join("\n");
     expect(parseBlockMarker(body, 1)).toBeNull();
   });
 
@@ -157,11 +142,9 @@ describe("parseBlockMarker", () => {
 
 describe("discoverMarkers", () => {
   test("finds inline markers", () => {
-    const text = [
-      "Some note text",
-      "@osb feedback negative topic=t principle=p",
-      "More text",
-    ].join("\n");
+    const text = ["Some note text", "@osb feedback negative topic=t principle=p", "More text"].join(
+      "\n",
+    );
     const markers = discoverMarkers(text);
     expect(markers.length).toBe(1);
     expect(markers[0]!.shape).toBe("inline");
@@ -186,11 +169,7 @@ describe("discoverMarkers", () => {
   });
 
   test("ignores '@osb' inside non-osb fences (code samples in docs)", () => {
-    const text = [
-      "```python",
-      "@osb feedback negative topic=t principle=p",
-      "```",
-    ].join("\n");
+    const text = ["```python", "@osb feedback negative topic=t principle=p", "```"].join("\n");
     expect(discoverMarkers(text).length).toBe(0);
   });
 

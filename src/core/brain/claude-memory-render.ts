@@ -3,7 +3,7 @@ export interface RenderMemoryInput {
   readonly description: string;
   readonly body: string;
   readonly memoryPath: string;
-  readonly importedAt: string;   // ISO Z
+  readonly importedAt: string; // ISO Z
   readonly bodySha256: string;
 }
 

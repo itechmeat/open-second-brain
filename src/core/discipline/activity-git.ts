@@ -14,10 +14,7 @@ export interface GitActivity {
   readonly deletions: number;
 }
 
-export function gitActivity(
-  path: string,
-  win: ActivityWindow,
-): GitActivity | null {
+export function gitActivity(path: string, win: ActivityWindow): GitActivity | null {
   if (!existsSync(join(path, ".git"))) return null;
   const since = win.startUtc.toISOString();
   const until = win.endUtc.toISOString();
@@ -26,9 +23,13 @@ export function gitActivity(
     raw = execFileSync(
       "git",
       [
-        "-C", path, "log",
-        `--since=${since}`, `--until=${until}`,
-        "--no-merges", "--numstat",
+        "-C",
+        path,
+        "log",
+        `--since=${since}`,
+        `--until=${until}`,
+        "--no-merges",
+        "--numstat",
         "--pretty=tformat:__COMMIT__",
       ],
       { encoding: "utf8" },

@@ -9,17 +9,9 @@
 import { test, expect } from "bun:test";
 
 import { rankResults } from "../../../src/core/search/ranker.ts";
-import type {
-  KeywordHit,
-  SemanticHit,
-  HydratedChunk,
-} from "../../../src/core/search/store.ts";
+import type { KeywordHit, SemanticHit, HydratedChunk } from "../../../src/core/search/store.ts";
 
-function hyd(
-  chunkId: number,
-  docId: number,
-  mtime: number,
-): HydratedChunk {
+function hyd(chunkId: number, docId: number, mtime: number): HydratedChunk {
   return Object.freeze({
     chunkId,
     documentId: docId,
@@ -35,9 +27,7 @@ function hyd(
 const NOW = 1_750_000_000_000;
 const OLD = NOW / 1000 - 365 * 24 * 3600;
 
-function rank(
-  tierByDoc?: ReadonlyMap<number, "core" | "supporting" | "peripheral">,
-) {
+function rank(tierByDoc?: ReadonlyMap<number, "core" | "supporting" | "peripheral">) {
   // Varied bm25 values produce a non-degenerate normalized spread
   // (min-max ≠ 0) so the tier multiplier has headroom below clamp01.
   // Lower keyword weight keeps the weighted product comfortably

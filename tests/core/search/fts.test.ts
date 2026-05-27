@@ -130,4 +130,3 @@ test("runFtsQuery survives FTS5-operator-like queries safely", async () => {
   expect(hits.length).toBeGreaterThan(0);
   await store.close();
 });
-

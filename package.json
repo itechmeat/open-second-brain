@@ -1,29 +1,24 @@
 {
   "name": "open-second-brain",
   "version": "0.14.0",
-  "type": "module",
   "private": false,
   "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw.",
-  "license": "MIT",
+  "keywords": [
+    "agents",
+    "mcp",
+    "obsidian",
+    "openclaw-plugin",
+    "second-brain"
+  ],
   "homepage": "https://github.com/itechmeat/open-second-brain",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/itechmeat/open-second-brain.git"
   },
-  "keywords": ["second-brain", "obsidian", "agents", "openclaw-plugin", "mcp"],
-  "engines": {
-    "bun": ">=1.1.0"
-  },
   "bin": {
     "o2b": "./scripts/o2b",
     "vault-log": "./scripts/vault-log"
-  },
-  "scripts": {
-    "build:openclaw": "bun build src/openclaw/index.ts --outfile openclaw/index.js --target=node --format=esm --external openclaw/plugin-sdk/plugin-entry",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "sync-version": "bun run scripts/sync-version.ts",
-    "sync-version:check": "bun run scripts/sync-version.ts --check"
   },
   "files": [
     "bin/",
@@ -37,6 +32,20 @@
     "LICENSE",
     "pyproject.toml"
   ],
+  "type": "module",
+  "scripts": {
+    "build:openclaw": "bun build src/openclaw/index.ts --outfile openclaw/index.js --target=node --format=esm --external openclaw/plugin-sdk/plugin-entry",
+    "test": "bash scripts/test",
+    "lint": "oxlint -c oxlint.json",
+    "lint:fix": "oxlint -c oxlint.json --fix",
+    "fmt": "oxfmt --write '**/*.{ts,js,json}' '.oxfmtrc.json' '!openclaw/index.js' --no-error-on-unmatched-pattern",
+    "fmt:check": "oxfmt --check '**/*.{ts,js,json}' '.oxfmtrc.json' '!openclaw/index.js' --no-error-on-unmatched-pattern",
+    "typecheck": "tsc --noEmit",
+    "validate": "bun run typecheck && bun run lint && bun run test",
+    "validate:fix": "bun run lint:fix && bun run fmt",
+    "sync-version": "bun run scripts/sync-version.ts",
+    "sync-version:check": "bun run scripts/sync-version.ts --check"
+  },
   "dependencies": {
     "proper-lockfile": "^4.1.2"
   },
@@ -44,12 +53,19 @@
     "@types/bun": "^1.1.0",
     "@types/node": "^22.0.0",
     "@types/proper-lockfile": "^4.1.4",
+    "oxfmt": "0.47.0",
+    "oxlint": "1.62.0",
     "typescript": "^5.5.0"
-  },
-  "openclaw": {
-    "extensions": ["./openclaw/index.js"]
   },
   "optionalDependencies": {
     "sqlite-vec": "^0.1.9"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./openclaw/index.js"
+    ]
   }
 }

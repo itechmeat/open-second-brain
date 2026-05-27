@@ -20,10 +20,7 @@ import { join } from "node:path";
 import { brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { findSimilarPairs, tokenise } from "./similarity.ts";
-import {
-  BRAIN_PREFERENCE_STATUS,
-  type BrainPreference,
-} from "./types.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
 
 /** Inclusive lower bound for surfacing a pair to the digest. */
 export const JACCARD_MERGE_SUGGEST_THRESHOLD = 0.6;
@@ -79,8 +76,8 @@ export function findMergeCandidates(
   const entries = [];
   for (const p of prefs) {
     if (
-      p.status !== BRAIN_PREFERENCE_STATUS.confirmed
-      && p.status !== BRAIN_PREFERENCE_STATUS.quarantine
+      p.status !== BRAIN_PREFERENCE_STATUS.confirmed &&
+      p.status !== BRAIN_PREFERENCE_STATUS.quarantine
     ) {
       continue;
     }

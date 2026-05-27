@@ -31,11 +31,7 @@ import type { DreamRunSummary } from "../dream.ts";
 import { preferencePath, retiredPath, vaultRelative } from "../paths.ts";
 import { parsePreference } from "../preference.ts";
 
-export type VerificationDeltaState =
-  | "confirmed"
-  | "drift"
-  | "regression"
-  | "missing_evidence";
+export type VerificationDeltaState = "confirmed" | "drift" | "regression" | "missing_evidence";
 
 export interface VerificationDeltaEntry {
   /** `pref-*` id from the dream summary. */

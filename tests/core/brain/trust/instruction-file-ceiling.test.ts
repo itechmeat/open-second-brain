@@ -40,7 +40,7 @@ describe("checkInstructionFileCeiling", () => {
     writeFileSync(join(vault, "AGENTS.md"), "x\n".repeat(250));
     writeFileSync(join(vault, "GEMINI.md"), "y\n".repeat(250));
     const r = checkInstructionFileCeiling(vault, { maxLines: 200 });
-    const paths = [...r].map((w) => w.path).sort();
+    const paths = [...r].map((w) => w.path).toSorted();
     expect(paths).toEqual(["AGENTS.md", "GEMINI.md"]);
   });
 

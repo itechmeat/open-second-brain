@@ -25,7 +25,7 @@ function firstLine(path: string): string {
 
 describe("registry — single source of adapters", () => {
   test("exposes all three adapters", () => {
-    const ids = SESSION_ADAPTERS.map((a) => a.id).sort();
+    const ids = SESSION_ADAPTERS.map((a) => a.id).toSorted();
     expect(ids).toEqual(["claude", "codex", "hermes"]);
   });
 

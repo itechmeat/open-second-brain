@@ -37,8 +37,7 @@ export async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
   });
   const config = defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
-  const agent =
-    (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
   const tz = resolveTimezone(config);
 
   let rawOutput: string | undefined;
@@ -57,8 +56,7 @@ export async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
   let policyStatus = (flags["policy-status"] as string | undefined) ?? null;
   let policyRule = (flags["policy-rule"] as string | undefined) ?? null;
   let policyReasons = (flags["policy-reasons"] as string[] | undefined) ?? null;
-  let policyCheckedAt =
-    (flags["policy-checked-at"] as string | undefined) ?? null;
+  let policyCheckedAt = (flags["policy-checked-at"] as string | undefined) ?? null;
   let approvalStatus: string | null = null;
   let approvedBy: string | null = null;
   let approvedAt: string | null = null;
@@ -89,9 +87,7 @@ export async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
       "not_checked",
     ];
     if (!allowed.includes(policyStatus as ReceiptPolicyStatus)) {
-      process.stderr.write(
-        `error: --policy-status must be one of: ${allowed.join(", ")}\n`,
-      );
+      process.stderr.write(`error: --policy-status must be one of: ${allowed.join(", ")}\n`);
       return 2;
     }
   }
@@ -124,19 +120,12 @@ export async function cmdAppendPaymentReceipt(argv: string[]): Promise<number> {
       policyReasons,
       policyCheckedAt,
       approvalRequestId: fromRequest,
-      approvalStatus: approvalStatus as
-        | "pending"
-        | "approved"
-        | "rejected"
-        | "consumed"
-        | null,
+      approvalStatus: approvalStatus as "pending" | "approved" | "rejected" | "consumed" | null,
       approvedBy,
       approvedAt,
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to write receipt: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to write receipt: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
 

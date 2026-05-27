@@ -9,25 +9,13 @@ import {
 describe("install types", () => {
   test("ADAPTER_STATUSES covers the four documented states", () => {
     expect(new Set(ADAPTER_STATUSES)).toEqual(
-      new Set([
-        "not-installed",
-        "installed",
-        "drift",
-        "unsupported-on-this-platform",
-      ]),
+      new Set(["not-installed", "installed", "drift", "unsupported-on-this-platform"]),
     );
   });
 
   test("INSTALL_STEP_KINDS covers the six operation kinds", () => {
     expect(new Set(INSTALL_STEP_KINDS)).toEqual(
-      new Set([
-        "json-merge",
-        "managed-block",
-        "subprocess",
-        "file-copy",
-        "symlink",
-        "print",
-      ]),
+      new Set(["json-merge", "managed-block", "subprocess", "file-copy", "symlink", "print"]),
     );
   });
 

@@ -11,10 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runDoctor } from "../../src/core/brain/doctor.ts";
-import {
-  brainConfigPath,
-  brainDirs,
-} from "../../src/core/brain/paths.ts";
+import { brainConfigPath, brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 

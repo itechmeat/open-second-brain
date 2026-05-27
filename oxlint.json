@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn"],
+  "categories": {
+    "correctness": "error",
+    "perf": "warn",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "no-console": "off",
+    "no-control-regex": "warn",
+    "no-unused-vars": "warn",
+    "require-yield": "warn",
+    "unicorn/no-new-array": "warn",
+    "unicorn/no-useless-fallback-in-spread": "warn",
+    "unicorn/no-useless-spread": "warn"
+  },
+  "ignorePatterns": [".codegraph", "node_modules", "openclaw/**", "dist", "coverage"]
+}

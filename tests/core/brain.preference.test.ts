@@ -1,12 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,11 +11,7 @@ import {
   writePreference,
   type WritePreferenceInput,
 } from "../../src/core/brain/preference.ts";
-import {
-  brainDirs,
-  preferencePath,
-  retiredPath,
-} from "../../src/core/brain/paths.ts";
+import { brainDirs, preferencePath, retiredPath } from "../../src/core/brain/paths.ts";
 
 let tmp: string;
 
@@ -34,14 +23,11 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function basePrefInput(
-  overrides: Partial<WritePreferenceInput> = {},
-): WritePreferenceInput {
+function basePrefInput(overrides: Partial<WritePreferenceInput> = {}): WritePreferenceInput {
   return {
     slug: "no-internal-abbrev",
     topic: "no-internal-abbrev",
-    principle:
-      "Do not use internal abbreviations in user-facing copy unless explained first",
+    principle: "Do not use internal abbreviations in user-facing copy unless explained first",
     created_at: "2026-05-14T10:42:00Z",
     unconfirmed_until: "2026-05-28T10:42:00Z",
     status: "unconfirmed",
@@ -56,8 +42,7 @@ function basePrefInput(
     last_evidence_at: null,
     confidence: "low",
     pinned: false,
-    howToApply:
-      "Expand acronyms on first use in any user-facing copy.",
+    howToApply: "Expand acronyms on first use in any user-facing copy.",
     ...overrides,
   };
 }
@@ -216,11 +201,7 @@ describe("moveToRetired", () => {
       retired_by: "[[Brain/log/2026-08-12]]",
     });
     const parsed = parseRetired(result.path);
-    expect(parsed.aliases).toEqual([
-      "pref-no-internal-abbrev",
-      "my-friendly-name",
-      "abbrev-rule",
-    ]);
+    expect(parsed.aliases).toEqual(["pref-no-internal-abbrev", "my-friendly-name", "abbrev-rule"]);
   });
 });
 
@@ -327,9 +308,7 @@ describe("status enum validation", () => {
     ].join("\n");
     writeFileSync(path, content, "utf8");
 
-    expect(() => parsePreference(path)).toThrow(
-      /preference status must be one of/,
-    );
+    expect(() => parsePreference(path)).toThrow(/preference status must be one of/);
   });
 });
 
@@ -354,7 +333,16 @@ function writeRawRetired(tmp: string, slug: string, fmLines: ReadonlyArray<strin
   const dirs = brainDirs(tmp);
   mkdirSync(dirs.retired, { recursive: true });
   const path = retiredPath(tmp, slug);
-  const content = ["---", ...fmLines, "---", "", "## Retired", "", "Reason: stale-no-evidence", ""].join("\n");
+  const content = [
+    "---",
+    ...fmLines,
+    "---",
+    "",
+    "## Retired",
+    "",
+    "Reason: stale-no-evidence",
+    "",
+  ].join("\n");
   writeFileSync(path, content, "utf8");
   return path;
 }
@@ -496,10 +484,7 @@ describe("writePreference emits _-prefixed Group C fields (§24)", () => {
 
 describe("moveToRetired carries _-prefixed shape forward (§24)", () => {
   test("retired file uses new shape for Group C fields", () => {
-    const written = writePreference(
-      tmp,
-      basePrefInput({ status: "confirmed", applied_count: 3 }),
-    );
+    const written = writePreference(tmp, basePrefInput({ status: "confirmed", applied_count: 3 }));
     const result = moveToRetired(tmp, written.path, "stale-no-evidence", {
       now: new Date("2026-08-12T05:00:00Z"),
       retired_by: "[[Brain/log/2026-08-12]]",

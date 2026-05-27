@@ -7,7 +7,6 @@
  * `toBeCloseTo` checks stay stable).
  */
 
-
 export interface FakeRequest {
   readonly method: string;
   readonly path: string;
@@ -22,7 +21,10 @@ export interface FakeResponseSpec {
   delayMs?: number;
 }
 
-type Handler = (req: FakeRequest, callIndex: number) => FakeResponseSpec | Promise<FakeResponseSpec>;
+type Handler = (
+  req: FakeRequest,
+  callIndex: number,
+) => FakeResponseSpec | Promise<FakeResponseSpec>;
 
 export interface FakeHttp {
   url: string;
@@ -72,13 +74,10 @@ export async function startFakeHttp(): Promise<FakeHttp> {
       if (resp.delayMs && resp.delayMs > 0) {
         await new Promise<void>((r) => setTimeout(r, resp.delayMs));
       }
-      return new Response(
-        resp.body === undefined ? "" : JSON.stringify(resp.body),
-        {
-          status: resp.status ?? 200,
-          headers: { "content-type": "application/json", ...(resp.headers ?? {}) },
-        },
-      );
+      return new Response(resp.body === undefined ? "" : JSON.stringify(resp.body), {
+        status: resp.status ?? 200,
+        headers: { "content-type": "application/json", ...resp.headers },
+      });
     },
   });
 

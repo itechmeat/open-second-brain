@@ -19,11 +19,7 @@
 
 import { readFileSync } from "node:fs";
 
-import type {
-  SessionAdapter,
-  SessionToolCall,
-  SessionTurn,
-} from "./types.ts";
+import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 interface ClaudeBlock {
   readonly type?: string;
@@ -43,9 +39,7 @@ function turnFromLine(obj: unknown, fallbackIndex: number): SessionTurn | null {
   if (role !== "user" && role !== "assistant") return null;
 
   const turnId =
-    typeof o["uuid"] === "string" && o["uuid"].length > 0
-      ? o["uuid"]
-      : `synth-${fallbackIndex}`;
+    typeof o["uuid"] === "string" && o["uuid"].length > 0 ? o["uuid"] : `synth-${fallbackIndex}`;
   const timestamp =
     typeof o["timestamp"] === "string" && o["timestamp"].length > 0
       ? o["timestamp"]
@@ -101,8 +95,7 @@ export const claudeAdapter: SessionAdapter = {
     if (obj === null || typeof obj !== "object") return false;
     const o = obj as Record<string, unknown>;
     if (o["type"] === "queue-operation") return true;
-    const hasClaudeShape =
-      "parentUuid" in o && "sessionId" in o && "entrypoint" in o;
+    const hasClaudeShape = "parentUuid" in o && "sessionId" in o && "entrypoint" in o;
     return hasClaudeShape;
   },
   async *iterate(path: string): AsyncIterable<SessionTurn> {

@@ -55,13 +55,7 @@ describe("path constructors", () => {
       join("/v", "Brain", "inbox", "sig-2026-05-14-no-internal-abbrev.md"),
     );
     expect(processedSignalPath("/v", "2026-05-14", "no-internal-abbrev")).toBe(
-      join(
-        "/v",
-        "Brain",
-        "inbox",
-        "processed",
-        "sig-2026-05-14-no-internal-abbrev.md",
-      ),
+      join("/v", "Brain", "inbox", "processed", "sig-2026-05-14-no-internal-abbrev.md"),
     );
   });
 
@@ -72,9 +66,7 @@ describe("path constructors", () => {
     expect(retiredPath("/v", "no-internal-abbrev")).toBe(
       join("/v", "Brain", "retired", "ret-no-internal-abbrev.md"),
     );
-    expect(logPath("/v", "2026-05-14")).toBe(
-      join("/v", "Brain", "log", "2026-05-14.md"),
-    );
+    expect(logPath("/v", "2026-05-14")).toBe(join("/v", "Brain", "log", "2026-05-14.md"));
     expect(snapshotsDir("/v")).toBe(join("/v", "Brain", ".snapshots"));
     expect(snapshotPath("/v", "dream-2026-05-14-104200")).toBe(
       join("/v", "Brain", ".snapshots", "dream-2026-05-14-104200.tar.zst"),
@@ -160,9 +152,7 @@ describe("validateIsoDate", () => {
 
 describe("validateRunId", () => {
   test("accepts dream run ids", () => {
-    expect(validateRunId("dream-2026-05-14-104200")).toBe(
-      "dream-2026-05-14-104200",
-    );
+    expect(validateRunId("dream-2026-05-14-104200")).toBe("dream-2026-05-14-104200");
   });
 
   test("rejects empty / separators / traversal", () => {
@@ -199,9 +189,7 @@ describe("path-safety", () => {
 describe("brainVaultRelative", () => {
   test("renders posix-style relative path", () => {
     const abs = join("/vault", "Brain", "preferences", "pref-x.md");
-    expect(brainVaultRelative(abs, "/vault")).toBe(
-      "Brain/preferences/pref-x.md",
-    );
+    expect(brainVaultRelative(abs, "/vault")).toBe("Brain/preferences/pref-x.md");
   });
 });
 
@@ -217,19 +205,13 @@ describe("allocateSlug — collision allocator", () => {
     });
     expect(result.slug).toBe("no-internal-abbrev");
     expect(result.suffix).toBeNull();
-    expect(result.path).toBe(
-      join(targetDir, "sig-2026-05-14-no-internal-abbrev.md"),
-    );
+    expect(result.path).toBe(join(targetDir, "sig-2026-05-14-no-internal-abbrev.md"));
   });
 
   test("appends -2 on first collision", () => {
     const targetDir = join(tmp, "Brain", "inbox");
     mkdirSync(targetDir, { recursive: true });
-    writeFileSync(
-      join(targetDir, "sig-2026-05-14-no-internal-abbrev.md"),
-      "stub",
-      "utf8",
-    );
+    writeFileSync(join(targetDir, "sig-2026-05-14-no-internal-abbrev.md"), "stub", "utf8");
 
     const result = allocateSlug({
       vault: tmp,
@@ -239,24 +221,14 @@ describe("allocateSlug — collision allocator", () => {
     });
     expect(result.slug).toBe("no-internal-abbrev-2");
     expect(result.suffix).toBe(2);
-    expect(result.path).toBe(
-      join(targetDir, "sig-2026-05-14-no-internal-abbrev-2.md"),
-    );
+    expect(result.path).toBe(join(targetDir, "sig-2026-05-14-no-internal-abbrev-2.md"));
   });
 
   test("appends -3 on second collision", () => {
     const targetDir = join(tmp, "Brain", "inbox");
     mkdirSync(targetDir, { recursive: true });
-    writeFileSync(
-      join(targetDir, "sig-2026-05-14-no-internal-abbrev.md"),
-      "stub",
-      "utf8",
-    );
-    writeFileSync(
-      join(targetDir, "sig-2026-05-14-no-internal-abbrev-2.md"),
-      "stub",
-      "utf8",
-    );
+    writeFileSync(join(targetDir, "sig-2026-05-14-no-internal-abbrev.md"), "stub", "utf8");
+    writeFileSync(join(targetDir, "sig-2026-05-14-no-internal-abbrev-2.md"), "stub", "utf8");
 
     const result = allocateSlug({
       vault: tmp,

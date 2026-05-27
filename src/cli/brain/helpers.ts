@@ -30,10 +30,7 @@ import { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
 
 // ── Vault resolution ────────────────────────────────────────────────────────
 
-export function resolveBrainVault(
-  flagVal: string | undefined,
-  configPath: string | null,
-): string {
+export function resolveBrainVault(flagVal: string | undefined, configPath: string | null): string {
   // Mirror `requireVault` in `../helpers.ts`: explicit `--vault ""`
   // is a user error, not an excuse to fall through to `resolveVault`.
   const explicit = normalizeFlagString(flagVal);

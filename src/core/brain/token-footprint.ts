@@ -9,12 +9,7 @@
  * Brain/ but does not match a known subdirectory.
  */
 
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
@@ -140,8 +135,7 @@ export function computeTokenFootprint(
     totalFiles += otherFiles;
   }
 
-  const warnThreshold =
-    opts.warnThreshold ?? resolveWarnThreshold(opts.envWarnThreshold);
+  const warnThreshold = opts.warnThreshold ?? resolveWarnThreshold(opts.envWarnThreshold);
   return Object.freeze({
     total,
     files: totalFiles,

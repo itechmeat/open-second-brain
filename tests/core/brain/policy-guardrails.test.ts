@@ -54,9 +54,7 @@ describe("guardrails config block", () => {
   });
 
   test("partial block → missing fields fall back to defaults via resolveGuardrails", () => {
-    const { config } = validate(
-      HEAD + `guardrails:\n  promotion_min_signals: 5\n`,
-    );
+    const { config } = validate(HEAD + `guardrails:\n  promotion_min_signals: 5\n`);
     expect(config.guardrails?.promotion_min_signals).toBe(5);
     const resolved = resolveGuardrails(config);
     expect(resolved.promotion_min_signals).toBe(5);
@@ -69,67 +67,59 @@ describe("guardrails config block", () => {
   });
 
   test("promotion_min_signals: 0 rejected", () => {
-    expect(() =>
-      validate(HEAD + `guardrails:\n  promotion_min_signals: 0\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `guardrails:\n  promotion_min_signals: 0\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("promotion_min_signals: negative rejected", () => {
-    expect(() =>
-      validate(HEAD + `guardrails:\n  promotion_min_signals: -1\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `guardrails:\n  promotion_min_signals: -1\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("promotion_min_signals: non-integer rejected", () => {
-    expect(() =>
-      validate(HEAD + `guardrails:\n  promotion_min_signals: 2.5\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `guardrails:\n  promotion_min_signals: 2.5\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("promotion_min_distinct_agents: 0 rejected", () => {
-    expect(() =>
-      validate(HEAD + `guardrails:\n  promotion_min_distinct_agents: 0\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `guardrails:\n  promotion_min_distinct_agents: 0\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("promotion_min_age_days: 0 accepted (means disabled)", () => {
-    const { config } = validate(
-      HEAD + `guardrails:\n  promotion_min_age_days: 0\n`,
-    );
+    const { config } = validate(HEAD + `guardrails:\n  promotion_min_age_days: 0\n`);
     expect(config.guardrails?.promotion_min_age_days).toBe(0);
   });
 
   test("promotion_min_age_days: negative rejected", () => {
-    expect(() =>
-      validate(HEAD + `guardrails:\n  promotion_min_age_days: -1\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `guardrails:\n  promotion_min_age_days: -1\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("instruction_file_max_lines: 0 rejected", () => {
-    expect(() =>
-      validate(HEAD + `guardrails:\n  instruction_file_max_lines: 0\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `guardrails:\n  instruction_file_max_lines: 0\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("instruction_file_max_lines: extreme upper bound 10000 accepted", () => {
-    const { config } = validate(
-      HEAD + `guardrails:\n  instruction_file_max_lines: 10000\n`,
-    );
+    const { config } = validate(HEAD + `guardrails:\n  instruction_file_max_lines: 10000\n`);
     expect(config.guardrails?.instruction_file_max_lines).toBe(10000);
   });
 
   test("instruction_file_max_lines: above hard ceiling rejected", () => {
-    expect(() =>
-      validate(
-        HEAD + `guardrails:\n  instruction_file_max_lines: 100000\n`,
-      ),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `guardrails:\n  instruction_file_max_lines: 100000\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("non-object guardrails block rejected", () => {
-    expect(() =>
-      validate(HEAD + `guardrails: "nope"\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `guardrails: "nope"\n`)).toThrow(BrainConfigError);
   });
 
   test("unknown sub-key warns but does not throw", () => {

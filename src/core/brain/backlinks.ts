@@ -30,10 +30,7 @@ import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { buildAliasIndex } from "./link-graph/alias-index.ts";
-import {
-  extractWikilinkRichBodies,
-  parseWikilinkRich,
-} from "./link-graph/parse-wikilink.ts";
+import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import { parseLogDay } from "./log.ts";
 import { brainDirs } from "./paths.ts";
 import { normalizeDerivedKeys } from "./preference.ts";
@@ -41,11 +38,7 @@ import { normaliseWikilinkTarget } from "./wikilink.ts";
 
 // ----- Public types --------------------------------------------------------
 
-export type BacklinkSourceKind =
-  | "preference"
-  | "retired"
-  | "signal"
-  | `log-${string}`;
+export type BacklinkSourceKind = "preference" | "retired" | "signal" | `log-${string}`;
 
 export interface BacklinkRef {
   /** Source id (basename without `.md`, e.g. `pref-foo`, `ret-bar`, `sig-2026-05-14-baz`). */
@@ -218,10 +211,7 @@ function collectPreferences(
   }
 }
 
-function collectSignals(
-  dir: string,
-  push: (target: string, ref: BacklinkRef) => void,
-): void {
+function collectSignals(dir: string, push: (target: string, ref: BacklinkRef) => void): void {
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".md")) continue;

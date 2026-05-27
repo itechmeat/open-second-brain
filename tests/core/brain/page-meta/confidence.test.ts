@@ -37,8 +37,6 @@ describe("readConfidence", () => {
   });
 
   test("modern shape wins over legacy", () => {
-    expect(readConfidence({ _confidence: "high", confidence: "low" })).toBe(
-      "high",
-    );
+    expect(readConfidence({ _confidence: "high", confidence: "low" })).toBe("high");
   });
 });

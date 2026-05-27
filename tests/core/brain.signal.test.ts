@@ -3,11 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  parseSignal,
-  writeSignal,
-  type WriteSignalInput,
-} from "../../src/core/brain/signal.ts";
+import { parseSignal, writeSignal, type WriteSignalInput } from "../../src/core/brain/signal.ts";
 
 let tmp: string;
 
@@ -55,9 +51,9 @@ describe("writeSignal — required field validation", () => {
       // field by composing a fresh object that omits it.
       const partial = { ...input } as Record<string, unknown>;
       delete partial[field as string];
-      expect(() =>
-        writeSignal(tmp, partial as unknown as WriteSignalInput),
-      ).toThrow(new RegExp(`signal missing field: ${String(field)}`));
+      expect(() => writeSignal(tmp, partial as unknown as WriteSignalInput)).toThrow(
+        new RegExp(`signal missing field: ${String(field)}`),
+      );
     });
   }
 
@@ -85,10 +81,7 @@ describe("writeSignal + parseSignal roundtrip", () => {
     expect(parsed.tags).toContain("brain/signal");
     expect(parsed.tags).toContain("brain/topic/no-internal-abbrev");
     expect(parsed.tags).toContain("brain/scope/writing");
-    expect(parsed.source).toEqual([
-      "[[Daily/2026.05.14]]",
-      "[[blog-header-draft]]",
-    ]);
+    expect(parsed.source).toEqual(["[[Daily/2026.05.14]]", "[[blog-header-draft]]"]);
     expect(parsed.raw).toContain("Sergey pointed out");
   });
 
@@ -119,10 +112,7 @@ describe("writeSignal + parseSignal roundtrip", () => {
     expect(normalize(firstBytes)).toBe(normalize(secondBytes));
 
     // And the parsed source array survives untouched.
-    expect(parsed.source).toEqual([
-      "[[Daily/2026.05.14]]",
-      "[[blog-header-draft]]",
-    ]);
+    expect(parsed.source).toEqual(["[[Daily/2026.05.14]]", "[[blog-header-draft]]"]);
   });
 });
 
@@ -133,10 +123,7 @@ describe("writeSignal — wikilink preservation", () => {
     });
     const first = writeSignal(tmp, input);
     const parsed = parseSignal(first.path);
-    expect(parsed.source).toEqual([
-      "[[Daily/2026.05.14]]",
-      "[[blog-header-draft]]",
-    ]);
+    expect(parsed.source).toEqual(["[[Daily/2026.05.14]]", "[[blog-header-draft]]"]);
 
     // Write again to a different slug, then re-parse.
     const second = writeSignal(tmp, {
@@ -145,10 +132,7 @@ describe("writeSignal — wikilink preservation", () => {
       source: [...parsed.source!],
     });
     const reparsed = parseSignal(second.path);
-    expect(reparsed.source).toEqual([
-      "[[Daily/2026.05.14]]",
-      "[[blog-header-draft]]",
-    ]);
+    expect(reparsed.source).toEqual(["[[Daily/2026.05.14]]", "[[blog-header-draft]]"]);
   });
 
   test("file body actually contains the wikilink literally", () => {
@@ -172,10 +156,13 @@ describe("extractRawSection (via parseSignal)", () => {
       "",
       "Third line after a blank gap.",
     ].join("\n");
-    const result = writeSignal(tmp, baseInput({
-      slug: "multi-line-raw",
-      raw: multiLine,
-    }));
+    const result = writeSignal(
+      tmp,
+      baseInput({
+        slug: "multi-line-raw",
+        raw: multiLine,
+      }),
+    );
     const parsed = parseSignal(result.path);
     expect(parsed.raw).toBe(multiLine);
   });
@@ -252,9 +239,9 @@ describe("writeSignal — sanitisation (§7)", () => {
   });
 
   test("rejects when sanitisation strips principle down to empty", () => {
-    expect(() =>
-      writeSignal(tmp, baseInput({ slug: "empty", principle: "\x00\x01\x07" })),
-    ).toThrow(/signal missing field: principle/);
+    expect(() => writeSignal(tmp, baseInput({ slug: "empty", principle: "\x00\x01\x07" }))).toThrow(
+      /signal missing field: principle/,
+    );
   });
 });
 
@@ -273,24 +260,20 @@ describe("writeSignal — capture-extension fields (§9/§16)", () => {
     );
     const raw = readFileSync(r.path, "utf8");
     expect(raw).toMatch(/^source_type: inline$/m);
-    expect(raw).toMatch(/^dedup_hash: deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef$/m);
+    expect(raw).toMatch(
+      /^dedup_hash: deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef$/m,
+    );
     expect(raw).toMatch(/^session_ref: /m);
   });
 
   test("adds brain/source/<type> tag when source_type is 'inline'", () => {
-    const r = writeSignal(
-      tmp,
-      baseInput({ slug: "inline-tag", source_type: "inline" }),
-    );
+    const r = writeSignal(tmp, baseInput({ slug: "inline-tag", source_type: "inline" }));
     const raw = readFileSync(r.path, "utf8");
     expect(raw).toMatch(/brain\/source\/inline/);
   });
 
   test("adds brain/source/<type> tag when source_type is 'session'", () => {
-    const r = writeSignal(
-      tmp,
-      baseInput({ slug: "session-tag", source_type: "session" }),
-    );
+    const r = writeSignal(tmp, baseInput({ slug: "session-tag", source_type: "session" }));
     const raw = readFileSync(r.path, "utf8");
     expect(raw).toMatch(/brain\/source\/session/);
   });

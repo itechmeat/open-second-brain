@@ -16,10 +16,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  dream,
-  shouldGateRetireFromConfirmed,
-} from "../../../src/core/brain/dream.ts";
+import { dream, shouldGateRetireFromConfirmed } from "../../../src/core/brain/dream.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import {
   BRAIN_PREFERENCE_STATUS,
@@ -51,29 +48,17 @@ const pref = (overrides: Partial<BrainPreference> = {}): BrainPreference => ({
 describe("shouldGateRetireFromConfirmed", () => {
   test("returns false when threshold is undefined (default-off)", () => {
     expect(
-      shouldGateRetireFromConfirmed(
-        pref(),
-        BRAIN_RETIRED_REASON.staleNoEvidence,
-        undefined,
-      ),
+      shouldGateRetireFromConfirmed(pref(), BRAIN_RETIRED_REASON.staleNoEvidence, undefined),
     ).toBe(false);
   });
 
   test("returns false when threshold is 0 or negative", () => {
-    expect(
-      shouldGateRetireFromConfirmed(
-        pref(),
-        BRAIN_RETIRED_REASON.staleNoEvidence,
-        0,
-      ),
-    ).toBe(false);
-    expect(
-      shouldGateRetireFromConfirmed(
-        pref(),
-        BRAIN_RETIRED_REASON.staleNoEvidence,
-        -1,
-      ),
-    ).toBe(false);
+    expect(shouldGateRetireFromConfirmed(pref(), BRAIN_RETIRED_REASON.staleNoEvidence, 0)).toBe(
+      false,
+    );
+    expect(shouldGateRetireFromConfirmed(pref(), BRAIN_RETIRED_REASON.staleNoEvidence, -1)).toBe(
+      false,
+    );
   });
 
   test("returns true when confirmed + unpinned + evidence below threshold", () => {

@@ -11,10 +11,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import {
-  atomicCreateFileSyncExclusive,
-  atomicWriteFileSync,
-} from "../fs-atomic.ts";
+import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "../fs-atomic.ts";
 import { PAY_MEMORY_ROOT_REL, policyPath } from "./paths.ts";
 
 export const DEFAULT_POLICY_TEMPLATE = `# Agent Spending Policy

@@ -64,10 +64,7 @@ describe("computeVerificationDelta", () => {
       confidence: "high",
     });
 
-    const r = computeVerificationDelta(
-      vault,
-      emptyDream({ confirmed: ["pref-test-rule"] }),
-    );
+    const r = computeVerificationDelta(vault, emptyDream({ confirmed: ["pref-test-rule"] }));
     expect(r.summary.confirmed).toBe(1);
     expect(r.summary.drift).toBe(0);
     expect(r.entries).toHaveLength(1);
@@ -91,19 +88,13 @@ describe("computeVerificationDelta", () => {
       confidence: "low",
     });
 
-    const r = computeVerificationDelta(
-      vault,
-      emptyDream({ confirmed: ["pref-no-evidence"] }),
-    );
+    const r = computeVerificationDelta(vault, emptyDream({ confirmed: ["pref-no-evidence"] }));
     expect(r.summary.drift).toBe(1);
     expect(r.entries[0]?.state).toBe("drift");
   });
 
   test("missing_evidence: dream cites pref id that no longer exists on disk", () => {
-    const r = computeVerificationDelta(
-      vault,
-      emptyDream({ confirmed: ["pref-ghost-id"] }),
-    );
+    const r = computeVerificationDelta(vault, emptyDream({ confirmed: ["pref-ghost-id"] }));
     expect(r.summary.missing_evidence).toBe(1);
     expect(r.entries[0]?.state).toBe("missing_evidence");
     expect(r.entries[0]?.id).toBe("pref-ghost-id");
@@ -162,10 +153,7 @@ describe("computeVerificationDelta - regression + path contract", () => {
       status: "unconfirmed",
       evidenced_by: ["[[sig-z]]"],
     });
-    const r = computeVerificationDelta(
-      vault,
-      emptyDream({ confirmed: ["pref-claim-mismatch"] }),
-    );
+    const r = computeVerificationDelta(vault, emptyDream({ confirmed: ["pref-claim-mismatch"] }));
     expect(r.summary.drift).toBe(1);
     expect(r.entries[0]?.state).toBe("drift");
     expect(r.entries[0]?.note).toMatch(/on-disk status is 'unconfirmed'/);
@@ -184,10 +172,7 @@ describe("computeVerificationDelta - regression + path contract", () => {
       applied_count: 1,
       last_evidence_at: "2026-05-22T00:00:00Z",
     });
-    const r = computeVerificationDelta(
-      vault,
-      emptyDream({ confirmed: ["pref-path-shape"] }),
-    );
+    const r = computeVerificationDelta(vault, emptyDream({ confirmed: ["pref-path-shape"] }));
     const path = r.entries[0]?.path ?? "";
     // Vault-relative path: starts with `Brain/preferences/`, never
     // with `/tmp/...` or any other absolute host directory.
@@ -197,10 +182,7 @@ describe("computeVerificationDelta - regression + path contract", () => {
 
   test("malformed slug surfaces as missing_evidence, not a thrown error", () => {
     // Slug with characters rejected by validateSlug (uppercase, spaces).
-    const r = computeVerificationDelta(
-      vault,
-      emptyDream({ confirmed: ["pref-Invalid Slug!"] }),
-    );
+    const r = computeVerificationDelta(vault, emptyDream({ confirmed: ["pref-Invalid Slug!"] }));
     expect(r.summary.missing_evidence).toBe(1);
     expect(r.entries[0]?.state).toBe("missing_evidence");
   });

@@ -27,13 +27,19 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "osb-jsonmcp-h-"));
 });
 afterEach(() => {
-  try { rmSync(vault, { recursive: true, force: true }); } catch {}
-  try { rmSync(home, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(vault, { recursive: true, force: true });
+  } catch {}
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {}
 });
 
 function env(extraEnv: Record<string, string> = {}) {
   return {
-    vault, home, cwd: home,
+    vault,
+    home,
+    cwd: home,
     // verify() rebuilds the canonical payload from these env vars; they
     // must match the values passed to buildPayload() below or every
     // smoke check would report drift.
@@ -43,9 +49,14 @@ function env(extraEnv: Record<string, string> = {}) {
 }
 
 function applyOpts() {
-  const sink = new Writable({ write(_c, _e, cb) { cb(); } });
+  const sink = new Writable({
+    write(_c, _e, cb) {
+      cb();
+    },
+  });
   return {
-    dryRun: false, force: false,
+    dryRun: false,
+    force: false,
     stdout: sink as unknown as NodeJS.WriteStream,
     stderr: sink as unknown as NodeJS.WriteStream,
   };
@@ -65,7 +76,9 @@ describe("opencode adapter — config path resolution", () => {
     const xdg = mkdtempSync(join(tmpdir(), "osb-xdg-"));
     const r = opencodeAdapter.detect(env({ XDG_CONFIG_HOME: xdg }));
     expect(r.configPath).toBe(join(xdg, "opencode", "mcp.json"));
-    try { rmSync(xdg, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(xdg, { recursive: true, force: true });
+    } catch {}
   });
 
   test("install + uninstall round-trip", () => {

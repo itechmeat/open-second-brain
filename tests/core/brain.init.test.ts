@@ -94,12 +94,8 @@ describe("bootstrapBrain — idempotent rerun", () => {
     // Brain-side: both files skipped, content intact.
     expect(second.skipped).toContain(join("Brain", "_brain.yaml"));
     expect(second.skipped).toContain(join("Brain", "_BRAIN.md"));
-    expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
-      "user: edited\n",
-    );
-    expect(readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8")).toBe(
-      "user manual edits\n",
-    );
+    expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe("user: edited\n");
+    expect(readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8")).toBe("user manual edits\n");
 
     // Nothing newly created or overwritten on the second run.
     expect(second.created.length).toBe(0);
@@ -130,9 +126,7 @@ describe("bootstrapBrain — force overwrite", () => {
     expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
       DEFAULT_BRAIN_CONFIG_YAML,
     );
-    expect(
-      readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8"),
-    ).not.toBe("stale\n");
+    expect(readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8")).not.toBe("stale\n");
   });
 });
 
@@ -174,24 +168,22 @@ describe("bootstrapBrain — primary_agent option", () => {
   });
 
   test("empty-string primaryAgent throws (fail loud, not silent fallback)", () => {
-    expect(() =>
-      bootstrapBrain(vault, { configPath, primaryAgent: "   " }),
-    ).toThrow(/primary_agent/);
+    expect(() => bootstrapBrain(vault, { configPath, primaryAgent: "   " })).toThrow(
+      /primary_agent/,
+    );
   });
 
   test("primaryAgent with a line break is rejected instead of corrupting YAML", () => {
-    expect(() =>
-      bootstrapBrain(vault, { configPath, primaryAgent: "agent\nsnapshots:" }),
-    ).toThrow(/disallowed character/);
+    expect(() => bootstrapBrain(vault, { configPath, primaryAgent: "agent\nsnapshots:" })).toThrow(
+      /disallowed character/,
+    );
   });
 });
 
 describe("bootstrapBrain — missing machine config", () => {
   test("throws an error naming `o2b init` when the plugin config does not exist", () => {
     const missing = join(configHome, "does-not-exist.yaml");
-    expect(() => bootstrapBrain(vault, { configPath: missing })).toThrow(
-      /o2b init/,
-    );
+    expect(() => bootstrapBrain(vault, { configPath: missing })).toThrow(/o2b init/);
   });
 
   test("error message includes the resolved config path", () => {
@@ -215,10 +207,7 @@ describe("bootstrapBrain — _BRAIN.md compliance ceiling", () => {
     // ending in `\n` and one ending without it should both report the
     // user-visible line count.
     const lines = manual.split("\n");
-    const lineCount =
-      manual.endsWith("\n") && lines.length > 0
-        ? lines.length - 1
-        : lines.length;
+    const lineCount = manual.endsWith("\n") && lines.length > 0 ? lines.length - 1 : lines.length;
     expect(lineCount).toBeLessThan(200);
   });
 });

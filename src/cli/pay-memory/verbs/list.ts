@@ -14,9 +14,7 @@ export async function cmdListPendingPayments(argv: string[]): Promise<number> {
   const status = String(flags["status"]);
   const valid = ["pending", "approved", "rejected", "consumed", "all"];
   if (!valid.includes(status)) {
-    process.stderr.write(
-      `error: --status must be one of: ${valid.join(", ")}\n`,
-    );
+    process.stderr.write(`error: --status must be one of: ${valid.join(", ")}\n`);
     return 2;
   }
 
@@ -26,9 +24,7 @@ export async function cmdListPendingPayments(argv: string[]): Promise<number> {
       status: status as "pending" | "approved" | "rejected" | "consumed" | "all",
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to list requests: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to list requests: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
 

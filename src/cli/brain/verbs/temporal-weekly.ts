@@ -60,9 +60,7 @@ export async function cmdBrainWeekly(argv: string[]): Promise<number> {
  * (`YYYY-MM-DD`); rejects whitespace-only / malformed input as a CLI
  * error so the underlying helper does not see garbage.
  */
-function resolveWeekEndArg(
-  raw: string | boolean | string[] | undefined,
-): string {
+function resolveWeekEndArg(raw: string | boolean | string[] | undefined): string {
   if (typeof raw !== "string" || raw.trim().length === 0) {
     return new Date().toISOString().slice(0, 10);
   }

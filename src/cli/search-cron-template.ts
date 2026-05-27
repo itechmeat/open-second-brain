@@ -38,16 +38,13 @@ export function parseInterval(raw: string): ParsedInterval {
   const m = /^(\d+)\s*(s|m|h|d)$/.exec(trimmed);
   if (!m) {
     throw new CronTemplateError(
-      "cannot parse interval " + JSON.stringify(raw) +
-        ": expected <N>s|m|h|d (e.g. 30m, 6h, 1d)",
+      "cannot parse interval " + JSON.stringify(raw) + ": expected <N>s|m|h|d (e.g. 30m, 6h, 1d)",
     );
   }
   const n = parseInt(m[1]!, 10);
   const unit = m[2]!;
   if (n <= 0) {
-    throw new CronTemplateError(
-      "interval must be positive; got " + JSON.stringify(raw),
-    );
+    throw new CronTemplateError("interval must be positive; got " + JSON.stringify(raw));
   }
   if (unit === "s") {
     throw new CronTemplateError(
@@ -58,8 +55,7 @@ export function parseInterval(raw: string): ParsedInterval {
     if (n >= 60) {
       const hours = Math.round(n / 60);
       throw new CronTemplateError(
-        "intervals of 60 minutes or more must use the h unit (e.g. " +
-          hours + "h)",
+        "intervals of 60 minutes or more must use the h unit (e.g. " + hours + "h)",
       );
     }
     const cron = "*/" + n + " * * * *";
@@ -69,8 +65,7 @@ export function parseInterval(raw: string): ParsedInterval {
     if (n >= 24) {
       const days = Math.round(n / 24);
       throw new CronTemplateError(
-        "intervals of 24 hours or more must use the d unit (e.g. " +
-          days + "d)",
+        "intervals of 24 hours or more must use the d unit (e.g. " + days + "d)",
       );
     }
     const cron = "0 */" + n + " * * *";
@@ -86,17 +81,16 @@ export interface RenderCronTemplateOptions {
   readonly o2bBin?: string;
 }
 
-export function renderCronTemplate(
-  interval: string,
-  opts: RenderCronTemplateOptions = {},
-): string {
+export function renderCronTemplate(interval: string, opts: RenderCronTemplateOptions = {}): string {
   const parsed = parseInterval(interval);
   const o2bBin = opts.o2bBin ?? "o2b";
   const watchdogBody = renderWatchdogBody(o2bBin);
   const header =
     "# ----------------------------------------------------------------------\n" +
     "# Open Second Brain - periodic reindex template\n" +
-    "# interval: " + parsed.human + "\n" +
+    "# interval: " +
+    parsed.human +
+    "\n" +
     "#\n" +
     "# Pick ONE of the three paths below. The watchdog script is the\n" +
     "# common piece; both crontab and Hermes-cron rely on it.\n" +
@@ -113,21 +107,25 @@ export function renderCronTemplate(
   const nativeCron =
     "## 2. Native crontab - open 'crontab -e' and append:\n" +
     "\n" +
-    parsed.cron + "    ~/.local/bin/osb-reindex.sh\n";
+    parsed.cron +
+    "    ~/.local/bin/osb-reindex.sh\n";
   const hermesCron =
     "## 3. Hermes cron (preferred when Hermes is the embedding owner):\n" +
     "\n" +
     "hermes cron create \\\n" +
     "  --name osb-reindex \\\n" +
-    "  --schedule '" + parsed.hermesSchedule + "' \\\n" +
+    "  --schedule '" +
+    parsed.hermesSchedule +
+    "' \\\n" +
     '  --command "$HOME/.local/bin/osb-reindex.sh" \\\n' +
     "  --no-agent\n";
   const footer =
     "# ----------------------------------------------------------------------\n" +
-    "# After install, verify with: " + o2bBin + " search status\n" +
+    "# After install, verify with: " +
+    o2bBin +
+    " search status\n" +
     "# ----------------------------------------------------------------------\n";
-  return [header, "", watchdog, "", nativeCron, "", hermesCron, "", footer]
-    .join("\n");
+  return [header, "", watchdog, "", nativeCron, "", hermesCron, "", footer].join("\n");
 }
 
 function renderWatchdogBody(o2bBin: string): string {

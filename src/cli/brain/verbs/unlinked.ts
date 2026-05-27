@@ -39,9 +39,7 @@ export async function cmdBrainUnlinked(argv: string[]): Promise<number> {
     limit = parsed;
   }
 
-  const mentions = findUnlinkedMentions(vault, target, {
-    ...(limit !== undefined ? { limit } : {}),
-  });
+  const mentions = findUnlinkedMentions(vault, target, limit !== undefined ? { limit } : {});
 
   if (flags["json"]) {
     process.stdout.write(
@@ -63,13 +61,9 @@ export async function cmdBrainUnlinked(argv: string[]): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(
-    `Unlinked mentions of ${target}: ${mentions.length}\n`,
-  );
+  process.stdout.write(`Unlinked mentions of ${target}: ${mentions.length}\n`);
   for (const m of mentions) {
-    process.stdout.write(
-      `  ${m.source}:${m.line}  (${m.term})  ${m.contextSnippet.trim()}\n`,
-    );
+    process.stdout.write(`  ${m.source}:${m.line}  (${m.term})  ${m.contextSnippet.trim()}\n`);
   }
   return 0;
 }

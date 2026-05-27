@@ -16,7 +16,13 @@ describe("UPDATE preserves accumulated evidence", () => {
       "---\nname: rule-x\ndescription: V1.\nmetadata:\n  type: feedback\n---\n\nBody v1.\n",
       "utf8",
     );
-    importClaudeMemory({ vault, memoryDir: mem, mode: "apply", allowArbitraryMemoryPath: true, now: new Date("2026-05-19T10:00:00Z") });
+    importClaudeMemory({
+      vault,
+      memoryDir: mem,
+      mode: "apply",
+      allowArbitraryMemoryPath: true,
+      now: new Date("2026-05-19T10:00:00Z"),
+    });
 
     // Simulate accumulated evidence.
     const prefPath = join(vault, "Brain", "preferences", "pref-rule-x.md");
@@ -34,14 +40,20 @@ describe("UPDATE preserves accumulated evidence", () => {
       "---\nname: rule-x\ndescription: V2.\nmetadata:\n  type: feedback\n---\n\nBody v2.\n",
       "utf8",
     );
-    importClaudeMemory({ vault, memoryDir: mem, mode: "apply", allowArbitraryMemoryPath: true, now: new Date("2026-05-19T10:00:01Z") });
+    importClaudeMemory({
+      vault,
+      memoryDir: mem,
+      mode: "apply",
+      allowArbitraryMemoryPath: true,
+      now: new Date("2026-05-19T10:00:01Z"),
+    });
 
     const after = readFileSync(prefPath, "utf8");
     expect(after).toContain("_applied_count: 7");
     expect(after).toContain("_violated_count: 2");
     expect(after).toContain("_evidenced_by: ['[[a.md]]', '[[b.md]]']");
     expect(after).toContain("pinned: true");
-    expect(after).toContain("principle: \"V2.\"");
+    expect(after).toContain('principle: "V2."');
     expect(after).toContain("Body v2.");
 
     rmSync(vault, { recursive: true });

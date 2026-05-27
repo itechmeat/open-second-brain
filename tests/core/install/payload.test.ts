@@ -16,7 +16,9 @@ describe("buildPayload", () => {
 
   test("includes env when agent_name + timezone present", () => {
     const { full, writer } = buildPayload({
-      vault: "/v", agent_name: "a", timezone: "UTC",
+      vault: "/v",
+      agent_name: "a",
+      timezone: "UTC",
     });
     expect(full.env).toEqual({ VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC" });
     expect(writer.env).toEqual({ VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC" });
@@ -38,10 +40,12 @@ describe("buildPayload", () => {
   });
 
   test("throws PayloadError on missing vault", () => {
-    expect(() => buildPayload({ vault: "", agent_name: null, timezone: null }))
-      .toThrow(PayloadError);
-    expect(() => buildPayload({ vault: null as unknown as string, agent_name: null, timezone: null }))
-      .toThrow(PayloadError);
+    expect(() => buildPayload({ vault: "", agent_name: null, timezone: null })).toThrow(
+      PayloadError,
+    );
+    expect(() =>
+      buildPayload({ vault: null as unknown as string, agent_name: null, timezone: null }),
+    ).toThrow(PayloadError);
   });
 
   test("writer args carry --writer-only before --vault", () => {

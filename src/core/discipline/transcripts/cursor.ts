@@ -40,7 +40,11 @@ function findDatabases(home: string): string[] {
   return out;
 }
 
-function queryCursorDb(dbPath: string, dayStartMs: number, dayEndMs: number): TranscriptDetail | null {
+function queryCursorDb(
+  dbPath: string,
+  dayStartMs: number,
+  dayEndMs: number,
+): TranscriptDetail | null {
   let Database: typeof import("bun:sqlite").Database;
   try {
     Database = require("bun:sqlite").Database;

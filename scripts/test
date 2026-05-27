@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SELF=$(realpath -- "${BASH_SOURCE[0]}")
+SCRIPT_DIR=$(cd -- "$(dirname -- "$SELF")" && pwd)
+
+# shellcheck source=./_bun-precheck.sh
+. "$SCRIPT_DIR/_bun-precheck.sh"
+
+# shellcheck source=./_macos-sqlite.sh
+. "$SCRIPT_DIR/_macos-sqlite.sh"
+
+exec bun test "$@"

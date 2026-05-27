@@ -19,11 +19,7 @@ import { join } from "node:path";
 
 import type { InstructionFileCeilingWarning } from "../doctor.ts";
 
-const TRACKED_FILES: ReadonlyArray<string> = Object.freeze([
-  "CLAUDE.md",
-  "AGENTS.md",
-  "GEMINI.md",
-]);
+const TRACKED_FILES: ReadonlyArray<string> = Object.freeze(["CLAUDE.md", "AGENTS.md", "GEMINI.md"]);
 
 export interface CheckInstructionFileCeilingOptions {
   readonly maxLines: number;

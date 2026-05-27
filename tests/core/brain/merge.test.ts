@@ -9,22 +9,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { regenerateActiveQuiet } from "../../../src/core/brain/active.ts";
 import { parseLogDay } from "../../../src/core/brain/log.ts";
-import {
-  BrainMergeError,
-  mergePreferences,
-} from "../../../src/core/brain/merge.ts";
+import { BrainMergeError, mergePreferences } from "../../../src/core/brain/merge.ts";
 import {
   parsePreference,
   parseRetired,
@@ -77,9 +68,9 @@ function basePref(
 describe("mergePreferences — guards", () => {
   test("rejects when keep id equals drop id", () => {
     writePreference(vault, basePref("a"));
-    expect(() =>
-      mergePreferences(vault, "pref-a", "pref-a", { now: NOW }),
-    ).toThrow(BrainMergeError);
+    expect(() => mergePreferences(vault, "pref-a", "pref-a", { now: NOW })).toThrow(
+      BrainMergeError,
+    );
   });
 
   test("rejects when keep is missing", () => {
@@ -161,9 +152,7 @@ describe("mergePreferences — guards", () => {
   test("accepts when both are pinned", () => {
     writePreference(vault, basePref("a", { pinned: true }));
     writePreference(vault, basePref("b", { pinned: true }));
-    expect(() =>
-      mergePreferences(vault, "pref-a", "pref-b", { now: NOW }),
-    ).not.toThrow();
+    expect(() => mergePreferences(vault, "pref-a", "pref-b", { now: NOW })).not.toThrow();
   });
 });
 
@@ -235,9 +224,7 @@ describe("mergePreferences — happy path", () => {
     // summary counters.
     const day = NOW.toISOString().slice(0, 10);
     const { entries } = parseLogDay(vault, day);
-    const merges = entries.filter(
-      (e) => e.eventType === BRAIN_LOG_EVENT_KIND.merge,
-    );
+    const merges = entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.merge);
     expect(merges.length).toBe(1);
     const body = merges[0]!.body;
     expect(String(body["keep"])).toContain("pref-keep");
@@ -254,34 +241,23 @@ describe("mergePreferences — happy path", () => {
   test("dryRun returns plan but writes nothing", () => {
     writePreference(vault, basePref("keep"));
     writePreference(vault, basePref("drop"));
-    const before = readFileSync(
-      join(vault, "Brain", "preferences", "pref-keep.md"),
-      "utf8",
-    );
+    const before = readFileSync(join(vault, "Brain", "preferences", "pref-keep.md"), "utf8");
     const plan = mergePreferences(vault, "pref-keep", "pref-drop", {
       now: NOW,
       dryRun: true,
     });
     expect(plan.applied_sum).toBe(2);
     // Disk unchanged.
-    expect(
-      readFileSync(join(vault, "Brain", "preferences", "pref-keep.md"), "utf8"),
-    ).toBe(before);
-    expect(
-      existsSync(join(vault, "Brain", "preferences", "pref-drop.md")),
-    ).toBe(true);
-    expect(
-      existsSync(join(vault, "Brain", "retired", "ret-drop.md")),
-    ).toBe(false);
+    expect(readFileSync(join(vault, "Brain", "preferences", "pref-keep.md"), "utf8")).toBe(before);
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-drop.md"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "retired", "ret-drop.md"))).toBe(false);
   });
 
   test("preserves keep.pinned across merge", () => {
     writePreference(vault, basePref("keep", { pinned: true }));
     writePreference(vault, basePref("drop", { pinned: true }));
     mergePreferences(vault, "pref-keep", "pref-drop", { now: NOW });
-    const keep = parsePreference(
-      join(vault, "Brain", "preferences", "pref-keep.md"),
-    );
+    const keep = parsePreference(join(vault, "Brain", "preferences", "pref-keep.md"));
     expect(keep.pinned).toBe(true);
   });
 });

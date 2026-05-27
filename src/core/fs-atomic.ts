@@ -68,11 +68,7 @@ export function atomicCreateFileSyncExclusive(target: string, contents: string):
  * file is unlinked on any failure; durability fsync of the parent directory
  * is best-effort after a successful commit.
  */
-function withTempFile(
-  target: string,
-  contents: string,
-  commit: (tmpPath: string) => void,
-): void {
+function withTempFile(target: string, contents: string, commit: (tmpPath: string) => void): void {
   const dir = dirname(target);
   mkdirSync(dir, { recursive: true });
 

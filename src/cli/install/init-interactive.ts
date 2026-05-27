@@ -12,6 +12,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { validateTimezoneName } from "../../core/config.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
 import "../../core/install/adapters/aider.ts";
 import "../../core/install/adapters/copilot-cli.ts";
@@ -84,12 +85,7 @@ function hostName(): string {
 function tryNormaliseTz(input: string): string | null {
   if (!input || input.trim().length === 0) return null;
   const trimmed = input.trim();
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: trimmed });
-    return trimmed;
-  } catch {
-    return null;
-  }
+  return validateTimezoneName(trimmed).ok ? trimmed : null;
 }
 
 // ---------- Default reader & runner ----------
@@ -153,9 +149,7 @@ export function defaultRunner(): WizardRunner {
 // ---------- Wizard ----------
 
 async function ask(opts: WizardOpts, label: string, defaultValue?: string): Promise<string> {
-  const suffix = defaultValue !== undefined && defaultValue !== ""
-    ? ` [${defaultValue}]: `
-    : ": ";
+  const suffix = defaultValue !== undefined && defaultValue !== "" ? ` [${defaultValue}]: ` : ": ";
   opts.stdout.write(`${label}${suffix}`);
   const line = await opts.reader.read();
   if (line === null || line.trim().length === 0) {
@@ -211,7 +205,11 @@ export async function runWizard(opts: WizardOpts): Promise<WizardResult> {
     vault,
     home: homedir(),
     cwd: process.cwd(),
-    env: { ...process.env, VAULT_AGENT_NAME: agentName, VAULT_TIMEZONE: tz } as Record<string, string>,
+    env: {
+      ...process.env,
+      VAULT_AGENT_NAME: agentName,
+      VAULT_TIMEZONE: tz,
+    } as Record<string, string>,
     now: new Date(),
   };
   const detected = defaultRegistry.detectAll(env);
@@ -227,7 +225,10 @@ export async function runWizard(opts: WizardOpts): Promise<WizardResult> {
   );
   const selected: string[] = [];
   if (sel.toLowerCase() !== "none" && sel.length > 0) {
-    for (const tok of sel.split(",").map((s) => s.trim()).filter((s) => s.length > 0)) {
+    for (const tok of sel
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)) {
       const idx = parseInt(tok, 10) - 1;
       if (idx >= 0 && idx < detected.length) selected.push(detected[idx]!.target);
     }

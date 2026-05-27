@@ -30,9 +30,7 @@ export async function cmdBrainSummary(argv: string[]): Promise<number> {
   if (topRaw !== undefined) {
     const n = Number(topRaw);
     if (!Number.isInteger(n) || n < 0) {
-      return fail(
-        `brain summary: --top-actions must be a non-negative integer; got ${topRaw}`,
-      );
+      return fail(`brain summary: --top-actions must be a non-negative integer; got ${topRaw}`);
     }
     topActionsN = n;
   }

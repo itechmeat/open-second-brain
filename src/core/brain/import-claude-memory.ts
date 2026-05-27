@@ -8,10 +8,7 @@ import { createSnapshot } from "./snapshot.ts";
 import { isoSecond } from "./time.ts";
 import { resolveAgentName } from "../config.ts";
 import { parseClaudeMemoryFile } from "./claude-memory-parser.ts";
-import {
-  loadManifest,
-  saveManifest,
-} from "./claude-memory-manifest.ts";
+import { loadManifest, saveManifest } from "./claude-memory-manifest.ts";
 import { planAction, type PlannedFile } from "./claude-memory-plan.ts";
 import { renderPreferenceFromMemory, slugifyMemoryName } from "./claude-memory-render.ts";
 import { assertSafeMemoryPath } from "./claude-memory-paths.ts";
@@ -99,7 +96,7 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   // any duplicate into the skipped list with a clear reason.
   const seenPrefIds = new Map<string, string>();
 
-  for (const name of readdirSync(opts.memoryDir).sort()) {
+  for (const name of readdirSync(opts.memoryDir).toSorted()) {
     if (name === "MEMORY.md") continue;
     if (!name.endsWith(".md")) continue;
     const text = readFileSync(join(opts.memoryDir, name), "utf8");

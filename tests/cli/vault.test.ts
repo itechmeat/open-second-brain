@@ -63,9 +63,9 @@ describe("o2b vault status", () => {
     expect(typeof payload.included.files).toBe("number");
     expect(typeof payload.included.dirs).toBe("number");
     expect(Array.isArray(payload.excluded.dirs)).toBe(true);
-    expect(payload.excluded.dirs.some(
-      (d: { rel_path: string }) => d.rel_path === ".obsidian",
-    )).toBe(true);
+    expect(
+      payload.excluded.dirs.some((d: { rel_path: string }) => d.rel_path === ".obsidian"),
+    ).toBe(true);
     expect(Array.isArray(payload.rules)).toBe(true);
   });
 });
@@ -74,10 +74,9 @@ describe("o2b vault inspect", () => {
   test("reports an included path that exists on disk (no suffix)", async () => {
     await bootstrap();
     writeFileSync(join(vault, "idea.md"), "x");
-    const r = await runCli(
-      ["vault", "inspect", "idea.md", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["vault", "inspect", "idea.md", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("status:       included");
     expect(r.stdout).not.toContain("(not found on disk)");
@@ -85,10 +84,9 @@ describe("o2b vault inspect", () => {
 
   test("reports an included path missing from disk with (not found on disk) suffix", async () => {
     await bootstrap();
-    const r = await runCli(
-      ["vault", "inspect", "hypothetical.md", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["vault", "inspect", "hypothetical.md", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("status:       included (not found on disk)");
   });
@@ -96,13 +94,7 @@ describe("o2b vault inspect", () => {
   test("reports an excluded path with matched rule, source, and (not found) suffix when file is hypothetical", async () => {
     await bootstrap();
     const r = await runCli(
-      [
-        "vault",
-        "inspect",
-        ".obsidian/plugins/foo/note.md",
-        "--vault",
-        vault,
-      ],
+      ["vault", "inspect", ".obsidian/plugins/foo/note.md", "--vault", vault],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
@@ -123,10 +115,9 @@ describe("o2b vault inspect", () => {
 
   test("path traversal exits 2", async () => {
     await bootstrap();
-    const r = await runCli(
-      ["vault", "inspect", "../outside", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["vault", "inspect", "../outside", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(2);
     expect(r.stderr).toContain("traverse");
   });
@@ -134,14 +125,7 @@ describe("o2b vault inspect", () => {
   test("--json shape exposes matched_rule, matched_at, exists_on_disk", async () => {
     await bootstrap();
     const r = await runCli(
-      [
-        "vault",
-        "inspect",
-        ".obsidian/plugins/foo/note.md",
-        "--vault",
-        vault,
-        "--json",
-      ],
+      ["vault", "inspect", ".obsidian/plugins/foo/note.md", "--vault", vault, "--json"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
@@ -157,10 +141,9 @@ describe("o2b vault inspect", () => {
   test("--json on included path has matched_rule=null and exists_on_disk=true when file present", async () => {
     await bootstrap();
     writeFileSync(join(vault, "idea.md"), "x");
-    const r = await runCli(
-      ["vault", "inspect", "idea.md", "--vault", vault, "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["vault", "inspect", "idea.md", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout);
     expect(payload.status).toBe("included");

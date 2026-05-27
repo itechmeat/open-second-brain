@@ -81,9 +81,7 @@ export function setPinned(
     throw new Error("setPinned missing field: pref_id");
   }
   if (typeof value !== "boolean") {
-    throw new Error(
-      `setPinned: 'value' must be a boolean; got ${JSON.stringify(value)}`,
-    );
+    throw new Error(`setPinned: 'value' must be a boolean; got ${JSON.stringify(value)}`);
   }
 
   const trimmed = prefId.trim();
@@ -146,4 +144,3 @@ export function setPinned(
 export function isPinned(pref: BrainPreference): boolean {
   return pref.pinned === true;
 }
-

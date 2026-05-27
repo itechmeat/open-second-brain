@@ -49,10 +49,7 @@ export function printUpgradePlanText(plan: UpgradePlan): void {
   if (plan.pending === 0 && plan.errors === 0) {
     ok("upgrade: all managed files match the current release.");
   } else if (plan.pending > 0) {
-    ok(
-      `upgrade: ${plan.pending} pending update(s); ` +
-        `re-run with --apply --yes when ready.`,
-    );
+    ok(`upgrade: ${plan.pending} pending update(s); ` + `re-run with --apply --yes when ready.`);
   }
 }
 
@@ -72,11 +69,7 @@ export function renderUnifiedDiff(before: string, after: string, label: string):
   while (head < a.length && head < b.length && a[head] === b[head]) head++;
   let tailA = a.length;
   let tailB = b.length;
-  while (
-    tailA > head &&
-    tailB > head &&
-    a[tailA - 1] === b[tailB - 1]
-  ) {
+  while (tailA > head && tailB > head && a[tailA - 1] === b[tailB - 1]) {
     tailA--;
     tailB--;
   }

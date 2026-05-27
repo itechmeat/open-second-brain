@@ -67,7 +67,7 @@ function renderYaml(payload: McpPayload): string {
 
 function yamlScalar(s: string): string {
   // Quote when needed (contains special chars or starts/ends with whitespace).
-  if (/[:#\[\]\{\}\,&\*!\|>\'"%@`]/.test(s) || /^\s|\s$/.test(s) || /^[\-?!]/.test(s)) {
+  if (/[:#[\]{},&*!|>'"%@`]/.test(s) || /^\s|\s$/.test(s) || /^[-?!]/.test(s)) {
     return JSON.stringify(s);
   }
   return s;
@@ -102,18 +102,11 @@ export const genericAdapter: InstallAdapter = {
           preview: "render OSB MCP payload to stdout or --out <path>",
         },
       ],
-      postNotes: [
-        "Copy the printed snippet into your runtime's MCP config manually.",
-      ],
+      postNotes: ["Copy the printed snippet into your runtime's MCP config manually."],
     };
   },
 
-  apply(
-    _plan: InstallPlan,
-    payload: McpPayload,
-    env: InstallEnv,
-    opts: ApplyOpts,
-  ): ApplyResult {
+  apply(_plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
     const format = opts.format ?? "json";
     const text = format === "yaml" ? renderYaml(payload) : renderJson(payload);
     const explicitStdout = opts.outPath === "-";
@@ -148,10 +141,7 @@ export const genericAdapter: InstallAdapter = {
         skipped.push([p, "generic: file left in place; remove manually if no longer needed"]);
       }
     } else {
-      skipped.push([
-        "(no recorded path)",
-        "generic: never wrote to disk; nothing to do",
-      ]);
+      skipped.push(["(no recorded path)", "generic: never wrote to disk; nothing to do"]);
     }
     if (!opts.dryRun) removeEntry(env.vault, TARGET);
     return { target: TARGET, removed_keys: [], removed_paths: [], skipped };
@@ -171,7 +161,9 @@ export const genericAdapter: InstallAdapter = {
     return {
       target: TARGET,
       status: "ok",
-      details: [`generic: payload written to ${m.owned_paths[0]} (runtime wiring is operator-managed)`],
+      details: [
+        `generic: payload written to ${m.owned_paths[0]} (runtime wiring is operator-managed)`,
+      ],
       fix_hint: null,
     };
   },

@@ -1691,6 +1691,14 @@ function discoverConfig(path) {
     return { path: resolved, exists: false, data: {} };
   }
 }
+function validateTimezoneName(name) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return { ok: true, error: null };
+  } catch (exc) {
+    return { ok: false, error: exc.message ?? String(exc) };
+  }
+}
 function resolveTimezone(configPath) {
   let name = process.env["VAULT_TIMEZONE"];
   if (!name) {
@@ -1698,12 +1706,7 @@ function resolveTimezone(configPath) {
   }
   if (!name)
     return null;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: name });
-    return name;
-  } catch {
-    return null;
-  }
+  return validateTimezoneName(name).ok ? name : null;
 }
 function resolveAgentName(configPath) {
   const env = process.env["VAULT_AGENT_NAME"];
@@ -3600,6 +3603,27 @@ function normalizeAgentArgument(value) {
   return cleaned;
 }
 
+// src/core/validate.ts
+function parseOptionalFiniteNumberInput(raw) {
+  if (raw === undefined || raw === null)
+    return { value: null, error: null };
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw))
+      return { value: null, error: "finite-number" };
+    return { value: raw, error: null };
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "")
+      return { value: null, error: null };
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed))
+      return { value: null, error: "number-or-numeric-string" };
+    return { value: parsed, error: null };
+  }
+  return { value: null, error: "number-or-numeric-string" };
+}
+
 // src/openclaw/index.ts
 function resolveVaultPath(api) {
   const cfg = api.pluginConfig ?? {};
@@ -3610,12 +3634,7 @@ function resolveOpenclawTimezone(api) {
   const candidate = cfg.timezone || process.env["VAULT_TIMEZONE"] || null;
   if (!candidate)
     return null;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: candidate });
-    return candidate;
-  } catch {
-    return null;
-  }
+  return validateTimezoneName(candidate).ok ? candidate : null;
 }
 function resolveOpenclawAgent(api, argAgent) {
   const normalized = normalizeAgentArgument(argAgent);
@@ -3625,25 +3644,14 @@ function resolveOpenclawAgent(api, argAgent) {
   return cfg.agentName ?? process.env["VAULT_AGENT_NAME"] ?? resolveAgentName();
 }
 function coerceExpectedAmount(value) {
-  if (value === undefined || value === null)
-    return null;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error("expected_amount must be a finite number");
-    }
-    return value;
+  const parsed = parseOptionalFiniteNumberInput(value);
+  if (parsed.error === "finite-number") {
+    throw new Error("expected_amount must be a finite number");
   }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed === "")
-      return null;
-    const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed)) {
-      throw new Error("expected_amount must be a number or numeric string");
-    }
-    return parsed;
+  if (parsed.error === "number-or-numeric-string") {
+    throw new Error("expected_amount must be a number or numeric string");
   }
-  throw new Error("expected_amount must be a number or numeric string");
+  return parsed.value;
 }
 function strOrNull(value) {
   if (value === undefined || value === null)

@@ -1,10 +1,6 @@
 import { escapeMarkdownV2 as e } from "./telegram.ts";
 import type { BrainEventCounts } from "./log-counts.ts";
-import {
-  transcriptConfirmed,
-  type ActivitySummary,
-  type DisciplineStatus,
-} from "./decision.ts";
+import { transcriptConfirmed, type ActivitySummary, type DisciplineStatus } from "./decision.ts";
 
 export interface RenderInput {
   readonly localDate: string;

@@ -5,14 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -61,15 +54,9 @@ function writeMd(rel: string, content: string): string {
 describe("scanInline empty notes.read_paths", () => {
   test("no notes config + no opts.paths -> scanInline does no work", async () => {
     // Override the beforeEach config to drop notes.read_paths entirely.
-    atomicWriteFileSync(
-      join(brainDirs(tmp).brain, "_brain.yaml"),
-      DEFAULT_BRAIN_CONFIG_YAML,
-    );
+    atomicWriteFileSync(join(brainDirs(tmp).brain, "_brain.yaml"), DEFAULT_BRAIN_CONFIG_YAML);
     // Plant a marker in Daily/ — old behaviour would find it.
-    writeMd(
-      "Daily/2026-05-16.md",
-      "@osb feedback negative topic=should-be-skipped principle=p\n",
-    );
+    writeMd("Daily/2026-05-16.md", "@osb feedback negative topic=should-be-skipped principle=p\n");
     const result = await scanInline(tmp, { agent: "test" });
     expect(result.scanned).toBe(0);
     expect(result.found).toBe(0);
@@ -77,10 +64,7 @@ describe("scanInline empty notes.read_paths", () => {
   });
 
   test("opts.paths still overrides absent config (explicit > config)", async () => {
-    atomicWriteFileSync(
-      join(brainDirs(tmp).brain, "_brain.yaml"),
-      DEFAULT_BRAIN_CONFIG_YAML,
-    );
+    atomicWriteFileSync(join(brainDirs(tmp).brain, "_brain.yaml"), DEFAULT_BRAIN_CONFIG_YAML);
     writeMd(
       "Journal/2026-05-16.md",
       "@osb feedback negative topic=explicit-override principle=p\n",
@@ -98,14 +82,8 @@ describe("scanInline empty notes.read_paths", () => {
       join(brainDirs(tmp).brain, "_brain.yaml"),
       `${DEFAULT_BRAIN_CONFIG_YAML}\nnotes:\n  read_paths:\n    - Daily\n    - Journal\n`,
     );
-    writeMd(
-      "Daily/2026-05-16.md",
-      "@osb feedback negative topic=daily-one principle=p\n",
-    );
-    writeMd(
-      "Journal/2026-05-16.md",
-      "@osb feedback negative topic=journal-one principle=p\n",
-    );
+    writeMd("Daily/2026-05-16.md", "@osb feedback negative topic=daily-one principle=p\n");
+    writeMd("Journal/2026-05-16.md", "@osb feedback negative topic=journal-one principle=p\n");
     const result = await scanInline(tmp, { agent: "test" });
     expect(result.found).toBe(2);
     expect(result.created).toBe(2);
@@ -116,10 +94,7 @@ describe("scanInline empty notes.read_paths", () => {
       join(brainDirs(tmp).brain, "_brain.yaml"),
       `${DEFAULT_BRAIN_CONFIG_YAML}\nnotes:\n  read_paths:\n    - Daily\n    - Missing\n`,
     );
-    writeMd(
-      "Daily/2026-05-16.md",
-      "@osb feedback negative topic=found-here principle=p\n",
-    );
+    writeMd("Daily/2026-05-16.md", "@osb feedback negative topic=found-here principle=p\n");
     const result = await scanInline(tmp, { agent: "test" });
     expect(result.found).toBe(1);
     expect(result.errors.length).toBe(0);
@@ -130,7 +105,7 @@ describe("scanInline", () => {
   test("finds an inline marker in Daily/ and creates a signal in inbox/", async () => {
     writeMd(
       "Daily/2026-05-16.md",
-      "Note text\n@osb feedback negative topic=mocking principle=\"don't mock DB\"\n",
+      'Note text\n@osb feedback negative topic=mocking principle="don\'t mock DB"\n',
     );
     const result = await scanInline(tmp, { agent: "test" });
     expect(result.scanned).toBeGreaterThan(0);
@@ -164,14 +139,13 @@ describe("scanInline", () => {
     );
     await scanInline(tmp, { agent: "test" });
     const after = readFileSync(notePath, "utf8");
-    expect(after).toMatch(/^@osb✓ \[\[sig-.*-rewrite\]\] feedback negative topic=rewrite principle=p$/m);
+    expect(after).toMatch(
+      /^@osb✓ \[\[sig-.*-rewrite\]\] feedback negative topic=rewrite principle=p$/m,
+    );
   });
 
   test("is idempotent on second run (rewritten markers ignored)", async () => {
-    writeMd(
-      "Daily/2026-05-16.md",
-      "@osb feedback negative topic=idemp principle=p\n",
-    );
+    writeMd("Daily/2026-05-16.md", "@osb feedback negative topic=idemp principle=p\n");
     const first = await scanInline(tmp, { agent: "test" });
     expect(first.created).toBe(1);
 
@@ -251,9 +225,7 @@ describe("scanInline", () => {
     });
     expect(result.created).toBe(1);
     const inboxFiles = readdirSync(brainDirs(tmp).inbox).filter((n) => n.endsWith(".md"));
-    const content = inboxFiles.map((f) =>
-      readFileSync(join(brainDirs(tmp).inbox, f), "utf8"),
-    );
+    const content = inboxFiles.map((f) => readFileSync(join(brainDirs(tmp).inbox, f), "utf8"));
     const joined = content.join("");
     expect(joined).toMatch(/topic: in-daily/);
     expect(joined).not.toMatch(/topic: in-projects/);
@@ -290,10 +262,7 @@ describe("scanInline", () => {
     );
     // Build a marker preceded by 1.5 MiB of filler.
     const filler = "x".repeat(1_500_000);
-    writeMd(
-      "Big/huge.md",
-      `${filler}\n@osb feedback negative topic=huge principle=p\n`,
-    );
+    writeMd("Big/huge.md", `${filler}\n@osb feedback negative topic=huge principle=p\n`);
     const result = await scanInline(tmp, { agent: "test" });
     expect(result.found).toBe(0);
     expect(result.errors.some((e) => e.message.includes("too large"))).toBe(true);
@@ -316,10 +285,7 @@ describe("scanInline", () => {
       `@osb feedback negative topic=obsidian-leak principle="should not be captured"\n`,
       "utf8",
     );
-    writeMd(
-      "Daily/keep.md",
-      `@osb feedback negative topic=visible principle=p\n`,
-    );
+    writeMd("Daily/keep.md", `@osb feedback negative topic=visible principle=p\n`);
     const result = await scanInline(tmp, { agent: "test" });
     expect(result.created).toBe(1);
     const inbox = readdirSync(brainDirs(tmp).inbox);
@@ -359,9 +325,7 @@ describe("scanInline", () => {
     const result = await scanInline(tmp, { agent: "test" });
     expect(result.created).toBe(1);
     const inbox = readdirSync(brainDirs(tmp).inbox);
-    expect(
-      inbox.some((f) => f.includes("nested-brain-keep")),
-    ).toBe(true);
+    expect(inbox.some((f) => f.includes("nested-brain-keep"))).toBe(true);
   });
 
   test("v0.10.9: vault.ignore_paths additions are respected", async () => {
@@ -369,14 +333,8 @@ describe("scanInline", () => {
       join(brainDirs(tmp).brain, "_brain.yaml"),
       `schema_version: 1\nvault:\n  ignore_paths:\n    - Drafts\nnotes:\n  read_paths:\n    - Drafts\n    - Daily\n`,
     );
-    writeMd(
-      "Drafts/x.md",
-      `@osb feedback negative topic=drafted principle=p\n`,
-    );
-    writeMd(
-      "Daily/d.md",
-      `@osb feedback negative topic=visible principle=p\n`,
-    );
+    writeMd("Drafts/x.md", `@osb feedback negative topic=drafted principle=p\n`);
+    writeMd("Daily/d.md", `@osb feedback negative topic=visible principle=p\n`);
     const result = await scanInline(tmp, { agent: "test" });
     expect(result.created).toBe(1);
     const inbox = readdirSync(brainDirs(tmp).inbox);

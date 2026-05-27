@@ -60,10 +60,7 @@ const LINE_RE = /^primary_agent:.*$/m;
  * surfaces as a typed error instead of writing back something that
  * the loader will reject on the next read.
  */
-export function setPrimaryAgent(
-  vault: string,
-  name: string | null,
-): SetPrimaryAgentResult {
+export function setPrimaryAgent(vault: string, name: string | null): SetPrimaryAgentResult {
   const path = brainConfigPath(vault);
   if (!existsSync(path)) {
     throw new BrainConfigError(

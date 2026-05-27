@@ -25,20 +25,10 @@
  * second run on the same file finds every hash already present.
  */
 
-import {
-  existsSync,
-  lstatSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-} from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import {
-  buildDedupIndex,
-  computeDedupHash,
-  type DedupIndexEntry,
-} from "../dedup-hash.ts";
+import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
 import { discoverMarkersDetailed } from "../inline.ts";
 import { writeSignal } from "../signal.ts";
 import { isoDate, isoSecond } from "../time.ts";
@@ -266,11 +256,7 @@ export async function importSession(
  * the caller, not here), then a per-adapter default, finally
  * `opts.agent`.
  */
-function agentLabelForTurn(
-  turn: SessionTurn,
-  adapter: SessionAdapterId,
-  fallback: string,
-): string {
+function agentLabelForTurn(turn: SessionTurn, adapter: SessionAdapterId, fallback: string): string {
   void turn; // reserved for future per-turn role-aware fallback
   switch (adapter) {
     case "claude":

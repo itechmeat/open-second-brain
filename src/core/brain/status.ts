@@ -24,10 +24,7 @@ import { brainDirs } from "./paths.ts";
 import { parseLogDay } from "./log.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { parseSignal } from "./signal.ts";
-import {
-  BRAIN_LOG_EVENT_KIND,
-  BRAIN_PREFERENCE_STATUS,
-} from "./types.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "./types.ts";
 
 // ----- Public types --------------------------------------------------------
 
@@ -185,8 +182,8 @@ function scanLogTimestamps(vault: string): {
   const days = readdirSync(dirs.log)
     .filter((n) => n.endsWith(".md") && /^\d{4}-\d{2}-\d{2}\.md$/.test(n))
     .map((n) => n.slice(0, -".md".length))
-    .sort()
-    .reverse(); // newest day first
+    .toSorted()
+    .toReversed(); // newest day first
 
   let lastDreamAt: string | null = null;
   let lastApplyEvidenceAt: string | null = null;
@@ -204,10 +201,7 @@ function scanLogTimestamps(vault: string): {
       if (lastDreamAt === null && e.eventType === BRAIN_LOG_EVENT_KIND.dream) {
         lastDreamAt = e.timestamp;
       }
-      if (
-        lastApplyEvidenceAt === null &&
-        e.eventType === BRAIN_LOG_EVENT_KIND.applyEvidence
-      ) {
+      if (lastApplyEvidenceAt === null && e.eventType === BRAIN_LOG_EVENT_KIND.applyEvidence) {
         lastApplyEvidenceAt = e.timestamp;
       }
       if (lastDreamAt !== null && lastApplyEvidenceAt !== null) break;

@@ -24,9 +24,7 @@ export function yesterdayWindow(now: Date, tz: string): YesterdayWindow {
   const m = parts[1]!;
   const d = parts[2]!;
   const todayLocalMidnightUtc = localMidnightUtc(y, m, d, tz);
-  const yesterdayLocalMidnightUtc = new Date(
-    todayLocalMidnightUtc.getTime() - 24 * 60 * 60 * 1000,
-  );
+  const yesterdayLocalMidnightUtc = new Date(todayLocalMidnightUtc.getTime() - 24 * 60 * 60 * 1000);
   const localDate = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
     year: "numeric",
@@ -78,8 +76,7 @@ function localMidnightUtc(y: number, m: number, d: number, tz: string): Date {
     // Whole-day signed offset between the observed local date and the
     // target civil date. UTC-based midnight arithmetic is safe here
     // because both inputs are already date-only.
-    const dayDelta =
-      (Date.UTC(ly, lm - 1, ld) - Date.UTC(y, m - 1, d)) / 86_400_000;
+    const dayDelta = (Date.UTC(ly, lm - 1, ld) - Date.UTC(y, m - 1, d)) / 86_400_000;
     const drift = dayDelta * 86400 + hh * 3600 + mm * 60 + ss;
     if (date === expected && drift === 0) return guess;
     guess = new Date(guess.getTime() - drift * 1000);

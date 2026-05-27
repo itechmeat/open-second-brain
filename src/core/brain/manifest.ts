@@ -8,12 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  readdirSync,
-} from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -127,7 +122,7 @@ function freezeManifest(
 ): BrainManifest {
   // Materialise in sorted key order so JSON.stringify yields stable
   // bytes across runs.
-  const sorted = Array.from(entries.keys()).sort();
+  const sorted = Array.from(entries.keys()).toSorted();
   const files: Record<string, BrainManifestEntry> = {};
   for (const k of sorted) files[k] = entries.get(k)!;
   return Object.freeze({
@@ -147,10 +142,7 @@ function freezeManifest(
  *
  * Each bucket is sorted by `path` ascending for stable rendering.
  */
-export function diffManifests(
-  before: BrainManifest,
-  after: BrainManifest,
-): BrainManifestDiff {
+export function diffManifests(before: BrainManifest, after: BrainManifest): BrainManifestDiff {
   const added: BrainManifestDiffEntry[] = [];
   const removed: BrainManifestDiffEntry[] = [];
   const changed: BrainManifestDiffEntry[] = [];
@@ -188,11 +180,7 @@ export function diffManifests(
 
 /** Convenience: `true` when any of the three buckets is non-empty. */
 export function manifestDiffHasDrift(diff: BrainManifestDiff): boolean {
-  return (
-    diff.added.length > 0 ||
-    diff.removed.length > 0 ||
-    diff.changed.length > 0
-  );
+  return diff.added.length > 0 || diff.removed.length > 0 || diff.changed.length > 0;
 }
 
 /**
@@ -200,10 +188,7 @@ export function manifestDiffHasDrift(diff: BrainManifestDiff): boolean {
  * drift-detection abort message. Sections are emitted only when their
  * bucket is non-empty so the operator's eye lands on real differences.
  */
-export function renderManifestDriftMarkdown(
-  diff: BrainManifestDiff,
-  runId: string,
-): string {
+export function renderManifestDriftMarkdown(diff: BrainManifestDiff, runId: string): string {
   const lines: string[] = [
     `Drift detected between snapshot '${runId}' and the live Brain/ tree.`,
     `Pass --force-rollback to overwrite anyway.`,
@@ -261,10 +246,7 @@ export function manifestSidecarPath(vault: string, runId: string): string {
  * schema_version — callers fall back to the legacy "no drift check"
  * path on a null return.
  */
-export function readManifestSidecar(
-  vault: string,
-  runId: string,
-): BrainManifest | null {
+export function readManifestSidecar(vault: string, runId: string): BrainManifest | null {
   const path = manifestSidecarPath(vault, runId);
   let raw: string;
   try {
@@ -315,11 +297,7 @@ export function readManifestSidecar(
  * Write the sidecar manifest atomically. Pretty-printed with two-space
  * indent so a manual `cat` or `git diff` stays readable.
  */
-export function writeManifestSidecar(
-  vault: string,
-  runId: string,
-  manifest: BrainManifest,
-): void {
+export function writeManifestSidecar(vault: string, runId: string, manifest: BrainManifest): void {
   const path = manifestSidecarPath(vault, runId);
   atomicWriteFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
 }

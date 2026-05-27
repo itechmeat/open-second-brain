@@ -101,9 +101,27 @@ export function setConfigValue(key: string, value: string, path?: string): strin
   const resolved = path ?? defaultConfigPath();
   const discovery = discoverConfig(resolved);
   const data = { ...discovery.data, [key]: value };
-  const body = Object.entries(data).map(([k, v]) => `${k}: "${v}"`).join("\n") + "\n";
+  const body =
+    Object.entries(data)
+      .map(([k, v]) => `${k}: "${v}"`)
+      .join("\n") + "\n";
   atomicWriteFileSync(resolved, body);
   return resolved;
+}
+
+export interface TimezoneValidationResult {
+  readonly ok: boolean;
+  readonly error: string | null;
+}
+
+/** Validate an IANA timezone name without normalising or trimming it. */
+export function validateTimezoneName(name: string): TimezoneValidationResult {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return { ok: true, error: null };
+  } catch (exc) {
+    return { ok: false, error: (exc as Error).message ?? String(exc) };
+  }
 }
 
 /**
@@ -119,12 +137,7 @@ export function resolveTimezone(configPath?: string): string | null {
     name = discoverConfig(configPath).data["timezone"];
   }
   if (!name) return null;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: name });
-    return name;
-  } catch {
-    return null;
-  }
+  return validateTimezoneName(name).ok ? name : null;
 }
 
 /**

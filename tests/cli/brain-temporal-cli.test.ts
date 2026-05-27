@@ -23,14 +23,9 @@ interface FixtureEvent {
   readonly body: Record<string, string | ReadonlyArray<string>>;
 }
 
-function writeJsonl(
-  date: string,
-  events: ReadonlyArray<FixtureEvent>,
-): void {
+function writeJsonl(date: string, events: ReadonlyArray<FixtureEvent>): void {
   const lines = events
-    .map((e) =>
-      JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }),
-    )
+    .map((e) => JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }))
     .join("\n");
   writeFileSync(join(vault, "Brain", "log", `${date}.jsonl`), lines + "\n");
 }
@@ -78,20 +73,18 @@ describe("o2b brain timeline", () => {
   });
 
   test("--limit -3 surfaces as exit 1", async () => {
-    const r = await runCli(
-      ["brain", "timeline", "--limit", "-3", "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
-    );
+    const r = await runCli(["brain", "timeline", "--limit", "-3", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(r.returncode).toBe(1);
   });
 });
 
 describe("o2b brain evolution", () => {
   test("--pref-id --json exits 0", async () => {
-    const r = await runCli(
-      ["brain", "evolution", "--pref-id", "pref-foo", "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
-    );
+    const r = await runCli(["brain", "evolution", "--pref-id", "pref-foo", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout);
     expect(payload.target).toEqual({ prefId: "pref-foo" });
@@ -106,15 +99,7 @@ describe("o2b brain evolution", () => {
 
   test("both --pref-id and --topic exits non-zero", async () => {
     const r = await runCli(
-      [
-        "brain",
-        "evolution",
-        "--pref-id",
-        "pref-foo",
-        "--topic",
-        "foo",
-        "--json",
-      ],
+      ["brain", "evolution", "--pref-id", "pref-foo", "--topic", "foo", "--json"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
     );
     expect(r.returncode).toBe(1);
@@ -135,10 +120,9 @@ describe("o2b brain stale", () => {
 
 describe("o2b brain daily", () => {
   test("--date --json exits 0", async () => {
-    const r = await runCli(
-      ["brain", "daily", "--date", "2026-05-20", "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
-    );
+    const r = await runCli(["brain", "daily", "--date", "2026-05-20", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout);
     expect(payload.date).toBe("2026-05-20");
@@ -147,10 +131,9 @@ describe("o2b brain daily", () => {
 
 describe("o2b brain weekly", () => {
   test("--week-end --json exits 0", async () => {
-    const r = await runCli(
-      ["brain", "weekly", "--week-end", "2026-05-25", "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
-    );
+    const r = await runCli(["brain", "weekly", "--week-end", "2026-05-25", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout);
     expect(payload.windowEnd).toBe("2026-05-25T00:00:00Z");

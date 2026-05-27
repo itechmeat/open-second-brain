@@ -60,7 +60,11 @@ async function initialize(server: MCPServer): Promise<void> {
   });
 }
 
-function call(server: MCPServer, name: string, args: Record<string, unknown> = {}): Promise<unknown> {
+function call(
+  server: MCPServer,
+  name: string,
+  args: Record<string, unknown> = {},
+): Promise<unknown> {
   return server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 99,
@@ -111,7 +115,12 @@ test("brain_search happy path returns paths and respects 600-char content cap", 
   await initialize(server);
   const resp = await call(server, "brain_search", { query: "fox", limit: 5 });
   const body = extractToolResult(resp);
-  const results = body["results"] as Array<{ content: string; path: string; searchType: string; score: number }>;
+  const results = body["results"] as Array<{
+    content: string;
+    path: string;
+    searchType: string;
+    score: number;
+  }>;
   expect(Array.isArray(results)).toBe(true);
   expect(results.length).toBeGreaterThan(0);
   expect(results[0]?.path).toBe("notes/foo.md");

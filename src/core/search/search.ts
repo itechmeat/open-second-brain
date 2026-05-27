@@ -35,10 +35,7 @@ interface SemanticPolicy {
   readonly wantSemantic: boolean;
 }
 
-function resolveSemanticPolicy(
-  config: ResolvedSearchConfig,
-  opts: SearchOptions,
-): SemanticPolicy {
+function resolveSemanticPolicy(config: ResolvedSearchConfig, opts: SearchOptions): SemanticPolicy {
   if (opts.keywordOnly === true) {
     return { explicit: true, wantSemantic: false };
   }
@@ -112,9 +109,7 @@ export async function search(
     // query names no entities or the index predates the entity store.
     const queryEntities = extractEntities(query);
     const entityMatchByChunk =
-      queryEntities.length > 0
-        ? store.chunkEntityMatches(idsList, queryEntities)
-        : undefined;
+      queryEntities.length > 0 ? store.chunkEntityMatches(idsList, queryEntities) : undefined;
 
     // When a property filter is active, overfetch the ranked
     // candidates so the post-filter result set still has a chance
@@ -122,8 +117,7 @@ export async function search(
     // top-`limit` ranked hits can lose all their property-matching
     // candidates to the filter and surface zero results even when
     // matches exist deeper in the rank.
-    const hasPropertyFilter =
-      opts.properties !== undefined && opts.properties.size > 0;
+    const hasPropertyFilter = opts.properties !== undefined && opts.properties.size > 0;
 
     // MMR and traversal both need a candidate pool wider than `limit`:
     // MMR diversifies from it, and traversal seeds expansion from it (a
@@ -288,6 +282,12 @@ async function runSemanticPhase(
 ): Promise<SemanticPhaseOutcome> {
   const warnings: string[] = [];
 
+  const counts = store.counts();
+  if (counts.embeddings === 0) {
+    warnings.push("no compatible embeddings; run: o2b search index --embeddings");
+    return { attempted: false, hits: [], warnings };
+  }
+
   if (!store.vecLoaded()) {
     if (opts.explicit) {
       throw new SearchError(
@@ -312,13 +312,6 @@ async function runSemanticPhase(
     return { attempted: false, hits: [], warnings };
   }
 
-  // Data-state check: are there embeddings to search against at all?
-  const counts = store.counts();
-  if (counts.embeddings === 0) {
-    warnings.push("no compatible embeddings; run: o2b search index --embeddings");
-    return { attempted: false, hits: [], warnings };
-  }
-
   let queryVec: number[];
   try {
     const provider = makeProvider(config.semantic);
@@ -331,10 +324,7 @@ async function runSemanticPhase(
       // so callers always see a typed code rather than a bare Error.
       if (e instanceof SearchError) throw e;
       const msg = e instanceof Error ? e.message : String(e);
-      throw new SearchError(
-        "EMBEDDING_PROVIDER_HTTP",
-        `embedding provider failure: ${msg}`,
-      );
+      throw new SearchError("EMBEDDING_PROVIDER_HTTP", `embedding provider failure: ${msg}`);
     }
     const msg = e instanceof Error ? e.message : String(e);
     warnings.push(`embedding provider unavailable: ${msg}`);
@@ -346,6 +336,9 @@ async function runSemanticPhase(
     return { attempted: false, hits: [], warnings };
   }
 
-  const hits = store.semanticTopK(queryVec, { limit: opts.limit, pathPrefix: opts.pathPrefix });
+  const hits = store.semanticTopK(queryVec, {
+    limit: opts.limit,
+    pathPrefix: opts.pathPrefix,
+  });
   return { attempted: true, hits, warnings };
 }

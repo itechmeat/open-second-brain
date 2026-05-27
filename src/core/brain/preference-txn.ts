@@ -31,10 +31,7 @@ import { existsSync } from "node:fs";
 
 import { computeContentHash } from "./content-hash.ts";
 import { appendEditHistory, type EditHistoryEntry } from "./health/edit-history.ts";
-import {
-  preferencePath,
-  validateSlug,
-} from "./paths.ts";
+import { preferencePath, validateSlug } from "./paths.ts";
 import {
   parsePreference,
   writePreference,
@@ -44,10 +41,7 @@ import {
   type WritePreferenceResult,
 } from "./preference.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
-import {
-  BRAIN_PREFERENCE_STATUS,
-  type BrainPreference,
-} from "./types.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
 
 /**
  * Machine-friendly discriminants for the four collision modes covered
@@ -62,8 +56,7 @@ export const BRAIN_COLLISION_KIND = Object.freeze({
   duplicateWrite: "DuplicateWrite",
 } as const);
 
-export type BrainCollisionKind =
-  (typeof BRAIN_COLLISION_KIND)[keyof typeof BRAIN_COLLISION_KIND];
+export type BrainCollisionKind = (typeof BRAIN_COLLISION_KIND)[keyof typeof BRAIN_COLLISION_KIND];
 
 /**
  * Typed error surfaced by every txn collision mode. `kind` is the
@@ -110,10 +103,13 @@ function editHistoryEntries(
   opts: EditHistoryOptions,
 ): EditHistoryEntry[] {
   const ts = (opts.now?.() ?? new Date()).toISOString();
-  const reader: Record<(typeof HISTORY_TRACKED_FIELDS)[number], {
-    before: string | null;
-    after: string | null;
-  }> = {
+  const reader: Record<
+    (typeof HISTORY_TRACKED_FIELDS)[number],
+    {
+      before: string | null;
+      after: string | null;
+    }
+  > = {
     principle: {
       before: existing?.principle ?? null,
       after: proposed.principle ?? null,
@@ -155,9 +151,7 @@ export interface WritePreferenceContext {
  * {@link BrainCollisionError} to abort the write; returning normally
  * signals "ok, keep going".
  */
-export type WritePreferenceExpectation = (
-  ctx: WritePreferenceContext,
-) => void;
+export type WritePreferenceExpectation = (ctx: WritePreferenceContext) => void;
 
 /**
  * Write a preference under an exclusive sync lock, running the
@@ -221,23 +215,20 @@ export function writePreferenceTxn(
     //
     // Callers that bypass the txn keep pre-v0.12.0 semantics.
     const autoHash =
-      input.content_hash === undefined
-      && input.status === BRAIN_PREFERENCE_STATUS.confirmed
+      input.content_hash === undefined && input.status === BRAIN_PREFERENCE_STATUS.confirmed
         ? { content_hash: computeContentHash(input.principle, input.scope) }
         : {};
     const candidate: WritePreferenceInput = {
       ...input,
       ...autoHash,
-      revision: input.revision ?? (existing?.revision ?? 0),
+      revision: input.revision ?? existing?.revision ?? 0,
     };
     const willChange =
-      input.revision !== undefined
-      || existing === null
-      || wouldRewritePreference(vault, candidate);
+      input.revision !== undefined || existing === null || wouldRewritePreference(vault, candidate);
     const inputWithDefaults: WritePreferenceInput = willChange
       ? {
           ...candidate,
-          revision: input.revision ?? ((existing?.revision ?? 0) + 1),
+          revision: input.revision ?? (existing?.revision ?? 0) + 1,
         }
       : candidate;
     const result = writePreference(vault, inputWithDefaults, options);
@@ -273,9 +264,7 @@ export function writePreferenceTxn(
  * Treats a missing on-disk `_revision` field as 0 - the absent-as-zero
  * convention from {@link BrainPreference.revision}'s reader.
  */
-export function expectRevision(
-  expected: number,
-): WritePreferenceExpectation {
+export function expectRevision(expected: number): WritePreferenceExpectation {
   return (ctx) => {
     const current = ctx.existing?.revision ?? 0;
     if (current !== expected) {
@@ -338,10 +327,7 @@ export function noDuplicateWriteWithin(
     if (!existing) return;
     const existingHash = existing.content_hash;
     if (!existingHash) return;
-    const proposedHash = computeContentHash(
-      ctx.input.principle,
-      ctx.input.scope,
-    );
+    const proposedHash = computeContentHash(ctx.input.principle, ctx.input.scope);
     if (existingHash !== proposedHash) return;
     const lastEv = existing.last_evidence_at;
     if (!lastEv) return;

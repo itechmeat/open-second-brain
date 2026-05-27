@@ -14,9 +14,7 @@ import { findDuplicateCandidates } from "../page-dedup.ts";
 import { computeTokenFootprint } from "../token-footprint.ts";
 import { scoreActions, type ActionItem } from "./action-scorer.ts";
 
-export function collectMaintenanceActions(
-  vault: string,
-): ReadonlyArray<ActionItem> {
+export function collectMaintenanceActions(vault: string): ReadonlyArray<ActionItem> {
   let dedupCandidates: Array<{ canonicalId: string; secondaryCount: number }> = [];
   let staleByLifecycle: Array<{ id: string; ageDays: number }> = [];
   let brokenLinks: Array<{ path: string; from: string }> = [];

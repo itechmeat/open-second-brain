@@ -30,15 +30,9 @@ interface FixtureEvent {
   readonly body: Record<string, string | ReadonlyArray<string>>;
 }
 
-function writeJsonl(
-  vault: string,
-  date: string,
-  events: ReadonlyArray<FixtureEvent>,
-): void {
+function writeJsonl(vault: string, date: string, events: ReadonlyArray<FixtureEvent>): void {
   const lines = events
-    .map((e) =>
-      JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }),
-    )
+    .map((e) => JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }))
     .join("\n");
   writeFileSync(join(vault, "Brain", "log", `${date}.jsonl`), lines + "\n");
 }
@@ -133,7 +127,7 @@ describe("buildDailyBrief", () => {
     const idx = buildTimelineIndex(VAULT, {});
     const brief = buildDailyBrief(idx, VAULT, "2026-05-25");
     expect(brief.statusTransitions.length).toBe(3);
-    const kinds = brief.statusTransitions.map((t) => t.kind).sort();
+    const kinds = brief.statusTransitions.map((t) => t.kind).toSorted();
     expect(kinds).toEqual(["creation", "promotion", "retirement"]);
   });
 

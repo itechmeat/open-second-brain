@@ -62,10 +62,9 @@ describe("o2b brain summary", () => {
   });
 
   test("rejects --top-actions=-1", async () => {
-    const r = await runCli(
-      ["brain", "summary", "--skip-dream", "--top-actions", "-1"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
-    );
+    const r = await runCli(["brain", "summary", "--skip-dream", "--top-actions", "-1"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(r.returncode).toBe(1);
   });
 });

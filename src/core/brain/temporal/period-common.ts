@@ -7,11 +7,7 @@
  */
 
 import { parseWikilink } from "./../wikilink.ts";
-import {
-  BRAIN_APPLY_RESULT,
-  BRAIN_LOG_EVENT_KIND,
-  type BrainLogEventKind,
-} from "./../types.ts";
+import { BRAIN_APPLY_RESULT, BRAIN_LOG_EVENT_KIND, type BrainLogEventKind } from "./../types.ts";
 import type { TemporalEvent } from "./types.ts";
 
 const LINK_REASON_RE = /\(([^)]+)\)\s*$/;
@@ -49,9 +45,7 @@ export function countByKind(
  * from `new_unconfirmed` / `confirmed` / `retired` arrays, and return
  * them in chronological order.
  */
-export function collectTransitions(
-  events: ReadonlyArray<TemporalEvent>,
-): PeriodStatusTransition[] {
+export function collectTransitions(events: ReadonlyArray<TemporalEvent>): PeriodStatusTransition[] {
   const out: PeriodStatusTransition[] = [];
   for (const ev of events) {
     if (ev.kind !== BRAIN_LOG_EVENT_KIND.dream) continue;
@@ -110,9 +104,7 @@ export function computeVaultDelta(
 }
 
 /** Deduplicated list of artifact wikilinks cited by apply-evidence rows. */
-export function collectSourcePointers(
-  events: ReadonlyArray<TemporalEvent>,
-): string[] {
+export function collectSourcePointers(events: ReadonlyArray<TemporalEvent>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const ev of events) {

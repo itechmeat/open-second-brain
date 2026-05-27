@@ -6,13 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,12 +49,9 @@ describe("o2b brain note", () => {
 
   test("--json emits the structured result", async () => {
     writeFileSync(configPath, `vault: ${vault}\nagent_name: tester\n`, "utf8");
-    const r = await runCli(
-      ["brain", "note", "json output check", "--json"],
-      {
-        env: { OPEN_SECOND_BRAIN_CONFIG: configPath, VAULT_AGENT_NAME: "" },
-      },
-    );
+    const r = await runCli(["brain", "note", "json output check", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath, VAULT_AGENT_NAME: "" },
+    });
     expect(r.returncode).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.ok).toBe(true);

@@ -34,7 +34,9 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const p of [vault, home, pluginRoot]) {
-    try { rmSync(p, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(p, { recursive: true, force: true });
+    } catch {}
   }
 });
 
@@ -43,9 +45,14 @@ function env() {
 }
 
 function applyOpts(overrides: Record<string, unknown> = {}) {
-  const sink = new Writable({ write(_c, _e, cb) { cb(); } });
+  const sink = new Writable({
+    write(_c, _e, cb) {
+      cb();
+    },
+  });
   return {
-    dryRun: false, force: false,
+    dryRun: false,
+    force: false,
     stdout: sink as unknown as NodeJS.WriteStream,
     stderr: sink as unknown as NodeJS.WriteStream,
     piSkillSource: skillSource,
@@ -118,9 +125,16 @@ describe("pi adapter", () => {
 
   test("piSkillDir override changes target location", () => {
     const altDir = mkdtempSync(join(tmpdir(), "osb-pi-alt-"));
-    piAdapter.apply(piAdapter.plan(payload, env()), payload, env(), applyOpts({ piSkillDir: altDir }));
+    piAdapter.apply(
+      piAdapter.plan(payload, env()),
+      payload,
+      env(),
+      applyOpts({ piSkillDir: altDir }),
+    );
     expect(lstatSync(join(altDir, "brain-memory")).isSymbolicLink()).toBe(true);
-    try { rmSync(altDir, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(altDir, { recursive: true, force: true });
+    } catch {}
   });
 
   test("uninstall removes the symlink only, leaves source alone", () => {

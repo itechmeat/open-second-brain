@@ -9,10 +9,7 @@
  */
 
 import { defaultConfigPath } from "../../../core/config.ts";
-import {
-  findDuplicateCandidates,
-  mergePage,
-} from "../../../core/brain/page-dedup.ts";
+import { findDuplicateCandidates, mergePage } from "../../../core/brain/page-dedup.ts";
 import { parse, fail, okJson, resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
@@ -27,9 +24,7 @@ export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
 
   const apply = Boolean(flags["apply"]);
   if (apply && !flags["yes"] && (flags["json"] || !process.stdin.isTTY)) {
-    return fail(
-      "brain page-dedup --apply requires --yes in non-interactive mode",
-    );
+    return fail("brain page-dedup --apply requires --yes in non-interactive mode");
   }
 
   const report = findDuplicateCandidates(vault);
@@ -49,9 +44,7 @@ export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
     process.stdout.write(`pages scanned: ${report.scanned}\n`);
     process.stdout.write(`duplicate clusters: ${report.candidates.length}\n`);
     for (const c of report.candidates) {
-      process.stdout.write(
-        `\ncanonical: ${c.canonical.id}  (topic: ${c.canonical.topic})\n`,
-      );
+      process.stdout.write(`\ncanonical: ${c.canonical.id}  (topic: ${c.canonical.topic})\n`);
       for (const s of c.secondaries) {
         process.stdout.write(`  -> ${s.id}\n`);
       }

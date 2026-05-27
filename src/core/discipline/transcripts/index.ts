@@ -30,9 +30,7 @@ export interface CollectTranscriptOpts {
   readonly runtimes?: ReadonlyArray<TranscriptRuntime>;
 }
 
-export function collectTranscriptActivity(
-  opts: CollectTranscriptOpts,
-): TranscriptActivity {
+export function collectTranscriptActivity(opts: CollectTranscriptOpts): TranscriptActivity {
   const runtimes = opts.runtimes ?? DEFAULT_TRANSCRIPT_RUNTIMES;
   const byRuntime = [];
   let total = 0;

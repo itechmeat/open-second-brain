@@ -6,10 +6,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import {
-  BRAIN_MANUAL_FILE,
-  BRAIN_ROOT_REL,
-} from "../../src/core/brain/paths.ts";
+import { BRAIN_MANUAL_FILE, BRAIN_ROOT_REL } from "../../src/core/brain/paths.ts";
 
 export function createSandboxVault(root: string, name = "Sandbox Brain"): string {
   const vault = join(root, "sandbox-vault");

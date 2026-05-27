@@ -119,18 +119,11 @@ export const piAdapter: InstallAdapter = {
           preview: `symlink ${target} → <plugin>/skills/brain-memory`,
         },
       ],
-      postNotes: [
-        "Pi reads skills from its own skills directory; no MCP registration needed.",
-      ],
+      postNotes: ["Pi reads skills from its own skills directory; no MCP registration needed."],
     };
   },
 
-  apply(
-    _plan: InstallPlan,
-    _payload: McpPayload,
-    env: InstallEnv,
-    opts: ApplyOpts,
-  ): ApplyResult {
+  apply(_plan: InstallPlan, _payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
     const target = resolveTargetPath(env, opts);
     const source = resolveSourcePath(opts);
 

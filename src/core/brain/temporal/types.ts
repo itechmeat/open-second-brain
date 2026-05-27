@@ -10,11 +10,7 @@
  * Design anchor: `docs/brainstorm/temporal-synthesis/design.md`.
  */
 
-import type {
-  BrainApplyResult,
-  BrainLogEventKind,
-  BrainPreferenceStatus,
-} from "../types.ts";
+import type { BrainApplyResult, BrainLogEventKind, BrainPreferenceStatus } from "../types.ts";
 
 /**
  * Vault-relative location an event was sourced from. The reader keeps
@@ -115,10 +111,7 @@ export interface TimelineIndex {
    */
   readonly events: ReadonlyArray<TemporalEvent>;
   /** Events grouped by `kind`. */
-  readonly eventsByKind: ReadonlyMap<
-    BrainLogEventKind,
-    ReadonlyArray<TemporalEvent>
-  >;
+  readonly eventsByKind: ReadonlyMap<BrainLogEventKind, ReadonlyArray<TemporalEvent>>;
   /** Events grouped by `prefId` (only events that carry one). */
   readonly eventsByPrefId: ReadonlyMap<string, ReadonlyArray<TemporalEvent>>;
   /** Events grouped by `topic` (only events that carry one). */

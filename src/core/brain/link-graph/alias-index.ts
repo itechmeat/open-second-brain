@@ -84,7 +84,7 @@ function collect(
   // Sort the directory listing so the first-wins rule is
   // deterministic across filesystems that don't enumerate in
   // stable order.
-  const entries = readdirSync(dir).sort();
+  const entries = readdirSync(dir).toSorted();
   for (const name of entries) {
     if (!name.endsWith(".md")) continue;
     const canonicalId = name.slice(0, -".md".length);

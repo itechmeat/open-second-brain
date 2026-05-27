@@ -71,15 +71,9 @@ export function findStaleEntries(
   const generatedAt = now.toISOString();
   const nowMs = now.getTime();
   return Object.freeze({
-    stalePreferences: Object.freeze(
-      scanPreferences(index, vault, cfg.stale_pref_days, nowMs),
-    ),
-    staleSignals: Object.freeze(
-      scanSignals(vault, cfg.stale_signal_days, nowMs),
-    ),
-    staleLogFiles: Object.freeze(
-      scanLogFiles(vault, cfg.stale_log_days, nowMs),
-    ),
+    stalePreferences: Object.freeze(scanPreferences(index, vault, cfg.stale_pref_days, nowMs)),
+    staleSignals: Object.freeze(scanSignals(vault, cfg.stale_signal_days, nowMs)),
+    staleLogFiles: Object.freeze(scanLogFiles(vault, cfg.stale_log_days, nowMs)),
     thresholds: cfg,
     generatedAt,
   });
@@ -104,8 +98,8 @@ function scanPreferences(
     } catch {
       continue;
     }
-    const lastSeenAt = mostRecentEventAt(index, pref.id) ??
-      pref.last_evidence_at ?? pref.created_at;
+    const lastSeenAt =
+      mostRecentEventAt(index, pref.id) ?? pref.last_evidence_at ?? pref.created_at;
     const ageDays = computeAgeDays(lastSeenAt, nowMs);
     if (ageDays === undefined) continue;
     if (ageDays < thresholdDays) continue;
@@ -123,11 +117,7 @@ function scanPreferences(
   return out;
 }
 
-function scanSignals(
-  vault: string,
-  thresholdDays: number,
-  nowMs: number,
-): StaleSignalRow[] {
+function scanSignals(vault: string, thresholdDays: number, nowMs: number): StaleSignalRow[] {
   const out: StaleSignalRow[] = [];
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.inbox)) return out;
@@ -158,11 +148,7 @@ function scanSignals(
   return out;
 }
 
-function scanLogFiles(
-  vault: string,
-  thresholdDays: number,
-  nowMs: number,
-): StaleLogFileRow[] {
+function scanLogFiles(vault: string, thresholdDays: number, nowMs: number): StaleLogFileRow[] {
   const out: StaleLogFileRow[] = [];
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.log)) return out;
@@ -186,10 +172,7 @@ function scanLogFiles(
   return out;
 }
 
-function mostRecentEventAt(
-  index: TimelineIndex,
-  prefId: string,
-): string | undefined {
+function mostRecentEventAt(index: TimelineIndex, prefId: string): string | undefined {
   const events = index.eventsByPrefId.get(prefId);
   if (events === undefined || events.length === 0) return undefined;
   // events is sorted ascending; last element is most recent.

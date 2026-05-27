@@ -1,8 +1,5 @@
 import { defaultConfigPath } from "../../../core/config.ts";
-import {
-  isBrainLogEventKind,
-  type BrainLogEventKind,
-} from "../../../core/brain/types.ts";
+import { isBrainLogEventKind, type BrainLogEventKind } from "../../../core/brain/types.ts";
 import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts";
 import { selectEvents } from "../../../core/brain/temporal/select-events.ts";
 import { CliError, parse, resolveBrainVault } from "../helpers.ts";
@@ -72,31 +69,22 @@ export async function cmdBrainTimeline(argv: string[]): Promise<number> {
 
   if (flags["json"]) {
     process.stdout.write(
-      JSON.stringify(
-        { window: index.window, total: events.length, events: sliced },
-        null,
-        2,
-      ) + "\n",
+      JSON.stringify({ window: index.window, total: events.length, events: sliced }, null, 2) +
+        "\n",
     );
     return 0;
   }
 
-  process.stdout.write(
-    `Timeline window ${index.window.since} .. ${index.window.until}\n`,
-  );
+  process.stdout.write(`Timeline window ${index.window.since} .. ${index.window.until}\n`);
   process.stdout.write(`${sliced.length} of ${events.length} event(s):\n`);
   for (const ev of sliced) {
     const slug = ev.prefId ?? ev.topic ?? "-";
-    process.stdout.write(
-      `  ${ev.at}  ${ev.kind}  ${slug}${ev.result ? `  [${ev.result}]` : ""}\n`,
-    );
+    process.stdout.write(`  ${ev.at}  ${ev.kind}  ${slug}${ev.result ? `  [${ev.result}]` : ""}\n`);
   }
   return 0;
 }
 
-function trimOrUndefined(
-  v: string | boolean | string[] | undefined,
-): string | undefined {
+function trimOrUndefined(v: string | boolean | string[] | undefined): string | undefined {
   if (typeof v !== "string") return undefined;
   const t = v.trim();
   return t.length > 0 ? t : undefined;

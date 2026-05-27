@@ -140,7 +140,7 @@ describe("evaluatePolicy", () => {
     // approval threshold can be bypassed by simply not stating the cost.
     for (const rule of [
       { max_single_call: 0.05 },
-      { max_total_per_day: 0.10 },
+      { max_total_per_day: 0.1 },
       { require_approval_above: 0.03 },
     ] as const) {
       const d = evaluatePolicy(

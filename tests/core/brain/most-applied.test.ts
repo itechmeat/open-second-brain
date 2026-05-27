@@ -26,10 +26,7 @@ import {
  * placeholders so the value satisfies the interface without dragging
  * unrelated test-shape concerns into this file.
  */
-function buildPref(
-  id: string,
-  overrides: Partial<BrainPreference> = {},
-): BrainPreference {
+function buildPref(id: string, overrides: Partial<BrainPreference> = {}): BrainPreference {
   const base: BrainPreference = {
     kind: "brain-preference",
     id,
@@ -147,11 +144,7 @@ describe("computeMostApplied", () => {
       [buildPref("pref-a"), buildPref("pref-b"), buildPref("pref-c")],
       { now },
     );
-    expect(result.map((r) => r.preference.id)).toEqual([
-      "pref-a",
-      "pref-b",
-      "pref-c",
-    ]);
+    expect(result.map((r) => r.preference.id)).toEqual(["pref-a", "pref-b", "pref-c"]);
     expect(result[0]!.applied_30d).toBe(2);
   });
 
@@ -174,11 +167,7 @@ describe("computeMostApplied", () => {
     // bare id before the count lookup. Same shape `normaliseWikilinkTarget`
     // already strips on the read side.
     const now = new Date("2026-05-20T00:00:00Z");
-    seedApplied(
-      vault,
-      "2026-05-15T10:00:00Z",
-      "[[pref-a|principle title with spaces]]",
-    );
+    seedApplied(vault, "2026-05-15T10:00:00Z", "[[pref-a|principle title with spaces]]");
     const result = computeMostApplied(vault, [buildPref("pref-a")], { now });
     expect(result.length).toBe(1);
     expect(result[0]!.applied_30d).toBe(1);
@@ -225,7 +214,7 @@ describe("computeMostApplied", () => {
 
     test("windowDays: 365 includes events from one year ago", () => {
       const now = new Date("2026-05-20T00:00:00Z");
-      seedApplied(vault, "2025-06-01T00:00:00Z", "[[pref-a]]");  // ~354 days ago
+      seedApplied(vault, "2025-06-01T00:00:00Z", "[[pref-a]]"); // ~354 days ago
       const result = computeMostApplied(vault, [buildPref("pref-a")], { now, windowDays: 365 });
       expect(result.length).toBe(1);
     });
@@ -247,8 +236,8 @@ describe("computeMostApplied", () => {
 
     test("default windowDays still 30 when option omitted", () => {
       const now = new Date("2026-05-20T00:00:00Z");
-      seedApplied(vault, "2026-05-15T00:00:00Z", "[[pref-a]]");  // 5d ago
-      seedApplied(vault, "2026-04-10T00:00:00Z", "[[pref-a]]");  // 40d ago — excluded
+      seedApplied(vault, "2026-05-15T00:00:00Z", "[[pref-a]]"); // 5d ago
+      seedApplied(vault, "2026-04-10T00:00:00Z", "[[pref-a]]"); // 40d ago — excluded
       const result = computeMostApplied(vault, [buildPref("pref-a")], { now });
       expect(result[0]!.applied_30d).toBe(1);
     });

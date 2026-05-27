@@ -27,9 +27,7 @@ export async function cmdCaptureAsset(argv: string[]): Promise<number> {
     try {
       prompt = readFileSync(promptFile, "utf8");
     } catch (exc) {
-      process.stderr.write(
-        `error: cannot read prompt-file: ${(exc as Error).message ?? exc}\n`,
-      );
+      process.stderr.write(`error: cannot read prompt-file: ${(exc as Error).message ?? exc}\n`);
       return 1;
     }
   }
@@ -47,9 +45,7 @@ export async function cmdCaptureAsset(argv: string[]): Promise<number> {
       overwrite: Boolean(flags["overwrite"]),
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to write asset: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to write asset: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
 

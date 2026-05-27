@@ -46,9 +46,7 @@ export interface AppendBrainNoteResult {
  * sidecar via `appendLogEvent`). Throws plain `Error` on empty text
  * — wrappers translate the error to their protocol's idiom.
  */
-export function appendBrainNote(
-  input: AppendBrainNoteInput,
-): AppendBrainNoteResult {
+export function appendBrainNote(input: AppendBrainNoteInput): AppendBrainNoteResult {
   const sanitised = sanitiseTextField(input.text, {
     maxLen: NOTE_TEXT_MAX_LEN,
     singleLine: true,

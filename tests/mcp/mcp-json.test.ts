@@ -11,7 +11,7 @@ const MCP_JSON_PATH = resolve(HERE, "..", "..", ".mcp.json");
 describe(".mcp.json shipped with the plugin", () => {
   const file = JSON.parse(readFileSync(MCP_JSON_PATH, "utf8"));
   test("declares both open-second-brain and -writer entries", () => {
-    expect(Object.keys(file.mcpServers).sort()).toEqual([
+    expect(Object.keys(file.mcpServers).toSorted()).toEqual([
       "open-second-brain",
       "open-second-brain-writer",
     ]);
