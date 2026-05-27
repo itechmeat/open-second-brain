@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-05-27
+
+Project-wide validation and formatting foundation. Open Second Brain gains
+a single, explicit green-path: `oxlint` for linting, `oxfmt` for
+reproducible formatting, and a `bun run validate` entrypoint that chains
+typecheck, lint, and the test suite. Formatting is now enforced across the
+TypeScript / JavaScript / JSON scope and lint errors are blocking, while
+the remaining pre-existing cleanup surface stays visible as non-blocking
+warnings. The same pass folds in the fixes required to keep the suite green
+under the stricter workflow. No runtime behaviour changes.
+
+### Added
+
+- `oxlint.json` and `.oxfmtrc.json` configs, plus `lint`, `lint:fix`,
+  `fmt`, `fmt:check`, `validate`, and `validate:fix` package scripts.
+  `bun run validate` is the main verification command; `bun run
+  validate:fix` is the single autofix path for lint and formatting.
+- `scripts/test` wrapper so `bun test` runs through the shared bun and
+  sqlite prechecks.
+- `tests/cli/coerce.test.ts`, `tests/core/validate.test.ts`, and
+  `tests/helpers/sqlite-vec.ts` covering the consolidated helpers and the
+  runtime-gated sqlite-vec path.
+
+### Changed
+
+- Applied a repository-wide formatting baseline across the TypeScript,
+  JavaScript, and JSON scope to lower diff noise for future changes.
+- Consolidated the shared input validation and coercion helpers used by
+  the CLI and MCP layers into one place.
+
+### Fixed
+
+- Removed the dream snapshot / workrun id collision that could occur when
+  both were generated within the same second.
+- Made the macOS sqlite shim-backed test execution path reliable.
+- Gated the sqlite-vec integration tests on actual runtime extension
+  loadability instead of package presence alone, so they no longer fail in
+  environments where the extension cannot load.
+
 ## [0.14.0] - 2026-05-27
 
 Semantic Brain Health and Self-Maintenance suite: `brain_doctor` grows
@@ -3059,6 +3098,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.14.1]: https://github.com/itechmeat/open-second-brain/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/itechmeat/open-second-brain/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/itechmeat/open-second-brain/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/itechmeat/open-second-brain/compare/v0.11.0...v0.12.0
