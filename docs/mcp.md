@@ -244,7 +244,7 @@ server to your Codex MCP config the same way as Hermes.
 
 The plugin's `.mcp.json` ships **two** MCP-server entries:
 
-- `open-second-brain` - the full surface (31 tools); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
+- `open-second-brain` - the full surface (33 tools, including `brain_health` since v0.14.0); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
 - `open-second-brain-writer` - a minimal always-loaded surface of four tools: `brain_feedback`, `brain_apply_evidence`, `brain_note` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md`, v0.10.10). The agent records taste signals, evidence events, and milestone notes - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).

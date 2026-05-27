@@ -383,7 +383,9 @@ are mirrored in MCP; destructive operations are CLI-only by design.
 | Render summary           | `o2b brain digest [--window Nd]` | `brain_digest`        | read-only; includes `top_applied`, `top_referenced`, and `agent_summary` sections |
 | Inspect state            | `o2b brain query`          | `brain_query`         | read-only              |
 | Computed backlinks       | `o2b brain backlinks <id>` | `brain_backlinks`     | read-only; inverted reference map across `preferences/`, `retired/`, `log/` |
-| Validate invariants      | `o2b brain doctor`         | `brain_doctor`        | read-only; six lint rules |
+| Validate invariants      | `o2b brain doctor`         | `brain_doctor`        | read-only; structural lints + semantic-health findings; `--remediate [--dry-run]` applies auto-safe content-hash re-stamps |
+| Semantic health          | `o2b brain health`         | `brain_health`        | read-only; contradictions, concept gaps, stale claims + clean/watch/investigate verdict |
+| Preference edit-history  | `o2b brain history <slug>` | — (CLI-only)          | read-only; one entry per content mutation (principle / scope / status before -> after) |
 | Full-text search         | `o2b search "<query>"`     | `brain_search`        | read-only; FTS5 + optional semantic |
 | Manage search index      | `o2b search index \| reindex \| status \| check` | — (CLI-only) | builds / inspects `<vault>/.open-second-brain/brain.sqlite`. `search check` ends with a `recommendations:` block on missing pieces (key, sqlite-vec, first reindex) |
 | Cron template for reindex | `o2b search reindex --cron-template [--interval N]` | — (CLI-only) | prints a watchdog script, native crontab line, and `hermes cron create` recipe to stdout (writes nothing) |
@@ -522,8 +524,10 @@ through `src/core/redactor.ts` (promoted from Pay Memory) plus a
   field" error branch, so the writer never persists a placeholder
   signal.
 
-**Doctor lints** (`o2b brain doctor`, `brain_doctor` MCP). All six are
-pure functions over the on-disk Brain state — no LLM, no network:
+**Doctor lints** (`o2b brain doctor`, `brain_doctor` MCP). All are pure
+functions over the on-disk Brain state — no LLM, no network. The first
+group are structural; the last three (v0.14.0) are semantic and also
+populate the `semantic_health` report (see `brain_health` below):
 
 | Code | Triggers when |
 |---|---|
@@ -533,11 +537,17 @@ pure functions over the on-disk Brain state — no LLM, no network:
 | `pinned-without-recent-evidence` | `pinned: true` with no evidence or evidence older than `stale_evidence_days` |
 | `malformed-evidence-range` | `apply-evidence` `artifact` uses `[[file:…]]` range syntax but fails validation (`:abc-def`, `:120-100`, bare `:`) |
 | `orphan-evidence` | `apply-evidence` `artifact` wikilink does not resolve to any file in the vault |
+| `contradictory-preferences` | two confirmed preferences share a subject (principle Jaccard ≥ `health.contradiction_jaccard`) but carry an opposite sign of record |
+| `concept-gap` | an entity recurs across ≥ `health.concept_gap_min_frequency` corpus entries with no covering preference topic |
+| `stale-claim` | a confirmed preference's newest evidence is older than `health.stale_claim_max_age_days` |
 
 With `--strict`, warnings demote `ok` to `false` so CI can gate on
-hygiene. The lints are read-only — `brain_doctor --fix` is explicitly
-out of scope because auto-modifying state runs against the
-"explicit-driven" invariant.
+hygiene. `brain_doctor` itself stays read-only — auto-modifying state on
+a plain doctor run would break the "explicit-driven" invariant. The
+explicit opt-in `o2b brain doctor --remediate [--dry-run]` is the only
+writer: it plans a dependency-ordered repair and applies the auto-safe
+fixes (currently the lossless content-hash re-stamp), bounded by
+`health.remediation_step_cap`.
 
 ```mermaid
 flowchart LR

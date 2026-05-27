@@ -722,6 +722,38 @@ async function toolBrainDoctor(
   };
 }
 
+// ----- brain_health --------------------------------------------------------
+
+async function toolBrainHealth(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const format = coerceFormat(args);
+  const result = runDoctor(ctx.vault);
+  const sh = result.semantic_health;
+  return {
+    format,
+    verdict: sh?.verdict ?? "clean",
+    contradictions: (sh?.contradictions ?? []).map((c) => ({
+      a: c.aId,
+      b: c.bId,
+      ...(c.scope !== null ? { scope: c.scope } : {}),
+      jaccard: c.jaccard,
+      a_sign: c.aSign,
+      b_sign: c.bSign,
+    })),
+    concept_gaps: (sh?.conceptGaps ?? []).map((g) => ({
+      term: g.term,
+      frequency: g.frequency,
+    })),
+    stale_claims: (sh?.staleClaims ?? []).map((s) => ({
+      id: s.id,
+      last_evidence_at: s.lastEvidenceAt,
+      age_days: s.ageDays,
+    })),
+  };
+}
+
 // ----- Serializers ---------------------------------------------------------
 
 function serializeSignal(s: BrainSignal): Record<string, unknown> {
@@ -1639,6 +1671,24 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainDoctor,
+  },
+  {
+    name: "brain_health",
+    description:
+      "Semantic-health report: contradictory confirmed preferences (opposite sign of record, same subject), recurring concepts with no dedicated preference, and confirmed preferences running on stale evidence. Returns the per-domain findings plus a clean/watch/investigate verdict. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description:
+            "Output format hint. Structured result is identical; caller decides rendering.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainHealth,
   },
   {
     name: "brain_backlinks",

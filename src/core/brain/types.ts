@@ -839,6 +839,12 @@ export interface BrainConfig {
    * to these paths - the type is `read_paths` for a reason.
    */
   readonly notes?: BrainNotesConfig;
+  /**
+   * Optional `health:` block (v0.14.0). Tunes the semantic-health
+   * detectors and the remediation step cap. Absent: callers fall back
+   * to `BRAIN_HEALTH_DEFAULTS` via `resolveHealth`.
+   */
+  readonly health?: BrainHealthConfig;
 }
 
 /**
@@ -957,4 +963,32 @@ export interface ResolvedBrainTemporalConfig {
   readonly stale_log_days: number;
   readonly weekly_start_dow: number;
   readonly daily_window_offset_hours: number;
+}
+
+/**
+ * Optional `health:` block (v0.14.0). Tunes the semantic-health
+ * detectors (contradiction / concept-gap / stale-claim) and the
+ * remediation step cap. Absent: callers fall back to
+ * `BRAIN_HEALTH_DEFAULTS` via `resolveHealth`.
+ */
+export interface BrainHealthConfig {
+  /** Minimum principle jaccard for a contradiction pair. Float in (0, 1]. */
+  readonly contradiction_jaccard?: number;
+  /** Minimum document frequency for a concept gap. Positive integer. */
+  readonly concept_gap_min_frequency?: number;
+  /** Age (days) past which a confirmed preference's evidence is stale. Positive integer. */
+  readonly stale_claim_max_age_days?: number;
+  /** Maximum auto-safe steps a single remediation run applies. Positive integer. */
+  readonly remediation_step_cap?: number;
+}
+
+/**
+ * Concrete (fully-resolved) health config. Returned by
+ * `resolveHealth(cfg)` so consumers do not branch on optionals.
+ */
+export interface ResolvedBrainHealthConfig {
+  readonly contradiction_jaccard: number;
+  readonly concept_gap_min_frequency: number;
+  readonly stale_claim_max_age_days: number;
+  readonly remediation_step_cap: number;
 }

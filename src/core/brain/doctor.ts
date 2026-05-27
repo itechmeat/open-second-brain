@@ -48,8 +48,10 @@ import { parseLogDay } from "./log.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
   BRAIN_GUARDRAIL_DEFAULTS,
+  BRAIN_HEALTH_DEFAULTS,
   BrainConfigError,
   loadBrainConfigDetailed,
+  resolveHealth,
 } from "./policy.ts";
 import { computeTrustVerdict } from "./trust/compute-trust-verdict.ts";
 import {
@@ -63,12 +65,18 @@ import {
   parsePreference,
   parseRetired,
 } from "./preference.ts";
+import {
+  reconcileSemanticHealth,
+  type PreferenceForHealth,
+  type SemanticHealthReport,
+} from "./health/reconcile.ts";
 import { parseSignal } from "./signal.ts";
 import { findSimilarPairs, tokenise } from "./similarity.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
   BRAIN_PREFERENCE_STATUS,
   type BrainConfig,
+  type ResolvedBrainHealthConfig,
 } from "./types.ts";
 import { normaliseWikilinkTarget, parseArtifactRef } from "./wikilink.ts";
 
@@ -192,6 +200,13 @@ export interface RunDoctorResult {
    * helper is invoked.
    */
   readonly uncertain?: ReadonlyArray<DoctorUncertainEntry>;
+  /**
+   * Semantic-health report (v0.14.0): contradiction / concept-gap /
+   * stale-claim findings plus an escalating verdict. Absent only when
+   * the vault has no Brain layer; otherwise present even on a clean
+   * run (with empty domains and a `clean` verdict).
+   */
+  readonly semantic_health?: SemanticHealthReport;
 }
 
 // ----- Entry point ----------------------------------------------------------
@@ -306,6 +321,17 @@ export function runDoctor(
     checkOrphanEvidence(vault, logRecords, issues);
   } catch { /* doctor never throws */ }
 
+  // v0.14.0 semantic-health pass. Best-effort like every other lint:
+  // a failure here must not poison the structural warning / error
+  // stream. The report is attached to the result even on a clean run
+  // (empty domains, `clean` verdict); it stays `undefined` only when
+  // the pass threw.
+  let semanticReport: SemanticHealthReport | undefined;
+  try {
+    const health = cfg ? resolveHealth(cfg) : BRAIN_HEALTH_DEFAULTS;
+    semanticReport = checkSemanticHealth(vault, prefRecords, issues, health, now);
+  } catch { /* doctor never throws */ }
+
   // Partition by severity. Stable sort preserves discovery order which
   // is convenient for tests asserting on `path`+`code`.
   const warnings = issues.filter((i) => i.severity === "warning");
@@ -349,7 +375,105 @@ export function runDoctor(
       ? { verification_delta_summary: verificationCounts }
       : {}),
     instruction_file_warnings: instructionWarnings,
+    ...(semanticReport !== undefined ? { semantic_health: semanticReport } : {}),
   });
+}
+
+// ----- Semantic health (v0.14.0) --------------------------------------------
+
+/** Minimal signal projection the semantic-health pass needs. */
+interface SignalSignRecord {
+  readonly id: string;
+  readonly sign: import("./types.ts").BrainSignalSign;
+  readonly principle: string;
+}
+
+/**
+ * Read every `sig-*.md` across `inbox/` and `processed/`, projecting
+ * each to its id, sign, and principle. Files that fail to parse are
+ * skipped (their schema errors surface through {@link checkSignals}).
+ */
+function readAllSignalRecords(vault: string): ReadonlyArray<SignalSignRecord> {
+  const dirs = brainDirs(vault);
+  const out: SignalSignRecord[] = [];
+  for (const dir of [dirs.inbox, dirs.processed]) {
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".md") || !name.startsWith("sig-")) continue;
+      try {
+        const sig = parseSignal(join(dir, name));
+        out.push({ id: sig.id, sign: sig.signal, principle: sig.principle });
+      } catch {
+        // schema error - reported by checkSignals
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Run the semantic-health detectors, merge their findings into the
+ * shared `issues` array as warnings, and return the structured report.
+ * Confirmed preferences feed the contradiction and stale-claim passes;
+ * signal + preference principles feed the concept-gap pass.
+ */
+function checkSemanticHealth(
+  vault: string,
+  prefRecords: ReadonlyArray<PreferenceRecord>,
+  issues: DoctorIssue[],
+  health: ResolvedBrainHealthConfig,
+  now: Date,
+): SemanticHealthReport {
+  const signals = readAllSignalRecords(vault);
+  const signSignById = new Map(signals.map((s) => [s.id, s.sign]));
+  const preferences: PreferenceForHealth[] = prefRecords.map(({ pref }) => pref);
+  const corpusPrinciples = [
+    ...signals.map((s) => s.principle),
+    ...prefRecords.map((r) => r.pref.principle),
+  ];
+  const coveredTopics = prefRecords.map((r) => r.pref.topic);
+
+  const report = reconcileSemanticHealth(
+    { preferences, signSignById, corpusPrinciples, coveredTopics },
+    {
+      contradictionJaccard: health.contradiction_jaccard,
+      conceptGapMinFrequency: health.concept_gap_min_frequency,
+      staleClaimMaxAgeDays: health.stale_claim_max_age_days,
+      now,
+    },
+  );
+
+  for (const c of report.contradictions) {
+    issues.push({
+      severity: "warning",
+      code: "contradictory-preferences",
+      message:
+        `[[${c.aId}]] (${c.aSign}) and [[${c.bId}]] (${c.bSign})` +
+        `${c.scope ? ` in scope '${c.scope}'` : ""}` +
+        ` look like contradictions (jaccard ${c.jaccard.toFixed(2)} of principle tokens,` +
+        " opposite sign of record). Reconcile or retire one.",
+    });
+  }
+  for (const g of report.conceptGaps) {
+    issues.push({
+      severity: "warning",
+      code: "concept-gap",
+      message:
+        `term '${g.term}' recurs across ${g.frequency} entries but no preference topic covers it.` +
+        " Consider capturing a dedicated preference.",
+    });
+  }
+  for (const s of report.staleClaims) {
+    issues.push({
+      severity: "warning",
+      code: "stale-claim",
+      message:
+        `[[${s.id}]] last saw evidence ${s.ageDays} days ago (${s.lastEvidenceAt}).` +
+        " Re-confirm or retire it.",
+    });
+  }
+
+  return report;
 }
 
 // ----- Config check ---------------------------------------------------------

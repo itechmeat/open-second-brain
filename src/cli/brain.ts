@@ -24,6 +24,8 @@ import {
   cmdBrainUnprotect,
   cmdBrainRollback,
   cmdBrainDoctor,
+  cmdBrainHealth,
+  cmdBrainHistory,
   cmdBrainBacklinks,
   cmdBrainMerge,
   cmdBrainExplorer,
@@ -82,6 +84,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
       case "snapshot": return await handleBrainSnapshotSubcommand(rest);
       case "rollback": return await cmdBrainRollback(rest);
       case "doctor": return await cmdBrainDoctor(rest);
+      case "health": return await cmdBrainHealth(rest);
+      case "history": return await cmdBrainHistory(rest);
       case "backlinks": return await cmdBrainBacklinks(rest);
       case "scan-inline": return await cmdBrainScanInline(rest);
       case "import-session": return await cmdBrainImportSession(rest);
