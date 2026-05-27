@@ -48,8 +48,10 @@ import { parseLogDay } from "./log.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
   BRAIN_GUARDRAIL_DEFAULTS,
+  BRAIN_HEALTH_DEFAULTS,
   BrainConfigError,
   loadBrainConfigDetailed,
+  resolveHealth,
 } from "./policy.ts";
 import { computeTrustVerdict } from "./trust/compute-trust-verdict.ts";
 import {
@@ -74,6 +76,7 @@ import {
   BRAIN_LOG_EVENT_KIND,
   BRAIN_PREFERENCE_STATUS,
   type BrainConfig,
+  type ResolvedBrainHealthConfig,
 } from "./types.ts";
 import { normaliseWikilinkTarget, parseArtifactRef } from "./wikilink.ts";
 
@@ -325,7 +328,8 @@ export function runDoctor(
   // the pass threw.
   let semanticReport: SemanticHealthReport | undefined;
   try {
-    semanticReport = checkSemanticHealth(vault, prefRecords, issues, now);
+    const health = cfg ? resolveHealth(cfg) : BRAIN_HEALTH_DEFAULTS;
+    semanticReport = checkSemanticHealth(vault, prefRecords, issues, health, now);
   } catch { /* doctor never throws */ }
 
   // Partition by severity. Stable sort preserves discovery order which
@@ -377,17 +381,6 @@ export function runDoctor(
 
 // ----- Semantic health (v0.14.0) --------------------------------------------
 
-/**
- * Default semantic-health thresholds. Tunable via the `health` config
- * section (wired in a later task); these are the conservative defaults
- * used when the section is absent.
- */
-const SEMANTIC_HEALTH_DEFAULTS = Object.freeze({
-  contradictionJaccard: 0.5,
-  conceptGapMinFrequency: 3,
-  staleClaimMaxAgeDays: 180,
-});
-
 /** Minimal signal projection the semantic-health pass needs. */
 interface SignalSignRecord {
   readonly id: string;
@@ -428,6 +421,7 @@ function checkSemanticHealth(
   vault: string,
   prefRecords: ReadonlyArray<PreferenceRecord>,
   issues: DoctorIssue[],
+  health: ResolvedBrainHealthConfig,
   now: Date,
 ): SemanticHealthReport {
   const signals = readAllSignalRecords(vault);
@@ -442,9 +436,9 @@ function checkSemanticHealth(
   const report = reconcileSemanticHealth(
     { preferences, signSignById, corpusPrinciples, coveredTopics },
     {
-      contradictionJaccard: SEMANTIC_HEALTH_DEFAULTS.contradictionJaccard,
-      conceptGapMinFrequency: SEMANTIC_HEALTH_DEFAULTS.conceptGapMinFrequency,
-      staleClaimMaxAgeDays: SEMANTIC_HEALTH_DEFAULTS.staleClaimMaxAgeDays,
+      contradictionJaccard: health.contradiction_jaccard,
+      conceptGapMinFrequency: health.concept_gap_min_frequency,
+      staleClaimMaxAgeDays: health.stale_claim_max_age_days,
       now,
     },
   );
