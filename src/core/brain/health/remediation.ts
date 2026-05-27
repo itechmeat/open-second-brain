@@ -161,7 +161,17 @@ export function planRemediation(
 
 /**
  * Re-stamp a preference's `_content_hash` to match its authoritative
- * (principle, scope). Lossless: only the one frontmatter field changes.
+ * (principle, scope). The file is round-tripped through
+ * `parseFrontmatter` -> `writeFrontmatterAtomic`, preserving field
+ * order and body verbatim; only the `_content_hash` value is rewritten.
+ * In-scope files are confirmed preferences that previously carried a
+ * txn-written (canonical) hash, so re-serialisation is a no-op for
+ * every other field. The write goes through the same `.lock` file the
+ * txn uses, so it is serialised against concurrent preference writes.
+ * It deliberately bypasses the txn (and so does not bump `_revision`
+ * or record edit-history): a hash re-stamp is bookkeeping, not a
+ * content change.
+ *
  * Returns true when a write happened, false when the file is gone, the
  * hash was already correct, or the lock could not be acquired.
  */
