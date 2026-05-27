@@ -24,7 +24,19 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   catch (exc) { return fail(`doctor failed: ${(exc as Error).message ?? exc}`); }
 
   if (flags["remediate"]) {
-    return runRemediate(vault, Boolean(flags["dry-run"]), Boolean(flags["json"]), result);
+    // Never auto-repair a vault that has structural errors - those need
+    // an operator, and remediation assumes a parseable tree.
+    if (result.errors.length > 0) {
+      for (const e of result.errors) {
+        process.stdout.write(`[ERROR] ${e.code}: ${e.message}${e.path ? ` (${e.path})` : ""}\n`);
+      }
+      return fail("doctor found errors; remediation aborted");
+    }
+    try {
+      return runRemediate(vault, Boolean(flags["dry-run"]), Boolean(flags["json"]), result);
+    } catch (exc) {
+      return fail(`remediation failed: ${(exc as Error).message ?? exc}`);
+    }
   }
 
   if (flags["json"]) {

@@ -22,6 +22,16 @@ export async function cmdBrainHealth(argv: string[]): Promise<number> {
     return fail(`health failed: ${(exc as Error).message ?? exc}`);
   }
 
+  // Structural errors mean the tree is not trustworthy enough to report
+  // a semantic verdict on - surface them and fail rather than print a
+  // misleading "clean".
+  if (result.errors.length > 0) {
+    for (const e of result.errors) {
+      process.stdout.write(`[ERROR] ${e.code}: ${e.message}${e.path ? ` (${e.path})` : ""}\n`);
+    }
+    return 1;
+  }
+
   const sh = result.semantic_health ?? {
     verdict: "clean" as const,
     contradictions: [],

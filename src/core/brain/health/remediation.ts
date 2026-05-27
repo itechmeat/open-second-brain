@@ -26,6 +26,7 @@ import { computeContentHash, verifyContentHash } from "../content-hash.ts";
 import { brainDirs, preferencePath } from "../paths.ts";
 import { parsePreference } from "../preference.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
+import { BRAIN_PREFERENCE_STATUS } from "../types.ts";
 
 export type RemediationClass = "auto-safe" | "needs-review";
 
@@ -95,6 +96,11 @@ export function collectDriftedSlugs(vault: string): string[] {
     if (!name.endsWith(".md") || !name.startsWith("pref-")) continue;
     try {
       const pref = parsePreference(join(dir, name));
+      // Only confirmed preferences carry a txn-stamped hash; a legacy
+      // or unconfirmed pref without one is not a drift target (and
+      // verifyContentHash is neutral on absent hashes anyway).
+      if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
+      if (!pref.content_hash) continue;
       const check = verifyContentHash({
         principle: pref.principle,
         scope: pref.scope,
@@ -186,6 +192,11 @@ function restampContentHash(vault: string, slug: string): boolean {
   }
   try {
     const pref = parsePreference(path);
+    // Defence in depth: only re-stamp confirmed preferences that
+    // already carry a hash, so a direct call cannot stamp a hash onto a
+    // legacy/unconfirmed record outside the drift path.
+    if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) return false;
+    if (!pref.content_hash) return false;
     const correct = computeContentHash(pref.principle, pref.scope);
     if (pref.content_hash === correct) return false;
     const [meta, body] = parseFrontmatter(path);
