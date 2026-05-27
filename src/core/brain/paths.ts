@@ -159,6 +159,19 @@ export function preferencePath(vault: string, slug: string): string {
   );
 }
 
+/**
+ * Per-preference edit-history sidecar: `Brain/preferences/pref-<slug>.history.jsonl`.
+ * Lives next to the preference file; never enters the search index
+ * because the walker only yields `.md` files.
+ */
+export function preferenceHistoryPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(
+    join(brainDirs(vault).preferences, `pref-${s}.history.jsonl`),
+    vault,
+  );
+}
+
 /** Retired-preference path: `Brain/retired/ret-<slug>.md`. */
 export function retiredPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
