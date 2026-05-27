@@ -11,7 +11,7 @@
 ## Scope
 
 - **F1 - Cross-preference contradiction detection.** Surface pairs of confirmed preferences about the same subject that carry an opposite sign of record (positive vs negative). Language-agnostic: pairing uses token overlap (`similarity.ts`); polarity uses the sign derived from each preference's `evidenced_by` signals - never a negation word list.
-- **F2 - Concept-gap detection.** Terms that recur across the signal + preference corpus at or above a configured frequency yet have no dedicated preference topic. Reuses `tokenise`; multi-codepoint terms only.
+- **F2 - Concept-gap detection.** Entities that recur across the signal + preference corpus at or above a configured frequency yet have no dedicated preference topic. Reuses the v0.13.0 language-agnostic entity extractor so lowercase function words ("the", "use") never surface without needing a stopword list.
 - **F3 - Stale-claim flagging.** Confirmed preferences whose newest supporting evidence (`last_evidence_at`) is older than a configured age window relative to the injected clock.
 - **F4 - Per-preference edit-history audit trail.** Append-only `Brain/preferences/<slug>.history.jsonl` sidecar capturing one entry per content mutation `{ts, agent, revision, field, before, after}`. Written from the `writePreferenceTxn` chokepoint; rendered as a timeline on demand. Excluded from the search index.
 - **F5 - Dependency-ordered remediation with dry-run.** A standalone planner turns doctor findings into an ordered repair plan, classifies each step `auto-safe` (deterministic) vs `needs-review`, applies only auto-safe steps outside dry-run through `writePreferenceTxn`, and refuses past a bounded step cap. No background worker, no paid LLM call.

@@ -114,7 +114,7 @@ describe("reconcileSemanticHealth", () => {
       {
         preferences: [],
         signSignById: signs,
-        corpusPrinciples: ["kanban slow", "kanban stuck", "kanban grooming"],
+        corpusPrinciples: ["Kanban slow", "Kanban stuck", "Kanban grooming"],
         coveredTopics: [],
       },
       config,
