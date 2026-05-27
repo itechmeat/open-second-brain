@@ -61,60 +61,106 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
 
   if (rest.length === 1 && (rest[0] === "-h" || rest[0] === "--help")) {
     const text = VERB_HELP[verb];
-    if (text) { process.stdout.write(text); return 0; }
+    if (text) {
+      process.stdout.write(text);
+      return 0;
+    }
     process.stdout.write(BRAIN_HELP);
     return 2;
   }
 
   try {
     switch (verb) {
-      case "init": return await cmdBrainInit(rest);
-      case "feedback": return await cmdBrainFeedback(rest);
-      case "note": return await cmdBrainNote(rest);
-      case "dream": return await cmdBrainDream(rest);
-      case "apply-evidence": return await cmdBrainApplyEvidence(rest);
-      case "digest": return await cmdBrainDigest(rest);
-      case "query": return await cmdBrainQuery(rest);
-      case "reject": return await cmdBrainReject(rest);
-      case "pin": return await cmdBrainPin(rest);
-      case "unpin": return await cmdBrainUnpin(rest);
-      case "set-primary": return await cmdBrainSetPrimary(rest);
-      case "protect": return await cmdBrainProtect(rest);
-      case "unprotect": return await cmdBrainUnprotect(rest);
-      case "snapshot": return await handleBrainSnapshotSubcommand(rest);
-      case "rollback": return await cmdBrainRollback(rest);
-      case "doctor": return await cmdBrainDoctor(rest);
-      case "health": return await cmdBrainHealth(rest);
-      case "history": return await cmdBrainHistory(rest);
-      case "backlinks": return await cmdBrainBacklinks(rest);
-      case "scan-inline": return await cmdBrainScanInline(rest);
-      case "import-session": return await cmdBrainImportSession(rest);
-      case "import-claude-memory": return await cmdBrainImportClaudeMemory(rest);
-      case "merge": return await cmdBrainMerge(rest);
-      case "upgrade": return await cmdBrainUpgrade(rest);
-      case "export": return await cmdBrainExport(rest);
-      case "explorer": return await cmdBrainExplorer(rest);
-      case "page-dedup": return await cmdBrainPageDedup(rest);
-      case "token-footprint": return await cmdBrainTokenFootprint(rest);
-      case "context-pack": return await cmdBrainContextPack(rest);
-      case "lint": return await cmdBrainLint(rest);
-      case "actions": return await cmdBrainActions(rest);
-      case "summary": return await cmdBrainSummary(rest);
-      case "unlinked": return await cmdBrainUnlinked(rest);
-      case "synthesise": return await cmdBrainSynthesise(rest);
-      case "moc-audit": return await cmdBrainMocAudit(rest);
-      case "timeline": return await cmdBrainTimeline(rest);
-      case "evolution": return await cmdBrainEvolution(rest);
-      case "stale": return await cmdBrainStale(rest);
-      case "daily": return await cmdBrainDaily(rest);
-      case "weekly": return await cmdBrainWeekly(rest);
+      case "init":
+        return await cmdBrainInit(rest);
+      case "feedback":
+        return await cmdBrainFeedback(rest);
+      case "note":
+        return await cmdBrainNote(rest);
+      case "dream":
+        return await cmdBrainDream(rest);
+      case "apply-evidence":
+        return await cmdBrainApplyEvidence(rest);
+      case "digest":
+        return await cmdBrainDigest(rest);
+      case "query":
+        return await cmdBrainQuery(rest);
+      case "reject":
+        return await cmdBrainReject(rest);
+      case "pin":
+        return await cmdBrainPin(rest);
+      case "unpin":
+        return await cmdBrainUnpin(rest);
+      case "set-primary":
+        return await cmdBrainSetPrimary(rest);
+      case "protect":
+        return await cmdBrainProtect(rest);
+      case "unprotect":
+        return await cmdBrainUnprotect(rest);
+      case "snapshot":
+        return await handleBrainSnapshotSubcommand(rest);
+      case "rollback":
+        return await cmdBrainRollback(rest);
+      case "doctor":
+        return await cmdBrainDoctor(rest);
+      case "health":
+        return await cmdBrainHealth(rest);
+      case "history":
+        return await cmdBrainHistory(rest);
+      case "backlinks":
+        return await cmdBrainBacklinks(rest);
+      case "scan-inline":
+        return await cmdBrainScanInline(rest);
+      case "import-session":
+        return await cmdBrainImportSession(rest);
+      case "import-claude-memory":
+        return await cmdBrainImportClaudeMemory(rest);
+      case "merge":
+        return await cmdBrainMerge(rest);
+      case "upgrade":
+        return await cmdBrainUpgrade(rest);
+      case "export":
+        return await cmdBrainExport(rest);
+      case "explorer":
+        return await cmdBrainExplorer(rest);
+      case "page-dedup":
+        return await cmdBrainPageDedup(rest);
+      case "token-footprint":
+        return await cmdBrainTokenFootprint(rest);
+      case "context-pack":
+        return await cmdBrainContextPack(rest);
+      case "lint":
+        return await cmdBrainLint(rest);
+      case "actions":
+        return await cmdBrainActions(rest);
+      case "summary":
+        return await cmdBrainSummary(rest);
+      case "unlinked":
+        return await cmdBrainUnlinked(rest);
+      case "synthesise":
+        return await cmdBrainSynthesise(rest);
+      case "moc-audit":
+        return await cmdBrainMocAudit(rest);
+      case "timeline":
+        return await cmdBrainTimeline(rest);
+      case "evolution":
+        return await cmdBrainEvolution(rest);
+      case "stale":
+        return await cmdBrainStale(rest);
+      case "daily":
+        return await cmdBrainDaily(rest);
+      case "weekly":
+        return await cmdBrainWeekly(rest);
       default:
         process.stderr.write(`error: unknown brain verb: ${verb}\n`);
         process.stdout.write(BRAIN_HELP);
         return 2;
     }
   } catch (exc) {
-    if (exc instanceof CliError) { process.stderr.write(`error: ${exc.message}\n`); return 1; }
+    if (exc instanceof CliError) {
+      process.stderr.write(`error: ${exc.message}\n`);
+      return 1;
+    }
     throw exc;
   }
 }

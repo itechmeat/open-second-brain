@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { walkVault } from "../../../src/core/search/walker.ts";
-import { createTempVault, writeMd, writeSymlink, makeConfig } from "../../helpers/search-fixtures.ts";
+import {
+  createTempVault,
+  writeMd,
+  writeSymlink,
+  makeConfig,
+} from "../../helpers/search-fixtures.ts";
 
 let vault: string;
 let cleanup: () => void;
@@ -22,7 +27,7 @@ afterEach(() => {
 function collect(cfg: ReturnType<typeof makeConfig>): string[] {
   const out: string[] = [];
   for (const f of walkVault(cfg)) out.push(f.relPath);
-  return out.sort();
+  return out.toSorted();
 }
 
 test("returns *.md files relative to vault, POSIX paths", () => {

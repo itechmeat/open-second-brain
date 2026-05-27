@@ -78,9 +78,7 @@ describe("renderCronTemplate", () => {
 
   test("grep fallback emits when added, updated, or deleted are non-zero", () => {
     const body = renderCronTemplate("30m");
-    expect(body).toContain(
-      '"(added|updated|deleted)"[[:space:]]*:[[:space:]]*[1-9]',
-    );
+    expect(body).toContain('"(added|updated|deleted)"[[:space:]]*:[[:space:]]*[1-9]');
     expect(body).not.toContain('"added": [^0]');
   });
 
@@ -120,25 +118,20 @@ describe("o2b search reindex --cron-template (CLI)", () => {
   test("default 30m prints the template and writes nothing under tmp", async () => {
     await bootstrap();
     const before = readdirSync(tmp);
-    const r = await runCli(
-      ["search", "reindex", "--cron-template", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["search", "reindex", "--cron-template", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("*/30 * * * *");
     expect(r.stdout).toContain("osb-reindex.sh");
     // No new entries in tmp from the CLI itself.
-    expect(readdirSync(tmp).sort()).toEqual(before.sort());
+    expect(readdirSync(tmp).toSorted()).toEqual(before.toSorted());
   });
 
   test("--interval 6h renders the 0 */6 cron expression", async () => {
     await bootstrap();
     const r = await runCli(
-      [
-        "search", "reindex", "--cron-template",
-        "--interval", "6h",
-        "--vault", vault,
-      ],
+      ["search", "reindex", "--cron-template", "--interval", "6h", "--vault", vault],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
@@ -148,11 +141,7 @@ describe("o2b search reindex --cron-template (CLI)", () => {
   test("--interval garbage exits 1 with the parser error", async () => {
     await bootstrap();
     const r = await runCli(
-      [
-        "search", "reindex", "--cron-template",
-        "--interval", "garbage",
-        "--vault", vault,
-      ],
+      ["search", "reindex", "--cron-template", "--interval", "garbage", "--vault", vault],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(1);

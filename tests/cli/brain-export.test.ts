@@ -58,20 +58,18 @@ async function seedPreference(slug: string): Promise<void> {
 describe("brain export", () => {
   test("missing --format → exit 2", async () => {
     await bootstrap();
-    const r = await runCli(
-      ["brain", "export", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "export", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(2);
     expect(r.stderr).toContain("--format");
   });
 
   test("--format json on empty vault → schema envelope, empty list", async () => {
     await bootstrap();
-    const r = await runCli(
-      ["brain", "export", "--vault", vault, "--format", "json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "export", "--vault", vault, "--format", "json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout) as {
       schema: number;
@@ -88,33 +86,26 @@ describe("brain export", () => {
     await bootstrap();
     await seedPreference("alpha");
     await seedPreference("beta");
-    const r = await runCli(
-      ["brain", "export", "--vault", vault, "--format", "json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "export", "--vault", vault, "--format", "json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout) as {
       preferences: Array<{ id: string; topic: string; principle: string }>;
     };
-    expect(payload.preferences.map((p) => p.id).sort()).toEqual([
-      "pref-alpha",
-      "pref-beta",
-    ]);
+    expect(payload.preferences.map((p) => p.id).toSorted()).toEqual(["pref-alpha", "pref-beta"]);
   });
 
   test("--format llms-txt emits H1 + section + bullet", async () => {
     await bootstrap();
     await seedPreference("alpha");
-    const r = await runCli(
-      ["brain", "export", "--vault", vault, "--format", "llms-txt"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "export", "--vault", vault, "--format", "llms-txt"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toMatch(/^# .*Brain preferences/);
     expect(r.stdout).toContain("## Confirmed");
-    expect(r.stdout).toContain(
-      "- pref-alpha (topic: alpha, scope: writing): principle alpha",
-    );
+    expect(r.stdout).toContain("- pref-alpha (topic: alpha, scope: writing): principle alpha");
   });
 
   test("--out writes a file (and refuses to overwrite without --force)", async () => {
@@ -122,16 +113,7 @@ describe("brain export", () => {
     await seedPreference("alpha");
     const out = join(tmp, "out.json");
     const r1 = await runCli(
-      [
-        "brain",
-        "export",
-        "--vault",
-        vault,
-        "--format",
-        "json",
-        "--out",
-        out,
-      ],
+      ["brain", "export", "--vault", vault, "--format", "json", "--out", out],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r1.returncode).toBe(0);
@@ -143,16 +125,7 @@ describe("brain export", () => {
 
     // Second call without --force should refuse.
     const r2 = await runCli(
-      [
-        "brain",
-        "export",
-        "--vault",
-        vault,
-        "--format",
-        "json",
-        "--out",
-        out,
-      ],
+      ["brain", "export", "--vault", vault, "--format", "json", "--out", out],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r2.returncode).toBe(1);
@@ -161,17 +134,7 @@ describe("brain export", () => {
     // With --force the overwrite goes through.
     writeFileSync(out, "stale");
     const r3 = await runCli(
-      [
-        "brain",
-        "export",
-        "--vault",
-        vault,
-        "--format",
-        "json",
-        "--out",
-        out,
-        "--force",
-      ],
+      ["brain", "export", "--vault", vault, "--format", "json", "--out", out, "--force"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r3.returncode).toBe(0);

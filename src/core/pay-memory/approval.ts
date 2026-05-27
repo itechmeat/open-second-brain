@@ -30,13 +30,7 @@ import { join } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
-import {
-  formatCode,
-  frontmatterStr,
-  nowIsoZ,
-  NOT_PROVIDED,
-  putIfPresent,
-} from "./_md.ts";
+import { formatCode, frontmatterStr, nowIsoZ, NOT_PROVIDED, putIfPresent } from "./_md.ts";
 import {
   ensureInsideVault,
   isoDateNow,
@@ -405,8 +399,7 @@ async function transitionRequest(
       policyDecision: {
         status: parseDecisionStatus(frontmatterStr(loaded.metadata["policy_status"])),
         allowed: frontmatterStr(loaded.metadata["policy_status"]) === "allowed",
-        approvalRequired:
-          frontmatterStr(loaded.metadata["policy_status"]) === "approval_required",
+        approvalRequired: frontmatterStr(loaded.metadata["policy_status"]) === "approval_required",
         reasons: [],
         rule: frontmatterStr(loaded.metadata["policy_rule"]) || null,
         hasPolicy: Boolean(frontmatterStr(loaded.metadata["policy_status"])),
@@ -419,11 +412,7 @@ async function transitionRequest(
   }
 }
 
-function defaultRequestSlug(
-  input: PendingRequestInput,
-  date: string,
-  time: string,
-): string {
+function defaultRequestSlug(input: PendingRequestInput, date: string, time: string): string {
   const tail = input.service.split("/").pop() ?? input.service;
   return slugify(`req-${date}-${time.replace(":", "")}-${tail}-${input.reason}`);
 }
@@ -463,12 +452,7 @@ function renderRequestBody(input: PendingRequestInput, decision: PolicyDecision)
   } else {
     lines.push(NOT_PROVIDED);
   }
-  lines.push(
-    "",
-    "## Policy check",
-    "",
-    `Status: \`${decision.status}\``,
-  );
+  lines.push("", "## Policy check", "", `Status: \`${decision.status}\``);
   if (decision.rule) lines.push(`Rule fired: \`${decision.rule}\``);
   if (decision.reasons.length > 0) {
     lines.push("", "Reasons:", "");
@@ -492,12 +476,7 @@ function renderRequestBody(input: PendingRequestInput, decision: PolicyDecision)
 }
 
 function parseStatus(raw: string): RequestStatus {
-  if (
-    raw === "pending" ||
-    raw === "approved" ||
-    raw === "rejected" ||
-    raw === "consumed"
-  ) {
+  if (raw === "pending" || raw === "approved" || raw === "rejected" || raw === "consumed") {
     return raw;
   }
   // Reject malformed / hand-edited status values rather than silently

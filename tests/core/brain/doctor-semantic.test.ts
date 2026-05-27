@@ -91,12 +91,9 @@ describe("runDoctor semantic health", () => {
 
   test("a coherent vault produces no semantic warnings and a clean verdict", () => {
     const pos = sig("tdd-pos", BRAIN_SIGNAL_SIGN.positive, "write tests early");
-    confirmedPref(
-      "tdd-rule",
-      "testing-discipline",
-      "write unit tests before merging code",
-      [`[[${pos}]]`],
-    );
+    confirmedPref("tdd-rule", "testing-discipline", "write unit tests before merging code", [
+      `[[${pos}]]`,
+    ]);
 
     const result = runDoctor(vault, { now: NOW });
     const semanticCodes = result.warnings

@@ -24,17 +24,17 @@ describe("estimateTokens", () => {
     // No script is special-cased: the formula must hold for every
     // input, regardless of which scripts it mixes.
     const samples = [
-      "Hello",                                // Latin ASCII
-      "café au lait",                         // Latin extended (NFC)
-      "Тест",                                 // Cyrillic
-      "テスト",                               // Hiragana / Katakana
-      "안녕하세요",                            // Hangul
-      "مرحبا",                                // Arabic
-      "สวัสดี",                                // Thai (with combining marks)
-      "नमस्ते",                                 // Devanagari (Hindi)
-      "ｱｲｳ",                                 // Halfwidth katakana
-      "🦊🚀",                                 // Emoji
-      "Hello テスト مرحبا 🦊",                  // Mixed
+      "Hello", // Latin ASCII
+      "café au lait", // Latin extended (NFC)
+      "Тест", // Cyrillic
+      "テスト", // Hiragana / Katakana
+      "안녕하세요", // Hangul
+      "مرحبا", // Arabic
+      "สวัสดี", // Thai (with combining marks)
+      "नमस्ते", // Devanagari (Hindi)
+      "ｱｲｳ", // Halfwidth katakana
+      "🦊🚀", // Emoji
+      "Hello テスト مرحبا 🦊", // Mixed
     ];
     for (const s of samples) {
       expect(estimateTokens(s)).toBe(Math.ceil(utf8Len(s) / 4));

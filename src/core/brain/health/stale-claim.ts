@@ -10,10 +10,7 @@
  * lint's concern), and a future-dated evidence is never stale.
  */
 
-import {
-  BRAIN_PREFERENCE_STATUS,
-  type BrainPreferenceStatus,
-} from "../types.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainPreferenceStatus } from "../types.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

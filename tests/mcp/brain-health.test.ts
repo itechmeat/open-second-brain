@@ -52,12 +52,20 @@ async function initialize(server: MCPServer): Promise<void> {
     jsonrpc: JSONRPC_VERSION,
     id: 1,
     method: "initialize",
-    params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "health-test", version: "0" } },
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "health-test", version: "0" },
+    },
   });
   await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
 }
 
-async function callTool(server: MCPServer, name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function callTool(
+  server: MCPServer,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
   const r = (await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 9,
@@ -80,23 +88,41 @@ describe("brain_health MCP tool", () => {
 
   test("contradictory preferences surface with an investigate verdict", async () => {
     const pos = writeSignal(vault, {
-      topic: "indentation", signal: BRAIN_SIGNAL_SIGN.positive, agent: "t",
-      principle: "use tabs", created_at: "2026-05-01T00:00:00Z", date: "2026-05-01", slug: "tabs-pos",
+      topic: "indentation",
+      signal: BRAIN_SIGNAL_SIGN.positive,
+      agent: "t",
+      principle: "use tabs",
+      created_at: "2026-05-01T00:00:00Z",
+      date: "2026-05-01",
+      slug: "tabs-pos",
     }).id;
     const neg = writeSignal(vault, {
-      topic: "indentation", signal: BRAIN_SIGNAL_SIGN.negative, agent: "t",
-      principle: "use spaces", created_at: "2026-05-01T00:00:00Z", date: "2026-05-01", slug: "tabs-neg",
+      topic: "indentation",
+      signal: BRAIN_SIGNAL_SIGN.negative,
+      agent: "t",
+      principle: "use spaces",
+      created_at: "2026-05-01T00:00:00Z",
+      date: "2026-05-01",
+      slug: "tabs-neg",
     }).id;
     for (const [slug, principle, ev] of [
       ["tabs-rule", "always indent source with tabs not spaces", pos],
       ["spaces-rule", "never indent source with tabs always spaces", neg],
     ] as const) {
-      writePreference(vault, {
-        slug, topic: slug, principle,
-        created_at: "2026-05-01T00:00:00Z", unconfirmed_until: "2026-05-08T00:00:00Z",
-        confirmed_at: "2026-05-08T00:00:00Z", status: BRAIN_PREFERENCE_STATUS.confirmed,
-        evidenced_by: [`[[${ev}]]`],
-      }, { overwrite: true });
+      writePreference(
+        vault,
+        {
+          slug,
+          topic: slug,
+          principle,
+          created_at: "2026-05-01T00:00:00Z",
+          unconfirmed_until: "2026-05-08T00:00:00Z",
+          confirmed_at: "2026-05-08T00:00:00Z",
+          status: BRAIN_PREFERENCE_STATUS.confirmed,
+          evidenced_by: [`[[${ev}]]`],
+        },
+        { overwrite: true },
+      );
     }
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

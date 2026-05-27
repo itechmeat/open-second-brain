@@ -62,9 +62,7 @@ describe("dominantSignOf", () => {
   });
 
   test("ignores wikilinks that do not resolve in the map", () => {
-    expect(dominantSignOf(["[[sig-c]]", "[[sig-missing]]"], byId)).toBe(
-      BRAIN_SIGNAL_SIGN.negative,
-    );
+    expect(dominantSignOf(["[[sig-c]]", "[[sig-missing]]"], byId)).toBe(BRAIN_SIGNAL_SIGN.negative);
   });
 
   test("returns unknown when no cited signal resolves", () => {

@@ -43,10 +43,7 @@ export const KNOWN_RUNTIME_TARGETS = ["hermes", "openclaw"] as const;
 export type RuntimeTarget = (typeof KNOWN_RUNTIME_TARGETS)[number];
 
 export function isRuntimeTarget(value: string | undefined): value is RuntimeTarget {
-  return (
-    typeof value === "string"
-    && (KNOWN_RUNTIME_TARGETS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && (KNOWN_RUNTIME_TARGETS as readonly string[]).includes(value);
 }
 
 let commonTemplateCache: string | undefined;
@@ -64,25 +61,17 @@ export function loadReminderTemplate(): string {
     return commonTemplateCache;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Failed to load identity reminder template from ${TEMPLATE_PATH}: ${message}`,
-    );
+    throw new Error(`Failed to load identity reminder template from ${TEMPLATE_PATH}: ${message}`, {
+      cause: err,
+    });
   }
 }
 
-const TEMPLATES_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "templates",
-);
+const TEMPLATES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "templates");
 
 const PER_TARGET_PATHS: Readonly<Record<RuntimeTarget, string>> = Object.freeze(
   Object.fromEntries(
-    KNOWN_RUNTIME_TARGETS.map((t) => [
-      t,
-      resolve(TEMPLATES_DIR, `identity-reminder.${t}.txt`),
-    ]),
+    KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve(TEMPLATES_DIR, `identity-reminder.${t}.txt`)]),
   ),
 ) as Readonly<Record<RuntimeTarget, string>>;
 

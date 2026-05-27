@@ -39,10 +39,7 @@ import { regenerateActive } from "../core/brain/active.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import type { BacklinkRef } from "../core/brain/backlinks.ts";
 import { renderDigest } from "../core/brain/digest.ts";
-import {
-  computeBrainStatus,
-  type BrainStatusSnapshot,
-} from "../core/brain/status.ts";
+import { computeBrainStatus, type BrainStatusSnapshot } from "../core/brain/status.ts";
 import {
   brainActivePath,
   logPath,
@@ -51,16 +48,9 @@ import {
   validateIsoDate,
   validateSlug,
 } from "../core/brain/paths.ts";
-import {
-  BrainNotFoundError,
-  queryByPreference,
-  queryByTopic,
-} from "../core/brain/query.ts";
+import { BrainNotFoundError, queryByPreference, queryByTopic } from "../core/brain/query.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
-import type {
-  BrainPreference,
-  BrainRetired,
-} from "../core/brain/types.ts";
+import type { BrainPreference, BrainRetired } from "../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 
 export interface ResourceContext {
@@ -100,8 +90,7 @@ const CONCRETE: ReadonlyArray<ResourceDescriptor> = [
   {
     uri: "osb://digest/latest",
     name: "Latest Brain digest",
-    description:
-      "Same body as `brain_digest` (default window: last 24h). Markdown.",
+    description: "Same body as `brain_digest` (default window: last 24h). Markdown.",
     mimeType: MIME_MARKDOWN,
   },
   {
@@ -131,8 +120,7 @@ const TEMPLATES: ReadonlyArray<ResourceTemplateDescriptor> = [
   {
     uriTemplate: "osb://log/{date}",
     name: "Brain daily log",
-    description:
-      "Body of `Brain/log/<date>.md` (YYYY-MM-DD).",
+    description: "Body of `Brain/log/<date>.md` (YYYY-MM-DD).",
     mimeType: MIME_MARKDOWN,
   },
   {
@@ -257,11 +245,7 @@ function readStatus(ctx: ResourceContext, uri: string): ResourceContent {
   };
 }
 
-function readPreference(
-  ctx: ResourceContext,
-  uri: string,
-  rawId: string,
-): ResourceContent {
+function readPreference(ctx: ResourceContext, uri: string, rawId: string): ResourceContent {
   if (!rawId.trim()) {
     throw new MCPError(INVALID_PARAMS, `resource id must not be empty: ${uri}`);
   }
@@ -281,9 +265,8 @@ function readPreference(
   } catch (err) {
     throw new MCPError(INVALID_PARAMS, (err as Error).message);
   }
-  const normalized = rawId.startsWith("pref-") || rawId.startsWith("ret-")
-    ? rawId
-    : `pref-${rawId}`;
+  const normalized =
+    rawId.startsWith("pref-") || rawId.startsWith("ret-") ? rawId : `pref-${rawId}`;
   let result;
   try {
     result = queryByPreference(ctx.vault, normalized);
@@ -307,11 +290,7 @@ function readPreference(
   return readMarkdown(uri, filePath);
 }
 
-function readTopic(
-  ctx: ResourceContext,
-  uri: string,
-  rawSlug: string,
-): ResourceContent {
+function readTopic(ctx: ResourceContext, uri: string, rawSlug: string): ResourceContent {
   if (!rawSlug.trim()) {
     throw new MCPError(INVALID_PARAMS, `topic slug must not be empty: ${uri}`);
   }
@@ -332,11 +311,7 @@ function readTopic(
   };
 }
 
-function readLog(
-  ctx: ResourceContext,
-  uri: string,
-  rawDate: string,
-): ResourceContent {
+function readLog(ctx: ResourceContext, uri: string, rawDate: string): ResourceContent {
   validateIsoDate(rawDate);
   const path = logPath(ctx.vault, rawDate);
   if (!existsSync(path)) {
@@ -345,11 +320,7 @@ function readLog(
   return readMarkdown(uri, path);
 }
 
-function readBacklinks(
-  ctx: ResourceContext,
-  uri: string,
-  rawId: string,
-): ResourceContent {
+function readBacklinks(ctx: ResourceContext, uri: string, rawId: string): ResourceContent {
   if (!rawId.trim()) {
     throw new MCPError(INVALID_PARAMS, `backlinks target must not be empty: ${uri}`);
   }
@@ -390,7 +361,7 @@ function renderStatusMarkdown(s: BrainStatusSnapshot): string {
   lines.push("");
   lines.push(`- inbox: ${s.counts.inbox} (processed: ${s.counts.inbox_processed})`);
   lines.push(`- preferences: ${s.counts.preferences}`);
-  for (const [status, n] of Object.entries(s.counts.preferences_by_status).sort()) {
+  for (const [status, n] of Object.entries(s.counts.preferences_by_status).toSorted()) {
     lines.push(`  - ${status}: ${n}`);
   }
   lines.push(`- retired: ${s.counts.retired}`);
@@ -414,10 +385,7 @@ function renderStatusMarkdown(s: BrainStatusSnapshot): string {
   return lines.join("\n") + "\n";
 }
 
-function renderBacklinksMarkdown(
-  target: string,
-  refs: ReadonlyArray<BacklinkRef>,
-): string {
+function renderBacklinksMarkdown(target: string, refs: ReadonlyArray<BacklinkRef>): string {
   const lines: string[] = [];
   lines.push(`# Backlinks to \`${target}\``);
   lines.push("");
@@ -449,10 +417,7 @@ function renderBacklinksMarkdown(
   return lines.join("\n") + "\n";
 }
 
-function renderTopicMarkdown(
-  slug: string,
-  result: ReturnType<typeof queryByTopic>,
-): string {
+function renderTopicMarkdown(slug: string, result: ReturnType<typeof queryByTopic>): string {
   const lines: string[] = [];
   lines.push(`# Brain topic: ${slug}`);
   lines.push("");
@@ -469,9 +434,7 @@ function renderTopicMarkdown(
       const p = pref as BrainPreference;
       lines.push("## Current preference");
       lines.push("");
-      lines.push(
-        `- \`${p.id}\` — status: \`${p.status}\`, confidence: \`${p.confidence}\``,
-      );
+      lines.push(`- \`${p.id}\` — status: \`${p.status}\`, confidence: \`${p.confidence}\``);
       lines.push(`  - ${p.principle}`);
     }
     lines.push("");
@@ -481,9 +444,7 @@ function renderTopicMarkdown(
     lines.push(`## Signals (${sigs.length})`);
     lines.push("");
     for (const s of sigs) {
-      lines.push(
-        `- \`${s.id}\` — ${s.signal} signal by ${s.agent} at ${s.created_at}`,
-      );
+      lines.push(`- \`${s.id}\` — ${s.signal} signal by ${s.agent} at ${s.created_at}`);
     }
     lines.push("");
   }

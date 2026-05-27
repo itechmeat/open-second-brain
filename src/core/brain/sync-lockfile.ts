@@ -21,14 +21,7 @@
  * remove them by hand.
  */
 
-import {
-  closeSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
+import { closeSync, mkdirSync, openSync, readdirSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export interface LockHandle {
@@ -80,9 +73,7 @@ export function acquireLockSync(target: string): LockHandle {
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === "EEXIST") {
-      const collision: NodeJS.ErrnoException = new Error(
-        `lock busy: ${lockPath}`,
-      );
+      const collision: NodeJS.ErrnoException = new Error(`lock busy: ${lockPath}`);
       collision.code = "ELOCKED";
       collision.path = lockPath;
       throw collision;
@@ -95,10 +86,7 @@ export function acquireLockSync(target: string): LockHandle {
   // stale locks. Failure to write is non-fatal: the lock semantics
   // come from the exclusive create, not from the body.
   try {
-    const stamp = Buffer.from(
-      `${process.pid}\n${new Date().toISOString()}\n`,
-      "utf8",
-    );
+    const stamp = Buffer.from(`${process.pid}\n${new Date().toISOString()}\n`, "utf8");
     writeSync(fd, stamp, 0, stamp.byteLength);
   } catch {
     // ignore; diagnostic-only payload

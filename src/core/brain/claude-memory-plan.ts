@@ -1,9 +1,4 @@
-export type PlanAction =
-  | "CREATE"
-  | "UPDATE"
-  | "RECREATE"
-  | "SKIP_UNCHANGED"
-  | "CONFLICT";
+export type PlanAction = "CREATE" | "UPDATE" | "RECREATE" | "SKIP_UNCHANGED" | "CONFLICT";
 
 export interface PlanActionInput {
   readonly basename: string;

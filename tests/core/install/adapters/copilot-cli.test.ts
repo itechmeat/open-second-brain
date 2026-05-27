@@ -1,7 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import {
-  mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -27,7 +25,9 @@ beforeEach(() => {
 afterEach(() => {
   resetCopilotRunner();
   for (const p of [vault, home]) {
-    try { rmSync(p, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(p, { recursive: true, force: true });
+    } catch {}
   }
 });
 
@@ -42,12 +42,20 @@ function env() {
 }
 
 function applyOpts() {
-  const stdout = new Writable({ write(_c, _e, cb) { cb(); } });
+  const stdout = new Writable({
+    write(_c, _e, cb) {
+      cb();
+    },
+  });
   const stderr = new Writable({
-    write(chunk, _e, cb) { stderrBuf.push(chunk.toString()); cb(); },
+    write(chunk, _e, cb) {
+      stderrBuf.push(chunk.toString());
+      cb();
+    },
   });
   return {
-    dryRun: false, force: false,
+    dryRun: false,
+    force: false,
     stdout: stdout as unknown as NodeJS.WriteStream,
     stderr: stderr as unknown as NodeJS.WriteStream,
   };
@@ -89,7 +97,9 @@ describe("copilot-cli adapter — fallback to JSON file", () => {
   test("uses file fallback when CLI absent", () => {
     const runner: CopilotRunner = {
       available: () => false,
-      run: () => { throw new Error("should not run"); },
+      run: () => {
+        throw new Error("should not run");
+      },
       list: () => ({ ok: false, names: [] }),
     };
     setCopilotRunner(runner);
@@ -140,7 +150,9 @@ describe("copilot-cli adapter — verify", () => {
   test("verify ok when fallback file has both keys", () => {
     const runner: CopilotRunner = {
       available: () => false,
-      run: () => { throw new Error("nope"); },
+      run: () => {
+        throw new Error("nope");
+      },
       list: () => ({ ok: false, names: [] }),
     };
     setCopilotRunner(runner);
@@ -152,7 +164,9 @@ describe("copilot-cli adapter — verify", () => {
   test("verify drift when fallback file payload was changed", () => {
     const runner: CopilotRunner = {
       available: () => false,
-      run: () => { throw new Error("nope"); },
+      run: () => {
+        throw new Error("nope");
+      },
       list: () => ({ ok: false, names: [] }),
     };
     setCopilotRunner(runner);
@@ -203,7 +217,9 @@ describe("copilot-cli adapter — uninstall", () => {
   test("uninstall via fallback file removes both keys", () => {
     const runner: CopilotRunner = {
       available: () => false,
-      run: () => { throw new Error("nope"); },
+      run: () => {
+        throw new Error("nope");
+      },
       list: () => ({ ok: false, names: [] }),
     };
     setCopilotRunner(runner);

@@ -24,9 +24,7 @@ export const opencodeAdapter = createJsonMcpAdapter({
   target: "opencode",
   label: "opencode",
   resolveConfigPath: configPath,
-  postNotes: [
-    "Restart opencode to load the new MCP servers.",
-  ],
+  postNotes: ["Restart opencode to load the new MCP servers."],
 });
 
 defaultRegistry.register(opencodeAdapter);

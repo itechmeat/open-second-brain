@@ -12,36 +12,15 @@
  * tool's own `now` argument.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-} from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  JSONRPC_VERSION,
-  MCPServer,
-  PROTOCOL_VERSION,
-} from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import {
-  brainDirs,
-  logJsonlPath,
-  logPath,
-  preferencePath,
-} from "../../src/core/brain/paths.ts";
+import { brainDirs, logJsonlPath, logPath, preferencePath } from "../../src/core/brain/paths.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
@@ -58,12 +37,7 @@ beforeEach(() => {
   vault = join(tmp, "vault");
   configHome = mkdtempSync(join(tmpdir(), "o2b-mcp-brain-cfg-"));
   configPath = join(configHome, "config.yaml");
-  for (const k of [
-    "VAULT_AGENT_NAME",
-    "VAULT_TIMEZONE",
-    "VAULT_DIR",
-    "OPEN_SECOND_BRAIN_CONFIG",
-  ]) {
+  for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -160,8 +134,7 @@ describe("brain_feedback tool schema", () => {
     }>;
     const feedback = tools.find((t) => t.name === "brain_feedback");
     expect(feedback).toBeDefined();
-    const fcDesc =
-      feedback!.inputSchema.properties?.["force_confirmed"]?.description ?? "";
+    const fcDesc = feedback!.inputSchema.properties?.["force_confirmed"]?.description ?? "";
     // The handler ALWAYS writes the inbox signal; with force_confirmed
     // it additionally materialises a confirmed preference. The earlier
     // "instead of an inbox signal" wording was incorrect.
@@ -307,12 +280,8 @@ describe("brain_dream", () => {
     const server = makeServer();
     await initialize(server);
     const dirs = brainDirs(vault);
-    const inboxBefore = readdirSync(dirs.inbox).filter((n) =>
-      n.endsWith(".md"),
-    ).length;
-    const prefsBefore = readdirSync(dirs.preferences).filter((n) =>
-      n.endsWith(".md"),
-    ).length;
+    const inboxBefore = readdirSync(dirs.inbox).filter((n) => n.endsWith(".md")).length;
+    const prefsBefore = readdirSync(dirs.preferences).filter((n) => n.endsWith(".md")).length;
 
     const r = await call(server, "brain_dream", {
       dry_run: true,
@@ -322,12 +291,8 @@ describe("brain_dream", () => {
     expect(r.result.structuredContent.dry_run).toBe(true);
 
     // Files unchanged on disk after a dry-run.
-    const inboxAfter = readdirSync(dirs.inbox).filter((n) =>
-      n.endsWith(".md"),
-    ).length;
-    const prefsAfter = readdirSync(dirs.preferences).filter((n) =>
-      n.endsWith(".md"),
-    ).length;
+    const inboxAfter = readdirSync(dirs.inbox).filter((n) => n.endsWith(".md")).length;
+    const prefsAfter = readdirSync(dirs.preferences).filter((n) => n.endsWith(".md")).length;
     expect(inboxAfter).toBe(inboxBefore);
     expect(prefsAfter).toBe(prefsBefore);
   });
@@ -703,10 +668,7 @@ describe("brain_backlinks", () => {
 // brain_note (§32B, v0.10.8)
 // ---------------------------------------------------------------------------
 
-function logFilesForLoggedAt(
-  vaultDir: string,
-  loggedAt: string,
-): { md: string; jsonl: string } {
+function logFilesForLoggedAt(vaultDir: string, loggedAt: string): { md: string; jsonl: string } {
   // Derive the date from the tool's own `logged_at` payload instead
   // of `new Date()`. This avoids a flake if the test happens to cross
   // `00:00:00Z` between the `brain_note` call and the file lookup.

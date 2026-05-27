@@ -29,8 +29,8 @@ function isSafeLocalConfigDir(target: string): readonly [boolean, string] {
       `directory name '${name}' is not a recognized Open Second Brain config directory; refusing to remove`,
     ];
   }
-  const partsLower = target.split(sep).map((p) => p.toLowerCase());
-  if (partsLower.includes(".hermes") || partsLower.includes("hermes")) {
+  const partsLower = new Set(target.split(sep).map((p) => p.toLowerCase()));
+  if (partsLower.has(".hermes") || partsLower.has("hermes")) {
     return [false, "config directory is inside a Hermes-owned path; refusing to remove"];
   }
   if (existsSync(join(target, ".git"))) {
@@ -51,7 +51,7 @@ function listEntries(dir: string): string[] {
   if (!existsSync(dir)) return [];
   try {
     if (!statSync(dir).isDirectory()) return [];
-    return readdirSync(dir).sort();
+    return readdirSync(dir).toSorted();
   } catch {
     return [];
   }
@@ -165,7 +165,11 @@ export function renderPlan(plan: UninstallPlan): string {
     if (plan.errors.length > 0) {
       for (const [p, reason] of plan.errors) lines.push(`  error:   ${p} — ${reason}`);
     }
-    if (plan.removedPaths.length === 0 && plan.skippedPaths.length === 0 && plan.errors.length === 0) {
+    if (
+      plan.removedPaths.length === 0 &&
+      plan.skippedPaths.length === 0 &&
+      plan.errors.length === 0
+    ) {
       lines.push("  (nothing to do)");
     }
     lines.push("");
@@ -173,7 +177,9 @@ export function renderPlan(plan: UninstallPlan): string {
     lines.push("Next steps:");
     lines.push("  1. Run the Hermes commands above to deregister the MCP server and plugin.");
     lines.push("  2. Re-run with --apply-local to remove the machine-local config directory.");
-    lines.push("  3. Add --remove-cli to also remove the o2b/vault-log symlinks from ~/.local/bin.");
+    lines.push(
+      "  3. Add --remove-cli to also remove the o2b/vault-log symlinks from ~/.local/bin.",
+    );
     lines.push("  4. Delete the vault yourself if and only if you really want to lose your notes.");
     lines.push("");
   }

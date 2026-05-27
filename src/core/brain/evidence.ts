@@ -119,10 +119,7 @@ export function collectEvidenceForSlug(
       });
       if (result === BRAIN_APPLY_RESULT.applied) {
         if (applied.length < maxApplied) applied.push(row);
-      } else if (
-        result === BRAIN_APPLY_RESULT.violated ||
-        result === BRAIN_APPLY_RESULT.outdated
-      ) {
+      } else if (result === BRAIN_APPLY_RESULT.violated || result === BRAIN_APPLY_RESULT.outdated) {
         if (violated.length < maxViolated) violated.push(row);
       }
       if (applied.length >= maxApplied && violated.length >= maxViolated) {

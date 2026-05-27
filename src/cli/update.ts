@@ -150,9 +150,7 @@ export async function cmdUpdate(argv: string[]): Promise<number> {
 
   const hasError = result.targets.some((t) => t.status === "error");
   if (hasError) {
-    const hasUserModifiedBlock = result.targets.some(
-      (t) => t.kind === "user-modified-block",
-    );
+    const hasUserModifiedBlock = result.targets.some((t) => t.kind === "user-modified-block");
     return hasUserModifiedBlock ? 4 : 1;
   }
   return 0;

@@ -22,26 +22,47 @@ export async function cmdBrainScanInline(argv: string[]): Promise<number> {
   let result;
   try {
     result = await scanInline(vault, {
-      agent, dryRun: Boolean(flags["dry-run"]),
+      agent,
+      dryRun: Boolean(flags["dry-run"]),
       paths: (flags["path"] as string[] | undefined) ?? [],
       exclude: (flags["exclude"] as string[] | undefined) ?? [],
     });
-  } catch (exc) { return fail(`scan-inline failed: ${(exc as Error).message ?? exc}`); }
+  } catch (exc) {
+    return fail(`scan-inline failed: ${(exc as Error).message ?? exc}`);
+  }
 
   if (!flags["dry-run"]) {
     try {
       appendLogEvent(vault, {
-        timestamp: isoSecond(new Date()), eventType: BRAIN_LOG_EVENT_KIND.scanInline,
-        body: { agent, scanned: String(result.scanned), found: String(result.found), created: String(result.created), deduped: String(result.deduped), malformed: String(result.malformed), errors: String(result.errors.length) },
+        timestamp: isoSecond(new Date()),
+        eventType: BRAIN_LOG_EVENT_KIND.scanInline,
+        body: {
+          agent,
+          scanned: String(result.scanned),
+          found: String(result.found),
+          created: String(result.created),
+          deduped: String(result.deduped),
+          malformed: String(result.malformed),
+          errors: String(result.errors.length),
+        },
       });
-    } catch (err) { process.stderr.write(`warning: append scan-inline log failed: ${(err as Error).message}\n`); }
+    } catch (err) {
+      process.stderr.write(`warning: append scan-inline log failed: ${(err as Error).message}\n`);
+    }
   }
 
   if (flags["json"]) {
     okJson({
-      scanned: result.scanned, found: result.found, created: result.created, deduped: result.deduped, malformed: result.malformed,
+      scanned: result.scanned,
+      found: result.found,
+      created: result.created,
+      deduped: result.deduped,
+      malformed: result.malformed,
       errors: result.errors.map((e) => ({ path: e.path, message: e.message })),
-      files_with_markers: result.filesWithMarkers.map((f) => ({ path: f.path, markers: f.markers })),
+      files_with_markers: result.filesWithMarkers.map((f) => ({
+        path: f.path,
+        markers: f.markers,
+      })),
     });
   } else {
     ok(`scanned: ${result.scanned}`);

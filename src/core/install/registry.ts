@@ -7,11 +7,7 @@
  * leak across cases.
  */
 
-import type {
-  DetectResult,
-  InstallAdapter,
-  InstallEnv,
-} from "./types.ts";
+import type { DetectResult, InstallAdapter, InstallEnv } from "./types.ts";
 
 export interface Registry {
   register(adapter: InstallAdapter): void;

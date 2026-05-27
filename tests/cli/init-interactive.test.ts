@@ -24,7 +24,9 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "osb-wizard-h-"));
 });
 afterEach(() => {
-  try { rmSync(home, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {}
 });
 
 function scriptedReader(answers: string[]): WizardReader {
@@ -43,10 +45,16 @@ function silentStreams() {
   const stdoutBuf: string[] = [];
   const stderrBuf: string[] = [];
   const stdout = new Writable({
-    write(chunk, _e, cb) { stdoutBuf.push(chunk.toString()); cb(); },
+    write(chunk, _e, cb) {
+      stdoutBuf.push(chunk.toString());
+      cb();
+    },
   });
   const stderr = new Writable({
-    write(chunk, _e, cb) { stderrBuf.push(chunk.toString()); cb(); },
+    write(chunk, _e, cb) {
+      stderrBuf.push(chunk.toString());
+      cb();
+    },
   });
   return {
     stdout: stdout as unknown as NodeJS.WriteStream,
@@ -70,19 +78,22 @@ describe("init wizard", () => {
     const vaultPath = join(home, "vault");
     // ensure no candidate vault directory exists, so prompt 1 needs explicit path
     const answers = [
-      vaultPath,        // vault path
-      "claude-vps",     // agent name
-      "UTC",            // timezone
-      "en",             // language
-      "1,2",            // pick targets 1 and 2 (whichever they are)
-      "y",              // brain init
-      "n",              // starter
-      "yes",            // confirm
+      vaultPath, // vault path
+      "claude-vps", // agent name
+      "UTC", // timezone
+      "en", // language
+      "1,2", // pick targets 1 and 2 (whichever they are)
+      "y", // brain init
+      "n", // starter
+      "yes", // confirm
     ];
     const { runner, calls } = recordingRunner();
     const { stdout, stderr } = silentStreams();
     const opts: WizardOpts = {
-      reader: scriptedReader(answers), stdout, stderr, runner,
+      reader: scriptedReader(answers),
+      stdout,
+      stderr,
+      runner,
     };
     const r = await runWizard(opts);
     expect(r.exitCode).toBe(0);
@@ -117,15 +128,21 @@ describe("init wizard", () => {
   test("'no' at confirmation runs nothing", async () => {
     const vaultPath = join(home, "vault");
     const answers = [
-      vaultPath, "claude-vps", "UTC", "en",
-      "none",   // no targets
-      "n",      // no brain init
-      "no",     // do not confirm
+      vaultPath,
+      "claude-vps",
+      "UTC",
+      "en",
+      "none", // no targets
+      "n", // no brain init
+      "no", // do not confirm
     ];
     const { runner, calls } = recordingRunner();
     const { stdout, stderr } = silentStreams();
     const opts: WizardOpts = {
-      reader: scriptedReader(answers), stdout, stderr, runner,
+      reader: scriptedReader(answers),
+      stdout,
+      stderr,
+      runner,
     };
     const r = await runWizard(opts);
     expect(r.exitCode).toBe(0);
@@ -137,7 +154,7 @@ describe("init wizard", () => {
     const answers = [
       vaultPath,
       "claude-vps",
-      "Mars/Cydonia",   // invalid IANA
+      "Mars/Cydonia", // invalid IANA
       "Europe/Belgrade", // valid retry
       "en",
       "none",
@@ -147,7 +164,10 @@ describe("init wizard", () => {
     const { runner, calls } = recordingRunner();
     const { stdout, stderr, stdoutBuf } = silentStreams();
     const opts: WizardOpts = {
-      reader: scriptedReader(answers), stdout, stderr, runner,
+      reader: scriptedReader(answers),
+      stdout,
+      stderr,
+      runner,
     };
     const r = await runWizard(opts);
     expect(r.exitCode).toBe(0);
@@ -157,14 +177,14 @@ describe("init wizard", () => {
 
   test("brain init with starter adds --starter flag", async () => {
     const vaultPath = join(home, "vault");
-    const answers = [
-      vaultPath, "claude-vps", "UTC", "en",
-      "none", "y", "y", "yes",
-    ];
+    const answers = [vaultPath, "claude-vps", "UTC", "en", "none", "y", "y", "yes"];
     const { runner, calls } = recordingRunner();
     const { stdout, stderr } = silentStreams();
     const opts: WizardOpts = {
-      reader: scriptedReader(answers), stdout, stderr, runner,
+      reader: scriptedReader(answers),
+      stdout,
+      stderr,
+      runner,
     };
     const r = await runWizard(opts);
     expect(r.exitCode).toBe(0);
@@ -178,7 +198,10 @@ describe("init wizard", () => {
     const runner: WizardRunner = async () => ({ exitCode: 1, stdout: "", stderr: "init failed" });
     const { stdout, stderr } = silentStreams();
     const opts: WizardOpts = {
-      reader: scriptedReader(answers), stdout, stderr, runner,
+      reader: scriptedReader(answers),
+      stdout,
+      stderr,
+      runner,
     };
     const r = await runWizard(opts);
     expect(r.exitCode).toBe(1);

@@ -43,7 +43,9 @@ if (window) {
 } else {
   const res = runDisciplineReport({ vault });
   if (res.status === "disabled") {
-    process.stderr.write("o2b-discipline-report: discipline_report disabled in Brain/_brain.yaml\n");
+    process.stderr.write(
+      "o2b-discipline-report: discipline_report disabled in Brain/_brain.yaml\n",
+    );
     process.exit(0);
   }
   process.stdout.write(res.text + "\n");

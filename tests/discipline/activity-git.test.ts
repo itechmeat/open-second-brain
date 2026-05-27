@@ -13,14 +13,20 @@ beforeAll(() => {
   execSync("git init -q -b main", { cwd: repo });
   execSync("git config user.email t@t && git config user.name t", { cwd: repo });
   writeFileSync(join(repo, "a.txt"), "hello\n");
-  execSync("git add a.txt && git commit -q -m c1 --date=2026-05-17T10:00:00Z",
-    { cwd: repo, env: { ...process.env, GIT_COMMITTER_DATE: "2026-05-17T10:00:00Z" } });
+  execSync("git add a.txt && git commit -q -m c1 --date=2026-05-17T10:00:00Z", {
+    cwd: repo,
+    env: { ...process.env, GIT_COMMITTER_DATE: "2026-05-17T10:00:00Z" },
+  });
   writeFileSync(join(repo, "a.txt"), "hello\nworld\n");
-  execSync("git add a.txt && git commit -q -m c2 --date=2026-05-17T20:00:00Z",
-    { cwd: repo, env: { ...process.env, GIT_COMMITTER_DATE: "2026-05-17T20:00:00Z" } });
+  execSync("git add a.txt && git commit -q -m c2 --date=2026-05-17T20:00:00Z", {
+    cwd: repo,
+    env: { ...process.env, GIT_COMMITTER_DATE: "2026-05-17T20:00:00Z" },
+  });
   writeFileSync(join(repo, "b.txt"), "x\n");
-  execSync("git add b.txt && git commit -q -m c3 --date=2026-05-18T10:00:00Z",
-    { cwd: repo, env: { ...process.env, GIT_COMMITTER_DATE: "2026-05-18T10:00:00Z" } });
+  execSync("git add b.txt && git commit -q -m c3 --date=2026-05-18T10:00:00Z", {
+    cwd: repo,
+    env: { ...process.env, GIT_COMMITTER_DATE: "2026-05-18T10:00:00Z" },
+  });
 });
 afterAll(() => rmSync(repo, { recursive: true, force: true }));
 

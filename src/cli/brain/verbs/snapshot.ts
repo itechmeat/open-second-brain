@@ -1,4 +1,8 @@
-import { listSnapshots, extractSnapshotToTemp, type ExtractSnapshotResult } from "../../../core/brain/snapshot.ts";
+import {
+  listSnapshots,
+  extractSnapshotToTemp,
+  type ExtractSnapshotResult,
+} from "../../../core/brain/snapshot.ts";
 import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
 import { brainDirs } from "../../../core/brain/paths.ts";
@@ -14,16 +18,22 @@ export async function cmdBrainSnapshotDiff(argv: string[]): Promise<number> {
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
 
   if (positional.length < 1 || positional.length > 2) {
-    return fail("brain snapshot diff requires <run_id_a> [<run_id_b>] (with one arg, the live tree is compared as B)");
+    return fail(
+      "brain snapshot diff requires <run_id_a> [<run_id_b>] (with one arg, the live tree is compared as B)",
+    );
   }
   const [a, b] = positional;
   const snaps = listSnapshots(vault);
   if (!snaps.some((s) => s.run_id === a)) {
-    process.stderr.write(`snapshot not found: ${a}; run \`o2b brain rollback --list\` to enumerate.\n`);
+    process.stderr.write(
+      `snapshot not found: ${a}; run \`o2b brain rollback --list\` to enumerate.\n`,
+    );
     return 2;
   }
   if (b !== undefined && !snaps.some((s) => s.run_id === b)) {
-    process.stderr.write(`snapshot not found: ${b}; run \`o2b brain rollback --list\` to enumerate.\n`);
+    process.stderr.write(
+      `snapshot not found: ${b}; run \`o2b brain rollback --list\` to enumerate.\n`,
+    );
     return 2;
   }
 
@@ -31,9 +41,12 @@ export async function cmdBrainSnapshotDiff(argv: string[]): Promise<number> {
   let extB: ExtractSnapshotResult | null = null;
   try {
     extA = extractSnapshotToTemp(vault, a!);
-    const bRoot = b !== undefined ? (extB = extractSnapshotToTemp(vault, b)).brainRoot : brainDirs(vault).brain;
+    const bRoot =
+      b !== undefined ? (extB = extractSnapshotToTemp(vault, b)).brainRoot : brainDirs(vault).brain;
     const diff = diffBrainTrees(extA.brainRoot, bRoot);
-    const out = flags["json"] ? JSON.stringify(renderDiffJson(diff), null, 2) + "\n" : renderDiffMarkdown(diff, { aLabel: a!, bLabel: b ?? "live" });
+    const out = flags["json"]
+      ? JSON.stringify(renderDiffJson(diff), null, 2) + "\n"
+      : renderDiffMarkdown(diff, { aLabel: a!, bLabel: b ?? "live" });
     process.stdout.write(out + (out.endsWith("\n") ? "" : "\n"));
     return 0;
   } catch (exc) {
@@ -57,7 +70,8 @@ export async function handleBrainSnapshotSubcommand(argv: ReadonlyArray<string>)
   const sub = argv[0]!;
   const rest = argv.slice(1);
   switch (sub) {
-    case "diff": return await cmdBrainSnapshotDiff([...rest]);
+    case "diff":
+      return await cmdBrainSnapshotDiff([...rest]);
     default:
       process.stderr.write(`unknown brain snapshot verb: ${sub}; supported: diff\n`);
       return 2;

@@ -6,12 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,10 +39,7 @@ function writePref(slug: string, fields: Record<string, string>) {
     lines.push(`${key}: ${v}`);
   }
   lines.push("---", "");
-  writeFileSync(
-    join(vault, "Brain", "preferences", `pref-${slug}.md`),
-    lines.join("\n"),
-  );
+  writeFileSync(join(vault, "Brain", "preferences", `pref-${slug}.md`), lines.join("\n"));
 }
 
 beforeEach(() => {

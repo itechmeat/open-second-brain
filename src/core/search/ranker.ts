@@ -9,11 +9,7 @@
  * testable and substitutable.
  */
 
-import {
-  PAGE_TIER_DEFAULT,
-  tierWeight,
-  type PageTier,
-} from "../brain/page-meta/tier.ts";
+import { PAGE_TIER_DEFAULT, tierWeight, type PageTier } from "../brain/page-meta/tier.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "./store.ts";
 import type { BrainSearchResult } from "./types.ts";
 

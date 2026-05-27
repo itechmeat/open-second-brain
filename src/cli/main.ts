@@ -16,6 +16,7 @@ import {
   discoverConfig,
   redactMapping,
   setConfigValue,
+  validateTimezoneName,
 } from "../core/config.ts";
 import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
 import { doctor } from "../core/doctor.ts";
@@ -82,7 +83,7 @@ async function cmdStatus(argv: string[]): Promise<number> {
       semantic_hint: semantic.hint,
     };
     if (Object.keys(result.data).length > 0) {
-      output["config_keys"] = Object.keys(result.data).sort();
+      output["config_keys"] = Object.keys(result.data).toSorted();
     }
     if (flags["vault"]) output["vault"] = String(flags["vault"]);
     process.stdout.write(JSON.stringify(output, sortedReplacer, 2) + "\n");
@@ -91,7 +92,7 @@ async function cmdStatus(argv: string[]): Promise<number> {
     process.stdout.write(`config_exists: ${result.exists ? "true" : "false"}\n`);
     if (Object.keys(result.data).length > 0) {
       process.stdout.write("config_keys:\n");
-      for (const key of Object.keys(result.data).sort()) {
+      for (const key of Object.keys(result.data).toSorted()) {
         process.stdout.write(`- ${key}\n`);
       }
     }
@@ -120,12 +121,11 @@ async function cmdInit(argv: string[]): Promise<number> {
   const timezone = (flags["timezone"] as string | undefined) ?? null;
 
   if (timezone) {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: timezone });
-    } catch (exc) {
+    const timezoneValidation = validateTimezoneName(timezone);
+    if (!timezoneValidation.ok) {
       process.stderr.write(
         `error: --timezone ${JSON.stringify(timezone)} is not a valid IANA name ` +
-          `(${(exc as Error).message ?? exc}). ` +
+          `(${timezoneValidation.error}). ` +
           "Examples: Europe/Belgrade, America/New_York, UTC.\n",
       );
       return 1;
@@ -186,11 +186,7 @@ function writeSearchInitBlock(configPath: string): void {
   // Skip the embedding-key prompt when search is explicitly disabled
   // (no point onboarding semantic when the whole layer is off), the
   // semantic flag is off, or the key is already present.
-  if (
-    semantic.search_disabled ||
-    !semantic.semantic_enabled ||
-    semantic.embedding_key_present
-  ) {
+  if (semantic.search_disabled || !semantic.semantic_enabled || semantic.embedding_key_present) {
     return;
   }
 
@@ -231,7 +227,11 @@ async function cmdDoctor(argv: string[]): Promise<number> {
 
   let results;
   try {
-    results = doctor({ vault, config, repoRoot: (flags["repo"] as string | undefined) ?? null });
+    results = doctor({
+      vault,
+      config,
+      repoRoot: (flags["repo"] as string | undefined) ?? null,
+    });
   } catch (exc) {
     process.stderr.write(`error: doctor failed: ${(exc as Error).message ?? exc}\n`);
     return 1;
@@ -326,14 +326,11 @@ async function cmdMcp(argv: string[]): Promise<number> {
     return 2;
   }
   if (writerOnly && rawScope !== "writer") {
-    process.stderr.write(
-      `o2b mcp: --writer-only conflicts with --scope ${rawScope}\n`,
-    );
+    process.stderr.write(`o2b mcp: --writer-only conflicts with --scope ${rawScope}\n`);
     return 2;
   }
   const scope = rawScope;
-  const serverName =
-    scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
+  const serverName = scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
 
@@ -368,9 +365,7 @@ async function runMcpProbe(args: {
   try {
     vault = requireVault(args.vault, args.config);
   } catch (e) {
-    process.stdout.write(
-      `mcp probe FAIL: vault not configured (${(e as Error).message})\n`,
-    );
+    process.stdout.write(`mcp probe FAIL: vault not configured (${(e as Error).message})\n`);
     return 1;
   }
   try {
@@ -405,7 +400,10 @@ async function cmdUninstall(argv: string[]): Promise<number> {
     "remove-cli": { type: "boolean" },
   });
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
-  const plan = planUninstall({ configPath: config, applyLocal: Boolean(flags["apply-local"]) });
+  const plan = planUninstall({
+    configPath: config,
+    applyLocal: Boolean(flags["apply-local"]),
+  });
   process.stdout.write(renderPlan(plan));
   let returnCode = 0;
   if (flags["remove-cli"]) {

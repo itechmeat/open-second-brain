@@ -3,11 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  appendLogEvent,
-  parseLogDay,
-  type BrainLogEntry,
-} from "../../src/core/brain/log.ts";
+import { appendLogEvent, parseLogDay, type BrainLogEntry } from "../../src/core/brain/log.ts";
 import { brainDirs, logJsonlPath, logPath } from "../../src/core/brain/paths.ts";
 
 let tmp: string;
@@ -155,7 +151,7 @@ describe("parseLogDay — malformed entry tolerance", () => {
       "- run_id: dream-2026-05-14-104200",
       "- confirmed: 0",
       "",
-      "## 11:00:00 NOT-A-VALID-HEADER",  // broken header
+      "## 11:00:00 NOT-A-VALID-HEADER", // broken header
       "- this: should be ignored",
       "",
       "## 12:00:00Z — apply-evidence",
@@ -164,12 +160,12 @@ describe("parseLogDay — malformed entry tolerance", () => {
       "- agent: claude",
       "- result: applied",
       "",
-      "## 13:00:00Z — totally-bogus-kind",  // unknown event kind
+      "## 13:00:00Z — totally-bogus-kind", // unknown event kind
       "- foo: bar",
       "",
       "## 14:00:00Z — feedback",
       "- signal: [[sig-x]]",
-      "garbage line that is not a bullet",  // malformed bullet inside a valid block
+      "garbage line that is not a bullet", // malformed bullet inside a valid block
       "- topic: foo",
     ].join("\n");
     writeFileSync(path, content, "utf8");
@@ -178,11 +174,7 @@ describe("parseLogDay — malformed entry tolerance", () => {
     // Only the three well-formed entries (dream, apply-evidence,
     // feedback) survive.
     expect(entries).toHaveLength(3);
-    expect(entries.map((e) => e.eventType)).toEqual([
-      "dream",
-      "apply-evidence",
-      "feedback",
-    ]);
+    expect(entries.map((e) => e.eventType)).toEqual(["dream", "apply-evidence", "feedback"]);
     // The broken header and bogus kind both produce warnings; the
     // stray bullet does too.
     expect(warnings.length).toBeGreaterThanOrEqual(2);

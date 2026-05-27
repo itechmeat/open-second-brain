@@ -23,21 +23,14 @@
 
 import { readFileSync } from "node:fs";
 
-import type {
-  SessionAdapter,
-  SessionToolCall,
-  SessionTurn,
-} from "./types.ts";
+import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 interface CodexBlock {
   readonly type?: string;
   readonly text?: string;
 }
 
-function buildMessageTurn(
-  obj: Record<string, unknown>,
-  fallbackIndex: number,
-): SessionTurn | null {
+function buildMessageTurn(obj: Record<string, unknown>, fallbackIndex: number): SessionTurn | null {
   const payload = obj["payload"] as Record<string, unknown> | undefined;
   if (!payload) return null;
   const role = payload["role"];
@@ -54,10 +47,7 @@ function buildMessageTurn(
   for (const raw of content) {
     if (raw === null || typeof raw !== "object") continue;
     const b = raw as CodexBlock;
-    if (
-      (b.type === "input_text" || b.type === "output_text") &&
-      typeof b.text === "string"
-    ) {
+    if ((b.type === "input_text" || b.type === "output_text") && typeof b.text === "string") {
       texts.push(b.text);
     }
   }
@@ -104,8 +94,7 @@ function buildFunctionCallTurn(
     input,
     ...(callId !== undefined ? { id: callId } : {}),
   };
-  const turnId =
-    callId !== undefined ? `codex-fc-${callId}` : `codex-fc-${fallbackIndex}`;
+  const turnId = callId !== undefined ? `codex-fc-${callId}` : `codex-fc-${fallbackIndex}`;
   const timestamp =
     typeof obj["timestamp"] === "string" ? (obj["timestamp"] as string) : new Date(0).toISOString();
   return {

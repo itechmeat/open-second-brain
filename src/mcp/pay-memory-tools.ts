@@ -44,8 +44,7 @@ async function toolPaymentMemoryInit(
 ): Promise<Record<string, unknown>> {
   const overwrite = Boolean(args["overwrite"] ?? false);
   const agentArg = coerceStr(args, "agent", false);
-  const agent =
-    normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+  const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
 
   const dirs = payMemoryDirs(ctx.vault);
   const dirList = [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports];
@@ -72,21 +71,15 @@ async function toolPaymentReceiptAppend(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const agentArg = coerceStr(args, "agent", false);
-  const agent =
-    normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+  const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
   const tz = resolveTimezone(ctx.configPath ?? undefined);
 
-  let policyStatus = coerceStr(args, "policy_status", false) as
-    | ReceiptPolicyStatus
-    | null;
+  let policyStatus = coerceStr(args, "policy_status", false) as ReceiptPolicyStatus | null;
   let policyRule = coerceStr(args, "policy_rule", false);
   const policyReasonsRaw = args["policy_reasons"];
   let policyReasons: string[] | null = null;
   if (policyReasonsRaw !== undefined && policyReasonsRaw !== null) {
-    if (
-      !Array.isArray(policyReasonsRaw) ||
-      !policyReasonsRaw.every((s) => typeof s === "string")
-    ) {
+    if (!Array.isArray(policyReasonsRaw) || !policyReasonsRaw.every((s) => typeof s === "string")) {
       throw new MCPError(INVALID_PARAMS, "policy_reasons must be an array of strings");
     }
     policyReasons = [...policyReasonsRaw] as string[];
@@ -121,10 +114,7 @@ async function toolPaymentReceiptAppend(
       "not_checked",
     ];
     if (!allowed.includes(policyStatus)) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `policy_status must be one of: ${allowed.join(", ")}`,
-      );
+      throw new MCPError(INVALID_PARAMS, `policy_status must be one of: ${allowed.join(", ")}`);
     }
   }
 
@@ -194,8 +184,7 @@ async function toolPaymentRequestApproval(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const agentArg = coerceStr(args, "agent", false);
-  const agent =
-    normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+  const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
   const tz = resolveTimezone(ctx.configPath ?? undefined);
 
   const expectedAmount = coerceOptionalNumber(args, "expected_amount");
@@ -307,9 +296,7 @@ async function toolPaymentPolicyCheck(
     reasons: decision.reasons,
     has_policy: decision.hasPolicy,
     policy_path:
-      decision.policyPath !== null
-        ? vaultRelativePath(decision.policyPath, ctx.vault)
-        : null,
+      decision.policyPath !== null ? vaultRelativePath(decision.policyPath, ctx.vault) : null,
     currency: decision.currency,
   };
 }
@@ -341,7 +328,10 @@ export const PAY_MEMORY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     inputSchema: {
       type: "object",
       properties: {
-        agent: { type: "string", description: "Agent identity (defaults to server-resolved name)." },
+        agent: {
+          type: "string",
+          description: "Agent identity (defaults to server-resolved name).",
+        },
         overwrite: {
           type: "boolean",
           description: "Overwrite an existing policy file. Directories are always idempotent.",
@@ -358,22 +348,52 @@ export const PAY_MEMORY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     inputSchema: {
       type: "object",
       properties: {
-        agent: { type: "string", description: "Agent identity (defaults to server-resolved name)." },
-        service: { type: "string", description: "Provider/skill identifier, e.g. 'paysponge/fal'." },
-        status: { type: "string", description: "Outcome of the paid call ('success', 'failed', ...)." },
-        reason: { type: "string", description: "Why the paid call was made — short imperative sentence." },
+        agent: {
+          type: "string",
+          description: "Agent identity (defaults to server-resolved name).",
+        },
+        service: {
+          type: "string",
+          description: "Provider/skill identifier, e.g. 'paysponge/fal'.",
+        },
+        status: {
+          type: "string",
+          description: "Outcome of the paid call ('success', 'failed', ...).",
+        },
+        reason: {
+          type: "string",
+          description: "Why the paid call was made — short imperative sentence.",
+        },
         category: { type: "string", description: "Optional category tag." },
         endpoint: { type: "string", description: "Gateway endpoint URL returned by pay-skills." },
         expected_cost: { type: "string", description: "Pre-call expected price range." },
-        actual_amount: { type: "string", description: "Actual amount charged (parsed from pay-tool output)." },
+        actual_amount: {
+          type: "string",
+          description: "Actual amount charged (parsed from pay-tool output).",
+        },
         currency: { type: "string", description: "Currency code (e.g. 'USDC')." },
         payment_proof: { type: "string", description: "Public proof / signature / receipt id." },
         result_ref: { type: "string", description: "Generated asset URL or response id." },
-        result_note: { type: "string", description: "Vault path to the asset note (wikilink target)." },
-        raw_output: { type: "string", description: "Raw payment-tool output to persist after redaction." },
-        slug: { type: "string", description: "Optional slug override; default derives from service+reason." },
-        date: { type: "string", description: "Receipt date in YYYY-MM-DD; default = today (vault tz)." },
-        time: { type: "string", description: "Receipt time in HH:MM 24h; default = now (vault tz)." },
+        result_note: {
+          type: "string",
+          description: "Vault path to the asset note (wikilink target).",
+        },
+        raw_output: {
+          type: "string",
+          description: "Raw payment-tool output to persist after redaction.",
+        },
+        slug: {
+          type: "string",
+          description: "Optional slug override; default derives from service+reason.",
+        },
+        date: {
+          type: "string",
+          description: "Receipt date in YYYY-MM-DD; default = today (vault tz).",
+        },
+        time: {
+          type: "string",
+          description: "Receipt time in HH:MM 24h; default = now (vault tz).",
+        },
         overwrite: { type: "boolean", description: "Allow overwriting an existing receipt." },
         policy_status: {
           type: "string",
@@ -401,11 +421,13 @@ export const PAY_MEMORY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         payment_layer: {
           type: "string",
-          description: "Payment rail (default `pay.sh`). Override only when a different rail was used.",
+          description:
+            "Payment rail (default `pay.sh`). Override only when a different rail was used.",
         },
         network: {
           type: "string",
-          description: "Settlement network (default `solana`). Override only when a different network was used.",
+          description:
+            "Settlement network (default `solana`). Override only when a different network was used.",
         },
       },
       required: ["service", "status", "reason"],
@@ -421,12 +443,24 @@ export const PAY_MEMORY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       type: "object",
       properties: {
         title: { type: "string", description: "Human-readable asset title." },
-        service: { type: "string", description: "Provider/skill identifier that produced the asset." },
+        service: {
+          type: "string",
+          description: "Provider/skill identifier that produced the asset.",
+        },
         result_url: { type: "string", description: "URL or identifier of the generated asset." },
         source_receipt: { type: "string", description: "Vault path to the receipt note." },
-        prompt: { type: "string", description: "Prompt sent to the service (rendered as a quote block)." },
-        used_in: { type: "string", description: "Vault path of the draft/page that consumes this asset." },
-        slug: { type: "string", description: "Optional slug override; default derives from title." },
+        prompt: {
+          type: "string",
+          description: "Prompt sent to the service (rendered as a quote block).",
+        },
+        used_in: {
+          type: "string",
+          description: "Vault path of the draft/page that consumes this asset.",
+        },
+        slug: {
+          type: "string",
+          description: "Optional slug override; default derives from title.",
+        },
         overwrite: { type: "boolean", description: "Allow overwriting an existing asset note." },
       },
       required: ["title", "service", "result_url"],
@@ -494,17 +528,22 @@ export const PAY_MEMORY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "payment_policy_check",
-    description:
-      `Evaluate a prospective paid call against ${PAY_MEMORY_SPENDING_JSON_REL}. Returns allowed / approval_required / denied + the rule that fired.`,
+    description: `Evaluate a prospective paid call against ${PAY_MEMORY_SPENDING_JSON_REL}. Returns allowed / approval_required / denied + the rule that fired.`,
     inputSchema: {
       type: "object",
       properties: {
-        service: { type: "string", description: "Provider/skill identifier, e.g. 'paysponge/fal'." },
+        service: {
+          type: "string",
+          description: "Provider/skill identifier, e.g. 'paysponge/fal'.",
+        },
         expected_amount: {
           type: ["number", "string"],
           description: "Expected payment amount; numeric or numeric-string.",
         },
-        currency: { type: "string", description: "Currency code; defaults to the policy currency." },
+        currency: {
+          type: "string",
+          description: "Currency code; defaults to the policy currency.",
+        },
         category: { type: "string", description: "Optional category for per-category caps." },
         date: { type: "string", description: "Date in YYYY-MM-DD; default = today (vault tz)." },
       },
@@ -515,12 +554,14 @@ export const PAY_MEMORY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "payment_report_generate",
-    description:
-      `Aggregate a date's payment receipts into a Markdown report under ${PAY_MEMORY_REPORTS_REL}/.`,
+    description: `Aggregate a date's payment receipts into a Markdown report under ${PAY_MEMORY_REPORTS_REL}/.`,
     inputSchema: {
       type: "object",
       properties: {
-        date: { type: "string", description: "Date in YYYY-MM-DD whose receipts will be aggregated." },
+        date: {
+          type: "string",
+          description: "Date in YYYY-MM-DD whose receipts will be aggregated.",
+        },
         title: { type: "string", description: "Report title; default 'Payment Report <date>'." },
         task: { type: "string", description: "Optional task description rendered in the body." },
         slug: { type: "string", description: "Optional slug override." },

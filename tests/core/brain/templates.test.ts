@@ -10,10 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  buildSubstitutions,
-  renderTemplate,
-} from "../../../src/core/brain/templates.ts";
+import { buildSubstitutions, renderTemplate } from "../../../src/core/brain/templates.ts";
 
 describe("renderTemplate", () => {
   test("replaces a single placeholder verbatim", () => {
@@ -26,12 +23,9 @@ describe("renderTemplate", () => {
       ["vault_name", "alpha"],
       ["schema_version", "1"],
     ]);
-    expect(
-      renderTemplate(
-        "vault {{vault_name}} schema {{schema_version}}",
-        subs,
-      ),
-    ).toBe("vault alpha schema 1");
+    expect(renderTemplate("vault {{vault_name}} schema {{schema_version}}", subs)).toBe(
+      "vault alpha schema 1",
+    );
   });
 
   test("preserves literal $& / $1 in substitution values (regression: CR on PR #21)", () => {
@@ -47,9 +41,7 @@ describe("renderTemplate", () => {
     ];
     for (const [input, expected] of cases) {
       const subs = new Map([["vault_name", input]]);
-      expect(renderTemplate("name={{vault_name}}", subs)).toBe(
-        `name=${expected}`,
-      );
+      expect(renderTemplate("name={{vault_name}}", subs)).toBe(`name=${expected}`);
     }
   });
 

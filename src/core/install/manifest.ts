@@ -48,8 +48,8 @@ export function readManifest(vault: string): Manifest {
     parsed = JSON.parse(raw);
   } catch (e) {
     throw new Error(
-      `install manifest is corrupted JSON: ${path}\n` +
-        `Original error: ${(e as Error).message}`,
+      `install manifest is corrupted JSON: ${path}\n` + `Original error: ${(e as Error).message}`,
+      { cause: e },
     );
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {

@@ -88,9 +88,9 @@ describe("detectFormat", () => {
     // permission-mode, attachment. They have `type` and `sessionId`
     // but no `message.role`. Detection must keep scanning so a real
     // user/assistant line drives the decision.
-    expect(
-      detectFormat(JSON.stringify({ type: "queue-operation", sessionId: "abc" })),
-    ).toBe("unknown");
+    expect(detectFormat(JSON.stringify({ type: "queue-operation", sessionId: "abc" }))).toBe(
+      "unknown",
+    );
     expect(
       detectFormat(JSON.stringify({ type: "permission-mode", permissionMode: "default" })),
     ).toBe("unknown");

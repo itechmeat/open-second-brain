@@ -12,12 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -115,9 +110,7 @@ describe("status-vs-folder mismatch", () => {
     );
     const res = runDoctor(tmp);
     expect(res.errors).toEqual([]);
-    expect(res.warnings.some((w) => w.code === "status-folder-mismatch")).toBe(
-      true,
-    );
+    expect(res.warnings.some((w) => w.code === "status-folder-mismatch")).toBe(true);
   });
 });
 
@@ -136,9 +129,7 @@ describe("broken wikilinks", () => {
     expect(res.errors).toEqual([]);
     expect(
       res.warnings.some(
-        (w) =>
-          w.code === "broken-wikilink" &&
-          w.message.includes("sig-never-existed"),
+        (w) => w.code === "broken-wikilink" && w.message.includes("sig-never-existed"),
       ),
     ).toBe(true);
   });
@@ -164,9 +155,7 @@ describe("broken wikilinks", () => {
       evidenced_by: ["[[sig-2026-05-13-alpha]]"],
     });
     const res = runDoctor(tmp);
-    expect(res.warnings.filter((w) => w.code === "broken-wikilink")).toEqual(
-      [],
-    );
+    expect(res.warnings.filter((w) => w.code === "broken-wikilink")).toEqual([]);
   });
 });
 
@@ -303,10 +292,7 @@ describe("schema_version", () => {
     );
     const res = runDoctor(tmp);
     expect(
-      res.errors.some(
-        (e) =>
-          e.code === "schema-version-unknown" || e.code === "config-invalid",
-      ),
+      res.errors.some((e) => e.code === "schema-version-unknown" || e.code === "config-invalid"),
     ).toBe(true);
   });
 });
@@ -338,11 +324,9 @@ describe("required fields per kind", () => {
       "utf8",
     );
     const res = runDoctor(tmp);
-    expect(
-      res.errors.some(
-        (e) => e.code === "signal-invalid" && /topic/.test(e.message),
-      ),
-    ).toBe(true);
+    expect(res.errors.some((e) => e.code === "signal-invalid" && /topic/.test(e.message))).toBe(
+      true,
+    );
   });
 });
 
@@ -399,9 +383,7 @@ describe("retired entries", () => {
     );
     const res = runDoctor(tmp);
     expect(res.errors).toEqual([]);
-    expect(res.warnings.filter((w) => w.code === "broken-wikilink")).toEqual(
-      [],
-    );
+    expect(res.warnings.filter((w) => w.code === "broken-wikilink")).toEqual([]);
   });
 });
 
@@ -471,9 +453,7 @@ describe("duplicate-preferences lint", () => {
       applied_count: 3,
     });
     const res = runDoctor(tmp);
-    expect(
-      res.warnings.find((w) => w.code === "duplicate-preferences"),
-    ).toBeUndefined();
+    expect(res.warnings.find((w) => w.code === "duplicate-preferences")).toBeUndefined();
   });
 });
 
@@ -512,9 +492,7 @@ describe("low-evidence-confirmed lint", () => {
     });
     const now = new Date("2026-05-12T00:00:00Z"); // 2 days past confirmed
     const res = runDoctor(tmp, { now });
-    expect(
-      res.warnings.find((w) => w.code === "low-evidence-confirmed"),
-    ).toBeUndefined();
+    expect(res.warnings.find((w) => w.code === "low-evidence-confirmed")).toBeUndefined();
   });
 });
 
@@ -556,9 +534,7 @@ describe("pinned-without-recent-evidence lint", () => {
     });
     const now = new Date("2026-05-15T00:00:00Z"); // 125 days past last evidence
     const res = runDoctor(tmp, { now });
-    expect(
-      res.warnings.find((w) => w.code === "pinned-without-recent-evidence"),
-    ).toBeDefined();
+    expect(res.warnings.find((w) => w.code === "pinned-without-recent-evidence")).toBeDefined();
   });
 
   test("does NOT flag unpinned prefs", () => {
@@ -577,9 +553,7 @@ describe("pinned-without-recent-evidence lint", () => {
     });
     const now = new Date("2026-05-15T00:00:00Z");
     const res = runDoctor(tmp, { now });
-    expect(
-      res.warnings.find((w) => w.code === "pinned-without-recent-evidence"),
-    ).toBeUndefined();
+    expect(res.warnings.find((w) => w.code === "pinned-without-recent-evidence")).toBeUndefined();
   });
 });
 
@@ -640,9 +614,7 @@ tags: [brain, brain/log]
       "utf8",
     );
     const res = runDoctor(tmp);
-    expect(
-      res.warnings.find((w) => w.code === "malformed-evidence-range"),
-    ).toBeUndefined();
+    expect(res.warnings.find((w) => w.code === "malformed-evidence-range")).toBeUndefined();
   });
 });
 
@@ -773,19 +745,12 @@ vault:
 `,
     );
     const res = runDoctor(tmp);
-    expect(
-      res.warnings.find((w) => w.code === "vault-ignore-missing-path"),
-    ).toBeUndefined();
+    expect(res.warnings.find((w) => w.code === "vault-ignore-missing-path")).toBeUndefined();
   });
 
   test("does NOT warn when the vault block is absent (defaults source)", () => {
-    atomicWriteFileSync(
-      brainConfigPath(tmp),
-      `schema_version: 1\n`,
-    );
+    atomicWriteFileSync(brainConfigPath(tmp), `schema_version: 1\n`);
     const res = runDoctor(tmp);
-    expect(
-      res.warnings.find((w) => w.code === "vault-ignore-missing-path"),
-    ).toBeUndefined();
+    expect(res.warnings.find((w) => w.code === "vault-ignore-missing-path")).toBeUndefined();
   });
 });

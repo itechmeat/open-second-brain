@@ -30,8 +30,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(vault, { recursive: true, force: true }); } catch {}
-  try { rmSync(home, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(vault, { recursive: true, force: true });
+  } catch {}
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {}
 });
 
 function makeEnv(now = new Date("2026-05-20T12:00:00.000Z")) {
@@ -46,24 +50,33 @@ function makeEnv(now = new Date("2026-05-20T12:00:00.000Z")) {
 
 function makeStreams() {
   const stdout = new Writable({
-    write(chunk, _enc, cb) { stdoutBuf.push(chunk.toString()); cb(); },
+    write(chunk, _enc, cb) {
+      stdoutBuf.push(chunk.toString());
+      cb();
+    },
   });
   const stderr = new Writable({
-    write(chunk, _enc, cb) { stderrBuf.push(chunk.toString()); cb(); },
+    write(chunk, _enc, cb) {
+      stderrBuf.push(chunk.toString());
+      cb();
+    },
   });
   return { stdout, stderr };
 }
 
 function payload() {
   return buildPayload({
-    vault, agent_name: "claude-vps", timezone: "UTC",
+    vault,
+    agent_name: "claude-vps",
+    timezone: "UTC",
   });
 }
 
 function applyOpts(overrides: Record<string, unknown> = {}) {
   const { stdout, stderr } = makeStreams();
   return {
-    dryRun: false, force: false,
+    dryRun: false,
+    force: false,
     stdout: stdout as unknown as NodeJS.WriteStream,
     stderr: stderr as unknown as NodeJS.WriteStream,
     ...overrides,
@@ -110,8 +123,10 @@ describe("cursor adapter", () => {
 
   test("apply preserves unrelated mcpServers keys", () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
-    writeFileSync(cursorConfigPath(),
-      JSON.stringify({ mcpServers: { other: { command: "x", args: [] } } }, null, 2) + "\n");
+    writeFileSync(
+      cursorConfigPath(),
+      JSON.stringify({ mcpServers: { other: { command: "x", args: [] } } }, null, 2) + "\n",
+    );
     const p = payload();
     const plan = cursorAdapter.plan(p, makeEnv());
     cursorAdapter.apply(plan, p, makeEnv(), applyOpts());
@@ -165,8 +180,10 @@ describe("cursor adapter", () => {
 
   test("uninstall removes both OSB keys, preserves user key, drops manifest entry", () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
-    writeFileSync(cursorConfigPath(),
-      JSON.stringify({ mcpServers: { other: { command: "x", args: [] } } }, null, 2) + "\n");
+    writeFileSync(
+      cursorConfigPath(),
+      JSON.stringify({ mcpServers: { other: { command: "x", args: [] } } }, null, 2) + "\n",
+    );
     const p = payload();
     cursorAdapter.apply(cursorAdapter.plan(p, makeEnv()), p, makeEnv(), applyOpts());
     cursorAdapter.uninstall(makeEnv(), applyOpts());
@@ -179,8 +196,14 @@ describe("cursor adapter", () => {
 
   test("uninstall without manifest entry throws manifest-missing", () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
-    writeFileSync(cursorConfigPath(),
-      JSON.stringify({ mcpServers: { "open-second-brain": { command: "o2b", args: ["mcp"] } } }, null, 2) + "\n");
+    writeFileSync(
+      cursorConfigPath(),
+      JSON.stringify(
+        { mcpServers: { "open-second-brain": { command: "o2b", args: ["mcp"] } } },
+        null,
+        2,
+      ) + "\n",
+    );
     try {
       cursorAdapter.uninstall(makeEnv(), applyOpts());
       expect.unreachable("should have thrown");
@@ -192,10 +215,17 @@ describe("cursor adapter", () => {
 
   test("uninstall --force-from-snippet works without manifest", () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
-    writeFileSync(cursorConfigPath(),
-      JSON.stringify({ mcpServers: { "open-second-brain": { command: "o2b", args: ["mcp"] } } }, null, 2) + "\n");
-    expect(() => cursorAdapter.uninstall(makeEnv(), applyOpts({ fromSnippet: true })))
-      .not.toThrow();
+    writeFileSync(
+      cursorConfigPath(),
+      JSON.stringify(
+        { mcpServers: { "open-second-brain": { command: "o2b", args: ["mcp"] } } },
+        null,
+        2,
+      ) + "\n",
+    );
+    expect(() =>
+      cursorAdapter.uninstall(makeEnv(), applyOpts({ fromSnippet: true })),
+    ).not.toThrow();
     const parsed = JSON.parse(readFileSync(cursorConfigPath(), "utf8"));
     expect(parsed.mcpServers["open-second-brain"]).toBeUndefined();
   });

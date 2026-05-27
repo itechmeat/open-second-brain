@@ -24,12 +24,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { dream } from "../../src/core/brain/dream.ts";
 import { moveToRetired, writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
-import {
-  brainDirs,
-  preferencePath,
-  retiredPath,
-  signalPath,
-} from "../../src/core/brain/paths.ts";
+import { brainDirs, preferencePath, retiredPath, signalPath } from "../../src/core/brain/paths.ts";
 
 let vault: string;
 
@@ -53,10 +48,7 @@ describe("signal body — no placeholder Raw", () => {
       agent: "claude",
       principle: "Something",
     });
-    const content = readFileSync(
-      signalPath(vault, "2026-05-16", "no-raw-here"),
-      "utf8",
-    );
+    const content = readFileSync(signalPath(vault, "2026-05-16", "no-raw-here"), "utf8");
     expect(content).not.toContain("## Raw");
     expect(content).not.toContain("_(not provided)_");
   });
@@ -72,10 +64,7 @@ describe("signal body — no placeholder Raw", () => {
       principle: "Something",
       raw: "verbatim user quote",
     });
-    const content = readFileSync(
-      signalPath(vault, "2026-05-16", "with-raw"),
-      "utf8",
-    );
+    const content = readFileSync(signalPath(vault, "2026-05-16", "with-raw"), "utf8");
     expect(content).toContain("## Raw");
     expect(content).toContain("verbatim user quote");
   });
@@ -319,9 +308,7 @@ describe("§6 signal suppression", () => {
     expect(summary.suppressed.length).toBe(0);
     // A new pref is created (slug is suffixed because ret-scoped reserves
     // the bare slug, hence pref-scoped-2).
-    expect(summary.new_unconfirmed.some((id) => id.startsWith("pref-scoped"))).toBe(
-      true,
-    );
+    expect(summary.new_unconfirmed.some((id) => id.startsWith("pref-scoped"))).toBe(true);
     const logPath = join(vault, "Brain", "log", "2026-05-16.md");
     const log = readFileSync(logPath, "utf8");
     expect(log).not.toContain("signal-suppressed");

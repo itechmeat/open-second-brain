@@ -96,7 +96,9 @@ describe("resolveCanonicalId", () => {
       const target = i + 1 < n ? `pref-p${i + 1}` : undefined;
       writePref(
         `p${i}`,
-        target ? { topic: "x", principle: "y", merged_into: target } : { topic: "x", principle: "y" },
+        target
+          ? { topic: "x", principle: "y", merged_into: target }
+          : { topic: "x", principle: "y" },
       );
     }
     try {

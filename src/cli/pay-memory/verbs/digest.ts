@@ -27,9 +27,7 @@ export async function cmdPaymentDigest(argv: string[]): Promise<number> {
       tz,
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to build digest: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to build digest: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
 

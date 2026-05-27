@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  loadManifest, saveManifest, type ClaudeMemoryManifest,
+  loadManifest,
+  saveManifest,
+  type ClaudeMemoryManifest,
 } from "../../../src/core/brain/claude-memory-manifest.ts";
 
 describe("claude-memory manifest", () => {

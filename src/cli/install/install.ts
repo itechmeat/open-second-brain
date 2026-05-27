@@ -37,11 +37,7 @@ import "../../core/install/adapters/pi.ts";
 
 import { buildPayload, PayloadError } from "../../core/install/payload.ts";
 import { InstallError } from "../../core/install/types.ts";
-import type {
-  ApplyOpts,
-  InstallEnv,
-  VerifyResult,
-} from "../../core/install/types.ts";
+import type { ApplyOpts, InstallEnv, VerifyResult } from "../../core/install/types.ts";
 import {
   renderApplyJson,
   renderApplyResult,

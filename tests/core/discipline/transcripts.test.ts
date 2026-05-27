@@ -18,7 +18,9 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "osb-transcripts-h-"));
 });
 afterEach(() => {
-  try { rmSync(home, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {}
 });
 
 const DAY_START = new Date("2026-05-19T00:00:00Z").getTime();
@@ -115,10 +117,12 @@ describe("collectTranscriptActivity aggregator", () => {
     writeWithMtime(join(wdir, "state.vscdb"), "x", IN_DAY);
 
     const out = collectTranscriptActivity({
-      dayStartMs: DAY_START, dayEndMs: DAY_END, home,
+      dayStartMs: DAY_START,
+      dayEndMs: DAY_END,
+      home,
     });
     expect(out.totalFiles).toBe(4);
-    expect(out.byRuntime.map((b) => `${b.runtime}=${b.fileCount}`).sort()).toEqual([
+    expect(out.byRuntime.map((b) => `${b.runtime}=${b.fileCount}`).toSorted()).toEqual([
       "claudecode=1",
       "codex=2",
       "cursor=1",
@@ -127,7 +131,9 @@ describe("collectTranscriptActivity aggregator", () => {
 
   test("totalFiles is zero when no runtime found anything", () => {
     const out = collectTranscriptActivity({
-      dayStartMs: DAY_START, dayEndMs: DAY_END, home,
+      dayStartMs: DAY_START,
+      dayEndMs: DAY_END,
+      home,
     });
     expect(out.totalFiles).toBe(0);
   });

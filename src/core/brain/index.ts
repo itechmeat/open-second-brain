@@ -75,11 +75,7 @@ export type { RegenerateActiveOptions, RegenerateActiveResult } from "./active.t
 
 // ----- Backlink index -------------------------------------------------------
 export { buildBacklinkIndex, backlinkCount } from "./backlinks.ts";
-export type {
-  BacklinkIndex,
-  BacklinkRef,
-  BacklinkSourceKind,
-} from "./backlinks.ts";
+export type { BacklinkIndex, BacklinkRef, BacklinkSourceKind } from "./backlinks.ts";
 
 // ----- Operational status ---------------------------------------------------
 export { computeBrainStatus } from "./status.ts";
@@ -89,11 +85,7 @@ export type {
   ComputeBrainStatusOptions,
 } from "./status.ts";
 
-export type {
-  BrainDirs,
-  AllocateSlugOptions,
-  AllocateSlugResult,
-} from "./paths.ts";
+export type { BrainDirs, AllocateSlugOptions, AllocateSlugResult } from "./paths.ts";
 
 // ----- Configuration --------------------------------------------------------
 export {
@@ -108,19 +100,11 @@ export {
   parseBrainYaml,
 } from "./policy.ts";
 
-export type {
-  BrainConfigLoadWarning,
-  LoadBrainConfigResult,
-  ValidateResult,
-} from "./policy.ts";
+export type { BrainConfigLoadWarning, LoadBrainConfigResult, ValidateResult } from "./policy.ts";
 
 // ----- Time helpers ---------------------------------------------------------
 export { isoSecond, isoDate } from "./time.ts";
 
 // ----- Wikilink helpers -----------------------------------------------------
-export {
-  normaliseWikilinkTarget,
-  parseWikilink,
-  parseArtifactRef,
-} from "./wikilink.ts";
+export { normaliseWikilinkTarget, parseWikilink, parseArtifactRef } from "./wikilink.ts";
 export type { ArtifactRange, ArtifactRefParse } from "./wikilink.ts";

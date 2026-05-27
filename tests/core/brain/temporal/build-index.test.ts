@@ -40,15 +40,9 @@ interface FixtureEvent {
   readonly body: Record<string, string | ReadonlyArray<string>>;
 }
 
-function writeJsonlDay(
-  vault: string,
-  date: string,
-  events: ReadonlyArray<FixtureEvent>,
-): void {
+function writeJsonlDay(vault: string, date: string, events: ReadonlyArray<FixtureEvent>): void {
   const lines = events
-    .map((e) =>
-      JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }),
-    )
+    .map((e) => JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }))
     .join("\n");
   writeFileSync(join(vault, "Brain", "log", `${date}.jsonl`), lines + "\n");
 }
@@ -185,11 +179,7 @@ describe("buildTimelineIndex", () => {
       },
     ]);
     const idx = buildTimelineIndex(VAULT, {});
-    expect(idx.events.map((e) => e.text)).toEqual([
-      "noon-19",
-      "afternoon-20",
-      "morning-21",
-    ]);
+    expect(idx.events.map((e) => e.text)).toEqual(["noon-19", "afternoon-20", "morning-21"]);
   });
 
   test("window since/until: inclusive lower, exclusive upper", () => {
@@ -222,10 +212,7 @@ describe("buildTimelineIndex", () => {
       until: "2026-05-21T00:00:00Z",
     });
     // lower-boundary included, upper-boundary excluded.
-    expect(idx.events.map((e) => e.text)).toEqual([
-      "lower-boundary",
-      "inside",
-    ]);
+    expect(idx.events.map((e) => e.text)).toEqual(["lower-boundary", "inside"]);
   });
 
   test("window since/until accept bare ISO date (interpreted as T00:00:00Z)", () => {

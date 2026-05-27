@@ -17,9 +17,7 @@ export const geminiCliAdapter = createJsonMcpAdapter({
   target: "gemini-cli",
   label: "Google Gemini CLI",
   resolveConfigPath: configPath,
-  postNotes: [
-    "Start `gemini` to load the registered MCP servers.",
-  ],
+  postNotes: ["Start `gemini` to load the registered MCP servers."],
 });
 
 defaultRegistry.register(geminiCliAdapter);

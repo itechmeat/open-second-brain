@@ -17,10 +17,7 @@ import { join, posix } from "node:path";
 
 import { BRAIN_ROOT_REL } from "../brain/paths.ts";
 
-export {
-  ensureInsideVault,
-  vaultRelative,
-} from "../path-safety.ts";
+export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 
 // ----- Canonical Pay Memory path constants ----------------------------------
 //
@@ -40,14 +37,8 @@ export const PAY_MEMORY_REPORTS_REL = posix.join(PAY_MEMORY_ROOT_REL, "reports")
 export const PAY_MEMORY_PENDING_REL = posix.join(PAY_MEMORY_ROOT_REL, "_pending");
 
 /** Spending-policy file paths (vault-relative). */
-export const PAY_MEMORY_SPENDING_MD_REL = posix.join(
-  PAY_MEMORY_POLICIES_REL,
-  "spending.md",
-);
-export const PAY_MEMORY_SPENDING_JSON_REL = posix.join(
-  PAY_MEMORY_POLICIES_REL,
-  "spending.json",
-);
+export const PAY_MEMORY_SPENDING_MD_REL = posix.join(PAY_MEMORY_POLICIES_REL, "spending.md");
+export const PAY_MEMORY_SPENDING_JSON_REL = posix.join(PAY_MEMORY_POLICIES_REL, "spending.json");
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const HHMM_RE = /^(\d{2}):(\d{2})$/;
@@ -96,8 +87,7 @@ export function reportPath(vault: string, slug: string): string {
 // rejects any path whose final component matches them — even with an
 // extension. We reject these here so the same vault can be cloned to a
 // Windows host without surprise EINVALs at write time.
-const WINDOWS_RESERVED_BASENAME_RE =
-  /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+const WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
 /**
  * Reject slugs that could escape the intended Pay Memory subdirectory or
@@ -118,9 +108,7 @@ export function validateSlug(slug: string): string {
     throw new Error(`slug must not contain '..' traversal: ${slug}`);
   }
   if (/[. ]$/.test(trimmed)) {
-    throw new Error(
-      `slug must not end with '.' or whitespace (Windows-incompatible): ${slug}`,
-    );
+    throw new Error(`slug must not end with '.' or whitespace (Windows-incompatible): ${slug}`);
   }
   if (WINDOWS_RESERVED_BASENAME_RE.test(trimmed)) {
     throw new Error(`slug uses a Windows-reserved filename: ${slug}`);
@@ -157,9 +145,7 @@ export function validateIsoTime(value: string): string {
   const hour = parseInt(m[1]!, 10);
   const minute = parseInt(m[2]!, 10);
   if (hour > 23 || minute > 59) {
-    throw new Error(
-      `payment time out of range: ${value} (hour must be 0-23, minute 0-59)`,
-    );
+    throw new Error(`payment time out of range: ${value} (hour must be 0-23, minute 0-59)`);
   }
   return value;
 }
@@ -251,4 +237,3 @@ function tzOffsetMinutes(instantMs: number, tz: string): number {
   );
   return Math.round((localUtcMs - instantMs) / 60_000);
 }
-

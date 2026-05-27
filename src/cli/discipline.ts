@@ -7,20 +7,14 @@
 
 import { defaultConfigPath, resolveVault } from "../core/config.ts";
 import { runDisciplineReport } from "../core/discipline/report.ts";
-import {
-  disciplineInstallVerb,
-  disciplineUninstallVerb,
-} from "./discipline-install.ts";
+import { disciplineInstallVerb, disciplineUninstallVerb } from "./discipline-install.ts";
 
 const NO_VAULT_ERROR =
   "error: no vault configured. Pass --vault <path> explicitly, " +
   "set VAULT_DIR in the environment, or run " +
   "`o2b init --vault <path> ...` first to persist a default.";
 
-function resolveDisciplineVault(
-  flagVal: string | undefined,
-  configPath: string | null,
-): string {
+function resolveDisciplineVault(flagVal: string | undefined, configPath: string | null): string {
   const vault = flagVal ?? resolveVault(configPath ?? undefined);
   if (vault === null || vault === undefined) {
     process.stderr.write(NO_VAULT_ERROR + "\n");
@@ -29,10 +23,7 @@ function resolveDisciplineVault(
   return vault;
 }
 
-export async function disciplineReportVerb(
-  args: string[],
-  defaultVault: string,
-): Promise<number> {
+export async function disciplineReportVerb(args: string[], defaultVault: string): Promise<number> {
   let vault = defaultVault;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--vault" && args[i + 1]) {
@@ -51,9 +42,7 @@ export async function disciplineReportVerb(
   return 0;
 }
 
-export async function handleDisciplineSubcommand(
-  argv: ReadonlyArray<string>,
-): Promise<number> {
+export async function handleDisciplineSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   const verb = argv[0];
   const rest = argv.slice(1) as string[];
 
@@ -86,9 +75,7 @@ export async function handleDisciplineSubcommand(
       return await disciplineUninstallVerb(rest, vault);
     }
     default:
-      process.stderr.write(
-        `error: unknown discipline subcommand: ${verb ?? "(none)"}\n`,
-      );
+      process.stderr.write(`error: unknown discipline subcommand: ${verb ?? "(none)"}\n`);
       return 2;
   }
 }

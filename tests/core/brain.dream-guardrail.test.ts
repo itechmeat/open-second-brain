@@ -77,10 +77,7 @@ describe("dream + self-approval guardrail (default config)", () => {
 
 describe("dream + self-approval guardrail (tighter config)", () => {
   test("3 signals from 1 agent: quarantined when min_distinct_agents=2", () => {
-    writeBrainCfg(
-      vault,
-      `guardrails:\n  promotion_min_distinct_agents: 2\n`,
-    );
+    writeBrainCfg(vault, `guardrails:\n  promotion_min_distinct_agents: 2\n`);
     seedPositiveSignals(vault, 3, "agent-a");
     const res = dream(vault);
     expect(res.new_unconfirmed).toEqual([]);
@@ -90,10 +87,7 @@ describe("dream + self-approval guardrail (tighter config)", () => {
   });
 
   test("cluster from two agents passes min_distinct_agents=2", () => {
-    writeBrainCfg(
-      vault,
-      `guardrails:\n  promotion_min_distinct_agents: 2\n`,
-    );
+    writeBrainCfg(vault, `guardrails:\n  promotion_min_distinct_agents: 2\n`);
     seedPositiveSignals(vault, 2, "agent-a", "test-topic", 1);
     seedPositiveSignals(vault, 2, "agent-b", "test-topic", 1);
     const res = dream(vault);

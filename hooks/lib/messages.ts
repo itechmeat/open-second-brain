@@ -47,11 +47,7 @@ function postWriteCadenceLine(runtime: HookRuntime): string {
   }
 }
 
-export function postWriteReminder({
-  toolName,
-  filePath,
-  runtime,
-}: PostWriteReminderInput): string {
+export function postWriteReminder({ toolName, filePath, runtime }: PostWriteReminderInput): string {
   const target = filePath ? `\`${filePath}\`` : "a file";
   const cadence = postWriteCadenceLine(runtime);
   const parts: string[] = [
@@ -61,8 +57,8 @@ export function postWriteReminder({
   if (cadence !== "") parts.push(cadence, "");
   parts.push(
     "If this turn contained a user preference, correction, or rule that",
-    "should outlast the current task (\"don't do X\", \"prefer Y\", \"use",
-    "A instead of B\"), call `brain_feedback` once per signal to record",
+    'should outlast the current task ("don\'t do X", "prefer Y", "use',
+    'A instead of B"), call `brain_feedback` once per signal to record',
     "it into `Brain/inbox/`.",
     "",
     "If a confirmed or unconfirmed preference in `Brain/preferences/`",
@@ -78,7 +74,7 @@ export function postWriteReminder({
     "",
     "Trivial edits (typo fix, pure formatting) don't need any of the",
     "three calls. When a preference plausibly applies but you are",
-    "unsure, record the event with `note: \"speculative; <reason>\"`",
+    'unsure, record the event with `note: "speculative; <reason>"`',
     "instead of skipping — the dream pass discards single-event",
     "speculative entries that do not recur.",
   );

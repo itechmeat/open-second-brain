@@ -8,27 +8,13 @@
  * regressions visible without re-deriving the structured shape.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { diffBrainTrees } from "../../src/core/brain/snapshot-diff.ts";
-import {
-  renderDiffJson,
-  renderDiffMarkdown,
-} from "../../src/core/brain/snapshot-diff-render.ts";
+import { renderDiffJson, renderDiffMarkdown } from "../../src/core/brain/snapshot-diff-render.ts";
 
 let scratch: string;
 
@@ -78,11 +64,7 @@ _violated_count: ${s.violated ?? 0}
 _last_evidence_at: null
 _confidence: ${s.confidence ?? "low"}
 _confidence_value: ${
-    s.confidence_value === undefined
-      ? 0
-      : s.confidence_value === null
-        ? "null"
-        : s.confidence_value
+    s.confidence_value === undefined ? 0 : s.confidence_value === null ? "null" : s.confidence_value
   }
 pinned: ${s.pinned ?? false}
 ---
@@ -184,7 +166,7 @@ describe("diffBrainTrees — field-level modifications", () => {
     const change = d.modified[0]!;
     expect(change.entry.id).toBe("pref-rule");
     expect(change.bodyChanged).toBe(false);
-    const fieldNames = change.fields.map((f) => f.field).sort();
+    const fieldNames = change.fields.map((f) => f.field).toSorted();
     expect(fieldNames).toEqual([
       "applied_count",
       "confidence",
@@ -227,12 +209,8 @@ describe("diffBrainTrees — ignored regions", () => {
     writeFileSync(join(a, ".snapshots", "x.tar.zst"), "old", "utf8");
     writeFileSync(join(b, ".snapshots", "y.tar.zst"), "new", "utf8");
     const d = diffBrainTrees(a, b);
-    expect(
-      d.added.find((e) => e.path.includes(".snapshots/")),
-    ).toBeUndefined();
-    expect(
-      d.removed.find((e) => e.path.includes(".snapshots/")),
-    ).toBeUndefined();
+    expect(d.added.find((e) => e.path.includes(".snapshots/"))).toBeUndefined();
+    expect(d.removed.find((e) => e.path.includes(".snapshots/"))).toBeUndefined();
   });
 
   test("symlinks are not followed (defense against malicious snapshot tarballs)", async () => {
@@ -248,11 +226,7 @@ describe("diffBrainTrees — ignored regions", () => {
     symlinkSync(secret, join(b, "preferences", "pref-trojan.md"));
     const d = diffBrainTrees(a, b);
     // The symlink must not appear in any diff section.
-    const allEntries = [
-      ...d.added,
-      ...d.removed,
-      ...d.modified.map((c) => c.entry),
-    ];
+    const allEntries = [...d.added, ...d.removed, ...d.modified.map((c) => c.entry)];
     expect(allEntries.find((e) => e.path.includes("pref-trojan"))).toBeUndefined();
   });
 });
@@ -268,12 +242,7 @@ describe("diffBrainTrees — output ordering", () => {
     const d = diffBrainTrees(a, b);
     const addedKinds = d.added.map((e) => e.kind);
     // 'preference' < 'signal' alphabetically — preferences come first.
-    expect(addedKinds).toEqual([
-      "preference",
-      "preference",
-      "signal",
-      "signal",
-    ]);
+    expect(addedKinds).toEqual(["preference", "preference", "signal", "signal"]);
     expect(d.added.map((e) => e.id)).toEqual([
       "pref-alpha",
       "pref-zeta",

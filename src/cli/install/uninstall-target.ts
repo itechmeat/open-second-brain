@@ -77,9 +77,7 @@ export async function cmdUninstallTarget(argv: string[]): Promise<number> {
       return 0;
     }
     const lines: string[] = [];
-    lines.push(
-      `o2b uninstall --target ${target}` + (dryRun ? " (dry-run)" : " --apply"),
-    );
+    lines.push(`o2b uninstall --target ${target}` + (dryRun ? " (dry-run)" : " --apply"));
     if (result.removed_keys.length > 0) {
       lines.push("  removed keys:");
       for (const k of result.removed_keys) lines.push(`    - ${k}`);

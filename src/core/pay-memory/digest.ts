@@ -106,9 +106,7 @@ export function renderPaymentDigestTelegram(
     return SILENT_TOKEN;
   }
 
-  const lines: string[] = [
-    `💳 Оплачено сервисов: **${digest.services}**`,
-  ];
+  const lines: string[] = [`💳 Оплачено сервисов: **${digest.services}**`];
   if (digest.totalAmount !== null) {
     const amount = formatAmount(digest.totalAmount);
     const cur = digest.currency ?? "?";

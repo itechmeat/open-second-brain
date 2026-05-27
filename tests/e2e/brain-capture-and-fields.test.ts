@@ -13,14 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -60,7 +53,7 @@ describe("capture + migration end-to-end", () => {
       [
         "# Daily notes",
         "",
-        "@osb feedback negative topic=e2e-inline principle=\"no e2e shortcuts\"",
+        '@osb feedback negative topic=e2e-inline principle="no e2e shortcuts"',
         "",
       ].join("\n"),
       "utf8",
@@ -88,21 +81,17 @@ describe("capture + migration end-to-end", () => {
     const inlineSigs = readdirSync(inbox).filter((n) => n.startsWith("sig-"));
     expect(inlineSigs.length).toBe(1);
     // The .obsidian marker MUST NOT have produced a signal.
-    expect(
-      inlineSigs.some((n) => n.includes("e2e-obsidian-leak")),
-    ).toBe(false);
+    expect(inlineSigs.some((n) => n.includes("e2e-obsidian-leak"))).toBe(false);
 
     // Step 4: import-session adds an independent signal from the
     // claude fixture (topic=mocking, distinct from e2e-inline).
     const fixturePath = resolve("tests/fixtures/sessions/claude-minimal.jsonl");
-    r = await runCli(
-      ["brain", "import-session", fixturePath, "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    r = await runCli(["brain", "import-session", fixturePath, "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
 
     const sigsAfterImport = readdirSync(inbox).filter((n) => n.startsWith("sig-"));
     expect(sigsAfterImport.length).toBeGreaterThan(inlineSigs.length);
-
   }, 60_000);
 });

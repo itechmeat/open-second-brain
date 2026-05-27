@@ -24,18 +24,64 @@ async function seed() {
     mode: "write",
     loadVec: false,
   });
-  const a = store.upsertDocument({ path: "a.md", title: "A", contentHash: "ha", mtime: 1, size: 1 });
-  const b = store.upsertDocument({ path: "b.md", title: "B", contentHash: "hb", mtime: 1, size: 1 });
-  const c = store.upsertDocument({ path: "c.md", title: "C", contentHash: "hc", mtime: 1, size: 1 });
+  const a = store.upsertDocument({
+    path: "a.md",
+    title: "A",
+    contentHash: "ha",
+    mtime: 1,
+    size: 1,
+  });
+  const b = store.upsertDocument({
+    path: "b.md",
+    title: "B",
+    contentHash: "hb",
+    mtime: 1,
+    size: 1,
+  });
+  const c = store.upsertDocument({
+    path: "c.md",
+    title: "C",
+    contentHash: "hc",
+    mtime: 1,
+    size: 1,
+  });
   const aChunks = store.replaceChunks(a, [
-    { chunkIndex: 0, content: "alpha head", contentHash: "a0", startLine: 1, endLine: 1, tokenCount: 2 },
-    { chunkIndex: 1, content: "alpha tail", contentHash: "a1", startLine: 2, endLine: 2, tokenCount: 2 },
+    {
+      chunkIndex: 0,
+      content: "alpha head",
+      contentHash: "a0",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 2,
+    },
+    {
+      chunkIndex: 1,
+      content: "alpha tail",
+      contentHash: "a1",
+      startLine: 2,
+      endLine: 2,
+      tokenCount: 2,
+    },
   ]);
   store.replaceChunks(b, [
-    { chunkIndex: 0, content: "beta body", contentHash: "b0", startLine: 1, endLine: 1, tokenCount: 2 },
+    {
+      chunkIndex: 0,
+      content: "beta body",
+      contentHash: "b0",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 2,
+    },
   ]);
   store.replaceChunks(c, [
-    { chunkIndex: 0, content: "gamma body", contentHash: "c0", startLine: 1, endLine: 1, tokenCount: 2 },
+    {
+      chunkIndex: 0,
+      content: "gamma body",
+      contentHash: "c0",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 2,
+    },
   ]);
   // a -> b (wikilink), a -> c (markdown_link), a -> a (self, must be ignored),
   // a -> #tag (tag, must be ignored for traversal).
@@ -52,8 +98,8 @@ async function seed() {
 test("outboundLinkTargets returns resolved wikilink/markdown targets, excluding self and tags", async () => {
   const { store, a, b, c } = await seed();
   const map = store.outboundLinkTargets([a]);
-  const targets = (map.get(a) ?? []).slice().sort((x, y) => x - y);
-  expect(targets).toEqual([b, c].sort((x, y) => x - y));
+  const targets = (map.get(a) ?? []).slice().toSorted((x, y) => x - y);
+  expect(targets).toEqual([b, c].toSorted((x, y) => x - y));
   await store.close();
 });
 

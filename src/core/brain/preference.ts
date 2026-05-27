@@ -37,17 +37,8 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
-import {
-  formatFrontmatter,
-  parseFrontmatter,
-  writeFrontmatterAtomic,
-} from "../vault.ts";
-import {
-  brainDirs,
-  preferencePath,
-  retiredPath,
-  validateSlug,
-} from "./paths.ts";
+import { formatFrontmatter, parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { brainDirs, preferencePath, retiredPath, validateSlug } from "./paths.ts";
 import {
   BRAIN_CONFIDENCE,
   BRAIN_PREFERENCE_STATUS,
@@ -74,12 +65,7 @@ export class BrainStatusFolderMismatchError extends Error {
   readonly status: string;
   readonly folder: "preferences" | "retired";
 
-  constructor(
-    message: string,
-    path: string,
-    status: string,
-    folder: "preferences" | "retired",
-  ) {
+  constructor(message: string, path: string, status: string, folder: "preferences" | "retired") {
     super(`${message} (path=${path}, status=${status}, folder=${folder})`);
     this.name = "BrainStatusFolderMismatchError";
     this.path = path;
@@ -258,7 +244,6 @@ export function writePreference(
     }
   }
 
-
   writeFrontmatterAtomic(path, metadata, body, {
     overwrite: options.overwrite ?? false,
     existsErrorKind: "preference",
@@ -281,10 +266,7 @@ export function writePreference(
  * body. Caller-side cost is negligible compared with the writePref
  * + log overhead avoided when the body is up to date.
  */
-export function wouldRewritePreference(
-  vault: string,
-  input: WritePreferenceInput,
-): boolean {
+export function wouldRewritePreference(vault: string, input: WritePreferenceInput): boolean {
   const slug = validateSlug(input.slug);
   const path = preferencePath(vault, slug);
   if (!existsSync(path)) return true;
@@ -302,10 +284,7 @@ export function wouldRewritePreference(
   }
 }
 
-function preferenceFrontmatter(
-  input: WritePreferenceInput,
-  id: string,
-): FrontmatterMap {
+function preferenceFrontmatter(input: WritePreferenceInput, id: string): FrontmatterMap {
   const tags = composePreferenceTags(input);
   const confidence = input.confidence ?? BRAIN_CONFIDENCE.low;
   const pinned = input.pinned ?? false;
@@ -442,10 +421,7 @@ function renderPreferenceBody(input: WritePreferenceInput): string {
   return sections.join("\n\n");
 }
 
-function renderEvidenceSection(
-  heading: string,
-  rows: ReadonlyArray<BrainEvidenceSummary>,
-): string {
+function renderEvidenceSection(heading: string, rows: ReadonlyArray<BrainEvidenceSummary>): string {
   const lines: string[] = [`## ${heading}`, ""];
   for (const ev of rows) {
     const parts: string[] = [`- ${ev.artifact}`, `— ${ev.timestamp}`];
@@ -730,9 +706,7 @@ export function moveToRetired(
   // file: a misrouted call fails fast with no destructive side effect.
   const dirs = brainDirs(vault);
   if (dirname(prefPath) !== dirs.preferences) {
-    throw new Error(
-      `moveToRetired: source path was not under preferences/: ${prefPath}`,
-    );
+    throw new Error(`moveToRetired: source path was not under preferences/: ${prefPath}`);
   }
 
   const [meta, body] = parseFrontmatter(prefPath);
@@ -770,9 +744,7 @@ export function moveToRetired(
     if (k === "tags") {
       // Replace the `brain/preference` tag with `brain/retired`.
       const arr = Array.isArray(v) ? [...v] : [];
-      newMeta["tags"] = arr.map((t) =>
-        t === "brain/preference" ? "brain/retired" : t,
-      );
+      newMeta["tags"] = arr.map((t) => (t === "brain/preference" ? "brain/retired" : t));
       continue;
     }
     // Group C derived fields go to disk in the `_`-prefixed shape so
@@ -825,12 +797,8 @@ export function moveToRetired(
     unconfirmed_until: requireString(meta, "unconfirmed_until", prefPath),
     status: BRAIN_PREFERENCE_STATUS.confirmed, // body render is status-agnostic
     evidenced_by: optionalStringArray(meta, "evidenced_by"),
-    ...(opts.evidenceApplied !== undefined
-      ? { recentApplied: opts.evidenceApplied }
-      : {}),
-    ...(opts.evidenceViolated !== undefined
-      ? { recentViolated: opts.evidenceViolated }
-      : {}),
+    ...(opts.evidenceApplied !== undefined ? { recentApplied: opts.evidenceApplied } : {}),
+    ...(opts.evidenceViolated !== undefined ? { recentViolated: opts.evidenceViolated } : {}),
   };
   // moveToRetired is also called outside dream (CLI reject) — when the
   // caller did not pre-fetch evidence, we collect it here so the
@@ -863,9 +831,7 @@ export function moveToRetired(
 
   // Confirm the new file actually landed before unlinking the source.
   if (!existsSync(newPath)) {
-    throw new Error(
-      `moveToRetired: write of ${newPath} reported success but file is absent`,
-    );
+    throw new Error(`moveToRetired: write of ${newPath} reported success but file is absent`);
   }
   unlinkSync(prefPath);
 
@@ -940,11 +906,7 @@ function enforceStatusFolderInvariant(
   }
 }
 
-function requireField(
-  meta: Record<string, unknown>,
-  field: string,
-  path: string,
-): void {
+function requireField(meta: Record<string, unknown>, field: string, path: string): void {
   if (!(field in meta) || meta[field] === undefined || meta[field] === null) {
     throw new Error(`preference missing field: ${field} (${path})`);
   }
@@ -953,11 +915,7 @@ function requireField(
   }
 }
 
-function requireString(
-  meta: Record<string, unknown>,
-  field: string,
-  path: string,
-): string {
+function requireString(meta: Record<string, unknown>, field: string, path: string): string {
   requireField(meta, field, path);
   const v = meta[field];
   if (typeof v !== "string") {
@@ -978,18 +936,13 @@ function requireStringArray(
   }
   for (const item of v) {
     if (typeof item !== "string") {
-      throw new Error(
-        `preference field '${field}' must be an array of strings (${path})`,
-      );
+      throw new Error(`preference field '${field}' must be an array of strings (${path})`);
     }
   }
   return [...(v as ReadonlyArray<string>)];
 }
 
-function optionalStringArray(
-  meta: Record<string, unknown>,
-  field: string,
-): ReadonlyArray<string> {
+function optionalStringArray(meta: Record<string, unknown>, field: string): ReadonlyArray<string> {
   const v = meta[field];
   if (v === undefined || v === null) return [];
   if (!Array.isArray(v)) {
@@ -997,9 +950,7 @@ function optionalStringArray(
   }
   for (const item of v) {
     if (typeof item !== "string") {
-      throw new Error(
-        `preference field '${field}' must be an array of strings`,
-      );
+      throw new Error(`preference field '${field}' must be an array of strings`);
     }
   }
   return [...(v as ReadonlyArray<string>)];
@@ -1011,10 +962,7 @@ function optionalStringArray(
  * the on-disk roundtrip survives the simple YAML emitter (which has no
  * native null token).
  */
-function optionalNullableString(
-  meta: Record<string, unknown>,
-  field: string,
-): string | null {
+function optionalNullableString(meta: Record<string, unknown>, field: string): string | null {
   const v = meta[field];
   if (v === undefined || v === null) return null;
   if (typeof v !== "string") {
@@ -1025,11 +973,7 @@ function optionalNullableString(
   return v;
 }
 
-function optionalNumber(
-  meta: Record<string, unknown>,
-  field: string,
-  fallback: number,
-): number {
+function optionalNumber(meta: Record<string, unknown>, field: string, fallback: number): number {
   const v = meta[field];
   if (v === undefined || v === null || v === "") return fallback;
   // The simple parser surfaces all values as strings; numerics included.
@@ -1046,10 +990,7 @@ function optionalNumber(
   throw new Error(`preference field '${field}' must be a number`);
 }
 
-function optionalScalarString(
-  meta: Record<string, unknown>,
-  field: string,
-): string | undefined {
+function optionalScalarString(meta: Record<string, unknown>, field: string): string | undefined {
   const v = meta[field];
   if (v === undefined || v === null) return undefined;
   if (typeof v !== "string") return undefined;
@@ -1057,10 +998,7 @@ function optionalScalarString(
   return trimmed === "" ? undefined : v;
 }
 
-function parseConfidence(
-  meta: Record<string, unknown>,
-  path: string,
-): BrainConfidence {
+function parseConfidence(meta: Record<string, unknown>, path: string): BrainConfidence {
   const v = meta["confidence"];
   if (v === undefined || v === null || v === "") return BRAIN_CONFIDENCE.low;
   if (typeof v !== "string") {
@@ -1085,10 +1023,7 @@ function parseConfidence(
  * hard parse error — drifting numeric confidence into `> 1` or
  * `NaN` would corrupt every downstream comparison silently.
  */
-function parseConfidenceValue(
-  meta: Record<string, unknown>,
-  path: string,
-): number | null {
+function parseConfidenceValue(meta: Record<string, unknown>, path: string): number | null {
   const v = meta["confidence_value"];
   if (v === undefined || v === null || v === "" || v === "null") return null;
   let n: number | null = null;

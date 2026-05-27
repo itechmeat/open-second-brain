@@ -3,10 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  backlinkCount,
-  buildBacklinkIndex,
-} from "../../src/core/brain/backlinks.ts";
+import { backlinkCount, buildBacklinkIndex } from "../../src/core/brain/backlinks.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writePreference, moveToRetired } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";

@@ -14,10 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  renderDigest,
-  type DigestJson,
-} from "../../src/core/brain/digest.ts";
+import { renderDigest, type DigestJson } from "../../src/core/brain/digest.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import {
@@ -118,10 +115,7 @@ describe("New (unconfirmed, in trial) section", () => {
   });
 
   test("omits unconfirmed prefs created outside the window", () => {
-    writePreference(
-      tmp,
-      basePref("old", { created_at: "2026-04-01T00:00:00Z" }),
-    );
+    writePreference(tmp, basePref("old", { created_at: "2026-04-01T00:00:00Z" }));
     const res = renderDigest(tmp, { since: SINCE, until: UNTIL });
     expect(res.empty).toBe(true);
     expect(res.content).not.toMatch(/\[\[pref-old[\]|]/);
@@ -244,10 +238,7 @@ describe("Markdown ↔ JSON parity", () => {
 
 describe("window filtering", () => {
   test("entries timestamped before `since` are excluded", () => {
-    writePreference(
-      tmp,
-      basePref("before-window", { created_at: "2026-04-01T00:00:00Z" }),
-    );
+    writePreference(tmp, basePref("before-window", { created_at: "2026-04-01T00:00:00Z" }));
     writePreference(tmp, basePref("inside-window"));
     const res = renderDigest(tmp, { since: SINCE, until: UNTIL });
     expect(res.content).toContain("[[pref-inside-window|");
@@ -256,10 +247,7 @@ describe("window filtering", () => {
 
   test("the upper bound is exclusive — until timestamp itself is dropped", () => {
     // created_at = until exactly → must be excluded.
-    writePreference(
-      tmp,
-      basePref("on-the-edge", { created_at: UNTIL.toISOString() }),
-    );
+    writePreference(tmp, basePref("on-the-edge", { created_at: UNTIL.toISOString() }));
     const res = renderDigest(tmp, { since: SINCE, until: UNTIL });
     expect(res.empty).toBe(true);
   });
@@ -328,14 +316,8 @@ describe("`empty` flag semantics", () => {
 
   test("default window is the last 24 hours when `since` is omitted", () => {
     const now = new Date("2026-05-14T20:00:00Z");
-    writePreference(
-      tmp,
-      basePref("recent", { created_at: "2026-05-14T15:00:00Z" }),
-    );
-    writePreference(
-      tmp,
-      basePref("old", { created_at: "2026-04-01T00:00:00Z" }),
-    );
+    writePreference(tmp, basePref("recent", { created_at: "2026-05-14T15:00:00Z" }));
+    writePreference(tmp, basePref("old", { created_at: "2026-04-01T00:00:00Z" }));
     const res = renderDigest(tmp, { until: now });
     expect(res.content).toContain("[[pref-recent|");
     expect(res.content).not.toMatch(/\[\[pref-old[\]|]/);

@@ -116,9 +116,11 @@ function splitLines(text: string): Line[] {
   return out;
 }
 
-function extractFrontmatter(
-  lines: ReadonlyArray<Line>,
-): { block: Block | null; remaining: ReadonlyArray<Line>; warnings: string[] } {
+function extractFrontmatter(lines: ReadonlyArray<Line>): {
+  block: Block | null;
+  remaining: ReadonlyArray<Line>;
+  warnings: string[];
+} {
   if (lines.length === 0 || lines[0]!.text.trim() !== "---") {
     return { block: null, remaining: lines, warnings: [] };
   }
@@ -217,7 +219,7 @@ function splitIntoBlocks(lines: ReadonlyArray<Line>): { blocks: Block[]; warning
     }
     if (FENCE_RE.test(text)) {
       const { end } = readCodeBlock(remaining, i);
-      blocks.push(makeBlock("code", [...remaining.slice(i, end + 1)]));
+      blocks.push(makeBlock("code", remaining.slice(i, end + 1)));
       i = end + 1;
       continue;
     }
@@ -228,18 +230,18 @@ function splitIntoBlocks(lines: ReadonlyArray<Line>): { blocks: Block[]; warning
     }
     if (LIST_ITEM_RE.test(text)) {
       const { end } = readList(remaining, i);
-      blocks.push(makeBlock("list", [...remaining.slice(i, end + 1)]));
+      blocks.push(makeBlock("list", remaining.slice(i, end + 1)));
       i = end + 1;
       continue;
     }
     if (isTableStart(remaining, i)) {
       const { end } = readTable(remaining, i);
-      blocks.push(makeBlock("table", [...remaining.slice(i, end + 1)]));
+      blocks.push(makeBlock("table", remaining.slice(i, end + 1)));
       i = end + 1;
       continue;
     }
     const { end } = readParagraph(remaining, i);
-    blocks.push(makeBlock("paragraph", [...remaining.slice(i, end + 1)]));
+    blocks.push(makeBlock("paragraph", remaining.slice(i, end + 1)));
     i = end + 1;
   }
 
@@ -273,17 +275,10 @@ function takeOverlap(prev: DraftChunk, overlapTokens: number): Line[] {
   return tail;
 }
 
-function emitChunk(
-  index: number,
-  overlap: ReadonlyArray<Line>,
-  draft: DraftChunk,
-): MarkdownChunk {
+function emitChunk(index: number, overlap: ReadonlyArray<Line>, draft: DraftChunk): MarkdownChunk {
   const bodyLines: Line[] = [];
   for (const b of draft.blocks) for (const l of b.lines) bodyLines.push(l);
-  const allText = [
-    ...overlap.map((l) => l.text),
-    ...bodyLines.map((l) => l.text),
-  ].join("\n");
+  const allText = [...overlap.map((l) => l.text), ...bodyLines.map((l) => l.text)].join("\n");
   const tokenCount = countTokens(allText);
   return Object.freeze({
     chunkIndex: index,
@@ -375,7 +370,10 @@ function packBlocks(
 
 function stripQuotes(s: string): string {
   const t = s.trim();
-  if (t.length >= 2 && ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))) {
+  if (
+    t.length >= 2 &&
+    ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))
+  ) {
     return t.slice(1, -1);
   }
   return t;
@@ -477,9 +475,7 @@ export function chunkMarkdown(
   const chunks =
     headings.length === 0
       ? packed
-      : packed.map((c) =>
-          Object.freeze({ ...c, headingPath: headingPathAt(headings, c.endLine) }),
-        );
+      : packed.map((c) => Object.freeze({ ...c, headingPath: headingPathAt(headings, c.endLine) }));
 
   return Object.freeze({
     title,

@@ -284,10 +284,7 @@ export class Store {
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      throw new SearchError(
-        "INDEX_LOCKED",
-        `another writer holds the search index lock: ${msg}`,
-      );
+      throw new SearchError("INDEX_LOCKED", `another writer holds the search index lock: ${msg}`);
     }
 
     let db: Database;
@@ -401,7 +398,10 @@ export class Store {
     const now = nowIso();
     // SQLite RETURNING on INSERT...ON CONFLICT works in 3.35+; bun:sqlite ships modern SQLite.
     const row = this.db
-      .query<{ id: number }, [string, string | null, string, number, number, string, string, string]>(
+      .query<
+        { id: number },
+        [string, string | null, string, number, number, string, string, string]
+      >(
         "INSERT INTO documents(path, title, content_hash, mtime, size, created_at, updated_at, indexed_at) " +
           "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
           "ON CONFLICT(path) DO UPDATE SET " +
@@ -609,19 +609,20 @@ export class Store {
       const buf = vecToBuffer(vector);
       let vecRowid: number;
       if (existing) {
-        this.db.run("UPDATE chunk_vec SET embedding = ? WHERE rowid = ?", [buf, existing.vec_rowid]);
+        this.db.run("UPDATE chunk_vec SET embedding = ? WHERE rowid = ?", [
+          buf,
+          existing.vec_rowid,
+        ]);
         vecRowid = existing.vec_rowid;
       } else {
         this.db.run("INSERT INTO chunk_vec(embedding) VALUES (?)", [buf]);
-        const row = this.db
-          .query<{ id: number }, []>("SELECT last_insert_rowid() AS id")
-          .get();
+        const row = this.db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get();
         if (!row) throw new SearchError("INDEX_UNREADABLE", "chunk_vec insert returned no rowid");
         vecRowid = row.id;
-        this.db.run(
-          "INSERT INTO chunk_vec_map(chunk_id, vec_rowid) VALUES (?, ?)",
-          [chunkId, vecRowid],
-        );
+        this.db.run("INSERT INTO chunk_vec_map(chunk_id, vec_rowid) VALUES (?, ?)", [
+          chunkId,
+          vecRowid,
+        ]);
       }
       const now = nowIso();
       this.db.run(
@@ -826,7 +827,11 @@ export class Store {
           "ORDER BY v.distance ASC",
       )
       .all(buf, limit);
-    return rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, distance: r.distance }));
+    return rows.map((r) => ({
+      chunkId: r.chunk_id,
+      documentId: r.document_id,
+      distance: r.distance,
+    }));
   }
 
   hydrateChunks(chunkIds: ReadonlyArray<number>): Map<number, HydratedChunk> {
@@ -878,10 +883,7 @@ export class Store {
     if (candidateChunkIds.length === 0) return out;
     const placeholders = candidateChunkIds.map(() => "?").join(",");
     const rows = this.db
-      .query<
-        { chunk_id: number; source_document_id: number },
-        number[]
-      >(
+      .query<{ chunk_id: number; source_document_id: number }, number[]>(
         "SELECT c.id AS chunk_id, l.source_document_id " +
           `FROM chunks c JOIN links l ON l.target_document_id = c.document_id ` +
           `WHERE c.id IN (${placeholders}) AND l.link_type IN ('wikilink','markdown_link') ` +
@@ -910,10 +912,7 @@ export class Store {
     if (sourceDocumentIds.length === 0) return out;
     const placeholders = sourceDocumentIds.map(() => "?").join(",");
     const rows = this.db
-      .query<
-        { source_document_id: number; target_document_id: number },
-        number[]
-      >(
+      .query<{ source_document_id: number; target_document_id: number }, number[]>(
         "SELECT DISTINCT l.source_document_id, l.target_document_id " +
           `FROM links l ` +
           `WHERE l.source_document_id IN (${placeholders}) ` +
@@ -1042,10 +1041,7 @@ export class Store {
     if (candidateChunkIds.length === 0) return out;
     const placeholders = candidateChunkIds.map(() => "?").join(",");
     const rows = this.db
-      .query<
-        { chunk_id: number; tag: string },
-        number[]
-      >(
+      .query<{ chunk_id: number; tag: string }, number[]>(
         "SELECT c.id AS chunk_id, l.link_text AS tag " +
           `FROM chunks c JOIN links l ON l.source_document_id = c.document_id ` +
           `WHERE c.id IN (${placeholders}) AND l.link_type = 'tag' AND l.link_text IS NOT NULL`,
@@ -1111,6 +1107,8 @@ export class Store {
 
   /** Escape hatch for status queries that don't fit the typed API. */
   rawQuery<T>(sql: string, params: ReadonlyArray<string | number | null> = []): T[] {
-    return this.db.query<T, (string | number | null)[]>(sql).all(...(params as (string | number | null)[]));
+    return this.db
+      .query<T, (string | number | null)[]>(sql)
+      .all(...(params as (string | number | null)[]));
   }
 }

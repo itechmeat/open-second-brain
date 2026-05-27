@@ -22,10 +22,7 @@ import {
   writePreference,
   type WritePreferenceInput,
 } from "../../../src/core/brain/preference.ts";
-import {
-  BRAIN_CONFIDENCE,
-  BRAIN_PREFERENCE_STATUS,
-} from "../../../src/core/brain/types.ts";
+import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 
 let vault: string;
 
@@ -63,19 +60,13 @@ describe("writePreference - _revision emission", () => {
   });
 
   test("emits the supplied revision when caller provides one", () => {
-    const res = writePreference(
-      vault,
-      basePref("rev-supplied", { revision: 7 }),
-    );
+    const res = writePreference(vault, basePref("rev-supplied", { revision: 7 }));
     const text = readFileSync(res.path, "utf8");
     expect(text).toContain("_revision: 7");
   });
 
   test("parsePreference reads _revision back as a number", () => {
-    const res = writePreference(
-      vault,
-      basePref("rev-roundtrip", { revision: 12 }),
-    );
+    const res = writePreference(vault, basePref("rev-roundtrip", { revision: 12 }));
     const parsed = parsePreference(res.path);
     expect(parsed.revision).toBe(12);
   });

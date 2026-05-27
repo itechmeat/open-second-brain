@@ -49,17 +49,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import {
-  buildManifest,
-  manifestSidecarPath,
-  writeManifestSidecar,
-} from "./manifest.ts";
-import {
-  BRAIN_ROOT_REL,
-  brainDirs,
-  snapshotPath,
-  validateRunId,
-} from "./paths.ts";
+import { buildManifest, manifestSidecarPath, writeManifestSidecar } from "./manifest.ts";
+import { BRAIN_ROOT_REL, brainDirs, snapshotPath, validateRunId } from "./paths.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -70,9 +61,7 @@ import {
  */
 export class BrainSnapshotToolingMissingError extends Error {
   constructor(tool: string, hint: string) {
-    super(
-      `snapshot tooling missing: '${tool}' not found on PATH. ${hint}`,
-    );
+    super(`snapshot tooling missing: '${tool}' not found on PATH. ${hint}`);
     this.name = "BrainSnapshotToolingMissingError";
   }
 }
@@ -176,10 +165,7 @@ function detectTooling(): ToolAvailability {
  * on filenames containing whitespace. Enumerating the kept entries
  * explicitly is byte-stable and easy to reason about.
  */
-export function createSnapshot(
-  vault: string,
-  runId: string,
-): CreateSnapshotResult {
+export function createSnapshot(vault: string, runId: string): CreateSnapshotResult {
   validateRunId(runId);
   const dirs = brainDirs(vault);
   mkdirSync(dirs.snapshots, { recursive: true });
@@ -233,10 +219,7 @@ export function createSnapshot(
   }
 
   if (!existsSync(outPath)) {
-    throw new BrainSnapshotError(
-      `archive write reported success but ${outPath} is absent`,
-      runId,
-    );
+    throw new BrainSnapshotError(`archive write reported success but ${outPath} is absent`, runId);
   }
 
   // Sidecar manifest. Failure is non-fatal: the archive is the
@@ -295,10 +278,7 @@ function runArchivePipeline(
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (tarResult.error) {
-    throw new BrainSnapshotError(
-      `${prodCmd} failed to start: ${tarResult.error.message}`,
-      runId,
-    );
+    throw new BrainSnapshotError(`${prodCmd} failed to start: ${tarResult.error.message}`, runId);
   }
   if (tarResult.status !== 0) {
     const stderr = (tarResult.stderr ?? Buffer.from("")).toString("utf8").trim();
@@ -321,17 +301,11 @@ function runArchivePipeline(
       stdio: ["pipe", "inherit", "pipe"],
     });
     if (r.error) {
-      throw new BrainSnapshotError(
-        `${consCmd} failed to start: ${r.error.message}`,
-        runId,
-      );
+      throw new BrainSnapshotError(`${consCmd} failed to start: ${r.error.message}`, runId);
     }
     if (r.status !== 0) {
       const stderr = (r.stderr ?? Buffer.from("")).toString("utf8").trim();
-      throw new BrainSnapshotError(
-        `${consCmd} exited with status ${r.status}: ${stderr}`,
-        runId,
-      );
+      throw new BrainSnapshotError(`${consCmd} exited with status ${r.status}: ${stderr}`, runId);
     }
   } else {
     // gzip pipeline → capture stdout, write to file.
@@ -341,17 +315,11 @@ function runArchivePipeline(
       maxBuffer: 256 * 1024 * 1024,
     });
     if (r.error) {
-      throw new BrainSnapshotError(
-        `${consCmd} failed to start: ${r.error.message}`,
-        runId,
-      );
+      throw new BrainSnapshotError(`${consCmd} failed to start: ${r.error.message}`, runId);
     }
     if (r.status !== 0) {
       const stderr = (r.stderr ?? Buffer.from("")).toString("utf8").trim();
-      throw new BrainSnapshotError(
-        `${consCmd} exited with status ${r.status}: ${stderr}`,
-        runId,
-      );
+      throw new BrainSnapshotError(`${consCmd} exited with status ${r.status}: ${stderr}`, runId);
     }
     // Write the compressed payload to the snapshot file atomically.
     // Use writeFileSync since the file is binary and lives inside
@@ -419,10 +387,7 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
  * paths that were deleted, vault-relative. Idempotent — a second run
  * on the same dir returns `deleted: []`.
  */
-export function pruneSnapshots(
-  vault: string,
-  retentionCount: number,
-): PruneSnapshotsResult {
+export function pruneSnapshots(vault: string, retentionCount: number): PruneSnapshotsResult {
   if (!Number.isInteger(retentionCount) || retentionCount < 0) {
     throw new Error(
       `pruneSnapshots: retentionCount must be a non-negative integer; got ${retentionCount}`,
@@ -504,10 +469,7 @@ export interface ExtractSnapshotResult {
  * missing root, {@link BrainSnapshotToolingMissingError} when the
  * host lacks the required external tool.
  */
-export function extractSnapshotToTemp(
-  vault: string,
-  runId: string,
-): ExtractSnapshotResult {
+export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnapshotResult {
   validateRunId(runId);
   const archive = snapshotPath(vault, runId);
   if (!existsSync(archive)) {
@@ -568,10 +530,7 @@ export function extractSnapshotToTemp(
       });
       if (tar.error || tar.status !== 0) {
         const stderr = (tar.stderr ?? Buffer.from("")).toString("utf8").trim();
-        throw new BrainSnapshotError(
-          `tar extract failed: ${tar.error?.message ?? stderr}`,
-          runId,
-        );
+        throw new BrainSnapshotError(`tar extract failed: ${tar.error?.message ?? stderr}`, runId);
       }
     } else {
       const tar = spawnSync("tar", ["-x", "-z", "-f", archive, "-C", tmp], {
@@ -579,19 +538,13 @@ export function extractSnapshotToTemp(
       });
       if (tar.error || tar.status !== 0) {
         const stderr = (tar.stderr ?? Buffer.from("")).toString("utf8").trim();
-        throw new BrainSnapshotError(
-          `tar extract failed: ${tar.error?.message ?? stderr}`,
-          runId,
-        );
+        throw new BrainSnapshotError(`tar extract failed: ${tar.error?.message ?? stderr}`, runId);
       }
     }
 
     const extractedBrain = join(tmp, BRAIN_ROOT_REL);
     if (!existsSync(extractedBrain)) {
-      throw new BrainSnapshotError(
-        `archive does not contain a ${BRAIN_ROOT_REL}/ root`,
-        runId,
-      );
+      throw new BrainSnapshotError(`archive does not contain a ${BRAIN_ROOT_REL}/ root`, runId);
     }
     return Object.freeze({ tmpRoot: tmp, brainRoot: extractedBrain, cleanup });
   } catch (err) {
@@ -613,9 +566,7 @@ export function restoreSnapshot(
     // The exclusion is the load-bearing safety guarantee: rolling back
     // an older state must not erase newer snapshots, otherwise the
     // operator is one click away from losing their forward path.
-    const replacementEntries = readdirSync(ext.brainRoot).filter(
-      (e) => e !== ".snapshots",
-    );
+    const replacementEntries = readdirSync(ext.brainRoot).filter((e) => e !== ".snapshots");
 
     // The correct semantics are "live tree == snapshot tree minus
     // `.snapshots/`". Delete every live top-level entry except

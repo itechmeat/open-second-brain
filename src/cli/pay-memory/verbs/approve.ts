@@ -21,9 +21,7 @@ export async function cmdApprovePaymentRequest(argv: string[]): Promise<number> 
       note: (flags["note"] as string | undefined) ?? null,
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to approve request: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to approve request: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
   if (flags["json"]) {

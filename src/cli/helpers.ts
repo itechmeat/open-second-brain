@@ -56,7 +56,7 @@ export function requireVault(flagVal: string | undefined, configPath: string | n
 
 export function sortedReplacer(_key: string, value: unknown): unknown {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
+    return Object.fromEntries(Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b)));
   }
   return value;
 }

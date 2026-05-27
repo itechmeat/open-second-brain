@@ -146,7 +146,11 @@ export function checkCodexManifest(path: string): CheckResult {
     ["keywords", "list"],
   ]);
   if (problems.length > 0) {
-    return { name: "codex_manifest", ok: false, message: `schema invalid: ${path} (${problems.join("; ")})` };
+    return {
+      name: "codex_manifest",
+      ok: false,
+      message: `schema invalid: ${path} (${problems.join("; ")})`,
+    };
   }
   return { name: "codex_manifest", ok: true, message: `valid Codex manifest: ${path}` };
 }
@@ -172,7 +176,10 @@ export function checkClaudeManifest(path: string): CheckResult {
   }
   if ("author" in data) {
     const author = data["author"];
-    const authorName = typeof author === "object" && author !== null ? (author as Record<string, unknown>)["name"] : null;
+    const authorName =
+      typeof author === "object" && author !== null
+        ? (author as Record<string, unknown>)["name"]
+        : null;
     if (
       typeof author !== "object" ||
       author === null ||
@@ -192,7 +199,11 @@ export function checkClaudeManifest(path: string): CheckResult {
     );
   }
   if (problems.length > 0) {
-    return { name: "claude_manifest", ok: false, message: `schema invalid: ${path} (${problems.join("; ")})` };
+    return {
+      name: "claude_manifest",
+      ok: false,
+      message: `schema invalid: ${path} (${problems.join("; ")})`,
+    };
   }
   return { name: "claude_manifest", ok: true, message: `valid Claude manifest: ${path}` };
 }
@@ -238,7 +249,11 @@ export function checkOpenclawManifest(path: string): CheckResult {
     problems.push("missing or empty field 'configSchema'");
   }
   if (problems.length > 0) {
-    return { name: "openclaw_manifest", ok: false, message: `schema invalid: ${path} (${problems.join("; ")})` };
+    return {
+      name: "openclaw_manifest",
+      ok: false,
+      message: `schema invalid: ${path} (${problems.join("; ")})`,
+    };
   }
   return { name: "openclaw_manifest", ok: true, message: `valid OpenClaw manifest: ${path}` };
 }

@@ -31,26 +31,11 @@ describe("computeTokenFootprint", () => {
   });
 
   test("counts preferences, retired, inbox, processed, log buckets", () => {
-    writeFileSync(
-      join(vault, "Brain", "preferences", "pref-a.md"),
-      "alpha beta gamma\n",
-    );
-    writeFileSync(
-      join(vault, "Brain", "retired", "ret-b.md"),
-      "delta epsilon\n",
-    );
-    writeFileSync(
-      join(vault, "Brain", "inbox", "sig-c.md"),
-      "zeta eta theta iota\n",
-    );
-    writeFileSync(
-      join(vault, "Brain", "inbox", "processed", "sig-d.md"),
-      "kappa lambda\n",
-    );
-    writeFileSync(
-      join(vault, "Brain", "log", "2026-05-25.md"),
-      "mu nu xi omicron\n",
-    );
+    writeFileSync(join(vault, "Brain", "preferences", "pref-a.md"), "alpha beta gamma\n");
+    writeFileSync(join(vault, "Brain", "retired", "ret-b.md"), "delta epsilon\n");
+    writeFileSync(join(vault, "Brain", "inbox", "sig-c.md"), "zeta eta theta iota\n");
+    writeFileSync(join(vault, "Brain", "inbox", "processed", "sig-d.md"), "kappa lambda\n");
+    writeFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "mu nu xi omicron\n");
     const r = computeTokenFootprint(vault);
     expect(r.files).toBe(5);
     const names = r.byCategory.map((c) => c.name);
@@ -67,14 +52,8 @@ describe("computeTokenFootprint", () => {
     // would naturally recurse into it. The processed bucket counts
     // those files separately, so the total must equal the sum of
     // both buckets exactly.
-    writeFileSync(
-      join(vault, "Brain", "inbox", "sig-a.md"),
-      "alpha beta gamma\n",
-    );
-    writeFileSync(
-      join(vault, "Brain", "inbox", "processed", "sig-b.md"),
-      "delta epsilon zeta\n",
-    );
+    writeFileSync(join(vault, "Brain", "inbox", "sig-a.md"), "alpha beta gamma\n");
+    writeFileSync(join(vault, "Brain", "inbox", "processed", "sig-b.md"), "delta epsilon zeta\n");
     const r = computeTokenFootprint(vault);
     const inbox = r.byCategory.find((c) => c.name === "inbox")!.tokens;
     const processed = r.byCategory.find((c) => c.name === "processed")!.tokens;
@@ -82,10 +61,7 @@ describe("computeTokenFootprint", () => {
   });
 
   test("exceeded flag flips when total crosses the threshold", () => {
-    writeFileSync(
-      join(vault, "Brain", "preferences", "pref-big.md"),
-      "word ".repeat(50),
-    );
+    writeFileSync(join(vault, "Brain", "preferences", "pref-big.md"), "word ".repeat(50));
     const r = computeTokenFootprint(vault, { warnThreshold: 1 });
     expect(r.exceeded).toBe(true);
   });

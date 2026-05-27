@@ -9,7 +9,7 @@ import {
 
 describe("BRAIN_ROLES", () => {
   test("enumerates exactly the four documented roles", () => {
-    expect(Object.values(BRAIN_ROLES).sort()).toEqual([
+    expect(Object.values(BRAIN_ROLES).toSorted()).toEqual([
       "applier",
       "dreamer",
       "unknown",
@@ -34,7 +34,7 @@ describe("BRAIN_ROLES", () => {
 
 describe("BRAIN_OPERATIONS", () => {
   test("enumerates exactly the six documented operations", () => {
-    expect(Object.values(BRAIN_OPERATIONS).sort()).toEqual([
+    expect(Object.values(BRAIN_OPERATIONS).toSorted()).toEqual([
       "evidence_record",
       "feedback_write",
       "log_append",

@@ -114,17 +114,13 @@ export function computeAgentSummary(
     }
   }
 
-  return [...byAgent.values()].sort((a, b) => {
+  return [...byAgent.values()].toSorted((a, b) => {
     const diff = b.total_events - a.total_events;
     return diff !== 0 ? diff : a.agent.localeCompare(b.agent);
   });
 }
 
-function readLogsInWindow(
-  vault: string,
-  since: Date,
-  until: Date,
-): BrainLogEntry[] {
+function readLogsInWindow(vault: string, since: Date, until: Date): BrainLogEntry[] {
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.log)) return [];
   const sinceIso = since.toISOString();
@@ -136,7 +132,7 @@ function readLogsInWindow(
     .filter((d) => d.isFile() && d.name.endsWith(".md"))
     .map((d) => d.name.slice(0, -3))
     .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n))
-    .sort();
+    .toSorted();
   for (const date of dates) {
     if (date < addDays(sinceDay, -1)) continue;
     if (date > addDays(untilDay, 1)) continue;

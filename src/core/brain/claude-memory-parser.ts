@@ -94,10 +94,7 @@ function detectIndent(lines: string[], from: number): number {
 }
 
 function stripYamlQuotes(val: string): string {
-  if (
-    (val.startsWith('"') && val.endsWith('"')) ||
-    (val.startsWith("'") && val.endsWith("'"))
-  ) {
+  if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
     return val.slice(1, -1);
   }
   return val;

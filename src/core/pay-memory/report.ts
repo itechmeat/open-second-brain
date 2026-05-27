@@ -17,12 +17,7 @@ import { join } from "node:path";
 
 import type { FrontmatterMap, FrontmatterValue } from "../types.ts";
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
-import {
-  frontmatterStr,
-  nowIsoZ,
-  NOT_PROVIDED,
-  stripMarkdownExt,
-} from "./_md.ts";
+import { frontmatterStr, nowIsoZ, NOT_PROVIDED, stripMarkdownExt } from "./_md.ts";
 import {
   ensureInsideVault,
   paymentsDateDir,
@@ -164,4 +159,3 @@ function renderReportBody(
   }
   return lines.join("\n");
 }
-

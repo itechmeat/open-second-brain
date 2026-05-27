@@ -7,10 +7,7 @@
  */
 
 import { defaultConfigPath } from "../../../core/config.ts";
-import {
-  resolveVaultScope,
-  walkVaultScope,
-} from "../../../core/vault-scope/index.ts";
+import { resolveVaultScope, walkVaultScope } from "../../../core/vault-scope/index.ts";
 import { CliError, parseFlags } from "../../argparse.ts";
 import { resolveBrainVault } from "../../brain/helpers.ts";
 import { fail, info, writeJson } from "../../output.ts";
@@ -63,9 +60,7 @@ export async function cmdVaultStatus(argv: ReadonlyArray<string>): Promise<numbe
   info(`ignore source: ${scope.source}`);
   info("");
   info(`included: ${walk.includedFiles} files, ${walk.includedDirs} directories`);
-  info(
-    `excluded: ${walk.excludedDirs.length} directories, ${walk.excludedFiles.length} files`,
-  );
+  info(`excluded: ${walk.excludedDirs.length} directories, ${walk.excludedFiles.length} files`);
   if (walk.excludedDirs.length > 0) {
     info("");
     info("excluded directories:");

@@ -6,22 +6,12 @@
  * stay byte-identical.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  JSONRPC_VERSION,
-  MCPServer,
-  PROTOCOL_VERSION,
-} from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
 let tmp: string;
@@ -40,12 +30,7 @@ beforeEach(() => {
   writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n");
   configHome = mkdtempSync(join(tmpdir(), "o2b-mcp-vault-instr-cfg-"));
   configPath = join(configHome, "config.yaml");
-  for (const k of [
-    "VAULT_AGENT_NAME",
-    "VAULT_TIMEZONE",
-    "VAULT_DIR",
-    "OPEN_SECOND_BRAIN_CONFIG",
-  ]) {
+  for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -98,10 +83,7 @@ describe("brain_context envelope vault_instruction extension (v0.10.17)", () => 
   });
 
   test("present VAULT.md: envelope includes path + content + lines", async () => {
-    writeFileSync(
-      join(vault, "VAULT.md"),
-      "# Project context\n\nI work on Open Second Brain.\n",
-    );
+    writeFileSync(join(vault, "VAULT.md"), "# Project context\n\nI work on Open Second Brain.\n");
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
     const out = await callContext(server);

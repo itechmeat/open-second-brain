@@ -60,11 +60,7 @@ import {
 } from "./trust/compute-verification-delta.ts";
 import { checkInstructionFileCeiling } from "./trust/instruction-file-ceiling.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
-import {
-  BrainStatusFolderMismatchError,
-  parsePreference,
-  parseRetired,
-} from "./preference.ts";
+import { BrainStatusFolderMismatchError, parsePreference, parseRetired } from "./preference.ts";
 import {
   reconcileSemanticHealth,
   type PreferenceForHealth,
@@ -211,10 +207,7 @@ export interface RunDoctorResult {
 
 // ----- Entry point ----------------------------------------------------------
 
-export function runDoctor(
-  vault: string,
-  opts: RunDoctorOptions = {},
-): RunDoctorResult {
+export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctorResult {
   const issues: DoctorIssue[] = [];
 
   const dirs = brainDirs(vault);
@@ -291,13 +284,19 @@ export function runDoctor(
   if (cfg) {
     try {
       checkDuplicatePreferences(prefRecords, issues);
-    } catch { /* doctor never throws */ }
+    } catch {
+      /* doctor never throws */
+    }
     try {
       checkLowEvidenceConfirmed(prefRecords, issues, cfg, now);
-    } catch { /* doctor never throws */ }
+    } catch {
+      /* doctor never throws */
+    }
     try {
       checkPinnedWithoutRecentEvidence(prefRecords, issues, cfg, now);
-    } catch { /* doctor never throws */ }
+    } catch {
+      /* doctor never throws */
+    }
   }
   // v0.12.0 Brain Integrity Suite: surface preferences whose live
   // (principle, scope) does not hash to the value stored in
@@ -305,7 +304,9 @@ export function runDoctor(
   // observable.
   try {
     checkContentHashDrift(prefRecords, issues);
-  } catch { /* doctor never throws */ }
+  } catch {
+    /* doctor never throws */
+  }
   // v0.12.0 Brain Integrity Suite: surface every dream workrun file
   // whose last phase is neither `finalized` nor `interrupted`. A
   // dangling workrun is forensic evidence that a previous dream
@@ -313,13 +314,19 @@ export function runDoctor(
   // how far the run got.
   try {
     checkDanglingWorkruns(vault, issues);
-  } catch { /* doctor never throws */ }
+  } catch {
+    /* doctor never throws */
+  }
   try {
     checkMalformedEvidenceRange(logRecords, issues);
-  } catch { /* doctor never throws */ }
+  } catch {
+    /* doctor never throws */
+  }
   try {
     checkOrphanEvidence(vault, logRecords, issues);
-  } catch { /* doctor never throws */ }
+  } catch {
+    /* doctor never throws */
+  }
 
   // v0.14.0 semantic-health pass. Best-effort like every other lint:
   // a failure here must not poison the structural warning / error
@@ -330,7 +337,9 @@ export function runDoctor(
   try {
     const health = cfg ? resolveHealth(cfg) : BRAIN_HEALTH_DEFAULTS;
     semanticReport = checkSemanticHealth(vault, prefRecords, issues, health, now);
-  } catch { /* doctor never throws */ }
+  } catch {
+    /* doctor never throws */
+  }
 
   // Partition by severity. Stable sort preserves discovery order which
   // is convenient for tests asserting on `path`+`code`.
@@ -345,14 +354,18 @@ export function runDoctor(
     instructionWarnings = checkInstructionFileCeiling(vault, {
       maxLines: guardrails.instruction_file_max_lines,
     });
-  } catch { /* doctor never throws */ }
+  } catch {
+    /* doctor never throws */
+  }
 
   let verificationCounts: VerificationDeltaSummaryCounts | undefined;
   if (opts.dreamSummary !== undefined) {
     try {
       const delta = computeVerificationDelta(vault, opts.dreamSummary);
       verificationCounts = delta.summary;
-    } catch { /* doctor never throws */ }
+    } catch {
+      /* doctor never throws */
+    }
   }
 
   const trustVerdict: TrustVerdict = computeTrustVerdict({
@@ -371,9 +384,7 @@ export function runDoctor(
     warnings: Object.freeze(warnings),
     errors: Object.freeze(errors),
     trust_verdict: trustVerdict,
-    ...(verificationCounts !== undefined
-      ? { verification_delta_summary: verificationCounts }
-      : {}),
+    ...(verificationCounts !== undefined ? { verification_delta_summary: verificationCounts } : {}),
     instruction_file_warnings: instructionWarnings,
     ...(semanticReport !== undefined ? { semantic_health: semanticReport } : {}),
   });
@@ -485,8 +496,7 @@ function checkConfig(vault: string, issues: DoctorIssue[]): void {
       severity: "error",
       code: "config-missing",
       path: cfgPath,
-      message:
-        "_brain.yaml is missing; run `o2b brain init` to bootstrap the Brain layer",
+      message: "_brain.yaml is missing; run `o2b brain init` to bootstrap the Brain layer",
     });
     return;
   }
@@ -558,19 +568,14 @@ function checkVaultIgnore(vault: string, issues: DoctorIssue[]): void {
     issues.push({
       severity: "warning",
       code: "vault-ignore-missing-path",
-      message:
-        `vault.ignore_paths entry '${rule.raw}' does not exist in this vault`,
+      message: `vault.ignore_paths entry '${rule.raw}' does not exist in this vault`,
     });
   }
 }
 
 // ----- Signal check ---------------------------------------------------------
 
-function checkSignals(
-  vault: string,
-  issues: DoctorIssue[],
-  idIndex: Map<string, string[]>,
-): void {
+function checkSignals(vault: string, issues: DoctorIssue[], idIndex: Map<string, string[]>): void {
   const dirs = brainDirs(vault);
   for (const dir of [dirs.inbox, dirs.processed]) {
     if (!existsSync(dir)) continue;
@@ -633,21 +638,9 @@ function checkPreferences(
       // values via the enum; a non-canonical value would have thrown
       // BrainStatusFolderMismatchError, caught below. Reaching here
       // means the status is valid; nothing more to check.
-      checkWikilinks(
-        path,
-        "evidenced_by",
-        pref.evidenced_by,
-        knownBasenames,
-        issues,
-      );
+      checkWikilinks(path, "evidenced_by", pref.evidenced_by, knownBasenames, issues);
       if (pref.supersedes) {
-        checkWikilinks(
-          path,
-          "supersedes",
-          [pref.supersedes],
-          knownBasenames,
-          issues,
-        );
+        checkWikilinks(path, "supersedes", [pref.supersedes], knownBasenames, issues);
       }
     } catch (err) {
       if (err instanceof BrainStatusFolderMismatchError) {
@@ -700,28 +693,10 @@ function checkRetired(
       if (ret.last_evidence_at !== null) {
         checkIso(path, "last_evidence_at", ret.last_evidence_at, issues);
       }
-      checkWikilinks(
-        path,
-        "evidenced_by",
-        ret.evidenced_by,
-        knownBasenames,
-        issues,
-      );
-      checkWikilinks(
-        path,
-        "retired_by",
-        [ret.retired_by],
-        knownBasenames,
-        issues,
-      );
+      checkWikilinks(path, "evidenced_by", ret.evidenced_by, knownBasenames, issues);
+      checkWikilinks(path, "retired_by", [ret.retired_by], knownBasenames, issues);
       if (ret.superseded_by) {
-        checkWikilinks(
-          path,
-          "superseded_by",
-          [ret.superseded_by],
-          knownBasenames,
-          issues,
-        );
+        checkWikilinks(path, "superseded_by", [ret.superseded_by], knownBasenames, issues);
       }
     } catch (err) {
       if (err instanceof BrainStatusFolderMismatchError) {
@@ -774,11 +749,7 @@ function checkLogs(vault: string, issues: DoctorIssue[]): void {
 
 // ----- Helpers --------------------------------------------------------------
 
-function registerId(
-  idIndex: Map<string, string[]>,
-  id: string,
-  path: string,
-): void {
+function registerId(idIndex: Map<string, string[]>, id: string, path: string): void {
   const list = idIndex.get(id);
   if (list) list.push(path);
   else idIndex.set(id, [path]);
@@ -787,15 +758,9 @@ function registerId(
 // ISO-8601 UTC: YYYY-MM-DDTHH:MM:SS(.fff)?Z. Lenient — we accept the
 // shorter date-only form too (created_at is sometimes a date-only string
 // in hand-authored signals).
-const ISO_RE =
-  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)?$/;
+const ISO_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)?$/;
 
-function checkIso(
-  path: string,
-  field: string,
-  value: string,
-  issues: DoctorIssue[],
-): void {
+function checkIso(path: string, field: string, value: string, issues: DoctorIssue[]): void {
   if (!ISO_RE.test(value)) {
     issues.push({
       severity: "error",
@@ -872,7 +837,7 @@ function checkBrokenBacklinks(
     // outside the Brain layer are user prose and not our concern.
     if (!/^(pref|ret|sig)-/.test(target)) continue;
     if (knownBasenames.has(target)) continue;
-    const sources = Array.from(new Set(refs.map((r) => r.source))).sort();
+    const sources = Array.from(new Set(refs.map((r) => r.source))).toSorted();
     issues.push({
       severity: "warning",
       code: "broken-backlinks",
@@ -956,7 +921,8 @@ function checkDuplicatePreferences(
     if (
       pref.status !== BRAIN_PREFERENCE_STATUS.confirmed &&
       pref.status !== BRAIN_PREFERENCE_STATUS.quarantine
-    ) continue;
+    )
+      continue;
     entries.push({
       id: pref.id,
       // Same-scope-undefined falls in its own bucket. Mirrors the
@@ -1097,10 +1063,7 @@ function checkContentHashDrift(
  * dream pass starts fresh - this check is purely observational so
  * the operator notices the failed run.
  */
-function checkDanglingWorkruns(
-  vault: string,
-  issues: DoctorIssue[],
-): void {
+function checkDanglingWorkruns(vault: string, issues: DoctorIssue[]): void {
   for (const path of scanDanglingWorkruns(vault)) {
     issues.push({
       severity: "warning",

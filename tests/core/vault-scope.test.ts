@@ -215,9 +215,7 @@ test("walkVaultScope: counts included files+dirs and reports excluded subtree on
   expect(obsidianHit).toBeTruthy();
   expect(obsidianHit?.rule.raw).toBe(".obsidian");
   // Subtree descendants must NOT be reported separately.
-  expect(
-    walk.excludedDirs.filter((d) => d.relPath.startsWith(".obsidian/")),
-  ).toHaveLength(0);
+  expect(walk.excludedDirs.filter((d) => d.relPath.startsWith(".obsidian/"))).toHaveLength(0);
 });
 
 test("walkVaultScope: file-level rule excludes a single file but not the parent", () => {

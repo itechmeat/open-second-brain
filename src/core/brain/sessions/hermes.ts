@@ -23,11 +23,7 @@
 
 import { readFileSync } from "node:fs";
 
-import type {
-  SessionAdapter,
-  SessionToolCall,
-  SessionTurn,
-} from "./types.ts";
+import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 interface HermesToolCall {
   readonly id?: string;
@@ -57,10 +53,7 @@ function decodeArguments(raw: unknown): Record<string, unknown> {
   return {};
 }
 
-function buildTurn(
-  obj: Record<string, unknown>,
-  fallbackIndex: number,
-): SessionTurn | null {
+function buildTurn(obj: Record<string, unknown>, fallbackIndex: number): SessionTurn | null {
   const role = obj["role"];
   if (role !== "user" && role !== "assistant") return null;
   const turnId = `hermes-${fallbackIndex}`;

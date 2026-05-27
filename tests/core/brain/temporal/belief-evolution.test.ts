@@ -29,15 +29,9 @@ interface FixtureEvent {
   readonly body: Record<string, string | ReadonlyArray<string>>;
 }
 
-function writeJsonl(
-  vault: string,
-  date: string,
-  events: ReadonlyArray<FixtureEvent>,
-): void {
+function writeJsonl(vault: string, date: string, events: ReadonlyArray<FixtureEvent>): void {
   const lines = events
-    .map((e) =>
-      JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }),
-    )
+    .map((e) => JSON.stringify({ ts: e.timestamp, kind: e.kind, payload: e.body }))
     .join("\n");
   writeFileSync(join(vault, "Brain", "log", `${date}.jsonl`), lines + "\n");
 }
@@ -91,11 +85,7 @@ describe("buildBeliefEvolution by prefId", () => {
     ]);
     const idx = buildTimelineIndex(VAULT, {});
     const evo = buildBeliefEvolution(idx, VAULT, { prefId: "pref-foo" });
-    expect(evo.transitions.map((t) => t.kind)).toEqual([
-      "creation",
-      "promotion",
-      "retirement",
-    ]);
+    expect(evo.transitions.map((t) => t.kind)).toEqual(["creation", "promotion", "retirement"]);
     expect(evo.transitions[0]!.at).toBe("2026-05-01T08:00:00Z");
     expect(evo.transitions[2]!.at).toBe("2026-05-20T08:00:00Z");
   });
@@ -172,7 +162,7 @@ describe("buildBeliefEvolution by prefId", () => {
     // once even though the supersedes-chain loops.
     const evo = buildBeliefEvolution(idx, VAULT, { prefId: "pref-a" });
     expect(evo.retirements.length).toBe(2);
-    const ids = evo.retirements.map((r) => r.prefId).sort();
+    const ids = evo.retirements.map((r) => r.prefId).toSorted();
     expect(ids).toEqual(["ret-a", "ret-b"]);
   });
 

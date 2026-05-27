@@ -5,7 +5,16 @@ import { SessionImportError } from "../../../core/brain/sessions/types.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
-import { parse, fail, info, normalizeFlagString, ok, okJson, resolveBrainVault, ISO_8601_RE } from "../helpers.ts";
+import {
+  parse,
+  fail,
+  info,
+  normalizeFlagString,
+  ok,
+  okJson,
+  resolveBrainVault,
+  parseOptionalIsoDate,
+} from "../helpers.ts";
 
 export async function cmdBrainImportSession(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -29,42 +38,78 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
   const formatRaw = flags["format"] as string | undefined;
   let format: "claude" | "codex" | "hermes" | undefined;
   if (formatRaw !== undefined && formatRaw !== "auto") {
-    if (formatRaw !== "claude" && formatRaw !== "codex" && formatRaw !== "hermes") return fail(`--format must be one of auto|claude|codex|hermes; got ${formatRaw}`);
+    if (formatRaw !== "claude" && formatRaw !== "codex" && formatRaw !== "hermes")
+      return fail(`--format must be one of auto|claude|codex|hermes; got ${formatRaw}`);
     format = formatRaw;
   }
 
-  let since: Date | undefined;
-  if (flags["since"]) {
-    const raw = String(flags["since"]);
-    if (!ISO_8601_RE.test(raw)) return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
-    const d = new Date(raw);
-    if (!Number.isFinite(d.getTime())) return fail(`--since must be a valid ISO-8601 timestamp; got ${raw}`);
-    since = d;
-  }
+  const { value: since, error: sinceErr } = parseOptionalIsoDate(flags, "since");
+  if (sinceErr) return fail(sinceErr);
 
   let stat;
-  try { stat = statSync(sessionPath); }
-  catch (err) { return fail(`cannot stat ${sessionPath}: ${(err as Error).message ?? err}`); }
+  try {
+    stat = statSync(sessionPath);
+  } catch (err) {
+    return fail(`cannot stat ${sessionPath}: ${(err as Error).message ?? err}`);
+  }
 
   try {
     const result = stat.isDirectory()
-      ? await importSessionPath(vault, sessionPath, { agent, ...(format ? { format } : {}), ...(since ? { since } : {}), dryRun: Boolean(flags["dry-run"]) })
-      : { files: [await importSession(vault, sessionPath, { agent, ...(format ? { format } : {}), ...(since ? { since } : {}), dryRun: Boolean(flags["dry-run"]) })], warnings: [] };
+      ? await importSessionPath(vault, sessionPath, {
+          agent,
+          ...(format ? { format } : {}),
+          ...(since ? { since } : {}),
+          dryRun: Boolean(flags["dry-run"]),
+        })
+      : {
+          files: [
+            await importSession(vault, sessionPath, {
+              agent,
+              ...(format ? { format } : {}),
+              ...(since ? { since } : {}),
+              dryRun: Boolean(flags["dry-run"]),
+            }),
+          ],
+          warnings: [],
+        };
 
     if (!flags["dry-run"]) {
       for (const f of result.files) {
         try {
           appendLogEvent(vault, {
-            timestamp: isoSecond(new Date()), eventType: BRAIN_LOG_EVENT_KIND.importSession,
-            body: { agent, file: `[[${f.file}]]`, format: f.format, turns_scanned: String(f.turns_scanned), signals_created: String(f.signals_created), signals_deduped: String(f.signals_deduped), tool_replays: String(f.tool_replays), malformed: String(f.malformed) },
+            timestamp: isoSecond(new Date()),
+            eventType: BRAIN_LOG_EVENT_KIND.importSession,
+            body: {
+              agent,
+              file: `[[${f.file}]]`,
+              format: f.format,
+              turns_scanned: String(f.turns_scanned),
+              signals_created: String(f.signals_created),
+              signals_deduped: String(f.signals_deduped),
+              tool_replays: String(f.tool_replays),
+              malformed: String(f.malformed),
+            },
           });
-        } catch (err) { process.stderr.write(`warning: append import-session log failed: ${(err as Error).message}\n`); }
+        } catch (err) {
+          process.stderr.write(
+            `warning: append import-session log failed: ${(err as Error).message}\n`,
+          );
+        }
       }
     }
 
     if (flags["json"]) {
       okJson({
-        files: result.files.map((f) => ({ file: f.file, format: f.format, turns_scanned: f.turns_scanned, signals_created: f.signals_created, signals_deduped: f.signals_deduped, tool_replays: f.tool_replays, malformed: f.malformed, errors: f.errors })),
+        files: result.files.map((f) => ({
+          file: f.file,
+          format: f.format,
+          turns_scanned: f.turns_scanned,
+          signals_created: f.signals_created,
+          signals_deduped: f.signals_deduped,
+          tool_replays: f.tool_replays,
+          malformed: f.malformed,
+          errors: f.errors,
+        })),
         warnings: result.warnings,
       });
     } else {

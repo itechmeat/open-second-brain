@@ -5,7 +5,10 @@ import { join } from "node:path";
 
 import { Store } from "../../../src/core/search/store.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
-import type { ResolvedSearchConfig, ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts";
+import type {
+  ResolvedSearchConfig,
+  ResolvedEmbeddingConfig,
+} from "../../../src/core/search/types.ts";
 
 let tmp: string;
 let dbPath: string;
@@ -32,7 +35,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     semanticWeight: 0.4,
     semantic,
     recall: Object.freeze({ mmrLambda: 0.7, maxHops: 1, hopDecay: 0.5, maxExpansionPerHit: 3 }),
-    ...(overrides ?? {}),
+    ...overrides,
   });
 }
 
@@ -142,10 +145,24 @@ test("replaceChunks twice replaces all old chunks", async () => {
     size: 1,
   });
   store.replaceChunks(docId, [
-    { chunkIndex: 0, content: "alpha bravo", contentHash: "c0", startLine: 1, endLine: 1, tokenCount: 2 },
+    {
+      chunkIndex: 0,
+      content: "alpha bravo",
+      contentHash: "c0",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 2,
+    },
   ]);
   store.replaceChunks(docId, [
-    { chunkIndex: 0, content: "charlie delta", contentHash: "c1", startLine: 1, endLine: 1, tokenCount: 2 },
+    {
+      chunkIndex: 0,
+      content: "charlie delta",
+      contentHash: "c1",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 2,
+    },
   ]);
   expect(store.keywordTopK("alpha", { limit: 5 }).length).toBe(0);
   expect(store.keywordTopK("charlie", { limit: 5 }).length).toBe(1);
@@ -163,7 +180,14 @@ test("deleteDocument cascades to chunks and FTS", async () => {
     size: 1,
   });
   store.replaceChunks(docId, [
-    { chunkIndex: 0, content: "doomed content", contentHash: "c", startLine: 1, endLine: 1, tokenCount: 2 },
+    {
+      chunkIndex: 0,
+      content: "doomed content",
+      contentHash: "c",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 2,
+    },
   ]);
   expect(store.keywordTopK("doomed", { limit: 5 }).length).toBe(1);
 
@@ -175,13 +199,39 @@ test("deleteDocument cascades to chunks and FTS", async () => {
 
 test("path-prefix filter constrains keywordTopK", async () => {
   const store = await Store.open(makeConfig(), { mode: "write", loadVec: false });
-  const d1 = store.upsertDocument({ path: "A/foo.md", title: null, contentHash: "h", mtime: 0, size: 1 });
-  const d2 = store.upsertDocument({ path: "B/bar.md", title: null, contentHash: "h", mtime: 0, size: 1 });
+  const d1 = store.upsertDocument({
+    path: "A/foo.md",
+    title: null,
+    contentHash: "h",
+    mtime: 0,
+    size: 1,
+  });
+  const d2 = store.upsertDocument({
+    path: "B/bar.md",
+    title: null,
+    contentHash: "h",
+    mtime: 0,
+    size: 1,
+  });
   store.replaceChunks(d1, [
-    { chunkIndex: 0, content: "alpha alpha alpha", contentHash: "c", startLine: 1, endLine: 1, tokenCount: 3 },
+    {
+      chunkIndex: 0,
+      content: "alpha alpha alpha",
+      contentHash: "c",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 3,
+    },
   ]);
   store.replaceChunks(d2, [
-    { chunkIndex: 0, content: "alpha bravo", contentHash: "c", startLine: 1, endLine: 1, tokenCount: 2 },
+    {
+      chunkIndex: 0,
+      content: "alpha bravo",
+      contentHash: "c",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 2,
+    },
   ]);
   const hitsA = store.keywordTopK("alpha", { limit: 10, pathPrefix: "A/" });
   expect(hitsA.length).toBe(1);
@@ -191,13 +241,39 @@ test("path-prefix filter constrains keywordTopK", async () => {
 
 test("path-prefix filter treats SQL wildcard characters literally", async () => {
   const store = await Store.open(makeConfig(), { mode: "write", loadVec: false });
-  const literal = store.upsertDocument({ path: "A_/foo.md", title: null, contentHash: "h1", mtime: 0, size: 1 });
-  const wildcardMatch = store.upsertDocument({ path: "AB/bar.md", title: null, contentHash: "h2", mtime: 0, size: 1 });
+  const literal = store.upsertDocument({
+    path: "A_/foo.md",
+    title: null,
+    contentHash: "h1",
+    mtime: 0,
+    size: 1,
+  });
+  const wildcardMatch = store.upsertDocument({
+    path: "AB/bar.md",
+    title: null,
+    contentHash: "h2",
+    mtime: 0,
+    size: 1,
+  });
   store.replaceChunks(literal, [
-    { chunkIndex: 0, content: "alpha literal", contentHash: "c1", startLine: 1, endLine: 1, tokenCount: 2 },
+    {
+      chunkIndex: 0,
+      content: "alpha literal",
+      contentHash: "c1",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 2,
+    },
   ]);
   store.replaceChunks(wildcardMatch, [
-    { chunkIndex: 0, content: "alpha wildcard", contentHash: "c2", startLine: 1, endLine: 1, tokenCount: 2 },
+    {
+      chunkIndex: 0,
+      content: "alpha wildcard",
+      contentHash: "c2",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 2,
+    },
   ]);
   const hits = store.keywordTopK("alpha", { limit: 10, pathPrefix: "A_/" });
   expect(hits.map((h) => h.documentId)).toEqual([literal]);
@@ -206,7 +282,13 @@ test("path-prefix filter treats SQL wildcard characters literally", async () => 
 
 test("counts() reflects documents/chunks", async () => {
   const store = await Store.open(makeConfig(), { mode: "write", loadVec: false });
-  const d = store.upsertDocument({ path: "a.md", title: null, contentHash: "h", mtime: 0, size: 1 });
+  const d = store.upsertDocument({
+    path: "a.md",
+    title: null,
+    contentHash: "h",
+    mtime: 0,
+    size: 1,
+  });
   store.replaceChunks(d, [
     { chunkIndex: 0, content: "one", contentHash: "c0", startLine: 1, endLine: 1, tokenCount: 1 },
     { chunkIndex: 1, content: "two", contentHash: "c1", startLine: 2, endLine: 2, tokenCount: 1 },
@@ -252,9 +334,7 @@ test("ensureEmbeddingModel sets state on first call and clears on change", async
 
 test("vecUpsert without sqlite-vec throws VEC_EXTENSION_UNAVAILABLE", async () => {
   const store = await Store.open(makeConfig(), { mode: "write", loadVec: false });
-  expect(() =>
-    store.vecUpsert(1, [0.1, 0.2, 0.3], "m", 3, "h"),
-  ).toThrow(/sqlite-vec/);
+  expect(() => store.vecUpsert(1, [0.1, 0.2, 0.3], "m", 3, "h")).toThrow(/sqlite-vec/);
   await store.close();
 });
 

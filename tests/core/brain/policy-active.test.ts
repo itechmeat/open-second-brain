@@ -23,10 +23,7 @@ describe("active.most_applied_* config block", () => {
 
   test("present with values → loaded into BrainMostAppliedConfig", () => {
     const { config } = validate(
-      HEAD +
-        `active:\n` +
-        `  most_applied_window_days: 7\n` +
-        `  most_applied_limit: 3\n`,
+      HEAD + `active:\n` + `  most_applied_window_days: 7\n` + `  most_applied_limit: 3\n`,
     );
     expect(config.active?.most_applied?.window_days).toBe(7);
     expect(config.active?.most_applied?.limit).toBe(3);
@@ -40,64 +37,48 @@ describe("active.most_applied_* config block", () => {
 
   test("window_days: 0 rejected", () => {
     expect(() =>
-      validate(
-        HEAD + `active:\n  most_applied_window_days: 0\n  most_applied_limit: 5\n`,
-      ),
+      validate(HEAD + `active:\n  most_applied_window_days: 0\n  most_applied_limit: 5\n`),
     ).toThrow(BrainConfigError);
   });
 
   test("window_days: 366 rejected", () => {
     expect(() =>
-      validate(
-        HEAD + `active:\n  most_applied_window_days: 366\n  most_applied_limit: 5\n`,
-      ),
+      validate(HEAD + `active:\n  most_applied_window_days: 366\n  most_applied_limit: 5\n`),
     ).toThrow(BrainConfigError);
   });
 
   test("limit: 0 rejected", () => {
     expect(() =>
-      validate(
-        HEAD + `active:\n  most_applied_window_days: 30\n  most_applied_limit: 0\n`,
-      ),
+      validate(HEAD + `active:\n  most_applied_window_days: 30\n  most_applied_limit: 0\n`),
     ).toThrow(BrainConfigError);
   });
 
   test("limit: 51 rejected", () => {
     expect(() =>
-      validate(
-        HEAD + `active:\n  most_applied_window_days: 30\n  most_applied_limit: 51\n`,
-      ),
+      validate(HEAD + `active:\n  most_applied_window_days: 30\n  most_applied_limit: 51\n`),
     ).toThrow(BrainConfigError);
   });
 
   test("non-integer window_days rejected", () => {
     expect(() =>
-      validate(
-        HEAD + `active:\n  most_applied_window_days: 30.5\n  most_applied_limit: 10\n`,
-      ),
+      validate(HEAD + `active:\n  most_applied_window_days: 30.5\n  most_applied_limit: 10\n`),
     ).toThrow(BrainConfigError);
   });
 
   test("string window_days rejected", () => {
-    expect(() =>
-      validate(
-        HEAD + `active:\n  most_applied_window_days: "thirty"\n`,
-      ),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `active:\n  most_applied_window_days: "thirty"\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("only window_days set → limit defaults to 10", () => {
-    const { config } = validate(
-      HEAD + `active:\n  most_applied_window_days: 14\n`,
-    );
+    const { config } = validate(HEAD + `active:\n  most_applied_window_days: 14\n`);
     expect(config.active?.most_applied?.window_days).toBe(14);
     expect(config.active?.most_applied?.limit).toBe(10);
   });
 
   test("only limit set → window_days defaults to 30", () => {
-    const { config } = validate(
-      HEAD + `active:\n  most_applied_limit: 3\n`,
-    );
+    const { config } = validate(HEAD + `active:\n  most_applied_limit: 3\n`);
     expect(config.active?.most_applied?.window_days).toBe(30);
     expect(config.active?.most_applied?.limit).toBe(3);
   });

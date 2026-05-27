@@ -34,7 +34,8 @@ export function makeProvider(config: ResolvedEmbeddingConfig): EmbeddingProvider
   }
   if (config.provider === "openai-compat") {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { OpenAICompatProvider } = require("./openai-compat.ts") as typeof import("./openai-compat.ts");
+    const { OpenAICompatProvider } =
+      require("./openai-compat.ts") as typeof import("./openai-compat.ts");
     return new OpenAICompatProvider(config);
   }
   throw new SearchError(

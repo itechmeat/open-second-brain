@@ -115,16 +115,12 @@ describe("buildReminder env-based resolution", () => {
 
   test("env O2B_TARGET=openclaw resolves to openclaw template", () => {
     process.env.O2B_TARGET = "openclaw";
-    expect(buildReminder("test-agent")).toContain(
-      "OpenClaw has no session boundary",
-    );
+    expect(buildReminder("test-agent")).toContain("OpenClaw has no session boundary");
   });
 
   test("explicit target beats env", () => {
     process.env.O2B_TARGET = "openclaw";
-    expect(buildReminder("test-agent", "hermes")).toContain(
-      "Hermes turns are short",
-    );
+    expect(buildReminder("test-agent", "hermes")).toContain("Hermes turns are short");
   });
 
   test("unknown env value falls back to common template", () => {

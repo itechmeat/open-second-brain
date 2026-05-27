@@ -27,11 +27,7 @@
  * exactly the entries the matching `applyProtect` added.
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -46,17 +42,17 @@ export const PROTECT_TARGETS = ["claudecode", "codex"] as const;
 export type ProtectTarget = (typeof PROTECT_TARGETS)[number];
 
 export function isProtectTarget(value: string | undefined): value is ProtectTarget {
-  return (
-    typeof value === "string"
-    && (PROTECT_TARGETS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && (PROTECT_TARGETS as readonly string[]).includes(value);
 }
 
 export class BrainProtectError extends Error {
   readonly code: string;
   readonly detail?: unknown;
 
-  constructor(message: string, info: { code: string; detail?: unknown } = { code: "BRAIN_PROTECT" }) {
+  constructor(
+    message: string,
+    info: { code: string; detail?: unknown } = { code: "BRAIN_PROTECT" },
+  ) {
     super(message);
     this.name = "BrainProtectError";
     this.code = info.code;
@@ -161,12 +157,8 @@ export function renderClaudeCode(
   rules: ReadonlyArray<ProtectRule>,
   vault: string = inferVault(rules),
 ): ClaudeCodeRender {
-  const deny = rules
-    .filter((r) => r.kind === "deny")
-    .map((r) => `${r.action}(${r.path})`);
-  const allow = rules
-    .filter((r) => r.kind === "allow")
-    .map((r) => `${r.action}(${r.path})`);
+  const deny = rules.filter((r) => r.kind === "deny").map((r) => `${r.action}(${r.path})`);
+  const allow = rules.filter((r) => r.kind === "allow").map((r) => `${r.action}(${r.path})`);
   return Object.freeze({
     snippet: { permissions: { deny, allow } },
     manifest: {
@@ -182,10 +174,9 @@ export function renderClaudeCode(
 function inferVault(rules: ReadonlyArray<ProtectRule>): string {
   const first = rules[0];
   if (!first) {
-    throw new BrainProtectError(
-      "renderClaudeCode requires at least one rule to infer the vault",
-      { code: "EMPTY_RULES" },
-    );
+    throw new BrainProtectError("renderClaudeCode requires at least one rule to infer the vault", {
+      code: "EMPTY_RULES",
+    });
   }
   return first.path.split(`/${BRAIN_ROOT_REL}/`)[0]!;
 }
@@ -215,9 +206,7 @@ export function renderCodex(rules: ReadonlyArray<ProtectRule>): CodexRender {
   return renderCodexEntries(codexEntriesFromRules(rules));
 }
 
-function renderCodexEntries(
-  entries: ReadonlyArray<CodexFilesystemEntry>,
-): CodexRender {
+function renderCodexEntries(entries: ReadonlyArray<CodexFilesystemEntry>): CodexRender {
   const lines: string[] = [
     FENCE_OPEN,
     `# schema_version = ${PROTECT_SCHEMA_VERSION}`,
@@ -302,22 +291,18 @@ function parseManifestFile(raw: string, path: string): ManifestFile {
     });
   }
   if (
-    parsed === null
-    || typeof parsed !== "object"
-    || !Array.isArray((parsed as { entries?: unknown }).entries)
+    parsed === null ||
+    typeof parsed !== "object" ||
+    !Array.isArray((parsed as { entries?: unknown }).entries)
   ) {
-    throw new BrainProtectError(
-      `manifest at ${path} missing 'entries' array`,
-      { code: "MANIFEST_MALFORMED" },
-    );
+    throw new BrainProtectError(`manifest at ${path} missing 'entries' array`, {
+      code: "MANIFEST_MALFORMED",
+    });
   }
   return parsed as ManifestFile;
 }
 
-export function readManifest(
-  vault: string,
-  target: ProtectTarget,
-): ManifestRecord | null {
+export function readManifest(vault: string, target: ProtectTarget): ManifestRecord | null {
   const path = manifestPath(vault);
   if (!existsSync(path)) return null;
   const file = parseManifestFile(readFileSync(path, "utf8"), path);
@@ -325,8 +310,8 @@ export function readManifest(
   if (entry === undefined) return null;
   if (entry.schema_version > PROTECT_SCHEMA_VERSION) {
     throw new BrainProtectError(
-      `manifest schema_version ${entry.schema_version} is newer than `
-        + `this binary (${PROTECT_SCHEMA_VERSION}); update o2b first`,
+      `manifest schema_version ${entry.schema_version} is newer than ` +
+        `this binary (${PROTECT_SCHEMA_VERSION}); update o2b first`,
       { code: "MANIFEST_NEWER_SCHEMA" },
     );
   }
@@ -374,10 +359,7 @@ function readFileOrEmpty(path: string): string {
   }
 }
 
-export function removeManifestEntry(
-  vault: string,
-  target: ProtectTarget,
-): void {
+export function removeManifestEntry(vault: string, target: ProtectTarget): void {
   const path = manifestPath(vault);
   if (!existsSync(path)) return;
   const file = parseManifestFile(readFileSync(path, "utf8"), path);
@@ -459,9 +441,7 @@ function applyClaudeCode(vault: string): ApplyResult {
   const dest = join(settingsDir, "settings.json");
   mkdirSync(settingsDir, { recursive: true });
 
-  const prev = readManifest(vault, "claudecode") as
-    | ManifestRecordClaudeCode
-    | null;
+  const prev = readManifest(vault, "claudecode") as ManifestRecordClaudeCode | null;
   const { raw: before, parsed: settings } = readSettingsJson(dest);
 
   settings.permissions ??= {};
@@ -472,12 +452,8 @@ function applyClaudeCode(vault: string): ApplyResult {
   // history (idempotency under repeated `--apply`).
   const priorDeny = prev?.owned_deny ?? [];
   const priorAllow = prev?.owned_allow ?? [];
-  settings.permissions.deny = settings.permissions.deny.filter(
-    (e) => !priorDeny.includes(e),
-  );
-  settings.permissions.allow = settings.permissions.allow.filter(
-    (e) => !priorAllow.includes(e),
-  );
+  settings.permissions.deny = settings.permissions.deny.filter((e) => !priorDeny.includes(e));
+  settings.permissions.allow = settings.permissions.allow.filter((e) => !priorAllow.includes(e));
 
   for (const e of rendered.snippet.permissions.deny) {
     if (!settings.permissions.deny.includes(e)) {
@@ -509,9 +485,7 @@ function applyClaudeCode(vault: string): ApplyResult {
 
 function unprotectClaudeCode(vault: string): void {
   const dest = join(vault, ".claude", "settings.json");
-  const prev = readManifest(vault, "claudecode") as
-    | ManifestRecordClaudeCode
-    | null;
+  const prev = readManifest(vault, "claudecode") as ManifestRecordClaudeCode | null;
   if (prev === null || !existsSync(dest)) {
     removeManifestEntry(vault, "claudecode");
     return;
@@ -561,8 +535,8 @@ function parseCodexFence(raw: string): ReadonlyArray<CodexFilesystemEntry> {
     const version = Number(schema[1]);
     if (Number.isFinite(version) && version > PROTECT_SCHEMA_VERSION) {
       throw new BrainProtectError(
-        `codex managed block schema_version ${version} is newer than `
-          + `this binary (${PROTECT_SCHEMA_VERSION}); update o2b first`,
+        `codex managed block schema_version ${version} is newer than ` +
+          `this binary (${PROTECT_SCHEMA_VERSION}); update o2b first`,
         { code: "CODEX_FENCE_NEWER_SCHEMA" },
       );
     }
@@ -585,10 +559,9 @@ function parseTomlStringLiteral(raw: string): string {
   try {
     return JSON.parse(`"${raw}"`) as string;
   } catch {
-    throw new BrainProtectError(
-      "codex managed block contains an invalid quoted filesystem path",
-      { code: "CODEX_FENCE_MALFORMED" },
-    );
+    throw new BrainProtectError("codex managed block contains an invalid quoted filesystem path", {
+      code: "CODEX_FENCE_MALFORMED",
+    });
   }
 }
 
@@ -661,12 +634,9 @@ function unprotectCodex(vault: string, homeOverride?: string): void {
     // a hand-edited fence whose manifest was deleted out-of-band.
     const prev = readManifest(vault, "codex") as ManifestRecordCodex | null;
     const ownedPaths = new Set<string>(
-      prev?.owned_paths
-        ?? codexEntriesFromRules(buildProtectRules(vault)).map((e) => e.path),
+      prev?.owned_paths ?? codexEntriesFromRules(buildProtectRules(vault)).map((e) => e.path),
     );
-    const remaining = parseCodexFence(raw).filter(
-      (e) => !ownedPaths.has(e.path),
-    );
+    const remaining = parseCodexFence(raw).filter((e) => !ownedPaths.has(e.path));
     const after = replaceCodexFence(
       raw,
       remaining.length > 0 ? renderCodexEntries(remaining).body : null,

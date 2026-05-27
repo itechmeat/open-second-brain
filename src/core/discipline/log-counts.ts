@@ -21,7 +21,8 @@ function zero(): AgentCounts {
 
 function bump(c: AgentCounts, kind: string): AgentCounts {
   if (kind === "feedback") return { ...c, feedback: c.feedback + 1, total: c.total + 1 };
-  if (kind === "apply-evidence") return { ...c, apply_evidence: c.apply_evidence + 1, total: c.total + 1 };
+  if (kind === "apply-evidence")
+    return { ...c, apply_evidence: c.apply_evidence + 1, total: c.total + 1 };
   if (kind === "note") return { ...c, note: c.note + 1, total: c.total + 1 };
   return { ...c, other: c.other + 1, total: c.total + 1 };
 }

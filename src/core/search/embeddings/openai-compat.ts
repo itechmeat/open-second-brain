@@ -24,7 +24,10 @@ import type { EmbeddingProvider } from "./provider.ts";
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 interface OpenAiEmbeddingResponse {
-  readonly data: ReadonlyArray<{ readonly embedding: ReadonlyArray<number>; readonly index: number }>;
+  readonly data: ReadonlyArray<{
+    readonly embedding: ReadonlyArray<number>;
+    readonly index: number;
+  }>;
   readonly model?: string;
 }
 
@@ -81,7 +84,10 @@ interface ResolvedHttp {
 
 function resolveHttp(config: ResolvedEmbeddingConfig): ResolvedHttp {
   if (!config.baseUrl) {
-    throw new SearchError("INVALID_INPUT", "embedding_base_url is required when semantic is enabled");
+    throw new SearchError(
+      "INVALID_INPUT",
+      "embedding_base_url is required when semantic is enabled",
+    );
   }
   if (!config.model) {
     throw new SearchError("INVALID_INPUT", "embedding_model is required when semantic is enabled");
@@ -140,9 +146,12 @@ export class OpenAICompatProvider implements EmbeddingProvider {
       await sem.acquire();
       try {
         if (cancel.signal.aborted) return;
-        const vectors = await this.embedBatchWithRetry(batch.map((b) => b.text), {
-          parentSignal: cancel.signal,
-        });
+        const vectors = await this.embedBatchWithRetry(
+          batch.map((b) => b.text),
+          {
+            parentSignal: cancel.signal,
+          },
+        );
         for (let i = 0; i < vectors.length; i++) {
           out[batch[i]!.originalIndex] = vectors[i]!;
         }
@@ -199,7 +208,9 @@ export class OpenAICompatProvider implements EmbeddingProvider {
         if (!err.retriable || attempt >= maxAttempts) throw err.error;
         lastError = err.error;
         this.retriesSeen++;
-        const wait = jittered(this.backoffMs[attempt - 1] ?? (this.backoffMs[this.backoffMs.length - 1] ?? 4000));
+        const wait = jittered(
+          this.backoffMs[attempt - 1] ?? this.backoffMs[this.backoffMs.length - 1] ?? 4000,
+        );
         await sleep(wait);
       }
     }
@@ -216,10 +227,7 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     return n;
   }
 
-  private async embedBatchOnce(
-    texts: string[],
-    parentSignal?: AbortSignal,
-  ): Promise<number[][]> {
+  private async embedBatchOnce(texts: string[], parentSignal?: AbortSignal): Promise<number[][]> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
     const onParentAbort = () => controller.abort();
@@ -286,7 +294,10 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     const ordered: number[][] = new Array(texts.length);
     for (const item of json.data) {
       if (typeof item.index !== "number" || item.index < 0 || item.index >= texts.length) {
-        throw new SearchError("EMBEDDING_PROVIDER_HTTP", `embedding response: out-of-range index ${item.index}`);
+        throw new SearchError(
+          "EMBEDDING_PROVIDER_HTTP",
+          `embedding response: out-of-range index ${item.index}`,
+        );
       }
       if (!Array.isArray(item.embedding)) {
         throw new SearchError(
@@ -307,7 +318,10 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     }
     for (let i = 0; i < ordered.length; i++) {
       if (!Array.isArray(ordered[i])) {
-        throw new SearchError("EMBEDDING_PROVIDER_HTTP", `embedding response: missing vector for index ${i}`);
+        throw new SearchError(
+          "EMBEDDING_PROVIDER_HTTP",
+          `embedding response: missing vector for index ${i}`,
+        );
       }
     }
     return ordered;

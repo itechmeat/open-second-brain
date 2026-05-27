@@ -7,15 +7,10 @@
  */
 
 import type { BrainLogEntry } from "../../core/brain/log.ts";
-import {
-  queryByPreference,
-  queryByTopic,
-} from "../../core/brain/query.ts";
+import { queryByPreference, queryByTopic } from "../../core/brain/query.ts";
 import { info, ok } from "../output.ts";
 
-export function renderQueryPreferenceText(
-  out: ReturnType<typeof queryByPreference>,
-): void {
+export function renderQueryPreferenceText(out: ReturnType<typeof queryByPreference>): void {
   const p = out.preference;
   ok(`id: ${p.id}`);
   ok(`topic: ${p.topic}`);
@@ -34,10 +29,7 @@ export function renderQueryPreferenceText(
   }
 }
 
-export function renderQueryTopicText(
-  out: ReturnType<typeof queryByTopic>,
-  topic: string,
-): void {
+export function renderQueryTopicText(out: ReturnType<typeof queryByTopic>, topic: string): void {
   ok(`topic: ${topic}`);
   if (out.preference) {
     ok(`preference: ${out.preference.id}`);

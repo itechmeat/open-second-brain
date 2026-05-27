@@ -16,10 +16,7 @@ import {
   MERGE_SUGGESTION_LIMIT,
 } from "../../../src/core/brain/merge-candidates.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
-import {
-  BRAIN_CONFIDENCE,
-  BRAIN_PREFERENCE_STATUS,
-} from "../../../src/core/brain/types.ts";
+import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 
 let vault: string;
 
@@ -54,8 +51,7 @@ function makePref(opts: MakePrefOpts): void {
     unconfirmed_until: "2026-05-08T00:00:00Z",
     status,
     evidenced_by: [`[[sig-2026-05-01-${opts.slug}]]`],
-    confirmed_at:
-      status === BRAIN_PREFERENCE_STATUS.unconfirmed ? null : "2026-05-02T00:00:00Z",
+    confirmed_at: status === BRAIN_PREFERENCE_STATUS.unconfirmed ? null : "2026-05-02T00:00:00Z",
     applied_count: 1,
     violated_count: 0,
     last_evidence_at: "2026-05-02T00:00:00Z",
@@ -85,9 +81,7 @@ describe("findMergeCandidates", () => {
     expect(out.length).toBe(1);
     expect(out[0]!.topic).toBe("commits");
     expect(out[0]!.scope).toBeNull();
-    expect(out[0]!.jaccard).toBeGreaterThanOrEqual(
-      JACCARD_MERGE_SUGGEST_THRESHOLD,
-    );
+    expect(out[0]!.jaccard).toBeGreaterThanOrEqual(JACCARD_MERGE_SUGGEST_THRESHOLD);
     // Ids stored as lexicographically smaller / larger.
     expect(out[0]!.a < out[0]!.b).toBe(true);
   });

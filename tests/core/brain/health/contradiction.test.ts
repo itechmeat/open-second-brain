@@ -9,10 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  BRAIN_PREFERENCE_STATUS,
-  BRAIN_SIGNAL_SIGN,
-} from "../../../../src/core/brain/types.ts";
+import { BRAIN_PREFERENCE_STATUS, BRAIN_SIGNAL_SIGN } from "../../../../src/core/brain/types.ts";
 import {
   detectContradictions,
   type PreferenceForContradiction,

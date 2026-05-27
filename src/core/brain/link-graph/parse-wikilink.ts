@@ -54,9 +54,27 @@ const CODE_BLOCK_RE = /```[\s\S]*?```|`[^`]+`/g;
  * register as backlinks.
  */
 const MEDIA_EXTENSIONS: ReadonlySet<string> = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".tiff",
-  ".avif", ".mp4", ".webm", ".ogv", ".mov", ".mkv", ".avi", ".mp3",
-  ".wav", ".ogg", ".flac", ".m4a", ".pdf",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".svg",
+  ".webp",
+  ".bmp",
+  ".tiff",
+  ".avif",
+  ".mp4",
+  ".webm",
+  ".ogv",
+  ".mov",
+  ".mkv",
+  ".avi",
+  ".mp3",
+  ".wav",
+  ".ogg",
+  ".flac",
+  ".m4a",
+  ".pdf",
 ]);
 
 export interface WikilinkParse {

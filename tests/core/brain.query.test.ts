@@ -17,10 +17,7 @@ import { join } from "node:path";
 
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
-import {
-  moveToRetired,
-  writePreference,
-} from "../../src/core/brain/preference.ts";
+import { moveToRetired, writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import {
   BrainNotFoundError,
@@ -60,10 +57,7 @@ function basePref(slug: string) {
     created_at: "2026-05-14T10:00:00Z",
     unconfirmed_until: "2026-05-28T10:00:00Z",
     status: "unconfirmed" as const,
-    evidenced_by: [
-      `[[sig-2026-05-13-${slug}]]`,
-      `[[sig-2026-05-14-${slug}]]`,
-    ],
+    evidenced_by: [`[[sig-2026-05-13-${slug}]]`, `[[sig-2026-05-14-${slug}]]`],
     scope: "writing",
     confirmed_at: null,
   };
@@ -145,12 +139,8 @@ describe("queryByPreference", () => {
   });
 
   test("throws BrainNotFoundError when no preference matches", () => {
-    expect(() => queryByPreference(tmp, "pref-nonexistent")).toThrow(
-      BrainNotFoundError,
-    );
-    expect(() => queryByPreference(tmp, "garbage")).toThrow(
-      BrainNotFoundError,
-    );
+    expect(() => queryByPreference(tmp, "pref-nonexistent")).toThrow(BrainNotFoundError);
+    expect(() => queryByPreference(tmp, "garbage")).toThrow(BrainNotFoundError);
     expect(() => queryByPreference(tmp, "")).toThrow(BrainNotFoundError);
   });
 
@@ -160,16 +150,10 @@ describe("queryByPreference", () => {
     // could resolve outside the vault on a permissive filesystem. We
     // surface this as `BrainNotFoundError` so the caller sees the same
     // shape as any other unknown id.
-    expect(() => queryByPreference(tmp, "pref-../escape")).toThrow(
-      BrainNotFoundError,
-    );
+    expect(() => queryByPreference(tmp, "pref-../escape")).toThrow(BrainNotFoundError);
     expect(() => queryByPreference(tmp, "pref-..")).toThrow(BrainNotFoundError);
-    expect(() => queryByPreference(tmp, "pref-with/slash")).toThrow(
-      BrainNotFoundError,
-    );
-    expect(() => queryByPreference(tmp, "ret-../escape")).toThrow(
-      BrainNotFoundError,
-    );
+    expect(() => queryByPreference(tmp, "pref-with/slash")).toThrow(BrainNotFoundError);
+    expect(() => queryByPreference(tmp, "ret-../escape")).toThrow(BrainNotFoundError);
   });
 
   test("preference without any applied evidence still resolves with empty `evidence` array", () => {
@@ -235,10 +219,7 @@ describe("queryByTopic", () => {
     ]);
     expect(res.preference?.id).toBe("pref-no-internal-abbrev");
     expect(res.all_log_events).toHaveLength(2);
-    expect(res.all_log_events.map((e) => e.eventType)).toEqual([
-      "promote",
-      "apply-evidence",
-    ]);
+    expect(res.all_log_events.map((e) => e.eventType)).toEqual(["promote", "apply-evidence"]);
   });
 
   test("falls back to retired preference when no active one exists for the topic", () => {
@@ -298,16 +279,11 @@ describe("queryByLogSince", () => {
 
     const res = queryByLogSince(tmp, new Date("2026-05-13T00:00:00Z"));
     expect(res).toHaveLength(2);
-    expect(res.map((e) => e.timestamp)).toEqual([
-      "2026-05-13T18:00:00Z",
-      "2026-05-14T14:00:00Z",
-    ]);
+    expect(res.map((e) => e.timestamp)).toEqual(["2026-05-13T18:00:00Z", "2026-05-14T14:00:00Z"]);
   });
 
   test("invalid Date throws TypeError", () => {
-    expect(() =>
-      queryByLogSince(tmp, new Date("totally-not-a-date")),
-    ).toThrow(TypeError);
+    expect(() => queryByLogSince(tmp, new Date("totally-not-a-date"))).toThrow(TypeError);
   });
 
   test("empty log returns empty array (no throw)", () => {

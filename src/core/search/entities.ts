@@ -32,7 +32,10 @@ const ALLCAPS_OR_DIGIT_RE = /[\p{Lu}\p{N}]*\p{Lu}[\p{Lu}\p{N}]+|\p{L}+\p{N}+|\p{
 
 /** Lowercase + collapse internal whitespace. */
 function normalize(raw: string): string {
-  return raw.trim().replace(/[ \t]+/g, " ").toLowerCase();
+  return raw
+    .trim()
+    .replace(/[ \t]+/g, " ")
+    .toLowerCase();
 }
 
 /** Last path segment without a markdown extension, for wikilink targets. */

@@ -7,23 +7,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import {
-  importSession,
-  importSessionPath,
-} from "../../src/core/brain/sessions/import.ts";
+import { importSession, importSessionPath } from "../../src/core/brain/sessions/import.ts";
 import { SessionImportError } from "../../src/core/brain/sessions/types.ts";
 
 const CLAUDE = resolve("tests/fixtures/sessions/claude-minimal.jsonl");
@@ -35,7 +26,15 @@ let tmp: string;
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-import-"));
   const dirs = brainDirs(tmp);
-  for (const d of [dirs.brain, dirs.inbox, dirs.processed, dirs.preferences, dirs.retired, dirs.log, dirs.snapshots]) {
+  for (const d of [
+    dirs.brain,
+    dirs.inbox,
+    dirs.processed,
+    dirs.preferences,
+    dirs.retired,
+    dirs.log,
+    dirs.snapshots,
+  ]) {
     mkdirSync(d, { recursive: true });
   }
   atomicWriteFileSync(join(dirs.brain, "_brain.yaml"), DEFAULT_BRAIN_CONFIG_YAML);

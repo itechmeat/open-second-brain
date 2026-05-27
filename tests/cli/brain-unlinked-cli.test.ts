@@ -14,11 +14,7 @@ let vault: string;
 let configHome: string;
 let configPath: string;
 
-function writePref(
-  slug: string,
-  frontmatter: Record<string, string>,
-  body = "",
-): void {
+function writePref(slug: string, frontmatter: Record<string, string>, body = ""): void {
   const lines = ["---"];
   for (const [k, v] of Object.entries(frontmatter)) lines.push(`${k}: ${v}`);
   lines.push("---", "", body);
@@ -86,7 +82,12 @@ describe("o2b brain unlinked", () => {
     const payload = JSON.parse(r.stdout) as {
       id: string;
       count: number;
-      mentions: Array<{ source: string; line: number; term: string; context: string }>;
+      mentions: Array<{
+        source: string;
+        line: number;
+        term: string;
+        context: string;
+      }>;
     };
     expect(payload.id).toBe("pref-tgt");
     expect(payload.count).toBe(1);
@@ -94,17 +95,12 @@ describe("o2b brain unlinked", () => {
     expect(payload.mentions[0]!.term).toBe("Subject Line");
   });
 
-  test("rejects --limit=0", async () => {
-    const r = await runCli(["brain", "unlinked", "pref-x", "--limit", "0"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
-    });
-    expect(r.returncode).toBe(1);
-  });
-
-  test("rejects --limit=abc", async () => {
-    const r = await runCli(["brain", "unlinked", "pref-x", "--limit", "abc"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
-    });
-    expect(r.returncode).toBe(1);
+  test("rejects invalid --limit values", async () => {
+    for (const limit of ["0", "abc"]) {
+      const r = await runCli(["brain", "unlinked", "pref-x", "--limit", limit], {
+        env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+      });
+      expect(r.returncode).toBe(1);
+    }
   });
 });

@@ -14,11 +14,7 @@ let vault: string;
 let configHome: string;
 let configPath: string;
 
-function writePref(
-  slug: string,
-  frontmatter: Record<string, string>,
-  body = "",
-): void {
+function writePref(slug: string, frontmatter: Record<string, string>, body = ""): void {
   const lines = ["---"];
   for (const [k, v] of Object.entries(frontmatter)) lines.push(`${k}: ${v}`);
   lines.push("---", "", body);

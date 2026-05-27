@@ -17,14 +17,8 @@ import {
   parseBrainYaml,
   validateBrainConfigDetailed,
 } from "../../../../src/core/brain/policy.ts";
-import {
-  BRAIN_TEMPORAL_DEFAULTS,
-  resolveTemporal,
-} from "../../../../src/core/brain/policy.ts";
-import type {
-  TemporalEvent,
-  TimelineIndex,
-} from "../../../../src/core/brain/temporal/types.ts";
+import { BRAIN_TEMPORAL_DEFAULTS, resolveTemporal } from "../../../../src/core/brain/policy.ts";
+import type { TemporalEvent, TimelineIndex } from "../../../../src/core/brain/temporal/types.ts";
 
 function validate(yaml: string) {
   return validateBrainConfigDetailed(parseBrainYaml(yaml), "<test>");
@@ -74,111 +68,78 @@ describe("temporal config block", () => {
   });
 
   test("partial block - missing fields fall back to defaults", () => {
-    const { config } = validate(
-      HEAD + `temporal:\n  stale_pref_days: 60\n`,
-    );
+    const { config } = validate(HEAD + `temporal:\n  stale_pref_days: 60\n`);
     expect(config.temporal?.stale_pref_days).toBe(60);
     const resolved = resolveTemporal(config);
     expect(resolved.stale_pref_days).toBe(60);
-    expect(resolved.stale_signal_days).toBe(
-      BRAIN_TEMPORAL_DEFAULTS.stale_signal_days,
-    );
-    expect(resolved.weekly_start_dow).toBe(
-      BRAIN_TEMPORAL_DEFAULTS.weekly_start_dow,
-    );
+    expect(resolved.stale_signal_days).toBe(BRAIN_TEMPORAL_DEFAULTS.stale_signal_days);
+    expect(resolved.weekly_start_dow).toBe(BRAIN_TEMPORAL_DEFAULTS.weekly_start_dow);
   });
 
   test("stale_pref_days: 0 rejected", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  stale_pref_days: 0\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `temporal:\n  stale_pref_days: 0\n`)).toThrow(BrainConfigError);
   });
 
   test("stale_pref_days: negative rejected", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  stale_pref_days: -1\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `temporal:\n  stale_pref_days: -1\n`)).toThrow(BrainConfigError);
   });
 
   test("stale_pref_days: non-integer rejected", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  stale_pref_days: 2.5\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `temporal:\n  stale_pref_days: 2.5\n`)).toThrow(BrainConfigError);
   });
 
   test("stale_signal_days: 0 rejected", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  stale_signal_days: 0\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `temporal:\n  stale_signal_days: 0\n`)).toThrow(BrainConfigError);
   });
 
   test("stale_log_days: 0 rejected", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  stale_log_days: 0\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `temporal:\n  stale_log_days: 0\n`)).toThrow(BrainConfigError);
   });
 
   test("weekly_start_dow: 0 rejected (must be 1..7 ISO-8601)", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  weekly_start_dow: 0\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `temporal:\n  weekly_start_dow: 0\n`)).toThrow(BrainConfigError);
   });
 
   test("weekly_start_dow: 8 rejected (must be 1..7 ISO-8601)", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  weekly_start_dow: 8\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `temporal:\n  weekly_start_dow: 8\n`)).toThrow(BrainConfigError);
   });
 
   test("weekly_start_dow: non-integer rejected", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  weekly_start_dow: 3.5\n`),
-    ).toThrow(BrainConfigError);
+    expect(() => validate(HEAD + `temporal:\n  weekly_start_dow: 3.5\n`)).toThrow(BrainConfigError);
   });
 
   test("daily_window_offset_hours: -23 accepted (lower bound)", () => {
-    const { config } = validate(
-      HEAD + `temporal:\n  daily_window_offset_hours: -23\n`,
-    );
+    const { config } = validate(HEAD + `temporal:\n  daily_window_offset_hours: -23\n`);
     expect(config.temporal?.daily_window_offset_hours).toBe(-23);
   });
 
   test("daily_window_offset_hours: 23 accepted (upper bound)", () => {
-    const { config } = validate(
-      HEAD + `temporal:\n  daily_window_offset_hours: 23\n`,
-    );
+    const { config } = validate(HEAD + `temporal:\n  daily_window_offset_hours: 23\n`);
     expect(config.temporal?.daily_window_offset_hours).toBe(23);
   });
 
   test("daily_window_offset_hours: -24 rejected (out of range)", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  daily_window_offset_hours: -24\n`),
-    ).toThrow(BrainConfigError);
-  });
-
-  test("daily_window_offset_hours: 24 rejected (out of range)", () => {
-    expect(() =>
-      validate(HEAD + `temporal:\n  daily_window_offset_hours: 24\n`),
-    ).toThrow(BrainConfigError);
-  });
-
-  test("non-object temporal block rejected", () => {
-    expect(() => validate(HEAD + `temporal: "nope"\n`)).toThrow(
+    expect(() => validate(HEAD + `temporal:\n  daily_window_offset_hours: -24\n`)).toThrow(
       BrainConfigError,
     );
   });
 
+  test("daily_window_offset_hours: 24 rejected (out of range)", () => {
+    expect(() => validate(HEAD + `temporal:\n  daily_window_offset_hours: 24\n`)).toThrow(
+      BrainConfigError,
+    );
+  });
+
+  test("non-object temporal block rejected", () => {
+    expect(() => validate(HEAD + `temporal: "nope"\n`)).toThrow(BrainConfigError);
+  });
+
   test("unknown sub-key warns but does not throw", () => {
     const { config, warnings } = validate(
-      HEAD +
-        `temporal:\n  stale_pref_days: 90\n  unknown_slot: 7\n`,
+      HEAD + `temporal:\n  stale_pref_days: 90\n  unknown_slot: 7\n`,
     );
     expect(config.temporal?.stale_pref_days).toBe(90);
-    expect(
-      warnings.some((w) =>
-        w.message.includes("temporal.unknown_slot"),
-      ),
-    ).toBe(true);
+    expect(warnings.some((w) => w.message.includes("temporal.unknown_slot"))).toBe(true);
   });
 });
 

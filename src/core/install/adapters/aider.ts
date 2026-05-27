@@ -87,11 +87,7 @@ function fileMtimeMs(path: string): number | null {
 }
 
 function resolveAgentName(env: InstallEnv, payload: McpPayload): string {
-  return (
-    payload.full.env?.["VAULT_AGENT_NAME"] ??
-    env.env["VAULT_AGENT_NAME"] ??
-    "agent"
-  );
+  return payload.full.env?.["VAULT_AGENT_NAME"] ?? env.env["VAULT_AGENT_NAME"] ?? "agent";
 }
 
 function renderTemplate(env: InstallEnv, payload: McpPayload): string {
@@ -173,12 +169,7 @@ export const aiderAdapter: InstallAdapter = {
     };
   },
 
-  apply(
-    _plan: InstallPlan,
-    payload: McpPayload,
-    env: InstallEnv,
-    opts: ApplyOpts,
-  ): ApplyResult {
+  apply(_plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
     const conf = resolveConfPath(env);
     const sidecar = resolveSidecarPath(env, opts);
     const stored = readManifest(env.vault).installs[TARGET];

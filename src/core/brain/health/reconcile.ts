@@ -17,10 +17,7 @@ import {
   type ContradictionFinding,
   type PreferenceForContradiction,
 } from "./contradiction.ts";
-import {
-  detectConceptGaps,
-  type ConceptGapFinding,
-} from "./concept-gap.ts";
+import { detectConceptGaps, type ConceptGapFinding } from "./concept-gap.ts";
 import {
   detectStaleClaims,
   type PreferenceForStaleClaim,
@@ -28,8 +25,7 @@ import {
 } from "./stale-claim.ts";
 
 /** A preference shape sufficient for every semantic-health detector. */
-export type PreferenceForHealth = PreferenceForContradiction &
-  PreferenceForStaleClaim;
+export type PreferenceForHealth = PreferenceForContradiction & PreferenceForStaleClaim;
 
 export interface SemanticHealthInput {
   readonly preferences: ReadonlyArray<PreferenceForHealth>;
@@ -61,16 +57,12 @@ export function reconcileSemanticHealth(
   input: SemanticHealthInput,
   config: SemanticHealthConfig,
 ): SemanticHealthReport {
-  const contradictions = detectContradictions(
-    input.preferences,
-    input.signSignById,
-    { jaccard: config.contradictionJaccard },
-  );
-  const conceptGaps = detectConceptGaps(
-    input.corpusPrinciples,
-    input.coveredTopics,
-    { minFrequency: config.conceptGapMinFrequency },
-  );
+  const contradictions = detectContradictions(input.preferences, input.signSignById, {
+    jaccard: config.contradictionJaccard,
+  });
+  const conceptGaps = detectConceptGaps(input.corpusPrinciples, input.coveredTopics, {
+    minFrequency: config.conceptGapMinFrequency,
+  });
   const staleClaims = detectStaleClaims(input.preferences, {
     maxAgeDays: config.staleClaimMaxAgeDays,
     now: config.now,

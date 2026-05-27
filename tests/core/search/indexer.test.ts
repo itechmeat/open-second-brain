@@ -2,7 +2,12 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { indexVault, reindexVault, indexStatus, indexCheck } from "../../../src/core/search/indexer.ts";
+import {
+  indexVault,
+  reindexVault,
+  indexStatus,
+  indexCheck,
+} from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
@@ -51,7 +56,9 @@ test("modifying a file produces an `updated` event and replaces chunks", async (
   utimesSync(abs, t, t);
 
   const events: Array<{ path: string; kind: string }> = [];
-  const stats = await indexVault(cfg, { onFile: (e) => events.push({ path: e.path, kind: e.kind }) });
+  const stats = await indexVault(cfg, {
+    onFile: (e) => events.push({ path: e.path, kind: e.kind }),
+  });
   expect(stats.updated).toBe(1);
   expect(events.find((e) => e.path === "x.md")?.kind).toBe("updated");
 
@@ -184,4 +191,3 @@ test("mtime+size fastpath skips read; hash fallback detects same-content touch",
   expect(second.updated).toBe(0);
   expect(second.added).toBe(0);
 });
-

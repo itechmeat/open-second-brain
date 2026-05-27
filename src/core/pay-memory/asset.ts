@@ -8,11 +8,7 @@
 
 import type { FrontmatterMap } from "../types.ts";
 import { slugify, writeFrontmatterAtomic } from "../vault.ts";
-import {
-  nowIsoZ,
-  NOT_PROVIDED,
-  wikiLink,
-} from "./_md.ts";
+import { nowIsoZ, NOT_PROVIDED, wikiLink } from "./_md.ts";
 import { assetPath, ensureInsideVault, vaultRelative } from "./paths.ts";
 import type { AssetInput, AssetOutput } from "./types.ts";
 
@@ -94,11 +90,6 @@ function renderAssetBody(input: AssetInput): string {
   }
   lines.push("");
 
-  lines.push(
-    "## Notes",
-    "",
-    "Generated through a paid API call recorded in the linked receipt.",
-  );
+  lines.push("## Notes", "", "Generated through a paid API call recorded in the linked receipt.");
   return lines.join("\n");
 }
-

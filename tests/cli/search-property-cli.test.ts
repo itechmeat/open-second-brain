@@ -40,28 +40,25 @@ afterEach(() => {
 
 describe("o2b search --property", () => {
   test("malformed --property without '=' is rejected", async () => {
-    const r = await runCli(
-      ["search", "foo", "--property", "no-equals-here"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
-    );
+    const r = await runCli(["search", "foo", "--property", "no-equals-here"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(r.returncode).not.toBe(0);
     expect(r.stderr).toContain("--property must be KEY=VALUE");
   });
 
   test("--property KEY=  rejects empty value", async () => {
-    const r = await runCli(
-      ["search", "foo", "--property", "type="],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
-    );
+    const r = await runCli(["search", "foo", "--property", "type="], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(r.returncode).not.toBe(0);
     expect(r.stderr).toContain("KEY=VALUE");
   });
 
   test("--property =VALUE rejects empty key", async () => {
-    const r = await runCli(
-      ["search", "foo", "--property", "=decision"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
-    );
+    const r = await runCli(["search", "foo", "--property", "=decision"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(r.returncode).not.toBe(0);
     expect(r.stderr).toContain("KEY=VALUE");
   });

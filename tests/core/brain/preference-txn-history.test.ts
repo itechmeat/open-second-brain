@@ -12,10 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  brainDirs,
-  preferenceHistoryPath,
-} from "../../../src/core/brain/paths.ts";
+import { brainDirs, preferenceHistoryPath } from "../../../src/core/brain/paths.ts";
 import { writePreferenceTxn } from "../../../src/core/brain/preference-txn.ts";
 import { readEditHistory } from "../../../src/core/brain/health/edit-history.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
@@ -51,7 +48,7 @@ describe("writePreferenceTxn edit-history", () => {
   test("first write seeds the trail from current state", () => {
     writePreferenceTxn(vault, baseInput(), [], {}, history);
     const entries = readEditHistory(vault, "test-rule");
-    const fields = entries.map((e) => e.field).sort();
+    const fields = entries.map((e) => e.field).toSorted();
     expect(fields).toEqual(["principle", "status"]);
     const principle = entries.find((e) => e.field === "principle")!;
     expect(principle.revision).toBe(1);

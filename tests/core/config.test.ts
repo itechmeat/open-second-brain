@@ -12,6 +12,7 @@ import {
   resolveTimezone,
   resolveVault,
   setConfigValue,
+  validateTimezoneName,
 } from "../../src/core/config.ts";
 
 let tmp: string;
@@ -60,7 +61,7 @@ describe("parseSimpleYaml", () => {
   });
 
   test("strips surrounding quotes", () => {
-    const data = parseSimpleYaml('vault: "/path"\nname: \'X\'\n');
+    const data = parseSimpleYaml("vault: \"/path\"\nname: 'X'\n");
     expect(data["vault"]).toBe("/path");
     expect(data["name"]).toBe("X");
   });
@@ -199,6 +200,13 @@ describe("resolveAgentName", () => {
 });
 
 describe("resolveTimezone", () => {
+  test("validates IANA timezone names", () => {
+    expect(validateTimezoneName("UTC")).toEqual({ ok: true, error: null });
+    const invalid = validateTimezoneName("Not/A/Real/Zone");
+    expect(invalid.ok).toBe(false);
+    expect(invalid.error).toBeString();
+  });
+
   test("returns null when nothing configured", () => {
     expect(resolveTimezone(join(tmp, "missing.yaml"))).toBeNull();
   });

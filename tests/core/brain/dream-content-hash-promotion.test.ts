@@ -11,11 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -89,8 +85,6 @@ describe("dream content_hash on promotion", () => {
     expect(text).toContain("_content_hash:");
     const parsed = parsePreference(path);
     expect(parsed.status).toBe("confirmed");
-    expect(parsed.content_hash).toBe(
-      computeContentHash(parsed.principle, parsed.scope),
-    );
+    expect(parsed.content_hash).toBe(computeContentHash(parsed.principle, parsed.scope));
   });
 });

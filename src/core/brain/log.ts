@@ -30,24 +30,13 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import {
-  brainDirs,
-  logJsonlPath,
-  logPath,
-  validateIsoDate,
-} from "./paths.ts";
-import {
-  BRAIN_LOG_EVENT_KIND,
-  BRAIN_LOG_EVENT_KIND_SET,
-  type BrainLogEventKind,
-} from "./types.ts";
+import { brainDirs, logJsonlPath, logPath, validateIsoDate } from "./paths.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
 // ----- Public types ---------------------------------------------------------
 
 /** Parsed bullet payload of a single log entry. */
-export type BrainLogEntryPayload = Readonly<
-  Record<string, string | ReadonlyArray<string>>
->;
+export type BrainLogEntryPayload = Readonly<Record<string, string | ReadonlyArray<string>>>;
 
 /**
  * A parsed log entry. `timestamp` is the full ISO-8601 UTC moment
@@ -245,10 +234,7 @@ function acquireLogLock(logDir: string): () => void {
   throw lastErr;
 }
 
-export function appendLogEvent(
-  vault: string,
-  event: BrainLogEntry,
-): AppendLogEventResult {
+export function appendLogEvent(vault: string, event: BrainLogEntry): AppendLogEventResult {
   if (!BRAIN_LOG_EVENT_KIND_SET.has(event.eventType)) {
     throw new Error(
       `appendLogEvent: unknown event kind '${event.eventType}' — must be one of ${Object.values(
@@ -269,8 +255,7 @@ export function appendLogEvent(
     typeof topLevelAgent === "string" && typeof event.body["agent"] !== "string"
       ? Object.freeze({ ...event.body, agent: topLevelAgent })
       : event.body;
-  const diskEvent: BrainLogEntry =
-    eventBody === event.body ? event : { ...event, body: eventBody };
+  const diskEvent: BrainLogEntry = eventBody === event.body ? event : { ...event, body: eventBody };
 
   // §23 (v0.10.8): each event lands in both `<date>.jsonl` (machine
   // surface, primary for `readLogDay`) and `<date>.md` (human-facing
@@ -290,14 +275,10 @@ export function appendLogEvent(
     // One row per event. The row is a deterministic projection of the
     // markdown body so the markdown and JSONL representations describe
     // the same event byte-for-byte after JSON.parse.
-    const existingJsonl = existsSync(jsonlPath)
-      ? readFileSync(jsonlPath, "utf8")
-      : "";
+    const existingJsonl = existsSync(jsonlPath) ? readFileSync(jsonlPath, "utf8") : "";
     const line = renderJsonlLine(diskEvent);
     const nextJsonl =
-      existingJsonl === ""
-        ? `${line}\n`
-        : `${existingJsonl.replace(/\s+$/, "")}\n${line}\n`;
+      existingJsonl === "" ? `${line}\n` : `${existingJsonl.replace(/\s+$/, "")}\n${line}\n`;
     atomicWriteFileSync(jsonlPath, nextJsonl);
 
     // ---- Markdown (human surface) -------------------------------------
@@ -470,10 +451,7 @@ interface IsoUtcParts {
  * heading shape is `HH:MM:SS` only.
  */
 function parseIsoUtc(timestamp: string): IsoUtcParts {
-  const m =
-    /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/.exec(
-      timestamp,
-    );
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/.exec(timestamp);
   if (!m) {
     throw new Error(
       `appendLogEvent: timestamp must be ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ); got ${JSON.stringify(timestamp)}`,

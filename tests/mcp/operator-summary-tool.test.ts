@@ -4,22 +4,12 @@
  * round-trip shape.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  JSONRPC_VERSION,
-  MCPServer,
-  PROTOCOL_VERSION,
-} from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
@@ -39,12 +29,7 @@ beforeEach(() => {
   writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n");
   configHome = mkdtempSync(join(tmpdir(), "o2b-mcp-op-summary-cfg-"));
   configPath = join(configHome, "config.yaml");
-  for (const k of [
-    "VAULT_AGENT_NAME",
-    "VAULT_TIMEZONE",
-    "VAULT_DIR",
-    "OPEN_SECOND_BRAIN_CONFIG",
-  ]) {
+  for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -120,54 +105,32 @@ describe("brain_operator_summary tool - round trip", () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
     const out = await callSummary(server, {});
-    const ifWarn = out["instruction_file_warnings"] as Array<{ path: string; lines: number }>;
+    const ifWarn = out["instruction_file_warnings"] as Array<{
+      path: string;
+      lines: number;
+    }>;
     expect(ifWarn).toHaveLength(1);
     expect(ifWarn[0]?.path).toBe("CLAUDE.md");
   });
 
-  test("rejects negative top_actions via INVALID_PARAMS", async () => {
+  test("rejects invalid summary arguments via INVALID_PARAMS", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
-    const r = (await server.handleRequest({
-      jsonrpc: JSONRPC_VERSION,
-      id: 11,
-      method: "tools/call",
-      params: { name: "brain_operator_summary", arguments: { top_actions: -1 } },
-    })) as { error?: { code: number; message: string } };
-    expect(r.error).toBeDefined();
-    // JSON-RPC INVALID_PARAMS = -32602. Assert the specific code so
-    // the test fails on the wrong failure mode (e.g. INTERNAL_ERROR
-    // smuggled through).
-    expect(r.error?.code).toBe(-32602);
-  });
-
-  test("rejects malformed top_actions string via INVALID_PARAMS", async () => {
-    const server = new MCPServer({ vault, configPath });
-    await initialize(server);
-    const r = (await server.handleRequest({
-      jsonrpc: JSONRPC_VERSION,
-      id: 12,
-      method: "tools/call",
-      params: {
-        name: "brain_operator_summary",
-        arguments: { top_actions: "3abc" },
-      },
-    })) as { error?: { code: number; message: string } };
-    expect(r.error?.code).toBe(-32602);
-  });
-
-  test("rejects non-boolean include_dream via INVALID_PARAMS", async () => {
-    const server = new MCPServer({ vault, configPath });
-    await initialize(server);
-    const r = (await server.handleRequest({
-      jsonrpc: JSONRPC_VERSION,
-      id: 13,
-      method: "tools/call",
-      params: {
-        name: "brain_operator_summary",
-        arguments: { include_dream: "yes" },
-      },
-    })) as { error?: { code: number; message: string } };
-    expect(r.error?.code).toBe(-32602);
+    for (const [id, args] of [
+      [11, { top_actions: -1 }],
+      [12, { top_actions: "3abc" }],
+      [13, { include_dream: "yes" }],
+    ] as const) {
+      const r = (await server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id,
+        method: "tools/call",
+        params: { name: "brain_operator_summary", arguments: args },
+      })) as { error?: { code: number; message: string } };
+      // JSON-RPC INVALID_PARAMS = -32602. Assert the specific code so
+      // the test fails on the wrong failure mode (e.g. INTERNAL_ERROR
+      // smuggled through).
+      expect(r.error?.code).toBe(-32602);
+    }
   });
 });

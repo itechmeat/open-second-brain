@@ -4,12 +4,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Store } from "../../../src/core/search/store.ts";
-import type { ResolvedSearchConfig, ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts";
+import type {
+  ResolvedSearchConfig,
+  ResolvedEmbeddingConfig,
+} from "../../../src/core/search/types.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 
 let tmp: string;
 let dbPath: string;
 
-function semanticConfig(model: string, dim: number, overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchConfig {
+function semanticConfig(
+  model: string,
+  dim: number,
+  overrides?: Partial<ResolvedSearchConfig>,
+): ResolvedSearchConfig {
   const semantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: true,
     provider: "openai-compat",
@@ -30,8 +38,13 @@ function semanticConfig(model: string, dim: number, overrides?: Partial<Resolved
     keywordWeight: 0.6,
     semanticWeight: 0.4,
     semantic,
-    recall: Object.freeze({ mmrLambda: 0.7, maxHops: 1, hopDecay: 0.5, maxExpansionPerHit: 3 }),
-    ...(overrides ?? {}),
+    recall: Object.freeze({
+      mmrLambda: 0.7,
+      maxHops: 1,
+      hopDecay: 0.5,
+      maxExpansionPerHit: 3,
+    }),
+    ...overrides,
   });
 }
 
@@ -44,15 +57,6 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function vecAvailable(): boolean {
-  try {
-    require("sqlite-vec");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function unit(values: number[]): number[] {
   const norm = Math.hypot(...values);
   if (norm === 0) return values;
@@ -60,7 +64,7 @@ function unit(values: number[]): number[] {
 }
 
 test("vec round-trip when sqlite-vec is loaded", async () => {
-  if (!vecAvailable()) return;
+  if (!sqliteVecLoadable()) return;
   const store = await Store.open(semanticConfig("m1", 4), { mode: "write" });
   expect(store.vecLoaded()).toBe(true);
 
@@ -72,8 +76,22 @@ test("vec round-trip when sqlite-vec is loaded", async () => {
     size: 1,
   });
   const [c0, c1] = store.replaceChunks(docId, [
-    { chunkIndex: 0, content: "alpha", contentHash: "h0", startLine: 1, endLine: 1, tokenCount: 1 },
-    { chunkIndex: 1, content: "bravo", contentHash: "h1", startLine: 2, endLine: 2, tokenCount: 1 },
+    {
+      chunkIndex: 0,
+      content: "alpha",
+      contentHash: "h0",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 1,
+    },
+    {
+      chunkIndex: 1,
+      content: "bravo",
+      contentHash: "h1",
+      startLine: 2,
+      endLine: 2,
+      tokenCount: 1,
+    },
   ]);
 
   store.vecUpsert(c0!, unit([1, 0, 0, 0]), "m1", 4, "eh0");
@@ -89,7 +107,7 @@ test("vec round-trip when sqlite-vec is loaded", async () => {
 });
 
 test("deleting a document leaves zero rows in chunk_vec/chunk_vec_map", async () => {
-  if (!vecAvailable()) return;
+  if (!sqliteVecLoadable()) return;
   const store = await Store.open(semanticConfig("m1", 4), { mode: "write" });
   const docId = store.upsertDocument({
     path: "vec/b.md",
@@ -99,8 +117,22 @@ test("deleting a document leaves zero rows in chunk_vec/chunk_vec_map", async ()
     size: 1,
   });
   const [c0, c1] = store.replaceChunks(docId, [
-    { chunkIndex: 0, content: "x", contentHash: "h0", startLine: 1, endLine: 1, tokenCount: 1 },
-    { chunkIndex: 1, content: "y", contentHash: "h1", startLine: 2, endLine: 2, tokenCount: 1 },
+    {
+      chunkIndex: 0,
+      content: "x",
+      contentHash: "h0",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 1,
+    },
+    {
+      chunkIndex: 1,
+      content: "y",
+      contentHash: "h1",
+      startLine: 2,
+      endLine: 2,
+      tokenCount: 1,
+    },
   ]);
   store.vecUpsert(c0!, unit([1, 0, 0, 0]), "m1", 4, "eh0");
   store.vecUpsert(c1!, unit([0, 1, 0, 0]), "m1", 4, "eh1");
@@ -120,7 +152,7 @@ test("deleting a document leaves zero rows in chunk_vec/chunk_vec_map", async ()
 });
 
 test("ensureEmbeddingModel drops chunk_vec when dimension changes", async () => {
-  if (!vecAvailable()) return;
+  if (!sqliteVecLoadable()) return;
   const store = await Store.open(semanticConfig("m1", 4), { mode: "write" });
 
   // Touch the vec table to confirm it exists.
@@ -146,7 +178,7 @@ test("ensureEmbeddingModel drops chunk_vec when dimension changes", async () => 
 });
 
 test("dimension mismatch is rejected on vecUpsert", async () => {
-  if (!vecAvailable()) return;
+  if (!sqliteVecLoadable()) return;
   const store = await Store.open(semanticConfig("m1", 4), { mode: "write" });
   const docId = store.upsertDocument({
     path: "z.md",
@@ -156,7 +188,14 @@ test("dimension mismatch is rejected on vecUpsert", async () => {
     size: 1,
   });
   const [c0] = store.replaceChunks(docId, [
-    { chunkIndex: 0, content: "x", contentHash: "h", startLine: 1, endLine: 1, tokenCount: 1 },
+    {
+      chunkIndex: 0,
+      content: "x",
+      contentHash: "h",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 1,
+    },
   ]);
   expect(() => store.vecUpsert(c0!, [0.1, 0.2, 0.3], "m1", 4, "eh")).toThrow(/dimension/);
   await store.close();

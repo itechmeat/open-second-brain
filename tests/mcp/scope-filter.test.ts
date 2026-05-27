@@ -15,7 +15,7 @@ describe("buildToolTable scope filter", () => {
 
   test("writer scope returns the three writers plus brain_context (v0.10.10)", () => {
     const writer = buildToolTable("writer");
-    const names = writer.map((t) => t.name).sort();
+    const names = writer.map((t) => t.name).toSorted();
     expect(names).toEqual([
       "brain_apply_evidence",
       "brain_context",

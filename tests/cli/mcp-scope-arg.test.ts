@@ -28,20 +28,29 @@ describe("o2b mcp --scope arg validation", () => {
 
     test("--scope writer starts the server and answers tools/list", async () => {
       const init = JSON.stringify({
-        jsonrpc: "2.0", id: 1, method: "initialize",
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
         params: { protocolVersion: "2025-06-18", capabilities: {} },
       });
       const list = JSON.stringify({
-        jsonrpc: "2.0", id: 2, method: "tools/list", params: {},
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+        params: {},
       });
-      const res = await runCli(
-        ["mcp", "--scope", "writer"],
-        { stdin: `${init}\n${list}\n`, env: { VAULT_DIR: tmp } },
-      );
+      const res = await runCli(["mcp", "--scope", "writer"], {
+        stdin: `${init}\n${list}\n`,
+        env: { VAULT_DIR: tmp },
+      });
       expect(res.returncode).toBe(0);
-      const lines = res.stdout.trim().split("\n").map((l) => JSON.parse(l));
+      const lines = res.stdout
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l));
       const names = (lines[1].result.tools as Array<{ name: string }>)
-        .map((t) => t.name).sort();
+        .map((t) => t.name)
+        .toSorted();
       expect(names).toEqual([
         "brain_apply_evidence",
         "brain_context",

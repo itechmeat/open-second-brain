@@ -60,19 +60,13 @@ describe("o2b discipline install / uninstall", () => {
     expect(readJobs().jobs.length).toBe(1);
 
     // 3. Uninstall — job removed
-    const r3 = await runCli(
-      ["discipline", "uninstall", "--vault", vault],
-      { env },
-    );
+    const r3 = await runCli(["discipline", "uninstall", "--vault", vault], { env });
     expect(r3.returncode).toBe(0);
     expect(r3.stdout).toContain("removed");
     expect(readJobs().jobs.length).toBe(0);
 
     // 4. Uninstall again — no-op, exits 0
-    const r4 = await runCli(
-      ["discipline", "uninstall", "--vault", vault],
-      { env },
-    );
+    const r4 = await runCli(["discipline", "uninstall", "--vault", vault], { env });
     expect(r4.returncode).toBe(0);
     expect(r4.stdout).toContain("no-op");
     expect(readJobs().jobs.length).toBe(0);
@@ -146,10 +140,7 @@ describe("o2b discipline install / uninstall", () => {
 
   test("install without --telegram-target exits 2 (no private chat id baked in)", async () => {
     const env = { OSB_HERMES_JOBS: jobsFile };
-    const r = await runCli(
-      ["discipline", "install", "--vault", vault],
-      { env },
-    );
+    const r = await runCli(["discipline", "install", "--vault", vault], { env });
     expect(r.returncode).toBe(2);
     expect(r.stderr).toContain("--telegram-target is required");
   });
@@ -169,15 +160,20 @@ describe("o2b discipline install / uninstall", () => {
       { env },
     );
     await runCli(
-      ["discipline", "install", "--weekly", "--vault", vault, "--telegram-target", "telegram:-100123:42"],
+      [
+        "discipline",
+        "install",
+        "--weekly",
+        "--vault",
+        vault,
+        "--telegram-target",
+        "telegram:-100123:42",
+      ],
       { env },
     );
     expect(readJobs().jobs.length).toBe(2);
 
-    const r = await runCli(
-      ["discipline", "uninstall", "--vault", vault, "--weekly"],
-      { env },
-    );
+    const r = await runCli(["discipline", "uninstall", "--vault", vault, "--weekly"], { env });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("removed");
     expect(readJobs().jobs.length).toBe(1);
@@ -192,15 +188,20 @@ describe("o2b discipline install / uninstall", () => {
       { env },
     );
     await runCli(
-      ["discipline", "install", "--weekly", "--vault", vault, "--telegram-target", "telegram:-100123:42"],
+      [
+        "discipline",
+        "install",
+        "--weekly",
+        "--vault",
+        vault,
+        "--telegram-target",
+        "telegram:-100123:42",
+      ],
       { env },
     );
     expect(readJobs().jobs.length).toBe(2);
 
-    const r = await runCli(
-      ["discipline", "uninstall", "--vault", vault],
-      { env },
-    );
+    const r = await runCli(["discipline", "uninstall", "--vault", vault], { env });
     expect(r.returncode).toBe(0);
     expect(readJobs().jobs.length).toBe(0);
   });

@@ -56,9 +56,7 @@ export async function cmdBrainEvolution(argv: string[]): Promise<number> {
   return 0;
 }
 
-function trimOrUndefined(
-  v: string | boolean | string[] | undefined,
-): string | undefined {
+function trimOrUndefined(v: string | boolean | string[] | undefined): string | undefined {
   if (typeof v !== "string") return undefined;
   const t = v.trim();
   return t.length > 0 ? t : undefined;
@@ -75,13 +73,9 @@ function buildEvolutionTarget(
   topic: string | undefined,
 ): BeliefEvolutionTarget {
   if (prefId !== undefined && topic !== undefined) {
-    throw new CliError(
-      "brain evolution: pass exactly one of --pref-id or --topic",
-    );
+    throw new CliError("brain evolution: pass exactly one of --pref-id or --topic");
   }
   if (prefId !== undefined) return { prefId };
   if (topic !== undefined) return { topic };
-  throw new CliError(
-    "brain evolution: pass exactly one of --pref-id or --topic",
-  );
+  throw new CliError("brain evolution: pass exactly one of --pref-id or --topic");
 }

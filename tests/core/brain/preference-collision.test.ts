@@ -11,10 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { computeContentHash } from "../../../src/core/brain/content-hash.ts";
-import {
-  brainDirs,
-  preferencePath,
-} from "../../../src/core/brain/paths.ts";
+import { brainDirs, preferencePath } from "../../../src/core/brain/paths.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import {
   BRAIN_COLLISION_KIND,
@@ -24,9 +21,7 @@ import {
   noUnsafeShrink,
   writePreferenceTxn,
 } from "../../../src/core/brain/preference-txn.ts";
-import {
-  BRAIN_PREFERENCE_STATUS,
-} from "../../../src/core/brain/types.ts";
+import { BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 
 let vault: string;
 
@@ -71,12 +66,9 @@ describe("expectRevision", () => {
     writePreferenceTxn(vault, baseInput({ revision: 5 }), [], {});
     let caught: unknown;
     try {
-      writePreferenceTxn(
-        vault,
-        baseInput({ revision: 6 }),
-        [expectRevision(2)],
-        { overwrite: true },
-      );
+      writePreferenceTxn(vault, baseInput({ revision: 6 }), [expectRevision(2)], {
+        overwrite: true,
+      });
     } catch (err) {
       caught = err;
     }
@@ -93,8 +85,7 @@ describe("expectRevision", () => {
       vault,
       baseInput({
         revision: 1,
-        principle:
-          "edited principle text after the no-revision baseline",
+        principle: "edited principle text after the no-revision baseline",
       }),
       [expectRevision(0)],
       { overwrite: true },
@@ -112,9 +103,7 @@ describe("noUnsafeShrink", () => {
       [noUnsafeShrink(0.5)],
       {},
     );
-    expect(
-      require("node:fs").existsSync(preferencePath(vault, "fresh")),
-    ).toBe(true);
+    expect(require("node:fs").existsSync(preferencePath(vault, "fresh"))).toBe(true);
   });
 
   test("passes when new principle is the same length or longer", () => {
@@ -134,12 +123,9 @@ describe("noUnsafeShrink", () => {
     writePreferenceTxn(vault, baseInput({}), [], {});
     let caught: unknown;
     try {
-      writePreferenceTxn(
-        vault,
-        baseInput({ principle: "tiny" }),
-        [noUnsafeShrink(0.5)],
-        { overwrite: true },
-      );
+      writePreferenceTxn(vault, baseInput({ principle: "tiny" }), [noUnsafeShrink(0.5)], {
+        overwrite: true,
+      });
     } catch (err) {
       caught = err;
     }
@@ -151,12 +137,9 @@ describe("noUnsafeShrink", () => {
     const r = writePreferenceTxn(vault, baseInput({}), [], {});
     const before = readFileSync(r.path, "utf8");
     try {
-      writePreferenceTxn(
-        vault,
-        baseInput({ principle: "x" }),
-        [noUnsafeShrink(0.5)],
-        { overwrite: true },
-      );
+      writePreferenceTxn(vault, baseInput({ principle: "x" }), [noUnsafeShrink(0.5)], {
+        overwrite: true,
+      });
     } catch {
       // expected
     }
@@ -248,14 +231,9 @@ describe("noDuplicateWriteWithin", () => {
 describe("BRAIN_COLLISION_KIND completeness", () => {
   test("all four discriminants are covered by either lock acquire or an expectation factory", () => {
     // Sanity assertion - guards against silent renames of the kind table.
-    const expected = [
-      "DuplicateWrite",
-      "SourceLock",
-      "StaleUpdate",
-      "UnsafeShrink",
-    ] as const;
-    const actual = [...Object.values(BRAIN_COLLISION_KIND)].sort();
-    const expectedSorted = [...expected].sort();
+    const expected = ["DuplicateWrite", "SourceLock", "StaleUpdate", "UnsafeShrink"] as const;
+    const actual = Object.values(BRAIN_COLLISION_KIND).toSorted();
+    const expectedSorted = [...expected].toSorted();
     expect(actual).toEqual(expectedSorted);
   });
 });

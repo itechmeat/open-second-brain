@@ -28,7 +28,7 @@ const WIKILINK_RE = /\[\[([^\]\n|]+?)(?:\|([^\]\n]+))?\]\]/g;
 const MD_LINK_RE = /(?<!!)\[([^\]\n]*)\]\(([^)\n\s]+)(?:\s+"[^"\n]*")?\)/g;
 // Obsidian-style tag: #word where word starts with a letter/_ and may contain
 // letters, digits, dashes, underscores, and '/' for hierarchy.
-const TAG_RE = /(^|[^\w\/])#([A-Za-z_][\w\-/]*)/g;
+const TAG_RE = /(^|[^\w/])#([A-Za-z_][\w\-/]*)/g;
 
 function stripCode(text: string): string {
   let out = text.replace(CODE_FENCE_RE, "\n");
@@ -37,7 +37,7 @@ function stripCode(text: string): string {
 }
 
 function isUrl(target: string): boolean {
-  return /^[a-z][a-z0-9+.\-]*:/i.test(target) || target.startsWith("//");
+  return /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//");
 }
 
 function isMailto(target: string): boolean {

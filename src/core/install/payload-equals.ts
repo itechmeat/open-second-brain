@@ -24,8 +24,8 @@ export function payloadKeyEquals(
   if (expected.env) {
     if (!env || typeof env !== "object") return false;
     const e = env as Record<string, unknown>;
-    const expectedKeys = Object.keys(expected.env).sort();
-    const actualKeys = Object.keys(e).sort();
+    const expectedKeys = Object.keys(expected.env).toSorted();
+    const actualKeys = Object.keys(e).toSorted();
     if (expectedKeys.length !== actualKeys.length) return false;
     for (const k of expectedKeys) {
       if (e[k] !== expected.env[k]) return false;

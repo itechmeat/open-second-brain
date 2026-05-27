@@ -44,10 +44,7 @@ export interface RewriteOp {
  * processing the op list in reverse (so earlier line indices stay
  * valid).
  */
-export async function rewriteMarkers(
-  path: string,
-  ops: ReadonlyArray<RewriteOp>,
-): Promise<void> {
+export async function rewriteMarkers(path: string, ops: ReadonlyArray<RewriteOp>): Promise<void> {
   if (ops.length === 0) return;
 
   // proper-lockfile requires the target to exist; locking the parent
@@ -66,9 +63,7 @@ export async function rewriteMarkers(
 
     // Sort ops descending by originLine so that inserts in block-form
     // ops don't shift the line indices of earlier ops.
-    const sorted = [...ops].sort(
-      (a, b) => b.marker.originLine - a.marker.originLine,
-    );
+    const sorted = [...ops].toSorted((a, b) => b.marker.originLine - a.marker.originLine);
 
     for (const op of sorted) {
       const idx = op.marker.originLine - 1;
@@ -82,10 +77,7 @@ export async function rewriteMarkers(
         const line = lines[idx]!;
         // Replace the leading '@osb' with '@osb✓ [[id]]' — preserve any
         // leading whitespace.
-        const replaced = line.replace(
-          /@osb(?=\s)/,
-          `@osb✓ [[${op.signalId}]]`,
-        );
+        const replaced = line.replace(/@osb(?=\s)/, `@osb✓ [[${op.signalId}]]`);
         lines[idx] = replaced;
       } else {
         // Block form: idx points at the opening ```osb line. Use an

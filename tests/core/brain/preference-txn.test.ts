@@ -10,10 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  brainDirs,
-  preferencePath,
-} from "../../../src/core/brain/paths.ts";
+import { brainDirs, preferencePath } from "../../../src/core/brain/paths.ts";
 import { parsePreference } from "../../../src/core/brain/preference.ts";
 import {
   BrainCollisionError,
@@ -62,10 +59,7 @@ describe("BRAIN_COLLISION_KIND", () => {
 
 describe("BrainCollisionError", () => {
   test("kind field is preserved on instances", () => {
-    const err = new BrainCollisionError(
-      BRAIN_COLLISION_KIND.staleUpdate,
-      "test message",
-    );
+    const err = new BrainCollisionError(BRAIN_COLLISION_KIND.staleUpdate, "test message");
     expect(err).toBeInstanceOf(Error);
     expect(err.kind).toBe("StaleUpdate");
     expect(err.name).toBe("BrainCollisionError");
@@ -112,10 +106,7 @@ describe("writePreferenceTxn", () => {
     };
     const fail: WritePreferenceExpectation = () => {
       calls.push("fail");
-      throw new BrainCollisionError(
-        BRAIN_COLLISION_KIND.staleUpdate,
-        "deliberate failure",
-      );
+      throw new BrainCollisionError(BRAIN_COLLISION_KIND.staleUpdate, "deliberate failure");
     };
     const never: WritePreferenceExpectation = () => {
       calls.push("never");
@@ -143,20 +134,14 @@ describe("writePreferenceTxn", () => {
   test("releases the lock even when an expectation throws", () => {
     writePreferenceTxn(vault, baseInput({ slug: "release-rule" }), [], {});
     const failingExpectation: WritePreferenceExpectation = () => {
-      throw new BrainCollisionError(
-        BRAIN_COLLISION_KIND.duplicateWrite,
-        "blocked",
-      );
+      throw new BrainCollisionError(BRAIN_COLLISION_KIND.duplicateWrite, "blocked");
     };
 
     let caught: unknown;
     try {
-      writePreferenceTxn(
-        vault,
-        baseInput({ slug: "release-rule" }),
-        [failingExpectation],
-        { overwrite: true },
-      );
+      writePreferenceTxn(vault, baseInput({ slug: "release-rule" }), [failingExpectation], {
+        overwrite: true,
+      });
     } catch (err) {
       caught = err;
     }
@@ -167,12 +152,9 @@ describe("writePreferenceTxn", () => {
     expect(existsSync(lockPath)).toBe(false);
 
     // A follow-up write with empty expectations must succeed.
-    const ok = writePreferenceTxn(
-      vault,
-      baseInput({ slug: "release-rule" }),
-      [],
-      { overwrite: true },
-    );
+    const ok = writePreferenceTxn(vault, baseInput({ slug: "release-rule" }), [], {
+      overwrite: true,
+    });
     expect(existsSync(ok.path)).toBe(true);
   });
 

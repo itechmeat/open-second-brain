@@ -8,12 +8,5 @@
   "license": "MIT",
   "homepage": "https://github.com/itechmeat/open-second-brain",
   "repository": "https://github.com/itechmeat/open-second-brain",
-  "keywords": [
-    "second-brain",
-    "obsidian",
-    "agents",
-    "skills",
-    "event-log",
-    "mcp"
-  ]
+  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"]
 }

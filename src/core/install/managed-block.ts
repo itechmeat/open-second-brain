@@ -102,11 +102,7 @@ function join(lines: ReadonlyArray<string>, ending: LineEnding): string {
  * Insert or replace the managed block. Idempotent: re-applying with
  * the same body yields byte-equal output.
  */
-export function insertManagedBlock(
-  current: string,
-  body: string,
-  opts: BlockOpts = {},
-): string {
+export function insertManagedBlock(current: string, body: string, opts: BlockOpts = {}): string {
   const resolved = resolve(opts);
   const ending = detectLineEnding(current);
   const lines = splitLines(current);
@@ -129,13 +125,7 @@ export function insertManagedBlock(
     // Append; ensure one blank line separating user content from our block
     // when the prior content didn't already end empty.
     const sep = lines.length > 0 && lines[lines.length - 1] !== "" ? [""] : [];
-    nextLines = [
-      ...lines,
-      ...sep,
-      resolved.begin,
-      ...bodyLines,
-      resolved.end,
-    ];
+    nextLines = [...lines, ...sep, resolved.begin, ...bodyLines, resolved.end];
   }
 
   return join(nextLines, { newline: ending.newline, trailing: true });

@@ -20,12 +20,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import {
-  mergeMcpServers,
-  removeMcpServers,
-  OSB_KEY_FULL,
-  OSB_KEY_WRITER,
-} from "../json-merge.ts";
+import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { expectedPayloadFromEnv, payloadKeyEquals } from "../payload-equals.ts";
 import { recordEntry, readManifest, removeEntry } from "../manifest.ts";
 import { defaultRegistry } from "../registry.ts";
@@ -148,9 +143,7 @@ function applyViaCli(
   ] as const) {
     const r = activeRunner.run(addArgs(name, entry));
     if (r.exitCode !== 0) {
-      stderr.write(
-        `copilot mcp add failed for ${name} (exit ${r.exitCode}): ${r.stderr.trim()}\n`,
-      );
+      stderr.write(`copilot mcp add failed for ${name} (exit ${r.exitCode}): ${r.stderr.trim()}\n`);
       return { ok: false, reason: r.stderr.trim() || `exit ${r.exitCode}` };
     }
   }
@@ -254,7 +247,12 @@ export const copilotCliAdapter: InstallAdapter = {
         }
       } catch {
         // parse error → drift
-        return { target: TARGET, status: "drift", configPath: fb, notes: ["fallback file not valid JSON"] };
+        return {
+          target: TARGET,
+          status: "drift",
+          configPath: fb,
+          notes: ["fallback file not valid JSON"],
+        };
       }
     }
     return {
@@ -297,19 +295,16 @@ export const copilotCliAdapter: InstallAdapter = {
     };
   },
 
-  apply(
-    _plan: InstallPlan,
-    payload: McpPayload,
-    env: InstallEnv,
-    opts: ApplyOpts,
-  ): ApplyResult {
+  apply(_plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
     let outcome: ApplyOutcome;
     if (activeRunner.available()) {
       const r = opts.dryRun ? { ok: true } : applyViaCli(payload, opts.stderr);
       if (r.ok) {
         outcome = { viaCli: true, fallbackFile: null };
       } else {
-        const file = opts.dryRun ? fallbackPath(env) : applyViaFile(env, payload, opts.stderr, false);
+        const file = opts.dryRun
+          ? fallbackPath(env)
+          : applyViaFile(env, payload, opts.stderr, false);
         outcome = { viaCli: false, fallbackFile: file };
       }
     } else {
@@ -394,14 +389,17 @@ export const copilotCliAdapter: InstallAdapter = {
       }
       const has = (n: string) => lst.names.includes(n);
       if (has(OSB_KEY_FULL) && has(OSB_KEY_WRITER)) {
-        return { target: TARGET, status: "ok", details: ["both OSB names registered with copilot CLI"], fix_hint: null };
+        return {
+          target: TARGET,
+          status: "ok",
+          details: ["both OSB names registered with copilot CLI"],
+          fix_hint: null,
+        };
       }
       return {
         target: TARGET,
         status: "drift",
-        details: [
-          `missing: ${[OSB_KEY_FULL, OSB_KEY_WRITER].filter((n) => !has(n)).join(", ")}`,
-        ],
+        details: [`missing: ${[OSB_KEY_FULL, OSB_KEY_WRITER].filter((n) => !has(n)).join(", ")}`],
         fix_hint: "o2b install --target copilot-cli --apply",
       };
     }
@@ -420,10 +418,21 @@ export const copilotCliAdapter: InstallAdapter = {
       const block = (parsed["mcpServers"] ?? {}) as Record<string, unknown>;
       const expected = expectedPayloadFromEnv(env);
       if (
-        payloadKeyEquals(block[OSB_KEY_FULL] as Record<string, unknown> | undefined, expected.full) &&
-        payloadKeyEquals(block[OSB_KEY_WRITER] as Record<string, unknown> | undefined, expected.writer)
+        payloadKeyEquals(
+          block[OSB_KEY_FULL] as Record<string, unknown> | undefined,
+          expected.full,
+        ) &&
+        payloadKeyEquals(
+          block[OSB_KEY_WRITER] as Record<string, unknown> | undefined,
+          expected.writer,
+        )
       ) {
-        return { target: TARGET, status: "ok", details: [`${path}: both keys present`], fix_hint: null };
+        return {
+          target: TARGET,
+          status: "ok",
+          details: [`${path}: both keys present`],
+          fix_hint: null,
+        };
       }
       if (block[OSB_KEY_FULL] && block[OSB_KEY_WRITER]) {
         return {

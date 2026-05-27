@@ -12,10 +12,7 @@ import { join } from "node:path";
 
 import { renderDigest } from "../../../src/core/brain/digest.ts";
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
-import {
-  BRAIN_APPLY_RESULT,
-  BRAIN_LOG_EVENT_KIND,
-} from "../../../src/core/brain/types.ts";
+import { BRAIN_APPLY_RESULT, BRAIN_LOG_EVENT_KIND } from "../../../src/core/brain/types.ts";
 
 let vault: string;
 
@@ -51,7 +48,9 @@ body
 });
 
 afterEach(() => {
-  try { rmSync(vault, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(vault, { recursive: true, force: true });
+  } catch {}
 });
 
 function writeBrainYaml(content: string): void {
@@ -122,11 +121,11 @@ describe("digest most_applied block — custom config", () => {
   test("honours window_days / limit from _brain.yaml", () => {
     writeBrainYaml(
       "schema_version: 1\n" +
-      "active:\n" +
-      "  most_applied_window_days: 7\n" +
-      "  most_applied_limit: 3\n",
+        "active:\n" +
+        "  most_applied_window_days: 7\n" +
+        "  most_applied_limit: 3\n",
     );
-    seedApplied("2026-05-19T10:00:00Z", "[[pref-a]]");  // within 7d
+    seedApplied("2026-05-19T10:00:00Z", "[[pref-a]]"); // within 7d
     const result = renderDigest(vault, {
       format: "json",
       now: new Date("2026-05-20T12:00:00Z"),
@@ -141,9 +140,9 @@ describe("digest most_applied block — custom config", () => {
   test("Markdown header reflects custom window", () => {
     writeBrainYaml(
       "schema_version: 1\n" +
-      "active:\n" +
-      "  most_applied_window_days: 14\n" +
-      "  most_applied_limit: 5\n",
+        "active:\n" +
+        "  most_applied_window_days: 14\n" +
+        "  most_applied_limit: 5\n",
     );
     seedApplied("2026-05-19T10:00:00Z", "[[pref-a]]");
     const result = renderDigest(vault, {

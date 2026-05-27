@@ -4,7 +4,11 @@ import { writeSignal } from "../../../core/brain/signal.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { writePreference } from "../../../core/brain/preference.ts";
 import { isoDate, isoSecond } from "../../../core/brain/time.ts";
-import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS, BRAIN_SIGNAL_SIGN } from "../../../core/brain/types.ts";
+import {
+  BRAIN_LOG_EVENT_KIND,
+  BRAIN_PREFERENCE_STATUS,
+  BRAIN_SIGNAL_SIGN,
+} from "../../../core/brain/types.ts";
 import { renderPrefLink } from "../../../core/brain/wikilink.ts";
 import { parse, fail, ok, okJson, resolveBrainVault } from "../helpers.ts";
 
@@ -78,7 +82,12 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     appendLogEvent(vault, {
       timestamp: isoSecond(now),
       eventType: BRAIN_LOG_EVENT_KIND.feedback,
-      body: { signal: `[[${sigResult.id}]]`, topic: String(flags["topic"]), sign: signalSign, agent },
+      body: {
+        signal: `[[${sigResult.id}]]`,
+        topic: String(flags["topic"]),
+        sign: signalSign,
+        agent,
+      },
     });
   } catch (err) {
     process.stderr.write(`warning: append feedback log failed: ${(err as Error).message}\n`);
@@ -87,17 +96,21 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   let prefResult: { path: string; id: string } | null = null;
   if (flags["force-confirmed"]) {
     try {
-      prefResult = writePreference(vault, {
-        slug,
-        topic: String(flags["topic"]),
-        principle: String(flags["principle"]),
-        created_at: now.toISOString(),
-        unconfirmed_until: now.toISOString(),
-        confirmed_at: now.toISOString(),
-        status: BRAIN_PREFERENCE_STATUS.confirmed,
-        evidenced_by: [`[[${sigResult.id}]]`],
-        ...(flags["scope"] ? { scope: String(flags["scope"]) } : {}),
-      }, { overwrite: false });
+      prefResult = writePreference(
+        vault,
+        {
+          slug,
+          topic: String(flags["topic"]),
+          principle: String(flags["principle"]),
+          created_at: now.toISOString(),
+          unconfirmed_until: now.toISOString(),
+          confirmed_at: now.toISOString(),
+          status: BRAIN_PREFERENCE_STATUS.confirmed,
+          evidenced_by: [`[[${sigResult.id}]]`],
+          ...(flags["scope"] ? { scope: String(flags["scope"]) } : {}),
+        },
+        { overwrite: false },
+      );
     } catch (exc) {
       return fail(`failed to force-confirm preference: ${(exc as Error).message ?? exc}`);
     }
@@ -105,10 +118,15 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
       appendLogEvent(vault, {
         timestamp: isoSecond(new Date(now.getTime() + 1000)),
         eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
-        body: { preference: renderPrefLink({ id: prefResult.id, principle: String(flags["principle"]) }), agent },
+        body: {
+          preference: renderPrefLink({ id: prefResult.id, principle: String(flags["principle"]) }),
+          agent,
+        },
       });
     } catch (err) {
-      process.stderr.write(`warning: append force-confirmed log failed: ${(err as Error).message}\n`);
+      process.stderr.write(
+        `warning: append force-confirmed log failed: ${(err as Error).message}\n`,
+      );
     }
   }
 

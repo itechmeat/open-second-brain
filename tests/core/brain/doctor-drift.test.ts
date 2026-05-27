@@ -44,11 +44,7 @@ snapshots:
 `,
     "utf8",
   );
-  writeFileSync(
-    join(dirs.brain, "_BRAIN.md"),
-    "---\ntitle: Brain\n---\n",
-    "utf8",
-  );
+  writeFileSync(join(dirs.brain, "_BRAIN.md"), "---\ntitle: Brain\n---\n", "utf8");
 });
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
@@ -96,9 +92,7 @@ describe("runDoctor content-hash drift detection", () => {
     const hash = computeContentHash(principle, undefined);
     writeConfirmedPref("clean", { principle, content_hash: hash });
     const result = runDoctor(vault);
-    const drift = result.warnings.filter(
-      (i) => i.code === "content-hash-drift",
-    );
+    const drift = result.warnings.filter((i) => i.code === "content-hash-drift");
     expect(drift).toEqual([]);
   });
 
@@ -111,9 +105,7 @@ describe("runDoctor content-hash drift detection", () => {
       content_hash: staleHash,
     });
     const result = runDoctor(vault);
-    const drift = result.warnings.filter(
-      (i) => i.code === "content-hash-drift",
-    );
+    const drift = result.warnings.filter((i) => i.code === "content-hash-drift");
     expect(drift).toHaveLength(1);
     expect(drift[0]?.path).toBe(path);
     expect(drift[0]?.message).toContain("drift");
@@ -125,9 +117,7 @@ describe("runDoctor content-hash drift detection", () => {
       // content_hash intentionally omitted
     });
     const result = runDoctor(vault);
-    const drift = result.warnings.filter(
-      (i) => i.code === "content-hash-drift",
-    );
+    const drift = result.warnings.filter((i) => i.code === "content-hash-drift");
     expect(drift).toEqual([]);
   });
 
@@ -141,9 +131,7 @@ describe("runDoctor content-hash drift detection", () => {
       content_hash: staleHash,
     });
     const result = runDoctor(vault);
-    const drift = result.warnings.filter(
-      (i) => i.code === "content-hash-drift",
-    );
+    const drift = result.warnings.filter((i) => i.code === "content-hash-drift");
     expect(drift).toHaveLength(1);
   });
 });

@@ -13,13 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,10 +59,7 @@ describe("buildManifest", () => {
     writeFileSync(join(brain, "preferences", "pref-b.md"), "beta\n");
     writeFileSync(join(brain, "preferences", "pref-a.md"), "alpha\n");
     const m = buildManifest(brain);
-    expect(Object.keys(m.files)).toEqual([
-      "preferences/pref-a.md",
-      "preferences/pref-b.md",
-    ]);
+    expect(Object.keys(m.files)).toEqual(["preferences/pref-a.md", "preferences/pref-b.md"]);
     expect(m.files["preferences/pref-a.md"]!.size).toBe(6);
     expect(m.files["preferences/pref-a.md"]!.sha256).toMatch(/^[0-9a-f]{64}$/);
     // sha256("alpha\n") == "31c0c4dee7f8eeeb27ff4f64ff5a7a9d97a6b6f49ad22082f6c12f9f0c5b9d27" → guard via length only.
@@ -108,15 +99,13 @@ describe("buildManifest", () => {
     writeFileSync(join(brain, "_brain.yaml"), "schema_version: 1\n");
     writeFileSync(join(brain, "_BRAIN.md"), "# manual\n");
     const m = buildManifest(brain);
-    expect(Object.keys(m.files).sort()).toEqual(["_BRAIN.md", "_brain.yaml"]);
+    expect(Object.keys(m.files).toSorted()).toEqual(["_BRAIN.md", "_brain.yaml"]);
   });
 });
 
 describe("diffManifests", () => {
-  function fakeManifest(
-    files: Record<string, { sha: string; size: number }>,
-  ): BrainManifest {
-    const sortedKeys = Object.keys(files).sort();
+  function fakeManifest(files: Record<string, { sha: string; size: number }>): BrainManifest {
+    const sortedKeys = Object.keys(files).toSorted();
     const out: Record<string, { readonly sha256: string; readonly size: number }> = {};
     for (const k of sortedKeys) {
       out[k] = Object.freeze({ sha256: files[k]!.sha, size: files[k]!.size });
@@ -192,9 +181,7 @@ describe("diffManifests", () => {
 
 describe("sidecar I/O", () => {
   test("manifestSidecarPath lands inside Brain/.snapshots/", () => {
-    expect(manifestSidecarPath(vault, "abc")).toBe(
-      join(brain, ".snapshots", "abc.manifest.json"),
-    );
+    expect(manifestSidecarPath(vault, "abc")).toBe(join(brain, ".snapshots", "abc.manifest.json"));
   });
 
   test("read of missing path → null (no throw)", () => {

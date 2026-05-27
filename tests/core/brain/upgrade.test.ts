@@ -10,21 +10,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
-import {
-  applyUpgrade,
-  mergeBrainYaml,
-  planUpgrade,
-} from "../../../src/core/brain/upgrade.ts";
+import { applyUpgrade, mergeBrainYaml, planUpgrade } from "../../../src/core/brain/upgrade.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { brainConfigPath, brainManualPath } from "../../../src/core/brain/paths.ts";
 import { listSnapshots } from "../../../src/core/brain/snapshot.ts";
@@ -87,9 +78,7 @@ dream:
     expect(merged).toContain("snapshots:");
     expect(merged).toContain("retention_count: 10");
     // Existing keys must remain at their original spot.
-    expect(merged.indexOf("schema_version: 1")).toBeLessThan(
-      merged.indexOf("retire:"),
-    );
+    expect(merged.indexOf("schema_version: 1")).toBeLessThan(merged.indexOf("retire:"));
     expect(merged.indexOf("dream:")).toBeLessThan(merged.indexOf("retire:"));
   });
 
@@ -162,10 +151,7 @@ describe("planUpgrade", () => {
 
   test("file ordering is _brain.yaml, _BRAIN.md", () => {
     const plan = planUpgrade(vault);
-    expect(plan.files.map((f) => f.path)).toEqual([
-      "Brain/_brain.yaml",
-      "Brain/_BRAIN.md",
-    ]);
+    expect(plan.files.map((f) => f.path)).toEqual(["Brain/_brain.yaml", "Brain/_BRAIN.md"]);
   });
 
   test("missing snapshots section in _brain.yaml → update with appended block", () => {
@@ -215,7 +201,6 @@ describe("planUpgrade", () => {
     expect(manualPlan.before).toBe("stale operator copy\n");
     expect(manualPlan.after).toContain("Brain");
   });
-
 });
 
 describe("applyUpgrade", () => {
@@ -236,9 +221,7 @@ describe("applyUpgrade", () => {
     const snaps = listSnapshots(vault);
     expect(snaps.some((s) => s.run_id === res.run_id)).toBe(true);
     // The live file is now the canonical template body.
-    expect(readFileSync(brainManualPath(vault), "utf8")).not.toBe(
-      "stale operator copy\n",
-    );
+    expect(readFileSync(brainManualPath(vault), "utf8")).not.toBe("stale operator copy\n");
     // Idempotent re-run: plan is now empty.
     const res2 = applyUpgrade(vault, { agent: "claude-vps-agent" });
     expect(res2.files_updated).toEqual([]);
@@ -262,9 +245,7 @@ describe("applyUpgrade", () => {
   test("malformed _brain.yaml refuses to apply (no snapshot taken)", () => {
     atomicWriteFileSync(brainConfigPath(vault), "not: a valid: brain yaml\n");
     const before = listSnapshots(vault).length;
-    expect(() => applyUpgrade(vault, { agent: "claude" })).toThrow(
-      /upgrade aborted/,
-    );
+    expect(() => applyUpgrade(vault, { agent: "claude" })).toThrow(/upgrade aborted/);
     expect(listSnapshots(vault).length).toBe(before);
   });
 

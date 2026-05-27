@@ -30,11 +30,7 @@ describe("detectConceptGaps", () => {
 
   test("an entity covered by a preference topic is not a gap", () => {
     const gaps = detectConceptGaps(
-      [
-        "Kanban board needs grooming",
-        "the Kanban workflow is slow",
-        "review Kanban tasks weekly",
-      ],
+      ["Kanban board needs grooming", "the Kanban workflow is slow", "review Kanban tasks weekly"],
       ["kanban-grooming"],
       { minFrequency: 3 },
     );
@@ -55,29 +51,19 @@ describe("detectConceptGaps", () => {
   });
 
   test("lowercase function words are never entities", () => {
-    const gaps = detectConceptGaps(
-      ["use the tool", "use the result", "use the output"],
-      [],
-      { minFrequency: 3 },
-    );
+    const gaps = detectConceptGaps(["use the tool", "use the result", "use the output"], [], {
+      minFrequency: 3,
+    });
     expect(gaps).toEqual([]);
   });
 
   test("an entity below the frequency threshold is not a gap", () => {
-    const gaps = detectConceptGaps(
-      ["Kanban once", "Kanban twice"],
-      [],
-      { minFrequency: 3 },
-    );
+    const gaps = detectConceptGaps(["Kanban once", "Kanban twice"], [], { minFrequency: 3 });
     expect(gaps).toEqual([]);
   });
 
   test("repeats within one principle count once (document frequency)", () => {
-    const gaps = detectConceptGaps(
-      ["Kanban Kanban Kanban Kanban"],
-      [],
-      { minFrequency: 2 },
-    );
+    const gaps = detectConceptGaps(["Kanban Kanban Kanban Kanban"], [], { minFrequency: 2 });
     expect(gaps).toEqual([]);
   });
 
@@ -94,11 +80,9 @@ describe("detectConceptGaps", () => {
   });
 
   test("is language-agnostic", () => {
-    const gaps = detectConceptGaps(
-      ["Бэклог растёт", "Бэклог завис", "разгрести Бэклог"],
-      [],
-      { minFrequency: 3 },
-    );
+    const gaps = detectConceptGaps(["Бэклог растёт", "Бэклог завис", "разгрести Бэклог"], [], {
+      minFrequency: 3,
+    });
     expect(gaps).toEqual([{ term: "бэклог", frequency: 3 }]);
   });
 });

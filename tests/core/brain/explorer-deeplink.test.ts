@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { collectExplorerData, renderExportedHtml, __resetExplorerTemplateCacheForTests } from "../../../src/core/brain/explorer.ts";
+import {
+  collectExplorerData,
+  renderExportedHtml,
+  __resetExplorerTemplateCacheForTests,
+} from "../../../src/core/brain/explorer.ts";
 
 let vault: string;
 
@@ -15,7 +19,9 @@ beforeEach(() => {
 
 afterEach(() => {
   __resetExplorerTemplateCacheForTests();
-  try { rmSync(vault, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(vault, { recursive: true, force: true });
+  } catch {}
 });
 
 describe("explorer deep-link", () => {

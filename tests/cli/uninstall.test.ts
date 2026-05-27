@@ -282,6 +282,9 @@ describe("CLI uninstall", () => {
 
 describe("safe names", () => {
   test("only canonical Open Second Brain names", () => {
-    expect([...SAFE_CONFIG_DIR_NAMES].sort()).toEqual(["open-second-brain", "open_second_brain"]);
+    expect([...SAFE_CONFIG_DIR_NAMES].toSorted()).toEqual([
+      "open-second-brain",
+      "open_second_brain",
+    ]);
   });
 });

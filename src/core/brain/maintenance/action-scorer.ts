@@ -11,11 +11,7 @@
  * and `computeTokenFootprint` outputs upstream.
  */
 
-export type ActionCategory =
-  | "dedup"
-  | "lifecycle"
-  | "merged-link"
-  | "token-footprint";
+export type ActionCategory = "dedup" | "lifecycle" | "merged-link" | "token-footprint";
 
 export interface ActionItem {
   readonly id: string;
@@ -52,9 +48,7 @@ const WEIGHT = Object.freeze({
   tokenFootprintExcessPer10k: 3,
 });
 
-function scoreDedup(
-  inputs: NonNullable<ActionInputs["dedupCandidates"]>,
-): ActionItem[] {
+function scoreDedup(inputs: NonNullable<ActionInputs["dedupCandidates"]>): ActionItem[] {
   const out: ActionItem[] = [];
   for (const c of inputs) {
     if (c.secondaryCount <= 0) continue;
@@ -69,9 +63,7 @@ function scoreDedup(
   return out;
 }
 
-function scoreStale(
-  inputs: NonNullable<ActionInputs["staleByLifecycle"]>,
-): ActionItem[] {
+function scoreStale(inputs: NonNullable<ActionInputs["staleByLifecycle"]>): ActionItem[] {
   const out: ActionItem[] = [];
   for (const s of inputs) {
     if (s.ageDays <= 0) continue;
@@ -87,9 +79,7 @@ function scoreStale(
   return out;
 }
 
-function scoreBrokenLinks(
-  inputs: NonNullable<ActionInputs["brokenLinks"]>,
-): ActionItem[] {
+function scoreBrokenLinks(inputs: NonNullable<ActionInputs["brokenLinks"]>): ActionItem[] {
   // Bucket by source path so the report does not duplicate noisy
   // file-level recommendations when one page has many broken links.
   const byPath = new Map<string, number>();
@@ -109,9 +99,7 @@ function scoreBrokenLinks(
   return out;
 }
 
-function scoreTokenFootprint(
-  input: NonNullable<ActionInputs["tokenFootprint"]>,
-): ActionItem[] {
+function scoreTokenFootprint(input: NonNullable<ActionInputs["tokenFootprint"]>): ActionItem[] {
   const excess = input.total - input.warnThreshold;
   if (excess <= 0) return [];
   const buckets = Math.ceil(excess / 10_000);
@@ -139,8 +127,7 @@ export function scoreActions(
   if (inputs.dedupCandidates) all.push(...scoreDedup(inputs.dedupCandidates));
   if (inputs.staleByLifecycle) all.push(...scoreStale(inputs.staleByLifecycle));
   if (inputs.brokenLinks) all.push(...scoreBrokenLinks(inputs.brokenLinks));
-  if (inputs.tokenFootprint)
-    all.push(...scoreTokenFootprint(inputs.tokenFootprint));
+  if (inputs.tokenFootprint) all.push(...scoreTokenFootprint(inputs.tokenFootprint));
 
   all.sort((a, b) => {
     if (b.impact !== a.impact) return b.impact - a.impact;

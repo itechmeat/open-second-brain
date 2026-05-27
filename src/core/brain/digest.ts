@@ -60,11 +60,7 @@ import {
   BRAIN_PREFERENCE_STATUS,
   BRAIN_RETIRED_REASON,
 } from "./types.ts";
-import type {
-  BrainConfidence,
-  BrainPreference,
-  BrainRetired,
-} from "./types.ts";
+import type { BrainConfidence, BrainPreference, BrainRetired } from "./types.ts";
 
 // ----- Public types ---------------------------------------------------------
 
@@ -315,10 +311,7 @@ const HOT_SECTION_LIMIT = 5;
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-export function renderDigest(
-  vault: string,
-  opts: RenderDigestOptions = {},
-): RenderDigestResult {
+export function renderDigest(vault: string, opts: RenderDigestOptions = {}): RenderDigestResult {
   const format = opts.format ?? "markdown";
   const now = opts.now ?? new Date();
   const until = opts.until ?? now;
@@ -376,9 +369,7 @@ export function renderDigest(
   }
 
   // Markdown.
-  const baseMd = empty
-    ? renderEmptyMarkdown(until)
-    : renderMarkdown(data, since, until);
+  const baseMd = empty ? renderEmptyMarkdown(until) : renderMarkdown(data, since, until);
   const trustSection = renderTrustSection(opts.doctorResult, opts.dreamSummary);
   const content = trustSection ? `${baseMd}\n${trustSection}` : baseMd;
   return Object.freeze({ content, empty });
@@ -423,11 +414,7 @@ interface DigestData {
   readonly actions: ReadonlyArray<ActionItem>;
 }
 
-function collectDigestData(
-  vault: string,
-  since: Date,
-  until: Date,
-): DigestData {
+function collectDigestData(vault: string, since: Date, until: Date): DigestData {
   const sinceMs = since.getTime();
   const untilMs = until.getTime();
   const inWindow = (iso: string | null): boolean => {
@@ -665,15 +652,12 @@ function computeConnectionHealth(
   if (totalNodes > 0) {
     const sum = counts.reduce((a, b) => a + b, 0);
     meanBacklinks = Math.round((sum / totalNodes) * 100) / 100;
-    const sorted = [...counts].sort((a, b) => a - b);
+    const sorted = [...counts].toSorted((a, b) => a - b);
     const mid = Math.floor(sorted.length / 2);
-    medianBacklinks = sorted.length % 2 === 0
-      ? (sorted[mid - 1]! + sorted[mid]!) / 2
-      : sorted[mid]!;
+    medianBacklinks =
+      sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
   }
-  const linkDensity = totalNodes > 0
-    ? Math.round((linkedNodes / totalNodes) * 1000) / 1000
-    : 0;
+  const linkDensity = totalNodes > 0 ? Math.round((linkedNodes / totalNodes) * 1000) / 1000 : 0;
 
   return Object.freeze({
     total_nodes: totalNodes,
@@ -743,11 +727,7 @@ function readAllRetired(vault: string): ReadonlyArray<RetiredWithPath> {
   return out;
 }
 
-function readLogsInWindow(
-  vault: string,
-  since: Date,
-  until: Date,
-): ReadonlyArray<BrainLogEntry> {
+function readLogsInWindow(vault: string, since: Date, until: Date): ReadonlyArray<BrainLogEntry> {
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.log)) return [];
   const sinceIso = since.toISOString();
@@ -761,7 +741,7 @@ function readLogsInWindow(
     .filter((d) => d.isFile() && d.name.endsWith(".md"))
     .map((d) => d.name.slice(0, -".md".length))
     .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n))
-    .sort();
+    .toSorted();
   for (const date of dates) {
     if (date < addDays(sinceDay, -1)) continue;
     if (date > addDays(untilDay, 1)) continue;
@@ -788,17 +768,14 @@ function addDays(day: string, delta: number): string {
  * applied evidence is found — e.g. a preference that was force-confirmed
  * without ever being applied. This matches design doc §8.2 example.
  */
-function findFirstAppliedArtifact(
-  vault: string,
-  prefId: string,
-): string | null {
+function findFirstAppliedArtifact(vault: string, prefId: string): string | null {
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.log)) return null;
   const dates = readdirSync(dirs.log, { withFileTypes: true })
     .filter((d) => d.isFile() && d.name.endsWith(".md"))
     .map((d) => d.name.slice(0, -".md".length))
     .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n))
-    .sort();
+    .toSorted();
   for (const date of dates) {
     const { entries } = parseLogDay(vault, date);
     for (const e of entries) {
@@ -948,16 +925,10 @@ function renderEmptyMarkdown(until: Date): string {
   return `Brain digest — ${ymd}: no changes\n`;
 }
 
-function renderMarkdown(
-  data: DigestData,
-  since: Date,
-  until: Date,
-): string {
+function renderMarkdown(data: DigestData, since: Date, until: Date): string {
   const sinceIso = since.toISOString();
   const untilIso = until.toISOString();
-  const windowHours = Math.round(
-    (until.getTime() - since.getTime()) / (60 * 60 * 1000),
-  );
+  const windowHours = Math.round((until.getTime() - since.getTime()) / (60 * 60 * 1000));
   const lines: string[] = [];
   lines.push(
     `# Brain digest — ${untilIso.slice(0, 16)}Z (${windowHours}h)`,
@@ -1083,9 +1054,9 @@ function renderMarkdown(
     for (const item of data.merge_suggestions) {
       const scope = item.scope ?? "—";
       lines.push(
-        `- ${renderPrefLink({ id: item.a, principle: item.principle_a })}`
-        + ` ≈ ${renderPrefLink({ id: item.b, principle: item.principle_b })}`
-        + ` — topic '${item.topic}', scope ${scope}, jaccard ${item.jaccard.toFixed(2)}`,
+        `- ${renderPrefLink({ id: item.a, principle: item.principle_a })}` +
+          ` ≈ ${renderPrefLink({ id: item.b, principle: item.principle_b })}` +
+          ` — topic '${item.topic}', scope ${scope}, jaccard ${item.jaccard.toFixed(2)}`,
       );
     }
     lines.push("");

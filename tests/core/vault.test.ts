@@ -24,10 +24,7 @@ afterEach(() => {
 describe("parseFrontmatter", () => {
   test("extracts simple key/value fields", () => {
     const path = join(tmp, "note.md");
-    writeFileSync(
-      path,
-      "---\ntitle: Hello World\ntags: test, example\n---\n\nBody text.\n",
-    );
+    writeFileSync(path, "---\ntitle: Hello World\ntags: test, example\n---\n\nBody text.\n");
     const [meta, body] = parseFrontmatter(path);
     expect(meta["title"]).toBe("Hello World");
     expect(meta["tags"]).toBe("test, example");

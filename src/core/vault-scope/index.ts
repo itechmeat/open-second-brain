@@ -13,13 +13,7 @@
  *     a `VaultScope` with classified rules.
  */
 
-import {
-  existsSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-  type Dirent,
-} from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { join, sep } from "node:path";
 
 import { loadBrainConfig } from "../brain/policy.ts";
@@ -31,11 +25,7 @@ import {
   type VaultIgnoreRule,
 } from "./defaults.ts";
 
-export {
-  DEFAULT_VAULT_IGNORE_PATHS,
-  classifyVaultIgnoreRule,
-  type VaultIgnoreRule,
-};
+export { DEFAULT_VAULT_IGNORE_PATHS, classifyVaultIgnoreRule, type VaultIgnoreRule };
 
 // ----- matchIgnore ---------------------------------------------------------
 
@@ -62,10 +52,7 @@ const NEGATIVE_MATCH: IgnoreMatch = Object.freeze({
  * normalisation. Callers (`walkVaultScope`, `inspectPath`) prepare
  * the input.
  */
-export function matchIgnore(
-  relPath: string,
-  rules: ReadonlyArray<VaultIgnoreRule>,
-): IgnoreMatch {
+export function matchIgnore(relPath: string, rules: ReadonlyArray<VaultIgnoreRule>): IgnoreMatch {
   if (relPath === "" || rules.length === 0) return NEGATIVE_MATCH;
   const segments = relPath.split("/").filter((s) => s.length > 0);
   let prefix = "";
@@ -97,19 +84,13 @@ export interface VaultScope {
   readonly source: "_brain.yaml" | "defaults";
 }
 
-function buildScope(
-  paths: ReadonlyArray<string>,
-  source: VaultScope["source"],
-): VaultScope {
+function buildScope(paths: ReadonlyArray<string>, source: VaultScope["source"]): VaultScope {
   const ignorePaths = Object.freeze([...paths]);
   const rules = Object.freeze(ignorePaths.map(classifyVaultIgnoreRule));
   return Object.freeze({ ignorePaths, rules, source });
 }
 
-const DEFAULT_SCOPE: VaultScope = buildScope(
-  DEFAULT_VAULT_IGNORE_PATHS,
-  "defaults",
-);
+const DEFAULT_SCOPE: VaultScope = buildScope(DEFAULT_VAULT_IGNORE_PATHS, "defaults");
 
 /**
  * Read `<vault>/Brain/_brain.yaml` and project the `vault.ignore_paths`
@@ -157,7 +138,11 @@ export interface VaultScopeWalk {
  */
 export function walkVaultScope(vault: string, scope: VaultScope): VaultScopeWalk {
   const vaultReal = (() => {
-    try { return realpathSync(vault); } catch { return vault; }
+    try {
+      return realpathSync(vault);
+    } catch {
+      return vault;
+    }
   })();
   const excludedDirs: ExcludedEntry[] = [];
   const excludedFiles: ExcludedEntry[] = [];
@@ -175,12 +160,14 @@ export function walkVaultScope(vault: string, scope: VaultScope): VaultScopeWalk
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
       const abs = join(absDir, entry.name);
-      const rel = relDir === ""
-        ? toPosix(entry.name)
-        : `${relDir}/${toPosix(entry.name)}`;
+      const rel = relDir === "" ? toPosix(entry.name) : `${relDir}/${toPosix(entry.name)}`;
       const isLinkHint = entry.isSymbolicLink();
       let stat;
-      try { stat = statSync(abs); } catch { continue; }
+      try {
+        stat = statSync(abs);
+      } catch {
+        continue;
+      }
       if (stat.isDirectory()) {
         const m = matchIgnore(rel, scope.rules);
         if (m.excluded && m.rule) {
@@ -188,7 +175,11 @@ export function walkVaultScope(vault: string, scope: VaultScope): VaultScopeWalk
           continue;
         }
         let real: string;
-        try { real = realpathSync(abs); } catch { continue; }
+        try {
+          real = realpathSync(abs);
+        } catch {
+          continue;
+        }
         if (real !== vaultReal && !real.startsWith(vaultReal + sep)) continue;
         if (seenDirs.has(real)) continue;
         seenDirs.add(real);
@@ -204,7 +195,11 @@ export function walkVaultScope(vault: string, scope: VaultScope): VaultScopeWalk
       // the kind of drift v0.10.9 is meant to eliminate.
       if (isLinkHint) {
         let real: string;
-        try { real = realpathSync(abs); } catch { continue; }
+        try {
+          real = realpathSync(abs);
+        } catch {
+          continue;
+        }
         if (real !== vaultReal && !real.startsWith(vaultReal + sep)) continue;
       }
       const m = matchIgnore(rel, scope.rules);
@@ -255,11 +250,7 @@ export interface InspectResult {
  * the filesystem only to set `existsOnDisk`; the rule decision is
  * determined by `scope.rules` alone.
  */
-export function inspectPath(
-  relPath: string,
-  scope: VaultScope,
-  vault: string,
-): InspectResult {
+export function inspectPath(relPath: string, scope: VaultScope, vault: string): InspectResult {
   // Segment-based normalisation: tolerate leading `./`, trailing
   // slashes, double slashes. Throw on any `..` component — silently
   // resolving them would let the caller probe outside the vault.
@@ -267,9 +258,7 @@ export function inspectPath(
   for (const raw of toPosix(relPath).split("/")) {
     if (raw === "" || raw === ".") continue;
     if (raw === "..") {
-      throw new Error(
-        `relPath must not traverse outside the vault: ${relPath}`,
-      );
+      throw new Error(`relPath must not traverse outside the vault: ${relPath}`);
     }
     segments.push(raw);
   }

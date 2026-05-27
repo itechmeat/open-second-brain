@@ -10,16 +10,8 @@
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §9.
  */
 
-import {
-  indexStatus,
-  resolveSearchConfig,
-  search,
-  SearchError,
-} from "../core/search/index.ts";
-import type {
-  BrainSearchResult,
-  SearchOutcome,
-} from "../core/search/index.ts";
+import { indexStatus, resolveSearchConfig, search, SearchError } from "../core/search/index.ts";
+import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
@@ -74,26 +66,17 @@ function parsePropertiesArgument(
   const map = new Map<string, ReadonlyArray<string>>();
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (!Array.isArray(v)) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `argument 'properties.${k}' must be an array of strings`,
-      );
+      throw new MCPError(INVALID_PARAMS, `argument 'properties.${k}' must be an array of strings`);
     }
     const accepted: string[] = [];
     for (const item of v) {
       if (typeof item !== "string") {
-        throw new MCPError(
-          INVALID_PARAMS,
-          `argument 'properties.${k}' must contain only strings`,
-        );
+        throw new MCPError(INVALID_PARAMS, `argument 'properties.${k}' must contain only strings`);
       }
       accepted.push(item);
     }
     if (accepted.length === 0) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `argument 'properties.${k}' must not be empty`,
-      );
+      throw new MCPError(INVALID_PARAMS, `argument 'properties.${k}' must not be empty`);
     }
     map.set(k, Object.freeze(accepted));
   }

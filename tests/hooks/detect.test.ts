@@ -8,12 +8,9 @@ import {
 } from "../../hooks/lib/detect.ts";
 
 describe("isArtifactToolName", () => {
-  test.each([["Write"], ["Edit"], ["MultiEdit"], ["apply_patch"]])(
-    "%s is an artifact",
-    (name) => {
-      expect(isArtifactToolName(name)).toBe(true);
-    },
-  );
+  test.each([["Write"], ["Edit"], ["MultiEdit"], ["apply_patch"]])("%s is an artifact", (name) => {
+    expect(isArtifactToolName(name)).toBe(true);
+  });
 
   test.each([["Bash"], ["Read"], ["Grep"], ["event_log_append"], ["second_brain_status"]])(
     "%s is NOT an artifact",
@@ -31,9 +28,7 @@ describe("isBrainEventToolName", () => {
   test("recognises `brain_feedback` (bare and decorated)", () => {
     expect(isBrainEventToolName("brain_feedback")).toBe(true);
     expect(
-      isBrainEventToolName(
-        "mcp__plugin_open-second-brain_open-second-brain__brain_feedback",
-      ),
+      isBrainEventToolName("mcp__plugin_open-second-brain_open-second-brain__brain_feedback"),
     ).toBe(true);
     expect(isBrainEventToolName("mcp__open-second-brain__brain_feedback")).toBe(true);
   });
@@ -41,27 +36,21 @@ describe("isBrainEventToolName", () => {
   test("recognises `brain_apply_evidence` (bare and decorated)", () => {
     expect(isBrainEventToolName("brain_apply_evidence")).toBe(true);
     expect(
-      isBrainEventToolName(
-        "mcp__plugin_open-second-brain_open-second-brain__brain_apply_evidence",
-      ),
+      isBrainEventToolName("mcp__plugin_open-second-brain_open-second-brain__brain_apply_evidence"),
     ).toBe(true);
   });
 
   test("recognises `brain_note` (bare and decorated) — §32B", () => {
     expect(isBrainEventToolName("brain_note")).toBe(true);
     expect(
-      isBrainEventToolName(
-        "mcp__plugin_open-second-brain_open-second-brain-writer__brain_note",
-      ),
+      isBrainEventToolName("mcp__plugin_open-second-brain_open-second-brain-writer__brain_note"),
     ).toBe(true);
   });
 
   test("event_log_append no longer counts as a brain event — §32", () => {
     expect(isBrainEventToolName("event_log_append")).toBe(false);
     expect(
-      isBrainEventToolName(
-        "mcp__plugin_open-second-brain_open-second-brain__event_log_append",
-      ),
+      isBrainEventToolName("mcp__plugin_open-second-brain_open-second-brain__event_log_append"),
     ).toBe(false);
     expect(isBrainEventToolName("mcp__open-second-brain__event_log_append")).toBe(false);
   });
@@ -112,10 +101,7 @@ describe("summarizeTurn", () => {
   });
 
   test("artifact + bash `vault-log` (deprecated, §32) does NOT clear guardrail", () => {
-    const s = summarizeTurn(
-      [{ name: "Write" }, { name: "Bash" }],
-      ["vault-log 'noted finding'"],
-    );
+    const s = summarizeTurn([{ name: "Write" }, { name: "Bash" }], ["vault-log 'noted finding'"]);
     expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 
@@ -132,10 +118,7 @@ describe("summarizeTurn", () => {
     // does not append anything to the daily log. Regression guard
     // against an earlier, looser needle list that incorrectly
     // treated `o2b mcp` as a log call.
-    const s = summarizeTurn(
-      [{ name: "Write" }, { name: "Bash" }],
-      ["o2b mcp --vault /tmp/vault"],
-    );
+    const s = summarizeTurn([{ name: "Write" }, { name: "Bash" }], ["o2b mcp --vault /tmp/vault"]);
     expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
 
@@ -159,10 +142,7 @@ describe("summarizeTurn", () => {
   });
 
   test("artifact + `brain_apply_evidence` MCP call clears guardrail", () => {
-    const s = summarizeTurn([
-      { name: "apply_patch" },
-      { name: "brain_apply_evidence" },
-    ]);
+    const s = summarizeTurn([{ name: "apply_patch" }, { name: "brain_apply_evidence" }]);
     expect(s).toEqual({ hadArtifact: true, hadBrainEvent: true });
   });
 
@@ -202,7 +182,7 @@ describe("summarizeTurn", () => {
   test("echoing `o2b brain note` text does NOT clear guardrail", () => {
     const s = summarizeTurn(
       [{ name: "Write" }, { name: "Bash" }],
-      ['echo \'o2b brain note "not executed"\''],
+      ["echo 'o2b brain note \"not executed\"'"],
     );
     expect(s).toEqual({ hadArtifact: true, hadBrainEvent: false });
   });
@@ -268,8 +248,7 @@ describe("detectHookRuntime", () => {
   test("Claude Code transcript path → claudecode", () => {
     expect(
       detectHookRuntime({
-        transcript_path:
-          "/Users/x/.claude/projects/-srv/projects/foo/abc.jsonl",
+        transcript_path: "/Users/x/.claude/projects/-srv/projects/foo/abc.jsonl",
       }),
     ).toBe("claudecode");
   });
@@ -297,8 +276,7 @@ describe("detectHookRuntime", () => {
       detectHookRuntime({
         tool_name: "apply_patch",
         tool_input: {
-          input:
-            "*** Begin Patch\n*** Update File: /tmp/x\n*** End Patch",
+          input: "*** Begin Patch\n*** Update File: /tmp/x\n*** End Patch",
         },
       }),
     ).toBe("codex");

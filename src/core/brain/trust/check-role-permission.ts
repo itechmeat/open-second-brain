@@ -14,15 +14,8 @@
  * rejected with `wrong-source-state`.
  */
 
-import type {
-  BrainPreferenceStatus,
-} from "../types.ts";
-import {
-  BRAIN_OPERATIONS,
-  BRAIN_ROLES,
-  type BrainOperation,
-  type BrainRole,
-} from "./role.ts";
+import type { BrainPreferenceStatus } from "../types.ts";
+import { BRAIN_OPERATIONS, BRAIN_ROLES, type BrainOperation, type BrainRole } from "./role.ts";
 
 export interface RolePermissionResult {
   readonly allowed: boolean;
@@ -51,10 +44,7 @@ const ALLOWED: ReadonlyMap<BrainRole, ReadonlySet<BrainOperation>> = new Map([
   ],
   [
     BRAIN_ROLES.applier,
-    new Set<BrainOperation>([
-      BRAIN_OPERATIONS.evidence_record,
-      BRAIN_OPERATIONS.log_append,
-    ]),
+    new Set<BrainOperation>([BRAIN_OPERATIONS.evidence_record, BRAIN_OPERATIONS.log_append]),
   ],
   [BRAIN_ROLES.unknown, new Set<BrainOperation>()],
 ]);
@@ -86,8 +76,7 @@ export function checkRolePermission(
     if (currentStatus === undefined) {
       return Object.freeze({
         allowed: false,
-        reason:
-          "wrong-source-state: currentStatus is required for preference_promote_confirmed",
+        reason: "wrong-source-state: currentStatus is required for preference_promote_confirmed",
       });
     }
     if (currentStatus !== "unconfirmed") {

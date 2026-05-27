@@ -260,11 +260,6 @@ function extractCodexShellCommand(serialized: string | undefined): string | null
 function isCodexEnvelope(p: NonNullable<CodexRecord["payload"]>): boolean {
   const content = p.content;
   if (!Array.isArray(content)) return false;
-  const text = content
-    .map((c) => (typeof c?.text === "string" ? c.text : ""))
-    .join("");
-  return (
-    text.startsWith("<environment_context>") ||
-    text.startsWith("<user_instructions>")
-  );
+  const text = content.map((c) => (typeof c?.text === "string" ? c.text : "")).join("");
+  return text.startsWith("<environment_context>") || text.startsWith("<user_instructions>");
 }

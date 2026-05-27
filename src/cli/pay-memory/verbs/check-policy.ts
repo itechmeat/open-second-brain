@@ -38,9 +38,7 @@ export async function cmdCheckPaymentPolicy(argv: string[]): Promise<number> {
       tz,
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to evaluate policy: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to evaluate policy: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
 

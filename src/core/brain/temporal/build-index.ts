@@ -102,9 +102,7 @@ function pushToMap<K, V>(m: Map<K, V[]>, key: K, value: V): void {
   }
 }
 
-function freezeMap<K, V>(
-  m: Map<K, V[]>,
-): ReadonlyMap<K, ReadonlyArray<V>> {
+function freezeMap<K, V>(m: Map<K, V[]>): ReadonlyMap<K, ReadonlyArray<V>> {
   const out = new Map<K, ReadonlyArray<V>>();
   for (const [k, v] of m) {
     out.set(k, Object.freeze(v));
@@ -127,9 +125,7 @@ function resolveWindow(opts: BuildTimelineIndexOptions): TimelineWindow {
   const untilRaw = opts.until;
   const now = opts.now ?? new Date();
   const since =
-    sinceRaw !== undefined
-      ? normalizeWindowBound(sinceRaw, "since")
-      : "1970-01-01T00:00:00Z";
+    sinceRaw !== undefined ? normalizeWindowBound(sinceRaw, "since") : "1970-01-01T00:00:00Z";
   const until =
     untilRaw !== undefined
       ? normalizeWindowBound(untilRaw, "until")
@@ -166,11 +162,7 @@ function addDays(day: string, delta: number): string {
   return new Date(t + delta * ONE_DAY_MS).toISOString().slice(0, 10);
 }
 
-function collectLogEvents(
-  vault: string,
-  window: TimelineWindow,
-  out: TemporalEvent[],
-): void {
+function collectLogEvents(vault: string, window: TimelineWindow, out: TemporalEvent[]): void {
   const logDir = brainDirs(vault).log;
   if (!existsSync(logDir)) return;
   const sinceDay = dateKeyFromIso(window.since);
@@ -185,7 +177,7 @@ function collectLogEvents(
     const base = stripKnownLogExtension(entry.name);
     if (base !== null && ISO_DATE_ONLY_RE.test(base)) dates.add(base);
   }
-  const sortedDates = [...dates].sort();
+  const sortedDates = [...dates].toSorted();
   for (const date of sortedDates) {
     if (date < lowerBound) continue;
     if (date > upperBound) continue;
@@ -193,10 +185,7 @@ function collectLogEvents(
     // Reflect the actual source `readLogDay` consumed so the
     // audit pointer stays accurate when the JSONL sidecar is
     // missing and the markdown fallback is used.
-    const filePath = join(
-      logDir,
-      source === "markdown-fallback" ? `${date}.md` : `${date}.jsonl`,
-    );
+    const filePath = join(logDir, source === "markdown-fallback" ? `${date}.md` : `${date}.jsonl`);
     const vaultPath = relative(vault, filePath);
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i]!;
@@ -226,10 +215,7 @@ function stripKnownLogExtension(name: string): string | null {
  * populated; consumers that care about a specific kind read the
  * narrower slot off the timeline event directly.
  */
-function normaliseLogEntry(
-  entry: BrainLogEntry,
-  source: TemporalEventSource,
-): TemporalEvent {
+function normaliseLogEntry(entry: BrainLogEntry, source: TemporalEventSource): TemporalEvent {
   const body = entry.body;
   const prefId = extractPrefIdFromBody(entry.eventType, body);
   const topic = readScalar(body["topic"]);
@@ -247,16 +233,10 @@ function normaliseLogEntry(
   // that helper collapses folder segments to a basename, which would
   // lose the `src/cli/main.ts` shape operators expect from an audit
   // pointer.
-  const artifact =
-    artifactRaw !== undefined ? stripWikilinkBrackets(artifactRaw) : undefined;
-  const text =
-    entry.eventType === BRAIN_LOG_EVENT_KIND.note
-      ? readScalar(body["text"])
-      : undefined;
+  const artifact = artifactRaw !== undefined ? stripWikilinkBrackets(artifactRaw) : undefined;
+  const text = entry.eventType === BRAIN_LOG_EVENT_KIND.note ? readScalar(body["text"]) : undefined;
   const dreamSummary =
-    entry.eventType === BRAIN_LOG_EVENT_KIND.dream
-      ? readDreamSummary(body)
-      : undefined;
+    entry.eventType === BRAIN_LOG_EVENT_KIND.dream ? readDreamSummary(body) : undefined;
   return Object.freeze({
     at: entry.timestamp,
     kind: entry.eventType,
@@ -276,17 +256,11 @@ function normaliseLogEntry(
  * `undefined` when no slot is populated so the spread above omits the
  * `dreamSummary` field on no-op runs.
  */
-function readDreamSummary(
-  body: BrainLogEntry["body"],
-): DreamSummarySlots | undefined {
+function readDreamSummary(body: BrainLogEntry["body"]): DreamSummarySlots | undefined {
   const newUnconfirmed = readStringArray(body["new_unconfirmed"]);
   const confirmed = readStringArray(body["confirmed"]);
   const retired = readStringArray(body["retired"]);
-  if (
-    newUnconfirmed === undefined &&
-    confirmed === undefined &&
-    retired === undefined
-  ) {
+  if (newUnconfirmed === undefined && confirmed === undefined && retired === undefined) {
     return undefined;
   }
   return Object.freeze({
@@ -354,9 +328,7 @@ function extractPrefIdFromBody(
     case BRAIN_LOG_EVENT_KIND.signalSuppressed:
       // The retired pref is the lifecycle-meaningful anchor for a
       // suppression event; the inbound signal slug is one-off.
-      return (
-        readWikilinkId(body["retired"]) ?? readWikilinkId(body["signal"])
-      );
+      return readWikilinkId(body["retired"]) ?? readWikilinkId(body["signal"]);
     case BRAIN_LOG_EVENT_KIND.feedback:
       return readWikilinkId(body["signal"]);
     default:
@@ -372,11 +344,7 @@ function readWikilinkId(value: unknown): string | undefined {
   return PREF_ID_RE.test(target) ? target : undefined;
 }
 
-function collectRetiredEvents(
-  vault: string,
-  window: TimelineWindow,
-  out: TemporalEvent[],
-): void {
+function collectRetiredEvents(vault: string, window: TimelineWindow, out: TemporalEvent[]): void {
   const retiredDir = brainDirs(vault).retired;
   if (!existsSync(retiredDir)) return;
   for (const entry of readdirSync(retiredDir, { withFileTypes: true })) {

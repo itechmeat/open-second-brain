@@ -18,9 +18,7 @@
  */
 
 export type PropertyFilterMap = ReadonlyMap<string, ReadonlyArray<string>>;
-export type PropertyFrontmatterReader = (
-  path: string,
-) => Record<string, unknown> | null;
+export type PropertyFrontmatterReader = (path: string) => Record<string, unknown> | null;
 
 export function filterByProperties<T extends { readonly path: string }>(
   results: ReadonlyArray<T>,
@@ -38,10 +36,7 @@ export function filterByProperties<T extends { readonly path: string }>(
   return Object.freeze(out) as ReadonlyArray<T>;
 }
 
-function matchesAll(
-  fm: Record<string, unknown>,
-  filters: PropertyFilterMap,
-): boolean {
+function matchesAll(fm: Record<string, unknown>, filters: PropertyFilterMap): boolean {
   for (const [key, accepted] of filters) {
     if (!Object.prototype.hasOwnProperty.call(fm, key)) return false;
     const value = fm[key];
@@ -51,10 +46,7 @@ function matchesAll(
   return true;
 }
 
-function matchesAny(
-  value: unknown,
-  accepted: ReadonlyArray<string>,
-): boolean {
+function matchesAny(value: unknown, accepted: ReadonlyArray<string>): boolean {
   const acceptedSet = new Set(accepted);
   if (Array.isArray(value)) {
     for (const v of value) {

@@ -10,9 +10,7 @@ import { VAULT_HELP, VAULT_VERB_HELP } from "./vault/help-text.ts";
 import { cmdVaultStatus } from "./vault/verbs/status.ts";
 import { cmdVaultInspect } from "./vault/verbs/inspect.ts";
 
-export async function handleVaultSubcommand(
-  argv: ReadonlyArray<string>,
-): Promise<number> {
+export async function handleVaultSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(VAULT_HELP);
     return argv.length === 0 ? 2 : 0;

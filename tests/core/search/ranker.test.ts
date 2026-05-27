@@ -17,7 +17,7 @@ function hyd(chunkId: number, docId: number, mtime: number): HydratedChunk {
 
 const NOW = 1_750_000_000_000; // ms
 const RECENT_MTIME = NOW / 1000 - 3 * 24 * 3600; // 3 days ago in unix seconds → 0.05 recency
-const OLD_MTIME = NOW / 1000 - 365 * 24 * 3600;  // >90d → 0 recency
+const OLD_MTIME = NOW / 1000 - 365 * 24 * 3600; // >90d → 0 recency
 
 test("union of keyword + semantic produces hybrid scoring", () => {
   const kw: KeywordHit[] = [

@@ -32,10 +32,7 @@ import type {
   SearchOutcome,
 } from "../core/search/index.ts";
 import { CliError, parseFlags } from "./argparse.ts";
-import {
-  CronTemplateError,
-  renderCronTemplate,
-} from "./search-cron-template.ts";
+import { CronTemplateError, renderCronTemplate } from "./search-cron-template.ts";
 
 const KNOWN_VERBS = new Set(["query", "index", "reindex", "status", "check"]);
 
@@ -92,8 +89,10 @@ function resolveConfig(
     );
   }
   const dbFlag = typeof flags["db"] === "string" ? (flags["db"] as string) : undefined;
-  const kwFlag = typeof flags["keyword-weight"] === "string" ? Number(flags["keyword-weight"]) : undefined;
-  const semFlag = typeof flags["semantic-weight"] === "string" ? Number(flags["semantic-weight"]) : undefined;
+  const kwFlag =
+    typeof flags["keyword-weight"] === "string" ? Number(flags["keyword-weight"]) : undefined;
+  const semFlag =
+    typeof flags["semantic-weight"] === "string" ? Number(flags["semantic-weight"]) : undefined;
   const concurrencyFlag =
     typeof flags["concurrency"] === "string" ? Number(flags["concurrency"]) : undefined;
   const overrides = {
@@ -355,9 +354,7 @@ async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
   const cfg = resolveConfig(flags);
   const stats = await reindexVault(cfg, {
     embeddings: flags["embeddings"] === true,
-    onFile: flags["verbose"]
-      ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`)
-      : undefined,
+    onFile: flags["verbose"] ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`) : undefined,
   });
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(jsonForStats(stats, cfg)) + "\n");

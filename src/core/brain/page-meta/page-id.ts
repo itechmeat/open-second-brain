@@ -37,9 +37,7 @@ export class MergeChainError extends Error {
  * Non-string values are treated as absent so a malformed file does
  * not poison the canonical lookup.
  */
-export function readMergedInto(
-  meta: Readonly<Record<string, unknown>>,
-): string | null {
+export function readMergedInto(meta: Readonly<Record<string, unknown>>): string | null {
   const v = meta["merged_into"];
   if (typeof v === "string" && v.trim().length > 0) return v.trim();
   return null;
@@ -87,11 +85,7 @@ export function resolveCanonicalId(vault: string, startId: string): string {
 
     const path = pageIdToPath(vault, current);
     if (path === null) {
-      throw new MergeChainError(
-        "MALFORMED",
-        current,
-        `page id has no known prefix: ${current}`,
-      );
+      throw new MergeChainError("MALFORMED", current, `page id has no known prefix: ${current}`);
     }
     if (!existsSync(path)) {
       // Dangling pointer - the canonical page was moved or deleted.
@@ -125,11 +119,7 @@ export function resolveCanonicalId(vault: string, startId: string): string {
  * The caller is responsible for picking which side is the canonical
  * and which is the secondary; this function only writes the pointer.
  */
-export function setMergedInto(
-  vault: string,
-  secondaryId: string,
-  canonicalId: string,
-): string {
+export function setMergedInto(vault: string, secondaryId: string, canonicalId: string): string {
   if (!isValidPageId(secondaryId)) {
     throw new MergeChainError(
       "MALFORMED",
@@ -153,11 +143,7 @@ export function setMergedInto(
   }
   const secondaryPath = pageIdToPath(vault, secondaryId);
   if (secondaryPath === null || !existsSync(secondaryPath)) {
-    throw new MergeChainError(
-      "MALFORMED",
-      secondaryId,
-      `secondary page not found: ${secondaryId}`,
-    );
+    throw new MergeChainError("MALFORMED", secondaryId, `secondary page not found: ${secondaryId}`);
   }
   const raw = readFileSync(secondaryPath, "utf8");
   if (raw.startsWith("---\n")) {
@@ -187,9 +173,5 @@ export function setMergedInto(
     }
     return canonicalId;
   }
-  throw new MergeChainError(
-    "MALFORMED",
-    secondaryId,
-    `file has no frontmatter: ${secondaryPath}`,
-  );
+  throw new MergeChainError("MALFORMED", secondaryId, `file has no frontmatter: ${secondaryPath}`);
 }

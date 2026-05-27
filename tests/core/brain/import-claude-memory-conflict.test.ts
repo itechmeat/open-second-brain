@@ -51,7 +51,12 @@ describe("CONFLICT path", () => {
       "---\nname: rule-c\ndescription: x.\nmetadata:\n  type: feedback\n---\n\nb.\n",
       "utf8",
     );
-    const res = importClaudeMemory({ vault, memoryDir: mem, mode: "dry-run", allowArbitraryMemoryPath: true });
+    const res = importClaudeMemory({
+      vault,
+      memoryDir: mem,
+      mode: "dry-run",
+      allowArbitraryMemoryPath: true,
+    });
     expect(res.conflicts.length).toBe(1);
     expect(res.conflicts[0]?.prefId).toBe("pref-rule-c");
 

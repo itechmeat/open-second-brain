@@ -269,16 +269,16 @@ async function populateEmbeddings(
       "set search_semantic_enabled=true and embedding_* keys to compute embeddings",
     );
   }
-  if (!store.vecLoaded()) {
-    throw new SearchError(
-      "VEC_EXTENSION_UNAVAILABLE",
-      "sqlite-vec did not load; cannot store embeddings",
-    );
-  }
   if (!config.semantic.apiKey) {
     throw new SearchError(
       "EMBEDDING_KEY_MISSING",
       "embedding_api_key is required when computing embeddings",
+    );
+  }
+  if (!store.vecLoaded()) {
+    throw new SearchError(
+      "VEC_EXTENSION_UNAVAILABLE",
+      "sqlite-vec did not load; cannot store embeddings",
     );
   }
 
@@ -308,7 +308,10 @@ async function populateEmbeddings(
     // Lock in the auto-detected dimension on the very first batch.
     const dim = provider.dimension ?? vectors[0]?.length ?? 0;
     if (dim <= 0) {
-      throw new SearchError("EMBEDDING_DIMENSION_MISMATCH", "provider returned vectors of zero length");
+      throw new SearchError(
+        "EMBEDDING_DIMENSION_MISMATCH",
+        "provider returned vectors of zero length",
+      );
     }
     store.ensureEmbeddingModel(model, dim);
     for (let j = 0; j < batch.length; j++) {
@@ -603,4 +606,3 @@ function buildRecommendations(input: BuildRecommendationsInput): string[] {
 
   return recs;
 }
-

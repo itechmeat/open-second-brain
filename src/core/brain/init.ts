@@ -20,13 +20,7 @@
  *     never a torn hybrid.
  */
 
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  statSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,10 +33,7 @@ import {
   brainManualPath,
   vaultRelative,
 } from "./paths.ts";
-import {
-  DEFAULT_BRAIN_CONFIG_YAML,
-  formatPrimaryAgentYamlValue,
-} from "./policy.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML, formatPrimaryAgentYamlValue } from "./policy.ts";
 import { renderBrainManual } from "./templates.ts";
 
 const STARTER_TARGETS = ["preferences", "retired", "inbox", "log"] as const;
@@ -89,9 +80,7 @@ export function copyStarterBundle(
   const src = opts.starterPath ?? DEFAULT_STARTER_DIR;
   try {
     if (!statSync(src).isDirectory()) {
-      throw new BrainStarterError(
-        `starter source is not a directory: ${src}`,
-      );
+      throw new BrainStarterError(`starter source is not a directory: ${src}`);
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -130,8 +119,8 @@ export function copyStarterBundle(
     });
     if (hasUserContent) {
       throw new BrainStarterError(
-        `Brain/${sub} already has content — \`--starter\` is intended for fresh vaults. `
-          + `Inspect the bundle at ${src} and copy individual files manually if needed.`,
+        `Brain/${sub} already has content — \`--starter\` is intended for fresh vaults. ` +
+          `Inspect the bundle at ${src} and copy individual files manually if needed.`,
       );
     }
   }
@@ -159,7 +148,6 @@ export function copyStarterBundle(
   }
   return Object.freeze({ copied });
 }
-
 
 export interface BootstrapBrainOptions {
   /** Overwrite `_brain.yaml` and `_BRAIN.md` if they already exist. */
@@ -254,10 +242,7 @@ export function bootstrapBrain(
   // 2. `_brain.yaml` — default config (with optional primary_agent).
   const brainYamlPath = brainConfigPath(vault);
   const brainYamlRel = vaultRelative(brainYamlPath, vault);
-  const initialYaml = applyPrimaryAgentToYaml(
-    DEFAULT_BRAIN_CONFIG_YAML,
-    opts.primaryAgent,
-  );
+  const initialYaml = applyPrimaryAgentToYaml(DEFAULT_BRAIN_CONFIG_YAML, opts.primaryAgent);
   if (existsSync(brainYamlPath)) {
     if (force) {
       atomicWriteFileSync(brainYamlPath, initialYaml);
@@ -307,10 +292,7 @@ export function bootstrapBrain(
  * so re-running the helper against an already-customised YAML stays
  * idempotent for the relevant slot.
  */
-function applyPrimaryAgentToYaml(
-  yamlBody: string,
-  primaryAgent: string | undefined,
-): string {
+function applyPrimaryAgentToYaml(yamlBody: string, primaryAgent: string | undefined): string {
   if (primaryAgent === undefined) return yamlBody;
   const line = `primary_agent: ${formatPrimaryAgentYamlValue(primaryAgent)}`;
   return yamlBody.replace(/^primary_agent:.*$/m, line);

@@ -33,10 +33,7 @@ function scriptPath(): string {
 }
 
 function jobId(vault: string): string {
-  const slug = createHash("sha256")
-    .update(resolve(vault))
-    .digest("hex")
-    .slice(0, 12);
+  const slug = createHash("sha256").update(resolve(vault)).digest("hex").slice(0, 12);
   return `osb-discipline-report-${slug}`;
 }
 
@@ -72,8 +69,9 @@ function loadJobs(file: string): JobsFile {
   } catch (e) {
     throw new Error(
       `o2b discipline: jobs file is corrupted JSON: ${file}\n` +
-      `Original error: ${(e as Error).message}\n` +
-      `Resolve manually before re-running install/uninstall.`,
+        `Original error: ${(e as Error).message}\n` +
+        `Resolve manually before re-running install/uninstall.`,
+      { cause: e },
     );
   }
   if (
@@ -81,9 +79,7 @@ function loadJobs(file: string): JobsFile {
     typeof parsed !== "object" ||
     !Array.isArray((parsed as { jobs?: unknown }).jobs)
   ) {
-    throw new Error(
-      `o2b discipline: jobs file is missing the jobs[] array: ${file}`,
-    );
+    throw new Error(`o2b discipline: jobs file is missing the jobs[] array: ${file}`);
   }
   return parsed as JobsFile;
 }
@@ -99,10 +95,7 @@ function pickVault(args: ReadonlyArray<string>, defaultVault: string): string {
   return defaultVault;
 }
 
-export async function disciplineInstallVerb(
-  args: string[],
-  defaultVault: string,
-): Promise<number> {
+export async function disciplineInstallVerb(args: string[], defaultVault: string): Promise<number> {
   let vault = pickVault(args, defaultVault);
   let telegramTarget = "";
   let at = "59 4 * * *";
@@ -189,9 +182,7 @@ export async function disciplineUninstallVerb(
   }
   vault = vault ?? defaultVault;
   if (!vault) {
-    process.stderr.write(
-      "o2b discipline uninstall: --vault is required\n",
-    );
+    process.stderr.write("o2b discipline uninstall: --vault is required\n");
     return 2;
   }
   const file = jobsFilePath();

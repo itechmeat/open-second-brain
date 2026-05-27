@@ -21,9 +21,7 @@ export async function cmdRejectPaymentRequest(argv: string[]): Promise<number> {
       reason: (flags["reason"] as string | undefined) ?? null,
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to reject request: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to reject request: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
   if (flags["json"]) {

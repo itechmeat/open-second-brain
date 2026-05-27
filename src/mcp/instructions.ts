@@ -57,8 +57,8 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "Always log under this identity; do not invent or change the name.\n\n" +
     "Brain tools are the agent-facing writable surface (design doc §9).\n" +
     "  - brain_feedback — call once per taste signal the user (or a " +
-    "teammate agent) expresses: corrections (\"don't do X\"), stated " +
-    "preferences (\"use A instead of B\"), or process rules that " +
+    'teammate agent) expresses: corrections ("don\'t do X"), stated ' +
+    'preferences ("use A instead of B"), or process rules that ' +
     "should outlast the current turn. With `force_confirmed: true` " +
     "the preference is created directly (skipping the dream trial " +
     "window).\n" +
@@ -85,7 +85,7 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "any files. Use it when you want to be deliberate before " +
     "triggering the learning pass.\n" +
     "  - brain_digest — read-only summary of the last activity " +
-    "window. Default format is Markdown; pass `format: \"json\"` for " +
+    'window. Default format is Markdown; pass `format: "json"` for ' +
     "programmatic use.\n" +
     "  - brain_query — read-only lookup by `preference`, `topic`, " +
     "or `since` (exactly one). Use this to discover applicable rules " +

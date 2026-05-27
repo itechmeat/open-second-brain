@@ -56,12 +56,9 @@ export const BRAIN_OPERATIONS = Object.freeze({
   log_append: "log_append",
 } as const);
 
-export type BrainOperation =
-  (typeof BRAIN_OPERATIONS)[keyof typeof BRAIN_OPERATIONS];
+export type BrainOperation = (typeof BRAIN_OPERATIONS)[keyof typeof BRAIN_OPERATIONS];
 
-const OPERATION_SET: ReadonlySet<string> = new Set(
-  Object.values(BRAIN_OPERATIONS),
-);
+const OPERATION_SET: ReadonlySet<string> = new Set(Object.values(BRAIN_OPERATIONS));
 
 export function isBrainOperation(value: unknown): value is BrainOperation {
   return typeof value === "string" && OPERATION_SET.has(value);

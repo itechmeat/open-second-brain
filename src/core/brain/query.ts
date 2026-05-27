@@ -35,11 +35,7 @@ import { parsePreference, parseRetired } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
-import type {
-  BrainPreference,
-  BrainRetired,
-  BrainSignal,
-} from "./types.ts";
+import type { BrainPreference, BrainRetired, BrainSignal } from "./types.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -115,10 +111,7 @@ export interface QueryByTopicResult {
  *   - A `ret-...` id is searched in `retired/` only.
  *   - Any other prefix raises {@link BrainNotFoundError} immediately.
  */
-export function queryByPreference(
-  vault: string,
-  pref_id: string,
-): QueryByPreferenceResult {
+export function queryByPreference(vault: string, pref_id: string): QueryByPreferenceResult {
   const id = pref_id.trim();
   if (!id) {
     throw new BrainNotFoundError(pref_id);
@@ -178,7 +171,7 @@ export function queryByPreference(
         e.eventType === BRAIN_LOG_EVENT_KIND.applyEvidence &&
         matchPreferencePayload(e.body["preference"], matchIds),
     )
-    .sort(byTimestampAsc);
+    .toSorted(byTimestampAsc);
 
   return Object.freeze({
     preference,
@@ -192,10 +185,7 @@ export function queryByPreference(
  * retired), and every log entry mentioning the preference id (active
  * or retired form). Unknown topic → empty result with `preference: null`.
  */
-export function queryByTopic(
-  vault: string,
-  topic: string,
-): QueryByTopicResult {
+export function queryByTopic(vault: string, topic: string): QueryByTopicResult {
   const want = topic.trim();
   if (!want) {
     return Object.freeze({
@@ -236,7 +226,7 @@ export function queryByTopic(
     all_log_events = Object.freeze(
       all
         .filter((e) => matchPreferencePayload(e.body["preference"], matchIds))
-        .sort(byTimestampAsc),
+        .toSorted(byTimestampAsc),
     );
   }
 
@@ -254,17 +244,12 @@ export function queryByTopic(
  * entries are silently skipped (their warnings are the doctor's
  * concern, not this surface's).
  */
-export function queryByLogSince(
-  vault: string,
-  since: Date,
-): ReadonlyArray<BrainLogEntry> {
+export function queryByLogSince(vault: string, since: Date): ReadonlyArray<BrainLogEntry> {
   if (!(since instanceof Date) || Number.isNaN(since.getTime())) {
     throw new TypeError("queryByLogSince: `since` must be a valid Date");
   }
   const sinceIso = since.toISOString();
-  const entries = readAllLogEntries(vault).filter(
-    (e) => e.timestamp >= sinceIso,
-  );
+  const entries = readAllLogEntries(vault).filter((e) => e.timestamp >= sinceIso);
   entries.sort(byTimestampAsc);
   return Object.freeze(entries);
 }
@@ -284,7 +269,7 @@ export function readAllLogEntries(vault: string): BrainLogEntry[] {
     .filter((d) => d.isFile() && d.name.endsWith(".md"))
     .map((d) => d.name.slice(0, -".md".length))
     .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n))
-    .sort();
+    .toSorted();
   const out: BrainLogEntry[] = [];
   for (const date of names) {
     const { entries } = parseLogDay(vault, date);
@@ -293,11 +278,7 @@ export function readAllLogEntries(vault: string): BrainLogEntry[] {
   return out;
 }
 
-function collectSignals(
-  dir: string,
-  topic: string,
-  out: BrainSignal[],
-): void {
+function collectSignals(dir: string, topic: string, out: BrainSignal[]): void {
   if (!existsSync(dir)) return;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isFile()) continue;
@@ -329,7 +310,7 @@ function findPreferenceForTopic(
   // different orders on different machines.
   const entries = readdirSync(dir, { withFileTypes: true })
     .slice()
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .toSorted((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!entry.name.startsWith(prefix) || !entry.name.endsWith(".md")) {
@@ -337,8 +318,7 @@ function findPreferenceForTopic(
     }
     const path = join(dir, entry.name);
     try {
-      const parsed =
-        kind === "preference" ? parsePreference(path) : parseRetired(path);
+      const parsed = kind === "preference" ? parsePreference(path) : parseRetired(path);
       if (parsed.topic === topic) return parsed;
     } catch {
       // Doctor's job, not query's.

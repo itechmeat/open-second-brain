@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { parseFrontmatter } from "../../src/core/vault.ts";
 import { writeReceipt } from "../../src/core/pay-memory/receipt.ts";
 
-
 let tmp: string;
 
 beforeEach(() => {
@@ -70,7 +69,7 @@ describe("writeReceipt", () => {
       paymentProof: "5G3...sig",
       resultRef: "https://fal-cdn.example/abc.png",
       resultNote: "Brain/payments/assets/blog-header.md",
-      rawOutput: "{\"ok\": true}",
+      rawOutput: '{"ok": true}',
     });
     const [meta, body] = parseFrontmatter(out.path);
     expect(meta["category"]).toBe("media_generation");
@@ -97,7 +96,7 @@ describe("writeReceipt", () => {
   test("redacts secrets in raw_output before writing", () => {
     const raw = [
       "request: GET /v1/foo",
-      'Authorization: Bearer eyJhbGciOi.SECRET',
+      "Authorization: Bearer eyJhbGciOi.SECRET",
       'response: {"api_key": "sk_live_abc", "ok": true}',
     ].join("\n");
     const out = writeReceipt(tmp, { ...baseInput, rawOutput: raw });

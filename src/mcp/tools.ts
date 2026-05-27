@@ -19,24 +19,15 @@
  * only assembles them in a stable order and applies scope filtering.
  */
 
-import {
-  discoverConfig,
-  redactMapping,
-} from "../core/config.ts";
+import { discoverConfig, redactMapping } from "../core/config.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { isDir } from "../core/fs-utils.ts";
-import {
-  resolveVaultScope,
-  walkVaultScope,
-} from "../core/vault-scope/index.ts";
+import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import { PAY_MEMORY_TOOLS } from "./pay-memory-tools.ts";
-import {
-  normalizeAgentArgument,
-  PLACEHOLDER_AGENT_VALUES,
-} from "../core/agent-identity.ts";
+import { normalizeAgentArgument, PLACEHOLDER_AGENT_VALUES } from "../core/agent-identity.ts";
 import { vaultRelative } from "../core/path-safety.ts";
 import { listVaultPages } from "../core/vault.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
@@ -52,7 +43,10 @@ export interface ToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
-  readonly handler: (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown;
+  readonly handler: (
+    ctx: ServerContext,
+    args: Record<string, unknown>,
+  ) => Promise<unknown> | unknown;
 }
 
 // PLACEHOLDER_AGENT_VALUES + normalizeAgentArgument live in
@@ -80,7 +74,7 @@ function vaultRelpath(target: string, vault: string): string {
 async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> {
   const discovery = discoverConfig(ctx.configPath ?? undefined);
   const vaultExists = isDir(ctx.vault);
-  const configKeys = Object.keys(discovery.data).sort();
+  const configKeys = Object.keys(discovery.data).toSorted();
   // Safe to call on a vault that has no Brain layer yet — returns
   // `present: false` with zero counts.
   const brain = vaultExists ? computeBrainStatus(ctx.vault) : null;
@@ -128,7 +122,10 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
   };
 }
 
-async function toolQuery(ctx: ServerContext, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function toolQuery(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
   if (!isDir(ctx.vault)) {
     throw new MCPError(INVALID_PARAMS, `vault directory missing: ${ctx.vault}`);
   }
@@ -177,7 +174,6 @@ async function toolVaultHealth(
     checks: payload,
   };
 }
-
 
 export type ToolScope = "full" | "writer";
 

@@ -9,11 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,10 +91,9 @@ describe("o2b brain merge — guards", () => {
   test("same id exits 1 with explanatory message", async () => {
     await bootstrap();
     makePref("a");
-    const r = await runCli(
-      ["brain", "merge", "pref-a", "pref-a", "--vault", vault, "--force"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "merge", "pref-a", "pref-a", "--vault", vault, "--force"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(1);
     expect(r.stderr).toContain("same preference");
   });
@@ -118,16 +113,13 @@ describe("o2b brain merge — guards", () => {
     await bootstrap();
     makePref("a", { topic: "x" });
     makePref("b", { topic: "y" });
-    const r = await runCli(
-      ["brain", "merge", "pref-a", "pref-b", "--vault", vault, "--force"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "merge", "pref-a", "pref-b", "--vault", vault, "--force"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(1);
     expect(r.stderr).toContain("topic mismatch");
     // Drop is still present in preferences/ — guard refused the write.
-    expect(
-      existsSync(join(vault, "Brain", "preferences", "pref-b.md")),
-    ).toBe(true);
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-b.md"))).toBe(true);
   });
 });
 
@@ -137,10 +129,7 @@ describe("o2b brain merge — happy paths", () => {
     makePref("keep", { applied_count: 3 });
     makePref("drop", { applied_count: 2 });
     const r = await runCli(
-      [
-        "brain", "merge", "pref-keep", "pref-drop",
-        "--vault", vault, "--dry-run",
-      ],
+      ["brain", "merge", "pref-keep", "pref-drop", "--vault", vault, "--dry-run"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
@@ -148,12 +137,8 @@ describe("o2b brain merge — happy paths", () => {
     expect(r.stdout).toContain("applied_sum: 5");
     expect(r.stdout).toContain("dry-run; no changes written");
     // Drop is still in preferences/.
-    expect(
-      existsSync(join(vault, "Brain", "preferences", "pref-drop.md")),
-    ).toBe(true);
-    expect(
-      existsSync(join(vault, "Brain", "retired", "ret-drop.md")),
-    ).toBe(false);
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-drop.md"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "retired", "ret-drop.md"))).toBe(false);
   });
 
   test("--force commits without prompt", async () => {
@@ -161,20 +146,13 @@ describe("o2b brain merge — happy paths", () => {
     makePref("keep");
     makePref("drop");
     const r = await runCli(
-      [
-        "brain", "merge", "pref-keep", "pref-drop",
-        "--vault", vault, "--force",
-      ],
+      ["brain", "merge", "pref-keep", "pref-drop", "--vault", vault, "--force"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("merged:");
-    expect(
-      existsSync(join(vault, "Brain", "preferences", "pref-drop.md")),
-    ).toBe(false);
-    expect(
-      existsSync(join(vault, "Brain", "retired", "ret-drop.md")),
-    ).toBe(true);
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-drop.md"))).toBe(false);
+    expect(existsSync(join(vault, "Brain", "retired", "ret-drop.md"))).toBe(true);
   });
 
   test("non-TTY without --force exits 1 with the TTY guard message", async () => {
@@ -186,22 +164,15 @@ describe("o2b brain merge — happy paths", () => {
     await bootstrap();
     makePref("keep");
     makePref("drop");
-    const r = await runCli(
-      ["brain", "merge", "pref-keep", "pref-drop", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "merge", "pref-keep", "pref-drop", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(1);
     expect(r.stderr).toContain("--force required when stdin is not a TTY");
     // No mutation: drop still in preferences/, no retired/ entry.
-    expect(
-      existsSync(join(vault, "Brain", "preferences", "pref-drop.md")),
-    ).toBe(true);
-    expect(
-      existsSync(join(vault, "Brain", "retired", "ret-drop.md")),
-    ).toBe(false);
-    expect(
-      existsSync(join(vault, "Brain", "retired", "ret-drop.md")),
-    ).toBe(false);
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-drop.md"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "retired", "ret-drop.md"))).toBe(false);
+    expect(existsSync(join(vault, "Brain", "retired", "ret-drop.md"))).toBe(false);
   });
 
   test("--json --dry-run emits parseable payload", async () => {
@@ -209,10 +180,7 @@ describe("o2b brain merge — happy paths", () => {
     makePref("keep", { applied_count: 3, violated_count: 1 });
     makePref("drop", { applied_count: 2, violated_count: 0 });
     const r = await runCli(
-      [
-        "brain", "merge", "pref-keep", "pref-drop",
-        "--vault", vault, "--dry-run", "--json",
-      ],
+      ["brain", "merge", "pref-keep", "pref-drop", "--vault", vault, "--dry-run", "--json"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(r.returncode).toBe(0);

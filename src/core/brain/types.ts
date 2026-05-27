@@ -22,8 +22,7 @@ export const BRAIN_SIGNAL_SIGN = {
   positive: "positive",
   negative: "negative",
 } as const;
-export type BrainSignalSign =
-  (typeof BRAIN_SIGNAL_SIGN)[keyof typeof BRAIN_SIGNAL_SIGN];
+export type BrainSignalSign = (typeof BRAIN_SIGNAL_SIGN)[keyof typeof BRAIN_SIGNAL_SIGN];
 
 /**
  * Where the signal came from (§9 / §16 capture extensions). Absent
@@ -49,8 +48,9 @@ const BRAIN_SIGNAL_SOURCE_TYPE_VALUES: ReadonlyArray<BrainSignalSourceType> =
 
 /** Type-guard for the enum union — used by writer + parser. */
 export function isBrainSignalSourceType(v: unknown): v is BrainSignalSourceType {
-  return typeof v === "string"
-    && (BRAIN_SIGNAL_SOURCE_TYPE_VALUES as ReadonlyArray<string>).includes(v);
+  return (
+    typeof v === "string" && (BRAIN_SIGNAL_SOURCE_TYPE_VALUES as ReadonlyArray<string>).includes(v)
+  );
 }
 
 export const BRAIN_PREFERENCE_STATUS = {
@@ -74,8 +74,7 @@ export const BRAIN_CONFIDENCE = {
   medium: "medium",
   high: "high",
 } as const;
-export type BrainConfidence =
-  (typeof BRAIN_CONFIDENCE)[keyof typeof BRAIN_CONFIDENCE];
+export type BrainConfidence = (typeof BRAIN_CONFIDENCE)[keyof typeof BRAIN_CONFIDENCE];
 
 export const BRAIN_RETIRED_REASON = {
   staleNoEvidence: "stale-no-evidence",
@@ -100,8 +99,7 @@ export const BRAIN_RETIRED_REASON = {
   // no contradiction, the two rules said the same thing.
   mergedInto: "merged-into",
 } as const;
-export type BrainRetiredReason =
-  (typeof BRAIN_RETIRED_REASON)[keyof typeof BRAIN_RETIRED_REASON];
+export type BrainRetiredReason = (typeof BRAIN_RETIRED_REASON)[keyof typeof BRAIN_RETIRED_REASON];
 
 export const BRAIN_APPLY_RESULT = {
   applied: "applied",
@@ -114,8 +112,7 @@ export const BRAIN_APPLY_RESULT = {
   // `retain-pinned` log entry instead.
   outdated: "outdated",
 } as const;
-export type BrainApplyResult =
-  (typeof BRAIN_APPLY_RESULT)[keyof typeof BRAIN_APPLY_RESULT];
+export type BrainApplyResult = (typeof BRAIN_APPLY_RESULT)[keyof typeof BRAIN_APPLY_RESULT];
 
 /**
  * All possible log event types. `dream` summarises a run; `feedback`
@@ -190,8 +187,7 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   note: "note",
 } as const;
-export type BrainLogEventKind =
-  (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
+export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
 /**
  * Precomputed set of every event-kind string. Both the markdown

@@ -23,12 +23,7 @@ import type { ToolCall } from "./transcript.ts";
 // `name` field in the transcript is always `apply_patch` for file
 // edits done through it; we still accept Edit/Write to defend against
 // a future runtime that mirrors the matcher alias into the call name.
-const NATIVE_ARTIFACT_NAMES = new Set<string>([
-  "Write",
-  "Edit",
-  "MultiEdit",
-  "apply_patch",
-]);
+const NATIVE_ARTIFACT_NAMES = new Set<string>(["Write", "Edit", "MultiEdit", "apply_patch"]);
 
 // Tool-name suffixes that count as "the agent logged this turn",
 // regardless of any runtime-injected MCP prefix.
@@ -45,8 +40,7 @@ const NATIVE_ARTIFACT_NAMES = new Set<string>([
 // in Claude Code transcripts. The regex anchors on either string
 // start or a `__` separator so a future prefix change keeps working
 // without an emergency patch.
-const BRAIN_EVENT_NAME_SUFFIX =
-  /(?:^|__)(brain_feedback|brain_apply_evidence|brain_note)$/;
+const BRAIN_EVENT_NAME_SUFFIX = /(?:^|__)(brain_feedback|brain_apply_evidence|brain_note)$/;
 
 // Bash command shape that counts as a brain-event call from the CLI.
 // Keep this anchored to command boundaries rather than raw substrings:
@@ -170,10 +164,7 @@ export function summarizeTurn(
  */
 export type HookRuntime = "claudecode" | "codex" | "unknown";
 
-const CLAUDE_TRANSCRIPT_NEEDLES = [
-  "/.claude/projects/",
-  "/.claude/sessions/",
-] as const;
+const CLAUDE_TRANSCRIPT_NEEDLES = ["/.claude/projects/", "/.claude/sessions/"] as const;
 const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
 
 /**
@@ -204,9 +195,9 @@ export function detectHookRuntime(payload: unknown): HookRuntime {
   }
 
   if (
-    typeof p["session_id"] === "string"
-    && typeof p["cwd"] === "string"
-    && typeof p["tool_use_id"] === "string"
+    typeof p["session_id"] === "string" &&
+    typeof p["cwd"] === "string" &&
+    typeof p["tool_use_id"] === "string"
   ) {
     return "claudecode";
   }

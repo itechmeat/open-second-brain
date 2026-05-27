@@ -48,7 +48,12 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
   }
 
   if (flags["json"]) {
-    okJson({ vault, created: result.created, overwritten: result.overwritten, skipped: result.skipped });
+    okJson({
+      vault,
+      created: result.created,
+      overwritten: result.overwritten,
+      skipped: result.skipped,
+    });
     return 0;
   }
   ok(`brain initialized: ${vault}`);

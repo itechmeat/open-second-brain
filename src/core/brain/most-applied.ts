@@ -11,10 +11,7 @@ import { existsSync, readdirSync } from "node:fs";
 
 import { brainDirs } from "./paths.ts";
 import { readLogDay } from "./log-jsonl.ts";
-import {
-  MOST_APPLIED_LIMIT_DEFAULT,
-  MOST_APPLIED_WINDOW_DAYS_DEFAULT,
-} from "./policy.ts";
+import { MOST_APPLIED_LIMIT_DEFAULT, MOST_APPLIED_WINDOW_DAYS_DEFAULT } from "./policy.ts";
 import { isoDate } from "./time.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
 import {

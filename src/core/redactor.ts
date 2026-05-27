@@ -91,9 +91,7 @@ export function redactRawOutput(text: string): string {
   if (!text) return text;
 
   let out =
-    text.length > MAX_REDACTOR_INPUT
-      ? text.slice(0, MAX_REDACTOR_INPUT) + TRUNCATION_MARKER
-      : text;
+    text.length > MAX_REDACTOR_INPUT ? text.slice(0, MAX_REDACTOR_INPUT) + TRUNCATION_MARKER : text;
 
   // Order matters: handle JSON entries first so the COLON_VALUE_RE
   // doesn't also match inside JSON pairs (the negative-lookbehind
@@ -174,10 +172,7 @@ export interface NormaliseTextFieldOptions {
  * Trim is left to the caller — the writer for a given field decides
  * whether leading / trailing whitespace is significant.
  */
-export function normaliseTextField(
-  value: unknown,
-  opts: NormaliseTextFieldOptions,
-): string {
+export function normaliseTextField(value: unknown, opts: NormaliseTextFieldOptions): string {
   if (typeof value !== "string") return "";
   let s = value.replace(FORBIDDEN_C0_RE, "");
   s = s.replace(UNICODE_LINE_SEP_RE, "\n");
@@ -200,10 +195,7 @@ export function normaliseTextField(
  * writers (`writeSignal`, `appendApplyEvidence`) to keep field
  * sanitisation consistent across surfaces.
  */
-export function sanitiseTextField(
-  value: unknown,
-  opts: NormaliseTextFieldOptions,
-): string {
+export function sanitiseTextField(value: unknown, opts: NormaliseTextFieldOptions): string {
   if (typeof value !== "string") return "";
   return normaliseTextField(redactRawOutput(value), opts);
 }

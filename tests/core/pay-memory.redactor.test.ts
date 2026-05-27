@@ -21,9 +21,7 @@ describe("redactRawOutput", () => {
     expect(redactRawOutput('{"api_key": "abc", "name": "ok"}')).toBe(
       '{"api_key": "***REDACTED***", "name": "ok"}',
     );
-    expect(redactRawOutput('{"token":"long.signed.value"}')).toBe(
-      '{"token":"***REDACTED***"}',
-    );
+    expect(redactRawOutput('{"token":"long.signed.value"}')).toBe('{"token":"***REDACTED***"}');
   });
 
   test("redacts Authorization: Bearer headers and preserves the `Bearer` prefix", () => {
@@ -70,9 +68,7 @@ describe("redactRawOutput", () => {
   test("redacts password / credential / session_token assignments", () => {
     expect(redactRawOutput("password: hunter2")).toBe("password: ***REDACTED***");
     expect(redactRawOutput("PASSWD=somepw123")).toBe("PASSWD=***REDACTED***");
-    expect(redactRawOutput('{"credential": "abc"}')).toBe(
-      '{"credential": "***REDACTED***"}',
-    );
+    expect(redactRawOutput('{"credential": "abc"}')).toBe('{"credential": "***REDACTED***"}');
     expect(redactRawOutput("session_token: eyJ.session.value")).toBe(
       "session_token: ***REDACTED***",
     );

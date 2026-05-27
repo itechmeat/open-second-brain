@@ -1,17 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  BRAIN_OPERATIONS,
-  BRAIN_ROLES,
-} from "../../../../src/core/brain/trust/role.ts";
+import { BRAIN_OPERATIONS, BRAIN_ROLES } from "../../../../src/core/brain/trust/role.ts";
 import { checkRolePermission } from "../../../../src/core/brain/trust/check-role-permission.ts";
 
 describe("checkRolePermission - allowed paths", () => {
   test("writer may write inbox feedback", () => {
-    const r = checkRolePermission(
-      BRAIN_ROLES.writer,
-      BRAIN_OPERATIONS.feedback_write,
-    );
+    const r = checkRolePermission(BRAIN_ROLES.writer, BRAIN_OPERATIONS.feedback_write);
     expect(r.allowed).toBe(true);
   });
 
@@ -42,18 +36,12 @@ describe("checkRolePermission - allowed paths", () => {
   });
 
   test("applier may record evidence", () => {
-    const r = checkRolePermission(
-      BRAIN_ROLES.applier,
-      BRAIN_OPERATIONS.evidence_record,
-    );
+    const r = checkRolePermission(BRAIN_ROLES.applier, BRAIN_OPERATIONS.evidence_record);
     expect(r.allowed).toBe(true);
   });
 
   test("applier may append narrative log", () => {
-    const r = checkRolePermission(
-      BRAIN_ROLES.applier,
-      BRAIN_OPERATIONS.log_append,
-    );
+    const r = checkRolePermission(BRAIN_ROLES.applier, BRAIN_OPERATIONS.log_append);
     expect(r.allowed).toBe(true);
   });
 });
@@ -69,26 +57,17 @@ describe("checkRolePermission - forbidden paths", () => {
   });
 
   test("writer must not retire a preference", () => {
-    const r = checkRolePermission(
-      BRAIN_ROLES.writer,
-      BRAIN_OPERATIONS.preference_retire,
-    );
+    const r = checkRolePermission(BRAIN_ROLES.writer, BRAIN_OPERATIONS.preference_retire);
     expect(r.allowed).toBe(false);
   });
 
   test("dreamer must not write inbox feedback", () => {
-    const r = checkRolePermission(
-      BRAIN_ROLES.dreamer,
-      BRAIN_OPERATIONS.feedback_write,
-    );
+    const r = checkRolePermission(BRAIN_ROLES.dreamer, BRAIN_OPERATIONS.feedback_write);
     expect(r.allowed).toBe(false);
   });
 
   test("dreamer must not record evidence", () => {
-    const r = checkRolePermission(
-      BRAIN_ROLES.dreamer,
-      BRAIN_OPERATIONS.evidence_record,
-    );
+    const r = checkRolePermission(BRAIN_ROLES.dreamer, BRAIN_OPERATIONS.evidence_record);
     expect(r.allowed).toBe(false);
   });
 
@@ -120,10 +99,7 @@ describe("checkRolePermission - forbidden paths", () => {
   });
 
   test("applier must not retire a preference", () => {
-    const r = checkRolePermission(
-      BRAIN_ROLES.applier,
-      BRAIN_OPERATIONS.preference_retire,
-    );
+    const r = checkRolePermission(BRAIN_ROLES.applier, BRAIN_OPERATIONS.preference_retire);
     expect(r.allowed).toBe(false);
   });
 
@@ -137,10 +113,7 @@ describe("checkRolePermission - forbidden paths", () => {
 
 describe("checkRolePermission - structural invariants", () => {
   test("returned object is frozen", () => {
-    const r = checkRolePermission(
-      BRAIN_ROLES.writer,
-      BRAIN_OPERATIONS.feedback_write,
-    );
+    const r = checkRolePermission(BRAIN_ROLES.writer, BRAIN_OPERATIONS.feedback_write);
     expect(Object.isFrozen(r)).toBe(true);
   });
 });

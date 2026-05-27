@@ -85,17 +85,17 @@ export function loadPolicyRules(vault: string): PolicyRules | null {
     // ENOENT into a `null` return. Other I/O errors (EACCES, EISDIR …)
     // are surfaced so the user sees the real cause.
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
-    throw new Error(
-      `failed to read ${target}: ${(err as Error).message ?? String(err)}`,
-    );
+    throw new Error(`failed to read ${target}: ${(err as Error).message ?? String(err)}`, {
+      cause: err,
+    });
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    throw new Error(
-      `${target} is not valid JSON: ${(err as Error).message ?? String(err)}`,
-    );
+    throw new Error(`${target} is not valid JSON: ${(err as Error).message ?? String(err)}`, {
+      cause: err,
+    });
   }
   return validatePolicyRules(parsed, target);
 }
@@ -155,9 +155,7 @@ function validatePolicyRules(value: unknown, source: string): PolicyRules {
     const map: Record<string, number> = {};
     for (const [k, n] of Object.entries(v as Record<string, unknown>)) {
       if (typeof n !== "number" || !Number.isInteger(n) || n < 0) {
-        throw new Error(
-          `${source}: max_per_category.${k} must be a non-negative integer`,
-        );
+        throw new Error(`${source}: max_per_category.${k} must be a non-negative integer`);
       }
       map[k] = n;
     }
@@ -198,9 +196,7 @@ export function evaluatePolicy(
   // 1. Allowlist on `service`.
   if (rules.allowed_services && rules.allowed_services.length > 0) {
     if (!rules.allowed_services.includes(request.service)) {
-      reasons.push(
-        `service ${JSON.stringify(request.service)} is not in allowed_services`,
-      );
+      reasons.push(`service ${JSON.stringify(request.service)} is not in allowed_services`);
       denyRule ??= "allowed_services";
     }
   }
@@ -239,11 +235,7 @@ export function evaluatePolicy(
   }
 
   // 3. Single-call cap.
-  if (
-    rules.max_single_call !== undefined &&
-    amount !== null &&
-    amount > rules.max_single_call
-  ) {
+  if (rules.max_single_call !== undefined && amount !== null && amount > rules.max_single_call) {
     reasons.push(
       `expected amount ${amount} ${reqCurrency} exceeds max_single_call ` +
         `${rules.max_single_call} ${policyCurrency}`,
@@ -292,8 +284,8 @@ export function evaluatePolicy(
   const status: PolicyDecisionStatus = denyRule
     ? "denied"
     : approvalRule
-    ? "approval_required"
-    : "allowed";
+      ? "approval_required"
+      : "allowed";
 
   return {
     status,
@@ -311,10 +303,7 @@ export function evaluatePolicy(
  * Top-level convenience: load the policy, aggregate today's receipts to
  * compute spend/count context, and evaluate.
  */
-export function checkPolicy(
-  vault: string,
-  request: PolicyCheckRequest,
-): PolicyDecision {
+export function checkPolicy(vault: string, request: PolicyCheckRequest): PolicyDecision {
   const rules = loadPolicyRules(vault);
   const date = validateIsoDate(request.date ?? isoDateNow(request.tz));
   const summaries = aggregateReceipts(vault, date);

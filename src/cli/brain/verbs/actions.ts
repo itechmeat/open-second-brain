@@ -10,10 +10,7 @@ import { defaultConfigPath } from "../../../core/config.ts";
 import { findDuplicateCandidates } from "../../../core/brain/page-dedup.ts";
 import { lintConsolidate } from "../../../core/brain/lint-consolidate.ts";
 import { computeTokenFootprint } from "../../../core/brain/token-footprint.ts";
-import {
-  scoreActions,
-  type ActionInputs,
-} from "../../../core/brain/maintenance/action-scorer.ts";
+import { scoreActions, type ActionInputs } from "../../../core/brain/maintenance/action-scorer.ts";
 import { parse, fail, okJson, resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainActions(argv: string[]): Promise<number> {
@@ -29,9 +26,7 @@ export async function cmdBrainActions(argv: string[]): Promise<number> {
   if (topNRaw !== undefined) {
     const parsed = Number(topNRaw);
     if (!Number.isInteger(parsed) || parsed <= 0) {
-      return fail(
-        `brain actions: --top-n must be a positive integer; got ${topNRaw}`,
-      );
+      return fail(`brain actions: --top-n must be a positive integer; got ${topNRaw}`);
     }
     topN = parsed;
   }

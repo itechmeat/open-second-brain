@@ -10,28 +10,12 @@
  * tools/call → handler`) so registration drift is caught here too.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  unlinkSync,
-} from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  JSONRPC_VERSION,
-  MCPServer,
-  PROTOCOL_VERSION,
-} from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainActivePath } from "../../src/core/brain/paths.ts";
@@ -49,12 +33,7 @@ beforeEach(() => {
   vault = join(tmp, "vault");
   configHome = mkdtempSync(join(tmpdir(), "o2b-mcp-brain-context-cfg-"));
   configPath = join(configHome, "config.yaml");
-  for (const k of [
-    "VAULT_AGENT_NAME",
-    "VAULT_TIMEZONE",
-    "VAULT_DIR",
-    "OPEN_SECOND_BRAIN_CONFIG",
-  ]) {
+  for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -112,9 +91,11 @@ describe("brain_context tool registration", () => {
   });
 
   test("writer scope still hosts the three Brain writers", () => {
-    const names = buildToolTable("writer").map((t) => t.name).sort();
+    const names = buildToolTable("writer")
+      .map((t) => t.name)
+      .toSorted();
     expect(names).toEqual(
-      ["brain_apply_evidence", "brain_context", "brain_feedback", "brain_note"].sort(),
+      ["brain_apply_evidence", "brain_context", "brain_feedback", "brain_note"].toSorted(),
     );
   });
 });

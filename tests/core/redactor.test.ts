@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  normaliseTextField,
-  redactRawOutput,
-  sanitiseTextField,
-} from "../../src/core/redactor.ts";
+import { normaliseTextField, redactRawOutput, sanitiseTextField } from "../../src/core/redactor.ts";
 
 describe("redactRawOutput (cross-module backward compat)", () => {
   test("masks api_key in env-style assignment", () => {
@@ -44,9 +40,7 @@ describe("normaliseTextField", () => {
 
   test("singleLine collapses \\n / \\r / \\t runs to single space", () => {
     const input = "a\n\nb\tc\r\nd";
-    expect(normaliseTextField(input, { maxLen: 100, singleLine: true })).toBe(
-      "a b c d",
-    );
+    expect(normaliseTextField(input, { maxLen: 100, singleLine: true })).toBe("a b c d");
   });
 
   test("non-singleLine normalises CRLF/CR to LF", () => {

@@ -5,6 +5,8 @@
  * `{ value, error }` tuple so the caller can decide the exit code.
  */
 
+import { parseOptionalFiniteNumberInput } from "../core/validate.ts";
+
 /**
  * Parse an optional `--<name>` flag whose value should be a finite number.
  * Returns `{ value: number | null, error: string | null }`.
@@ -21,15 +23,16 @@ export function parseOptionalNumberFlag(
   // flag schema — surface it as a clean validation error instead of
   // throwing at the `.trim()` call below.
   if (typeof raw !== "string") {
-    return { value: null, error: `--${name} must be provided as a single string value` };
+    return {
+      value: null,
+      error: `--${name} must be provided as a single string value`,
+    };
   }
-  const trimmed = raw.trim();
-  if (trimmed === "") return { value: null, error: null };
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseOptionalFiniteNumberInput(raw);
+  if (parsed.error !== null) {
     return { value: null, error: `--${name} must be a number, got: ${raw}` };
   }
-  return { value: parsed, error: null };
+  return { value: parsed.value, error: null };
 }
 
 /**
@@ -45,8 +48,7 @@ export function parseOptionalNumberFlag(
  * `Date` is normalised to UTC by the JS runtime before any downstream
  * code touches it.
  */
-export const ISO_8601_RE =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
+export const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
 
 /**
  * Parse an optional `--<name>` flag as a strict ISO-8601 Date.
@@ -59,16 +61,25 @@ export function parseOptionalIsoDate(
   const raw = flags[name];
   if (raw === undefined) return { value: null, error: null };
   if (typeof raw !== "string") {
-    return { value: null, error: `--${name} must be provided as a single string value` };
+    return {
+      value: null,
+      error: `--${name} must be provided as a single string value`,
+    };
   }
   const trimmed = raw.trim();
   if (trimmed === "") return { value: null, error: null };
   if (!ISO_8601_RE.test(trimmed)) {
-    return { value: null, error: `--${name} must be a valid ISO-8601 timestamp; got ${raw}` };
+    return {
+      value: null,
+      error: `--${name} must be a valid ISO-8601 timestamp; got ${raw}`,
+    };
   }
   const d = new Date(trimmed);
   if (!Number.isFinite(d.getTime())) {
-    return { value: null, error: `--${name} must be a valid ISO-8601 timestamp; got ${raw}` };
+    return {
+      value: null,
+      error: `--${name} must be a valid ISO-8601 timestamp; got ${raw}`,
+    };
   }
   return { value: d, error: null };
 }

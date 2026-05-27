@@ -45,9 +45,7 @@ export async function cmdBrainSynthesise(argv: string[]): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(
-    `Concept cluster for ${cluster.targetId} (${cluster.targetTitle}):\n`,
-  );
+  process.stdout.write(`Concept cluster for ${cluster.targetId} (${cluster.targetTitle}):\n`);
   process.stdout.write(`  Linkers: ${cluster.linkers.length}\n`);
   for (const l of cluster.linkers) {
     const anchor = l.targetAnchor ? `#${l.targetAnchor}` : "";
@@ -58,9 +56,7 @@ export async function cmdBrainSynthesise(argv: string[]): Promise<number> {
     );
   }
   if (cluster.unlinkedMentions.length > 0) {
-    process.stdout.write(
-      `  Unlinked mentions: ${cluster.unlinkedMentions.length}\n`,
-    );
+    process.stdout.write(`  Unlinked mentions: ${cluster.unlinkedMentions.length}\n`);
     for (const m of cluster.unlinkedMentions) {
       process.stdout.write(`    ${m.source}:${m.line}  (${m.term})\n`);
     }

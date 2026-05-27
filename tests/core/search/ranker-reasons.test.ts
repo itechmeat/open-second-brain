@@ -7,11 +7,7 @@
 import { test, expect } from "bun:test";
 
 import { rankResults } from "../../../src/core/search/ranker.ts";
-import type {
-  KeywordHit,
-  SemanticHit,
-  HydratedChunk,
-} from "../../../src/core/search/store.ts";
+import type { KeywordHit, SemanticHit, HydratedChunk } from "../../../src/core/search/store.ts";
 
 function hyd(chunkId: number, docId: number, mtime: number): HydratedChunk {
   return Object.freeze({

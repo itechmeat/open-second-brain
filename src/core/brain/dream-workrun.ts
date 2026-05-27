@@ -32,10 +32,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import {
-  dreamRunsDir,
-  dreamWorkrunPath,
-} from "./paths.ts";
+import { dreamRunsDir, dreamWorkrunPath } from "./paths.ts";
 
 /**
  * Canonical phase identifiers. Five forward-progress phases plus the
@@ -51,8 +48,7 @@ export const WORKRUN_PHASE = Object.freeze({
   interrupted: "interrupted",
 } as const);
 
-export type WorkrunPhase =
-  (typeof WORKRUN_PHASE)[keyof typeof WORKRUN_PHASE];
+export type WorkrunPhase = (typeof WORKRUN_PHASE)[keyof typeof WORKRUN_PHASE];
 
 export interface WorkrunHandle {
   /** Path of the underlying JSONL file. */
@@ -74,12 +70,13 @@ export function openWorkrun(vault: string, runId: string): WorkrunHandle {
   mkdirSync(dirname(path), { recursive: true });
   let closed = false;
   const append = (phase: WorkrunPhase, extra: Record<string, unknown> = {}): void => {
-    const line = JSON.stringify({
-      phase,
-      at: new Date().toISOString(),
-      run_id: runId,
-      ...extra,
-    }) + "\n";
+    const line =
+      JSON.stringify({
+        phase,
+        at: new Date().toISOString(),
+        run_id: runId,
+        ...extra,
+      }) + "\n";
     appendFileSync(path, line, "utf8");
   };
   append(WORKRUN_PHASE.started);
@@ -97,10 +94,7 @@ export function openWorkrun(vault: string, runId: string): WorkrunHandle {
     interrupt(reason?: string): void {
       if (closed) return;
       closed = true;
-      append(
-        WORKRUN_PHASE.interrupted,
-        reason !== undefined ? { reason } : {},
-      );
+      append(WORKRUN_PHASE.interrupted, reason !== undefined ? { reason } : {});
     },
   };
 }
@@ -141,10 +135,7 @@ export function scanDanglingWorkruns(vault: string): string[] {
         out.push(path);
         continue;
       }
-      if (
-        parsed.phase !== WORKRUN_PHASE.finalized &&
-        parsed.phase !== WORKRUN_PHASE.interrupted
-      ) {
+      if (parsed.phase !== WORKRUN_PHASE.finalized && parsed.phase !== WORKRUN_PHASE.interrupted) {
         out.push(path);
       }
     } catch {

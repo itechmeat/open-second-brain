@@ -12,9 +12,7 @@ import { jaccard, tokenise } from "../../../src/core/brain/similarity.ts";
 
 describe("tokenise", () => {
   test("lowercases and splits on punctuation", () => {
-    const tokens = tokenise(
-      "Use imperative voice; describe what the commit DOES",
-    );
+    const tokens = tokenise("Use imperative voice; describe what the commit DOES");
     expect(tokens.has("use")).toBe(true);
     expect(tokens.has("imperative")).toBe(true);
     expect(tokens.has("does")).toBe(true);
@@ -56,8 +54,6 @@ describe("jaccard", () => {
   });
 
   test("partial overlap → |intersection| / |union|", () => {
-    expect(
-      jaccard(new Set(["a", "b", "c"]), new Set(["b", "c", "d"])),
-    ).toBeCloseTo(2 / 4, 5);
+    expect(jaccard(new Set(["a", "b", "c"]), new Set(["b", "c", "d"]))).toBeCloseTo(2 / 4, 5);
   });
 });

@@ -25,19 +25,10 @@
  * file), not a new signal.
  */
 
-import {
-  Dirent,
-  readFileSync,
-  readdirSync,
-  statSync,
-} from "node:fs";
+import { Dirent, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-import {
-  buildDedupIndex,
-  computeDedupHash,
-  type DedupIndexEntry,
-} from "./dedup-hash.ts";
+import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { discoverMarkersDetailed } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
@@ -45,11 +36,7 @@ import { loadNotesConfigSafe } from "./policy.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
-import {
-  matchIgnore,
-  resolveVaultScope,
-  type VaultIgnoreRule,
-} from "../vault-scope/index.ts";
+import { matchIgnore, resolveVaultScope, type VaultIgnoreRule } from "../vault-scope/index.ts";
 
 const MAX_FILE_SIZE_BYTES = 1_048_576; // 1 MiB
 
@@ -106,9 +93,7 @@ export async function scanInline(
   // the agent never walks the vault without an operator opt-in.
   const explicitPaths = (opts.paths ?? []).filter((p) => p.trim().length > 0);
   const resolvedPaths =
-    explicitPaths.length > 0
-      ? explicitPaths
-      : [...loadNotesConfigSafe(vault).read_paths];
+    explicitPaths.length > 0 ? explicitPaths : [...loadNotesConfigSafe(vault).read_paths];
   if (resolvedPaths.length === 0) {
     return Object.freeze({
       scanned: 0,
@@ -256,7 +241,10 @@ function normalisePrefix(rel: string): string {
   // strip leading/trailing slashes. On Windows `notes\\` must become
   // `notes` (not `notes/`), so the separator conversion has to happen
   // before the slash trim. `matchIgnore` expects POSIX rel-paths.
-  return rel.split(sep).join("/").replace(/^\/+|\/+$/g, "");
+  return rel
+    .split(sep)
+    .join("/")
+    .replace(/^\/+|\/+$/g, "");
 }
 
 function* walkVault(
@@ -264,9 +252,7 @@ function* walkVault(
   includePrefixes: ReadonlyArray<string>,
   rules: ReadonlyArray<VaultIgnoreRule>,
 ): Generator<string> {
-  const stack: Array<{ abs: string; rel: string }> = [
-    { abs: vault, rel: "" },
-  ];
+  const stack: Array<{ abs: string; rel: string }> = [{ abs: vault, rel: "" }];
   while (stack.length > 0) {
     const { abs: dir, rel: relDir } = stack.pop()!;
     let entries: Dirent[];
@@ -291,9 +277,7 @@ function* walkVault(
       if (!entry.name.endsWith(".md")) continue;
 
       if (includePrefixes.length > 0) {
-        const matches = includePrefixes.some(
-          (p) => relPosix === p || relPosix.startsWith(p + "/"),
-        );
+        const matches = includePrefixes.some((p) => relPosix === p || relPosix.startsWith(p + "/"));
         if (!matches) continue;
       }
 

@@ -9,12 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -100,9 +95,21 @@ describe("auditMoc - bucket classification", () => {
     // Hub references pref-popular. Two other prefs also reference pref-popular.
     // Body of pref-popular is long.
     const longBody = "Long body content. ".repeat(20);
-    writePref("pref-popular", { kind: "preference", topic: "p", status: "confirmed", principle: "p" }, longBody);
-    writePref("pref-a", { kind: "preference", topic: "a", status: "confirmed", principle: "p" }, "Refers to [[pref-popular]].");
-    writePref("pref-b", { kind: "preference", topic: "b", status: "confirmed", principle: "p" }, "Also [[pref-popular]].");
+    writePref(
+      "pref-popular",
+      { kind: "preference", topic: "p", status: "confirmed", principle: "p" },
+      longBody,
+    );
+    writePref(
+      "pref-a",
+      { kind: "preference", topic: "a", status: "confirmed", principle: "p" },
+      "Refers to [[pref-popular]].",
+    );
+    writePref(
+      "pref-b",
+      { kind: "preference", topic: "b", status: "confirmed", principle: "p" },
+      "Also [[pref-popular]].",
+    );
     writePref("pref-c", { kind: "preference", topic: "c", status: "confirmed", principle: "p" });
     writePref("pref-d", { kind: "preference", topic: "d", status: "confirmed", principle: "p" });
     writePref("pref-e", { kind: "preference", topic: "e", status: "confirmed", principle: "p" });
@@ -117,7 +124,11 @@ describe("auditMoc - bucket classification", () => {
   });
 
   test("fragile: cluster member with only one backlink and short body", () => {
-    writePref("pref-thin", { kind: "preference", topic: "t", status: "confirmed", principle: "p" }, "short");
+    writePref(
+      "pref-thin",
+      { kind: "preference", topic: "t", status: "confirmed", principle: "p" },
+      "short",
+    );
     writePref("pref-a", { kind: "preference", topic: "a", status: "confirmed", principle: "p" });
     writePref("pref-b", { kind: "preference", topic: "b", status: "confirmed", principle: "p" });
     writePref("pref-c", { kind: "preference", topic: "c", status: "confirmed", principle: "p" });
@@ -152,8 +163,16 @@ describe("auditMoc - bucket classification", () => {
   test("suggested-next: highest-leverage candidate-missing (most mentions across cluster)", () => {
     // pref-popular-missing referenced from hub + 2 cluster members.
     // pref-rare-missing referenced from hub only.
-    writePref("pref-a", { kind: "preference", topic: "a", status: "confirmed", principle: "p" }, "see [[pref-popular-missing]]");
-    writePref("pref-b", { kind: "preference", topic: "b", status: "confirmed", principle: "p" }, "again [[pref-popular-missing]]");
+    writePref(
+      "pref-a",
+      { kind: "preference", topic: "a", status: "confirmed", principle: "p" },
+      "see [[pref-popular-missing]]",
+    );
+    writePref(
+      "pref-b",
+      { kind: "preference", topic: "b", status: "confirmed", principle: "p" },
+      "again [[pref-popular-missing]]",
+    );
     writePref("pref-c", { kind: "preference", topic: "c", status: "confirmed", principle: "p" });
     writePref("pref-d", { kind: "preference", topic: "d", status: "confirmed", principle: "p" });
     writePref("pref-e", { kind: "preference", topic: "e", status: "confirmed", principle: "p" });

@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -69,7 +63,7 @@ describe("buildProtectRules", () => {
     const rules = buildProtectRules("/v");
     const denyPaths = Array.from(
       new Set(rules.filter((r) => r.kind === "deny").map((r) => r.path)),
-    ).sort();
+    ).toSorted();
     expect(denyPaths).toEqual([
       "/v/Brain/.snapshots/**",
       "/v/Brain/_brain.yaml",
@@ -84,22 +78,14 @@ describe("renderClaudeCode", () => {
   test("emits a snippet with deny + allow arrays and a manifest", () => {
     const rules = buildProtectRules("/vault");
     const out = renderClaudeCode(rules, "/vault");
-    expect(out.snippet.permissions.deny).toContain(
-      "Write(/vault/Brain/preferences/**)",
-    );
-    expect(out.snippet.permissions.deny).toContain(
-      "Edit(/vault/Brain/preferences/**)",
-    );
-    expect(out.snippet.permissions.allow).toEqual([
-      "Write(/vault/Brain/inbox/**)",
-    ]);
+    expect(out.snippet.permissions.deny).toContain("Write(/vault/Brain/preferences/**)");
+    expect(out.snippet.permissions.deny).toContain("Edit(/vault/Brain/preferences/**)");
+    expect(out.snippet.permissions.allow).toEqual(["Write(/vault/Brain/inbox/**)"]);
     expect(out.manifest.schema_version).toBe(PROTECT_SCHEMA_VERSION);
     expect(out.manifest.target).toBe("claudecode");
     expect(out.manifest.vault).toBe("/vault");
     expect(out.manifest.owned_deny).toHaveLength(10);
-    expect(out.manifest.owned_allow).toEqual([
-      "Write(/vault/Brain/inbox/**)",
-    ]);
+    expect(out.manifest.owned_allow).toEqual(["Write(/vault/Brain/inbox/**)"]);
   });
 });
 
@@ -164,26 +150,16 @@ describe("applyProtect claudecode", () => {
     const vault = mkVault();
     const r = applyProtect({ target: "claudecode", vault });
     expect(r.changed).toBe(true);
-    const settings = JSON.parse(
-      readFileSync(join(vault, ".claude", "settings.json"), "utf8"),
-    );
-    expect(settings.permissions.deny).toContain(
-      `Write(${vault}/Brain/preferences/**)`,
-    );
+    const settings = JSON.parse(readFileSync(join(vault, ".claude", "settings.json"), "utf8"));
+    expect(settings.permissions.deny).toContain(`Write(${vault}/Brain/preferences/**)`);
   });
 
   test("idempotent: second apply produces byte-identical settings", () => {
     const vault = mkVault();
     applyProtect({ target: "claudecode", vault });
-    const first = readFileSync(
-      join(vault, ".claude", "settings.json"),
-      "utf8",
-    );
+    const first = readFileSync(join(vault, ".claude", "settings.json"), "utf8");
     applyProtect({ target: "claudecode", vault });
-    const second = readFileSync(
-      join(vault, ".claude", "settings.json"),
-      "utf8",
-    );
+    const second = readFileSync(join(vault, ".claude", "settings.json"), "utf8");
     expect(second).toBe(first);
   });
 
@@ -192,27 +168,18 @@ describe("applyProtect claudecode", () => {
     mkdirSync(join(vault, ".claude"), { recursive: true });
     writeFileSync(
       join(vault, ".claude", "settings.json"),
-      JSON.stringify(
-        { permissions: { deny: ["Bash(rm -rf /)"], allow: [] } },
-        null,
-        2,
-      ) + "\n",
+      JSON.stringify({ permissions: { deny: ["Bash(rm -rf /)"], allow: [] } }, null, 2) + "\n",
     );
     applyProtect({ target: "claudecode", vault });
-    const settings = JSON.parse(
-      readFileSync(join(vault, ".claude", "settings.json"), "utf8"),
-    );
+    const settings = JSON.parse(readFileSync(join(vault, ".claude", "settings.json"), "utf8"));
     expect(settings.permissions.deny).toContain("Bash(rm -rf /)");
-    expect(settings.permissions.deny).toContain(
-      `Write(${vault}/Brain/preferences/**)`,
-    );
+    expect(settings.permissions.deny).toContain(`Write(${vault}/Brain/preferences/**)`);
   });
 
   test("apply against unbootstrapped vault throws", () => {
     const dir = mkdtempSync(join(tmpdir(), "osb-noinit-"));
     tmpRoots.push(dir);
-    expect(() => applyProtect({ target: "claudecode", vault: dir }))
-      .toThrow(BrainProtectError);
+    expect(() => applyProtect({ target: "claudecode", vault: dir })).toThrow(BrainProtectError);
   });
 });
 
@@ -220,20 +187,14 @@ describe("unprotect claudecode", () => {
   test("round-trip restores settings.json to pre-protect content", () => {
     const vault = mkVault();
     mkdirSync(join(vault, ".claude"), { recursive: true });
-    const userSettings = JSON.stringify(
-      { permissions: { deny: ["Bash(rm -rf /)"], allow: [] } },
-      null,
-      2,
-    ) + "\n";
+    const userSettings =
+      JSON.stringify({ permissions: { deny: ["Bash(rm -rf /)"], allow: [] } }, null, 2) + "\n";
     writeFileSync(join(vault, ".claude", "settings.json"), userSettings);
 
     applyProtect({ target: "claudecode", vault });
     unprotect({ target: "claudecode", vault });
 
-    const after = readFileSync(
-      join(vault, ".claude", "settings.json"),
-      "utf8",
-    );
+    const after = readFileSync(join(vault, ".claude", "settings.json"), "utf8");
     expect(after).toBe(userSettings);
   });
 
@@ -249,10 +210,7 @@ describe("applyProtect codex", () => {
     const vault = mkVault();
     const r = applyProtect({ target: "codex", vault, __homeOverride: home });
     expect(r.changed).toBe(true);
-    const config = readFileSync(
-      join(home, ".codex", "config.toml"),
-      "utf8",
-    );
+    const config = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     expect(config).toContain("# >>> open-second-brain managed >>>");
     expect(config).toContain("[permissions.osb_protected.filesystem]");
     expect(config).toContain(`"${vault}/Brain/preferences/**" = "none"`);
@@ -262,15 +220,9 @@ describe("applyProtect codex", () => {
     const home = mkHome();
     const vault = mkVault();
     applyProtect({ target: "codex", vault, __homeOverride: home });
-    const first = readFileSync(
-      join(home, ".codex", "config.toml"),
-      "utf8",
-    );
+    const first = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     applyProtect({ target: "codex", vault, __homeOverride: home });
-    const second = readFileSync(
-      join(home, ".codex", "config.toml"),
-      "utf8",
-    );
+    const second = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     expect(second).toBe(first);
   });
 
@@ -281,10 +233,7 @@ describe("applyProtect codex", () => {
     const userToml = '# user content\nmodel = "gpt-5.5"\n';
     writeFileSync(join(home, ".codex", "config.toml"), userToml);
     applyProtect({ target: "codex", vault, __homeOverride: home });
-    const after = readFileSync(
-      join(home, ".codex", "config.toml"),
-      "utf8",
-    );
+    const after = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     expect(after.startsWith(userToml)).toBe(true);
     expect(after).toContain("# >>> open-second-brain managed >>>");
   });
@@ -305,14 +254,13 @@ describe("applyProtect codex", () => {
     );
 
     applyProtect({ target: "codex", vault, __homeOverride: home });
-    const after = readFileSync(
-      join(home, ".codex", "config.toml"),
-      "utf8",
+    const after = readFileSync(join(home, ".codex", "config.toml"), "utf8");
+    expect(after.indexOf('default_permissions = "osb_protected"')).toBeLessThan(
+      after.indexOf('[plugins."open-second-brain@open-second-brain"]'),
     );
-    expect(after.indexOf('default_permissions = "osb_protected"'))
-      .toBeLessThan(after.indexOf('[plugins."open-second-brain@open-second-brain"]'));
-    expect(after.indexOf("[permissions.osb_protected.filesystem]"))
-      .toBeLessThan(after.indexOf('[plugins."open-second-brain@open-second-brain"]'));
+    expect(after.indexOf("[permissions.osb_protected.filesystem]")).toBeLessThan(
+      after.indexOf('[plugins."open-second-brain@open-second-brain"]'),
+    );
   });
 
   test("applying a second vault preserves the first vault's entries", () => {
@@ -322,10 +270,7 @@ describe("applyProtect codex", () => {
     applyProtect({ target: "codex", vault: vaultA, __homeOverride: home });
     applyProtect({ target: "codex", vault: vaultB, __homeOverride: home });
 
-    const config = readFileSync(
-      join(home, ".codex", "config.toml"),
-      "utf8",
-    );
+    const config = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     expect(config).toContain(`"${vaultA}/Brain/preferences/**" = "none"`);
     expect(config).toContain(`"${vaultB}/Brain/preferences/**" = "none"`);
   });
@@ -340,10 +285,7 @@ describe("unprotect codex", () => {
     writeFileSync(join(home, ".codex", "config.toml"), userToml);
     applyProtect({ target: "codex", vault, __homeOverride: home });
     unprotect({ target: "codex", vault, __homeOverride: home });
-    const after = readFileSync(
-      join(home, ".codex", "config.toml"),
-      "utf8",
-    );
+    const after = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     expect(after).toBe(userToml);
   });
 
@@ -355,10 +297,7 @@ describe("unprotect codex", () => {
     applyProtect({ target: "codex", vault: vaultB, __homeOverride: home });
 
     unprotect({ target: "codex", vault: vaultA, __homeOverride: home });
-    const after = readFileSync(
-      join(home, ".codex", "config.toml"),
-      "utf8",
-    );
+    const after = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     expect(after).not.toContain(`${vaultA}/Brain/preferences/**`);
     expect(after).toContain(`${vaultB}/Brain/preferences/**`);
     expect(after).toContain("# >>> open-second-brain managed >>>");
@@ -379,6 +318,6 @@ describe("printSnippet", () => {
   test("codex prints the fenced TOML block", () => {
     const out = printSnippet({ target: "codex", vault: "/v" });
     expect(out.body).toContain("# >>> open-second-brain managed >>>");
-    expect(out.body).toContain('[permissions.osb_protected.filesystem]');
+    expect(out.body).toContain("[permissions.osb_protected.filesystem]");
   });
 });

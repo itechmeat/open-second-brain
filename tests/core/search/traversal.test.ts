@@ -130,6 +130,6 @@ test("results stay sorted by score descending after expansion", () => {
     OPTS,
   );
   const scores = out.map((r) => r.score);
-  const sorted = [...scores].sort((a, b) => b - a);
+  const sorted = [...scores].toSorted((a, b) => b - a);
   expect(scores).toEqual(sorted);
 });

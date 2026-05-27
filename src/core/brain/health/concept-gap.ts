@@ -45,8 +45,7 @@ export function detectConceptGaps(
   for (const topic of coveredTopics) {
     for (const t of tokenise(topic.replace(/[-_]+/gu, " "))) covered.add(t);
   }
-  const isCovered = (term: string): boolean =>
-    term.split(/\s+/u).every((w) => covered.has(w));
+  const isCovered = (term: string): boolean => term.split(/\s+/u).every((w) => covered.has(w));
 
   const docFreq = new Map<string, number>();
   for (const principle of principles) {

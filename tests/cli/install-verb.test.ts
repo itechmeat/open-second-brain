@@ -21,14 +21,13 @@ beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "osb-install-verb-v-"));
   home = mkdtempSync(join(tmpdir(), "osb-install-verb-h-"));
   configPath = join(home, "config.yaml");
-  writeFileSync(
-    configPath,
-    `vault: "${vault}"\nagent_name: "claude-vps"\ntimezone: "UTC"\n`,
-  );
+  writeFileSync(configPath, `vault: "${vault}"\nagent_name: "claude-vps"\ntimezone: "UTC"\n`);
 });
 afterEach(() => {
   for (const p of [vault, home]) {
-    try { rmSync(p, { recursive: true, force: true }); } catch {}
+    try {
+      rmSync(p, { recursive: true, force: true });
+    } catch {}
   }
 });
 
@@ -80,10 +79,7 @@ describe("o2b install --target X (plan-only)", () => {
 
 describe("o2b install --target X --apply", () => {
   test("writes the cursor config file", async () => {
-    const r = await runCli(
-      ["install", "--target", "cursor", "--apply"],
-      { env: envBase() },
-    );
+    const r = await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
     expect(r.returncode).toBe(0);
     const cfgPath = join(home, ".cursor", "mcp.json");
     expect(existsSync(cfgPath)).toBe(true);
@@ -111,10 +107,9 @@ describe("o2b install --target X --apply", () => {
 describe("o2b install --target generic", () => {
   test("--out <path> writes the JSON payload to that path", async () => {
     const outPath = join(home, "snippet.json");
-    const r = await runCli(
-      ["install", "--target", "generic", "--apply", "--out", outPath],
-      { env: envBase() },
-    );
+    const r = await runCli(["install", "--target", "generic", "--apply", "--out", outPath], {
+      env: envBase(),
+    });
     expect(r.returncode).toBe(0);
     expect(existsSync(outPath)).toBe(true);
     const parsed = JSON.parse(readFileSync(outPath, "utf8"));

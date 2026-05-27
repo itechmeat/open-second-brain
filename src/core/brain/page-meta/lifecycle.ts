@@ -43,9 +43,7 @@ export function isPageLifecycle(value: unknown): value is PageLifecycle {
  * Unknown / absent values fall back to `stable` per the
  * backwards-compatibility contract.
  */
-export function readLifecycle(
-  meta: Readonly<Record<string, unknown>>,
-): PageLifecycle {
+export function readLifecycle(meta: Readonly<Record<string, unknown>>): PageLifecycle {
   const modern = meta["_lifecycle"];
   if (isPageLifecycle(modern)) return modern;
   const legacy = meta["lifecycle"];

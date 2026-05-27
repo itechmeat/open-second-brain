@@ -39,11 +39,7 @@ import { isoSecond } from "./time.ts";
 import { checkRolePermission } from "./trust/check-role-permission.ts";
 import { BRAIN_OPERATIONS, type BrainRole } from "./trust/role.ts";
 import { renderPrefLink } from "./wikilink.ts";
-import {
-  BRAIN_APPLY_RESULT,
-  BRAIN_LOG_EVENT_KIND,
-  type BrainApplyResult,
-} from "./types.ts";
+import { BRAIN_APPLY_RESULT, BRAIN_LOG_EVENT_KIND, type BrainApplyResult } from "./types.ts";
 
 const ARTIFACT_MAX_LEN = 512;
 const NOTE_MAX_LEN = 4096;
@@ -155,9 +151,7 @@ export function appendApplyEvidence(
     singleLine: true,
   });
   const note =
-    input.note !== undefined
-      ? sanitiseTextField(input.note, { maxLen: NOTE_MAX_LEN })
-      : undefined;
+    input.note !== undefined ? sanitiseTextField(input.note, { maxLen: NOTE_MAX_LEN }) : undefined;
   if (!artifact || !artifact.trim()) {
     throw new Error("apply-evidence missing field: artifact");
   }
@@ -218,4 +212,3 @@ export function appendApplyEvidence(
   const result: AppendLogEventResult = appendLogEvent(vault, entry);
   return { logged_at: timestamp, log_path: result.logPath };
 }
-

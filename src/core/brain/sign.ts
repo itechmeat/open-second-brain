@@ -24,9 +24,7 @@ import { parseWikilink } from "./wikilink.ts";
 export type ResolvedSign = BrainSignalSign | "unknown";
 
 /** Count positive vs negative signs in an iterable of polarities. */
-export function countSigns(
-  signs: Iterable<BrainSignalSign>,
-): { pos: number; neg: number } {
+export function countSigns(signs: Iterable<BrainSignalSign>): { pos: number; neg: number } {
   let pos = 0;
   let neg = 0;
   for (const s of signs) {

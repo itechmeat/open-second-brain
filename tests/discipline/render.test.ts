@@ -16,7 +16,12 @@ describe("renderReport", () => {
         total: 6,
       },
       activity: {
-        repo: [{ path: "/srv/projects/foo", git: { commits: 4, filesChanged: 27, insertions: 312, deletions: 148 } }],
+        repo: [
+          {
+            path: "/srv/projects/foo",
+            git: { commits: 4, filesChanged: 27, insertions: 312, deletions: 148 },
+          },
+        ],
         nonRepo: [],
         vaultDelta: { newSignals: 1, newPreferences: 0, newRetired: 0, total: 1 },
       },
@@ -38,7 +43,11 @@ describe("renderReport", () => {
       localDate: "2026-05-17",
       timezone: "UTC",
       status: "alert",
-      events: { byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } }, unknownAgents: [], total: 0 },
+      events: {
+        byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } },
+        unknownAgents: [],
+        total: 0,
+      },
       activity: {
         repo: [{ path: "/x", git: { commits: 3, filesChanged: 5, insertions: 10, deletions: 2 } }],
         nonRepo: [],
@@ -55,7 +64,11 @@ describe("renderReport", () => {
       localDate: "2026-05-17",
       timezone: "UTC",
       status: "alert",
-      events: { byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } }, unknownAgents: [], total: 0 },
+      events: {
+        byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } },
+        unknownAgents: [],
+        total: 0,
+      },
       activity: {
         repo: [{ path: "/x", git: { commits: 3, filesChanged: 5, insertions: 10, deletions: 2 } }],
         nonRepo: [],
@@ -79,15 +92,17 @@ describe("renderReport", () => {
       localDate: "2026-05-17",
       timezone: "UTC",
       status: "alert",
-      events: { byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } }, unknownAgents: [], total: 0 },
+      events: {
+        byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } },
+        unknownAgents: [],
+        total: 0,
+      },
       activity: {
         repo: [{ path: "/x", git: { commits: 1, filesChanged: 1, insertions: 1, deletions: 0 } }],
         nonRepo: [],
         vaultDelta: { newSignals: 0, newPreferences: 0, newRetired: 0, total: 0 },
         transcripts: {
-          byRuntime: [
-            { runtime: "claudecode", fileCount: 0, agentHint: "claude-vps-agent" },
-          ],
+          byRuntime: [{ runtime: "claudecode", fileCount: 0, agentHint: "claude-vps-agent" }],
           totalFiles: 0,
         },
       },

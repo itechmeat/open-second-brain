@@ -89,10 +89,9 @@ test("applyMigrations throws SCHEMA_MISMATCH if db is newer than binary", () => 
   const db = new Database(dbPath);
   applyMigrations(db);
   // Simulate a future version.
-  db.run(
-    "UPDATE index_state SET value = ? WHERE key = 'schema_version'",
-    [String(LATEST_SCHEMA_VERSION + 7)],
-  );
+  db.run("UPDATE index_state SET value = ? WHERE key = 'schema_version'", [
+    String(LATEST_SCHEMA_VERSION + 7),
+  ]);
 
   let err: SearchError | null = null;
   try {
@@ -127,7 +126,9 @@ test("ensureVecTable + dropVecTable round-trip", () => {
   expect(tables.has("chunk_vec")).toBe(true);
 
   // Insert a vector.
-  db.run("INSERT INTO chunk_vec(rowid, embedding) VALUES (1, ?)", [JSON.stringify([0.1, 0.2, 0.3, 0.4])]);
+  db.run("INSERT INTO chunk_vec(rowid, embedding) VALUES (1, ?)", [
+    JSON.stringify([0.1, 0.2, 0.3, 0.4]),
+  ]);
   const row = db.query<{ c: number }, []>("SELECT count(*) AS c FROM chunk_vec").get();
   expect(row?.c).toBe(1);
 

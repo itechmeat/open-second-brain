@@ -7,13 +7,7 @@
  * `--json` keys.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,11 +72,8 @@ describe("o2b status — semantic hint (human output)", () => {
 
   test("hint present when configured key is whitespace-only", async () => {
     writeCfg(
-      [
-        "vault: /tmp/x",
-        'search_semantic_enabled: "true"',
-        'embedding_api_key: "   "',
-      ].join("\n") + "\n",
+      ["vault: /tmp/x", 'search_semantic_enabled: "true"', 'embedding_api_key: "   "'].join("\n") +
+        "\n",
     );
     const r = await runCli(["status", "--config", cfgPath], { env: ENV_CLEAN });
     expect(r.returncode).toBe(0);
@@ -113,11 +104,9 @@ describe("o2b status — semantic fields (--json)", () => {
 
   test("--json semantic_hint is null when fully configured", async () => {
     writeCfg(
-      [
-        "vault: /tmp/x",
-        'search_semantic_enabled: "true"',
-        'embedding_api_key: "sk-test"',
-      ].join("\n") + "\n",
+      ["vault: /tmp/x", 'search_semantic_enabled: "true"', 'embedding_api_key: "sk-test"'].join(
+        "\n",
+      ) + "\n",
     );
     const r = await runCli(["status", "--config", cfgPath, "--json"], {
       env: ENV_CLEAN,

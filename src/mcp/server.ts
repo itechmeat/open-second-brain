@@ -17,12 +17,14 @@ import {
   SERVER_NAME,
   SERVER_VERSION,
 } from "./protocol.ts";
+import { listResources, listResourceTemplates, readResource } from "./resources.ts";
 import {
-  listResources,
-  listResourceTemplates,
-  readResource,
-} from "./resources.ts";
-import { buildToolTable, findTool, type ServerContext, type ToolDefinition, type ToolScope } from "./tools.ts";
+  buildToolTable,
+  findTool,
+  type ServerContext,
+  type ToolDefinition,
+  type ToolScope,
+} from "./tools.ts";
 
 export interface MCPServerOptions {
   readonly vault: string;
@@ -100,11 +102,7 @@ export class MCPServer {
     const isNotification = !("id" in request);
     if (!isNotification) {
       const idType = typeof request.id;
-      if (
-        idType !== "string" &&
-        idType !== "number" &&
-        request.id !== null
-      ) {
+      if (idType !== "string" && idType !== "number" && request.id !== null) {
         return errorResponse(null, INVALID_REQUEST, "id must be string, number, or null");
       }
     }
@@ -232,7 +230,7 @@ function toolError(message: string): Record<string, unknown> {
 
 function sortedReplacer(_key: string, value: unknown): unknown {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+    const entries = Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
     return Object.fromEntries(entries);
   }
   return value;

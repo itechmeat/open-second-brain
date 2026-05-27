@@ -5,6 +5,7 @@ import { Store } from "../../../src/core/search/store.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 
 let vault: string;
 let dbPath: string;
@@ -43,6 +44,7 @@ function semanticConfig(model = "fake-model", dim = 4) {
 }
 
 test("index --embeddings populates chunk_vec for new chunks", async () => {
+  if (!sqliteVecLoadable()) return;
   writeMd(vault, "a.md", "# A\n\nFirst note about something.");
   writeMd(vault, "b.md", "# B\n\nSecond note discussing things.");
   const cfg = semanticConfig();
@@ -57,6 +59,7 @@ test("index --embeddings populates chunk_vec for new chunks", async () => {
 });
 
 test("unchanged files do NOT trigger re-embedding on the next run", async () => {
+  if (!sqliteVecLoadable()) return;
   writeMd(vault, "a.md", "# A\n\nHello.");
   const cfg = semanticConfig();
   await indexVault(cfg, { embeddings: true });
@@ -68,12 +71,17 @@ test("unchanged files do NOT trigger re-embedding on the next run", async () => 
 });
 
 test("changing the embedding model drops embeddings and the next index repopulates", async () => {
+  if (!sqliteVecLoadable()) return;
   writeMd(vault, "a.md", "# A\n\nHello.");
-  const first = await indexVault(semanticConfig("modelA", 4), { embeddings: true });
+  const first = await indexVault(semanticConfig("modelA", 4), {
+    embeddings: true,
+  });
   expect(first.embeddingsComputed).toBeGreaterThan(0);
 
   const before = server.callCount();
-  const second = await indexVault(semanticConfig("modelB", 4), { embeddings: true });
+  const second = await indexVault(semanticConfig("modelB", 4), {
+    embeddings: true,
+  });
   // All chunks re-embedded under the new model.
   expect(second.embeddingsComputed).toBeGreaterThan(0);
   expect(server.callCount()).toBeGreaterThan(before);
@@ -129,7 +137,9 @@ test("onFile callback fires for every classification", async () => {
   writeMd(vault, "new.md", "# C");
 
   const events: Array<{ kind: string; path: string }> = [];
-  await indexVault(cfg, { onFile: (e) => events.push({ kind: e.kind, path: e.path }) });
+  await indexVault(cfg, {
+    onFile: (e) => events.push({ kind: e.kind, path: e.path }),
+  });
 
   const kinds = new Set(events.map((e) => e.kind));
   expect(kinds.has("added")).toBe(true);

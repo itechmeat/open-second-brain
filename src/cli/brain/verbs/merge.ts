@@ -10,7 +10,8 @@ export async function cmdBrainMerge(argv: string[]): Promise<number> {
     agent: { type: "string" },
     json: { type: "boolean" },
   });
-  if (positional.length !== 2) return fail("brain merge requires exactly two positional ids: <keep-pref-id> <drop-pref-id>");
+  if (positional.length !== 2)
+    return fail("brain merge requires exactly two positional ids: <keep-pref-id> <drop-pref-id>");
   const [keepId, dropId] = positional as [string, string];
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
@@ -21,7 +22,11 @@ export async function cmdBrainMerge(argv: string[]): Promise<number> {
 
   let plan;
   try {
-    plan = mergePreferences(vault, keepId, dropId, { now: new Date(), agentName: agent, dryRun: true });
+    plan = mergePreferences(vault, keepId, dropId, {
+      now: new Date(),
+      agentName: agent,
+      dryRun: true,
+    });
   } catch (exc) {
     if (exc instanceof BrainMergeError) return fail(`brain merge: ${exc.message}`);
     return fail(`brain merge: failed to plan merge: ${(exc as Error).message ?? exc}`);
@@ -39,27 +44,44 @@ export async function cmdBrainMerge(argv: string[]): Promise<number> {
   ];
 
   if (dryRun) {
-    if (wantJson) { okJson({ dry_run: true, plan }); }
-    else { for (const line of planLines) ok(line); ok("dry-run; no changes written"); }
+    if (wantJson) {
+      okJson({ dry_run: true, plan });
+    } else {
+      for (const line of planLines) ok(line);
+      ok("dry-run; no changes written");
+    }
     return 0;
   }
 
   if (!force) {
-    if (wantJson) return fail("brain merge: --json without --force is not supported (interactive prompt cannot render)");
-    if (!process.stdin.isTTY) return fail("brain merge: --force required when stdin is not a TTY (cannot prompt for confirmation)");
+    if (wantJson)
+      return fail(
+        "brain merge: --json without --force is not supported (interactive prompt cannot render)",
+      );
+    if (!process.stdin.isTTY)
+      return fail(
+        "brain merge: --force required when stdin is not a TTY (cannot prompt for confirmation)",
+      );
     for (const line of planLines) process.stderr.write(line + "\n");
     process.stderr.write("Proceed? [y/N] ");
     const ans = (await readSingleLine()).toLowerCase();
-    if (ans !== "y" && ans !== "yes") { ok("merge cancelled"); return 0; }
+    if (ans !== "y" && ans !== "yes") {
+      ok("merge cancelled");
+      return 0;
+    }
   }
 
-  try { mergePreferences(vault, keepId, dropId, { now: new Date(), agentName: agent }); }
-  catch (exc) {
+  try {
+    mergePreferences(vault, keepId, dropId, { now: new Date(), agentName: agent });
+  } catch (exc) {
     if (exc instanceof BrainMergeError) return fail(`brain merge: ${exc.message}`);
     return fail(`brain merge: failed to commit merge: ${(exc as Error).message ?? exc}`);
   }
 
-  if (wantJson) { okJson({ merged: true, plan }); }
-  else { ok(`merged: ${plan.drop_id} → ${plan.keep_id} (retired as merged-into)`); }
+  if (wantJson) {
+    okJson({ merged: true, plan });
+  } else {
+    ok(`merged: ${plan.drop_id} → ${plan.keep_id} (retired as merged-into)`);
+  }
   return 0;
 }

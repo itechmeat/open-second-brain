@@ -8,13 +8,7 @@
  * markdown / JSON output channels.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,12 +44,18 @@ async function seedDream(): Promise<string> {
   for (const slug of ["a", "b", "c"]) {
     const r = await runCli(
       [
-        "brain", "feedback",
-        "--vault", vault,
-        "--topic", "diff-demo",
-        "--signal", "positive",
-        "--principle", "Take care",
-        "--slug", `diff-demo-${slug}`,
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "diff-demo",
+        "--signal",
+        "positive",
+        "--principle",
+        "Take care",
+        "--slug",
+        `diff-demo-${slug}`,
       ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
@@ -65,10 +65,9 @@ async function seedDream(): Promise<string> {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },
   });
   expect(d.returncode).toBe(0);
-  const list = await runCli(
-    ["brain", "rollback", "--list", "--vault", vault, "--json"],
-    { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-  );
+  const list = await runCli(["brain", "rollback", "--list", "--vault", vault, "--json"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
   expect(list.returncode).toBe(0);
   const snaps = JSON.parse(list.stdout) as ReadonlyArray<{ run_id: string }>;
   expect(snaps.length).toBeGreaterThan(0);
@@ -104,27 +103,24 @@ pinned: false
 `,
       "utf8",
     );
-    const r = await runCli(
-      ["brain", "rollback", runId, "--dry-run", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "rollback", runId, "--dry-run", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toMatch(/^# Brain snapshot diff$/m);
     expect(r.stdout).toMatch(/^- A: live$/m);
     expect(r.stdout).toContain(`- B: ${runId}`);
     expect(r.stdout).toMatch(/^- - \[\[pref-extra\|Added after snapshot\]\] \(removed\)$/m);
     // Live tree must NOT have been touched.
-    expect(existsSync(join(vault, "Brain", "preferences", "pref-extra.md")))
-      .toBe(true);
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-extra.md"))).toBe(true);
   });
 
   test("--dry-run + --yes is an error", async () => {
     await bootstrap();
     const runId = await seedDream();
-    const r = await runCli(
-      ["brain", "rollback", runId, "--dry-run", "--yes", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "rollback", runId, "--dry-run", "--yes", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(1);
     expect(r.stderr).toMatch(/mutually exclusive/);
   });
@@ -132,10 +128,9 @@ pinned: false
   test("--dry-run --json returns parseable JSON", async () => {
     await bootstrap();
     const runId = await seedDream();
-    const r = await runCli(
-      ["brain", "rollback", runId, "--dry-run", "--vault", vault, "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "rollback", runId, "--dry-run", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout);
     expect(payload).toHaveProperty("added");
@@ -145,10 +140,9 @@ pinned: false
 
   test("unknown run_id exits 2", async () => {
     await bootstrap();
-    const r = await runCli(
-      ["brain", "rollback", "no-such-run", "--dry-run", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "rollback", "no-such-run", "--dry-run", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(2);
   });
 });
@@ -181,10 +175,9 @@ pinned: false
 `,
       "utf8",
     );
-    const r = await runCli(
-      ["brain", "snapshot", "diff", runId, "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "snapshot", "diff", runId, "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toMatch(/^- B: live$/m);
     expect(r.stdout).toMatch(/\[\[pref-added\|Added principle\]\]/);
@@ -196,12 +189,18 @@ pinned: false
     // Add evidence and run dream again so a second snapshot is created.
     const fb = await runCli(
       [
-        "brain", "feedback",
-        "--vault", vault,
-        "--topic", "again",
-        "--signal", "positive",
-        "--principle", "Be careful",
-        "--slug", "again-1",
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "again",
+        "--signal",
+        "positive",
+        "--principle",
+        "Be careful",
+        "--slug",
+        "again-1",
       ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
@@ -209,12 +208,18 @@ pinned: false
     for (const s of ["2", "3"]) {
       const seed = await runCli(
         [
-          "brain", "feedback",
-          "--vault", vault,
-          "--topic", "again",
-          "--signal", "positive",
-          "--principle", "Be careful",
-          "--slug", `again-${s}`,
+          "brain",
+          "feedback",
+          "--vault",
+          vault,
+          "--topic",
+          "again",
+          "--signal",
+          "positive",
+          "--principle",
+          "Be careful",
+          "--slug",
+          `again-${s}`,
         ],
         { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
       );
@@ -224,17 +229,15 @@ pinned: false
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     expect(d2.returncode).toBe(0);
-    const list = await runCli(
-      ["brain", "rollback", "--list", "--vault", vault, "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const list = await runCli(["brain", "rollback", "--list", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     const snaps = JSON.parse(list.stdout) as ReadonlyArray<{ run_id: string }>;
     expect(snaps.length).toBeGreaterThanOrEqual(2);
     const second = snaps.find((s) => s.run_id !== first)!.run_id;
-    const r = await runCli(
-      ["brain", "snapshot", "diff", first, second, "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "snapshot", "diff", first, second, "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain(`- A: ${first}`);
     expect(r.stdout).toContain(`- B: ${second}`);
@@ -243,10 +246,9 @@ pinned: false
   test("--json returns parseable JSON", async () => {
     await bootstrap();
     const runId = await seedDream();
-    const r = await runCli(
-      ["brain", "snapshot", "diff", runId, "--vault", vault, "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "snapshot", "diff", runId, "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed).toHaveProperty("added");
@@ -254,19 +256,17 @@ pinned: false
 
   test("missing positional arg exits 1", async () => {
     await bootstrap();
-    const r = await runCli(
-      ["brain", "snapshot", "diff", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "snapshot", "diff", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(1);
   });
 
   test("unknown run_id exits 2", async () => {
     await bootstrap();
-    const r = await runCli(
-      ["brain", "snapshot", "diff", "no-such-run", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "snapshot", "diff", "no-such-run", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(2);
   });
 
@@ -283,10 +283,9 @@ pinned: false
 
   test("unknown sub-verb exits 2", async () => {
     await bootstrap();
-    const r = await runCli(
-      ["brain", "snapshot", "no-such-verb", "--vault", vault],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
+    const r = await runCli(["brain", "snapshot", "no-such-verb", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(2);
   });
 });

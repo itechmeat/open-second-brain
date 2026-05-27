@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -111,11 +105,7 @@ tags: [brain, brain/log]
         payload: { topic: "also-ok" },
       }),
     ].join("\n");
-    writeFileSync(
-      logJsonlPath(tmp, "2026-05-19"),
-      lines + "\n",
-      "utf8",
-    );
+    writeFileSync(logJsonlPath(tmp, "2026-05-19"), lines + "\n", "utf8");
 
     const res = readLogDay(tmp, "2026-05-19");
     expect(res.source).toBe("jsonl");
@@ -140,11 +130,7 @@ tags: [brain, brain/log]
         payload: { topic: "ok" },
       }),
     ].join("\n");
-    writeFileSync(
-      logJsonlPath(tmp, "2026-05-19"),
-      lines + "\n",
-      "utf8",
-    );
+    writeFileSync(logJsonlPath(tmp, "2026-05-19"), lines + "\n", "utf8");
 
     const res = readLogDay(tmp, "2026-05-19");
     expect(res.entries).toHaveLength(1);
@@ -168,11 +154,7 @@ tags: [brain, brain/log]
         payload: { topic: "ok" },
       }),
     ].join("\n");
-    writeFileSync(
-      logJsonlPath(tmp, "2026-05-19"),
-      lines + "\n",
-      "utf8",
-    );
+    writeFileSync(logJsonlPath(tmp, "2026-05-19"), lines + "\n", "utf8");
 
     const res = readLogDay(tmp, "2026-05-19");
     expect(res.entries).toHaveLength(1);
@@ -194,11 +176,7 @@ tags: [brain, brain/log]
       "",
       "",
     ].join("\n");
-    writeFileSync(
-      logJsonlPath(tmp, "2026-05-19"),
-      lines,
-      "utf8",
-    );
+    writeFileSync(logJsonlPath(tmp, "2026-05-19"), lines, "utf8");
 
     const res = readLogDay(tmp, "2026-05-19");
     expect(res.entries).toHaveLength(1);
@@ -214,8 +192,6 @@ describe("readLogDay — invariants", () => {
   test("does not create files on a read", () => {
     readLogDay(tmp, "2026-05-19");
     expect(existsSync(logPath(tmp, "2026-05-19"))).toBe(false);
-    expect(
-      existsSync(logJsonlPath(tmp, "2026-05-19")),
-    ).toBe(false);
+    expect(existsSync(logJsonlPath(tmp, "2026-05-19"))).toBe(false);
   });
 });

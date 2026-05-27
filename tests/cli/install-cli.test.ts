@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,17 +70,15 @@ describe("uninstallCli", () => {
     symlinkSync(elsewhere, join(tmp, "o2b"));
     const result = uninstallCli(tmp);
     expect(result.errors).toEqual([]);
-    expect(result.outcomes.some(([n, msg]) => n === "o2b" && msg.includes("outside this repo"))).toBe(
-      true,
-    );
+    expect(
+      result.outcomes.some(([n, msg]) => n === "o2b" && msg.includes("outside this repo")),
+    ).toBe(true);
     expect(existsSync(join(tmp, "o2b"))).toBe(true);
   });
 
   test("skips a link that doesn't exist", () => {
     const result = uninstallCli(tmp);
     expect(result.errors).toEqual([]);
-    expect(
-      result.outcomes.every(([_, msg]) => msg.startsWith("skipped:")),
-    ).toBe(true);
+    expect(result.outcomes.every(([_, msg]) => msg.startsWith("skipped:"))).toBe(true);
   });
 });

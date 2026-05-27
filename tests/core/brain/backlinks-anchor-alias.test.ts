@@ -13,10 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  buildBacklinkIndex,
-  type BacklinkRef,
-} from "../../../src/core/brain/backlinks.ts";
+import { buildBacklinkIndex, type BacklinkRef } from "../../../src/core/brain/backlinks.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 
 describe("BacklinkRef atom shape (additive)", () => {
@@ -138,7 +135,7 @@ describe("buildBacklinkIndex - anchor / block populated from body wikilinks", ()
     const idx = buildBacklinkIndex(vault);
     const refs = idx.get("bar") ?? [];
     expect(refs.length).toBe(2);
-    const anchors = refs.map((r) => r.targetAnchor).sort();
+    const anchors = refs.map((r) => r.targetAnchor).toSorted();
     expect(anchors).toEqual(["Alpha", "Beta"]);
   });
 });

@@ -25,15 +25,26 @@ async function pinOrUnpin(argv: string[], value: boolean): Promise<number> {
     const slug = id.replace(/^pref-/, "");
     const label = value ? "pinned" : "unpinned";
     const idemLabel = value ? "already pinned" : "already unpinned";
-    if (flags["json"]) { okJson({ id: `pref-${slug}`, changed: out.changed, pinned: value }); }
-    else if (out.changed) { ok(`${label}: pref-${slug}`); }
-    else { ok(`${idemLabel}: pref-${slug}`); }
+    if (flags["json"]) {
+      okJson({ id: `pref-${slug}`, changed: out.changed, pinned: value });
+    } else if (out.changed) {
+      ok(`${label}: pref-${slug}`);
+    } else {
+      ok(`${idemLabel}: pref-${slug}`);
+    }
     return 0;
   } catch (exc) {
-    if (exc instanceof BrainPreferenceNotFoundError) { process.stderr.write(`${exc.message}\n`); return 2; }
+    if (exc instanceof BrainPreferenceNotFoundError) {
+      process.stderr.write(`${exc.message}\n`);
+      return 2;
+    }
     return fail(`${value ? "pin" : "unpin"} failed: ${(exc as Error).message ?? exc}`);
   }
 }
 
-export async function cmdBrainPin(argv: string[]): Promise<number> { return pinOrUnpin(argv, true); }
-export async function cmdBrainUnpin(argv: string[]): Promise<number> { return pinOrUnpin(argv, false); }
+export async function cmdBrainPin(argv: string[]): Promise<number> {
+  return pinOrUnpin(argv, true);
+}
+export async function cmdBrainUnpin(argv: string[]): Promise<number> {
+  return pinOrUnpin(argv, false);
+}

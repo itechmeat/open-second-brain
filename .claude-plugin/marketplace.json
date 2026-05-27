@@ -14,14 +14,7 @@
       "source": "./",
       "description": "Plugin-first second brain for AI agents and humans (Obsidian-compatible Markdown vaults).",
       "category": "knowledge",
-      "tags": [
-        "second-brain",
-        "obsidian",
-        "agents",
-        "skills",
-        "event-log",
-        "mcp"
-      ]
+      "tags": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"]
     }
   ]
 }

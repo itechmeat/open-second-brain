@@ -27,11 +27,7 @@ const DERIVED_KEYS = new Set([
   "confirmed_at",
 ]);
 
-function writePref(
-  slug: string,
-  frontmatter: Record<string, string>,
-  body = "",
-): void {
+function writePref(slug: string, frontmatter: Record<string, string>, body = ""): void {
   const lines = ["---"];
   for (const [k, v] of Object.entries(frontmatter)) {
     const key = DERIVED_KEYS.has(k) ? `_${k}` : k;
@@ -120,10 +116,9 @@ describe("o2b brain synthesise", () => {
       },
       "I mention Subject Line in prose.",
     );
-    const r = await runCli(
-      ["brain", "synthesise", "pref-tgt", "--include-unlinked", "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
-    );
+    const r = await runCli(["brain", "synthesise", "pref-tgt", "--include-unlinked", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout) as {
       unlinked_mentions: Array<{ source: string }>;

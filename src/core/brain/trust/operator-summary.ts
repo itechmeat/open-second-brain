@@ -23,14 +23,10 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import type { DoctorIssue } from "../doctor.ts";
 import { runDoctor, type RunDoctorResult, type TrustVerdict } from "../doctor.ts";
 import type { DreamRunSummary } from "../dream.ts";
-import {
-  collectMaintenanceActions,
-} from "../maintenance/collect.ts";
+import { collectMaintenanceActions } from "../maintenance/collect.ts";
 import type { ActionItem } from "../maintenance/action-scorer.ts";
 import { brainDirs } from "../paths.ts";
-import {
-  BRAIN_GUARDRAIL_DEFAULTS,
-} from "../policy.ts";
+import { BRAIN_GUARDRAIL_DEFAULTS } from "../policy.ts";
 import type { ResolvedBrainGuardrailConfig } from "../types.ts";
 import {
   computeVerificationDelta,

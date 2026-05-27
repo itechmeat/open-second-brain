@@ -5,10 +5,7 @@ import { join } from "node:path";
 
 import { isPinned, setPinned } from "../../src/core/brain/pin.ts";
 import { parseLogDay } from "../../src/core/brain/log.ts";
-import {
-  parsePreference,
-  writePreference,
-} from "../../src/core/brain/preference.ts";
+import { parsePreference, writePreference } from "../../src/core/brain/preference.ts";
 import { BrainPreferenceNotFoundError } from "../../src/core/brain/apply-evidence.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
@@ -141,9 +138,7 @@ describe("setPinned — body preservation", () => {
 
 describe("setPinned — error paths", () => {
   test("missing preference throws BrainPreferenceNotFoundError", () => {
-    expect(() => setPinned(vault, "does-not-exist", true)).toThrow(
-      BrainPreferenceNotFoundError,
-    );
+    expect(() => setPinned(vault, "does-not-exist", true)).toThrow(BrainPreferenceNotFoundError);
   });
 
   test("empty pref_id throws", () => {
@@ -178,9 +173,7 @@ describe("isPinned — accessor", () => {
 
   test("returns true when frontmatter explicitly sets pinned: true", () => {
     makePref("explicit-pinned", true);
-    const parsed = parsePreference(
-      `${vault}/Brain/preferences/pref-explicit-pinned.md`,
-    );
+    const parsed = parsePreference(`${vault}/Brain/preferences/pref-explicit-pinned.md`);
     expect(isPinned(parsed)).toBe(true);
   });
 });

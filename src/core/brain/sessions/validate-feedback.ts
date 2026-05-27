@@ -69,10 +69,7 @@ export function validateBrainFeedbackInput(input: unknown): ValidationResult {
   if (signalRaw === null) {
     return { ok: false, reason: "brain_feedback missing required field: signal" };
   }
-  if (
-    signalRaw !== BRAIN_SIGNAL_SIGN.positive &&
-    signalRaw !== BRAIN_SIGNAL_SIGN.negative
-  ) {
+  if (signalRaw !== BRAIN_SIGNAL_SIGN.positive && signalRaw !== BRAIN_SIGNAL_SIGN.negative) {
     return {
       ok: false,
       reason: `brain_feedback field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(signalRaw)}`,

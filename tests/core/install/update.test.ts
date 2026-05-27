@@ -26,8 +26,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(vault, { recursive: true, force: true }); } catch {}
-  try { rmSync(home, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(vault, { recursive: true, force: true });
+  } catch {}
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {}
 });
 
 function makeEnv(): InstallEnv {

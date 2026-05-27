@@ -19,9 +19,7 @@ export async function cmdConsumePaymentRequest(argv: string[]): Promise<number> 
       receiptPath: String(flags["receipt"]),
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to consume request: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to consume request: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
   if (flags["json"]) {

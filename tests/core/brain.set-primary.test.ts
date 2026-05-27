@@ -1,17 +1,5 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,8 +32,7 @@ afterEach(() => {
 
 function readPrimary(): string | null {
   const text = readFileSync(brainConfigPath(vault), "utf8");
-  return validateBrainConfig(parseBrainYaml(text), brainConfigPath(vault))
-    .primary_agent;
+  return validateBrainConfig(parseBrainYaml(text), brainConfigPath(vault)).primary_agent;
 }
 
 describe("setPrimaryAgent — happy path", () => {
@@ -55,9 +42,7 @@ describe("setPrimaryAgent — happy path", () => {
     expect(r.next).toBe("hermes-vps");
     expect(r.changed).toBe(true);
     expect(readPrimary()).toBe("hermes-vps");
-    expect(readFileSync(brainConfigPath(vault), "utf8")).toMatch(
-      /^primary_agent: "hermes-vps"$/m,
-    );
+    expect(readFileSync(brainConfigPath(vault), "utf8")).toMatch(/^primary_agent: "hermes-vps"$/m);
   });
 
   test("quotes values so inline-comment text round-trips", () => {
@@ -104,8 +89,10 @@ describe("setPrimaryAgent — happy path", () => {
   test("preserves neighbouring blocks (dream/retire/confidence/snapshots)", () => {
     // Custom edit to a different block, then set primary.
     const cfgPath = brainConfigPath(vault);
-    const original = readFileSync(cfgPath, "utf8")
-      .replace(/^  candidate_threshold: 3$/m, "  candidate_threshold: 5");
+    const original = readFileSync(cfgPath, "utf8").replace(
+      /^  candidate_threshold: 3$/m,
+      "  candidate_threshold: 5",
+    );
     writeFileSync(cfgPath, original, "utf8");
 
     setPrimaryAgent(vault, "hermes-vps");
@@ -130,9 +117,7 @@ describe("setPrimaryAgent — error cases", () => {
   });
 
   test("line breaks are rejected rather than written into YAML", () => {
-    expect(() => setPrimaryAgent(vault, "agent\nsnapshots:")).toThrow(
-      /disallowed character/,
-    );
+    expect(() => setPrimaryAgent(vault, "agent\nsnapshots:")).toThrow(/disallowed character/);
   });
 
   test("rewritten file still validates against the schema", () => {
@@ -159,8 +144,6 @@ describe("setPrimaryAgent — missing primary_agent line", () => {
     setPrimaryAgent(vault, "hermes-vps");
     const text = readFileSync(cfgPath, "utf8");
     expect(text).toMatch(/^primary_agent: "hermes-vps"$/m);
-    expect(text.indexOf("schema_version:")).toBeLessThan(
-      text.indexOf("primary_agent:"),
-    );
+    expect(text.indexOf("schema_version:")).toBeLessThan(text.indexOf("primary_agent:"));
   });
 });

@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -32,7 +26,12 @@ function writePref(
   fields: { topic: string; principle: string; created_at?: string; merged_into?: string },
 ): string {
   const path = join(vault, "Brain", "preferences", `pref-${slug}.md`);
-  const lines = ["---", `id: pref-${slug}`, `topic: ${fields.topic}`, `principle: ${fields.principle}`];
+  const lines = [
+    "---",
+    `id: pref-${slug}`,
+    `topic: ${fields.topic}`,
+    `principle: ${fields.principle}`,
+  ];
   if (fields.created_at) lines.push(`created_at: ${fields.created_at}`);
   if (fields.merged_into) lines.push(`merged_into: ${fields.merged_into}`);
   lines.push("---", "");
@@ -91,10 +90,7 @@ describe("findDuplicateCandidates", () => {
     writePref("c", { topic: "x", principle: "alpha" });
     const report = findDuplicateCandidates(vault);
     expect(report.candidates.length).toBe(1);
-    expect(report.candidates[0]!.pages.map((p) => p.id).sort()).toEqual([
-      "pref-a",
-      "pref-c",
-    ]);
+    expect(report.candidates[0]!.pages.map((p) => p.id).toSorted()).toEqual(["pref-a", "pref-c"]);
   });
 });
 
@@ -109,10 +105,7 @@ describe("patchWikilinks", () => {
 
   test("rewrites aliased and anchored wikilinks", () => {
     const log = join(vault, "Brain", "log", "2026-05-25.md");
-    writeFileSync(
-      log,
-      "[[pref-old|the rule]] and [[pref-old#section]] and [[pref-old]]\n",
-    );
+    writeFileSync(log, "[[pref-old|the rule]] and [[pref-old#section]] and [[pref-old]]\n");
     const touched = patchWikilinks(vault, "pref-old", "pref-new");
     expect(touched).toBe(1);
     const content = readFileSync(log, "utf8");
@@ -143,10 +136,7 @@ describe("patchWikilinks", () => {
     // the patcher's regex defends this; pin it explicitly so a
     // future regex rewrite cannot regress the case.
     const log = join(vault, "Brain", "log", "2026-05-25.md");
-    writeFileSync(
-      log,
-      "matches [[pref-old]] and skips [[pref-old-extra]] and [[pref-older]]\n",
-    );
+    writeFileSync(log, "matches [[pref-old]] and skips [[pref-old-extra]] and [[pref-older]]\n");
     const touched = patchWikilinks(vault, "pref-old", "pref-new");
     expect(touched).toBe(1);
     const content = readFileSync(log, "utf8");

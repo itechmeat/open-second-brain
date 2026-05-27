@@ -75,9 +75,7 @@ export function buildReviewCandidates(
     would_create: Object.freeze([...summary.new_unconfirmed]),
     would_promote: Object.freeze([...summary.confirmed]),
     would_retire: Object.freeze(
-      summary.retired.map((r) =>
-        Object.freeze({ id: r.id, reason: r.reason }),
-      ),
+      summary.retired.map((r) => Object.freeze({ id: r.id, reason: r.reason })),
     ),
     would_supersede: Object.freeze(
       summary.retired

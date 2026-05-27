@@ -6,10 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  computeContentHash,
-  verifyContentHash,
-} from "../../../src/core/brain/content-hash.ts";
+import { computeContentHash, verifyContentHash } from "../../../src/core/brain/content-hash.ts";
 
 describe("computeContentHash", () => {
   test("returns a 64-char lowercase hex sha256 digest", () => {
@@ -74,10 +71,9 @@ describe("verifyContentHash", () => {
       content_hash: "0".repeat(64),
     });
     expect(result.ok).toBe(false);
-    expect(result.expected).toBe(computeContentHash(
-      "altered principle after a hand edit",
-      "coding",
-    ));
+    expect(result.expected).toBe(
+      computeContentHash("altered principle after a hand edit", "coding"),
+    );
     expect(result.observed).toBe("0".repeat(64));
   });
 

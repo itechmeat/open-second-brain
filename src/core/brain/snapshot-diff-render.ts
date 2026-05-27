@@ -24,15 +24,14 @@ const SECTION_ORDER: ReadonlyArray<BrainTreeEntryKind> = Object.freeze([
   "other",
 ]);
 
-const SECTION_TITLE: Readonly<Record<BrainTreeEntryKind, string>> =
-  Object.freeze({
-    preference: "Preferences",
-    retired: "Retired",
-    signal: "Signals",
-    log: "Logs",
-    config: "Config",
-    other: "Other",
-  });
+const SECTION_TITLE: Readonly<Record<BrainTreeEntryKind, string>> = Object.freeze({
+  preference: "Preferences",
+  retired: "Retired",
+  signal: "Signals",
+  log: "Logs",
+  config: "Config",
+  other: "Other",
+});
 
 export interface RenderDiffMarkdownOptions {
   /** Display label for the "A" side (typically a run id). */
@@ -85,10 +84,7 @@ export function renderDiffJson(diff: BrainTreeDiff): BrainTreeDiff {
 
 // ----- Internal helpers ----------------------------------------------------
 
-function renderSection(
-  diff: BrainTreeDiff,
-  kind: BrainTreeEntryKind,
-): string[] {
+function renderSection(diff: BrainTreeDiff, kind: BrainTreeEntryKind): string[] {
   const out: string[] = [];
   for (const entry of diff.added.filter((e) => e.kind === kind)) {
     out.push(`- + ${renderEntryRef(entry)} (added)`);
@@ -103,10 +99,7 @@ function renderSection(
 }
 
 function renderEntryRef(entry: BrainTreeEntry): string {
-  if (
-    (entry.kind === "preference" || entry.kind === "retired")
-    && entry.id !== null
-  ) {
+  if ((entry.kind === "preference" || entry.kind === "retired") && entry.id !== null) {
     return renderPrefLink({ id: entry.id, principle: entry.principle });
   }
   if (entry.id !== null) {
