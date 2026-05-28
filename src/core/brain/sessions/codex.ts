@@ -107,6 +107,7 @@ function buildFunctionCallTurn(
 
 export const codexAdapter: SessionAdapter = {
   id: "codex",
+  defaultAgent: "codex",
   detect(firstLine: string): boolean {
     let obj: unknown;
     try {

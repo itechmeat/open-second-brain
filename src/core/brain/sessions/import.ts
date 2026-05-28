@@ -258,16 +258,7 @@ export async function importSession(
  */
 function agentLabelForTurn(turn: SessionTurn, adapter: SessionAdapterId, fallback: string): string {
   void turn; // reserved for future per-turn role-aware fallback
-  switch (adapter) {
-    case "claude":
-      return "claude";
-    case "codex":
-      return "codex";
-    case "hermes":
-      return "hermes";
-    default:
-      return fallback;
-  }
+  return getAdapter(adapter).defaultAgent.trim() || fallback;
 }
 
 export async function importSessionPath(

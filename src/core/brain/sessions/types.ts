@@ -38,6 +38,8 @@ export interface SessionTurn {
 
 export interface SessionAdapter {
   readonly id: SessionAdapterId;
+  /** Default `agent` label stamped on imported signals for this runtime. */
+  readonly defaultAgent: string;
   /**
    * Match the first line of the session file. Adapters identify by
    * structural fields (`"originator":"codex_exec"`, `"role":"session_meta"`,

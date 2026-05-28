@@ -2,6 +2,10 @@ import { statSync } from "node:fs";
 import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import { importSession, importSessionPath } from "../../../core/brain/sessions/import.ts";
 import { SessionImportError } from "../../../core/brain/sessions/types.ts";
+import {
+  isSessionAdapterId,
+  sessionAdapterFormatChoices,
+} from "../../../core/brain/sessions/registry.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
@@ -38,8 +42,8 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
   const formatRaw = flags["format"] as string | undefined;
   let format: "claude" | "codex" | "hermes" | undefined;
   if (formatRaw !== undefined && formatRaw !== "auto") {
-    if (formatRaw !== "claude" && formatRaw !== "codex" && formatRaw !== "hermes")
-      return fail(`--format must be one of auto|claude|codex|hermes; got ${formatRaw}`);
+    if (!isSessionAdapterId(formatRaw))
+      return fail(`--format must be one of ${sessionAdapterFormatChoices()}; got ${formatRaw}`);
     format = formatRaw;
   }
 

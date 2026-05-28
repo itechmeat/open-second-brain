@@ -35,7 +35,7 @@ Brain verbs (observing memory):
   history             Render a preference's edit-history timeline
   backlinks           List inbound references to a Brain artifact id
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
-  import-session      Replay signals from a Claude/Codex/Hermes session .jsonl (or directory)
+  import-session      Replay signals from a registered agent session .jsonl (or directory)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
   token-footprint     Report per-category vault token size with a warn threshold
@@ -162,9 +162,9 @@ export const VERB_HELP: Record<string, string> = {
     "Default is --dry-run; --apply requires --yes in non-interactive mode.\n",
   "import-session":
     "usage: o2b brain import-session <path> [--vault <vault>]\n" +
-    "                                [--format auto|claude|codex|hermes]\n" +
+    "                                [--format auto|<registered-adapter>]\n" +
     "                                [--since <ISO>] [--dry-run] [--json]\n" +
-    "Extract signals from a Claude / Codex / Hermes session .jsonl file (or\n" +
+    "Extract signals from a registered agent session .jsonl file (or\n" +
     "directory of .jsonl files). Two extraction paths run in parallel:\n" +
     "@osb markers in user/assistant messages, and replay of brain_feedback\n" +
     "tool_use calls. Dedup against the inbox by normalised payload hash.\n" +

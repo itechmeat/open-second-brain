@@ -85,6 +85,7 @@ function turnFromLine(obj: unknown, fallbackIndex: number): SessionTurn | null {
 
 export const claudeAdapter: SessionAdapter = {
   id: "claude",
+  defaultAgent: "claude",
   detect(firstLine: string): boolean {
     let obj: unknown;
     try {

@@ -97,6 +97,7 @@ function buildTurn(obj: Record<string, unknown>, fallbackIndex: number): Session
 
 export const hermesAdapter: SessionAdapter = {
   id: "hermes",
+  defaultAgent: "hermes",
   detect(firstLine: string): boolean {
     let obj: unknown;
     try {
