@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-05-28
+
+Cross-agent query foundation. Open Second Brain now exposes a read-only
+agent-source layer over existing Brain provenance, so operators and agents can
+ask what Claude, Codex, Hermes, or any future registered source contributed and
+compare their coverage without hardcoding a present-day agent matrix. The first
+provider reads vault provenance from signals, preferences, and Brain log events;
+future providers can register behind the same query/diff contracts.
+
+### Added
+
+- `src/core/brain/agent-source/` with registry-driven provider, query, summary,
+  and diff helpers over normalized source-agent contributions.
+- `brain_agent_query` and `brain_agent_diff` MCP tools for structured
+  source-agent retrieval and browse/search/diff/map comparison modes.
+- `o2b brain agent-query` and `o2b brain agent-diff` CLI mirrors with markdown
+  output and `--json` envelopes matching the MCP semantics.
+- Core, MCP, and CLI tests covering provenance collection, filtering, summary,
+  comparison, and tool/command wiring.
+
+### Changed
+
+- Centralized session-adapter runtime metadata in the registry: format choices,
+  validation, and default agent labels now come from adapter registration rather
+  than duplicated `claude|codex|hermes` checks in the import path.
+
 ## [0.14.1] - 2026-05-27
 
 Project-wide validation and formatting foundation. Open Second Brain gains
@@ -21,7 +47,7 @@ under the stricter workflow. No runtime behaviour changes.
 - `oxlint.json` and `.oxfmtrc.json` configs, plus `lint`, `lint:fix`,
   `fmt`, `fmt:check`, `validate`, and `validate:fix` package scripts.
   `bun run validate` is the main verification command; `bun run
-  validate:fix` is the single autofix path for lint and formatting.
+validate:fix` is the single autofix path for lint and formatting.
 - `scripts/test` wrapper so `bun test` runs through the shared bun and
   sqlite prechecks.
 - `tests/cli/coerce.test.ts`, `tests/core/validate.test.ts`, and
@@ -167,8 +193,8 @@ weak signal when the operator opts in via config.
 
 - `src/core/brain/sync-lockfile.ts` (`acquireLockSync`, `scanStaleLocks`)
   - a sync exclusive-create primitive for the brain write path. Pay
-  Memory keeps its async `proper-lockfile` recipe; the brain ships
-  its own sync variant to avoid migrating every caller signature.
+    Memory keeps its async `proper-lockfile` recipe; the brain ships
+    its own sync variant to avoid migrating every caller signature.
 - `src/core/brain/preference-txn.ts` (`writePreferenceTxn`,
   `BrainCollisionError`, `BRAIN_COLLISION_KIND`, plus three
   expectation factories: `expectRevision`, `noUnsafeShrink`,
@@ -206,7 +232,7 @@ weak signal when the operator opts in via config.
   `would_promote`, `would_retire`, `would_supersede`,
   `clusters_below_threshold`, `gated_retires`. No state mutates.
 - Path helpers `dreamRunsDir(vault)` and `dreamWorkrunPath(vault,
-  runId)` in `src/core/brain/paths.ts`.
+runId)` in `src/core/brain/paths.ts`.
 
 ### Changed
 
@@ -359,7 +385,7 @@ agent assembles into prose externally.
 - `src/core/brain/temporal/belief-evolution.ts` -
   `buildBeliefEvolution(index, vault, target)` for `prefId` or
   `topic`. Returns frozen `{target, transitions, evidence,
-  retirements, generatedAt}`. Transitions derived from dream
+retirements, generatedAt}`. Transitions derived from dream
   summary arrays (`new_unconfirmed` / `confirmed` / `retired`);
   evidence rollup carries per-row running counts; retirement chain
   walked via `supersedes` / `superseded_by` with a visited-set
@@ -381,7 +407,7 @@ agent assembles into prose externally.
   window ending at `weekEnd`. Same counters as daily plus
   `retired-in-window` list and `contradictions` (`signal-suppressed`
   events combined with `apply-evidence` rows where `result ===
-  "violated"`).
+"violated"`).
 - `src/core/brain/temporal/period-common.ts` - shared helpers
   consumed by both briefs: `countByKind`, `collectTransitions`,
   `computeVaultDelta`, `collectSourcePointers`, `extractId`. One
@@ -591,7 +617,7 @@ dream, and vault metadata into a single operator dashboard.
   Surfaces as a quality gate at `brain_feedback` time.
 - `src/core/brain/trust/self-approval-guardrail.ts` -
   `applySelfApprovalGuardrail({signal_count, distinct_agents,
-  age_days}, config)`. Promotes only when all three thresholds
+age_days}, config)`. Promotes only when all three thresholds
   pass; quarantines otherwise. Defaults
   (`promotion_min_signals: 2`, `promotion_min_distinct_agents: 1`,
   `promotion_min_age_days: 0`) keep pre-v0.10.16 dream behaviour
@@ -607,7 +633,7 @@ dream, and vault metadata into a single operator dashboard.
   `AGENTS.md`, `GEMINI.md`) exceeds the configured ceiling.
 - `src/core/brain/trust/compute-trust-verdict.ts` -
   `computeTrustVerdict({ doctorWarnings, doctorErrors,
-  dreamWarnings, verification, driftWatchThreshold? })`. Returns
+dreamWarnings, verification, driftWatchThreshold? })`. Returns
   one of `clean`, `watch`, `investigate`.
 - `src/core/brain/trust/operator-summary.ts` -
   `buildOperatorSummary(vault, opts)` and
@@ -620,18 +646,18 @@ dream, and vault metadata into a single operator dashboard.
   `guardrails:` block in `_brain.yaml` overrides any subset.
 - `DreamRunSummary.uncertain: ReadonlyArray<DreamUncertainEntry>`
   and `DreamRunSummary.quarantined:
-  ReadonlyArray<DreamQuarantinedEntry>` (empty on every clean run).
+ReadonlyArray<DreamQuarantinedEntry>` (empty on every clean run).
 - `RunDoctorResult.trust_verdict` (always populated),
   `RunDoctorResult.verification_delta_summary` (present when a
   dream summary is threaded through), `RunDoctorResult.
-  instruction_file_warnings`, and `RunDoctorResult.uncertain`.
+instruction_file_warnings`, and `RunDoctorResult.uncertain`.
 - `DigestJson.trust_verdict?`, `DigestJson.uncertain_count`,
   `DigestJson.quarantined_count`. Markdown digest gains a `##
-  Trust` section when doctor or dream input is supplied.
+Trust` section when doctor or dream input is supplied.
 - `brain_operator_summary` MCP tool in the full scope. Returns
   the structured envelope from `buildOperatorSummary`.
 - `o2b brain summary [--skip-dream] [--top-actions <n>]
-  [--vault <path>] [--json]` CLI verb. Markdown by default, JSON
+[--vault <path>] [--json]` CLI verb. Markdown by default, JSON
   on demand.
 - `BrainRolePermissionError` thrown by
   `appendApplyEvidence(vault, input, { role })` when the role is
@@ -930,7 +956,7 @@ Companion design and impl plan at
 - `o2b mcp --probe` flag — in-process MCP handshake used by
   `o2b install --check` to confirm the server starts cleanly.
 - `_brain.yaml` block `active.{most_applied_window_days,
-  most_applied_limit}` (defaults 30 / 10; bounds 1..365 / 1..50).
+most_applied_limit}` (defaults 30 / 10; bounds 1..365 / 1..50).
   Both `Brain/active.md` and `brain_digest` honour the values;
   defaults unchanged from prior behaviour.
 - `Most-applied (Nd)` section in `brain_digest` Markdown plus a
@@ -1234,21 +1260,21 @@ tracks ship together under one release.
   surface stays deferred under the existing `open-second-brain`
   entry. `o2b mcp` gains `--scope writer|full` (default `full`).
 - §30 §D - Daily discipline cron. New `bin/o2b-discipline-report`
-  + `o2b discipline {report|install|uninstall}` build a
-  deterministic Telegram MarkdownV2 block comparing brain-event
-  counts per agent (parsed from `Brain/log/<date>.md`) against
-  runtime-agnostic activity proxies: git activity on watched
-  repos, mtime walk on watched non-repo paths, vault delta on
-  `Brain/inbox/`, `Brain/preferences/`, `Brain/retired/`. Status
-  `ok | info | alert` is binary; numeric ratios were rejected in
-  design as noise-prone. Hermes cron job installable with
-  `o2b discipline install [--telegram-target] [--at]` (job id
-  derived from sha256(vault_path) so multiple vaults on one host
-  do not collide). No LLM in the report path.
+  - `o2b discipline {report|install|uninstall}` build a
+    deterministic Telegram MarkdownV2 block comparing brain-event
+    counts per agent (parsed from `Brain/log/<date>.md`) against
+    runtime-agnostic activity proxies: git activity on watched
+    repos, mtime walk on watched non-repo paths, vault delta on
+    `Brain/inbox/`, `Brain/preferences/`, `Brain/retired/`. Status
+    `ok | info | alert` is binary; numeric ratios were rejected in
+    design as noise-prone. Hermes cron job installable with
+    `o2b discipline install [--telegram-target] [--at]` (job id
+    derived from sha256(vault_path) so multiple vaults on one host
+    do not collide). No LLM in the report path.
 - §30 §E - Claude Code MEMORY to Brain bridge. New verb
   `o2b brain import-claude-memory [--memory <path>]
-  [--dry-run | --apply] [--yes] [--json]
-  [--allow-arbitrary-memory-path]` reads `metadata.type: feedback`
+[--dry-run | --apply] [--yes] [--json]
+[--allow-arbitrary-memory-path]` reads `metadata.type: feedback`
   entries from a Claude Code memory directory and writes them as
   confirmed Brain preferences with a sidecar manifest
   `Brain/.imports/claude-memory.json` for idempotency.
@@ -1319,7 +1345,7 @@ sidecar that powers drift detection.
 ### Added
 
 - §22 — `o2b brain upgrade [--dry-run] [--apply] [--yes] [--check]
-  [--json]` migrates the three release-owned files
+[--json]` migrates the three release-owned files
   (`Brain/_brain.yaml`, `Brain/_BRAIN.md`,
   `AI Wiki/_OPEN_SECOND_BRAIN.md`) forward when the installed
   open-second-brain version changes them. `_brain.yaml` merge is
@@ -1339,7 +1365,7 @@ sidecar that powers drift detection.
   warning. `pruneSnapshots` removes the sidecar alongside the
   archive; `listSnapshots` surfaces `manifest_path`.
 - §28 — `o2b brain export --format json|llms-txt [--out <path>]
-  [--force]` produces a read-only dump of active preferences
+[--force]` produces a read-only dump of active preferences
   (`confirmed | unconfirmed | quarantine`) from
   `Brain/preferences/`. Retired and signal artifacts are not
   included. Default sink is stdout; `--out` writes a file
@@ -1380,7 +1406,7 @@ sidecar that powers drift detection.
 - §30 §C — `skills/brain-memory/SKILL.md` description and "When NOT
   to call" section reformulate the trigger: when a preference
   plausibly applies but you are unsure, record with `note:
-  "speculative; <reason>"` instead of skipping. The dream pass
+"speculative; <reason>"` instead of skipping. The dream pass
   filters single-event speculative entries that do not recur, so
   coverage costs less than missing the signal.
   `hooks/lib/messages.ts:postWriteReminder` mirrors the new wording.
@@ -1454,7 +1480,7 @@ runs `o2b brain merge`.
 - §14 — `o2b brain explorer` launches a loopback HTTP server (default
   port `7777`, `--port <n>` to override) that renders preferences and
   retired entries as a force-directed graph. `o2b brain explorer
-  --export <path>` writes the same view as a single offline HTML file
+--export <path>` writes the same view as a single offline HTML file
   with inlined data; `--force` overwrites an existing file. Live and
   export modes share one template at `templates/brain-explorer.html`.
   Zero backend, no LLM, no network. Markdown is parsed in the browser
@@ -1464,7 +1490,7 @@ runs `o2b brain merge`.
   whose `principle` tokens reach jaccard ≥ `0.6`. Pairs ≥ doctor's
   own duplicate threshold continue to trip the
   `duplicate-preferences` doctor lint. `o2b brain merge <keep>
-  <drop>` is the explicit resolver: `keep` retains its frontmatter,
+<drop>` is the explicit resolver: `keep` retains its frontmatter,
   picks up the deduped union of `evidenced_by`, the summed
   `applied_count` and `violated_count`, and `max(last_evidence_at)`;
   `drop` retires under reason `merged-into` with a `superseded_by`
@@ -1481,7 +1507,7 @@ runs `o2b brain merge`.
   `session_id`/`cwd`/`tool_use_id` triple). `stopGuardrailReason`
   follows the same pattern.
 - §15 (completes deferred D4 from v0.10.4) — `skills/brain-memory/
-  SKILL.md` gains an `## Examples — good vs bad` section: four
+SKILL.md` gains an `## Examples — good vs bad` section: four
   contrastive pairs covering weak vs strong `principle`,
   too-general vs precise `topic`, and `note` with versus without
   the "why" line.
@@ -1630,7 +1656,7 @@ without an explicit declaration keep their current behaviour.
 - **`_brain.yaml.confidence.medium_min` (default 0.40) and
   `high_min` (default 0.75)** — derived-band thresholds on the
   numeric value. Validated to lie in `[0, 1]` with `medium_min <
-  high_min`.
+high_min`.
 - **`Brain/_brain.yaml.primary_agent`** declarative field. When set,
   dream runs invoked from a different agent emit a stderr warning,
   a `warnings` array entry on the MCP `brain_dream` response, and a
@@ -1642,7 +1668,7 @@ without an explicit declaration keep their current behaviour.
   during the fresh bootstrap; on re-runs the flag is a no-op (use
   `set-primary` instead).
 - **`src/core/brain/set-primary.ts`** — `setPrimaryAgent(vault,
-  name | null): SetPrimaryAgentResult`. Validates the rewritten
+name | null): SetPrimaryAgentResult`. Validates the rewritten
   YAML before persisting; surfaces a typed `BrainConfigError` when
   the on-disk file is malformed.
 - **`renderPrefLink({ id, principle })`** in `src/core/brain/wikilink.ts`
@@ -1677,7 +1703,7 @@ without an explicit declaration keep their current behaviour.
 - **`brain_query` MCP response** carries `confidence_value` next to
   `confidence` on every preference and retired result row.
 - **`brain_dream` MCP response** carries a `warnings: [{code,
-  message}]` array. CLI `o2b brain dream` writes the same warnings
+message}]` array. CLI `o2b brain dream` writes the same warnings
   to `stderr`.
 - **`brain_dream` MCP schema** accepts an optional `agent` argument
   for the primary-agent check.
@@ -1748,17 +1774,17 @@ eagerly via `o2b brain migrate-frontmatter --apply --yes`.
 - **`o2b brain scan-inline`** — capture `@osb` markers from any
   vault markdown file. Two shapes are recognised: a single line
   (`@osb feedback negative topic=... principle="..."`) and a
-  fenced ``` ```osb ``` block with YAML body. Markers create a
-  signal in `Brain/inbox/` via the same writer as `brain_feedback`,
-  with `source_type: inline`, the source-file wikilink in `source`,
-  and a `dedup_hash` over the normalised payload. After capture
-  the source line is annotated `@osb✓ [[sig-...]]` (inline form)
-  or the info-string flips to `osb-checked` with a `<!-- @osb✓
-  [[sig-...]] -->` comment line (block form), making re-runs
-  idempotent. Default ignore set covers `Brain/`, `.git`,
-  `node_modules`, `.obsidian`, `.trash`, `.stversions`,
-  `.open-second-brain`; additional excludes via `--exclude`,
-  scope narrowing via `--path`, dry-run via `--dry-run`.
+  fenced ` `osb ```block with YAML body. Markers create a
+signal in`Brain/inbox/`via the same writer as`brain_feedback`,
+with `source_type: inline`, the source-file wikilink in `source`,
+and a `dedup_hash`over the normalised payload. After capture
+the source line is annotated`@osb✓ [[sig-...]]`(inline form)
+or the info-string flips to`osb-checked`with a`<!-- @osb✓
+  [[sig-...]] -->`comment line (block form), making re-runs
+idempotent. Default ignore set covers`Brain/`, `.git`,
+`node_modules`, `.obsidian`, `.trash`, `.stversions`,
+`.open-second-brain`; additional excludes via `--exclude`,
+scope narrowing via `--path`, dry-run via `--dry-run`.
 - **`o2b brain import-session <path>`** — extract signals from a
   Claude Code / Codex CLI / Hermes session JSONL (or a directory
   of session files). Two extraction paths run in parallel:
@@ -1882,7 +1908,7 @@ in place.
   every preference and retired file. Dream collects the last 5
   applied + last 3 violated rows from `Brain/log/` on every pass and
   writes them as bulleted `[[artifact:lines]] — timestamp (agent)
-  [result] — note` entries. The data was already on disk in the
+[result] — note` entries. The data was already on disk in the
   daily log; v0.10.1 joins it back to the rule.
 - **`src/core/brain/evidence.ts`** — read-only log scanner used by
   dream and `moveToRetired`. Returns newest-first slices for a given
@@ -1948,9 +1974,9 @@ in place.
   render-time view, never persisted as its own file).
 - The §6 implementation in this release covers suppression only.
   The follow-up "after 5 rejects of the same topic, auto-block" mode
-  from the _summary doc is deliberately out of scope — suppression
-  + the explicit `--reason` audit trail is enough to break the
-  reject → re-grow loop the user observed.
+  from the \_summary doc is deliberately out of scope — suppression
+  - the explicit `--reason` audit trail is enough to break the
+    reject → re-grow loop the user observed.
 
 ## [0.10.0] - 2026-05-16
 
@@ -2069,10 +2095,11 @@ negative without yet crossing the rebuttal threshold.
 
   The MCP initialize response advertises
   `capabilities.resources = { listChanged: false, subscribe: false }`.
+
 - **`quarantine` preference status** (closes design summary §20).
   Entry: a `confirmed` preference whose recomputed counters satisfy
   `violated_count ≥ applied_count AND applied_count >
-  confidence.low_max_applied` transitions to `quarantine`. The rule
+confidence.low_max_applied` transitions to `quarantine`. The rule
   is still listed in `Brain/active.md` (under its own section), but
   the digest surfaces it separately. Exit: a new `violated`
   evidence event since the last `dream` snapshot retires the rule
@@ -2092,7 +2119,7 @@ negative without yet crossing the rebuttal threshold.
   surfaces.
 - **`brain_backlinks` MCP tool** + `o2b brain backlinks <id>` CLI verb.
   Returns the count plus a list of `{source, source_kind, field,
-  timestamp?}` records for any Brain artifact id (preference,
+timestamp?}` records for any Brain artifact id (preference,
   retired, or signal).
 - **`osb://backlinks/{id}` MCP resource template** — markdown render
   of inbound references grouped by source kind. Same data as the
@@ -2109,6 +2136,7 @@ negative without yet crossing the rebuttal threshold.
   The sections render only on non-empty windows so `--silent-if-empty`
   exit semantics are preserved; JSON always emits the arrays so
   programmatic consumers can read them regardless of window state.
+
 - **`broken-backlinks` lint** in `brain_doctor`. Walks the backlink
   index and reports any source that still references a `pref-*`,
   `ret-*`, or `sig-*` target whose file no longer exists. Warning
@@ -2116,7 +2144,7 @@ negative without yet crossing the rebuttal threshold.
   — the source artifact's pointer just went stale.
 - **`brain` section in `second_brain_status`**. The existing MCP
   tool now includes a `brain: { present, counts, last_dream_at,
-  last_apply_evidence_at, sanity }` field. Counts cover
+last_apply_evidence_at, sanity }` field. Counts cover
   inbox/preferences (split by status)/retired/log_days/snapshots.
   `sanity.signals_awaiting_dream` is non-zero when inbox signals
   predate the `unconfirmed_window_days` cutoff — a one-glance "you
@@ -2165,7 +2193,7 @@ negative without yet crossing the rebuttal threshold.
   `[[src/cli/main.ts:42]]` (single line). New
   `parseArtifactRef(value)` helper in
   `src/core/brain/wikilink.ts` extracts `{target, range?,
-  malformedRange?}`. The writer accepts the syntax verbatim; the
+malformedRange?}`. The writer accepts the syntax verbatim; the
   parser is used by downstream readers (lint, future fragment
   display).
 - **`brain_doctor` hygiene lints** (closes the remaining §11 items
@@ -2196,7 +2224,7 @@ evidence of preference application; a deterministic `dream` pass
 turns repeat signals into rules whose confidence grows from real use
 and decays when nothing applies them. Filesystem-first, Obsidian-
 native, no LLM inside the algorithm — counters, thresholds, atomic
-file operations only. Conceptually mirrors Anthropic's *Dreaming*
+file operations only. Conceptually mirrors Anthropic's _Dreaming_
 research preview (2026-05-06) but stays runtime-agnostic and
 deterministic.
 
@@ -2219,7 +2247,7 @@ an orthogonal audit layer for paid actions.
   `contradiction_window_days`, `stale_evidence_days`,
   `high_freshness_factor`, `snapshots.retention_count`) and
   `_BRAIN.md` (agent-facing operating manual, rendered by `o2b
-  brain init`, kept under 200 lines).
+brain init`, kept under 200 lines).
 - **CLI namespace `o2b brain *`** with 11 verbs: `init`,
   `feedback`, `dream`, `apply-evidence`, `digest`, `query`,
   `reject`, `pin`, `unpin`, `rollback`, `doctor`.
@@ -2422,7 +2450,7 @@ records what happened.
     `renderPaymentDigestTelegram`) for cron-friendly 4-line summaries;
   - **approval workflow** (`pending-payment-request` artifact under
     `AI Wiki/payments/_pending/`) with `pending → approved/rejected →
-    consumed` state machine.
+consumed` state machine.
 - **Path-safety helpers** (`src/core/path-safety.ts`): `ensureInsideVault`
   and `vaultRelative` use `path.sep` so the prefix check works on Windows
   too; replaces the duplicated POSIX-only versions previously inlined in
@@ -2488,7 +2516,7 @@ parallel Python implementation under `src/open_second_brain/*.py` are gone.
 - `bun:test` suite (176 cases) + Python shim tests (13 cases). Includes a
   12-worker multi-process append-event lock test.
 - Per-runtime install flows for local marketplaces (Claude `claude plugin
-  marketplace add <path>`, Codex `codex plugin marketplace add <path>`,
+marketplace add <path>`, Codex `codex plugin marketplace add <path>`,
   Hermes via plugin-dir symlink, OpenClaw `openclaw plugins install <path>`).
 - `agent-event-log` skill: stronger trigger description and a language
   policy that follows the user's session language.
@@ -2640,7 +2668,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
   path is `codex plugin marketplace add <source>`, which validates a
   marketplace catalog at this exact location. Without this file the
   install fails with `marketplace root does not contain a supported
-  manifest`. The manifest declares the repository as a one-plugin
+manifest`. The manifest declares the repository as a one-plugin
   marketplace pointing at itself (`path: "."`), so the same Git URL
   that worked for `hermes plugins install` works for the new Codex
   flow without restructuring the repo.
@@ -2727,7 +2755,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
   the success line `appended: Daily/...` gave no signal that the
   entry had landed in the wrong place. Now every one of these entry
   points resolves the vault via `--vault → VAULT_DIR → persisted
-  plugin config (vault field)`, and exits with a clear
+plugin config (vault field)`, and exits with a clear
   `error: no vault configured. Pass --vault ... or run o2b init ...`
   if none of those is set. The shared resolver lives in
   `cli._require_vault`; the `vault-log` and standalone-`o2b mcp`
@@ -2772,7 +2800,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - `o2b doctor`'s `claude_manifest` author check rejects an empty
   `name` (e.g. `{"author": {"name": ""}}`) with the same error
   message used for missing or wrong-typed `author`. Previously
-  ``isinstance(author.get("name"), str)`` accepted the empty string.
+  `isinstance(author.get("name"), str)` accepted the empty string.
 - The two timezone-aware MCP tests now capture the local-tz wall
   clock **before** invoking the tool. The previous order computed
   `now_local` after the tool returned, which around midnight could
@@ -2799,8 +2827,8 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
   facts worth recalling. The rules now treat any **durable artifact**
   as loggable, including research outcomes, design decisions, and
   external-fact discoveries (CLI behaviour change, API quirk, etc.),
-  and end with a self-test prompt: *"would future-me want to find this
-  in the log by searching for it later?"*. Skip-list is unchanged in
+  and end with a self-test prompt: _"would future-me want to find this
+  in the log by searching for it later?"_. Skip-list is unchanged in
   spirit but reworded around "did not produce an artifact" rather
   than against specific activity types.
 - `tests/test_cli.py` `run_cli` helper now isolates
@@ -3007,7 +3035,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Reworded the `--args` guidance in `after-install.md` and `docs/mcp.md` so
   the docs no longer contain a literal copyable quoted-args anti-example.
   The corrected `hermes mcp add open-second-brain --command o2b --args mcp
-  --vault /path/to/vault` example stays; the negative case is now described
+--vault /path/to/vault` example stays; the negative case is now described
   in prose ("do not wrap all of those arguments into one quoted shell
   string and do not repeat `--args` per token") so a careless copy/paste
   cannot pick up the wrong form.

@@ -64,13 +64,13 @@ Register the MCP server in `~/.hermes/config.yaml` and restart the gateway one m
 
 ## Other runtimes
 
-| Runtime | Install |
-| --- | --- |
-| Claude Code | Marketplace plugin (bundled `.mcp.json` + hooks) - [`install/claudecode.md`](install/claudecode.md) |
-| OpenAI Codex | `codex plugin marketplace add ...` - [`install/codex.md`](install/codex.md) |
-| OpenClaw | Native JS plugin, no MCP needed - [`install/openclaw.md`](install/openclaw.md) |
-| Cursor · Aider · opencode · kiro · Copilot CLI · Gemini CLI · Pi | `o2b install --target <name> --apply` - see [`install/`](install/) |
-| Any other MCP host | `o2b install --target generic --apply` - [`install/generic.md`](install/generic.md) |
+| Runtime                                                          | Install                                                                                             |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Claude Code                                                      | Marketplace plugin (bundled `.mcp.json` + hooks) - [`install/claudecode.md`](install/claudecode.md) |
+| OpenAI Codex                                                     | `codex plugin marketplace add ...` - [`install/codex.md`](install/codex.md)                         |
+| OpenClaw                                                         | Native JS plugin, no MCP needed - [`install/openclaw.md`](install/openclaw.md)                      |
+| Cursor · Aider · opencode · kiro · Copilot CLI · Gemini CLI · Pi | `o2b install --target <name> --apply` - see [`install/`](install/)                                  |
+| Any other MCP host                                               | `o2b install --target generic --apply` - [`install/generic.md`](install/generic.md)                 |
 
 Each non-Hermes target writes a sidecar manifest under `<vault>/.open-second-brain/install.lock.json` so `o2b uninstall --target <name> --apply` removes exactly what it added.
 
@@ -99,20 +99,20 @@ Three repeat signals on the same topic graduate to a confirmed rule. Evidence sh
 
 The capabilities you actually feel day to day:
 
-| # | Feature | What it means for you |
-|---|---|---|
-| 1 | Your memory, in your Obsidian vault | Every rule the agent learns about you is a Markdown file you can open, read, and edit. Wikilinks, backlinks, and the graph view in Obsidian all work — no separate UI to learn. |
-| 2 | `dream` - the agent learns what you actually want | The nightly `dream` pass turns repeat corrections into rules: three signals on the same topic graduate to a confirmed preference. Its confidence rises every time the agent applies the rule and drops when it slips. No LLM inside the algorithm - counters and atomic file moves, nothing else. |
-| 3 | One brain, every agent | Hermes Agent, Claude Code, Codex, Cursor, Aider, opencode, kiro, Copilot CLI, Gemini CLI, Pi - they all read the same memory. Teach one of them a rule and the next one already knows. |
-| 4 | Teach a rule in one line | Drop `@osb feedback negative topic=... principle="..."` into any note. Next time `o2b brain scan-inline` runs (or you call it manually) the marker becomes a real taste signal in `Brain/inbox/` and the note gets a `@osb✓` checkmark so re-runs skip it. |
-| 5 | Look back at how your AI grew | The time axis surfaces how the agent's view of you evolved. `o2b brain evolution` walks a single preference's life from first signal to confirmed to retired; `o2b brain daily` / `weekly` summarise what changed; `o2b brain stale` flags rules nothing has applied in months. |
-| 6 | Browse your memory as a graph | `o2b brain explorer` opens a force-directed HTML graph of every rule, every link, every retirement. Double-click a node — Obsidian opens the underlying note. |
-| 7 | Undo the agent if it gets it wrong | Every Brain mutation lands a verified snapshot before touching anything. One command (`o2b brain rollback <id>`) restores yesterday's state, and drift detection refuses to clobber unintended local edits. |
-| 8 | Pin, merge, retire by hand | When a rule is wrong, you fix it. `o2b brain pin` keeps a good one safe from auto-retire, `merge` folds duplicates, `reject` puts a bad rule in the bin with a reason. The CLI is the operator's seat. |
-| 9 | Hybrid search that explains itself | `o2b search "<query>" --property type=decision --property status=open` — SQLite + FTS5 and an optional semantic layer, fused and then sharpened by a recall-quality suite: MMR diversity so near-duplicates do not crowd the top, link-graph traversal that surfaces notes one hop from a hit, entity-boosting for proper-noun precision, and header-anchored chunking so a mid-document chunk keeps its section context. Every result carries a `why_retrieved` breakdown of the layers that ranked it. |
-| 10 | Pay Memory — audit every paid action | When the agent spends money (Solana-Foundation `pay`, third-party APIs) every receipt lands in `Brain/payments/<date>/`. Spending policy, approval gate, daily Telegram report. The agent never holds wallet keys. |
+| #   | Feature                                           | What it means for you                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Your memory, in your Obsidian vault               | Every rule the agent learns about you is a Markdown file you can open, read, and edit. Wikilinks, backlinks, and the graph view in Obsidian all work — no separate UI to learn.                                                                                                                                                                                                                                                                                                                          |
+| 2   | `dream` - the agent learns what you actually want | The nightly `dream` pass turns repeat corrections into rules: three signals on the same topic graduate to a confirmed preference. Its confidence rises every time the agent applies the rule and drops when it slips. No LLM inside the algorithm - counters and atomic file moves, nothing else.                                                                                                                                                                                                        |
+| 3   | One brain, every agent                            | Hermes Agent, Claude Code, Codex, Cursor, Aider, opencode, kiro, Copilot CLI, Gemini CLI, Pi - they all read the same memory. Teach one of them a rule and the next one already knows; `brain_agent_query` and `brain_agent_diff` let you inspect which agent contributed what.                                                                                                                                                                                                                          |
+| 4   | Teach a rule in one line                          | Drop `@osb feedback negative topic=... principle="..."` into any note. Next time `o2b brain scan-inline` runs (or you call it manually) the marker becomes a real taste signal in `Brain/inbox/` and the note gets a `@osb✓` checkmark so re-runs skip it.                                                                                                                                                                                                                                               |
+| 5   | Look back at how your AI grew                     | The time axis surfaces how the agent's view of you evolved. `o2b brain evolution` walks a single preference's life from first signal to confirmed to retired; `o2b brain daily` / `weekly` summarise what changed; `o2b brain stale` flags rules nothing has applied in months.                                                                                                                                                                                                                          |
+| 6   | Browse your memory as a graph                     | `o2b brain explorer` opens a force-directed HTML graph of every rule, every link, every retirement. Double-click a node — Obsidian opens the underlying note.                                                                                                                                                                                                                                                                                                                                            |
+| 7   | Undo the agent if it gets it wrong                | Every Brain mutation lands a verified snapshot before touching anything. One command (`o2b brain rollback <id>`) restores yesterday's state, and drift detection refuses to clobber unintended local edits.                                                                                                                                                                                                                                                                                              |
+| 8   | Pin, merge, retire by hand                        | When a rule is wrong, you fix it. `o2b brain pin` keeps a good one safe from auto-retire, `merge` folds duplicates, `reject` puts a bad rule in the bin with a reason. The CLI is the operator's seat.                                                                                                                                                                                                                                                                                                   |
+| 9   | Hybrid search that explains itself                | `o2b search "<query>" --property type=decision --property status=open` — SQLite + FTS5 and an optional semantic layer, fused and then sharpened by a recall-quality suite: MMR diversity so near-duplicates do not crowd the top, link-graph traversal that surfaces notes one hop from a hit, entity-boosting for proper-noun precision, and header-anchored chunking so a mid-document chunk keeps its section context. Every result carries a `why_retrieved` breakdown of the layers that ranked it. |
+| 10  | Pay Memory — audit every paid action              | When the agent spends money (Solana-Foundation `pay`, third-party APIs) every receipt lands in `Brain/payments/<date>/`. Spending policy, approval gate, daily Telegram report. The agent never holds wallet keys.                                                                                                                                                                                                                                                                                       |
 
-These are the headline capabilities. The full surface also includes: importing Claude Code memory directories, daily logging-discipline cron, cross-project pointers for shared vaults, the codegraph partner skill, vault hygiene lints, per-MOC coverage audit, concept synthesis, an operator dashboard, the v0.12.0 Brain Integrity Suite (content-hash drift detection, durable workrun checkpoints, destructive-from-confirmed retire gate, and the `brain_review_candidates` MCP tool that previews what the next dream pass would do without writing anything), the v0.13.0 Hybrid Search and Recall Quality suite (explainable recall, MMR diversity, link-graph traversal, entity-boosted retrieval, header-anchored chunking), and the v0.14.0 Semantic Brain Health and Self-Maintenance suite (cross-preference contradiction detection, concept-gap and stale-claim surfacing, per-preference edit-history, a clean/watch/investigate reconciliation verdict via `brain_health`, and dependency-ordered `doctor --remediate`). Browse [`docs/cli-reference.md`](docs/cli-reference.md) for every verb and [`docs/how-it-works.md`](docs/how-it-works.md) for the mental model.
+These are the headline capabilities. The full surface also includes: importing Claude Code memory directories, daily logging-discipline cron, cross-project pointers for shared vaults, source-agent query and comparison (`brain_agent_query`, `brain_agent_diff`, `o2b brain agent-query`, `o2b brain agent-diff`), the codegraph partner skill, vault hygiene lints, per-MOC coverage audit, concept synthesis, an operator dashboard, the v0.12.0 Brain Integrity Suite (content-hash drift detection, durable workrun checkpoints, destructive-from-confirmed retire gate, and the `brain_review_candidates` MCP tool that previews what the next dream pass would do without writing anything), the v0.13.0 Hybrid Search and Recall Quality suite (explainable recall, MMR diversity, link-graph traversal, entity-boosted retrieval, header-anchored chunking), and the v0.14.0 Semantic Brain Health and Self-Maintenance suite (cross-preference contradiction detection, concept-gap and stale-claim surfacing, per-preference edit-history, a clean/watch/investigate reconciliation verdict via `brain_health`, and dependency-ordered `doctor --remediate`). Browse [`docs/cli-reference.md`](docs/cli-reference.md) for every verb and [`docs/how-it-works.md`](docs/how-it-works.md) for the mental model.
 
 ## CLI
 
@@ -122,6 +122,8 @@ o2b init                      # Bootstrap the vault profile
 o2b doctor                    # Run vault + adapter checks
 o2b brain dream               # Deterministic consolidation pass (idempotent)
 o2b brain digest              # Recent transitions, markdown or JSON
+o2b brain agent-query --agent claude --json   # Source-agent provenance query
+o2b brain agent-diff --mode diff --agent claude --agent codex
 o2b search "<query>"          # FTS5 over the vault
 o2b update                    # Update across detected runtimes
 ```
@@ -147,16 +149,16 @@ Per-runtime upgrade paths and the canonical version source live in [`install.md`
 
 ## Documentation
 
-| Topic | Doc |
-| --- | --- |
-| Mental model, vault layout, dream mechanics | [`docs/how-it-works.md`](docs/how-it-works.md) |
-| MCP protocol, tools, lifecycle, writer split | [`docs/mcp.md`](docs/mcp.md) |
-| Full CLI reference (every verb, every flag) | [`docs/cli-reference.md`](docs/cli-reference.md) |
-| Pay Memory - audit for paid agent actions | [`docs/pay-memory.md`](docs/pay-memory.md) |
-| Hermes cron jobs (daily digest, discipline report) | [`docs/hermes-cron.md`](docs/hermes-cron.md) |
-| Cross-project pointer (multi-host vaults) | [`docs/cross-project-pointer.md`](docs/cross-project-pointer.md) |
-| Architecture | [`docs/architecture.md`](docs/architecture.md) |
-| Origin idea | [`docs/idea.md`](docs/idea.md) |
+| Topic                                              | Doc                                                              |
+| -------------------------------------------------- | ---------------------------------------------------------------- |
+| Mental model, vault layout, dream mechanics        | [`docs/how-it-works.md`](docs/how-it-works.md)                   |
+| MCP protocol, tools, lifecycle, writer split       | [`docs/mcp.md`](docs/mcp.md)                                     |
+| Full CLI reference (every verb, every flag)        | [`docs/cli-reference.md`](docs/cli-reference.md)                 |
+| Pay Memory - audit for paid agent actions          | [`docs/pay-memory.md`](docs/pay-memory.md)                       |
+| Hermes cron jobs (daily digest, discipline report) | [`docs/hermes-cron.md`](docs/hermes-cron.md)                     |
+| Cross-project pointer (multi-host vaults)          | [`docs/cross-project-pointer.md`](docs/cross-project-pointer.md) |
+| Architecture                                       | [`docs/architecture.md`](docs/architecture.md)                   |
+| Origin idea                                        | [`docs/idea.md`](docs/idea.md)                                   |
 
 ## Uninstalling
 

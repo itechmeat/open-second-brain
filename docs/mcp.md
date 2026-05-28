@@ -18,22 +18,28 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tools
 
-| Tool | Purpose | Required arguments |
-| --- | --- | --- |
-| `second_brain_status` | Report config and vault status, with secrets redacted. | — |
-| `second_brain_query` | List vault pages with an optional case-insensitive title substring. | — |
-| `vault_health` | Run vault, config, and plugin manifest health checks. | — |
-| `payment_memory_init` | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template. | — |
-| `payment_receipt_append` | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting. | `service`, `status`, `reason` |
-| `asset_capture` | Save a Markdown note for an asset produced by a paid call, linked to its receipt. | `title`, `service`, `result_url` |
-| `payment_report_generate` | Aggregate a date's receipts into a Markdown report under `Brain/payments/reports/`. | `date` |
-| `payment_policy_check` | Evaluate a prospective paid call against `policies/spending.json` (allowed / approval_required / denied). | `service` |
-| `payment_request_approval` | Create a pending-payment-request the user must approve before the agent runs `pay`. | `service`, `reason` |
-| `payment_request_status` | Look up a pending request by id; agent uses this to poll for approval. | `id` |
-| `payment_request_consume` | Mark an `approved` request as `consumed` and link the resulting receipt. | `id`, `receipt` |
+| Tool                       | Purpose                                                                                                                                   | Required arguments               |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `second_brain_status`      | Report config and vault status, with secrets redacted.                                                                                    | —                                |
+| `second_brain_query`       | List vault pages with an optional case-insensitive title substring.                                                                       | —                                |
+| `vault_health`             | Run vault, config, and plugin manifest health checks.                                                                                     | —                                |
+| `brain_agent_query`        | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.          | —                                |
+| `brain_agent_diff`         | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                        | —                                |
+| `payment_memory_init`      | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template. | —                                |
+| `payment_receipt_append`   | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting.                                                | `service`, `status`, `reason`    |
+| `asset_capture`            | Save a Markdown note for an asset produced by a paid call, linked to its receipt.                                                         | `title`, `service`, `result_url` |
+| `payment_report_generate`  | Aggregate a date's receipts into a Markdown report under `Brain/payments/reports/`.                                                       | `date`                           |
+| `payment_policy_check`     | Evaluate a prospective paid call against `policies/spending.json` (allowed / approval_required / denied).                                 | `service`                        |
+| `payment_request_approval` | Create a pending-payment-request the user must approve before the agent runs `pay`.                                                       | `service`, `reason`              |
+| `payment_request_status`   | Look up a pending request by id; agent uses this to poll for approval.                                                                    | `id`                             |
+| `payment_request_consume`  | Mark an `approved` request as `consumed` and link the resulting receipt.                                                                  | `id`, `receipt`                  |
 
 `second_brain_query` accepts `pattern` (string) and `limit` (1–500, default 50).
 `vault_health` accepts `repo` (string) for plugin manifest validation.
+`brain_agent_query` accepts `agents` (string array), `topic`, `query`, `kind`
+(`signal`, `preference`, `log`), and `limit` (1-500, default 50).
+`brain_agent_diff` accepts the same filters plus `mode` (`browse`, `search`,
+`diff`, `map`). Omitting `agents` means all known source agents.
 
 `payment_memory_init` accepts `agent` (string) and `overwrite` (boolean — to
 refresh the policy template). `payment_receipt_append` accepts the same
@@ -244,7 +250,7 @@ server to your Codex MCP config the same way as Hermes.
 
 The plugin's `.mcp.json` ships **two** MCP-server entries:
 
-- `open-second-brain` - the full surface (33 tools, including `brain_health` since v0.14.0); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
+- `open-second-brain` - the full surface (35 tools, including `brain_health`, `brain_agent_query`, and `brain_agent_diff`); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
 - `open-second-brain-writer` - a minimal always-loaded surface of four tools: `brain_feedback`, `brain_apply_evidence`, `brain_note` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md`, v0.10.10). The agent records taste signals, evidence events, and milestone notes - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).
