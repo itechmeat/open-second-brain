@@ -1,6 +1,37 @@
 import { describe, expect, test } from "bun:test";
 
-import { normaliseTextField, redactRawOutput, sanitiseTextField } from "../../src/core/redactor.ts";
+import {
+  PRIVATE_REGION_PLACEHOLDER,
+  normaliseTextField,
+  redactRawOutput,
+  sanitiseTextField,
+  stripPrivateRegions,
+} from "../../src/core/redactor.ts";
+
+describe("stripPrivateRegions", () => {
+  test("strips balanced private regions across lines", () => {
+    const input = "before <private>secret\nbody token=abc</private> after";
+    expect(stripPrivateRegions(input)).toBe(`before ${PRIVATE_REGION_PLACEHOLDER} after`);
+  });
+
+  test("matches private tags case-insensitively", () => {
+    const input = "A <PRIVATE>hidden</PrIvAtE> B";
+    expect(stripPrivateRegions(input)).toBe(`A ${PRIVATE_REGION_PLACEHOLDER} B`);
+  });
+
+  test("strips from an unclosed private tag to the end", () => {
+    const input = "keep <private>hide forever";
+    expect(stripPrivateRegions(input)).toBe(`keep ${PRIVATE_REGION_PLACEHOLDER}`);
+  });
+
+  test("runs before assignment redaction in redactRawOutput", () => {
+    const input = "visible api_key=keep <private>api_key=secret</private>";
+    const out = redactRawOutput(input);
+    expect(out).toContain("api_key=***REDACTED***");
+    expect(out).toContain(PRIVATE_REGION_PLACEHOLDER);
+    expect(out).not.toContain("secret");
+  });
+});
 
 describe("redactRawOutput (cross-module backward compat)", () => {
   test("masks api_key in env-style assignment", () => {

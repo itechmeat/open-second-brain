@@ -27,6 +27,8 @@
 
 const PLACEHOLDER = "***REDACTED***";
 
+export const PRIVATE_REGION_PLACEHOLDER = "***PRIVATE***";
+
 /**
  * Maximum input size accepted by `redactRawOutput`. Receipts have no
  * legitimate reason to embed multi-megabyte payloads — a runaway pipe
@@ -37,6 +39,9 @@ const PLACEHOLDER = "***REDACTED***";
 export const MAX_REDACTOR_INPUT = 256 * 1024;
 const TRUNCATION_MARKER =
   "\n\n[…truncated for size; original exceeded 256 KB. Inspect raw output before sharing.]\n";
+
+const PRIVATE_OPEN_TAG_RE = /<private\b[^>]*>/gi;
+const PRIVATE_CLOSE_TAG_RE = /<\/private>/gi;
 
 /**
  * Canonical list of secret-bearing field names. Each entry is the
@@ -87,11 +92,41 @@ const JSON_ENTRY_RE = new RegExp(
 // and only replace the token portion.
 const BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._\-+/=]+)/gi;
 
+export function stripPrivateRegions(text: string): string {
+  if (!text) return text;
+
+  let output = "";
+  let cursor = 0;
+  PRIVATE_OPEN_TAG_RE.lastIndex = 0;
+  PRIVATE_CLOSE_TAG_RE.lastIndex = 0;
+
+  while (cursor < text.length) {
+    PRIVATE_OPEN_TAG_RE.lastIndex = cursor;
+    const openMatch = PRIVATE_OPEN_TAG_RE.exec(text);
+    if (!openMatch) {
+      output += text.slice(cursor);
+      break;
+    }
+
+    output += text.slice(cursor, openMatch.index);
+    output += PRIVATE_REGION_PLACEHOLDER;
+
+    PRIVATE_CLOSE_TAG_RE.lastIndex = PRIVATE_OPEN_TAG_RE.lastIndex;
+    const closeMatch = PRIVATE_CLOSE_TAG_RE.exec(text);
+    if (!closeMatch) break;
+    cursor = PRIVATE_CLOSE_TAG_RE.lastIndex;
+  }
+
+  return output;
+}
+
 export function redactRawOutput(text: string): string {
   if (!text) return text;
 
   let out =
     text.length > MAX_REDACTOR_INPUT ? text.slice(0, MAX_REDACTOR_INPUT) + TRUNCATION_MARKER : text;
+
+  out = stripPrivateRegions(out);
 
   // Order matters: handle JSON entries first so the COLON_VALUE_RE
   // doesn't also match inside JSON pairs (the negative-lookbehind
