@@ -41,7 +41,7 @@ describe("brain_review_candidates MCP tool", () => {
     expect(tool?.inputSchema).toBeDefined();
   });
 
-  test("returns the six fields, all empty on a fresh vault", async () => {
+  test("returns the review fields, all empty on a fresh vault", async () => {
     const tool = BRAIN_TOOLS.find((t) => t.name === "brain_review_candidates");
     expect(tool).toBeDefined();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -54,5 +54,6 @@ describe("brain_review_candidates MCP tool", () => {
     expect(out["would_supersede"]).toEqual([]);
     expect(out["clusters_below_threshold"]).toEqual([]);
     expect(out["gated_retires"]).toEqual([]);
+    expect(out["intent_reviews"]).toEqual([]);
   });
 });

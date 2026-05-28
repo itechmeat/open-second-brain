@@ -24,7 +24,12 @@ describe("decideStatus", () => {
   } as any;
   const someRepoActivity = {
     ...noActivity,
-    repo: [{ path: "/a", git: { commits: 2, filesChanged: 1, insertions: 1, deletions: 0 } }],
+    repo: [
+      {
+        path: "/a",
+        git: { commits: 2, filesChanged: 1, insertions: 1, deletions: 0 },
+      },
+    ],
   };
   const someMtimeActivity = {
     ...noActivity,
@@ -34,6 +39,19 @@ describe("decideStatus", () => {
     ...noActivity,
     vaultDelta: { newSignals: 0, newPreferences: 1, newRetired: 0, total: 1 },
   };
+  const highComplexity = {
+    ...noActivity,
+    complexity: {
+      schema_version: 1,
+      generated_at: "2026-05-28T00:00:00.000Z",
+      score: 12,
+      ratio: 12,
+      thinking_activity: 0,
+      structural_complexity: 12,
+      warning: true,
+      factors: [{ name: "structure_churn", value: 12, weight: 1 }],
+    },
+  } as any;
 
   test("0 events + 0 activity → info", () => {
     expect(decideStatus(noEvents, noActivity)).toBe("info");
@@ -51,9 +69,13 @@ describe("decideStatus", () => {
   test("0 events + vault delta → alert", () => {
     expect(decideStatus(noEvents, someVaultDelta)).toBe("alert");
   });
-  test("taste events present (feedback or apply_evidence) → ok regardless of activity", () => {
+  test("0 events + high complexity-to-thinking ratio → alert", () => {
+    expect(decideStatus(noEvents, highComplexity)).toBe("alert");
+  });
+  test("taste events present → ok unless complexity warning fires", () => {
     expect(decideStatus(someTasteEvents, noActivity)).toBe("ok");
     expect(decideStatus(someTasteEvents, someRepoActivity)).toBe("ok");
+    expect(decideStatus(someTasteEvents, highComplexity)).toBe("alert");
   });
 
   test("only `other` events (snapshot/dream/import) do NOT count as taste → alert if activity", () => {

@@ -9,8 +9,20 @@ describe("renderReport", () => {
       status: "ok",
       events: {
         byAgent: {
-          "@claude-vps-agent": { feedback: 2, apply_evidence: 3, note: 1, other: 0, total: 6 },
-          "@codex-vps-agent": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 },
+          "@claude-vps-agent": {
+            feedback: 2,
+            apply_evidence: 3,
+            note: 1,
+            other: 0,
+            total: 6,
+          },
+          "@codex-vps-agent": {
+            feedback: 0,
+            apply_evidence: 0,
+            note: 0,
+            other: 0,
+            total: 0,
+          },
         },
         unknownAgents: [],
         total: 6,
@@ -19,11 +31,21 @@ describe("renderReport", () => {
         repo: [
           {
             path: "/srv/projects/foo",
-            git: { commits: 4, filesChanged: 27, insertions: 312, deletions: 148 },
+            git: {
+              commits: 4,
+              filesChanged: 27,
+              insertions: 312,
+              deletions: 148,
+            },
           },
         ],
         nonRepo: [],
-        vaultDelta: { newSignals: 1, newPreferences: 0, newRetired: 0, total: 1 },
+        vaultDelta: {
+          newSignals: 1,
+          newPreferences: 0,
+          newRetired: 0,
+          total: 1,
+        },
       },
     });
     expect(text).toContain("OSB discipline");
@@ -44,14 +66,26 @@ describe("renderReport", () => {
       timezone: "UTC",
       status: "alert",
       events: {
-        byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } },
+        byAgent: {
+          "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 },
+        },
         unknownAgents: [],
         total: 0,
       },
       activity: {
-        repo: [{ path: "/x", git: { commits: 3, filesChanged: 5, insertions: 10, deletions: 2 } }],
+        repo: [
+          {
+            path: "/x",
+            git: { commits: 3, filesChanged: 5, insertions: 10, deletions: 2 },
+          },
+        ],
         nonRepo: [],
-        vaultDelta: { newSignals: 0, newPreferences: 0, newRetired: 0, total: 0 },
+        vaultDelta: {
+          newSignals: 0,
+          newPreferences: 0,
+          newRetired: 0,
+          total: 0,
+        },
       },
     });
     expect(text).toContain("Status: alert");
@@ -65,17 +99,33 @@ describe("renderReport", () => {
       timezone: "UTC",
       status: "alert",
       events: {
-        byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } },
+        byAgent: {
+          "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 },
+        },
         unknownAgents: [],
         total: 0,
       },
       activity: {
-        repo: [{ path: "/x", git: { commits: 3, filesChanged: 5, insertions: 10, deletions: 2 } }],
+        repo: [
+          {
+            path: "/x",
+            git: { commits: 3, filesChanged: 5, insertions: 10, deletions: 2 },
+          },
+        ],
         nonRepo: [],
-        vaultDelta: { newSignals: 0, newPreferences: 0, newRetired: 0, total: 0 },
+        vaultDelta: {
+          newSignals: 0,
+          newPreferences: 0,
+          newRetired: 0,
+          total: 0,
+        },
         transcripts: {
           byRuntime: [
-            { runtime: "claudecode", fileCount: 2, agentHint: "claude-vps-agent" },
+            {
+              runtime: "claudecode",
+              fileCount: 2,
+              agentHint: "claude-vps-agent",
+            },
             { runtime: "codex", fileCount: 0, agentHint: "codex-vps-agent" },
           ],
           totalFiles: 2,
@@ -87,22 +137,78 @@ describe("renderReport", () => {
     expect(text).toContain("transcript\\-confirmed");
   });
 
+  test("status: alert + complexity warning adds productivity-trap sub-reason", () => {
+    const text = renderReport({
+      localDate: "2026-05-17",
+      timezone: "UTC",
+      status: "alert",
+      events: {
+        byAgent: {
+          "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 },
+        },
+        unknownAgents: [],
+        total: 0,
+      },
+      activity: {
+        repo: [],
+        nonRepo: [],
+        vaultDelta: {
+          newSignals: 0,
+          newPreferences: 0,
+          newRetired: 0,
+          total: 0,
+        },
+        complexity: {
+          schema_version: 1,
+          generated_at: "2026-05-28T00:00:00.000Z",
+          score: 12,
+          ratio: 12,
+          thinking_activity: 0,
+          structural_complexity: 12,
+          warning: true,
+          factors: [{ name: "structure_churn", value: 12, weight: 1 }],
+        },
+      },
+    });
+    expect(text).toContain("\\- complexity — score 12, thinking 0, ratio 12");
+    expect(text).toContain("complexity — score 12, thinking 0, ratio 12");
+    expect(text).toContain("productivity\\-trap");
+  });
+
   test("transcripts with zero files omit the line and skip the sub-reason", () => {
     const text = renderReport({
       localDate: "2026-05-17",
       timezone: "UTC",
       status: "alert",
       events: {
-        byAgent: { "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 } },
+        byAgent: {
+          "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 },
+        },
         unknownAgents: [],
         total: 0,
       },
       activity: {
-        repo: [{ path: "/x", git: { commits: 1, filesChanged: 1, insertions: 1, deletions: 0 } }],
+        repo: [
+          {
+            path: "/x",
+            git: { commits: 1, filesChanged: 1, insertions: 1, deletions: 0 },
+          },
+        ],
         nonRepo: [],
-        vaultDelta: { newSignals: 0, newPreferences: 0, newRetired: 0, total: 0 },
+        vaultDelta: {
+          newSignals: 0,
+          newPreferences: 0,
+          newRetired: 0,
+          total: 0,
+        },
         transcripts: {
-          byRuntime: [{ runtime: "claudecode", fileCount: 0, agentHint: "claude-vps-agent" }],
+          byRuntime: [
+            {
+              runtime: "claudecode",
+              fileCount: 0,
+              agentHint: "claude-vps-agent",
+            },
+          ],
           totalFiles: 0,
         },
       },

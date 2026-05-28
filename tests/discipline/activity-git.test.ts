@@ -11,7 +11,9 @@ let repo: string;
 beforeAll(() => {
   repo = mkdtempSync(join(tmpdir(), "o2b-disc-git-"));
   execSync("git init -q -b main", { cwd: repo });
-  execSync("git config user.email t@t && git config user.name t", { cwd: repo });
+  execSync("git config user.email t@t && git config user.name t", {
+    cwd: repo,
+  });
   writeFileSync(join(repo, "a.txt"), "hello\n");
   execSync("git add a.txt && git commit -q -m c1 --date=2026-05-17T10:00:00Z", {
     cwd: repo,
@@ -38,6 +40,7 @@ describe("gitActivity", () => {
     });
     expect(out?.commits).toBe(2);
     expect(out?.filesChanged).toBe(1);
+    expect(out?.pathsChanged).toEqual(["a.txt"]);
     expect(out?.insertions).toBe(2); // 1 + 1
     expect(out?.deletions).toBe(0);
   });

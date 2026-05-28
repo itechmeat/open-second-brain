@@ -48,6 +48,12 @@ export function renderReport(r: RenderInput): string {
   lines.push(
     `\\- vault — ${vd.newSignals} new signals, ${vd.newPreferences} new preferences, ${vd.newRetired} new retired`,
   );
+  const complexity = r.activity.complexity;
+  if (complexity !== undefined) {
+    lines.push(
+      `\\- complexity — score ${complexity.score}, thinking ${complexity.thinking_activity}, ratio ${formatRatio(complexity.ratio)}`,
+    );
+  }
   const transcripts = r.activity.transcripts;
   if (transcripts && transcripts.byRuntime.length > 0) {
     const parts = transcripts.byRuntime
@@ -78,6 +84,16 @@ export function renderReport(r: RenderInput): string {
         "_Sub\\-reason: transcript\\-confirmed — runtime session files dated to this window\\._",
       );
     }
+    if (complexity?.warning === true) {
+      lines.push(
+        "_Sub\\-reason: productivity\\-trap — vault structure grew faster than recorded thinking\\._",
+      );
+    }
   }
   return lines.join("\n");
+}
+
+function formatRatio(value: number): string {
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(2);
 }

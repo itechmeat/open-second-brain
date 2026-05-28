@@ -29,6 +29,9 @@ o2b brain dream               Run the deterministic consolidation pass (idempote
 o2b brain apply-evidence      Record applied / violated against a preference for a durable artifact
 o2b brain note <text>         Append a one-line narrative milestone to Brain/log/<today>.md (cron / shell mirror of brain_note)
 o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions; --window 7d for arbitrary lookback; Markdown links follow link_output_format / OBSIDIAN_LINK_FORMAT
+o2b brain intent-review       Read-only pre-dream review of active signal clusters; --now ISO; --json mirrors brain_intent_review
+o2b brain retention           Recommendation-only lifecycle review over retired preferences and processed signals; --now ISO; --json mirrors brain_retention
+o2b brain monthly             Month-level Brain synthesis over timeline events, transitions, retirements, contradictions, and neglected areas; --month YYYY-MM; --json mirrors brain_monthly_review
 o2b brain query               Read helper: by preference, by topic, or by log timestamp
 o2b brain agent-query         Read source-agent provenance; filters by --agent, --topic, --query, --kind, --limit; --json mirrors brain_agent_query
 o2b brain agent-diff          Compare source-agent coverage in browse/search/diff/map modes; --json mirrors brain_agent_diff
@@ -60,6 +63,7 @@ o2b brain evolution           Per-preference or per-topic belief evolution with 
 o2b brain stale               Structural staleness report (preferences / signals / log files) using configurable per-kind thresholds
 o2b brain daily               Daily brief: counters, transitions, source pointers
 o2b brain weekly              7-day synthesis with contradictions list (signal-suppressed events + apply-evidence violated rows)
+o2b brain monthly             Monthly synthesis: event count, status transitions, retirements, contradictions, neglected areas
 ```
 
 ### Maintenance and operator surfaces
@@ -88,7 +92,7 @@ o2b vault inspect <relpath>   Point-check one vault-relative path; reports match
 ## Discipline (daily logging cron)
 
 ```text
-o2b discipline report         Render the daily MarkdownV2 block to stdout (brain-event counts per agent vs git/mtime activity); status ok | info | alert
+o2b discipline report         Render the daily MarkdownV2 block to stdout (brain-event counts per agent vs git/mtime/vault activity plus complexity-to-thinking ratio); status ok | info | alert
 o2b discipline install        Register the Hermes cron job that delivers the report. --telegram-target is required; --at defaults to "59 4 * * *" UTC; --weekly installs a Monday 08:59 weekly digest
 o2b discipline uninstall      Remove the cron job; --weekly removes only the weekly digest, without flag removes both
 ```

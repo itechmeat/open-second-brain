@@ -31,6 +31,7 @@ describe("mtimeActivity", () => {
       endUtc: new Date("2026-05-18T00:00:00Z"),
     });
     expect(out.modifiedFiles).toBe(3);
+    expect(out.modifiedPaths).toEqual(["in1.txt", "in2.md", "subdir/in3.md"]);
     rmSync(root, { recursive: true });
   });
 });

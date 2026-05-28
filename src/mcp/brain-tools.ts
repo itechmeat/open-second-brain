@@ -67,6 +67,9 @@ import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts"
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
+import { buildIntentReview } from "../core/brain/intent-review.ts";
+import { buildRetentionReview } from "../core/brain/retention.ts";
+import { buildMonthlyReview, normalizeMonthlyReviewMonth } from "../core/brain/monthly-review.ts";
 import { buildReviewCandidates } from "../core/brain/review-candidates.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
 import { buildOperatorSummary } from "../core/brain/trust/operator-summary.ts";
@@ -314,6 +317,72 @@ async function toolBrainDream(
 
 // ----- brain_review_candidates --------------------------------------------
 
+async function toolBrainIntentReview(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const nowDate = coerceIsoDate(args, "now");
+  const report = buildIntentReview(ctx.vault, nowDate ? { now: nowDate } : {});
+  return {
+    schema_version: report.schema_version,
+    generated_at: report.generated_at,
+    reviews: report.reviews.map((review) => ({
+      topic: review.topic,
+      decision: review.decision,
+      signal_count: review.signal_count,
+      risk_band: review.risk_band,
+      risk_score: review.risk_score,
+      reasons: [...review.reasons],
+    })),
+  };
+}
+
+async function toolBrainRetention(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const nowDate = coerceIsoDate(args, "now");
+  const report = buildRetentionReview(ctx.vault, nowDate ? { now: nowDate } : {});
+  return {
+    schema_version: report.schema_version,
+    generated_at: report.generated_at,
+    summary: report.summary,
+    recommendations: report.recommendations.map((recommendation) => ({
+      id: recommendation.id,
+      artifact_type: recommendation.artifact_type,
+      action: recommendation.action,
+      reason: recommendation.reason,
+      path: recommendation.path,
+    })),
+  };
+}
+
+async function toolBrainMonthlyReview(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const monthRaw = args["month"];
+  let month: string | undefined;
+  if (monthRaw !== undefined && monthRaw !== null) {
+    if (typeof monthRaw !== "string") {
+      throw new MCPError(INVALID_PARAMS, "brain_monthly_review: month must be YYYY-MM");
+    }
+    try {
+      month = normalizeMonthlyReviewMonth(monthRaw);
+    } catch {
+      throw new MCPError(INVALID_PARAMS, "brain_monthly_review: month must be YYYY-MM");
+    }
+  }
+  const report = buildMonthlyReview(ctx.vault, month ? { month } : {});
+  return {
+    schema_version: report.schema_version,
+    generated_at: report.generated_at,
+    month: report.month,
+    window: report.window,
+    summary: report.summary,
+  };
+}
+
 async function toolBrainReviewCandidates(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -345,6 +414,14 @@ async function toolBrainReviewCandidates(
       violated_count: g.violated_count,
       threshold: g.threshold,
       attempted_reason: g.attempted_reason,
+    })),
+    intent_reviews: report.intent_reviews.map((review) => ({
+      topic: review.topic,
+      decision: review.decision,
+      signal_count: review.signal_count,
+      risk_band: review.risk_band,
+      risk_score: review.risk_score,
+      reasons: [...review.reasons],
     })),
   };
 }
@@ -1517,8 +1594,13 @@ async function toolBrainContextPack(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const maxRaw = args["max_tokens"];
-  const maxTokens = typeof maxRaw === "number" ? maxRaw : Number.parseInt(String(maxRaw ?? ""), 10);
-  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
+  const maxTokens =
+    typeof maxRaw === "number"
+      ? maxRaw
+      : typeof maxRaw === "string" && /^[0-9]+$/.test(maxRaw.trim())
+        ? Number.parseInt(maxRaw.trim(), 10)
+        : Number.NaN;
+  if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
     throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
@@ -1623,9 +1705,59 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainDream,
   },
   {
+    name: "brain_intent_review",
+    description:
+      "Read-only pre-dream intent review over active signal clusters. Returns each topic's decision, signal count, risk band, risk score, and reasons without mutating files.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        now: {
+          type: "string",
+          description:
+            "Optional ISO-8601 timestamp used as the wall clock for the review (testing / replay).",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainIntentReview,
+  },
+  {
+    name: "brain_retention",
+    description:
+      "Recommendation-only lifecycle review over retired preferences and processed signals. Returns keep/improve/park/prune candidates and never deletes or moves artifacts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        now: {
+          type: "string",
+          description:
+            "Optional ISO-8601 timestamp used as the wall clock for the review (testing / replay).",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainRetention,
+  },
+  {
+    name: "brain_monthly_review",
+    description:
+      "Read-only monthly synthesis over Brain timeline activity: event count, status transitions, retirements, contradictions, and neglected areas.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        month: {
+          type: "string",
+          description: "Optional target month in YYYY-MM form. Defaults to the current UTC month.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainMonthlyReview,
+  },
+  {
     name: "brain_review_candidates",
     description:
-      "Read-only preview of what the next `brain_dream` invocation would do. Returns `would_create`, `would_promote`, `would_retire`, `would_supersede`, `clusters_below_threshold`, and `gated_retires` without mutating any files. Useful for agents that want to be deliberate before triggering the learning pass, or for operators inspecting the dream pass intent.",
+      "Read-only preview of what the next `brain_dream` invocation would do. Returns `would_create`, `would_promote`, `would_retire`, `would_supersede`, `clusters_below_threshold`, `gated_retires`, and `intent_reviews` without mutating any files. Useful for agents that want to be deliberate before triggering the learning pass, or for operators inspecting the dream pass intent.",
     inputSchema: {
       type: "object",
       properties: {

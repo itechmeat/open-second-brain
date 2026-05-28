@@ -24,7 +24,9 @@ describe("runDisciplineReport", () => {
     const repo = join(vault, "repo");
     mkdirSync(repo);
     execSync("git init -q -b main", { cwd: repo });
-    execSync("git config user.email t@t && git config user.name t", { cwd: repo });
+    execSync("git config user.email t@t && git config user.name t", {
+      cwd: repo,
+    });
     writeFileSync(join(repo, "a.txt"), "hi\n");
     execSync("git add . && git commit -q -m c1", {
       cwd: repo,
@@ -42,6 +44,49 @@ describe("runDisciplineReport", () => {
     expect(res.status).toBe("alert");
     expect(res.text).toContain("Status: alert");
     expect(res.text).toContain("1 commits");
+    rmSync(vault, { recursive: true });
+  });
+
+  test("end-to-end: high structure churn emits complexity warning", () => {
+    const vault = mkdtempSync(join(tmpdir(), "o2b-disc-complexity-vault-"));
+    mkdirSync(join(vault, "Brain", "log"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\ndiscipline_report:\n" +
+        "  enabled: true\n  timezone: UTC\n" +
+        "  watched_paths:\n    - " +
+        vault +
+        "/repo\n" +
+        "  known_agents:\n    - '@claude-vps-agent'\n",
+      "utf8",
+    );
+
+    const repo = join(vault, "repo");
+    mkdirSync(repo);
+    execSync("git init -q -b main", { cwd: repo });
+    execSync("git config user.email t@t && git config user.name t", {
+      cwd: repo,
+    });
+    for (let index = 0; index < 12; index++) {
+      writeFileSync(join(repo, `structure-${index}.md`), "metadata only\n");
+    }
+    execSync("git add . && git commit -q -m structure", {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_COMMITTER_DATE: "2026-05-17T10:00:00Z",
+        GIT_AUTHOR_DATE: "2026-05-17T10:00:00Z",
+      },
+    });
+
+    const res = runDisciplineReport({
+      vault,
+      now: new Date("2026-05-18T01:00:00Z"),
+    });
+    expect(res.status).toBe("alert");
+    expect(res.activity?.complexity?.warning).toBe(true);
+    expect(res.text).toContain("complexity");
+    expect(res.text).toContain("productivity\\-trap");
     rmSync(vault, { recursive: true });
   });
 
@@ -70,7 +115,11 @@ describe("runDisciplineReport", () => {
   test("malformed Brain config is not silently disabled", () => {
     const vault = mkdtempSync(join(tmpdir(), "o2b-disc-bad-"));
     mkdirSync(join(vault, "Brain"), { recursive: true });
-    writeFileSync(join(vault, "Brain", "_brain.yaml"), "not: valid: yaml\n", "utf8");
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "not: valid: yaml\n",
+      "utf8",
+    );
     expect(() => runDisciplineReport({ vault, now: new Date() })).toThrow();
     rmSync(vault, { recursive: true });
   });

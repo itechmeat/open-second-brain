@@ -10,11 +10,15 @@ export interface ActivityWindow {
 export interface GitActivity {
   readonly commits: number;
   readonly filesChanged: number;
+  readonly pathsChanged?: ReadonlyArray<string>;
   readonly insertions: number;
   readonly deletions: number;
 }
 
-export function gitActivity(path: string, win: ActivityWindow): GitActivity | null {
+export function gitActivity(
+  path: string,
+  win: ActivityWindow,
+): GitActivity | null {
   if (!existsSync(join(path, ".git"))) return null;
   const since = win.startUtc.toISOString();
   const until = win.endUtc.toISOString();
@@ -60,5 +64,11 @@ export function gitActivity(path: string, win: ActivityWindow): GitActivity | nu
     seenFiles.add(m[3]!);
   }
 
-  return { commits, filesChanged: seenFiles.size, insertions, deletions };
+  return {
+    commits,
+    filesChanged: seenFiles.size,
+    pathsChanged: [...seenFiles].toSorted(),
+    insertions,
+    deletions,
+  };
 }

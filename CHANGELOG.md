@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-05-28
+
+Brain Lifecycle Review Suite. Open Second Brain now adds read-only review
+surfaces around the existing deterministic learning loop: pre-dream signal
+readiness, retention recommendations, monthly timeline synthesis, schema
+contracts for lifecycle artifacts, and a discipline warning when vault
+structure grows faster than recorded thinking.
+
+### Added
+
+- `o2b brain intent-review` and `brain_intent_review` for deterministic
+  pre-dream review of active signal clusters. `dream` and
+  `brain_review_candidates` now include the same `intent_reviews` audit data
+  without changing existing mutation outcomes.
+- `o2b brain retention` and `brain_retention` for recommendation-only
+  keep/improve/park/prune review over retired preferences and processed
+  signals. The review never deletes, moves, or edits Brain artifacts.
+- `o2b brain monthly` and `brain_monthly_review` for monthly synthesis over
+  timeline events, status transitions, retirements, contradictions, and
+  neglected areas.
+- Public lifecycle schema artifacts under `schemas/brain/` plus the local
+  schema-contract registry used by tests and agent-facing envelopes.
+- Discipline-report complexity-to-thinking metric, with an explicit
+  productivity-trap sub-reason when structural churn outpaces recorded taste
+  or evidence output.
+
+### Changed
+
+- Brain lifecycle CLI/MCP surfaces now reject malformed timestamps and month
+  values with stable validation errors.
+
 ## [0.16.0] - 2026-05-28
 
 Agent boundary control surfaces. Open Second Brain now gives agents a
@@ -1808,7 +1839,7 @@ with `source_type: inline`, the source-file wikilink in `source`,
 and a `dedup_hash`over the normalised payload. After capture
 the source line is annotated`@osb✓ [[sig-...]]`(inline form)
 or the info-string flips to`osb-checked`with a`<!-- @osb✓
-    [[sig-...]] -->`comment line (block form), making re-runs
+      [[sig-...]] -->`comment line (block form), making re-runs
 idempotent. Default ignore set covers`Brain/`, `.git`,
 `node_modules`, `.obsidian`, `.trash`, `.stversions`,
 `.open-second-brain`; additional excludes via `--exclude`,
@@ -3154,6 +3185,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.17.0]: https://github.com/itechmeat/open-second-brain/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/itechmeat/open-second-brain/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/itechmeat/open-second-brain/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/itechmeat/open-second-brain/compare/v0.14.0...v0.14.1
