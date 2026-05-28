@@ -16,6 +16,7 @@ import { withTimeout } from "../core/search/with-timeout.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceBoolOptional, coerceStringOptional } from "./coerce.ts";
+import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -223,6 +224,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       "Full-text search across the vault. Optional semantic layer when configured. Read-only.",
     inputSchema: SEARCH_INPUT_SCHEMA,
     outputSchema: SEARCH_OUTPUT_SCHEMA,
+    previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainSearch,
   },
 ]);

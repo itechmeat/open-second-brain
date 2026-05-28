@@ -14,6 +14,14 @@
 
 import type { StoredArtifact } from "./artifact-store.ts";
 
+/**
+ * Shared default preview budget in characters (v0.18.0). Roughly ~500
+ * tokens of inline preview - enough to judge a result set, small enough
+ * that a dense vault's full payload never silently floods the context.
+ * Tools opt in by setting `previewBudget` to this constant.
+ */
+export const MCP_PREVIEW_BUDGET = 2000;
+
 /** Envelope substituted for an over-budget tool result in `content[0].text`. */
 export interface PreviewEnvelope {
   readonly preview_truncated: true;

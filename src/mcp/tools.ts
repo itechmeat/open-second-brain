@@ -34,6 +34,7 @@ import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
 import { coerceStr, coerceInt } from "./coerce.ts";
 import type { OutputSchema } from "./output-contract.ts";
 import type { ArtifactStore } from "./artifact-store.ts";
+import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 
 export interface ServerContext {
   readonly vault: string;
@@ -246,6 +247,7 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
       name: "second_brain_status",
       description: "Report Open Second Brain configuration and vault status.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      previewBudget: MCP_PREVIEW_BUDGET,
       handler: toolStatus,
     },
     {
@@ -267,6 +269,7 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         },
         additionalProperties: false,
       },
+      previewBudget: MCP_PREVIEW_BUDGET,
       handler: toolQuery,
     },
     // `second_brain_capture` and `event_log_append` were retired from
