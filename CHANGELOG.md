@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-05-28
+
+Typed graph semantics. The vault's link graph and page frontmatter gain
+typed, machine-readable meaning that the search and query layers honor:
+edges can carry a semantic relation, pages can declare typed
+relationships and a visibility scope, and the Model Context Protocol
+servers configured around the vault become a queryable landscape.
+
+### Added
+
+- Relation vocabulary as a single validation boundary
+  (`src/core/graph/relation-vocab.ts`) plus a nullable `relation` column
+  on the search `links` table (schema migration v3), orthogonal to the
+  syntactic `link_type`. The vocabulary is data-driven and carries no
+  SQL CHECK, so adding a relation type is a one-line change rather than a
+  migration.
+- Typed frontmatter relationships. Any page can declare `related`,
+  `extends`, `contradicts`, or `superseded_by` in frontmatter; these
+  become typed edges in the graph, are recorded with a relation type in
+  the backlink index, and surface inline on `brain_search` results
+  (structured output and CLI render). The result `relations` field is
+  computed at query time and never stored.
+- Content visibility scoping. A page may declare a `visibility:`
+  frontmatter field; `brain_search` honors a requested visibility scope
+  (`visibility` MCP argument, `--visibility` CLI flag). Untagged pages
+  are always returned; a tagged page only when the caller's scope
+  includes one of its values.
+- `brain_mcp_landscape` MCP tool and `o2b brain mcp-landscape` CLI verb:
+  list the MCP servers configured across the vault - each server's name,
+  source config file, packages, and required env-var names. Environment
+  values are never read. Recognises `.mcp.json`, `mcp.json`,
+  `mcp_servers.json`, and `claude_desktop_config.json`.
+
+### Changed
+
+- Vaults that adopt frontmatter relations: those typed edges are written
+  as wikilink-type edges, so `related`/`extends`/etc. now also
+  contribute to link-boost and traversal recall. Additive; vaults
+  without relation frontmatter are unaffected.
+
+### Notes
+
+- The schema migration is additive and reindex-safe; existing link rows
+  keep a NULL relation until a reindex repopulates frontmatter-derived
+  edges. All-untagged vaults see byte-identical search results.
+
 ## [0.18.0] - 2026-05-28
 
 MCP context economy. Large tool results no longer flood the calling
@@ -3215,6 +3261,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.19.0]: https://github.com/itechmeat/open-second-brain/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/itechmeat/open-second-brain/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/itechmeat/open-second-brain/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/itechmeat/open-second-brain/compare/v0.15.0...v0.16.0
