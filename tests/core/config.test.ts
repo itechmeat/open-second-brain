@@ -9,6 +9,7 @@ import {
   parseSimpleYaml,
   redactMapping,
   resolveAgentName,
+  resolveLinkOutputFormat,
   resolveTimezone,
   resolveVault,
   setConfigValue,
@@ -26,6 +27,7 @@ beforeEach(() => {
     "VAULT_DIR",
     "VAULT_AGENT_NAME",
     "VAULT_TIMEZONE",
+    "OBSIDIAN_LINK_FORMAT",
   ]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
@@ -196,6 +198,31 @@ describe("resolveAgentName", () => {
 
   test("returns 'agent' literal when nothing configured", () => {
     expect(resolveAgentName(join(tmp, "missing.yaml"))).toBe("agent");
+  });
+});
+
+describe("resolveLinkOutputFormat", () => {
+  test("defaults to wikilink", () => {
+    expect(resolveLinkOutputFormat(join(tmp, "missing.yaml"))).toBe("wikilink");
+  });
+
+  test("reads markdown from config", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'link_output_format: "markdown"\n');
+    expect(resolveLinkOutputFormat(cfg)).toBe("markdown");
+  });
+
+  test("invalid config falls back to wikilink", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'link_output_format: "html"\n');
+    expect(resolveLinkOutputFormat(cfg)).toBe("wikilink");
+  });
+
+  test("OBSIDIAN_LINK_FORMAT env wins over config", () => {
+    process.env["OBSIDIAN_LINK_FORMAT"] = "markdown";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'link_output_format: "wikilink"\n');
+    expect(resolveLinkOutputFormat(cfg)).toBe("markdown");
   });
 });
 

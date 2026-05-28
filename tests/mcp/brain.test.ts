@@ -416,6 +416,31 @@ describe("brain_digest", () => {
     expect(s.content).toContain("Confirmed");
   });
 
+  test("uses configured markdown link output in Markdown digest", async () => {
+    atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\nlink_output_format: markdown\n`);
+    writePreference(vault, {
+      slug: "confirmed-rule",
+      topic: "confirmed-rule",
+      principle: "Confirmed test rule.",
+      created_at: "2026-05-14T09:00:00Z",
+      unconfirmed_until: "2026-05-14T09:00:00Z",
+      status: "confirmed",
+      evidenced_by: [],
+      confirmed_at: "2026-05-14T09:00:00Z",
+      applied_count: 1,
+      scope: "process",
+    });
+    const server = makeServer();
+    await initialize(server);
+    const r = await call(server, "brain_digest", {
+      since: "2026-05-14T00:00:00Z",
+      until: "2026-05-14T23:59:59Z",
+    });
+    const s = r.result.structuredContent;
+    expect(s.content).toContain("[Confirmed test rule.](Brain/preferences/pref-confirmed-rule.md)");
+    expect(s.content).not.toContain("[[pref-confirmed-rule|Confirmed test rule.]]");
+  });
+
   test("format=json returns valid JSON content", async () => {
     const server = makeServer();
     await initialize(server);

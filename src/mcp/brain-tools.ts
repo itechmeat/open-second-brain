@@ -40,7 +40,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 
 import { existsSync, readFileSync } from "node:fs";
 
-import { resolveAgentName } from "../core/config.ts";
+import { resolveAgentName, resolveLinkOutputFormat } from "../core/config.ts";
 import { brainActivePath, brainDirs } from "../core/brain/paths.ts";
 import {
   regenerateActive,
@@ -652,6 +652,7 @@ async function toolBrainDigest(
     ...(since ? { since } : {}),
     ...(until ? { until } : {}),
     format,
+    linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
   });
 
   return {

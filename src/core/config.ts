@@ -19,6 +19,8 @@ const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"] as
 
 const CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
 
+export type LinkOutputFormat = "wikilink" | "markdown";
+
 /**
  * Resolve the location of the plugin config file.
  *
@@ -169,6 +171,13 @@ export function resolveAgentName(configPath?: string): string {
   const value = data["agent_name"] ?? data["agentName"];
   if (value) return value;
   return "agent";
+}
+
+export function resolveLinkOutputFormat(configPath?: string): LinkOutputFormat {
+  const env = process.env["OBSIDIAN_LINK_FORMAT"];
+  const data = env ? {} : discoverConfig(configPath).data;
+  const raw = env ?? data["link_output_format"] ?? data["linkOutputFormat"];
+  return raw === "markdown" ? "markdown" : "wikilink";
 }
 
 /** Replace values for keys whose name suggests a secret with `[REDACTED]`. */

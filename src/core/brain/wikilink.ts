@@ -28,6 +28,8 @@
 
 import { basename } from "node:path";
 
+import type { LinkOutputFormat } from "../config.ts";
+
 /**
  * Strip wikilink decoration off `value` and return the bare target id.
  *
@@ -207,6 +209,8 @@ export const MAX_PREF_LINK_TITLE_LEN = 80;
 export function renderPrefLink(input: {
   readonly id: string;
   readonly principle?: string;
+  readonly format?: LinkOutputFormat;
+  readonly targetPath?: string;
 }): string {
   const raw = input.principle ?? "";
   // Sanitisation pipeline, in order:
@@ -229,13 +233,21 @@ export function renderPrefLink(input: {
     .replace(/[[\]|]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (title.length === 0) return `[[${input.id}]]`;
+  if (title.length === 0) {
+    if (input.format === "markdown") {
+      return renderMarkdownLink(input.id, inferBrainArtifactPath(input.id, input.targetPath));
+    }
+    return `[[${input.id}]]`;
+  }
   // Measure the cap against code-point count (Array.from yields one
   // entry per Unicode scalar) rather than UTF-16 code units so a
   // string of 50 astral glyphs (100 code units, 50 code points) is
   // not forced into the truncation path when the cap is 80.
   const codepoints = Array.from(title);
   if (codepoints.length <= MAX_PREF_LINK_TITLE_LEN) {
+    if (input.format === "markdown") {
+      return renderMarkdownLink(title, inferBrainArtifactPath(input.id, input.targetPath));
+    }
     return `[[${input.id}|${title}]]`;
   }
   // Truncate to the cap, then back off to the previous word boundary —
@@ -247,7 +259,26 @@ export function renderPrefLink(input: {
   let cutPoints = codepoints.slice(0, MAX_PREF_LINK_TITLE_LEN);
   const lastSpace = cutPoints.lastIndexOf(" ");
   if (lastSpace > 0) cutPoints = cutPoints.slice(0, lastSpace);
-  return `[[${input.id}|${cutPoints.join("")}…]]`;
+  const truncated = `${cutPoints.join("")}…`;
+  if (input.format === "markdown") {
+    return renderMarkdownLink(truncated, inferBrainArtifactPath(input.id, input.targetPath));
+  }
+  return `[[${input.id}|${truncated}]]`;
+}
+
+function inferBrainArtifactPath(id: string, targetPath?: string): string {
+  if (targetPath) return targetPath;
+  if (id.startsWith("ret-")) return `Brain/retired/${id}.md`;
+  if (id.startsWith("pref-")) return `Brain/preferences/${id}.md`;
+  return `Brain/${id}.md`;
+}
+
+function renderMarkdownLink(label: string, targetPath: string): string {
+  return `[${label}](${encodeMarkdownTarget(targetPath)})`;
+}
+
+function encodeMarkdownTarget(targetPath: string): string {
+  return encodeURI(targetPath).replace(/\)/g, "%29");
 }
 
 function validateRangeText(text: string): ArtifactRange | null {
