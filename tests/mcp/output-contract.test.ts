@@ -5,6 +5,7 @@ import {
   validateOutputContract,
   type OutputSchema,
 } from "../../src/mcp/output-contract.ts";
+import { JSONRPC_VERSION, MCPServer } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
 describe("validateOutputContract", () => {
@@ -78,5 +79,23 @@ describe("registered output contracts", () => {
     for (const name of ["brain_context", "brain_pinned_context", "brain_query", "brain_search"]) {
       expect(tools.get(name)?.outputSchema).toBeDefined();
     }
+  });
+
+  test("tools/list advertises output schemas for contracted tools", async () => {
+    const server = new MCPServer({ vault: "/tmp/o2b-output-contract-test" });
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 1,
+      method: "tools/list",
+    })) as any;
+    const tools = new Map(
+      (response.result.tools as Array<{ name: string; outputSchema?: unknown }>).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    expect(tools.get("brain_context")?.outputSchema).toBeDefined();
+    expect(tools.get("brain_pinned_context")?.outputSchema).toBeDefined();
+    expect(tools.get("brain_feedback")?.outputSchema).toBeUndefined();
   });
 });
