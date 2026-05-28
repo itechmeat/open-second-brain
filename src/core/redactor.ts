@@ -139,13 +139,25 @@ export function stripPrivateRegions(text: string): string {
   return output;
 }
 
-export function redactRawOutput(text: string): string {
+export interface RedactRawOutputOptions {
+  /**
+   * Maximum input length before the truncation guard fires. Defaults to
+   * {@link MAX_REDACTOR_INPUT} (256 KiB) - the right cap for receipts,
+   * where a multi-megabyte payload is a runaway log pipe. Callers that
+   * must redact-without-losing-data (the MCP artifact store, whose whole
+   * job is to preserve the full payload for later fetch) pass
+   * `Number.POSITIVE_INFINITY` to disable truncation while still scrubbing
+   * secrets.
+   */
+  readonly maxInput?: number;
+}
+
+export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
   if (!text) return text;
 
+  const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
   let out =
-    text.length > MAX_REDACTOR_INPUT
-      ? text.slice(0, MAX_REDACTOR_INPUT) + TRUNCATION_MARKER
-      : text;
+    text.length > maxInput ? text.slice(0, maxInput) + TRUNCATION_MARKER : text;
 
   out = stripPrivateRegions(out);
 

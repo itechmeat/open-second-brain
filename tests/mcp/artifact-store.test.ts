@@ -64,6 +64,18 @@ describe("ArtifactStore", () => {
     expect(stored.fullChars).toBe(back.length);
   });
 
+  test("stores the full payload even when it exceeds the redactor's context cap", () => {
+    // The whole point of the artifact path is that brain_artifact_get can
+    // recover the COMPLETE payload. The receipt redactor caps input at
+    // 256 KiB for context protection; the artifact store must not inherit
+    // that cap or large results would be silently truncated on disk.
+    const store = new ArtifactStore({ vault, runId: "run-1" });
+    const big = "q".repeat(300 * 1024);
+    const stored = store.put(big);
+    expect(stored.fullChars).toBe(big.length);
+    expect(store.get(stored.artifactId)).toBe(big);
+  });
+
   test("prune removes run directories older than the TTL and keeps fresh ones", () => {
     const oldStore = new ArtifactStore({ vault, runId: "run-old" });
     oldStore.put("old payload");

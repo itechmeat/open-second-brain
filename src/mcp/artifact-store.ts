@@ -72,7 +72,10 @@ export class ArtifactStore {
    * and the atomic write simply re-lands identical bytes.
    */
   put(fullText: string): StoredArtifact {
-    const text = redactRawOutput(fullText);
+    // Scrub secrets but never truncate: the artifact IS the recoverable
+    // full payload, so the receipt-oriented 256 KiB context cap must not
+    // apply here, or large results would be silently clipped on disk.
+    const text = redactRawOutput(fullText, { maxInput: Number.POSITIVE_INFINITY });
     const artifactId = createHash("sha256")
       .update(text, "utf8")
       .digest("hex")

@@ -15,7 +15,7 @@ Separately, `brain_search`/`brain_query` return ranked results with no top-level
 - A per-tool, opt-in `previewBudget` (character count) on `ToolDefinition`. Over-budget tool results, **on the MCP JSON-RPC path only**, return a bounded, valid-JSON preview envelope in `content[0].text` plus an `artifact_id`.
 - A vault-local artifact store under `Brain/.artifacts/<run-id>/` that holds the full serialized payload (atomic write, secret-redacted, path-safe), with best-effort TTL pruning of stale run directories.
 - A new read-only MCP tool `brain_artifact_get(artifact_id)` that returns the full stored bytes.
-- A computed-at-recall-time `recall_hint` string on `brain_search` (and `brain_query`) derived from result counts via a single English template - no stored text, no per-language tables.
+- A computed-at-recall-time `recall_hint` string on `brain_search` derived from result counts via a single English template - no stored text, no per-language tables. (Scoped to `brain_search` only: `brain_query` is a preference/topic aggregation, not a ranked result set, so the ranked-hint shape - searchType / score / top hit - does not fit it.)
 - Budgets wired onto the known-large tools; agent-facing `instructions` updated to describe the preview/fetch protocol.
 
 ## Out of scope
@@ -29,7 +29,7 @@ Separately, `brain_search`/`brain_query` return ranked results with no top-level
 
 Variant 1 (single-seam byte budget), refined per the orchestrator decision in `variants.md`:
 
-The MCP dispatch path (`MCPServer.handleToolsCall`) validates the handler's full output against `outputSchema` (unchanged), serializes it, and if the serialized text exceeds the tool's `previewBudget`, it (a) writes the full text to the artifact store, and (b) returns an envelope whose `content[0].text` is a valid-JSON object `{preview_truncated: true, artifact_id, full_chars, bytes_preview}` where `bytes_preview` is the head slice of the full text capped to the budget (a string field, so the envelope always parses). `structuredContent` remains the full, schema-valid object. The CLI bridge (`callTool` -> `toolResult`) is untouched and always returns the full payload.
+The MCP dispatch path (`MCPServer.handleToolsCall`) validates the handler's full output against `outputSchema` (unchanged), serializes it, and if the serialized text exceeds the tool's `previewBudget`, it (a) writes the full text to the artifact store, and (b) returns an envelope whose `content[0].text` is a valid-JSON object `{preview_truncated: true, artifact_id, full_chars, bytes_preview, note}` where `bytes_preview` is the head slice of the full text capped to the budget (a string field, so the envelope always parses) and `note` is a fixed English instruction pointing the agent at `brain_artifact_get`. `structuredContent` remains the full, schema-valid object. The CLI bridge (`callTool` -> `toolResult`) is untouched and always returns the full payload.
 
 `brain_artifact_get` resolves `artifact_id` through path-safety validation and returns the stored full text. Unknown / expired ids return a tool-level error envelope.
 
