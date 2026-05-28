@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
+import { LATEST_SCHEMA_VERSION } from "../../src/core/search/schema.ts";
 
 let tmp: string;
 let vault: string;
@@ -63,7 +64,7 @@ test("search status --json after an index returns documents count", async () => 
   const obj = JSON.parse(out.stdout);
   expect(obj.exists).toBe(true);
   expect(obj.documents).toBe(2);
-  expect(obj.schema_version).toBe(2);
+  expect(obj.schema_version).toBe(LATEST_SCHEMA_VERSION);
 });
 
 test("search query returns a human-readable hit for indexed content", async () => {

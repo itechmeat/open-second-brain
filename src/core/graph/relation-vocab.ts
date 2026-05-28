@@ -8,11 +8,16 @@
  * relation string is hardcoded across call sites, and classification
  * happens at this one boundary.
  *
- * The vocabulary is data-driven and open: a default set lives here and
- * unknown relations are preserved by callers (and flagged by
- * `brain_doctor`), never silently dropped or hard-rejected at ingest.
- * Identifiers are language-neutral tokens, never human-facing prose, so
- * nothing here hardcodes a natural-language phrase.
+ * The vocabulary is data-driven: a default set lives here, and adding a
+ * relation type is a one-line change to that set - never a schema
+ * migration, because the `links.relation` column carries no SQL CHECK.
+ * The frontmatter ingest path only emits relations whose field name is
+ * in this set (`relationFromFrontmatterField` returns `null` otherwise),
+ * so an unrecognised frontmatter key is simply not treated as a
+ * relation. `isKnownRelation` is the predicate callers use to validate a
+ * relation token against the vocabulary. Identifiers are language-neutral
+ * tokens, never human-facing prose, so nothing here hardcodes a
+ * natural-language phrase.
  */
 
 /**

@@ -56,6 +56,17 @@ describe("parseMcpConfig (pure)", () => {
     expect(servers[0]!.packages).toEqual(["some-mcp-package"]);
   });
 
+  test("an inline KEY=value positional is never captured as a package", () => {
+    const json = JSON.stringify({
+      mcpServers: {
+        inlined: { command: "npx", args: ["TOKEN=sk-inline-leak-xyz", "@scope/pkg"] },
+      },
+    });
+    const servers = parseMcpConfig(json, ".mcp.json");
+    expect(servers[0]!.packages).toEqual(["@scope/pkg"]);
+    expect(JSON.stringify(servers)).not.toContain("sk-inline-leak-xyz");
+  });
+
   test("a local-binary command yields no package edge", () => {
     const json = JSON.stringify({
       mcpServers: { local: { command: "node", args: ["./server.js"] } },

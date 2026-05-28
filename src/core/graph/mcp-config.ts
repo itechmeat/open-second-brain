@@ -73,6 +73,15 @@ function isFlag(arg: string): boolean {
   return arg.startsWith("-");
 }
 
+/**
+ * A token that is not a package reference: a flag, or an inline
+ * `KEY=value` env assignment (whose value could be a secret). Both are
+ * skipped when selecting the package argument.
+ */
+function isNonPackageToken(arg: string): boolean {
+  return isFlag(arg) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg);
+}
+
 /** First non-flag argument from a runner's args (the package reference). */
 function packageFromArgs(command: string, args: string[]): string[] {
   let rest = args;
@@ -85,7 +94,7 @@ function packageFromArgs(command: string, args: string[]): string[] {
     // A bare binary (node, python, docker, a local path) - no package.
     return [];
   }
-  const pkg = rest.find((a) => !isFlag(a));
+  const pkg = rest.find((a) => !isNonPackageToken(a));
   return pkg ? [pkg] : [];
 }
 
@@ -143,7 +152,7 @@ function findConfigFiles(vault: string): string[] {
     return [];
   }
   walk(vault, "");
-  return found.sort();
+  return found.toSorted();
 }
 
 export interface McpLandscape {

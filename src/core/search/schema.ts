@@ -188,10 +188,10 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
     // v3 (typed graph semantics) - a nullable `relation` column on
     // `links` so an edge can carry a semantic relation type orthogonal
     // to its syntactic `link_type`. No CHECK constraint: the relation
-    // vocabulary is open/extensible and validated in the application
-    // layer (src/core/graph/relation-vocab.ts), so new relation types
-    // never need a migration. Existing rows keep a NULL relation until
-    // a reindex repopulates frontmatter-derived edges.
+    // vocabulary lives in the application layer
+    // (src/core/graph/relation-vocab.ts), so adding a relation type is a
+    // one-line change, never a migration. Existing rows keep a NULL
+    // relation until a reindex repopulates frontmatter-derived edges.
     version: 3,
     up(db) {
       const cols = db.query<{ name: string }, []>("PRAGMA table_info(links)").all();

@@ -121,8 +121,10 @@ export async function search(
     const hasPropertyFilter = opts.properties !== undefined && opts.properties.size > 0;
     // An explicit visibility scope can also drop ranked rows, so it
     // shares the property filter's overfetch. The default (no scope)
-    // path is left untouched so all-untagged vaults are byte-identical
-    // to prior behaviour.
+    // path does NOT overfetch up front - all-untagged vaults stay
+    // byte-identical to prior behaviour - and instead relies on the
+    // one-shot backfill below when tagged pages actually shrink the
+    // window.
     const visibilityScope = normalizeVisibilityScope(opts.visibility ?? []);
     const hasVisibilityRequest = (opts.visibility?.length ?? 0) > 0;
     const hasFrontmatterFilter = hasPropertyFilter || hasVisibilityRequest;
@@ -140,55 +142,75 @@ export async function search(
     const rankLimit =
       mmrActive || traversalActive ? Math.max(baseRankLimit, limit * 3, 30) : baseRankLimit;
 
-    let ranked = rankResults(
-      {
-        keyword: kwHits,
-        semantic: semHits,
-        hydrated,
-        inboundLinkSources,
-        tagsByDoc,
-        ...(entityMatchByChunk !== undefined ? { entityMatchByChunk } : {}),
-      },
-      {
-        keywordWeight: opts.keywordWeight ?? config.keywordWeight,
-        semanticWeight: opts.semanticWeight ?? config.semanticWeight,
-        limit: rankLimit,
-        semanticEnabled: policy.wantSemantic && semanticAttempted,
-      },
-    );
+    // Rank → traverse → diversify → property filter → visibility scope,
+    // for a given candidate cap. Returns the pre-visibility count, the
+    // post-visibility list, and whether the cap was actually hit (so the
+    // caller can tell "the pool ran out" from "the cap truncated more").
+    const assemble = (
+      rankCap: number,
+    ): { preVisibility: number; visible: ReadonlyArray<BrainSearchResult>; capHit: boolean } => {
+      let ranked = rankResults(
+        {
+          keyword: kwHits,
+          semantic: semHits,
+          hydrated,
+          inboundLinkSources,
+          tagsByDoc,
+          ...(entityMatchByChunk !== undefined ? { entityMatchByChunk } : {}),
+        },
+        {
+          keywordWeight: opts.keywordWeight ?? config.keywordWeight,
+          semanticWeight: opts.semanticWeight ?? config.semanticWeight,
+          limit: rankCap,
+          semanticEnabled: policy.wantSemantic && semanticAttempted,
+        },
+      );
+      const capHit = ranked.length >= rankCap;
+      // Link-graph traversal (v0.13.0): walk outbound links from the top
+      // hits and surface related documents not already matched, scored by
+      // decay. No-op when maxHops == 0. Runs before MMR so expansions are
+      // subject to the same diversity pass.
+      if (traversalActive && ranked.length > 0) {
+        ranked = applyTraversal(store, ranked, {
+          maxHops,
+          hopDecay: config.recall.hopDecay,
+          maxExpansionPerHit: config.recall.maxExpansionPerHit,
+        });
+      }
+      // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
+      if (mmrActive) {
+        ranked = mmrRerank(ranked, { lambda: mmrLambda });
+      }
+      // Optional post-rank property filter (v0.10.17). Reads each
+      // result's source frontmatter and drops rows whose scalars do not
+      // match the requested key/value pairs, then visibility scoping (v3)
+      // drops pages outside the requested visibility scope. Caching by
+      // document path bounds the read cost to the result set.
+      const propFiltered = hasPropertyFilter
+        ? applyPropertyFilter(ranked, opts.properties!, config.vault)
+        : ranked;
+      const visible = applyVisibilityScope(propFiltered, visibilityScope, config.vault);
+      return { preVisibility: propFiltered.length, visible, capHit };
+    };
 
-    // Link-graph traversal (v0.13.0): walk outbound links from the top
-    // hits and surface related documents not already matched, scored by
-    // decay. No-op when maxHops == 0. Runs before MMR so expansions are
-    // subject to the same diversity pass.
-    if (traversalActive && ranked.length > 0) {
-      ranked = applyTraversal(store, ranked, {
-        maxHops,
-        hopDecay: config.recall.hopDecay,
-        maxExpansionPerHit: config.recall.maxExpansionPerHit,
-      });
+    let assembled = assemble(rankLimit);
+    // Default-scope visibility (no explicit filter, so no overfetch above)
+    // can drop tagged pages and leave fewer than `limit` rows while more
+    // untagged matches sit deeper in the candidate pool. When that happens
+    // and the narrow cap was actually hit, re-assemble once at the wider
+    // cap from the same in-memory candidates - no extra DB fetch. Untagged
+    // vaults never drop rows, so this never fires and their results stay
+    // byte-identical.
+    if (
+      !hasFrontmatterFilter &&
+      assembled.visible.length < limit &&
+      assembled.visible.length < assembled.preVisibility &&
+      assembled.capHit
+    ) {
+      const wideCap = Math.max(limit * 5, 50, limit * 3, 30);
+      if (wideCap > rankLimit) assembled = assemble(wideCap);
     }
-
-    // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
-    if (mmrActive) {
-      ranked = mmrRerank(ranked, { lambda: mmrLambda });
-    }
-
-    // Optional post-rank property filter (v0.10.17). Reads each
-    // result's source frontmatter and drops rows whose scalars do
-    // not match the requested key/value pairs. Caching by document
-    // path keeps the read cost bounded by the result set, not the
-    // vault. After filtering we truncate back to the caller's
-    // declared `limit` so the property-filter overfetch above
-    // doesn't leak through.
-    const propFiltered = hasPropertyFilter
-      ? applyPropertyFilter(ranked, opts.properties!, config.vault)
-      : ranked;
-    // Visibility scoping (v3): drop pages whose declared visibility is
-    // not in the requested scope. Untagged pages always pass, so an
-    // all-untagged vault is unaffected.
-    const visFiltered = applyVisibilityScope(propFiltered, visibilityScope, config.vault);
-    const filtered = visFiltered.slice(0, limit);
+    const filtered = assembled.visible.slice(0, limit);
 
     // Typed graph semantics (v3): surface the typed relations each
     // result page declares in its frontmatter. Computed here from the
