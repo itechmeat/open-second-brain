@@ -4,7 +4,10 @@ import {
   importSession,
   importSessionPath,
 } from "../../../core/brain/sessions/import.ts";
-import { SessionImportError } from "../../../core/brain/sessions/types.ts";
+import {
+  SessionImportError,
+  type SessionAdapterId,
+} from "../../../core/brain/sessions/types.ts";
 import {
   isSessionAdapterId,
   sessionAdapterFormatChoices,
@@ -44,7 +47,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
   const agent = explicitAgent ?? resolveAgentName(config);
 
   const formatRaw = flags["format"] as string | undefined;
-  let format: "claude" | "codex" | "hermes" | undefined;
+  let format: SessionAdapterId | undefined;
   if (formatRaw !== undefined && formatRaw !== "auto") {
     if (!isSessionAdapterId(formatRaw))
       return fail(

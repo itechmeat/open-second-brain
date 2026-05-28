@@ -8,6 +8,7 @@ import { parsePreference, parseRetired } from "../preference.ts";
 import { parseSignal } from "../signal.ts";
 import type { BrainPreference, BrainRetired, BrainSignal } from "../types.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
+import { deepFreeze } from "./freeze.ts";
 import type { AgentSourceContribution, AgentSourceProvider } from "./types.ts";
 
 const PROVIDER_ID = "vault";
@@ -47,7 +48,7 @@ function collectVaultContributions(
     if (byKind !== 0) return byKind;
     return a.id.localeCompare(b.id);
   });
-  return Object.freeze(contributions.map((c) => Object.freeze(c)));
+  return deepFreeze(contributions);
 }
 
 function collectSignals(...dirs: string[]): BrainSignal[] {
@@ -113,7 +114,7 @@ function collectPreferenceDir(
 }
 
 function signalContribution(signal: BrainSignal): AgentSourceContribution {
-  return Object.freeze({
+  return deepFreeze({
     provider_id: PROVIDER_ID,
     kind: "signal",
     id: signal.id,
@@ -125,7 +126,7 @@ function signalContribution(signal: BrainSignal): AgentSourceContribution {
     text: [signal.topic, signal.signal, signal.principle, signal.raw ?? ""]
       .join("\n")
       .trim(),
-    data: Object.freeze({
+    data: {
       signal: signal.signal,
       principle: signal.principle,
       ...(signal.source !== undefined ? { source: [...signal.source] } : {}),
@@ -135,7 +136,7 @@ function signalContribution(signal: BrainSignal): AgentSourceContribution {
       ...(signal.session_ref !== undefined
         ? { session_ref: signal.session_ref }
         : {}),
-    }),
+    },
   });
 }
 
@@ -150,7 +151,7 @@ function preferenceContribution(
     const agent = signalAgentById.get(id);
     if (agent !== undefined) agents.add(agent);
   }
-  return Object.freeze({
+  return deepFreeze({
     provider_id: PROVIDER_ID,
     kind: "preference",
     id: preference.id,
@@ -165,7 +166,7 @@ function preferenceContribution(
     text: [preference.topic, preference.status, preference.principle].join(
       "\n",
     ),
-    data: Object.freeze({
+    data: {
       status: preference.status,
       principle: preference.principle,
       evidenced_by: [...preference.evidenced_by],
@@ -173,14 +174,14 @@ function preferenceContribution(
       violated_count: preference.violated_count,
       last_evidence_at: preference.last_evidence_at,
       confidence: preference.confidence,
-    }),
+    },
   });
 }
 
 function logContribution(entry: BrainLogEntry): AgentSourceContribution | null {
   const agents = entry.agent ? [entry.agent] : [];
   if (agents.length === 0) return null;
-  return Object.freeze({
+  return deepFreeze({
     provider_id: PROVIDER_ID,
     kind: "log",
     id: `${entry.timestamp}:${entry.eventType}`,
@@ -189,10 +190,10 @@ function logContribution(entry: BrainLogEntry): AgentSourceContribution | null {
     topic: logTopic(entry),
     title: entry.eventType,
     text: logText(entry),
-    data: Object.freeze({
+    data: {
       event_type: entry.eventType,
       body: cloneLogBody(entry.body),
-    }),
+    },
   });
 }
 

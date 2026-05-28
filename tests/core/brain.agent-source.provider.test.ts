@@ -51,6 +51,7 @@ function seedVault(): void {
     date: "2026-05-20",
     slug: "agent-query",
     scope: "brain",
+    source: ["[[notes/agent-query.md]]"],
   });
   writeSignal(tmp, {
     topic: "agent-diff",
@@ -81,6 +82,7 @@ function seedVault(): void {
       artifact: "[[docs/brainstorm/cross-agent-query-foundation/design.md]]",
       result: "applied",
       agent: "hermes",
+      source: ["[[notes/agent-query.md]]"],
     },
   });
 }
@@ -116,6 +118,13 @@ describe("vault agent-source provider", () => {
     expect(contributions[3]?.text).toContain(
       "docs/brainstorm/cross-agent-query-foundation/design.md",
     );
+    expect(Object.isFrozen(contributions[0])).toBe(true);
+    expect(Object.isFrozen(contributions[0]?.agents)).toBe(true);
+    expect(Object.isFrozen(contributions[0]?.data)).toBe(true);
+    expect(Object.isFrozen(contributions[0]?.data["source"])).toBe(true);
+    const logBody = contributions[3]?.data["body"] as Record<string, unknown>;
+    expect(Object.isFrozen(logBody)).toBe(true);
+    expect(Object.isFrozen(logBody["source"])).toBe(true);
     expect(readdirSync(brainDirs(tmp).inbox).toSorted()).toEqual(beforeInbox);
   });
 });

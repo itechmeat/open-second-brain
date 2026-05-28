@@ -16,13 +16,21 @@ in Open Second Brain depends on the MCP server being running.
 - Standard MCP lifecycle: `initialize`, `notifications/initialized`,
   `tools/list`, `tools/call`, optional `ping`.
 
-## Tools
+## Tool Highlights
+
+The full server currently advertises 35 tools. The table below highlights the
+operator-facing core, agent-source, health, and Pay Memory tools; the full
+surface also includes Brain writer, review, query, temporal, link-graph, and
+search tools. In Claude Code, that full schema can push MCP definitions beyond
+10% of the context window, causing `MCPSearch` tool-search deferral; use the
+writer split below for the always-loaded writer subset.
 
 | Tool                       | Purpose                                                                                                                                   | Required arguments               |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | `second_brain_status`      | Report config and vault status, with secrets redacted.                                                                                    | —                                |
 | `second_brain_query`       | List vault pages with an optional case-insensitive title substring.                                                                       | —                                |
 | `vault_health`             | Run vault, config, and plugin manifest health checks.                                                                                     | —                                |
+| `brain_health`             | Run semantic Brain Health checks and return the health verdict/domains.                                                                   | —                                |
 | `brain_agent_query`        | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.          | —                                |
 | `brain_agent_diff`         | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                        | —                                |
 | `payment_memory_init`      | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template. | —                                |

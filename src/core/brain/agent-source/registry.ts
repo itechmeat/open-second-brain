@@ -5,6 +5,7 @@ import type {
   AgentSourceProvider,
   AgentSourceSummary,
 } from "./types.ts";
+import { deepFreeze } from "./freeze.ts";
 
 export const AGENT_SOURCE_PROVIDERS: ReadonlyArray<AgentSourceProvider> =
   Object.freeze([vaultAgentSourceProvider]);
@@ -17,7 +18,7 @@ export function collectAgentSourceContributions(
     contributions.push(...provider.collect(vault));
   }
   contributions.sort(compareContributions);
-  return Object.freeze(contributions);
+  return deepFreeze(contributions);
 }
 
 export function listAgentSources(
@@ -63,7 +64,7 @@ export function listAgentSources(
     );
   }
   summaries.sort((a, b) => a.id.localeCompare(b.id));
-  return Object.freeze(summaries);
+  return deepFreeze(summaries);
 }
 
 function compareContributions(
