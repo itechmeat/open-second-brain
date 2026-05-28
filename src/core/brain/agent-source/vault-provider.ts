@@ -204,7 +204,7 @@ function logTopic(entry: BrainLogEntry): string | undefined {
 }
 
 function logText(entry: BrainLogEntry): string {
-  const parts = [entry.eventType];
+  const parts: string[] = [entry.eventType];
   for (const [key, value] of Object.entries(entry.body)) {
     if (Array.isArray(value)) {
       parts.push(`${key}: ${value.join(", ")}`);
@@ -220,7 +220,11 @@ function cloneLogBody(
 ): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {};
   for (const [key, value] of Object.entries(body)) {
-    out[key] = Array.isArray(value) ? [...value] : value;
+    if (typeof value === "string") {
+      out[key] = value;
+    } else {
+      out[key] = [...value];
+    }
   }
   return out;
 }

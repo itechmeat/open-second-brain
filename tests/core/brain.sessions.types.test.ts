@@ -13,7 +13,10 @@ import {
 
 describe("SessionImportError", () => {
   test("carries a typed code", () => {
-    const err = new SessionImportError("DETECT_FAIL", "no adapter recognised this file");
+    const err = new SessionImportError(
+      "DETECT_FAIL",
+      "no adapter recognised this file",
+    );
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe("SessionImportError");
     expect(err.code).toBe("DETECT_FAIL");
@@ -29,6 +32,7 @@ describe("SessionAdapter / SessionTurn / SessionToolCall shape (compile-time)", 
   test("a minimal stub adapter satisfies the interface", () => {
     const stub: SessionAdapter = {
       id: "claude",
+      defaultAgent: "claude",
       detect: () => false,
       iterate: async function* (_path: string) {
         void _path;
