@@ -7,16 +7,16 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "integer", "enum": [1] },
-    "generated_at": { "type": "string" },
+    "generated_at": { "type": "string", "format": "date-time" },
     "summary": {
       "type": "object",
       "required": ["keep", "improve", "park", "prune"],
       "additionalProperties": false,
       "properties": {
-        "keep": { "type": "integer" },
-        "improve": { "type": "integer" },
-        "park": { "type": "integer" },
-        "prune": { "type": "integer" }
+        "keep": { "type": "integer", "minimum": 0 },
+        "improve": { "type": "integer", "minimum": 0 },
+        "park": { "type": "integer", "minimum": 0 },
+        "prune": { "type": "integer", "minimum": 0 }
       }
     },
     "recommendations": {

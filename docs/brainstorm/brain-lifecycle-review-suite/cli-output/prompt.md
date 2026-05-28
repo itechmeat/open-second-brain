@@ -204,7 +204,7 @@ Constraints:
 
 Produce exactly 3 distinct architectural variants. For each variant:
 
-### Variant N: <short name>
+## Variant N: <short name>
 
 - **Approach**: 2-3 sentences describing the variant.
 - **Trade-offs**: bullet list of pros and cons.
@@ -213,7 +213,7 @@ Produce exactly 3 distinct architectural variants. For each variant:
 
 After the three variants, add exactly one recommendation:
 
-### Recommended: Variant N
+## Recommended: Variant N
 
 **Rationale**: 2-3 sentences explaining why this variant over the others, considering the project context and constraints above.
 

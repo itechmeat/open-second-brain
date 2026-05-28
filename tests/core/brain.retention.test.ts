@@ -1,24 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  renameSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import {
-  preferencePath,
-  processedSignalPath,
-  signalPath,
-} from "../../src/core/brain/paths.ts";
-import {
-  moveToRetired,
-  writePreference,
-} from "../../src/core/brain/preference.ts";
+import { preferencePath, processedSignalPath, signalPath } from "../../src/core/brain/paths.ts";
+import { moveToRetired, writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { buildRetentionReview } from "../../src/core/brain/retention.ts";
 import { BRAIN_RETIRED_REASON } from "../../src/core/brain/types.ts";
@@ -72,12 +59,10 @@ describe("buildRetentionReview", () => {
       slug: "discarded-signal",
     });
     const activeSignal = signalPath(vault, "2026-04-01", "discarded-signal");
-    const processedSignal = processedSignalPath(
-      vault,
-      "2026-04-01",
-      "discarded-signal",
-    );
+    const processedSignal = processedSignalPath(vault, "2026-04-01", "discarded-signal");
     renameSync(activeSignal, processedSignal);
+    const retiredMtimeBefore = statSync(retired.path).mtimeMs;
+    const processedMtimeBefore = statSync(processedSignal).mtimeMs;
 
     const report = buildRetentionReview(vault, {
       now: new Date("2026-05-28T00:00:00Z"),
@@ -94,5 +79,7 @@ describe("buildRetentionReview", () => {
     ]);
     expect(existsSync(retired.path)).toBe(true);
     expect(existsSync(processedSignal)).toBe(true);
+    expect(statSync(retired.path).mtimeMs).toBe(retiredMtimeBefore);
+    expect(statSync(processedSignal).mtimeMs).toBe(processedMtimeBefore);
   });
 });

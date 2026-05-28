@@ -39,7 +39,7 @@
   - Pro: monthly review reuses the existing temporal index and brief helpers; complexity ratio is a small additive field in discipline.
   - Pro: schemas-as-emitted-contracts with optional boundary validation avoids heavy deps but still tightens MCP input safety.
   - Con: introduces a new pre-dream stage that must stay in sync with dream's signal expectations; needs careful contract testing.
-  - Con: two write-surface tools (retention, monthly) plus a discipline field plus an intent-review pre-pass plus schemas is still five distinct moving pieces - release coordination matters.
+  - Con: two read-only recommendation surfaces (retention, monthly) plus a discipline field plus an intent-review pre-pass plus schemas is still five distinct moving pieces - release coordination matters.
   - Con: complexity-vs-thinking metric is heuristic; tuning the threshold for discipline status may need iteration.
 - **Complexity**: medium
 - **Risk**: low-to-medium

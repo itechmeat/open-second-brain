@@ -108,6 +108,8 @@ export function buildReviewCandidates(
         }),
       ),
     ),
-    intent_reviews: Object.freeze([...summary.intent_reviews]),
+    intent_reviews: Object.freeze(
+      summary.intent_reviews.map((review) => Object.freeze({ ...review })),
+    ),
   } satisfies ReviewCandidatesReport);
 }

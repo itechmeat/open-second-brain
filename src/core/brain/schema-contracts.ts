@@ -1,15 +1,12 @@
-export type SchemaType =
-  | "object"
-  | "array"
-  | "string"
-  | "integer"
-  | "number"
-  | "boolean";
+export type SchemaType = "object" | "array" | "string" | "integer" | "number" | "boolean";
 
 export interface SchemaNode {
   readonly type?: SchemaType;
   readonly title?: string;
   readonly description?: string;
+  readonly format?: "date-time";
+  readonly minimum?: number;
+  readonly maximum?: number;
   readonly enum?: ReadonlyArray<unknown>;
   readonly required?: ReadonlyArray<string>;
   readonly properties?: Readonly<Record<string, SchemaNode>>;
@@ -37,19 +34,12 @@ const INTENT_REVIEW_SCHEMA: BrainSchemaContract = {
   additionalProperties: false,
   properties: {
     schema_version: { type: "integer", enum: [1] },
-    generated_at: { type: "string" },
+    generated_at: { type: "string", format: "date-time" },
     reviews: {
       type: "array",
       items: {
         type: "object",
-        required: [
-          "topic",
-          "decision",
-          "signal_count",
-          "risk_band",
-          "risk_score",
-          "reasons",
-        ],
+        required: ["topic", "decision", "signal_count", "risk_band", "risk_score", "reasons"],
         additionalProperties: false,
         properties: {
           topic: { type: "string" },
@@ -81,16 +71,16 @@ const RETENTION_REVIEW_SCHEMA: BrainSchemaContract = {
   additionalProperties: false,
   properties: {
     schema_version: { type: "integer", enum: [1] },
-    generated_at: { type: "string" },
+    generated_at: { type: "string", format: "date-time" },
     summary: {
       type: "object",
       required: ["keep", "improve", "park", "prune"],
       additionalProperties: false,
       properties: {
-        keep: { type: "integer" },
-        improve: { type: "integer" },
-        park: { type: "integer" },
-        prune: { type: "integer" },
+        keep: { type: "integer", minimum: 0 },
+        improve: { type: "integer", minimum: 0 },
+        park: { type: "integer", minimum: 0 },
+        prune: { type: "integer", minimum: 0 },
       },
     },
     recommendations: {
@@ -126,7 +116,7 @@ const MONTHLY_REVIEW_SCHEMA: BrainSchemaContract = {
   additionalProperties: false,
   properties: {
     schema_version: { type: "integer", enum: [1] },
-    generated_at: { type: "string" },
+    generated_at: { type: "string", format: "date-time" },
     month: { type: "string" },
     window: {
       type: "object",
@@ -139,13 +129,7 @@ const MONTHLY_REVIEW_SCHEMA: BrainSchemaContract = {
     },
     summary: {
       type: "object",
-      required: [
-        "events",
-        "status_transitions",
-        "retired",
-        "contradictions",
-        "neglected_areas",
-      ],
+      required: ["events", "status_transitions", "retired", "contradictions", "neglected_areas"],
       additionalProperties: false,
       properties: {
         events: { type: "integer" },
@@ -176,11 +160,11 @@ const COMPLEXITY_REPORT_SCHEMA: BrainSchemaContract = {
   additionalProperties: false,
   properties: {
     schema_version: { type: "integer", enum: [1] },
-    generated_at: { type: "string" },
-    score: { type: "integer" },
-    ratio: { type: "number" },
-    thinking_activity: { type: "integer" },
-    structural_complexity: { type: "integer" },
+    generated_at: { type: "string", format: "date-time" },
+    score: { type: "integer", minimum: 0 },
+    ratio: { type: "number", minimum: 0 },
+    thinking_activity: { type: "integer", minimum: 0 },
+    structural_complexity: { type: "integer", minimum: 0 },
     warning: { type: "boolean" },
     factors: {
       type: "array",
@@ -190,32 +174,26 @@ const COMPLEXITY_REPORT_SCHEMA: BrainSchemaContract = {
         additionalProperties: false,
         properties: {
           name: { type: "string" },
-          value: { type: "integer" },
-          weight: { type: "integer" },
+          value: { type: "integer", minimum: 0 },
+          weight: { type: "integer", minimum: 0 },
         },
       },
     },
   },
 };
 
-export const BRAIN_SCHEMA_CONTRACTS: ReadonlyArray<BrainSchemaContract> =
-  Object.freeze([
-    INTENT_REVIEW_SCHEMA,
-    RETENTION_REVIEW_SCHEMA,
-    MONTHLY_REVIEW_SCHEMA,
-    COMPLEXITY_REPORT_SCHEMA,
-  ]);
+export const BRAIN_SCHEMA_CONTRACTS: ReadonlyArray<BrainSchemaContract> = Object.freeze([
+  INTENT_REVIEW_SCHEMA,
+  RETENTION_REVIEW_SCHEMA,
+  MONTHLY_REVIEW_SCHEMA,
+  COMPLEXITY_REPORT_SCHEMA,
+]);
 
-export function getBrainSchemaContract(
-  id: string,
-): BrainSchemaContract | undefined {
+export function getBrainSchemaContract(id: string): BrainSchemaContract | undefined {
   return BRAIN_SCHEMA_CONTRACTS.find((schema) => schema.id === id);
 }
 
-export function validateSchemaContract(
-  schema: SchemaNode,
-  value: unknown,
-): SchemaValidationResult {
+export function validateSchemaContract(schema: SchemaNode, value: unknown): SchemaValidationResult {
   const errors: string[] = [];
   validateNode(schema, value, "", errors);
   return Object.freeze({
@@ -224,26 +202,20 @@ export function validateSchemaContract(
   });
 }
 
-function validateNode(
-  schema: SchemaNode,
-  value: unknown,
-  path: string,
-  errors: string[],
-): void {
+function validateNode(schema: SchemaNode, value: unknown, path: string, errors: string[]): void {
   if (schema.type !== undefined && !matchesType(schema.type, value)) {
     errors.push(`${formatPath(path)} must be ${schema.type}`);
     return;
   }
 
-  if (
-    schema.enum !== undefined &&
-    !schema.enum.some((allowed) => Object.is(allowed, value))
-  ) {
+  if (schema.enum !== undefined && !schema.enum.some((allowed) => Object.is(allowed, value))) {
     errors.push(
       `${formatPath(path)} must be one of ${schema.enum.map(formatEnumValue).join(", ")}`,
     );
     return;
   }
+
+  validateScalarConstraints(schema, value, path, errors);
 
   if (schema.type === "object") {
     validateObject(schema, value, path, errors);
@@ -255,12 +227,28 @@ function validateNode(
   }
 }
 
-function validateObject(
+function validateScalarConstraints(
   schema: SchemaNode,
   value: unknown,
   path: string,
   errors: string[],
 ): void {
+  if (schema.format === "date-time" && typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (!Number.isFinite(parsed)) {
+      errors.push(`${formatPath(path)} must be date-time`);
+    }
+  }
+  if (typeof value !== "number") return;
+  if (schema.minimum !== undefined && value < schema.minimum) {
+    errors.push(`${formatPath(path)} must be >= ${schema.minimum}`);
+  }
+  if (schema.maximum !== undefined && value > schema.maximum) {
+    errors.push(`${formatPath(path)} must be <= ${schema.maximum}`);
+  }
+}
+
+function validateObject(schema: SchemaNode, value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) return;
   const properties = schema.properties ?? {};
   for (const requiredKey of schema.required ?? []) {
@@ -280,12 +268,7 @@ function validateObject(
   }
 }
 
-function validateArray(
-  schema: SchemaNode,
-  value: unknown,
-  path: string,
-  errors: string[],
-): void {
+function validateArray(schema: SchemaNode, value: unknown, path: string, errors: string[]): void {
   if (!Array.isArray(value)) return;
   const itemSchema = schema.items;
   if (itemSchema === undefined) return;

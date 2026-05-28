@@ -16,11 +16,11 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "integer", "enum": [1] },
-    "generated_at": { "type": "string" },
-    "score": { "type": "integer" },
-    "ratio": { "type": "number" },
-    "thinking_activity": { "type": "integer" },
-    "structural_complexity": { "type": "integer" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "score": { "type": "integer", "minimum": 0 },
+    "ratio": { "type": "number", "minimum": 0 },
+    "thinking_activity": { "type": "integer", "minimum": 0 },
+    "structural_complexity": { "type": "integer", "minimum": 0 },
     "warning": { "type": "boolean" },
     "factors": {
       "type": "array",
@@ -30,8 +30,8 @@
         "additionalProperties": false,
         "properties": {
           "name": { "type": "string" },
-          "value": { "type": "integer" },
-          "weight": { "type": "integer" }
+          "value": { "type": "integer", "minimum": 0 },
+          "weight": { "type": "integer", "minimum": 0 }
         }
       }
     }
