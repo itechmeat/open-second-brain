@@ -62,7 +62,15 @@ export function applyPreviewBudget(
   budget: number | undefined,
   store: ArtifactSink,
 ): BudgetOutcome {
-  if (budget === undefined || serialized.length <= budget) {
+  // No budget, or an explicitly unbounded one, means never truncate.
+  if (budget === undefined || budget === Number.POSITIVE_INFINITY) {
+    return { text: serialized, truncated: false, artifactId: null };
+  }
+  // Normalize before comparing/slicing: a negative or non-finite budget
+  // would otherwise make `slice` leak nearly the whole payload (slice(0, -1))
+  // and defeat the context-protection goal. Clamp to a finite int >= 0.
+  const safeBudget = Number.isFinite(budget) && budget > 0 ? Math.floor(budget) : 0;
+  if (serialized.length <= safeBudget) {
     return { text: serialized, truncated: false, artifactId: null };
   }
 
@@ -71,7 +79,7 @@ export function applyPreviewBudget(
     preview_truncated: true,
     artifact_id: stored.artifactId,
     full_chars: stored.fullChars,
-    bytes_preview: stored.text.slice(0, budget),
+    bytes_preview: stored.text.slice(0, safeBudget),
     note: previewNote(stored.artifactId),
   };
   return {

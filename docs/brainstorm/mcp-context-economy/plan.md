@@ -26,6 +26,6 @@ on `feat/mcp-context-economy`. Order matters: store -> seam -> fetch tool -> wir
 - **Depends on**: Task 2.
 
 ### Task 5: Recall hint
-- **Files**: `src/core/search/recall-hint.ts`, `src/mcp/search-tools.ts` (add `recall_hint` to output + `SEARCH_OUTPUT_SCHEMA`), `src/mcp/tools.ts` (`brain_query`/`second_brain_query` hint), `tests/core/search/recall-hint.test.ts`.
+- **Files**: `src/core/search/recall-hint.ts`, `src/mcp/search-tools.ts` (add `recall_hint` to output + `SEARCH_OUTPUT_SCHEMA`), `tests/core/search/recall-hint.test.ts`. Scoped to `brain_search` only - `brain_query`/`second_brain_query` are aggregations, not ranked result sets, so the ranked-hint shape does not fit them (see design doc).
 - **Acceptance**: `deriveRecallHint` returns one English-template string built from counts (total, per-`searchType`, top score); field omitted when zero results; never reads or stores natural-language phrase tables; existing `brain_search` consumers still validate (additive optional field).
 - **Depends on**: none (independent; sequenced last to keep search-tools edits together).

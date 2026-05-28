@@ -70,6 +70,24 @@ describe("applyPreviewBudget", () => {
     expect(env.bytes_preview).toContain("***REDACTED***");
   });
 
+  test("a negative or non-finite budget is normalized, not slice-abused", () => {
+    const big = "y".repeat(5000);
+    for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const store = fakeStore();
+      const out = applyPreviewBudget(big, bad, store);
+      // Infinity must NOT truncate (budget never exceeded); negative/NaN
+      // clamp to 0 so the preview can't leak nearly the whole payload.
+      if (bad === Number.POSITIVE_INFINITY) {
+        expect(out.truncated).toBe(false);
+        expect(out.text).toBe(big);
+      } else {
+        expect(out.truncated).toBe(true);
+        const env = JSON.parse(out.text);
+        expect(env.bytes_preview).toBe("");
+      }
+    }
+  });
+
   test("the preview envelope is far smaller than the original payload", () => {
     const store = fakeStore();
     const big = "w".repeat(50_000);
