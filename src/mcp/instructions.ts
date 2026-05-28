@@ -111,6 +111,13 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "Other tools: second_brain_status (config status), " +
     "vault_health (verify vault), second_brain_query (list vault pages " +
     "by title - read-only).\n\n" +
+    "Preview budget: large tool results may come back as a preview " +
+    "envelope - a JSON object with `preview_truncated: true`, " +
+    "`bytes_preview` (a head slice), `full_chars`, and an `artifact_id`. " +
+    "The full payload is not lost: call brain_artifact_get with that " +
+    "`artifact_id` to retrieve the complete result. Only fetch the full " +
+    "payload when the preview is insufficient - that is the point of the " +
+    "budget, to keep your context lean by default.\n\n" +
     "Pay Memory tools record paid agent actions as inspectable Markdown:\n" +
     "  - payment_memory_init bootstraps the layout and writes the " +
     "spending policy template (run once per vault).\n" +

@@ -177,6 +177,8 @@ describe("tool listing", () => {
         "second_brain_status",
         "second_brain_query",
         "vault_health",
+        // Preview-budget artifact fetch (added in v0.18.0).
+        "brain_artifact_get",
         // Brain (brain_note added in v0.10.8 §32B,
         // brain_context added in v0.10.10,
         // brain_context_pack added in v0.10.15,
@@ -460,8 +462,9 @@ describe("stdio loop", () => {
     // brain_stale_scan / brain_daily_brief / brain_weekly_synthesis
     // added v0.10.18; brain_agent_query / brain_agent_diff added in
     // v0.15.0; brain_pinned_context added in v0.16.0; lifecycle review
-    // tools added in v0.17.0) + 8 Pay Memory + 1 Search = 39.
-    expect(list.result.tools.length).toBe(39);
+    // tools added in v0.17.0) + 8 Pay Memory + 1 Search
+    // + brain_artifact_get (v0.18.0) = 40.
+    expect(list.result.tools.length).toBe(40);
   });
 
   test("returns parse error for invalid JSON", async () => {

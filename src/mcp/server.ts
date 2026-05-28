@@ -92,7 +92,12 @@ export class MCPServer {
   }
 
   get context(): ServerContext {
-    return { vault: this.vault, configPath: this.configPath, repoRoot: this.repoRoot };
+    return {
+      vault: this.vault,
+      configPath: this.configPath,
+      repoRoot: this.repoRoot,
+      artifactStore: this.artifactStore,
+    };
   }
 
   /** Public method for CLI tool-call bridge — the legacy code reached into `_tools`. */
