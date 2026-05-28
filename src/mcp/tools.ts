@@ -45,6 +45,15 @@ export interface ToolDefinition {
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   readonly outputSchema?: OutputSchema;
+  /**
+   * Optional MCP preview budget in characters (v0.18.0). When set and
+   * the serialized result exceeds it, the JSON-RPC `tools/call` path
+   * parks the full payload in the artifact store and returns a bounded
+   * preview envelope in `content[0].text` instead, leaving
+   * `structuredContent` intact. A tool with no budget is never truncated
+   * - opt-in only. The CLI bridge ignores the budget entirely.
+   */
+  readonly previewBudget?: number;
   readonly handler: (
     ctx: ServerContext,
     args: Record<string, unknown>,

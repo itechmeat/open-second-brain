@@ -26,6 +26,11 @@ import {
   type ToolScope,
 } from "./tools.ts";
 import { assertOutputContract } from "./output-contract.ts";
+import { ArtifactStore } from "./artifact-store.ts";
+import { applyPreviewBudget } from "./preview-budget.ts";
+
+/** TTL after which a prior process's artifact run directory is pruned. */
+const ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface MCPServerOptions {
   readonly vault: string;
@@ -36,6 +41,12 @@ export interface MCPServerOptions {
 export interface MCPServerRuntimeOptions {
   readonly serverName?: string;
   readonly scope?: ToolScope;
+  /**
+   * Run id grouping this process's preview artifacts under
+   * `Brain/.artifacts/<run-id>/`. Defaults to a per-process id;
+   * injectable so tests get a deterministic directory.
+   */
+  readonly artifactRunId?: string;
 }
 
 export interface JsonRpcRequest {
@@ -59,6 +70,7 @@ export class MCPServer {
   readonly tools: ReadonlyArray<ToolDefinition>;
   private readonly serverName: string;
   private readonly scope: ToolScope;
+  private readonly artifactStore: ArtifactStore;
 
   constructor(opts: MCPServerOptions, runtimeOpts: MCPServerRuntimeOptions = {}) {
     this.vault = opts.vault;
@@ -67,6 +79,16 @@ export class MCPServer {
     this.serverName = runtimeOpts.serverName ?? SERVER_NAME;
     this.scope = runtimeOpts.scope ?? "full";
     this.tools = buildToolTable(this.scope);
+    const runId =
+      runtimeOpts.artifactRunId ?? `run-${process.pid}-${Date.now().toString(36)}`;
+    this.artifactStore = new ArtifactStore({ vault: this.vault, runId });
+    // Best-effort housekeeping: clear prior processes' stale artifacts.
+    // Never fatal - a missing/unwritable vault just yields zero pruned.
+    try {
+      this.artifactStore.prune(ARTIFACT_TTL_MS);
+    } catch {
+      // ignore
+    }
   }
 
   get context(): ServerContext {
@@ -202,7 +224,7 @@ export class MCPServer {
     const args = argsRaw as Record<string, unknown>;
     try {
       const structured = await tool.handler(this.context, args);
-      return toolResult(tool, structured);
+      return buildMcpToolResult(tool, structured, this.artifactStore);
     } catch (exc) {
       if (exc instanceof MCPError) throw exc;
       const message = (exc as Error).message ?? String(exc);
@@ -219,6 +241,30 @@ function toolResult(tool: ToolDefinition, structured: unknown): Record<string, u
   const text = JSON.stringify(structured, sortedReplacer, 2);
   return {
     content: [{ type: "text", text }],
+    structuredContent: structured,
+    isError: false,
+  };
+}
+
+/**
+ * MCP `tools/call` result builder. Identical to {@link toolResult} for
+ * tools with no `previewBudget` or small outputs, but when a budgeted
+ * tool's serialized output exceeds the budget it parks the full payload
+ * in `store` and swaps `content[0].text` for a bounded preview envelope.
+ * `structuredContent` is always the full, contract-validated object, so
+ * programmatic consumers and `outputSchema` are untouched. Exported for
+ * direct unit testing of the seam.
+ */
+export function buildMcpToolResult(
+  tool: ToolDefinition,
+  structured: unknown,
+  store: ArtifactStore,
+): Record<string, unknown> {
+  assertOutputContract(tool.name, tool.outputSchema, structured);
+  const serialized = JSON.stringify(structured, sortedReplacer, 2);
+  const outcome = applyPreviewBudget(serialized, tool.previewBudget, store);
+  return {
+    content: [{ type: "text", text: outcome.text }],
     structuredContent: structured,
     isError: false,
   };
