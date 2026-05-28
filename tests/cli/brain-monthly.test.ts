@@ -45,4 +45,12 @@ describe("o2b brain monthly", () => {
     expect(payload.month).toBe("2026-05");
     expect(payload.summary.events).toBe(1);
   });
+
+  test("rejects malformed --month", async () => {
+    const result = await runCli(["brain", "monthly", "--month", "2026-13"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
+    expect(result.returncode).toBe(1);
+    expect(result.stderr).toContain("YYYY-MM");
+  });
 });

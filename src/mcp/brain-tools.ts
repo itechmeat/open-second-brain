@@ -75,7 +75,10 @@ import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
 import { buildIntentReview } from "../core/brain/intent-review.ts";
 import { buildRetentionReview } from "../core/brain/retention.ts";
-import { buildMonthlyReview } from "../core/brain/monthly-review.ts";
+import {
+  buildMonthlyReview,
+  normalizeMonthlyReviewMonth,
+} from "../core/brain/monthly-review.ts";
 import { buildReviewCandidates } from "../core/brain/review-candidates.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
 import { buildOperatorSummary } from "../core/brain/trust/operator-summary.ts";
@@ -382,16 +385,20 @@ async function toolBrainMonthlyReview(
   const monthRaw = args["month"];
   let month: string | undefined;
   if (monthRaw !== undefined && monthRaw !== null) {
-    if (
-      typeof monthRaw !== "string" ||
-      !/^\d{4}-\d{2}$/.test(monthRaw.trim())
-    ) {
+    if (typeof monthRaw !== "string") {
       throw new MCPError(
         INVALID_PARAMS,
         "brain_monthly_review: month must be YYYY-MM",
       );
     }
-    month = monthRaw.trim();
+    try {
+      month = normalizeMonthlyReviewMonth(monthRaw);
+    } catch {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_monthly_review: month must be YYYY-MM",
+      );
+    }
   }
   const report = buildMonthlyReview(ctx.vault, month ? { month } : {});
   return {

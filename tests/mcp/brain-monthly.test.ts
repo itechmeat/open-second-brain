@@ -38,4 +38,15 @@ describe("brain_monthly_review MCP tool", () => {
     expect(out["month"]).toBe("2026-05");
     expect((out["summary"] as Record<string, unknown>)["events"]).toBe(1);
   });
+
+  test("rejects malformed month", async () => {
+    const tool = BRAIN_TOOLS.find(
+      (entry) => entry.name === "brain_monthly_review",
+    );
+    await expect(
+      tool!.handler(ctx as any, { month: "2026-13" }),
+    ).rejects.toMatchObject({
+      code: -32602,
+    });
+  });
 });

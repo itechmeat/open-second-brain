@@ -39,7 +39,9 @@ export function buildMonthlyReview(
   options: BuildMonthlyReviewOptions = {},
 ): MonthlyReviewReport {
   const now = options.now ?? new Date();
-  const month = options.month ?? now.toISOString().slice(0, 7);
+  const month = normalizeMonthlyReviewMonth(
+    options.month ?? now.toISOString().slice(0, 7),
+  );
   const window = monthWindow(month);
   const index = buildTimelineIndex(vault, window);
   const transitions = collectTransitions(index.events);
@@ -65,12 +67,23 @@ export function buildMonthlyReview(
   });
 }
 
-function monthWindow(month: string): MonthlyReviewWindow {
-  if (!MONTH_RE.test(month)) {
+export function normalizeMonthlyReviewMonth(month: string): string {
+  const normalized = month.trim();
+  if (!MONTH_RE.test(normalized)) {
     throw new Error(
       `buildMonthlyReview: month must be YYYY-MM; got ${JSON.stringify(month)}`,
     );
   }
+  const monthNumber = Number(normalized.slice(5, 7));
+  if (monthNumber < 1 || monthNumber > 12) {
+    throw new Error(
+      `buildMonthlyReview: invalid month ${JSON.stringify(month)}`,
+    );
+  }
+  return normalized;
+}
+
+function monthWindow(month: string): MonthlyReviewWindow {
   const start = Date.parse(`${month}-01T00:00:00Z`);
   if (!Number.isFinite(start)) {
     throw new Error(

@@ -56,4 +56,12 @@ describe("o2b brain retention", () => {
     const payload = JSON.parse(result.stdout) as { summary: { prune: number } };
     expect(payload.summary.prune).toBe(1);
   });
+
+  test("rejects malformed --now", async () => {
+    const result = await runCli(["brain", "retention", "--now", "not-a-date"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
+    expect(result.returncode).toBe(1);
+    expect(result.stderr).toContain("invalid --now");
+  });
 });

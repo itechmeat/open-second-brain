@@ -44,4 +44,13 @@ describe("brain_retention MCP tool", () => {
     })) as Record<string, unknown>;
     expect((out["summary"] as Record<string, unknown>)["prune"]).toBe(1);
   });
+
+  test("rejects malformed now", async () => {
+    const tool = BRAIN_TOOLS.find((entry) => entry.name === "brain_retention");
+    await expect(
+      tool!.handler(ctx as any, { now: "not-a-date" }),
+    ).rejects.toMatchObject({
+      code: -32602,
+    });
+  });
 });

@@ -1,5 +1,8 @@
 import { defaultConfigPath } from "../../../core/config.ts";
-import { buildMonthlyReview } from "../../../core/brain/monthly-review.ts";
+import {
+  buildMonthlyReview,
+  normalizeMonthlyReviewMonth,
+} from "../../../core/brain/monthly-review.ts";
 import { CliError, parse, resolveBrainVault } from "../helpers.ts";
 
 const MONTH_RE = /^\d{4}-\d{2}$/;
@@ -47,8 +50,12 @@ function parseMonth(
   raw: string | boolean | string[] | undefined,
 ): string | undefined {
   if (raw === undefined || raw === false) return undefined;
-  if (typeof raw !== "string" || !MONTH_RE.test(raw.trim())) {
+  if (typeof raw !== "string") {
     throw new CliError("brain monthly: --month must be YYYY-MM");
   }
-  return raw.trim();
+  try {
+    return normalizeMonthlyReviewMonth(raw);
+  } catch {
+    throw new CliError("brain monthly: --month must be YYYY-MM");
+  }
 }
