@@ -38,6 +38,8 @@ export interface SessionTurn {
 
 export interface SessionAdapter {
   readonly id: SessionAdapterId;
+  /** Default `agent` label stamped on imported signals for this runtime. */
+  readonly defaultAgent: string;
   /**
    * Match the first line of the session file. Adapters identify by
    * structural fields (`"originator":"codex_exec"`, `"role":"session_meta"`,
@@ -63,7 +65,10 @@ export interface SessionAdapter {
 export class SessionImportError extends Error {
   readonly code: "DETECT_FAIL" | "IO" | "PARSE" | "UNKNOWN_FORMAT";
 
-  constructor(code: "DETECT_FAIL" | "IO" | "PARSE" | "UNKNOWN_FORMAT", message: string) {
+  constructor(
+    code: "DETECT_FAIL" | "IO" | "PARSE" | "UNKNOWN_FORMAT",
+    message: string,
+  ) {
     super(message);
     this.name = "SessionImportError";
     this.code = code;

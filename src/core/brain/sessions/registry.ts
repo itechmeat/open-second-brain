@@ -20,6 +20,14 @@ export const SESSION_ADAPTERS: ReadonlyArray<SessionAdapter> = Object.freeze([
   hermesAdapter,
 ]);
 
+export function isSessionAdapterId(value: string): value is SessionAdapterId {
+  return SESSION_ADAPTERS.some((a) => a.id === value);
+}
+
+export function sessionAdapterFormatChoices(): string {
+  return ["auto", ...SESSION_ADAPTERS.map((a) => a.id)].join("|");
+}
+
 /**
  * Probe each adapter's `detect()` in registry order, return the first
  * match. Adapters identify on structural fields rather than fuzzy

@@ -1,7 +1,17 @@
 import { statSync } from "node:fs";
 import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
-import { importSession, importSessionPath } from "../../../core/brain/sessions/import.ts";
-import { SessionImportError } from "../../../core/brain/sessions/types.ts";
+import {
+  importSession,
+  importSessionPath,
+} from "../../../core/brain/sessions/import.ts";
+import {
+  SessionImportError,
+  type SessionAdapterId,
+} from "../../../core/brain/sessions/types.ts";
+import {
+  isSessionAdapterId,
+  sessionAdapterFormatChoices,
+} from "../../../core/brain/sessions/registry.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
@@ -25,7 +35,8 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     agent: { type: "string" },
     json: { type: "boolean" },
   });
-  if (positional.length < 1) return fail("brain import-session requires a <path> argument");
+  if (positional.length < 1)
+    return fail("brain import-session requires a <path> argument");
   const sessionPath = positional[0]!;
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
@@ -36,14 +47,19 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
   const agent = explicitAgent ?? resolveAgentName(config);
 
   const formatRaw = flags["format"] as string | undefined;
-  let format: "claude" | "codex" | "hermes" | undefined;
+  let format: SessionAdapterId | undefined;
   if (formatRaw !== undefined && formatRaw !== "auto") {
-    if (formatRaw !== "claude" && formatRaw !== "codex" && formatRaw !== "hermes")
-      return fail(`--format must be one of auto|claude|codex|hermes; got ${formatRaw}`);
+    if (!isSessionAdapterId(formatRaw))
+      return fail(
+        `--format must be one of ${sessionAdapterFormatChoices()}; got ${formatRaw}`,
+      );
     format = formatRaw;
   }
 
-  const { value: since, error: sinceErr } = parseOptionalIsoDate(flags, "since");
+  const { value: since, error: sinceErr } = parseOptionalIsoDate(
+    flags,
+    "since",
+  );
   if (sinceErr) return fail(sinceErr);
 
   let stat;
@@ -123,7 +139,8 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
         if (f.malformed > 0) ok(`  malformed: ${f.malformed}`);
         for (const e of f.errors) info(`  error: ${e.path}: ${e.message}`);
       }
-      for (const w of result.warnings) info(`  warning: ${w.path}: ${w.message}`);
+      for (const w of result.warnings)
+        info(`  warning: ${w.path}: ${w.message}`);
     }
     return 0;
   } catch (exc) {

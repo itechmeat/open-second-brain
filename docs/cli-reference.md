@@ -30,6 +30,8 @@ o2b brain apply-evidence      Record applied / violated against a preference for
 o2b brain note <text>         Append a one-line narrative milestone to Brain/log/<today>.md (cron / shell mirror of brain_note)
 o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions; --window 7d for arbitrary lookback
 o2b brain query               Read helper: by preference, by topic, or by log timestamp
+o2b brain agent-query         Read source-agent provenance; filters by --agent, --topic, --query, --kind, --limit; --json mirrors brain_agent_query
+o2b brain agent-diff          Compare source-agent coverage in browse/search/diff/map modes; --json mirrors brain_agent_diff
 o2b brain reject              (CLI-only) Retire a preference; requires --reason "<text>". Subsequent signals on the same topic are suppressed.
 o2b brain merge               (CLI-only) Fold one confirmed/quarantine pref into another (<keep> <drop>); --dry-run / --force; drop retires with reason 'merged-into'
 o2b brain pin / unpin         (CLI-only) Toggle pinned: true on a preference (exempt from auto-retire)
@@ -46,7 +48,7 @@ o2b brain health              Semantic-health report (since v0.14.0): contradict
 o2b brain history             Render a preference's edit-history timeline (since v0.14.0): one entry per content mutation (principle / scope / status before -> after)
 o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain scan-inline         Capture `@osb` markers from folders listed under `notes.read_paths` in _brain.yaml
-o2b brain import-session      Replay signals from a Claude / Codex / Hermes session .jsonl (or directory)
+o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory)
 o2b brain import-claude-memory (CLI-only) Import metadata.type=feedback entries from a Claude Code memory directory into Brain/preferences/. --dry-run / --apply, sidecar manifest for idempotency, UPDATE preserves accumulated evidence
 ```
 
@@ -126,12 +128,12 @@ o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
 The fused ranking is sharpened by a recall-quality suite (v0.13.0), each
 layer config-tunable and bounded:
 
-| Config key | Env var | Default | Effect |
-|---|---|---|---|
-| `search_mmr_lambda` | `OPEN_SECOND_BRAIN_SEARCH_MMR_LAMBDA` | `0.7` | MMR relevance-vs-diversity tradeoff; `1` disables diversification |
-| `search_max_hops` | `OPEN_SECOND_BRAIN_SEARCH_MAX_HOPS` | `1` | Link-graph traversal depth during recall; `0` disables |
-| `search_hop_decay` | `OPEN_SECOND_BRAIN_SEARCH_HOP_DECAY` | `0.5` | Per-hop score multiplier for traversal-surfaced docs |
-| `search_max_expansion_per_hit` | `OPEN_SECOND_BRAIN_SEARCH_MAX_EXPANSION_PER_HIT` | `3` | Cap on outbound links followed per node |
+| Config key                     | Env var                                          | Default | Effect                                                            |
+| ------------------------------ | ------------------------------------------------ | ------- | ----------------------------------------------------------------- |
+| `search_mmr_lambda`            | `OPEN_SECOND_BRAIN_SEARCH_MMR_LAMBDA`            | `0.7`   | MMR relevance-vs-diversity tradeoff; `1` disables diversification |
+| `search_max_hops`              | `OPEN_SECOND_BRAIN_SEARCH_MAX_HOPS`              | `1`     | Link-graph traversal depth during recall; `0` disables            |
+| `search_hop_decay`             | `OPEN_SECOND_BRAIN_SEARCH_HOP_DECAY`             | `0.5`   | Per-hop score multiplier for traversal-surfaced docs              |
+| `search_max_expansion_per_hit` | `OPEN_SECOND_BRAIN_SEARCH_MAX_EXPANSION_PER_HIT` | `3`     | Cap on outbound links followed per node                           |
 
 Entity-boosted retrieval and header-anchored chunking populate on the
 next reindex and need no configuration. Every result carries a

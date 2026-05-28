@@ -16,6 +16,8 @@ import {
   cmdBrainApplyEvidence,
   cmdBrainDigest,
   cmdBrainQuery,
+  cmdBrainAgentQuery,
+  cmdBrainAgentDiff,
   cmdBrainReject,
   cmdBrainPin,
   cmdBrainUnpin,
@@ -51,7 +53,9 @@ import {
   cmdBrainWeekly,
 } from "./brain/verbs/index.ts";
 
-export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promise<number> {
+export async function handleBrainSubcommand(
+  argv: ReadonlyArray<string>,
+): Promise<number> {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(BRAIN_HELP);
     return argv.length === 0 ? 2 : 0;
@@ -85,6 +89,10 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainDigest(rest);
       case "query":
         return await cmdBrainQuery(rest);
+      case "agent-query":
+        return await cmdBrainAgentQuery(rest);
+      case "agent-diff":
+        return await cmdBrainAgentDiff(rest);
       case "reject":
         return await cmdBrainReject(rest);
       case "pin":
