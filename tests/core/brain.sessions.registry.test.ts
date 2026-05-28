@@ -40,8 +40,14 @@ describe("registry — single source of adapters", () => {
   });
 
   test("exposes the default agent label per adapter", () => {
-    const labels = Object.fromEntries(SESSION_ADAPTERS.map((a) => [a.id, a.defaultAgent]));
-    expect(labels).toEqual({ claude: "claude", codex: "codex", hermes: "hermes" });
+    const labels = Object.fromEntries(
+      SESSION_ADAPTERS.map((a) => [a.id, a.defaultAgent]),
+    );
+    expect(labels).toEqual({
+      claude: "claude",
+      codex: "codex",
+      hermes: "hermes",
+    });
   });
 
   test("getAdapter returns each by id", () => {

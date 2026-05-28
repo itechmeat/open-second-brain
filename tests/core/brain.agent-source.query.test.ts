@@ -1,20 +1,13 @@
 /**
- * Agent-source provider tests.
- *
- * These lock the first provider contract: vault provenance is read-only,
- * derives the agent universe from existing Brain artifacts, and exposes
- * a normalized contribution stream for later query/diff layers.
+ * Agent-source query core tests.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  collectAgentSourceContributions,
-  listAgentSources,
-} from "../../src/core/brain/agent-source/registry.ts";
+import { queryAgentSources } from "../../src/core/brain/agent-source/query.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
@@ -23,7 +16,7 @@ import { writeSignal } from "../../src/core/brain/signal.ts";
 let tmp: string;
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "o2b-agent-source-"));
+  tmp = mkdtempSync(join(tmpdir(), "o2b-agent-query-"));
   const dirs = brainDirs(tmp);
   for (const d of [
     dirs.brain,
@@ -85,37 +78,52 @@ function seedVault(): void {
   });
 }
 
-describe("vault agent-source provider", () => {
-  test("lists agents from normalized vault contributions", () => {
+describe("queryAgentSources", () => {
+  test("returns one agent's contributions with deterministic summary", () => {
     seedVault();
 
-    const agents = listAgentSources(tmp);
+    const result = queryAgentSources(tmp, { agents: ["claude"] });
 
-    expect(agents.map((a) => a.id)).toEqual(["claude", "codex", "hermes"]);
-    expect(agents.find((a) => a.id === "claude")?.contribution_count).toBe(2);
-    expect(agents.find((a) => a.id === "codex")?.kinds).toEqual(["signal"]);
-    expect(agents.find((a) => a.id === "hermes")?.kinds).toEqual(["log"]);
+    expect(result.filters.agents).toEqual(["claude"]);
+    expect(result.unknown_agents).toEqual([]);
+    expect(result.total_matched).toBe(2);
+    expect(result.contributions.map((c) => `${c.kind}:${c.id}`)).toEqual([
+      "signal:sig-2026-05-20-agent-query",
+      "preference:pref-agent-query",
+    ]);
+    expect(result.summary).toBe(
+      "claude: 2 contributions across 1 topic (preference, signal).",
+    );
   });
 
-  test("collects stable normalized contributions without writing to the vault", () => {
+  test("filters by kind, topic, free-text query, and limit", () => {
     seedVault();
-    const beforeInbox = readdirSync(brainDirs(tmp).inbox).toSorted();
 
-    const contributions = collectAgentSourceContributions(tmp);
+    const result = queryAgentSources(tmp, {
+      agents: ["codex", "claude"],
+      kind: "signal",
+      topic: "agent-diff",
+      query: "hardcode",
+      limit: 1,
+    });
 
-    expect(Object.isFrozen(contributions)).toBe(true);
-    expect(contributions.map((c) => `${c.kind}:${c.id}`)).toEqual([
-      "signal:sig-2026-05-20-agent-query",
-      "signal:sig-2026-05-21-agent-diff",
-      "preference:pref-agent-query",
-      "log:2026-05-23T10:00:00Z:apply-evidence",
-    ]);
-    expect(contributions[0]?.agents).toEqual(["claude"]);
-    expect(contributions[2]?.agents).toEqual(["claude"]);
-    expect(contributions[3]?.agents).toEqual(["hermes"]);
-    expect(contributions[3]?.text).toContain(
-      "docs/brainstorm/cross-agent-query-foundation/design.md",
+    expect(result.total_matched).toBe(1);
+    expect(result.returned).toBe(1);
+    expect(result.contributions[0]?.id).toBe("sig-2026-05-21-agent-diff");
+    expect(result.contributions[0]?.agents).toEqual(["codex"]);
+  });
+
+  test("reports unknown agents without throwing", () => {
+    seedVault();
+
+    const result = queryAgentSources(tmp, { agents: ["copilot"] });
+
+    expect(result.filters.agents).toEqual(["copilot"]);
+    expect(result.unknown_agents).toEqual(["copilot"]);
+    expect(result.total_matched).toBe(0);
+    expect(result.contributions).toEqual([]);
+    expect(result.summary).toBe(
+      "No contributions matched the selected filters.",
     );
-    expect(readdirSync(brainDirs(tmp).inbox).toSorted()).toEqual(beforeInbox);
   });
 });

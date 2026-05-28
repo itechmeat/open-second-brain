@@ -39,7 +39,11 @@ function decodeArguments(raw: unknown): Record<string, unknown> {
   if (typeof raw === "string" && raw.length > 0) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      if (
+        parsed !== null &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed)
+      ) {
         return parsed as Record<string, unknown>;
       }
       return { _raw_arguments: raw };
@@ -47,13 +51,21 @@ function decodeArguments(raw: unknown): Record<string, unknown> {
       return { _raw_arguments: raw };
     }
   }
-  if (raw !== undefined && raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+  if (
+    raw !== undefined &&
+    raw !== null &&
+    typeof raw === "object" &&
+    !Array.isArray(raw)
+  ) {
     return raw as Record<string, unknown>;
   }
   return {};
 }
 
-function buildTurn(obj: Record<string, unknown>, fallbackIndex: number): SessionTurn | null {
+function buildTurn(
+  obj: Record<string, unknown>,
+  fallbackIndex: number,
+): SessionTurn | null {
   const role = obj["role"];
   if (role !== "user" && role !== "assistant") return null;
   const turnId = `hermes-${fallbackIndex}`;

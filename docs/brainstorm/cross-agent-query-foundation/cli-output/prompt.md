@@ -12,6 +12,7 @@ Primary kanban tasks in scope:
 Task body excerpts (verbatim):
 
 ## t_51c827e7
+
 Upstream added `/wiki-{claude,codex,hermes,openclaw,copilot}` slash commands that query one AI tool's session history from any other tool. Each agent has its own extraction strategy, and a no-query form ingests the last 5 unprocessed sessions. The result is synthesized and returned immediately after ingestion into the shared wiki.
 
 OSB already imports sessions from Claude, Codex, and Hermes, but has no cross-agent query capability. `brain_search` and `brain_query` operate on vault content, not on raw agent history with synthesized answers. Adding cross-agent targeted search would let OSB users ask "what did Codex say about X" from within a Hermes session, enriching the multi-agent brain.
@@ -19,6 +20,7 @@ OSB already imports sessions from Claude, Codex, and Hermes, but has no cross-ag
 Notes: depends on upstream's extraction strategies per agent. Could be implemented as a brain tool that accepts an agent filter parameter on `brain_search`, or as a new `brain_agent_query` tool.
 
 ## t_64dad481
+
 `/memory-bridge` browses and compares wiki knowledge by source tool. `/memory-bridge codex` lists all Codex-sourced pages. `/memory-bridge diff` surfaces what each tool uniquely contributed — the knowledge gaps between AI tools. Supports browse, search, diff, and map modes.
 
 OSB tracks agent identity on every signal, preference, and log entry, but has no tool to compare contributions by source agent. A memory-bridge equivalent would let OSB users see which agent (Claude vs Hermes vs Codex) contributed which preferences, or identify knowledge gaps where one agent found patterns others missed. This aligns with OSB's multi-agent brain architecture.
@@ -37,6 +39,7 @@ b76199a v0.14.0 - Semantic Brain Health and Self-Maintenance (#38)
 84886d1 v0.12.0 - Brain Integrity Suite (#36)
 
 Related files:
+
 - `src/core/brain/sessions/import.ts`
 - `src/core/brain/sessions/types.ts`
 - `src/core/brain/sessions/registry.ts`
@@ -52,6 +55,7 @@ Related files:
 - `tests/mcp/*.test.ts`
 
 Observed current constraints from code:
+
 - `SessionAdapterId` is a closed union: `"claude" | "codex" | "hermes"`.
 - `agentLabelForTurn()` hardcodes those three adapter ids.
 - CLI `brain import-session --format` only accepts `auto|claude|codex|hermes`.
@@ -59,6 +63,7 @@ Observed current constraints from code:
 - `brain_query` and `brain_search` are vault-centric read surfaces today.
 
 Conventions:
+
 - Prefer deterministic, additive surfaces over opaque LLM-only behavior.
 - Keep public outputs structured and machine-readable.
 - TDD-first. Every atomic unit must start with failing tests.
@@ -67,11 +72,13 @@ Conventions:
 - Existing README positions OSB as “one vault, every agent.” The design should reinforce that rather than optimizing only for today's agents.
 
 Critical design constraint from the operator:
+
 - Only Claude Code and Codex are extra agents available right now, but the solution must remain universal for future agents.
 - Do NOT design a hardcoded current-agent matrix. Future agents should require new adapters / registrations, not a rewrite of the query layer.
 - Treat this as a universal `agent-source query foundation + first comparison surface`, not a one-off feature for current agents only.
 
 Additional constraints:
+
 - SOLID, KISS, DRY.
 - No Python. TypeScript with Bun runtime.
 - Keep the implementation suitable for one feature-release-playbook PR with roughly 50-70 files changed if it is the right scope, but project value matters more than exact file count.
@@ -82,6 +89,7 @@ Additional constraints:
 Produce exactly 3 distinct architectural variants. For each variant:
 
 ### Variant N: <short name>
+
 - **Approach**: 2-3 sentences describing the variant.
 - **Trade-offs**: bullet list of pros and cons.
 - **Complexity**: small | medium | large
@@ -90,6 +98,7 @@ Produce exactly 3 distinct architectural variants. For each variant:
 After the three variants, add exactly one recommendation:
 
 ### Recommended: Variant N
+
 **Rationale**: 2-3 sentences explaining why this variant over the others, considering the project context and constraints above.
 
 Output nothing outside of these sections.

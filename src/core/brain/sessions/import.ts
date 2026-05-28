@@ -25,10 +25,20 @@
  * second run on the same file finds every hash already present.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 
-import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
+import {
+  buildDedupIndex,
+  computeDedupHash,
+  type DedupIndexEntry,
+} from "../dedup-hash.ts";
 import { discoverMarkersDetailed } from "../inline.ts";
 import { writeSignal } from "../signal.ts";
 import { isoDate, isoSecond } from "../time.ts";
@@ -89,7 +99,10 @@ function firstLineOfFile(path: string): string {
 }
 
 /** Pick an adapter — by explicit format, or autodetect. */
-function chooseAdapter(path: string, format?: SessionAdapterId): SessionAdapter {
+function chooseAdapter(
+  path: string,
+  format?: SessionAdapterId,
+): SessionAdapter {
   if (format !== undefined) {
     return getAdapter(format);
   }
@@ -256,7 +269,11 @@ export async function importSession(
  * the caller, not here), then a per-adapter default, finally
  * `opts.agent`.
  */
-function agentLabelForTurn(turn: SessionTurn, adapter: SessionAdapterId, fallback: string): string {
+function agentLabelForTurn(
+  turn: SessionTurn,
+  adapter: SessionAdapterId,
+  fallback: string,
+): string {
   void turn; // reserved for future per-turn role-aware fallback
   return getAdapter(adapter).defaultAgent.trim() || fallback;
 }
@@ -269,7 +286,10 @@ export async function importSessionPath(
   const stat = statSync(path);
   if (stat.isFile()) {
     const res = await importSession(vault, path, opts);
-    return Object.freeze({ files: Object.freeze([res]), warnings: Object.freeze([]) });
+    return Object.freeze({
+      files: Object.freeze([res]),
+      warnings: Object.freeze([]),
+    });
   }
   // Directory walk: build the dedup index ONCE and thread it through
   // every per-file `importSession` call. emit() mutates the shared map
@@ -302,7 +322,10 @@ export async function importSessionPath(
   queue.sort();
 
   const sharedDedup = opts.dedupIndex ?? buildDedupIndex(vault);
-  const perFileOpts: ImportSessionOptions = { ...opts, dedupIndex: sharedDedup };
+  const perFileOpts: ImportSessionOptions = {
+    ...opts,
+    dedupIndex: sharedDedup,
+  };
 
   // Sequential — writes go to the same Brain/inbox/ and share the
   // dedup map; parallelising would race on both.

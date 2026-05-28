@@ -65,7 +65,10 @@ export interface SessionAdapter {
 export class SessionImportError extends Error {
   readonly code: "DETECT_FAIL" | "IO" | "PARSE" | "UNKNOWN_FORMAT";
 
-  constructor(code: "DETECT_FAIL" | "IO" | "PARSE" | "UNKNOWN_FORMAT", message: string) {
+  constructor(
+    code: "DETECT_FAIL" | "IO" | "PARSE" | "UNKNOWN_FORMAT",
+    message: string,
+  ) {
     super(message);
     this.name = "SessionImportError";
     this.code = code;
