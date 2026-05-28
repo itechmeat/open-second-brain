@@ -17,6 +17,8 @@ Brain verbs (observing memory):
   note             Append a one-line narrative milestone to Brain/log/today
   digest           Render the recent-changes digest (markdown or --json)
   query            Read by --preference, --topic, or --since
+  agent-query      Read Brain provenance by source agent (--agent; --json)
+  agent-diff       Compare source-agent coverage (browse/search/diff/map)
   reject           Move a preference to retired (user-rejected); --yes if pinned
   pin              Mark a preference exempt from automatic retire (idempotent)
   unpin            Clear the pinned flag (idempotent)
@@ -87,6 +89,17 @@ export const VERB_HELP: Record<string, string> = {
   query:
     "usage: o2b brain query --preference <id> | --topic <slug> | --since <ISO> [--vault <path>] [--json]\n" +
     "Read-only lookup. One of --preference / --topic / --since is required.\n",
+  "agent-query":
+    "usage: o2b brain agent-query [--agent <id>...] [--topic <slug>] [--query <text>]\n" +
+    "                             [--kind signal|preference|log] [--limit <n>]\n" +
+    "                             [--vault <path>] [--json]\n" +
+    "Read-only source-agent retrieval over Brain provenance. Omit --agent to query all known agents.\n",
+  "agent-diff":
+    "usage: o2b brain agent-diff [--mode browse|search|diff|map] [--agent <id>...]\n" +
+    "                            [--topic <slug>] [--query <text>]\n" +
+    "                            [--kind signal|preference|log] [--limit <n>]\n" +
+    "                            [--vault <path>] [--json]\n" +
+    "Compare source-agent coverage using the same provenance foundation as agent-query.\n",
   reject:
     "usage: o2b brain reject --id <pref-id> --reason <text> [--yes] [--vault <path>] [--json]\n" +
     "Move a preference to retired/ with reason 'user-rejected'. --yes required when pinned.\n",

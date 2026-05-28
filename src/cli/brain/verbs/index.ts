@@ -5,6 +5,8 @@ export { cmdBrainDream } from "./dream.ts";
 export { cmdBrainApplyEvidence } from "./apply-evidence.ts";
 export { cmdBrainDigest } from "./digest.ts";
 export { cmdBrainQuery } from "./query.ts";
+export { cmdBrainAgentQuery } from "./agent-query.ts";
+export { cmdBrainAgentDiff } from "./agent-diff.ts";
 export { cmdBrainReject } from "./reject.ts";
 export { cmdBrainPin, cmdBrainUnpin } from "./pin.ts";
 export { cmdBrainSetPrimary } from "./set-primary.ts";
@@ -18,7 +20,10 @@ export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";
 export { cmdBrainExport } from "./export.ts";
 export { cmdBrainUpgrade } from "./upgrade.ts";
-export { cmdBrainSnapshotDiff, handleBrainSnapshotSubcommand } from "./snapshot.ts";
+export {
+  cmdBrainSnapshotDiff,
+  handleBrainSnapshotSubcommand,
+} from "./snapshot.ts";
 export { cmdBrainScanInline } from "./scan-inline.ts";
 export { cmdBrainImportSession } from "./import-session.ts";
 export { cmdBrainImportClaudeMemory } from "./import-claude-memory.ts";
