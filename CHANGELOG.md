@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-05-28
+
+Agent boundary control surfaces. Open Second Brain now gives agents a
+transient current-task scratchpad, configurable Markdown-link output for
+presentation surfaces, explicit MCP output contracts, and deterministic
+private-region stripping before memory writes. These are additive controls:
+permanent preferences still live in Obsidian-compatible Brain files, while
+short-lived facts and boundary checks stay outside the learning loop.
+
+### Added
+
+- `Brain/pinned.md` plus the `brain_pinned_context` MCP tool for read/write/
+  append/clear operations on transient current-task context.
+- `brain_context` now returns a structured `pinned` block and includes pinned
+  content in its text card when present.
+- `link_output_format: markdown` config support, with `OBSIDIAN_LINK_FORMAT`
+  as an env override for presentation output such as `brain_digest`.
+- Lightweight MCP `outputSchema` contracts and boundary validation for
+  `brain_context`, `brain_pinned_context`, `brain_query`, and `brain_search`.
+- `<private>...</private>` region stripping in the shared redactor before
+  secret-shaped assignment masking.
+
+### Changed
+
+- The always-loaded writer MCP surface now has five tools: `brain_feedback`,
+  `brain_apply_evidence`, `brain_note`, `brain_pinned_context`, and
+  `brain_context`.
+
 ## [0.15.0] - 2026-05-28
 
 Cross-agent query foundation. Open Second Brain now exposes a read-only

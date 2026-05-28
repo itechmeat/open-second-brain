@@ -28,7 +28,7 @@ o2b brain feedback            Record one taste signal (--topic, --signal, --prin
 o2b brain dream               Run the deterministic consolidation pass (idempotent; usually cron'd)
 o2b brain apply-evidence      Record applied / violated against a preference for a durable artifact
 o2b brain note <text>         Append a one-line narrative milestone to Brain/log/<today>.md (cron / shell mirror of brain_note)
-o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions; --window 7d for arbitrary lookback
+o2b brain digest              Render a Markdown or JSON summary of recent Brain transitions; --window 7d for arbitrary lookback; Markdown links follow link_output_format / OBSIDIAN_LINK_FORMAT
 o2b brain query               Read helper: by preference, by topic, or by log timestamp
 o2b brain agent-query         Read source-agent provenance; filters by --agent, --topic, --query, --kind, --limit; --json mirrors brain_agent_query
 o2b brain agent-diff          Compare source-agent coverage in browse/search/diff/map modes; --json mirrors brain_agent_diff
@@ -150,5 +150,6 @@ vault-log                     Shell mirror of brain_note (one-liner narrative mi
 
 - Every CLI mutation that touches Brain takes a pre-run snapshot under `Brain/.snapshots/` with a SHA-256 sidecar manifest. `o2b brain rollback` aborts on drift unless `--force-rollback`.
 - `o2b ... --json` exists on every read verb and most write verbs (the JSON payload mirrors the MCP tool's response shape).
+- MCP-only `brain_pinned_context` manages `Brain/pinned.md`, a transient current-task scratchpad loaded by `brain_context`; it is intentionally not a learned preference CLI verb.
 - `--dry-run` is supported by every mutating verb that touches more than a single file (`brain merge`, `brain rollback`, `brain upgrade`, `brain import-claude-memory`, `update`, ...).
 - `--vault` always overrides the profile path; useful for multi-vault hosts where the config-resolved default is not the right target.

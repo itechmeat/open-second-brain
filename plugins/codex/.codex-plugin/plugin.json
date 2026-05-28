@@ -1,6 +1,6 @@
 {
   "name": "open-second-brain",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Plugin-first second brain package for Codex, Hermes, Claude Code, OpenClaw, and other agent runtimes.",
   "author": {
     "name": "Open Second Brain contributors",

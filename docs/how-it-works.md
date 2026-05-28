@@ -333,6 +333,7 @@ flowchart LR
     Active -- PostCompact hook --> ClaudeCompact["Claude Code / Codex<br/>after /compact"]
     Active -- "osb://preferences/active" --> MCPHost["MCP host (Hermes, others)"]
     Active -- "brain_context tool" --> PullRT["Cursor / Aider / raw API<br/>(no SessionStart hook)"]
+    Pinned[Brain/pinned.md] -- "brain_context tool" --> PullRT
 ```
 
 - **`Brain/active.md`** is a derived Markdown digest: confirmed
@@ -360,8 +361,12 @@ flowchart LR
 - **`brain_context` MCP tool** (v0.10.10) lives in the always-loaded
   writer-scope MCP server. Runtimes that lack a `SessionStart` hook
   *and* do not auto-load MCP resources (Cursor, Aider, raw Claude
-  API) can fetch the same `active.md` body plus active-preference
-  counts with a single tool call.
+  API) can fetch the same `active.md` body, pinned current-task context,
+  and active-preference counts with a single tool call.
+- **`Brain/pinned.md`** is a transient scratchpad for current-task facts.
+  Agents update it through `brain_pinned_context` when a fact should survive
+  context rotation but should not become a durable preference. Clearing it
+  leaves the permanent Brain history untouched.
 
 `active.md` is **not** edited by hand — `o2b brain dream` and pin /
 unpin re-derive it from `preferences/` and `retired/`. Deleting the
@@ -379,7 +384,8 @@ are mirrored in MCP; destructive operations are CLI-only by design.
 | Consolidation pass       | `o2b brain dream`          | `brain_dream`         | mutates preferences/retired, atomic snapshot, regenerates `Brain/active.md` |
 | Record application       | `o2b brain apply-evidence` | `brain_apply_evidence`| appends log event; `result ∈ {applied, violated, outdated}`; artifact supports `[[file:120-145]]` ranges |
 | Record milestone         | `o2b brain note <text>`    | `brain_note`          | appends one `note` log event to `Brain/log/<today>.md` plus the JSONL sidecar. Multi-line collapses to one line. CLI mirror exists for cron / shell. |
-| Pull active context      | — (use MCP)                | `brain_context`       | read-only; returns `Brain/active.md` body + counts. Always-loaded on the writer MCP server so runtimes without a `SessionStart` hook (Cursor, Aider, raw Claude API) can fetch it at session start. |
+| Pin current-task context | — (use MCP)                | `brain_pinned_context`| writes/appends/clears `Brain/pinned.md`; transient context, not a learned preference |
+| Pull active context      | — (use MCP)                | `brain_context`       | read-only; returns `Brain/active.md` body, pinned context + counts. Always-loaded on the writer MCP server so runtimes without a `SessionStart` hook (Cursor, Aider, raw Claude API) can fetch it at session start. |
 | Render summary           | `o2b brain digest [--window Nd]` | `brain_digest`        | read-only; includes `top_applied`, `top_referenced`, and `agent_summary` sections |
 | Inspect state            | `o2b brain query`          | `brain_query`         | read-only              |
 | Computed backlinks       | `o2b brain backlinks <id>` | `brain_backlinks`     | read-only; inverted reference map across `preferences/`, `retired/`, `log/` |
@@ -520,6 +526,9 @@ through `src/core/redactor.ts` (promoted from Pay Memory) plus a
   with `***REDACTED***`. The `raw` field is the only verbatim-quote
   surface and is intentionally **not** redacted — it carries the
   original user phrasing.
+- Explicit `<private>...</private>` regions are stripped before secret
+  assignment redaction. An unclosed `<private>` tag strips from the tag to
+  the end of the field, which is conservative for accidental paste leaks.
 - Inputs that sanitise down to empty fall into the existing "missing
   field" error branch, so the writer never persists a placeholder
   signal.
