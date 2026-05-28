@@ -75,6 +75,7 @@ import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
 import { buildIntentReview } from "../core/brain/intent-review.ts";
 import { buildRetentionReview } from "../core/brain/retention.ts";
+import { buildMonthlyReview } from "../core/brain/monthly-review.ts";
 import { buildReviewCandidates } from "../core/brain/review-candidates.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
 import { buildOperatorSummary } from "../core/brain/trust/operator-summary.ts";
@@ -371,6 +372,34 @@ async function toolBrainRetention(
       reason: recommendation.reason,
       path: recommendation.path,
     })),
+  };
+}
+
+async function toolBrainMonthlyReview(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const monthRaw = args["month"];
+  let month: string | undefined;
+  if (monthRaw !== undefined && monthRaw !== null) {
+    if (
+      typeof monthRaw !== "string" ||
+      !/^\d{4}-\d{2}$/.test(monthRaw.trim())
+    ) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_monthly_review: month must be YYYY-MM",
+      );
+    }
+    month = monthRaw.trim();
+  }
+  const report = buildMonthlyReview(ctx.vault, month ? { month } : {});
+  return {
+    schema_version: report.schema_version,
+    generated_at: report.generated_at,
+    month: report.month,
+    window: report.window,
+    summary: report.summary,
   };
 }
 
@@ -1830,6 +1859,23 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRetention,
+  },
+  {
+    name: "brain_monthly_review",
+    description:
+      "Read-only monthly synthesis over Brain timeline activity: event count, status transitions, retirements, contradictions, and neglected areas.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        month: {
+          type: "string",
+          description:
+            "Optional target month in YYYY-MM form. Defaults to the current UTC month.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainMonthlyReview,
   },
   {
     name: "brain_review_candidates",

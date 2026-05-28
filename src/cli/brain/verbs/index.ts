@@ -6,6 +6,7 @@ export { cmdBrainApplyEvidence } from "./apply-evidence.ts";
 export { cmdBrainDigest } from "./digest.ts";
 export { cmdBrainIntentReview } from "./intent-review.ts";
 export { cmdBrainRetention } from "./retention.ts";
+export { cmdBrainMonthly } from "./monthly.ts";
 export { cmdBrainQuery } from "./query.ts";
 export { cmdBrainAgentQuery } from "./agent-query.ts";
 export { cmdBrainAgentDiff } from "./agent-diff.ts";

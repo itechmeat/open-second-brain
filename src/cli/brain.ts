@@ -17,6 +17,7 @@ import {
   cmdBrainDigest,
   cmdBrainIntentReview,
   cmdBrainRetention,
+  cmdBrainMonthly,
   cmdBrainQuery,
   cmdBrainAgentQuery,
   cmdBrainAgentDiff,
@@ -93,6 +94,8 @@ export async function handleBrainSubcommand(
         return await cmdBrainIntentReview(rest);
       case "retention":
         return await cmdBrainRetention(rest);
+      case "monthly":
+        return await cmdBrainMonthly(rest);
       case "query":
         return await cmdBrainQuery(rest);
       case "agent-query":
