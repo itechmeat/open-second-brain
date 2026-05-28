@@ -112,6 +112,7 @@ import {
 
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
+import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import {
   coerceStr,
   coerceStrList,
@@ -1740,6 +1741,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_monthly_review",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Read-only monthly synthesis over Brain timeline activity: event count, status transitions, retirements, contradictions, and neglected areas.",
     inputSchema: {
@@ -1865,6 +1867,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_digest",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Render a human-readable summary of Brain activity in the last 24h (default) or a custom window. Read-only.",
     inputSchema: {
@@ -2060,6 +2063,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_context_pack",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Return the highest-tier, most recent vault slice that fits under `max_tokens`. Ordered core → supporting → peripheral, newest first; stops adding pages when the next page would exceed the budget. Read-only.",
     inputSchema: {
@@ -2106,6 +2110,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_concept_synthesis",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Concept-scoped cluster: target note + every artifact that wikilinks to it (depth-1), optionally including unlinked-mention rows. Deterministic JSON envelope, no LLM call inside. Read-only.",
     inputSchema: {
@@ -2145,6 +2150,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_timeline",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Chronological list of Brain events filtered by any combination of pref_id, topic, kind, since, until, limit. Returns the canonical TimelineIndex projection. Read-only.",
     inputSchema: {
@@ -2214,6 +2220,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_daily_brief",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Deterministic daily brief: events grouped by kind, status transitions, vault delta (newPromotions / newRetired / newFeedback / evidenceApplied / evidenceViolated), and deduplicated artifact wikilinks. Read-only.",
     inputSchema: {
@@ -2230,6 +2237,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_weekly_synthesis",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Deterministic 7-day synthesis: events grouped by kind, status transitions, retired-in-window list, contradictions (signal-suppressed + apply-evidence violated), vault delta, and source pointers. Read-only.",
     inputSchema: {
@@ -2247,6 +2255,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_operator_summary",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Aggregate operator dashboard: trust verdict, doctor + dream counts, verification delta, ranked maintenance actions, and instruction-file ceiling warnings. Read-only.",
     inputSchema: {

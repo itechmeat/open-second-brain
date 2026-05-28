@@ -2322,6 +2322,7 @@ var BRAIN_PREFERENCES_REL = posix2.join(BRAIN_ROOT_REL, "preferences");
 var BRAIN_RETIRED_REL = posix2.join(BRAIN_ROOT_REL, "retired");
 var BRAIN_LOG_REL = posix2.join(BRAIN_ROOT_REL, "log");
 var BRAIN_SNAPSHOTS_REL = posix2.join(BRAIN_ROOT_REL, ".snapshots");
+var BRAIN_ARTIFACTS_REL = posix2.join(BRAIN_ROOT_REL, ".artifacts");
 var BRAIN_INDEX_FILE = "_INDEX.md";
 var BRAIN_INDEX_REL = posix2.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
 
@@ -2524,10 +2525,11 @@ function stripPrivateRegions(text) {
   }
   return output;
 }
-function redactRawOutput(text) {
+function redactRawOutput(text, opts = {}) {
   if (!text)
     return text;
-  let out = text.length > MAX_REDACTOR_INPUT ? text.slice(0, MAX_REDACTOR_INPUT) + TRUNCATION_MARKER : text;
+  const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
+  let out = text.length > maxInput ? text.slice(0, maxInput) + TRUNCATION_MARKER : text;
   out = stripPrivateRegions(out);
   out = out.replace(JSON_ENTRY_RE, (_match, keyPart, value) => {
     if (value.startsWith('"'))

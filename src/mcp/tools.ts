@@ -33,11 +33,19 @@ import { listVaultPages } from "../core/vault.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
 import { coerceStr, coerceInt } from "./coerce.ts";
 import type { OutputSchema } from "./output-contract.ts";
+import type { ArtifactStore } from "./artifact-store.ts";
+import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 
 export interface ServerContext {
   readonly vault: string;
   readonly configPath: string | null;
   readonly repoRoot: string | null;
+  /**
+   * Per-process preview-artifact store (v0.18.0). Present on the live MCP
+   * server context; `brain_artifact_get` reads parked tool-result payloads
+   * back through it. Optional so manually-built contexts stay valid.
+   */
+  readonly artifactStore?: ArtifactStore;
 }
 
 export interface ToolDefinition {
@@ -45,6 +53,15 @@ export interface ToolDefinition {
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   readonly outputSchema?: OutputSchema;
+  /**
+   * Optional MCP preview budget in characters (v0.18.0). When set and
+   * the serialized result exceeds it, the JSON-RPC `tools/call` path
+   * parks the full payload in the artifact store and returns a bounded
+   * preview envelope in `content[0].text` instead, leaving
+   * `structuredContent` intact. A tool with no budget is never truncated
+   * - opt-in only. The CLI bridge ignores the budget entirely.
+   */
+  readonly previewBudget?: number;
   readonly handler: (
     ctx: ServerContext,
     args: Record<string, unknown>,
@@ -177,6 +194,38 @@ async function toolVaultHealth(
   };
 }
 
+async function toolArtifactGet(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const artifactId = coerceStr(args, "artifact_id", true) as string;
+  if (!ctx.artifactStore) {
+    throw new Error("artifact store unavailable in this context");
+  }
+  let content: string | null;
+  try {
+    content = ctx.artifactStore.get(artifactId);
+  } catch (err) {
+    // Malformed id (path-traversal attempt) → invalid params.
+    throw new MCPError(INVALID_PARAMS, (err as Error)?.message ?? String(err));
+  }
+  if (content === null) {
+    // Well-formed but absent / expired → tool-level error envelope.
+    throw new Error(`unknown or expired artifact_id: ${artifactId}`);
+  }
+  return { artifact_id: artifactId, full_chars: content.length, content };
+}
+
+const ARTIFACT_GET_OUTPUT_SCHEMA: OutputSchema = {
+  type: "object",
+  required: ["artifact_id", "full_chars", "content"],
+  properties: {
+    artifact_id: { type: "string" },
+    full_chars: { type: "integer" },
+    content: { type: "string" },
+  },
+};
+
 export type ToolScope = "full" | "writer";
 
 // The set is named after the original payload (mutating writers). As
@@ -198,6 +247,7 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
       name: "second_brain_status",
       description: "Report Open Second Brain configuration and vault status.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      previewBudget: MCP_PREVIEW_BUDGET,
       handler: toolStatus,
     },
     {
@@ -219,6 +269,7 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         },
         additionalProperties: false,
       },
+      previewBudget: MCP_PREVIEW_BUDGET,
       handler: toolQuery,
     },
     // `second_brain_capture` and `event_log_append` were retired from
@@ -240,6 +291,24 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         additionalProperties: false,
       },
       handler: toolVaultHealth,
+    },
+    {
+      name: "brain_artifact_get",
+      description:
+        "Fetch the full payload of a previously preview-truncated tool result by its artifact_id. Read-only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          artifact_id: {
+            type: "string",
+            description: "The artifact_id returned in a preview-truncated tool result envelope.",
+          },
+        },
+        required: ["artifact_id"],
+        additionalProperties: false,
+      },
+      outputSchema: ARTIFACT_GET_OUTPUT_SCHEMA,
+      handler: toolArtifactGet,
     },
     ...PAY_MEMORY_TOOLS,
   ];

@@ -47,6 +47,12 @@ export const BRAIN_PREFERENCES_REL = posix.join(BRAIN_ROOT_REL, "preferences");
 export const BRAIN_RETIRED_REL = posix.join(BRAIN_ROOT_REL, "retired");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
+/**
+ * Ephemeral MCP tool-result artifacts (v0.18.0). Dot-directory so the
+ * vault walker excludes it from search/indexing exactly like
+ * `.snapshots`; never backed up, pruned by TTL on server startup.
+ */
+export const BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, ".artifacts");
 
 /** Brain-internal artefact filenames at the root of `Brain/`. */
 export const BRAIN_CONFIG_FILE = "_brain.yaml";
@@ -205,6 +211,28 @@ export function snapshotsDir(vault: string): string {
 export function snapshotPath(vault: string, runId: string): string {
   const id = validateRunId(runId);
   return ensureInsideVault(join(brainDirs(vault).snapshots, `${id}.tar.zst`), vault);
+}
+
+/** Artifacts root: `Brain/.artifacts/`. */
+export function brainArtifactsDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_ARTIFACTS_REL), vault);
+}
+
+/** Per-run artifact directory: `Brain/.artifacts/<run_id>/`. */
+export function artifactRunDir(vault: string, runId: string): string {
+  const id = validateRunId(runId);
+  return ensureInsideVault(join(brainArtifactsDir(vault), id), vault);
+}
+
+/**
+ * Single artifact path: `Brain/.artifacts/<run_id>/<artifact_id>.json`.
+ * Both ids go through {@link validateRunId} (the same filesystem-safety
+ * contract: no separators, no traversal, no Windows reservation), so a
+ * malicious `artifact_id` from an MCP argument cannot escape the run dir.
+ */
+export function artifactPath(vault: string, runId: string, artifactId: string): string {
+  const aid = validateRunId(artifactId);
+  return ensureInsideVault(join(artifactRunDir(vault, runId), `${aid}.json`), vault);
 }
 
 // ----- Validators -----------------------------------------------------------
