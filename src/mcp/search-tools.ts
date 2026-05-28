@@ -17,6 +17,7 @@ import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceBoolOptional, coerceStringOptional } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
+import { deriveRecallHint } from "../core/search/recall-hint.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -76,6 +77,7 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
     },
     warnings: { type: "array", items: { type: "string" } },
     total: { type: "integer" },
+    recall_hint: { type: "string" },
   },
 };
 
@@ -201,6 +203,7 @@ async function toolBrainSearch(
     throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
   }
 
+  const recallHint = deriveRecallHint(outcome.results, outcome.total);
   return {
     results: outcome.results.map((r: BrainSearchResult) => ({
       path: r.path,
@@ -214,6 +217,7 @@ async function toolBrainSearch(
     })),
     warnings: outcome.warnings,
     total: outcome.total,
+    ...(recallHint !== null ? { recall_hint: recallHint } : {}),
   };
 }
 
