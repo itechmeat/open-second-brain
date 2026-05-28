@@ -20,7 +20,13 @@ import { join } from "node:path";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import { brainDirs, logJsonlPath, logPath, preferencePath } from "../../src/core/brain/paths.ts";
+import {
+  brainDirs,
+  brainPinnedPath,
+  logJsonlPath,
+  logPath,
+  preferencePath,
+} from "../../src/core/brain/paths.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
@@ -783,12 +789,71 @@ describe("brain_note tool schema visibility", () => {
         "brain_feedback",
         "brain_apply_evidence",
         "brain_note",
+        "brain_pinned_context",
         // v0.10.10 added the `brain_context` reader to the same scope
         // so runtimes without a SessionStart hook can fetch active.md
         // without going through ToolSearch.
         "brain_context",
       ]),
     );
-    expect(writer).toHaveLength(4);
+    expect(writer).toHaveLength(5);
+  });
+});
+
+describe("brain_pinned_context", () => {
+  test("reads missing pinned context as an empty payload", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = (await call(server, "brain_pinned_context", { operation: "read" })) as any;
+    expect(r.result.isError).toBe(false);
+    const pinned = r.result.structuredContent;
+    expect(pinned.operation).toBe("read");
+    expect(pinned.present).toBe(false);
+    expect(pinned.content).toBe("");
+    expect(pinned.path).toBe("Brain/pinned.md");
+    expect(pinned.absolute_path).toBe(brainPinnedPath(vault));
+  });
+
+  test("writes, appends, and clears pinned context", async () => {
+    const server = makeServer();
+    await initialize(server);
+
+    const written = (await call(server, "brain_pinned_context", {
+      operation: "write",
+      content: "Remember api_key=abc <private>hidden</private>",
+    })) as any;
+    expect(written.result.structuredContent.content).toContain("api_key=***REDACTED***");
+    expect(written.result.structuredContent.content).toContain("***PRIVATE***");
+    expect(written.result.structuredContent.content).not.toContain("hidden");
+
+    const appended = (await call(server, "brain_pinned_context", {
+      operation: "append",
+      content: "Second fact",
+    })) as any;
+    expect(appended.result.structuredContent.content).toContain("\n\nSecond fact");
+
+    const cleared = (await call(server, "brain_pinned_context", { operation: "clear" })) as any;
+    expect(cleared.result.structuredContent.content).toBe("");
+    expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe("");
+  });
+
+  test("brain_context includes pinned content as structured data and text", async () => {
+    const server = makeServer();
+    await initialize(server);
+    await call(server, "brain_pinned_context", {
+      operation: "write",
+      content: "Current task: fix MCP boundary tests.",
+    });
+
+    const r = (await call(server, "brain_context", {})) as any;
+    const context = r.result.structuredContent;
+    expect(context.pinned).toEqual({
+      present: true,
+      path: "Brain/pinned.md",
+      absolute_path: brainPinnedPath(vault),
+      content: "Current task: fix MCP boundary tests.",
+    });
+    expect(context.content).toContain("## Pinned context");
+    expect(context.content).toContain("Current task: fix MCP boundary tests.");
   });
 });

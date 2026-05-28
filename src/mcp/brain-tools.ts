@@ -19,6 +19,7 @@
  *   - `brain_agent_diff`      — read-only comparison between source agents.
  *   - `brain_doctor`          — invariant / schema health check.
  *   - `brain_backlinks`       — read-only inbound reference lookup.
+ *   - `brain_pinned_context`  — current-task scratchpad read/write/clear.
  *   - `brain_context`         — pull-bootstrap of `Brain/active.md`.
  *
  * The five Brain commands that remain CLI-only on purpose
@@ -107,6 +108,13 @@ import {
 import { appendLogEvent } from "../core/brain/log.ts";
 import type { BrainLogEntry } from "../core/brain/log.ts";
 import { appendBrainNote } from "../core/brain/note.ts";
+import {
+  appendPinnedContext,
+  clearPinnedContext,
+  readPinnedContext,
+  writePinnedContext,
+  type PinnedContext,
+} from "../core/brain/pinned.ts";
 
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
@@ -467,6 +475,64 @@ async function toolBrainNote(
 
 // ----- brain_context (v0.10.10) --------------------------------------------
 
+type PinnedContextOperation = "read" | "write" | "append" | "clear";
+
+function coercePinnedContextOperation(args: Record<string, unknown>): PinnedContextOperation {
+  const operation = coerceStr(args, "operation", false) ?? "read";
+  if (
+    operation !== "read" &&
+    operation !== "write" &&
+    operation !== "append" &&
+    operation !== "clear"
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_pinned_context operation must be one of: read, write, append, clear",
+    );
+  }
+  return operation;
+}
+
+function serializePinnedContext(
+  ctx: ServerContext,
+  pinned: PinnedContext,
+  operation?: PinnedContextOperation,
+): Record<string, unknown> {
+  return {
+    ...(operation ? { operation } : {}),
+    present: pinned.present,
+    path: vaultRelativeSafe(ctx.vault, pinned.path),
+    absolute_path: pinned.path,
+    content: pinned.content,
+  };
+}
+
+async function toolBrainPinnedContext(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = coercePinnedContextOperation(args);
+  let pinned: PinnedContext;
+  if (operation === "read") {
+    pinned = readPinnedContext(ctx.vault);
+  } else if (operation === "write") {
+    pinned = writePinnedContext(ctx.vault, coerceStr(args, "content", true)!);
+  } else if (operation === "append") {
+    pinned = appendPinnedContext(ctx.vault, coerceStr(args, "content", true)!);
+  } else {
+    pinned = clearPinnedContext(ctx.vault);
+  }
+  return serializePinnedContext(ctx, pinned, operation);
+}
+
+function appendPinnedToContextContent(activeContent: string, pinnedContent: string): string {
+  if (pinnedContent.length === 0) return activeContent;
+  const pinnedBlock = `## Pinned context\n\n${pinnedContent}`;
+  const trimmedActive = activeContent.trimEnd();
+  if (trimmedActive.length === 0) return `${pinnedBlock}\n`;
+  return `${trimmedActive}\n\n${pinnedBlock}\n`;
+}
+
 type BrainContextCounts = RegenerateActiveResult["counts"];
 
 const EMPTY_CONTEXT_COUNTS: BrainContextCounts = {
@@ -496,6 +562,7 @@ async function toolBrainContext(
 ): Promise<Record<string, unknown>> {
   const dirs = brainDirs(ctx.vault);
   const activePath = brainActivePath(ctx.vault);
+  const pinned = readPinnedContext(ctx.vault);
   if (!existsSync(dirs.brain)) {
     return {
       vault_path: ctx.vault,
@@ -504,6 +571,7 @@ async function toolBrainContext(
       content: "",
       counts: EMPTY_CONTEXT_COUNTS,
       generated_at: null,
+      pinned: serializePinnedContext(ctx, pinned),
     };
   }
 
@@ -536,6 +604,7 @@ async function toolBrainContext(
       generatedAt = null;
     }
   }
+  content = appendPinnedToContextContent(content, pinned.content);
 
   // Optional vault-root instruction file (v0.10.17). Absent file =
   // field omitted so hosts that strip unknown fields stay
@@ -555,6 +624,7 @@ async function toolBrainContext(
     content,
     counts,
     generated_at: generatedAt,
+    pinned: serializePinnedContext(ctx, pinned),
     ...(error ? { error } : {}),
     ...(vaultInstruction
       ? {
@@ -1685,9 +1755,30 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainNote,
   },
   {
+    name: "brain_pinned_context",
+    description:
+      "Read, write, append, or clear the transient current-task scratchpad at `Brain/pinned.md`. Use for facts that should survive context rotation but should not become permanent preferences.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["read", "write", "append", "clear"],
+          description: "Operation to perform. Defaults to read.",
+        },
+        content: {
+          type: "string",
+          description: "Pinned context body for write/append operations.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainPinnedContext,
+  },
+  {
     name: "brain_context",
     description:
-      "Pull the current Brain/active.md body plus active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Read-only.",
+      "Pull the current Brain/active.md body, pinned current-task context, and active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Read-only.",
     inputSchema: {
       type: "object",
       properties: {},

@@ -187,6 +187,7 @@ const WRITER_TOOL_NAMES: ReadonlySet<string> = new Set([
   "brain_context",
   "brain_feedback",
   "brain_note",
+  "brain_pinned_context",
 ]);
 
 export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {

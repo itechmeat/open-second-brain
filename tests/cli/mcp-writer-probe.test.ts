@@ -38,6 +38,7 @@ describe("o2b mcp --writer-only alias", () => {
         "brain_context",
         "brain_feedback",
         "brain_note",
+        "brain_pinned_context",
       ]);
     } finally {
       if (tmp) rmSync(tmp, { recursive: true, force: true });
