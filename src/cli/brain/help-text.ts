@@ -39,6 +39,7 @@ Brain verbs (observing memory):
   health              Semantic-health report: contradictions, concept gaps, stale claims
   history             Render a preference's edit-history timeline
   backlinks           List inbound references to a Brain artifact id
+  mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a registered agent session .jsonl (or directory)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
@@ -167,6 +168,11 @@ export const VERB_HELP: Record<string, string> = {
   backlinks:
     "usage: o2b brain backlinks <id> [--vault <path>] [--json]\n" +
     "List inbound references to the given Brain artifact id (preference, retired, signal).\n",
+  "mcp-landscape":
+    "usage: o2b brain mcp-landscape [--vault <path>] [--json]\n" +
+    "List the Model Context Protocol servers configured across the vault: each\n" +
+    "server's name, the config file that declares it, the packages it pulls, and\n" +
+    "the env-var NAMES it requires. Environment values are never read. Read-only.\n",
   "set-primary":
     "usage: o2b brain set-primary <name> [--vault <path>] [--json]\n" +
     "       o2b brain set-primary --clear [--vault <path>] [--json]\n" +

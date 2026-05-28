@@ -205,6 +205,7 @@ describe("tool listing", () => {
         "brain_agent_diff",
         "brain_doctor",
         "brain_health",
+        "brain_mcp_landscape",
         "brain_backlinks",
         "brain_context_pack",
         "brain_unlinked_mentions",
@@ -464,7 +465,8 @@ describe("stdio loop", () => {
     // v0.15.0; brain_pinned_context added in v0.16.0; lifecycle review
     // tools added in v0.17.0) + 8 Pay Memory + 1 Search
     // + brain_artifact_get (v0.18.0) = 40.
-    expect(list.result.tools.length).toBe(40);
+    // + brain_mcp_landscape (typed graph semantics) = 41.
+    expect(list.result.tools.length).toBe(41);
   });
 
   test("returns parse error for invalid JSON", async () => {
