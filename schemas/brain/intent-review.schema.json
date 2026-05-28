@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "brain.intent_review.v1",
+  "title": "Brain Intent Review v1",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "reviews"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "generated_at": { "type": "string" },
+    "reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["topic", "decision", "signal_count", "risk_band", "risk_score", "reasons"],
+        "additionalProperties": false,
+        "properties": {
+          "topic": { "type": "string" },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "ready_for_main_review",
+              "needs_more_evidence",
+              "blocked_conflicted",
+              "suppressed_by_rejected_retired"
+            ]
+          },
+          "signal_count": { "type": "integer" },
+          "risk_band": { "type": "string", "enum": ["low", "medium", "high"] },
+          "risk_score": { "type": "integer" },
+          "reasons": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

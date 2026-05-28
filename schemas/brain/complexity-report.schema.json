@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "brain.complexity_report.v1",
+  "title": "Brain Complexity Report v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "score",
+    "ratio",
+    "thinking_activity",
+    "structural_complexity",
+    "warning",
+    "factors"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "generated_at": { "type": "string" },
+    "score": { "type": "integer" },
+    "ratio": { "type": "number" },
+    "thinking_activity": { "type": "integer" },
+    "structural_complexity": { "type": "integer" },
+    "warning": { "type": "boolean" },
+    "factors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "value", "weight"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "integer" },
+          "weight": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

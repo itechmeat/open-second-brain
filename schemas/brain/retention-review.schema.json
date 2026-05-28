@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "brain.retention_review.v1",
+  "title": "Brain Retention Review v1",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "summary", "recommendations"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "generated_at": { "type": "string" },
+    "summary": {
+      "type": "object",
+      "required": ["keep", "improve", "park", "prune"],
+      "additionalProperties": false,
+      "properties": {
+        "keep": { "type": "integer" },
+        "improve": { "type": "integer" },
+        "park": { "type": "integer" },
+        "prune": { "type": "integer" }
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "artifact_type", "action", "reason", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "artifact_type": { "type": "string", "enum": ["retired_preference", "processed_signal"] },
+          "action": { "type": "string", "enum": ["keep", "improve", "park", "prune"] },
+          "reason": { "type": "string" },
+          "path": { "type": "string" }
+        }
+      }
+    }
+  }
+}
