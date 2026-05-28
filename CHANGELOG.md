@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-05-28
+
+MCP context economy. Large tool results no longer flood the calling
+agent's context window: budgeted tools return a bounded preview inline and
+park the full payload in a vault-local artifact the agent can fetch on
+demand. Search results also gain a one-line recall hint.
+
+### Added
+
+- Per-tool MCP preview budget. When a budgeted tool's serialized result
+  exceeds its character budget, the JSON-RPC `tools/call` response returns
+  a valid-JSON preview envelope (`preview_truncated`, `bytes_preview`,
+  `full_chars`, `artifact_id`, `note`) in `content[0].text` while
+  `structuredContent` stays the full, contract-validated object. Tools
+  with no budget, and the CLI, are unaffected.
+- `brain_artifact_get` MCP tool to fetch the complete payload of a
+  preview-truncated result by its `artifact_id`. Read-only, full scope.
+- Vault-local artifact store under `Brain/.artifacts/<run-id>/`, with
+  secret redaction, path-safety, content-hashed ids, and best-effort TTL
+  pruning of stale run directories on server start.
+- `recall_hint` on `brain_search` results: a computed, never-stored
+  one-line summary of the recalled set (count, per-type breakdown, top
+  hit) built from a single language-agnostic template.
+
+### Changed
+
+- `redactRawOutput` accepts an optional `maxInput` so the artifact store
+  can scrub secrets without inheriting the receipt-oriented 256 KiB
+  truncation cap, preserving full payloads for later fetch.
+
 ## [0.17.0] - 2026-05-28
 
 Brain Lifecycle Review Suite. Open Second Brain now adds read-only review
