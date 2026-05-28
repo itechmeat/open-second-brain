@@ -2,6 +2,7 @@ import type { BrainEventCounts } from "./log-counts.ts";
 import type { GitActivity } from "./activity-git.ts";
 import type { VaultDelta } from "./vault-delta.ts";
 import type { TranscriptActivity } from "./transcripts/types.ts";
+import type { ComplexityReport } from "./complexity.ts";
 
 export interface RepoActivityRow {
   readonly path: string;
@@ -16,6 +17,8 @@ export interface ActivitySummary {
   readonly repo: ReadonlyArray<RepoActivityRow>;
   readonly nonRepo: ReadonlyArray<NonRepoActivityRow>;
   readonly vaultDelta: VaultDelta;
+  /** Productivity-trap detector: structure churn compared to thinking output. */
+  readonly complexity?: ComplexityReport;
   /**
    * Per-runtime session-transcript activity (v0.10.11). Optional so
    * the type is back-compat with callers / tests that have not been
@@ -55,6 +58,8 @@ export function decideStatus(
   const repoCommits = activity.repo.reduce((a, r) => a + r.git.commits, 0);
   const mtimeFiles = activity.nonRepo.reduce((a, r) => a + r.modifiedFiles, 0);
   const vaultActive = activity.vaultDelta.total > 0;
-  const activitySignal = repoCommits > 0 || mtimeFiles >= 3 || vaultActive;
+  const complexityWarning = activity.complexity?.warning === true;
+  const activitySignal =
+    repoCommits > 0 || mtimeFiles >= 3 || vaultActive || complexityWarning;
   return activitySignal ? "alert" : "info";
 }
