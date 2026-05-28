@@ -1649,7 +1649,13 @@ function stem(filename) {
 }
 
 // src/core/config.ts
-var SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"];
+var SECRET_KEY_PARTS = [
+  "key",
+  "token",
+  "secret",
+  "password",
+  "credential"
+];
 function defaultConfigPath() {
   const override = process.env["OPEN_SECOND_BRAIN_CONFIG"];
   if (override)
@@ -2021,7 +2027,11 @@ function checkCodexManifest(path) {
     ["keywords", "list"]
   ]);
   if (problems.length > 0) {
-    return { name: "codex_manifest", ok: false, message: `schema invalid: ${path} (${problems.join("; ")})` };
+    return {
+      name: "codex_manifest",
+      ok: false,
+      message: `schema invalid: ${path} (${problems.join("; ")})`
+    };
   }
   return { name: "codex_manifest", ok: true, message: `valid Codex manifest: ${path}` };
 }
@@ -2056,7 +2066,11 @@ function checkClaudeManifest(path) {
     problems.push("embedded 'commands' array is deprecated — author slash commands " + "as Markdown files under commands/ at plugin root instead");
   }
   if (problems.length > 0) {
-    return { name: "claude_manifest", ok: false, message: `schema invalid: ${path} (${problems.join("; ")})` };
+    return {
+      name: "claude_manifest",
+      ok: false,
+      message: `schema invalid: ${path} (${problems.join("; ")})`
+    };
   }
   return { name: "claude_manifest", ok: true, message: `valid Claude manifest: ${path}` };
 }
@@ -2102,7 +2116,11 @@ function checkOpenclawManifest(path) {
     problems.push("missing or empty field 'configSchema'");
   }
   if (problems.length > 0) {
-    return { name: "openclaw_manifest", ok: false, message: `schema invalid: ${path} (${problems.join("; ")})` };
+    return {
+      name: "openclaw_manifest",
+      ok: false,
+      message: `schema invalid: ${path} (${problems.join("; ")})`
+    };
   }
   return { name: "openclaw_manifest", ok: true, message: `valid OpenClaw manifest: ${path}` };
 }
@@ -2196,14 +2214,13 @@ function loadReminderTemplate() {
     return commonTemplateCache;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to load identity reminder template from ${TEMPLATE_PATH}: ${message}`);
+    throw new Error(`Failed to load identity reminder template from ${TEMPLATE_PATH}: ${message}`, {
+      cause: err
+    });
   }
 }
 var TEMPLATES_DIR = resolve2(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates");
-var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [
-  t,
-  resolve2(TEMPLATES_DIR, `identity-reminder.${t}.txt`)
-])));
+var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve2(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
 var TEMPLATE_CACHE = new Map;
 function tryReadTargetTemplate(target) {
   const cached = TEMPLATE_CACHE.get(target);
@@ -2440,11 +2457,14 @@ function tzOffsetMinutes(instantMs, tz) {
 }
 // src/core/redactor.ts
 var PLACEHOLDER = "***REDACTED***";
+var PRIVATE_REGION_PLACEHOLDER = "***PRIVATE***";
 var MAX_REDACTOR_INPUT = 256 * 1024;
 var TRUNCATION_MARKER = `
 
 […truncated for size; original exceeded 256 KB. Inspect raw output before sharing.]
 `;
+var PRIVATE_OPEN_TAG_RE = /<private\b[^>]*>/gi;
+var PRIVATE_CLOSE_TAG_RE = /<\/private>/gi;
 var SECRET_KEYS = [
   "api_key",
   "token",
@@ -2467,10 +2487,48 @@ var ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
 var COLON_VALUE_RE = new RegExp(`(?<!")\\b(${KEY_PATTERN})(\\s*:\\s*)("[^"]*"|'[^']*'|[^\\r\\n]+)`, "gi");
 var JSON_ENTRY_RE = new RegExp(`("(?:${KEY_PATTERN})"\\s*:\\s*)("(?:[^"\\\\]|\\\\.)*"|true|false|null|-?\\d+(?:\\.\\d+)?)`, "gi");
 var BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._\-+/=]+)/gi;
+function stripPrivateRegions(text) {
+  if (!text)
+    return text;
+  let output = "";
+  let cursor = 0;
+  PRIVATE_OPEN_TAG_RE.lastIndex = 0;
+  PRIVATE_CLOSE_TAG_RE.lastIndex = 0;
+  while (cursor < text.length) {
+    PRIVATE_OPEN_TAG_RE.lastIndex = cursor;
+    const openMatch = PRIVATE_OPEN_TAG_RE.exec(text);
+    if (!openMatch) {
+      output += text.slice(cursor);
+      break;
+    }
+    output += text.slice(cursor, openMatch.index);
+    output += PRIVATE_REGION_PLACEHOLDER;
+    let depth = 1;
+    let scan = PRIVATE_OPEN_TAG_RE.lastIndex;
+    while (depth > 0) {
+      PRIVATE_OPEN_TAG_RE.lastIndex = scan;
+      PRIVATE_CLOSE_TAG_RE.lastIndex = scan;
+      const nextOpen = PRIVATE_OPEN_TAG_RE.exec(text);
+      const nextClose = PRIVATE_CLOSE_TAG_RE.exec(text);
+      if (!nextClose)
+        return output;
+      if (nextOpen && nextOpen.index < nextClose.index) {
+        depth += 1;
+        scan = PRIVATE_OPEN_TAG_RE.lastIndex;
+      } else {
+        depth -= 1;
+        scan = PRIVATE_CLOSE_TAG_RE.lastIndex;
+      }
+    }
+    cursor = scan;
+  }
+  return output;
+}
 function redactRawOutput(text) {
   if (!text)
     return text;
   let out = text.length > MAX_REDACTOR_INPUT ? text.slice(0, MAX_REDACTOR_INPUT) + TRUNCATION_MARKER : text;
+  out = stripPrivateRegions(out);
   out = out.replace(JSON_ENTRY_RE, (_match, keyPart, value) => {
     if (value.startsWith('"'))
       return `${keyPart}"${PLACEHOLDER}"`;
@@ -2666,7 +2724,7 @@ function writeFrontmatterAtomic(path, metadata, body, opts = {}) {
   } catch (err) {
     if (opts.existsErrorKind && err?.code === "EEXIST") {
       const rel = opts.vaultForRelativePath ? path.startsWith(opts.vaultForRelativePath + "/") ? path.slice(opts.vaultForRelativePath.length + 1) : path : path;
-      throw new Error(`${opts.existsErrorKind} already exists: ${rel}`);
+      throw new Error(`${opts.existsErrorKind} already exists: ${rel}`, { cause: err });
     }
     throw err;
   }
@@ -3214,13 +3272,17 @@ function loadPolicyRules(vault) {
   } catch (err) {
     if (err?.code === "ENOENT")
       return null;
-    throw new Error(`failed to read ${target}: ${err.message ?? String(err)}`);
+    throw new Error(`failed to read ${target}: ${err.message ?? String(err)}`, {
+      cause: err
+    });
   }
   let parsed;
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    throw new Error(`${target} is not valid JSON: ${err.message ?? String(err)}`);
+    throw new Error(`${target} is not valid JSON: ${err.message ?? String(err)}`, {
+      cause: err
+    });
   }
   return validatePolicyRules(parsed, target);
 }
@@ -3678,19 +3740,25 @@ var openclaw_default = definePluginEntry({
     api.registerTool({
       name: "second_brain_status",
       description: "Report Open Second Brain configuration and vault status.",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false
+      },
       async execute() {
         const vault = resolveVaultPath(api);
         const discovery = discoverConfig();
         const result = {
           config_path: discovery.path,
           config_exists: discovery.exists,
-          config_keys: Object.keys(discovery.data).sort(),
+          config_keys: Object.keys(discovery.data).toSorted(),
           config: redactMapping(discovery.data),
           vault_path: vault,
           vault_exists: existsSync6(vault)
         };
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+        };
       }
     });
     api.registerTool({
@@ -3722,7 +3790,11 @@ var openclaw_default = definePluginEntry({
           throw new Error("argument 'limit' must be between 1 and 500");
         const pages = listVaultPages(vault);
         const needle = pattern ? pattern.toLowerCase() : null;
-        const matched = (needle === null ? pages : pages.filter((p) => p.title.toLowerCase().includes(needle))).slice(0, limit).map((p) => ({ title: p.title, path: vaultRelative(p.path, vault), metadata: p.metadata }));
+        const matched = (needle === null ? pages : pages.filter((p) => p.title.toLowerCase().includes(needle))).slice(0, limit).map((p) => ({
+          title: p.title,
+          path: vaultRelative(p.path, vault),
+          metadata: p.metadata
+        }));
         const result = {
           vault_path: vault,
           total_pages: pages.length,
@@ -3731,7 +3803,9 @@ var openclaw_default = definePluginEntry({
           pattern,
           pages: matched
         };
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+        };
       }
     });
     api.registerTool({
@@ -3754,9 +3828,15 @@ var openclaw_default = definePluginEntry({
         const result = {
           vault_path: vault,
           ok: results.every((r) => r.ok),
-          checks: results.map((r) => ({ name: r.name, ok: r.ok, message: r.message }))
+          checks: results.map((r) => ({
+            name: r.name,
+            ok: r.ok,
+            message: r.message
+          }))
         };
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+        };
       }
     });
     api.registerTool({
