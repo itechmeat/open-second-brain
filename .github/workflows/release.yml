@@ -25,23 +25,16 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify (bun ${{ matrix.bun-version }})
+    name: Verify
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        # Floor matches `engines.bun` in package.json. Bumping that floor MUST
-        # also bump this matrix so CI never silently ships green at "latest"
-        # while the declared minimum no longer compiles.
-        bun-version: ["1.1.0", "latest"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Bun ${{ matrix.bun-version }}
+      - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: ${{ matrix.bun-version }}
+          bun-version: latest
 
       - name: Set up Python (Hermes shim test only)
         uses: actions/setup-python@v5

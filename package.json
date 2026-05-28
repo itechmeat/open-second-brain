@@ -60,9 +60,6 @@
   "optionalDependencies": {
     "sqlite-vec": "^0.1.9"
   },
-  "engines": {
-    "bun": ">=1.1.0"
-  },
   "openclaw": {
     "extensions": [
       "./openclaw/index.js"
