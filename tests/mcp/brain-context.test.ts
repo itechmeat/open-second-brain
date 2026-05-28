@@ -90,12 +90,18 @@ describe("brain_context tool registration", () => {
     expect(tools.find((t) => t.name === "brain_context")).toBeDefined();
   });
 
-  test("writer scope still hosts the three Brain writers", () => {
+  test("writer scope still hosts the Brain writers plus context", () => {
     const names = buildToolTable("writer")
       .map((t) => t.name)
       .toSorted();
     expect(names).toEqual(
-      ["brain_apply_evidence", "brain_context", "brain_feedback", "brain_note"].toSorted(),
+      [
+        "brain_apply_evidence",
+        "brain_context",
+        "brain_feedback",
+        "brain_note",
+        "brain_pinned_context",
+      ].toSorted(),
     );
   });
 });
