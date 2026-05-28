@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { ActivityWindow } from "./activity-git.ts";
 
 const EXCLUDE_DIRS: ReadonlySet<string> = new Set([
@@ -19,12 +19,17 @@ const EXCLUDE_DIRS: ReadonlySet<string> = new Set([
 
 export interface MtimeActivity {
   readonly modifiedFiles: number;
+  readonly modifiedPaths: ReadonlyArray<string>;
 }
 
-export function mtimeActivity(root: string, win: ActivityWindow): MtimeActivity {
+export function mtimeActivity(
+  root: string,
+  win: ActivityWindow,
+): MtimeActivity {
   const startMs = win.startUtc.getTime();
   const endMs = win.endUtc.getTime();
   let count = 0;
+  const modifiedPaths: string[] = [];
 
   function walk(dir: string): void {
     let entries: string[];
@@ -62,10 +67,13 @@ export function mtimeActivity(root: string, win: ActivityWindow): MtimeActivity 
         continue;
       }
       const m = st.mtimeMs;
-      if (m >= startMs && m < endMs) count += 1;
+      if (m >= startMs && m < endMs) {
+        count += 1;
+        modifiedPaths.push(relative(root, p).replaceAll("\\", "/"));
+      }
     }
   }
 
   walk(root);
-  return { modifiedFiles: count };
+  return { modifiedFiles: count, modifiedPaths: modifiedPaths.toSorted() };
 }

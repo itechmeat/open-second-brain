@@ -54,12 +54,11 @@ export function decideStatus(
   for (const u of events.unknownAgents) {
     tasteEvents += u.counts.feedback + u.counts.apply_evidence;
   }
-  if (tasteEvents > 0) return "ok";
+  const complexityWarning = activity.complexity?.warning === true;
+  if (tasteEvents > 0 && !complexityWarning) return "ok";
   const repoCommits = activity.repo.reduce((a, r) => a + r.git.commits, 0);
   const mtimeFiles = activity.nonRepo.reduce((a, r) => a + r.modifiedFiles, 0);
   const vaultActive = activity.vaultDelta.total > 0;
-  const complexityWarning = activity.complexity?.warning === true;
-  const activitySignal =
-    repoCommits > 0 || mtimeFiles >= 3 || vaultActive || complexityWarning;
+  const activitySignal = repoCommits > 0 || mtimeFiles >= 3 || vaultActive || complexityWarning;
   return activitySignal ? "alert" : "info";
 }

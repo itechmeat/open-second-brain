@@ -1,10 +1,6 @@
 import { escapeMarkdownV2 as e } from "./telegram.ts";
 import type { BrainEventCounts } from "./log-counts.ts";
-import {
-  transcriptConfirmed,
-  type ActivitySummary,
-  type DisciplineStatus,
-} from "./decision.ts";
+import { transcriptConfirmed, type ActivitySummary, type DisciplineStatus } from "./decision.ts";
 
 export interface RenderInput {
   readonly localDate: string;
@@ -55,7 +51,7 @@ export function renderReport(r: RenderInput): string {
   const complexity = r.activity.complexity;
   if (complexity !== undefined) {
     lines.push(
-      `\- complexity — score ${complexity.score}, thinking ${complexity.thinking_activity}, ratio ${formatRatio(complexity.ratio)}`,
+      `\\- complexity — score ${complexity.score}, thinking ${complexity.thinking_activity}, ratio ${formatRatio(complexity.ratio)}`,
     );
   }
   const transcripts = r.activity.transcripts;

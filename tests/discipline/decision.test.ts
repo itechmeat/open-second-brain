@@ -72,10 +72,10 @@ describe("decideStatus", () => {
   test("0 events + high complexity-to-thinking ratio → alert", () => {
     expect(decideStatus(noEvents, highComplexity)).toBe("alert");
   });
-  test("taste events present (feedback or apply_evidence) → ok regardless of activity", () => {
+  test("taste events present → ok unless complexity warning fires", () => {
     expect(decideStatus(someTasteEvents, noActivity)).toBe("ok");
     expect(decideStatus(someTasteEvents, someRepoActivity)).toBe("ok");
-    expect(decideStatus(someTasteEvents, highComplexity)).toBe("ok");
+    expect(decideStatus(someTasteEvents, highComplexity)).toBe("alert");
   });
 
   test("only `other` events (snapshot/dream/import) do NOT count as taste → alert if activity", () => {

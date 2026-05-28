@@ -53,9 +53,7 @@ describe("renderReport", () => {
     expect(text).toContain("Europe/Belgrade");
     expect(text).toContain("Status: ok");
     expect(text).toContain("@claude\\-vps\\-agent");
-    expect(text).toContain(
-      "2 feedback, 3 apply\\-evidence, 1 note, 0 other \\(total 6\\)",
-    );
+    expect(text).toContain("2 feedback, 3 apply\\-evidence, 1 note, 0 other \\(total 6\\)");
     expect(text).toContain("/srv/projects/foo");
     expect(text).toContain("4 commits");
     expect(text).toContain("vault");
@@ -172,6 +170,7 @@ describe("renderReport", () => {
         },
       },
     });
+    expect(text).toContain("\\- complexity — score 12, thinking 0, ratio 12");
     expect(text).toContain("complexity — score 12, thinking 0, ratio 12");
     expect(text).toContain("productivity\\-trap");
   });

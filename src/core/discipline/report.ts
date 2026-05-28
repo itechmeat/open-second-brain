@@ -6,7 +6,11 @@ import { countBrainEvents, type BrainEventCounts } from "./log-counts.ts";
 import { gitActivity } from "./activity-git.ts";
 import { mtimeActivity } from "./activity-mtime.ts";
 import { vaultDelta } from "./vault-delta.ts";
-import { buildComplexityReport } from "./complexity.ts";
+import {
+  buildComplexityReport,
+  complexityPathFactors,
+  type ComplexityChangedPath,
+} from "./complexity.ts";
 import {
   decideStatus,
   type ActivitySummary,
@@ -31,9 +35,7 @@ export interface DisciplineReportResult {
   readonly activity: ActivitySummary | null;
 }
 
-export function runDisciplineReport(
-  opts: RunDisciplineReportOpts,
-): DisciplineReportResult {
+export function runDisciplineReport(opts: RunDisciplineReportOpts): DisciplineReportResult {
   // A vault without Brain/_brain.yaml (legacy bare vault, or fresh `o2b
   // init` without `o2b brain init`) used to crash the report path here.
   // Downgrade to the `disabled` shape — same as an explicit `enabled:
@@ -65,13 +67,20 @@ export function runDisciplineReport(
 
   const repo: RepoActivityRow[] = [];
   const nonRepo: NonRepoActivityRow[] = [];
+  const changedPaths: ComplexityChangedPath[] = [];
   for (const p of d.watched_paths) {
     const g = gitActivity(p, win);
     if (g !== null) {
       repo.push({ path: p, git: g });
+      for (const relativePath of g.pathsChanged ?? []) {
+        changedPaths.push({ root: p, relativePath });
+      }
     } else if (existsSync(p)) {
       const m = mtimeActivity(p, win);
       nonRepo.push({ path: p, modifiedFiles: m.modifiedFiles });
+      for (const relativePath of m.modifiedPaths) {
+        changedPaths.push({ root: p, relativePath });
+      }
     }
   }
   const vd = vaultDelta(opts.vault, win);
@@ -92,10 +101,12 @@ export function runDisciplineReport(
   const structuralFilesChanged =
     repo.reduce((total, row) => total + row.git.filesChanged, 0) +
     nonRepo.reduce((total, row) => total + row.modifiedFiles, 0);
+  const pathFactors = complexityPathFactors(changedPaths);
   const complexity = buildComplexityReport(
     {
       thinkingActivity: countTasteEvents(events),
       structuralFilesChanged,
+      ...pathFactors,
     },
     { now },
   );
