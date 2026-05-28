@@ -25,6 +25,7 @@ import {
   type ToolDefinition,
   type ToolScope,
 } from "./tools.ts";
+import { assertOutputContract } from "./output-contract.ts";
 
 export interface MCPServerOptions {
   readonly vault: string;
@@ -75,7 +76,7 @@ export class MCPServer {
   /** Public method for CLI tool-call bridge — the legacy code reached into `_tools`. */
   async callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const tool = findTool(this.tools, name);
-    return toolResult(await tool.handler(this.context, args));
+    return toolResult(tool, await tool.handler(this.context, args));
   }
 
   /** Process one JSON-RPC request or notification. Returns null for notifications. */
@@ -200,7 +201,7 @@ export class MCPServer {
     const args = argsRaw as Record<string, unknown>;
     try {
       const structured = await tool.handler(this.context, args);
-      return toolResult(structured);
+      return toolResult(tool, structured);
     } catch (exc) {
       if (exc instanceof MCPError) throw exc;
       const message = (exc as Error).message ?? String(exc);
@@ -212,7 +213,8 @@ export class MCPServer {
   }
 }
 
-function toolResult(structured: unknown): Record<string, unknown> {
+function toolResult(tool: ToolDefinition, structured: unknown): Record<string, unknown> {
+  assertOutputContract(tool.name, tool.outputSchema, structured);
   const text = JSON.stringify(structured, sortedReplacer, 2);
   return {
     content: [{ type: "text", text }],

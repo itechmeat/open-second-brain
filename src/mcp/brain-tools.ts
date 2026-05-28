@@ -42,10 +42,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { resolveAgentName, resolveLinkOutputFormat } from "../core/config.ts";
 import { brainActivePath, brainDirs } from "../core/brain/paths.ts";
-import {
-  regenerateActive,
-  type RegenerateActiveResult,
-} from "../core/brain/active.ts";
+import { regenerateActive, type RegenerateActiveResult } from "../core/brain/active.ts";
 import { parseFrontmatter } from "../core/vault.ts";
 import {
   appendApplyEvidence,
@@ -64,10 +61,7 @@ import { findStaleEntries } from "../core/brain/temporal/stale-watch.ts";
 import { buildDailyBrief } from "../core/brain/temporal/daily-brief.ts";
 import { buildWeeklySynthesis } from "../core/brain/temporal/weekly-brief.ts";
 import { loadTemporalConfigSafe } from "../core/brain/policy.ts";
-import {
-  isBrainLogEventKind,
-  type BrainLogEventKind,
-} from "../core/brain/types.ts";
+import { isBrainLogEventKind, type BrainLogEventKind } from "../core/brain/types.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
@@ -83,10 +77,7 @@ import {
   queryByPreference,
   queryByTopic,
 } from "../core/brain/query.ts";
-import {
-  diffAgentSources,
-  type AgentSourceDiffMode,
-} from "../core/brain/agent-source/diff.ts";
+import { diffAgentSources, type AgentSourceDiffMode } from "../core/brain/agent-source/diff.ts";
 import { queryAgentSources } from "../core/brain/agent-source/query.ts";
 import type { AgentSourceContributionKind } from "../core/brain/agent-source/types.ts";
 import { writeSignal } from "../core/brain/signal.ts";
@@ -203,9 +194,7 @@ async function toolBrainFeedback(
       },
     });
   } catch (err) {
-    process.stderr.write(
-      `warning: append feedback log failed: ${(err as Error).message}\n`,
-    );
+    process.stderr.write(`warning: append feedback log failed: ${(err as Error).message}\n`);
   }
 
   let prefResult: { path: string; id: string } | null = null;
@@ -279,9 +268,7 @@ async function toolBrainDream(
   const dryRun = coerceBool(args, "dry_run");
   const nowDate = coerceIsoDate(args, "now");
   const agentArg = coerceStr(args, "agent", false);
-  const agent =
-    normalizeAgentArgument(agentArg) ??
-    resolveAgentName(ctx.configPath ?? undefined);
+  const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
 
   const summary = dream(ctx.vault, {
     dryRun,
@@ -321,9 +308,7 @@ async function toolBrainDream(
     snapshot_path: summary.snapshot_path
       ? vaultRelativeSafe(ctx.vault, summary.snapshot_path)
       : null,
-    log_path: summary.log_path
-      ? vaultRelativeSafe(ctx.vault, summary.log_path)
-      : null,
+    log_path: summary.log_path ? vaultRelativeSafe(ctx.vault, summary.log_path) : null,
   };
 }
 
@@ -334,10 +319,7 @@ async function toolBrainReviewCandidates(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const nowDate = coerceIsoDate(args, "now");
-  const report = buildReviewCandidates(
-    ctx.vault,
-    nowDate ? { now: nowDate } : {},
-  );
+  const report = buildReviewCandidates(ctx.vault, nowDate ? { now: nowDate } : {});
   return {
     would_create: [...report.would_create],
     would_promote: [...report.would_promote],
@@ -389,9 +371,7 @@ async function toolBrainApplyEvidence(
   const agentArg = coerceStr(args, "agent", false);
   const note = coerceStr(args, "note", false);
 
-  const agent =
-    normalizeAgentArgument(agentArg) ??
-    resolveAgentName(ctx.configPath ?? undefined);
+  const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
 
   const input: AppendApplyEvidenceInput = {
     pref_id: prefId,
@@ -460,9 +440,7 @@ async function toolBrainNote(
     // any other failure is an I/O / filesystem fault from `appendLogEvent`
     // and must not be reported as a client-side INVALID_PARAMS.
     const message = (err as Error).message ?? String(err);
-    const code = message.startsWith("brain_note:")
-      ? INVALID_PARAMS
-      : INTERNAL_ERROR;
+    const code = message.startsWith("brain_note:") ? INVALID_PARAMS : INTERNAL_ERROR;
     throw new MCPError(code, message);
   }
   return {
@@ -557,9 +535,7 @@ const EMPTY_CONTEXT_COUNTS: BrainContextCounts = {
  *                                        rewrite; the on-disk body is
  *                                        returned verbatim.
  */
-async function toolBrainContext(
-  ctx: ServerContext,
-): Promise<Record<string, unknown>> {
+async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unknown>> {
   const dirs = brainDirs(ctx.vault);
   const activePath = brainActivePath(ctx.vault);
   const pinned = readPinnedContext(ctx.vault);
@@ -833,8 +809,7 @@ async function toolBrainDoctor(
   // Decide a single ok flag — `strict` only changes the CLI exit code,
   // so we mirror that semantic here: with `strict`, warnings demote ok
   // to false. Errors always do.
-  const ok =
-    result.errors.length === 0 && (!strict || result.warnings.length === 0);
+  const ok = result.errors.length === 0 && (!strict || result.warnings.length === 0);
 
   return {
     format,
@@ -844,17 +819,13 @@ async function toolBrainDoctor(
       severity: i.severity,
       code: i.code,
       message: i.message,
-      ...(i.path !== undefined
-        ? { path: vaultRelativeSafe(ctx.vault, i.path) }
-        : {}),
+      ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
     })),
     warnings: result.warnings.map((i) => ({
       severity: i.severity,
       code: i.code,
       message: i.message,
-      ...(i.path !== undefined
-        ? { path: vaultRelativeSafe(ctx.vault, i.path) }
-        : {}),
+      ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
     })),
     // v0.10.15: ranked maintenance actions surfaced as a parallel
     // signal to errors/warnings. The list is independent of `strict`
@@ -873,16 +844,12 @@ async function toolBrainDoctor(
     // surface, so it stays absent here). `instruction_file_warnings`
     // surfaces vault-root instruction files exceeding the configured
     // ceiling.
-    ...(result.trust_verdict !== undefined
-      ? { trust_verdict: result.trust_verdict }
-      : {}),
-    instruction_file_warnings: (result.instruction_file_warnings ?? []).map(
-      (w) => ({
-        path: w.path,
-        lines: w.lines,
-        ceiling: w.ceiling,
-      }),
-    ),
+    ...(result.trust_verdict !== undefined ? { trust_verdict: result.trust_verdict } : {}),
+    instruction_file_warnings: (result.instruction_file_warnings ?? []).map((w) => ({
+      path: w.path,
+      lines: w.lines,
+      ceiling: w.ceiling,
+    })),
   };
 }
 
@@ -936,9 +903,7 @@ function serializeSignal(s: BrainSignal): Record<string, unknown> {
   };
 }
 
-function serializePreference(
-  p: BrainPreference | BrainRetired,
-): Record<string, unknown> {
+function serializePreference(p: BrainPreference | BrainRetired): Record<string, unknown> {
   if (p.kind === "brain-retired") {
     return {
       kind: p.kind,
@@ -947,9 +912,7 @@ function serializePreference(
       retired_at: p.retired_at,
       retired_reason: p.retired_reason,
       retired_by: p.retired_by,
-      ...(p.superseded_by !== undefined
-        ? { superseded_by: p.superseded_by }
-        : {}),
+      ...(p.superseded_by !== undefined ? { superseded_by: p.superseded_by } : {}),
       created_at: p.created_at,
       topic: p.topic,
       ...(p.scope !== undefined ? { scope: p.scope } : {}),
@@ -1035,6 +998,51 @@ export function vaultRelativeSafe(vault: string, target: string): string {
 
 // ----- Tool registration ---------------------------------------------------
 
+const PINNED_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  required: ["present", "path", "absolute_path", "content"],
+  properties: {
+    operation: { type: "string", enum: ["read", "write", "append", "clear"] },
+    present: { type: "boolean" },
+    path: { type: "string" },
+    absolute_path: { type: "string" },
+    content: { type: "string" },
+  },
+  additionalProperties: false,
+};
+
+const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  required: ["vault_path", "present", "active_path", "content", "counts", "generated_at", "pinned"],
+  properties: {
+    vault_path: { type: "string" },
+    present: { type: "boolean" },
+    active_path: { type: "string" },
+    content: { type: "string" },
+    counts: {
+      type: "object",
+      required: ["confirmed", "quarantine", "retired_recent", "most_applied_30d"],
+      properties: {
+        confirmed: { type: "integer" },
+        quarantine: { type: "integer" },
+        retired_recent: { type: "integer" },
+        most_applied_30d: { type: "integer" },
+      },
+      additionalProperties: false,
+    },
+    generated_at: {},
+    pinned: PINNED_CONTEXT_OUTPUT_SCHEMA,
+  },
+};
+
+const BRAIN_QUERY_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  required: ["mode"],
+  properties: {
+    mode: { type: "string", enum: ["preference", "topic", "since"] },
+  },
+};
+
 // ----- brain_operator_summary (v0.10.16) -----------------------------------
 
 /**
@@ -1085,10 +1093,7 @@ async function toolBrainOperatorSummary(
   } else if (typeof includeDreamRaw === "boolean") {
     includeDream = includeDreamRaw;
   } else {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_operator_summary: include_dream must be a boolean",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_operator_summary: include_dream must be a boolean");
   }
 
   let dreamSummary;
@@ -1140,10 +1145,7 @@ async function toolBrainUnlinkedMentions(
 ): Promise<Record<string, unknown>> {
   const idRaw = args["id"];
   if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_unlinked_mentions: id must be a non-empty string",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_unlinked_mentions: id must be a non-empty string");
   }
   const targetId = normaliseWikilinkTarget(idRaw);
   // Limit coercion mirrors the v0.10.16 `brain_operator_summary`
@@ -1184,11 +1186,7 @@ async function toolBrainUnlinkedMentions(
       );
     }
   }
-  const mentions = findUnlinkedMentions(
-    ctx.vault,
-    targetId,
-    limit !== undefined ? { limit } : {},
-  );
+  const mentions = findUnlinkedMentions(ctx.vault, targetId, limit !== undefined ? { limit } : {});
   return {
     vault_path: ctx.vault,
     target_id: targetId,
@@ -1213,10 +1211,7 @@ async function toolBrainConceptSynthesis(
 ): Promise<Record<string, unknown>> {
   const idRaw = args["id"];
   if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_concept_synthesis: id must be a non-empty string",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_concept_synthesis: id must be a non-empty string");
   }
   const includeUnlinkedRaw = args["include_unlinked"];
   let includeUnlinked = false;
@@ -1257,10 +1252,7 @@ async function toolBrainMocAudit(
 ): Promise<Record<string, unknown>> {
   const idRaw = args["id"];
   if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_moc_audit: id must be a non-empty string",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_moc_audit: id must be a non-empty string");
   }
   const targetId = normaliseWikilinkTarget(idRaw);
   try {
@@ -1284,42 +1276,26 @@ async function toolBrainMocAudit(
 
 // ----- Temporal subsystem MCP wrappers (v0.10.18) --------------------------
 
-function coercePositiveInteger(
-  tool: string,
-  field: string,
-  raw: unknown,
-): number | undefined {
+function coercePositiveInteger(tool: string, field: string, raw: unknown): number | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw === "number") {
     if (!Number.isInteger(raw) || raw < 1) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `${tool}: ${field} must be a positive integer`,
-      );
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a positive integer`);
     }
     return raw;
   }
   if (typeof raw === "string") {
     const trimmed = raw.trim();
     if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `${tool}: ${field} must be a positive integer`,
-      );
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a positive integer`);
     }
     const parsed = Number.parseInt(trimmed, 10);
     if (parsed < 1) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `${tool}: ${field} must be a positive integer`,
-      );
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a positive integer`);
     }
     return parsed;
   }
-  throw new MCPError(
-    INVALID_PARAMS,
-    `${tool}: ${field} must be a positive integer`,
-  );
+  throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a positive integer`);
 }
 
 const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1355,19 +1331,13 @@ function coerceIsoTimestampOrDate(
   return v;
 }
 
-function coerceEventKind(
-  tool: string,
-  raw: unknown,
-): BrainLogEventKind | undefined {
+function coerceEventKind(tool: string, raw: unknown): BrainLogEventKind | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "string") {
     throw new MCPError(INVALID_PARAMS, `${tool}: kind must be a string`);
   }
   if (!isBrainLogEventKind(raw)) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `${tool}: kind must be a known BrainLogEventKind`,
-    );
+    throw new MCPError(INVALID_PARAMS, `${tool}: kind must be a known BrainLogEventKind`);
   }
   return raw;
 }
@@ -1381,20 +1351,11 @@ async function toolBrainTimeline(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const prefId =
-    typeof args["pref_id"] === "string" ? args["pref_id"] : undefined;
+  const prefId = typeof args["pref_id"] === "string" ? args["pref_id"] : undefined;
   const topic = typeof args["topic"] === "string" ? args["topic"] : undefined;
   const kind = coerceEventKind("brain_timeline", args["kind"]);
-  const since = coerceIsoTimestampOrDate(
-    "brain_timeline",
-    "since",
-    args["since"],
-  );
-  const until = coerceIsoTimestampOrDate(
-    "brain_timeline",
-    "until",
-    args["until"],
-  );
+  const since = coerceIsoTimestampOrDate("brain_timeline", "since", args["since"]);
+  const until = coerceIsoTimestampOrDate("brain_timeline", "until", args["until"]);
   const limit = coercePositiveInteger("brain_timeline", "limit", args["limit"]);
 
   const index = buildTimelineIndex(ctx.vault, {
@@ -1493,12 +1454,7 @@ async function toolBrainDailyBrief(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const dateRaw = args["date"];
-  const dateCoerced = coerceIsoTimestampOrDate(
-    "brain_daily_brief",
-    "date",
-    dateRaw,
-    "date-only",
-  );
+  const dateCoerced = coerceIsoTimestampOrDate("brain_daily_brief", "date", dateRaw, "date-only");
   const date = dateCoerced ?? new Date().toISOString().slice(0, 10);
   const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
@@ -1561,18 +1517,11 @@ async function toolBrainContextPack(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const maxRaw = args["max_tokens"];
-  const maxTokens =
-    typeof maxRaw === "number"
-      ? maxRaw
-      : Number.parseInt(String(maxRaw ?? ""), 10);
+  const maxTokens = typeof maxRaw === "number" ? maxRaw : Number.parseInt(String(maxRaw ?? ""), 10);
   if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_context_pack: max_tokens must be a positive integer",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
-  const query =
-    typeof args["query"] === "string" ? (args["query"] as string) : undefined;
+  const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
   const report = packContext(ctx.vault, {
     maxTokens,
     ...(query ? { query } : {}),
@@ -1606,8 +1555,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         topic: {
           type: "string",
-          description:
-            "Stable kebab-slug for the rule, e.g. `no-internal-abbrev`.",
+          description: "Stable kebab-slug for the rule, e.g. `no-internal-abbrev`.",
         },
         signal: {
           type: "string",
@@ -1617,8 +1565,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         principle: {
           type: "string",
-          description:
-            "One-line, agent-readable formulation of the rule (imperative voice).",
+          description: "One-line, agent-readable formulation of the rule (imperative voice).",
         },
         scope: {
           type: "string",
@@ -1628,18 +1575,15 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         source: {
           type: "array",
           items: { type: "string" },
-          description:
-            "Optional wikilinks to the artifacts or notes that triggered the signal.",
+          description: "Optional wikilinks to the artifacts or notes that triggered the signal.",
         },
         agent: {
           type: "string",
-          description:
-            "Optional agent identity override; defaults to the server-resolved name.",
+          description: "Optional agent identity override; defaults to the server-resolved name.",
         },
         raw: {
           type: "string",
-          description:
-            "Optional free-form raw quote (rendered under `## Raw` in the signal file).",
+          description: "Optional free-form raw quote (rendered under `## Raw` in the signal file).",
         },
         force_confirmed: {
           type: "boolean",
@@ -1719,8 +1663,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         agent: {
           type: "string",
-          description:
-            "Optional agent identity override; defaults to the server-resolved name.",
+          description: "Optional agent identity override; defaults to the server-resolved name.",
         },
         note: {
           type: "string",
@@ -1746,8 +1689,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         agent: {
           type: "string",
-          description:
-            "Optional agent identity override; defaults to the server-resolved name.",
+          description: "Optional agent identity override; defaults to the server-resolved name.",
         },
       },
       required: ["text"],
@@ -1774,6 +1716,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       },
       additionalProperties: false,
     },
+    outputSchema: PINNED_CONTEXT_OUTPUT_SCHEMA,
     handler: toolBrainPinnedContext,
   },
   {
@@ -1785,6 +1728,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {},
       additionalProperties: false,
     },
+    outputSchema: BRAIN_CONTEXT_OUTPUT_SCHEMA,
     handler: toolBrainContext,
   },
   {
@@ -1796,8 +1740,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         since: {
           type: "string",
-          description:
-            "Inclusive lower bound (ISO-8601). Defaults to `until - 24h`.",
+          description: "Inclusive lower bound (ISO-8601). Defaults to `until - 24h`.",
         },
         until: {
           type: "string",
@@ -1827,13 +1770,11 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         topic: {
           type: "string",
-          description:
-            "Topic slug to aggregate signals + active/retired preference + log events.",
+          description: "Topic slug to aggregate signals + active/retired preference + log events.",
         },
         since: {
           type: "string",
-          description:
-            "ISO-8601 timestamp; returns every Brain log event with timestamp >= since.",
+          description: "ISO-8601 timestamp; returns every Brain log event with timestamp >= since.",
         },
         format: {
           type: "string",
@@ -1844,6 +1785,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       },
       additionalProperties: false,
     },
+    outputSchema: BRAIN_QUERY_OUTPUT_SCHEMA,
     handler: toolBrainQuery,
   },
   {
@@ -1856,8 +1798,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agents: {
           type: "array",
           items: { type: "string" },
-          description:
-            "Agent ids to query. Omit or pass [] to query all known agents.",
+          description: "Agent ids to query. Omit or pass [] to query all known agents.",
         },
         topic: {
           type: "string",
@@ -1900,8 +1841,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agents: {
           type: "array",
           items: { type: "string" },
-          description:
-            "Agent ids to compare. Omit or pass [] to compare all known agents.",
+          description: "Agent ids to compare. Omit or pass [] to compare all known agents.",
         },
         topic: {
           type: "string",
@@ -1921,8 +1861,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           maximum: 500,
-          description:
-            "Maximum contributions returned before comparison. Defaults to 50.",
+          description: "Maximum contributions returned before comparison. Defaults to 50.",
         },
       },
       additionalProperties: false,
@@ -1938,8 +1877,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         strict: {
           type: "boolean",
-          description:
-            "When true, warnings demote `ok` to false (CLI exit-code parity).",
+          description: "When true, warnings demote `ok` to false (CLI exit-code parity).",
         },
         format: {
           type: "string",
@@ -1998,13 +1936,11 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         max_tokens: {
           type: "integer",
           minimum: 1,
-          description:
-            "Strict upper bound on the returned slice's token count.",
+          description: "Strict upper bound on the returned slice's token count.",
         },
         query: {
           type: "string",
-          description:
-            "Optional case/Unicode-insensitive substring filter on topic + principle.",
+          description: "Optional case/Unicode-insensitive substring filter on topic + principle.",
         },
       },
       required: ["max_tokens"],
@@ -2045,8 +1981,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         id: {
           type: "string",
-          description:
-            "Target id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
+          description: "Target id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
         },
         include_unlinked: {
           type: "boolean",
@@ -2068,8 +2003,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         id: {
           type: "string",
-          description:
-            "Hub note id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
+          description: "Hub note id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
         },
       },
       required: ["id"],
@@ -2086,8 +2020,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         pref_id: {
           type: "string",
-          description:
-            "Restrict to events for this preference / retired / signal id.",
+          description: "Restrict to events for this preference / retired / signal id.",
         },
         topic: {
           type: "string",
@@ -2095,24 +2028,20 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         kind: {
           type: "string",
-          description:
-            "Restrict to events of this BrainLogEventKind (e.g. `apply-evidence`).",
+          description: "Restrict to events of this BrainLogEventKind (e.g. `apply-evidence`).",
         },
         since: {
           type: "string",
-          description:
-            "Inclusive lower bound (ISO date or ISO timestamp). Defaults to epoch.",
+          description: "Inclusive lower bound (ISO date or ISO timestamp). Defaults to epoch.",
         },
         until: {
           type: "string",
-          description:
-            "Exclusive upper bound (ISO date or ISO timestamp). Defaults to now.",
+          description: "Exclusive upper bound (ISO date or ISO timestamp). Defaults to now.",
         },
         limit: {
           type: "integer",
           minimum: 1,
-          description:
-            "Maximum number of events to return after filtering. Omit for no cap.",
+          description: "Maximum number of events to return after filtering. Omit for no cap.",
         },
       },
       additionalProperties: false,
@@ -2128,8 +2057,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         pref_id: {
           type: "string",
-          description:
-            "Target preference id (e.g. `pref-foo`). Mutually exclusive with `topic`.",
+          description: "Target preference id (e.g. `pref-foo`). Mutually exclusive with `topic`.",
         },
         topic: {
           type: "string",
@@ -2161,8 +2089,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         date: {
           type: "string",
-          description:
-            "ISO date (`YYYY-MM-DD`) the brief targets. Defaults to today UTC.",
+          description: "ISO date (`YYYY-MM-DD`) the brief targets. Defaults to today UTC.",
         },
       },
       additionalProperties: false,
@@ -2201,8 +2128,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         top_actions: {
           type: "integer",
           minimum: 0,
-          description:
-            "Cap on the ranked maintenance action list. Defaults to 5.",
+          description: "Cap on the ranked maintenance action list. Defaults to 5.",
         },
       },
       additionalProperties: false,

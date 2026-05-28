@@ -32,6 +32,7 @@ import { vaultRelative } from "../core/path-safety.ts";
 import { listVaultPages } from "../core/vault.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
 import { coerceStr, coerceInt } from "./coerce.ts";
+import type { OutputSchema } from "./output-contract.ts";
 
 export interface ServerContext {
   readonly vault: string;
@@ -43,6 +44,7 @@ export interface ToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
+  readonly outputSchema?: OutputSchema;
   readonly handler: (
     ctx: ServerContext,
     args: Record<string, unknown>,

@@ -19,12 +19,7 @@ const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-test-"));
-  for (const k of [
-    "VAULT_AGENT_NAME",
-    "VAULT_TIMEZONE",
-    "VAULT_DIR",
-    "OPEN_SECOND_BRAIN_CONFIG",
-  ]) {
+  for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -279,9 +274,7 @@ describe("tool calls", () => {
     expect(s.vault.ignore_source).toBeDefined();
     expect(["_brain.yaml", "defaults"]).toContain(s.vault.ignore_source);
     expect(Array.isArray(s.vault.rules)).toBe(true);
-    expect(
-      s.vault.rules.some((r: { raw: string }) => r.raw === ".obsidian"),
-    ).toBe(true);
+    expect(s.vault.rules.some((r: { raw: string }) => r.raw === ".obsidian")).toBe(true);
     expect(typeof s.vault.included.files).toBe("number");
     expect(typeof s.vault.included.dirs).toBe("number");
     expect(typeof s.vault.excluded.dirs).toBe("number");
@@ -342,9 +335,7 @@ describe("tool calls", () => {
     const s = r.result.structuredContent;
     expect(s.limit).toBe(5);
     expect(s.total_pages).toBeGreaterThanOrEqual(1);
-    expect(
-      s.pages.some((p: { title: string }) => p.title.includes("Sandbox")),
-    ).toBe(true);
+    expect(s.pages.some((p: { title: string }) => p.title.includes("Sandbox"))).toBe(true);
   });
 
   // `second_brain_capture` and `event_log_append` are no longer
@@ -385,6 +376,29 @@ describe("tool calls", () => {
     await initialize(server);
     const r = (await callTool(server, "not_a_tool")) as any;
     expect(r.error.code).toBe(-32601);
+  });
+
+  test("tool output contract failure becomes a tool-level error", async () => {
+    const server = new MCPServer({ vault: tmp });
+    await initialize(server);
+    (server as any).tools = [
+      {
+        name: "bad_contract",
+        description: "test tool",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        outputSchema: {
+          type: "object",
+          required: ["ok"],
+          properties: { ok: { type: "boolean" } },
+          additionalProperties: false,
+        },
+        handler: () => ({ ok: "yes" }),
+      },
+    ];
+    const r = (await callTool(server, "bad_contract")) as any;
+    expect(r.result.isError).toBe(true);
+    expect(r.result.structuredContent).toBeUndefined();
+    expect(r.result.content[0].text).toContain("bad_contract output contract failed");
   });
 });
 

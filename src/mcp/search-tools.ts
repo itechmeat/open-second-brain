@@ -43,6 +43,41 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
+const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  required: ["results", "warnings", "total"],
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        required: [
+          "path",
+          "title",
+          "content",
+          "score",
+          "startLine",
+          "endLine",
+          "searchType",
+          "reasons",
+        ],
+        properties: {
+          path: { type: "string" },
+          title: { type: "string" },
+          content: { type: "string" },
+          score: { type: "number" },
+          startLine: { type: "integer" },
+          endLine: { type: "integer" },
+          searchType: { type: "string" },
+          reasons: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+    warnings: { type: "array", items: { type: "string" } },
+    total: { type: "integer" },
+  },
+};
+
 function searchTimeoutError(ms: number): MCPError {
   return new MCPError(INTERNAL_ERROR, `search timeout after ${ms}ms`);
 }
@@ -187,6 +222,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     description:
       "Full-text search across the vault. Optional semantic layer when configured. Read-only.",
     inputSchema: SEARCH_INPUT_SCHEMA,
+    outputSchema: SEARCH_OUTPUT_SCHEMA,
     handler: toolBrainSearch,
   },
 ]);
