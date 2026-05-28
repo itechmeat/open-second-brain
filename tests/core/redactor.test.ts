@@ -1,10 +1,56 @@
 import { describe, expect, test } from "bun:test";
 
-import { normaliseTextField, redactRawOutput, sanitiseTextField } from "../../src/core/redactor.ts";
+import {
+  PRIVATE_REGION_PLACEHOLDER,
+  normaliseTextField,
+  redactRawOutput,
+  sanitiseTextField,
+  stripPrivateRegions,
+} from "../../src/core/redactor.ts";
+
+describe("stripPrivateRegions", () => {
+  test("strips balanced private regions across lines", () => {
+    const input = "before <private>secret\nbody token=abc</private> after";
+    expect(stripPrivateRegions(input)).toBe(
+      `before ${PRIVATE_REGION_PLACEHOLDER} after`,
+    );
+  });
+
+  test("matches private tags case-insensitively", () => {
+    const input = "A <PRIVATE>hidden</PrIvAtE> B";
+    expect(stripPrivateRegions(input)).toBe(
+      `A ${PRIVATE_REGION_PLACEHOLDER} B`,
+    );
+  });
+
+  test("strips from an unclosed private tag to the end", () => {
+    const input = "keep <private>hide forever";
+    expect(stripPrivateRegions(input)).toBe(
+      `keep ${PRIVATE_REGION_PLACEHOLDER}`,
+    );
+  });
+
+  test("strips nested private regions atomically", () => {
+    const input = "before <private>a<private>b</private>c</private> after";
+    expect(stripPrivateRegions(input)).toBe(
+      `before ${PRIVATE_REGION_PLACEHOLDER} after`,
+    );
+  });
+
+  test("runs before assignment redaction in redactRawOutput", () => {
+    const input = "visible api_key=keep <private>api_key=secret</private>";
+    const out = redactRawOutput(input);
+    expect(out).toContain("api_key=***REDACTED***");
+    expect(out).toContain(PRIVATE_REGION_PLACEHOLDER);
+    expect(out).not.toContain("secret");
+  });
+});
 
 describe("redactRawOutput (cross-module backward compat)", () => {
   test("masks api_key in env-style assignment", () => {
-    expect(redactRawOutput("api_key=abcd1234")).toContain("api_key=***REDACTED***");
+    expect(redactRawOutput("api_key=abcd1234")).toContain(
+      "api_key=***REDACTED***",
+    );
   });
 
   test("masks token in YAML-style colon assignment", () => {
@@ -35,12 +81,16 @@ describe("normaliseTextField", () => {
   test("folds U+2028 / U+2029 to \\n", () => {
     // U+2028 line separator, U+2029 paragraph separator.
     const input = "line1 line2 line3";
-    expect(normaliseTextField(input, { maxLen: 100 })).toBe("line1\nline2\nline3");
+    expect(normaliseTextField(input, { maxLen: 100 })).toBe(
+      "line1\nline2\nline3",
+    );
   });
 
   test("singleLine collapses \\n / \\r / \\t runs to single space", () => {
     const input = "a\n\nb\tc\r\nd";
-    expect(normaliseTextField(input, { maxLen: 100, singleLine: true })).toBe("a b c d");
+    expect(normaliseTextField(input, { maxLen: 100, singleLine: true })).toBe(
+      "a b c d",
+    );
   });
 
   test("non-singleLine normalises CRLF/CR to LF", () => {

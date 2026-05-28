@@ -2,8 +2,8 @@
  * Server-supplied instructions returned in `initialize.instructions`.
  *
  * The Brain observing-memory layer is the canonical writable surface:
- * three writer tools (`brain_feedback`, `brain_apply_evidence`,
- * `brain_note`) plus the read-only `brain_context` reader live on the
+ * four writer tools (`brain_feedback`, `brain_apply_evidence`,
+ * `brain_note`, `brain_pinned_context`) plus the read-only `brain_context` reader live on the
  * always-loaded writer scope; the remaining `brain_*` surface ships on
  * the deferred full server.
  */
@@ -22,7 +22,7 @@ export interface BuildInstructionsOpts {
 
 const WRITER_INSTRUCTIONS = `Open Second Brain — always-loaded MCP surface.
 
-Four tools live here (three writers + one reader; the server's name is
+Five tools live here (four writers + one reader; the server's name is
 preserved for backward compatibility with existing client configs):
   - brain_feedback        — record one new taste signal the user just expressed.
   - brain_apply_evidence  — record applied | violated | outdated against an
@@ -30,8 +30,12 @@ preserved for backward compatibility with existing client configs):
   - brain_note            — record one narrative milestone (release shipped,
                             PR merged, fact discovered) that fits neither
                             category.
+  - brain_pinned_context  — read/write/append/clear Brain/pinned.md for
+                            current-task facts that should survive context
+                            rotation without becoming permanent preferences.
   - brain_context         — pull the current Brain/active.md body plus
-                            active-preference counts. Read-only. Use at session
+                            pinned context and active-preference counts.
+                            Read-only. Use at session
                             start when the host runtime lacks a SessionStart
                             hook (Cursor, Aider, raw Claude API). Runtimes that
                             already inject active.md via a hook can skip this.
@@ -42,7 +46,7 @@ and the scheduled learning pass) lives on the sibling
 "open-second-brain" MCP server (deferred). Use ToolSearch to reach it.
 
 Prefer the writer-server copies of brain_feedback / brain_apply_evidence /
-brain_note over any duplicate exposed by the full server — both call the same
+brain_note / brain_pinned_context over any duplicate exposed by the full server — both call the same
 handler, but the writer copy is always available without ToolSearch.`;
 
 export function buildInstructions(opts: BuildInstructionsOpts | string): string {
@@ -75,6 +79,13 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "`note` in `Brain/log/<today>.md` (and the JSONL sidecar). " +
     "This is the Brain-native replacement for the retired " +
     "`event_log_append` tool.\n" +
+    "  - brain_pinned_context — read/write/append/clear " +
+    "`Brain/pinned.md` for current-task facts that should survive " +
+    "context rotation without becoming permanent preferences.\n" +
+    "  - brain_context — read-only session bootstrap that returns " +
+    "`Brain/active.md`, pinned current-task context, and active " +
+    "preference counts. Use it at session start when the host runtime " +
+    "does not inject active.md via a hook.\n" +
     "  - brain_dream — runs the deterministic learning pass " +
     "(clusters signals, promotes preferences, retires stale rules). " +
     "Usually scheduled via cron, not invoked interactively.\n" +

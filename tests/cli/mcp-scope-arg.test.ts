@@ -56,6 +56,7 @@ describe("o2b mcp --scope arg validation", () => {
         "brain_context",
         "brain_feedback",
         "brain_note",
+        "brain_pinned_context",
       ]);
     });
   });

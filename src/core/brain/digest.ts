@@ -38,6 +38,8 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import type { LinkOutputFormat } from "../config.ts";
+
 import { backlinkCount, buildBacklinkIndex } from "./backlinks.ts";
 import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summary.ts";
 import { findMergeCandidates } from "./merge-candidates.ts";
@@ -73,6 +75,8 @@ export interface RenderDigestOptions {
   readonly until?: Date;
   /** Output format. Defaults to `markdown`. */
   readonly format?: DigestFormat;
+  /** Presentation link format for Markdown output. Defaults to Obsidian wikilinks. */
+  readonly linkOutputFormat?: LinkOutputFormat;
   /**
    * Injection seam for deterministic tests: defaults the generated_at
    * timestamp. Production callers do not pass this — the renderer
@@ -369,7 +373,8 @@ export function renderDigest(vault: string, opts: RenderDigestOptions = {}): Ren
   }
 
   // Markdown.
-  const baseMd = empty ? renderEmptyMarkdown(until) : renderMarkdown(data, since, until);
+  const linkOutputFormat = opts.linkOutputFormat ?? "wikilink";
+  const baseMd = empty ? renderEmptyMarkdown(until) : renderMarkdown(data, since, until, linkOutputFormat);
   const trustSection = renderTrustSection(opts.doctorResult, opts.dreamSummary);
   const content = trustSection ? `${baseMd}\n${trustSection}` : baseMd;
   return Object.freeze({ content, empty });
@@ -925,7 +930,12 @@ function renderEmptyMarkdown(until: Date): string {
   return `Brain digest — ${ymd}: no changes\n`;
 }
 
-function renderMarkdown(data: DigestData, since: Date, until: Date): string {
+function renderMarkdown(
+  data: DigestData,
+  since: Date,
+  until: Date,
+  linkOutputFormat: LinkOutputFormat,
+): string {
   const sinceIso = since.toISOString();
   const untilIso = until.toISOString();
   const windowHours = Math.round((until.getTime() - since.getTime()) / (60 * 60 * 1000));
@@ -943,7 +953,7 @@ function renderMarkdown(data: DigestData, since: Date, until: Date): string {
       const scope = item.scope ?? "—";
       const trialDay = item.unconfirmed_until.slice(0, 10);
       lines.push(
-        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${item.signal_count} signals, trial ends ${trialDay}`,
+        `- ${renderPrefLink({ id: item.id, principle: item.principle, format: linkOutputFormat })} — ${scope}, ${item.signal_count} signals, trial ends ${trialDay}`,
       );
     }
     lines.push("");
@@ -954,7 +964,7 @@ function renderMarkdown(data: DigestData, since: Date, until: Date): string {
       const scope = item.scope ?? "—";
       const artifact = item.first_applied_artifact ?? "_(none)_";
       lines.push(
-        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, first applied in ${artifact}`,
+        `- ${renderPrefLink({ id: item.id, principle: item.principle, format: linkOutputFormat })} — ${scope}, first applied in ${artifact}`,
       );
     }
     lines.push("");
@@ -968,7 +978,7 @@ function renderMarkdown(data: DigestData, since: Date, until: Date): string {
           ? `${item.reason} (${item.days_stale} days)`
           : item.reason;
       lines.push(
-        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${detail}`,
+        `- ${renderPrefLink({ id: item.id, principle: item.principle, format: linkOutputFormat })} — ${scope}, ${detail}`,
       );
     }
     lines.push("");
@@ -981,7 +991,7 @@ function renderMarkdown(data: DigestData, since: Date, until: Date): string {
     for (const item of data.most_applied.entries) {
       const scope = item.scope ?? "—";
       lines.push(
-        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${item.applied_in_window} applied`,
+        `- ${renderPrefLink({ id: item.id, principle: item.principle, format: linkOutputFormat })} — ${scope}, ${item.applied_in_window} applied`,
       );
     }
     lines.push("");
@@ -1007,7 +1017,7 @@ function renderMarkdown(data: DigestData, since: Date, until: Date): string {
       const stats = `applied: ${item.applied_count}, violated: ${item.violated_count}`;
       const tags = item.status === "quarantine" ? " [quarantine]" : "";
       lines.push(
-        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${stats}${tags}`,
+        `- ${renderPrefLink({ id: item.id, principle: item.principle, format: linkOutputFormat })} — ${scope}, ${stats}${tags}`,
       );
     }
     lines.push("");
@@ -1017,7 +1027,7 @@ function renderMarkdown(data: DigestData, since: Date, until: Date): string {
     for (const item of data.top_referenced) {
       const scope = item.scope ?? "—";
       lines.push(
-        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${scope}, ${item.backlink_count} inbound`,
+        `- ${renderPrefLink({ id: item.id, principle: item.principle, format: linkOutputFormat })} — ${scope}, ${item.backlink_count} inbound`,
       );
     }
     lines.push("");
@@ -1054,8 +1064,8 @@ function renderMarkdown(data: DigestData, since: Date, until: Date): string {
     for (const item of data.merge_suggestions) {
       const scope = item.scope ?? "—";
       lines.push(
-        `- ${renderPrefLink({ id: item.a, principle: item.principle_a })}` +
-          ` ≈ ${renderPrefLink({ id: item.b, principle: item.principle_b })}` +
+        `- ${renderPrefLink({ id: item.a, principle: item.principle_a, format: linkOutputFormat })}` +
+          ` ≈ ${renderPrefLink({ id: item.b, principle: item.principle_b, format: linkOutputFormat })}` +
           ` — topic '${item.topic}', scope ${scope}, jaccard ${item.jaccard.toFixed(2)}`,
       );
     }
@@ -1069,7 +1079,7 @@ function renderMarkdown(data: DigestData, since: Date, until: Date): string {
           ? ` (applied: ${item.applied_count}, violated: ${item.violated_count})`
           : "";
       lines.push(
-        `- ${renderPrefLink({ id: item.id, principle: item.principle })} ${item.from} → ${item.to}${stats}`,
+        `- ${renderPrefLink({ id: item.id, principle: item.principle, format: linkOutputFormat })} ${item.from} → ${item.to}${stats}`,
       );
     }
     lines.push("");
@@ -1079,7 +1089,7 @@ function renderMarkdown(data: DigestData, since: Date, until: Date): string {
     for (const item of data.contradictions) {
       const topic = item.topic ? ` (topic: ${item.topic})` : "";
       lines.push(
-        `- ${renderPrefLink({ id: item.id, principle: item.principle })} — ${item.description}${topic}`,
+        `- ${renderPrefLink({ id: item.id, principle: item.principle, format: linkOutputFormat })} — ${item.description}${topic}`,
       );
     }
     lines.push("");

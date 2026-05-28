@@ -1,4 +1,4 @@
-import { defaultConfigPath } from "../../../core/config.ts";
+import { defaultConfigPath, resolveLinkOutputFormat } from "../../../core/config.ts";
 import { renderDigest, type RenderDigestOptions } from "../../../core/brain/digest.ts";
 import { parse, fail, resolveBrainVault, parseOptionalIsoDate } from "../helpers.ts";
 
@@ -45,6 +45,7 @@ export async function cmdBrainDigest(argv: string[]): Promise<number> {
     ...(sinceDate ? { since: sinceDate } : {}),
     ...(untilDate ? { until: untilDate } : {}),
     format: flags["json"] ? "json" : "markdown",
+    linkOutputFormat: resolveLinkOutputFormat(config),
   };
 
   let result;

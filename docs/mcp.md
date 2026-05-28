@@ -258,8 +258,8 @@ server to your Codex MCP config the same way as Hermes.
 
 The plugin's `.mcp.json` ships **two** MCP-server entries:
 
-- `open-second-brain` - the full surface (35 tools, including `brain_health`, `brain_agent_query`, and `brain_agent_diff`); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
-- `open-second-brain-writer` - a minimal always-loaded surface of four tools: `brain_feedback`, `brain_apply_evidence`, `brain_note` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md`, v0.10.10). The agent records taste signals, evidence events, and milestone notes - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
+- `open-second-brain` - the full surface (36 tools, including `brain_health`, `brain_agent_query`, `brain_agent_diff`, and `brain_pinned_context`); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
+- `open-second-brain-writer` - a minimal always-loaded surface of five tools: `brain_feedback`, `brain_apply_evidence`, `brain_note`, `brain_pinned_context` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md` plus pinned context, v0.16.0). The agent records taste signals, evidence events, milestone notes, and current-task pinned facts - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).
 
@@ -268,6 +268,9 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
 - The vault path is bound to the server instance at startup. Tools cannot
   escape it.
 - `second_brain_status` reuses the same redaction logic as `o2b export-config`.
-- Brain writers (`brain_feedback`, `brain_apply_evidence`, `brain_note`)
+- Brain writers (`brain_feedback`, `brain_apply_evidence`, `brain_note`,
+  `brain_pinned_context`)
   go through atomic-rename writes so an interrupted call leaves either
   the prior or the new file, never a torn hybrid.
+- MCP tools can declare lightweight output contracts; declared contracts are
+  validated against `structuredContent` before the text mirror is emitted.

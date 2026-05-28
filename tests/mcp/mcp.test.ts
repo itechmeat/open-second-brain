@@ -19,12 +19,7 @@ const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-test-"));
-  for (const k of [
-    "VAULT_AGENT_NAME",
-    "VAULT_TIMEZONE",
-    "VAULT_DIR",
-    "OPEN_SECOND_BRAIN_CONFIG",
-  ]) {
+  for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -189,6 +184,7 @@ describe("tool listing", () => {
         "brain_review_candidates",
         "brain_apply_evidence",
         "brain_note",
+        "brain_pinned_context",
         "brain_context",
         "brain_digest",
         "brain_query",
@@ -278,9 +274,7 @@ describe("tool calls", () => {
     expect(s.vault.ignore_source).toBeDefined();
     expect(["_brain.yaml", "defaults"]).toContain(s.vault.ignore_source);
     expect(Array.isArray(s.vault.rules)).toBe(true);
-    expect(
-      s.vault.rules.some((r: { raw: string }) => r.raw === ".obsidian"),
-    ).toBe(true);
+    expect(s.vault.rules.some((r: { raw: string }) => r.raw === ".obsidian")).toBe(true);
     expect(typeof s.vault.included.files).toBe("number");
     expect(typeof s.vault.included.dirs).toBe("number");
     expect(typeof s.vault.excluded.dirs).toBe("number");
@@ -341,9 +335,7 @@ describe("tool calls", () => {
     const s = r.result.structuredContent;
     expect(s.limit).toBe(5);
     expect(s.total_pages).toBeGreaterThanOrEqual(1);
-    expect(
-      s.pages.some((p: { title: string }) => p.title.includes("Sandbox")),
-    ).toBe(true);
+    expect(s.pages.some((p: { title: string }) => p.title.includes("Sandbox"))).toBe(true);
   });
 
   // `second_brain_capture` and `event_log_append` are no longer
@@ -385,6 +377,29 @@ describe("tool calls", () => {
     const r = (await callTool(server, "not_a_tool")) as any;
     expect(r.error.code).toBe(-32601);
   });
+
+  test("tool output contract failure becomes a tool-level error", async () => {
+    const server = new MCPServer({ vault: tmp });
+    await initialize(server);
+    (server as any).tools = [
+      {
+        name: "bad_contract",
+        description: "test tool",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        outputSchema: {
+          type: "object",
+          required: ["ok"],
+          properties: { ok: { type: "boolean" } },
+          additionalProperties: false,
+        },
+        handler: () => ({ ok: "yes" }),
+      },
+    ];
+    const r = (await callTool(server, "bad_contract")) as any;
+    expect(r.result.isError).toBe(true);
+    expect(r.result.structuredContent).toBeUndefined();
+    expect(r.result.content[0].text).toContain("bad_contract output contract failed");
+  });
 });
 
 describe("stdio loop", () => {
@@ -418,14 +433,16 @@ describe("stdio loop", () => {
     const list = JSON.parse(lines[1]!);
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
-    // v0.15.0: 3 core + 23 Brain (brain_health added in v0.14.0
+    // v0.16.0: 3 core + 24 Brain (brain_health added in v0.14.0
     // Semantic Brain Health; brain_review_candidates added in v0.12.0
     // Brain Integrity Suite; brain_timeline / brain_belief_evolution /
     // brain_stale_scan / brain_daily_brief / brain_weekly_synthesis
     // added v0.10.18)
     // brain_agent_query / brain_agent_diff added in v0.15.0)
-    // + 8 Pay Memory + 1 Search = 35.
-    expect(list.result.tools.length).toBe(35);
+    // brain_agent_query / brain_agent_diff added in v0.15.0;
+    // brain_pinned_context added in v0.16.0)
+    // + 8 Pay Memory + 1 Search = 36.
+    expect(list.result.tools.length).toBe(36);
   });
 
   test("returns parse error for invalid JSON", async () => {
@@ -495,6 +512,7 @@ describe("serveStdioFromString respects scope+name", () => {
       "brain_context",
       "brain_feedback",
       "brain_note",
+      "brain_pinned_context",
     ]);
   });
 });

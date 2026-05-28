@@ -9,6 +9,7 @@ import {
   parseSimpleYaml,
   redactMapping,
   resolveAgentName,
+  resolveLinkOutputFormat,
   resolveTimezone,
   resolveVault,
   setConfigValue,
@@ -26,6 +27,7 @@ beforeEach(() => {
     "VAULT_DIR",
     "VAULT_AGENT_NAME",
     "VAULT_TIMEZONE",
+    "OBSIDIAN_LINK_FORMAT",
   ]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
@@ -49,13 +51,17 @@ describe("defaultConfigPath", () => {
 
   test("uses XDG_CONFIG_HOME when set without override", () => {
     process.env["XDG_CONFIG_HOME"] = tmp;
-    expect(defaultConfigPath()).toBe(join(tmp, "open-second-brain", "config.yaml"));
+    expect(defaultConfigPath()).toBe(
+      join(tmp, "open-second-brain", "config.yaml"),
+    );
   });
 });
 
 describe("parseSimpleYaml", () => {
   test("parses key: value lines", () => {
-    const data = parseSimpleYaml("instance_name: Test Brain\nruntime: hermes\n");
+    const data = parseSimpleYaml(
+      "instance_name: Test Brain\nruntime: hermes\n",
+    );
     expect(data["instance_name"]).toBe("Test Brain");
     expect(data["runtime"]).toBe("hermes");
   });
@@ -128,8 +134,12 @@ describe("setConfigValue", () => {
 
   test("rejects values with disallowed characters", () => {
     const p = join(tmp, "config.yaml");
-    expect(() => setConfigValue("vault", 'evil"value', p)).toThrow(/disallowed character/);
-    expect(() => setConfigValue("vault", "with\nnewline", p)).toThrow(/disallowed character/);
+    expect(() => setConfigValue("vault", 'evil"value', p)).toThrow(
+      /disallowed character/,
+    );
+    expect(() => setConfigValue("vault", "with\nnewline", p)).toThrow(
+      /disallowed character/,
+    );
   });
 });
 
@@ -196,6 +206,38 @@ describe("resolveAgentName", () => {
 
   test("returns 'agent' literal when nothing configured", () => {
     expect(resolveAgentName(join(tmp, "missing.yaml"))).toBe("agent");
+  });
+});
+
+describe("resolveLinkOutputFormat", () => {
+  test("defaults to wikilink", () => {
+    expect(resolveLinkOutputFormat(join(tmp, "missing.yaml"))).toBe("wikilink");
+  });
+
+  test("reads markdown from config", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'link_output_format: "markdown"\n');
+    expect(resolveLinkOutputFormat(cfg)).toBe("markdown");
+  });
+
+  test("invalid config falls back to wikilink", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'link_output_format: "html"\n');
+    expect(resolveLinkOutputFormat(cfg)).toBe("wikilink");
+  });
+
+  test("OBSIDIAN_LINK_FORMAT env wins over config", () => {
+    process.env["OBSIDIAN_LINK_FORMAT"] = "markdown";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'link_output_format: "wikilink"\n');
+    expect(resolveLinkOutputFormat(cfg)).toBe("markdown");
+  });
+
+  test("empty OBSIDIAN_LINK_FORMAT env falls back to config", () => {
+    process.env["OBSIDIAN_LINK_FORMAT"] = "   ";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'link_output_format: "markdown"\n');
+    expect(resolveLinkOutputFormat(cfg)).toBe("markdown");
   });
 });
 
