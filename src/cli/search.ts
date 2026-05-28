@@ -218,6 +218,7 @@ function jsonForOutcome(o: SearchOutcome): unknown {
       reasons: r.reasons,
       document_id: r.documentId,
       chunk_id: r.chunkId,
+      ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
     })),
     warnings: o.warnings,
     total: o.total,
@@ -242,6 +243,10 @@ function renderOutcomeHuman(o: SearchOutcome, verbose: boolean): string {
     lines.push(`    ${snippet}${r.content.length > 140 ? "…" : ""}`);
     if (verbose && r.reasons.length > 0) {
       lines.push(`    why: ${r.reasons.join(", ")}`);
+    }
+    if (r.relations && r.relations.length > 0) {
+      const rel = r.relations.map((x) => `${x.relation} ${x.target}`).join(", ");
+      lines.push(`    relations: ${rel}`);
     }
     lines.push("");
   });

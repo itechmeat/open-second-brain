@@ -178,10 +178,19 @@ export async function search(
       : ranked;
     const filtered = filteredAll.slice(0, limit);
 
+    // Typed graph semantics (v3): surface the typed relations each
+    // result page declares in its frontmatter. Computed here from the
+    // links table, never stored on the result row. One batched query.
+    const relByDoc = store.typedRelationsForDocuments(filtered.map((r) => r.documentId));
+    const withRelations = filtered.map((r) => {
+      const rels = relByDoc.get(r.documentId);
+      return rels && rels.length > 0 ? { ...r, relations: Object.freeze(rels) } : r;
+    });
+
     return Object.freeze({
-      results: Object.freeze(filtered),
+      results: Object.freeze(withRelations),
       warnings: Object.freeze(warnings),
-      total: filtered.length,
+      total: withRelations.length,
     });
   } finally {
     await store.close();

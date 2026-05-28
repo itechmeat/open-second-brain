@@ -72,6 +72,17 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
           endLine: { type: "integer" },
           searchType: { type: "string" },
           reasons: { type: "array", items: { type: "string" } },
+          relations: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["relation", "target"],
+              properties: {
+                relation: { type: "string" },
+                target: { type: "string" },
+              },
+            },
+          },
         },
       },
     },
@@ -214,6 +225,7 @@ async function toolBrainSearch(
       endLine: r.endLine,
       searchType: r.searchType,
       reasons: r.reasons,
+      ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
     })),
     warnings: outcome.warnings,
     total: outcome.total,

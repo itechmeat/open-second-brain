@@ -53,6 +53,14 @@ export interface BrainSearchResult {
    * never empty for a result that surfaced.
    */
   readonly reasons: ReadonlyArray<string>;
+  /**
+   * Typed semantic relations this result's page declares in its
+   * frontmatter (v3 / typed graph semantics): `related` / `extends` /
+   * `contradicts` / `superseded_by` and any other vocabulary relation.
+   * Computed at query time from the links table, never stored on the
+   * result row. Absent when the page declares no typed relations.
+   */
+  readonly relations?: ReadonlyArray<{ readonly relation: string; readonly target: string }>;
 }
 
 export interface IndexStats {

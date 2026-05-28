@@ -756,6 +756,36 @@ export class Store {
     );
   }
 
+  /**
+   * For each document id, the typed relation edges it declares
+   * (v3 / typed graph semantics): rows whose `relation` is set, in
+   * insertion order. The target is the edge's `target_path` as written.
+   * Documents with no typed edges are absent from the returned map.
+   */
+  typedRelationsForDocuments(
+    documentIds: ReadonlyArray<number>,
+  ): Map<number, Array<{ relation: string; target: string }>> {
+    const out = new Map<number, Array<{ relation: string; target: string }>>();
+    if (documentIds.length === 0) return out;
+    const placeholders = documentIds.map(() => "?").join(",");
+    const rows = this.db
+      .query<{ source_document_id: number; relation: string; target_path: string | null }, number[]>(
+        "SELECT source_document_id, relation, target_path FROM links " +
+          `WHERE source_document_id IN (${placeholders}) AND relation IS NOT NULL ` +
+          "ORDER BY id",
+      )
+      .all(...(documentIds as number[]));
+    for (const r of rows) {
+      const target = r.target_path ?? "";
+      if (target === "") continue;
+      const arr = out.get(r.source_document_id);
+      const edge = { relation: r.relation, target };
+      if (arr) arr.push(edge);
+      else out.set(r.source_document_id, [edge]);
+    }
+    return out;
+  }
+
   // ── search ─────────────────────────────────────────────────────────────────
 
   /**
