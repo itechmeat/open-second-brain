@@ -85,6 +85,13 @@ export interface LinkInput {
   readonly targetPath: string | null;
   readonly linkText: string | null;
   readonly linkType: "wikilink" | "markdown_link" | "tag";
+  /**
+   * Semantic relation type for this edge (v3 / typed graph semantics),
+   * orthogonal to `linkType`. `null`/absent for plain syntactic links;
+   * set for frontmatter-relation and MCP-config edges. Validated
+   * against the open vocabulary in src/core/graph/relation-vocab.ts.
+   */
+  readonly relation?: string | null;
 }
 
 export interface KeywordHit {
@@ -717,14 +724,22 @@ export class Store {
       if (links.length > 0) {
         const insert = this.db.prepare<
           undefined,
-          [number, number | null, string | null, string | null, string, string]
+          [number, number | null, string | null, string | null, string, string | null, string]
         >(
-          "INSERT INTO links(source_document_id, source_chunk_id, target_path, link_text, link_type, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT INTO links(source_document_id, source_chunk_id, target_path, link_text, link_type, relation, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
         );
         const now = nowIso();
         for (const l of links) {
-          insert.run(sourceDocumentId, l.sourceChunkId, l.targetPath, l.linkText, l.linkType, now);
+          insert.run(
+            sourceDocumentId,
+            l.sourceChunkId,
+            l.targetPath,
+            l.linkText,
+            l.linkType,
+            l.relation ?? null,
+            now,
+          );
         }
       }
       this.db.exec("COMMIT");

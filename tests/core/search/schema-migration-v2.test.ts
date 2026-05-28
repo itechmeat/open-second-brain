@@ -37,10 +37,10 @@ function hasTable(db: Database, name: string): boolean {
   );
 }
 
-test("fresh migration reaches v2 and creates chunk_entities", () => {
+test("fresh migration reaches the latest version and creates chunk_entities", () => {
   const db = new Database(dbPath);
-  expect(applyMigrations(db)).toBe(2);
-  expect(LATEST_SCHEMA_VERSION).toBe(2);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
+  expect(LATEST_SCHEMA_VERSION).toBeGreaterThanOrEqual(2);
   expect(hasTable(db, "chunk_entities")).toBe(true);
   db.close();
 });
@@ -62,7 +62,7 @@ test("a v1 index upgrades to v2, adding chunk_entities and preserving data", () 
   db.run("UPDATE index_state SET value = '1' WHERE key = 'schema_version'");
   expect(readSchemaVersion(db)).toBe(1);
 
-  expect(applyMigrations(db)).toBe(2);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(hasTable(db, "chunk_entities")).toBe(true);
   // Pre-existing rows survive the upgrade.
   const docs = db.query<{ c: number }, []>("SELECT count(*) AS c FROM documents").get();
