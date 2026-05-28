@@ -74,6 +74,7 @@ import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
 import { buildIntentReview } from "../core/brain/intent-review.ts";
+import { buildRetentionReview } from "../core/brain/retention.ts";
 import { buildReviewCandidates } from "../core/brain/review-candidates.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
 import { buildOperatorSummary } from "../core/brain/trust/operator-summary.ts";
@@ -346,6 +347,29 @@ async function toolBrainIntentReview(
       risk_band: review.risk_band,
       risk_score: review.risk_score,
       reasons: [...review.reasons],
+    })),
+  };
+}
+
+async function toolBrainRetention(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const nowDate = coerceIsoDate(args, "now");
+  const report = buildRetentionReview(
+    ctx.vault,
+    nowDate ? { now: nowDate } : {},
+  );
+  return {
+    schema_version: report.schema_version,
+    generated_at: report.generated_at,
+    summary: report.summary,
+    recommendations: report.recommendations.map((recommendation) => ({
+      id: recommendation.id,
+      artifact_type: recommendation.artifact_type,
+      action: recommendation.action,
+      reason: recommendation.reason,
+      path: recommendation.path,
     })),
   };
 }
@@ -1789,6 +1813,23 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainIntentReview,
+  },
+  {
+    name: "brain_retention",
+    description:
+      "Recommendation-only lifecycle review over retired preferences and processed signals. Returns keep/improve/park/prune candidates and never deletes or moves artifacts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        now: {
+          type: "string",
+          description:
+            "Optional ISO-8601 timestamp used as the wall clock for the review (testing / replay).",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainRetention,
   },
   {
     name: "brain_review_candidates",

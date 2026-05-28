@@ -16,6 +16,7 @@ import {
   cmdBrainApplyEvidence,
   cmdBrainDigest,
   cmdBrainIntentReview,
+  cmdBrainRetention,
   cmdBrainQuery,
   cmdBrainAgentQuery,
   cmdBrainAgentDiff,
@@ -90,6 +91,8 @@ export async function handleBrainSubcommand(
         return await cmdBrainDigest(rest);
       case "intent-review":
         return await cmdBrainIntentReview(rest);
+      case "retention":
+        return await cmdBrainRetention(rest);
       case "query":
         return await cmdBrainQuery(rest);
       case "agent-query":
