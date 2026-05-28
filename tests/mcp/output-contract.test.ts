@@ -25,7 +25,22 @@ describe("validateOutputContract", () => {
       required: ["ok"],
       properties: { ok: { type: "boolean" } },
     };
-    expect(validateOutputContract(schema, {})).toEqual(["$: missing required property 'ok'"]);
+    expect(validateOutputContract(schema, {})).toEqual([
+      "$: missing required property 'ok'",
+    ]);
+  });
+
+  test("does not satisfy required properties via prototype chain", () => {
+    const schema: OutputSchema = {
+      type: "object",
+      required: ["ok"],
+      properties: { ok: { type: "boolean" } },
+      additionalProperties: false,
+    };
+    const value = Object.create({ ok: true }) as Record<string, unknown>;
+    expect(validateOutputContract(schema, value)).toEqual([
+      "$: missing required property 'ok'",
+    ]);
   });
 
   test("reports unexpected properties when additionalProperties is false", () => {
@@ -37,6 +52,31 @@ describe("validateOutputContract", () => {
     expect(validateOutputContract(schema, { ok: true, extra: 1 })).toEqual([
       "$: unexpected property 'extra'",
     ]);
+  });
+
+  test("treats inherited schema properties as undeclared", () => {
+    const schema: OutputSchema = {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    };
+    expect(validateOutputContract(schema, { toString: "owned" })).toEqual([
+      "$: unexpected property 'toString'",
+    ]);
+  });
+
+  test("rejects non-finite numbers for number type", () => {
+    const schema: OutputSchema = { type: "number" };
+    expect(validateOutputContract(schema, Number.NaN)).toEqual([
+      "$: expected number",
+    ]);
+    expect(validateOutputContract(schema, Infinity)).toEqual([
+      "$: expected number",
+    ]);
+    expect(validateOutputContract(schema, -Infinity)).toEqual([
+      "$: expected number",
+    ]);
+    expect(validateOutputContract(schema, 1.5)).toEqual([]);
   });
 
   test("validates arrays, items, and enum values", () => {
@@ -67,16 +107,23 @@ describe("assertOutputContract", () => {
       required: ["ok"],
       properties: { ok: { type: "boolean" } },
     };
-    expect(() => assertOutputContract("demo_tool", schema, { ok: "yes" })).toThrow(
-      /demo_tool output contract failed: \$\.ok: expected boolean/,
-    );
+    expect(() =>
+      assertOutputContract("demo_tool", schema, { ok: "yes" }),
+    ).toThrow(/demo_tool output contract failed: \$\.ok: expected boolean/);
   });
 });
 
 describe("registered output contracts", () => {
   test("covers the first agent-facing structured surfaces", () => {
-    const tools = new Map(buildToolTable("full").map((tool) => [tool.name, tool]));
-    for (const name of ["brain_context", "brain_pinned_context", "brain_query", "brain_search"]) {
+    const tools = new Map(
+      buildToolTable("full").map((tool) => [tool.name, tool]),
+    );
+    for (const name of [
+      "brain_context",
+      "brain_pinned_context",
+      "brain_query",
+      "brain_search",
+    ]) {
       expect(tools.get(name)?.outputSchema).toBeDefined();
     }
   });
@@ -89,10 +136,9 @@ describe("registered output contracts", () => {
       method: "tools/list",
     })) as any;
     const tools = new Map(
-      (response.result.tools as Array<{ name: string; outputSchema?: unknown }>).map((tool) => [
-        tool.name,
-        tool,
-      ]),
+      (
+        response.result.tools as Array<{ name: string; outputSchema?: unknown }>
+      ).map((tool) => [tool.name, tool]),
     );
     expect(tools.get("brain_context")?.outputSchema).toBeDefined();
     expect(tools.get("brain_pinned_context")?.outputSchema).toBeDefined();

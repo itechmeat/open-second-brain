@@ -1,5 +1,6 @@
 ### Variant 1: Independent additive slices
-- **Approach**: Land each task as its own thin, isolated slice with no shared abstraction. `Brain/pinned.md` gets a small `src/core/brain/pinned.ts` and a `brain_pin` tool (read/write/clear ops), with `brain_context` appending pinned content beside active prefs. Link output adds a `link_output_format` key to `src/core/config.ts` plus a renderer branch in `src/core/brain/wikilink.ts`/`src/core/search/links.ts`. Contract enforcement adds an optional JSON-Schema field to `ToolDefinition` in `src/mcp/tools.ts` and a validation step in `MCPServer.handleToolsCall` against `structuredContent`. The cavemem helper is a `stripPrivateRegions` pass added to `src/core/redactor.ts`, invoked from the existing Brain/Pay Memory write boundary that already calls `redactRawOutput`.
+
+- **Approach**: Land each task as its own thin, isolated slice with no shared abstraction. `Brain/pinned.md` gets a small `src/core/brain/pinned.ts` and a `brain_pinned_context` tool (read/write/clear ops), with `brain_context` appending pinned content beside active prefs. Link output adds a `link_output_format` key to `src/core/config.ts` plus a renderer branch in `src/core/brain/wikilink.ts`/`src/core/search/links.ts`. Contract enforcement adds an optional JSON-Schema field to `ToolDefinition` in `src/mcp/tools.ts` and a validation step in `MCPServer.handleToolsCall` against `structuredContent`. The cavemem helper is a `stripPrivateRegions` pass added to `src/core/redactor.ts`, invoked from the existing Brain/Pay Memory write boundary that already calls `redactRawOutput`.
 - **Trade-offs**:
   - Pro: aligns with the "small additive surfaces" constraint; each slice ships behind its own tests, fits TDD feature-by-feature, and reviews independently.
   - Pro: no new cross-cutting abstraction to design, document, or migrate later if priorities change.
@@ -10,6 +11,7 @@
 - **Risk**: low
 
 ### Variant 2: Unified boundary-stage pipeline
+
 - **Approach**: Introduce a generalized "boundary pipeline" abstraction (e.g., `src/mcp/boundary.ts`) with explicit inbound (context-assembly) and outbound (response-shaping) stages, each registered by name. Pinned-content load becomes an inbound stage on `brain_context`; link rendering, contract validation, and private-region stripping become outbound stages applied to `structuredContent` and text payloads. `MCPServer.handleToolsCall` becomes a thin driver over this pipeline; `src/core/redactor.ts` plugs in as one outbound stage.
 - **Trade-offs**:
   - Pro: principled, extensible seam that anticipates further boundary control surfaces.
@@ -22,7 +24,8 @@
 - **Risk**: medium
 
 ### Variant 3: Direction-split surfaces (inbound context vs outbound envelope)
-- **Approach**: Group the work into two cohesive but small surfaces. An inbound "session context" surface adds `Brain/pinned.md` plus the `brain_pin` tool and extends `brain_context` to compose active prefs + pinned snippet. An outbound "envelope" surface adds a single `renderEnvelope` helper that the MCP server calls before returning tool results: it applies the `link_output_format` config to any rendered wikilinks, validates `structuredContent` against per-tool JSON Schemas declared on `ToolDefinition`, and runs the new `stripPrivateRegions` pass (also exported from `src/core/redactor.ts` so Brain writers can call it on the write path).
+
+- **Approach**: Group the work into two cohesive but small surfaces. An inbound "session context" surface adds `Brain/pinned.md` plus the `brain_pinned_context` tool and extends `brain_context` to compose active prefs + pinned snippet. An outbound "envelope" surface adds a single `renderEnvelope` helper that the MCP server calls before returning tool results: it applies the `link_output_format` config to any rendered wikilinks, validates `structuredContent` against per-tool JSON Schemas declared on `ToolDefinition`, and runs the new `stripPrivateRegions` pass (also exported from `src/core/redactor.ts` so Brain writers can call it on the write path).
 - **Trade-offs**:
   - Pro: organizes the four tasks by data direction, which matches how the existing code is already split (`brain-tools.ts` for inbound context vs `redactor.ts`/`tools.ts` for outbound shaping).
   - Pro: still avoids a generic pipeline; each surface is one new file plus targeted edits.
@@ -34,4 +37,5 @@
 - **Risk**: medium
 
 ### Recommended: Variant 1
-**Rationale**: The project's stated constraints — additive surfaces over broad refactors, TDD feature-by-feature, backward-compatible public APIs, and the conditional cavemem clause requiring a *small* shared redaction helper — all favor independent slices. The four tasks happen to touch the agent boundary but do not share enough mechanism to justify a pipeline (Variant 2) or even a shared envelope (Variant 3); each slice is a few dozen lines against well-isolated files (`brain-tools.ts`, `wikilink.ts`/`links.ts`, `tools.ts`/`server.ts`, `redactor.ts`) with existing test homes. If a real cross-cutting need emerges later (e.g., a second tool needing the same JSON-Schema check), extracting from the concrete implementations will be straightforward and lower-risk than designing the abstraction up front.
+
+**Rationale**: The project's stated constraints — additive surfaces over broad refactors, TDD feature-by-feature, backward-compatible public APIs, and the conditional cavemem clause requiring a _small_ shared redaction helper — all favor independent slices. The four tasks happen to touch the agent boundary but do not share enough mechanism to justify a pipeline (Variant 2) or even a shared envelope (Variant 3); each slice is a few dozen lines against well-isolated files (`brain-tools.ts`, `wikilink.ts`/`links.ts`, `tools.ts`/`server.ts`, `redactor.ts`) with existing test homes. If a real cross-cutting need emerges later (e.g., a second tool needing the same JSON-Schema check), extracting from the concrete implementations will be straightforward and lower-risk than designing the abstraction up front.

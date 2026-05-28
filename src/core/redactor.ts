@@ -68,10 +68,15 @@ export const SECRET_KEYS: ReadonlyArray<string> = [
   "session_token",
 ];
 
-const KEY_PATTERN = SECRET_KEYS.map((k) => k.replace(/[-_]/g, "[-_]?")).join("|");
+const KEY_PATTERN = SECRET_KEYS.map((k) => k.replace(/[-_]/g, "[-_]?")).join(
+  "|",
+);
 
 // `key=value` (env-style): value runs to whitespace or end of line.
-const ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
+const ENV_RE = new RegExp(
+  `\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`,
+  "gi",
+);
 
 // `key: value` outside of JSON quoting. Excludes the `"key": ...` JSON
 // shape and the `Authorization: Bearer X` header (handled below).
@@ -111,10 +116,24 @@ export function stripPrivateRegions(text: string): string {
     output += text.slice(cursor, openMatch.index);
     output += PRIVATE_REGION_PLACEHOLDER;
 
-    PRIVATE_CLOSE_TAG_RE.lastIndex = PRIVATE_OPEN_TAG_RE.lastIndex;
-    const closeMatch = PRIVATE_CLOSE_TAG_RE.exec(text);
-    if (!closeMatch) break;
-    cursor = PRIVATE_CLOSE_TAG_RE.lastIndex;
+    let depth = 1;
+    let scan = PRIVATE_OPEN_TAG_RE.lastIndex;
+    while (depth > 0) {
+      PRIVATE_OPEN_TAG_RE.lastIndex = scan;
+      PRIVATE_CLOSE_TAG_RE.lastIndex = scan;
+      const nextOpen = PRIVATE_OPEN_TAG_RE.exec(text);
+      const nextClose = PRIVATE_CLOSE_TAG_RE.exec(text);
+      if (!nextClose) return output;
+
+      if (nextOpen && nextOpen.index < nextClose.index) {
+        depth += 1;
+        scan = PRIVATE_OPEN_TAG_RE.lastIndex;
+      } else {
+        depth -= 1;
+        scan = PRIVATE_CLOSE_TAG_RE.lastIndex;
+      }
+    }
+    cursor = scan;
   }
 
   return output;
@@ -124,7 +143,9 @@ export function redactRawOutput(text: string): string {
   if (!text) return text;
 
   let out =
-    text.length > MAX_REDACTOR_INPUT ? text.slice(0, MAX_REDACTOR_INPUT) + TRUNCATION_MARKER : text;
+    text.length > MAX_REDACTOR_INPUT
+      ? text.slice(0, MAX_REDACTOR_INPUT) + TRUNCATION_MARKER
+      : text;
 
   out = stripPrivateRegions(out);
 
@@ -143,18 +164,24 @@ export function redactRawOutput(text: string): string {
   });
 
   // Bearer headers BEFORE the generic colon rule.
-  out = out.replace(BEARER_RE, (_match, prefix: string) => `${prefix}${PLACEHOLDER}`);
+  out = out.replace(
+    BEARER_RE,
+    (_match, prefix: string) => `${prefix}${PLACEHOLDER}`,
+  );
 
-  out = out.replace(COLON_VALUE_RE, (match, key: string, sep: string, value: string) => {
-    if (value.includes(PLACEHOLDER)) return match;
-    if (value.startsWith('"') && value.endsWith('"')) {
-      return `${key}${sep}"${PLACEHOLDER}"`;
-    }
-    if (value.startsWith("'") && value.endsWith("'")) {
-      return `${key}${sep}'${PLACEHOLDER}'`;
-    }
-    return `${key}${sep}${PLACEHOLDER}`;
-  });
+  out = out.replace(
+    COLON_VALUE_RE,
+    (match, key: string, sep: string, value: string) => {
+      if (value.includes(PLACEHOLDER)) return match;
+      if (value.startsWith('"') && value.endsWith('"')) {
+        return `${key}${sep}"${PLACEHOLDER}"`;
+      }
+      if (value.startsWith("'") && value.endsWith("'")) {
+        return `${key}${sep}'${PLACEHOLDER}'`;
+      }
+      return `${key}${sep}${PLACEHOLDER}`;
+    },
+  );
 
   return out;
 }
@@ -207,7 +234,10 @@ export interface NormaliseTextFieldOptions {
  * Trim is left to the caller — the writer for a given field decides
  * whether leading / trailing whitespace is significant.
  */
-export function normaliseTextField(value: unknown, opts: NormaliseTextFieldOptions): string {
+export function normaliseTextField(
+  value: unknown,
+  opts: NormaliseTextFieldOptions,
+): string {
   if (typeof value !== "string") return "";
   let s = value.replace(FORBIDDEN_C0_RE, "");
   s = s.replace(UNICODE_LINE_SEP_RE, "\n");
@@ -230,7 +260,10 @@ export function normaliseTextField(value: unknown, opts: NormaliseTextFieldOptio
  * writers (`writeSignal`, `appendApplyEvidence`) to keep field
  * sanitisation consistent across surfaces.
  */
-export function sanitiseTextField(value: unknown, opts: NormaliseTextFieldOptions): string {
+export function sanitiseTextField(
+  value: unknown,
+  opts: NormaliseTextFieldOptions,
+): string {
   if (typeof value !== "string") return "";
   return normaliseTextField(redactRawOutput(value), opts);
 }

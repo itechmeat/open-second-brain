@@ -15,7 +15,13 @@ import { atomicWriteFileSync } from "./fs-atomic.ts";
 import { isFile } from "./fs-utils.ts";
 import type { ConfigDiscovery } from "./types.ts";
 
-const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"] as const;
+const SECRET_KEY_PARTS = [
+  "key",
+  "token",
+  "secret",
+  "password",
+  "credential",
+] as const;
 
 const CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
 
@@ -87,9 +93,15 @@ export function discoverConfig(path?: string): ConfigDiscovery {
  * dir. Rejects values containing characters that would break the simple parser
  * on read-back rather than silently corrupting them.
  */
-export function setConfigValue(key: string, value: string, path?: string): string {
+export function setConfigValue(
+  key: string,
+  value: string,
+  path?: string,
+): string {
   if (typeof value !== "string") {
-    throw new TypeError(`config value for ${JSON.stringify(key)} must be a string`);
+    throw new TypeError(
+      `config value for ${JSON.stringify(key)} must be a string`,
+    );
   }
   for (const bad of CONFIG_VALUE_REJECTED_CHARS) {
     if (value.includes(bad)) {
@@ -174,14 +186,16 @@ export function resolveAgentName(configPath?: string): string {
 }
 
 export function resolveLinkOutputFormat(configPath?: string): LinkOutputFormat {
-  const env = process.env["OBSIDIAN_LINK_FORMAT"];
+  const env = process.env["OBSIDIAN_LINK_FORMAT"]?.trim();
   const data = env ? {} : discoverConfig(configPath).data;
-  const raw = env ?? data["link_output_format"] ?? data["linkOutputFormat"];
+  const raw = env || data["link_output_format"] || data["linkOutputFormat"];
   return raw === "markdown" ? "markdown" : "wikilink";
 }
 
 /** Replace values for keys whose name suggests a secret with `[REDACTED]`. */
-export function redactMapping<T extends Record<string, unknown>>(data: T): Record<string, unknown> {
+export function redactMapping<T extends Record<string, unknown>>(
+  data: T,
+): Record<string, unknown> {
   const redacted: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
     const lowered = key.toLowerCase();

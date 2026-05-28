@@ -51,13 +51,17 @@ describe("defaultConfigPath", () => {
 
   test("uses XDG_CONFIG_HOME when set without override", () => {
     process.env["XDG_CONFIG_HOME"] = tmp;
-    expect(defaultConfigPath()).toBe(join(tmp, "open-second-brain", "config.yaml"));
+    expect(defaultConfigPath()).toBe(
+      join(tmp, "open-second-brain", "config.yaml"),
+    );
   });
 });
 
 describe("parseSimpleYaml", () => {
   test("parses key: value lines", () => {
-    const data = parseSimpleYaml("instance_name: Test Brain\nruntime: hermes\n");
+    const data = parseSimpleYaml(
+      "instance_name: Test Brain\nruntime: hermes\n",
+    );
     expect(data["instance_name"]).toBe("Test Brain");
     expect(data["runtime"]).toBe("hermes");
   });
@@ -130,8 +134,12 @@ describe("setConfigValue", () => {
 
   test("rejects values with disallowed characters", () => {
     const p = join(tmp, "config.yaml");
-    expect(() => setConfigValue("vault", 'evil"value', p)).toThrow(/disallowed character/);
-    expect(() => setConfigValue("vault", "with\nnewline", p)).toThrow(/disallowed character/);
+    expect(() => setConfigValue("vault", 'evil"value', p)).toThrow(
+      /disallowed character/,
+    );
+    expect(() => setConfigValue("vault", "with\nnewline", p)).toThrow(
+      /disallowed character/,
+    );
   });
 });
 
@@ -222,6 +230,13 @@ describe("resolveLinkOutputFormat", () => {
     process.env["OBSIDIAN_LINK_FORMAT"] = "markdown";
     const cfg = join(tmp, "config.yaml");
     writeFileSync(cfg, 'link_output_format: "wikilink"\n');
+    expect(resolveLinkOutputFormat(cfg)).toBe("markdown");
+  });
+
+  test("empty OBSIDIAN_LINK_FORMAT env falls back to config", () => {
+    process.env["OBSIDIAN_LINK_FORMAT"] = "   ";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'link_output_format: "markdown"\n');
     expect(resolveLinkOutputFormat(cfg)).toBe("markdown");
   });
 });
