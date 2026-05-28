@@ -27,8 +27,14 @@
         "additionalProperties": false,
         "properties": {
           "id": { "type": "string" },
-          "artifact_type": { "type": "string", "enum": ["retired_preference", "processed_signal"] },
-          "action": { "type": "string", "enum": ["keep", "improve", "park", "prune"] },
+          "artifact_type": {
+            "type": "string",
+            "enum": ["retired_preference", "processed_signal"]
+          },
+          "action": {
+            "type": "string",
+            "enum": ["keep", "improve", "park", "prune"]
+          },
           "reason": { "type": "string" },
           "path": { "type": "string" }
         }

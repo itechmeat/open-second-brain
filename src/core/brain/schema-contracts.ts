@@ -1,4 +1,10 @@
-export type SchemaType = "object" | "array" | "string" | "integer" | "number" | "boolean";
+export type SchemaType =
+  | "object"
+  | "array"
+  | "string"
+  | "integer"
+  | "number"
+  | "boolean";
 
 export interface SchemaNode {
   readonly type?: SchemaType;
@@ -36,7 +42,14 @@ const INTENT_REVIEW_SCHEMA: BrainSchemaContract = {
       type: "array",
       items: {
         type: "object",
-        required: ["topic", "decision", "signal_count", "risk_band", "risk_score", "reasons"],
+        required: [
+          "topic",
+          "decision",
+          "signal_count",
+          "risk_band",
+          "risk_score",
+          "reasons",
+        ],
         additionalProperties: false,
         properties: {
           topic: { type: "string" },
@@ -88,8 +101,14 @@ const RETENTION_REVIEW_SCHEMA: BrainSchemaContract = {
         additionalProperties: false,
         properties: {
           id: { type: "string" },
-          artifact_type: { type: "string", enum: ["retired_preference", "processed_signal"] },
-          action: { type: "string", enum: ["keep", "improve", "park", "prune"] },
+          artifact_type: {
+            type: "string",
+            enum: ["retired_preference", "processed_signal"],
+          },
+          action: {
+            type: "string",
+            enum: ["keep", "improve", "park", "prune"],
+          },
           reason: { type: "string" },
           path: { type: "string" },
         },
@@ -120,7 +139,13 @@ const MONTHLY_REVIEW_SCHEMA: BrainSchemaContract = {
     },
     summary: {
       type: "object",
-      required: ["events", "status_transitions", "retired", "contradictions", "neglected_areas"],
+      required: [
+        "events",
+        "status_transitions",
+        "retired",
+        "contradictions",
+        "neglected_areas",
+      ],
       additionalProperties: false,
       properties: {
         events: { type: "integer" },
@@ -173,14 +198,17 @@ const COMPLEXITY_REPORT_SCHEMA: BrainSchemaContract = {
   },
 };
 
-export const BRAIN_SCHEMA_CONTRACTS: ReadonlyArray<BrainSchemaContract> = Object.freeze([
-  INTENT_REVIEW_SCHEMA,
-  RETENTION_REVIEW_SCHEMA,
-  MONTHLY_REVIEW_SCHEMA,
-  COMPLEXITY_REPORT_SCHEMA,
-]);
+export const BRAIN_SCHEMA_CONTRACTS: ReadonlyArray<BrainSchemaContract> =
+  Object.freeze([
+    INTENT_REVIEW_SCHEMA,
+    RETENTION_REVIEW_SCHEMA,
+    MONTHLY_REVIEW_SCHEMA,
+    COMPLEXITY_REPORT_SCHEMA,
+  ]);
 
-export function getBrainSchemaContract(id: string): BrainSchemaContract | undefined {
+export function getBrainSchemaContract(
+  id: string,
+): BrainSchemaContract | undefined {
   return BRAIN_SCHEMA_CONTRACTS.find((schema) => schema.id === id);
 }
 
@@ -190,7 +218,10 @@ export function validateSchemaContract(
 ): SchemaValidationResult {
   const errors: string[] = [];
   validateNode(schema, value, "", errors);
-  return Object.freeze({ ok: errors.length === 0, errors: Object.freeze(errors) });
+  return Object.freeze({
+    ok: errors.length === 0,
+    errors: Object.freeze(errors),
+  });
 }
 
 function validateNode(
@@ -204,8 +235,13 @@ function validateNode(
     return;
   }
 
-  if (schema.enum !== undefined && !schema.enum.some((allowed) => Object.is(allowed, value))) {
-    errors.push(`${formatPath(path)} must be one of ${schema.enum.map(formatEnumValue).join(", ")}`);
+  if (
+    schema.enum !== undefined &&
+    !schema.enum.some((allowed) => Object.is(allowed, value))
+  ) {
+    errors.push(
+      `${formatPath(path)} must be one of ${schema.enum.map(formatEnumValue).join(", ")}`,
+    );
     return;
   }
 
