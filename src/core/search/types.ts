@@ -147,6 +147,14 @@ export interface SearchOptions {
    * resolved config default; `0` disables traversal for this query.
    */
   readonly maxHops?: number;
+  /**
+   * Requested content-visibility scope (v3 / typed graph semantics).
+   * Pages with no `visibility:` frontmatter are always returned;
+   * a page that declares visibility values is returned only when this
+   * scope includes one of them. Absent/empty = default scope (reaches
+   * untagged pages only). See src/core/graph/visibility.ts.
+   */
+  readonly visibility?: ReadonlyArray<string>;
 }
 
 export interface SearchOutcome {

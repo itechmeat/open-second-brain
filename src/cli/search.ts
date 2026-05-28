@@ -119,6 +119,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     "semantic-weight": { type: "string" },
     "auto-refresh": { type: "boolean" },
     property: { type: "string-array" },
+    visibility: { type: "string-array" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
   });
@@ -153,6 +154,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     flags["semantic"] === true ? true : flags["keyword-only"] === true ? false : undefined;
 
   const properties = parsePropertyFlags(flags["property"] as string[] | undefined);
+  const visibility = flags["visibility"] as string[] | undefined;
 
   const outcome = await search(cfg, {
     query,
@@ -161,6 +163,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     keywordOnly: flags["keyword-only"] === true,
     pathPrefix: typeof flags["path"] === "string" ? (flags["path"] as string) : undefined,
     ...(properties !== undefined ? { properties } : {}),
+    ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
   });
 
   if (flags["json"]) {

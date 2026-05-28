@@ -40,6 +40,12 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
         items: { type: "string" },
       },
     },
+    visibility: {
+      type: "array",
+      description:
+        "Optional content-visibility scope (v3). Pages with no `visibility:` frontmatter are always returned; a page that declares visibility values is returned only when this scope includes one of them. Absent = default scope (untagged pages only).",
+      items: { type: "string" },
+    },
   },
   required: ["query"],
   additionalProperties: false,
@@ -132,6 +138,21 @@ function parsePropertiesArgument(
   return map;
 }
 
+function parseVisibilityArgument(raw: unknown): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new MCPError(INVALID_PARAMS, "argument 'visibility' must be an array of strings");
+  }
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") {
+      throw new MCPError(INVALID_PARAMS, "argument 'visibility' must contain only strings");
+    }
+    if (item.length > 0) out.push(item);
+  }
+  return out;
+}
+
 function truncateContent(c: string, max: number): string {
   if (c.length <= max) return c;
   return c.slice(0, max - 1) + "…";
@@ -188,6 +209,7 @@ async function toolBrainSearch(
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const properties = parsePropertiesArgument(args["properties"]);
+  const visibility = parseVisibilityArgument(args["visibility"]);
 
   const config = resolveSearchConfig({
     vault: ctx.vault,
@@ -204,6 +226,7 @@ async function toolBrainSearch(
         keywordOnly,
         pathPrefix,
         ...(properties !== undefined ? { properties } : {}),
+        ...(visibility !== undefined ? { visibility } : {}),
       }),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,

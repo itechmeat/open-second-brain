@@ -12,6 +12,7 @@
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { extractEntities } from "./entities.ts";
 import { runFtsQuery } from "./fts.ts";
@@ -118,6 +119,13 @@ export async function search(
     // candidates to the filter and surface zero results even when
     // matches exist deeper in the rank.
     const hasPropertyFilter = opts.properties !== undefined && opts.properties.size > 0;
+    // An explicit visibility scope can also drop ranked rows, so it
+    // shares the property filter's overfetch. The default (no scope)
+    // path is left untouched so all-untagged vaults are byte-identical
+    // to prior behaviour.
+    const visibilityScope = normalizeVisibilityScope(opts.visibility ?? []);
+    const hasVisibilityRequest = (opts.visibility?.length ?? 0) > 0;
+    const hasFrontmatterFilter = hasPropertyFilter || hasVisibilityRequest;
 
     // MMR and traversal both need a candidate pool wider than `limit`:
     // MMR diversifies from it, and traversal seeds expansion from it (a
@@ -128,7 +136,7 @@ export async function search(
     const mmrActive = mmrLambda < 1;
     const maxHops = opts.maxHops ?? config.recall.maxHops;
     const traversalActive = maxHops > 0;
-    const baseRankLimit = hasPropertyFilter ? Math.max(limit * 5, 50) : limit;
+    const baseRankLimit = hasFrontmatterFilter ? Math.max(limit * 5, 50) : limit;
     const rankLimit =
       mmrActive || traversalActive ? Math.max(baseRankLimit, limit * 3, 30) : baseRankLimit;
 
@@ -173,10 +181,14 @@ export async function search(
     // vault. After filtering we truncate back to the caller's
     // declared `limit` so the property-filter overfetch above
     // doesn't leak through.
-    const filteredAll = hasPropertyFilter
+    const propFiltered = hasPropertyFilter
       ? applyPropertyFilter(ranked, opts.properties!, config.vault)
       : ranked;
-    const filtered = filteredAll.slice(0, limit);
+    // Visibility scoping (v3): drop pages whose declared visibility is
+    // not in the requested scope. Untagged pages always pass, so an
+    // all-untagged vault is unaffected.
+    const visFiltered = applyVisibilityScope(propFiltered, visibilityScope, config.vault);
+    const filtered = visFiltered.slice(0, limit);
 
     // Typed graph semantics (v3): surface the typed relations each
     // result page declares in its frontmatter. Computed here from the
@@ -275,6 +287,28 @@ function applyPropertyFilter(
     }
   };
   return filterByProperties(ranked, filters, reader);
+}
+
+function applyVisibilityScope(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  scope: ReadonlySet<string>,
+  vault: string,
+): ReadonlyArray<BrainSearchResult> {
+  const cache = new Map<string, string[]>();
+  const tagsFor = (path: string): string[] => {
+    const cached = cache.get(path);
+    if (cached) return cached;
+    let tags: string[] = [];
+    try {
+      const [meta] = parseFrontmatter(join(vault, path));
+      tags = pageVisibility(meta);
+    } catch {
+      tags = [];
+    }
+    cache.set(path, tags);
+    return tags;
+  };
+  return ranked.filter((r) => isVisible(tagsFor(r.path), scope));
 }
 
 interface SemanticPhaseOutcome {
