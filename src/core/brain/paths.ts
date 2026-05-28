@@ -52,6 +52,7 @@ export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
 export const BRAIN_CONFIG_FILE = "_brain.yaml";
 export const BRAIN_MANUAL_FILE = "_BRAIN.md";
 export const BRAIN_ACTIVE_FILE = "active.md";
+export const BRAIN_PINNED_FILE = "pinned.md";
 export const BRAIN_INDEX_FILE = "_INDEX.md";
 
 /** Vault-relative path of the `o2b index` output file. */
@@ -114,6 +115,11 @@ export function brainManualPath(vault: string): string {
  */
 export function brainActivePath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_ACTIVE_FILE), vault);
+}
+
+/** Path of the transient current-task scratchpad read by `brain_context`. */
+export function brainPinnedPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_PINNED_FILE), vault);
 }
 
 /** Active-signal path: `Brain/inbox/sig-<date>-<slug>.md`. */
