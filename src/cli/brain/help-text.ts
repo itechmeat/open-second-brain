@@ -16,6 +16,7 @@ Brain verbs (observing memory):
   apply-evidence   Log a real-work application of a preference
   note             Append a one-line narrative milestone to Brain/log/today
   digest           Render the recent-changes digest (markdown or --json)
+  intent-review    Read-only pre-dream review of active signal clusters
   query            Read by --preference, --topic, or --since
   agent-query      Read Brain provenance by source agent (--agent; --json)
   agent-diff       Compare source-agent coverage (browse/search/diff/map)
@@ -86,6 +87,11 @@ export const VERB_HELP: Record<string, string> = {
   digest:
     "usage: o2b brain digest [--vault <path>] [--since <ISO>] [--until <ISO>] [--json] [--silent-if-empty]\n" +
     "Renders the 24-hour change digest. Empty + --silent-if-empty exits 2.\n",
+  "intent-review":
+    "usage: o2b brain intent-review [--vault <path>] [--now <ISO-8601>] [--json]\n" +
+    "Read-only pre-dream review of active signal clusters. Surfaces whether\n" +
+    "each topic is ready for main dream review, needs more evidence, or is\n" +
+    "blocked by conflicting signals.\n",
   query:
     "usage: o2b brain query --preference <id> | --topic <slug> | --since <ISO> [--vault <path>] [--json]\n" +
     "Read-only lookup. One of --preference / --topic / --since is required.\n",

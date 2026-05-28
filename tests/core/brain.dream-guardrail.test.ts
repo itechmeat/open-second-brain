@@ -63,6 +63,13 @@ describe("dream + self-approval guardrail (default config)", () => {
     const res = dream(vault);
     expect(res.new_unconfirmed).toEqual(["pref-test-topic"]);
     expect(res.quarantined).toEqual([]);
+    expect(res.intent_reviews).toEqual([
+      expect.objectContaining({
+        topic: "test-topic",
+        decision: "ready_for_main_review",
+        signal_count: 3,
+      }),
+    ]);
   });
 
   test("2 signals from 1 agent: blocked by candidate_threshold, not by guardrail", () => {

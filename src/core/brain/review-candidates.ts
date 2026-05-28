@@ -14,6 +14,7 @@
  */
 
 import { dream } from "./dream.ts";
+import type { BrainIntentReviewEntry } from "./intent-review.ts";
 import { BRAIN_RETIRED_REASON, type BrainRetiredReason } from "./types.ts";
 
 export interface ReviewCandidatesReport {
@@ -55,6 +56,8 @@ export interface ReviewCandidatesReport {
     readonly threshold: number;
     readonly attempted_reason: BrainRetiredReason;
   }>;
+  /** Intent-review decisions for active signal clusters before main dream planning. */
+  readonly intent_reviews: ReadonlyArray<BrainIntentReviewEntry>;
 }
 
 export interface BuildReviewCandidatesOptions {
@@ -105,5 +108,6 @@ export function buildReviewCandidates(
         }),
       ),
     ),
+    intent_reviews: Object.freeze([...summary.intent_reviews]),
   } satisfies ReviewCandidatesReport);
 }
