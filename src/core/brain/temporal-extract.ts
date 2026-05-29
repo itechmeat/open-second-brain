@@ -13,8 +13,9 @@
  *
  *   1. ISO interval `YYYY-MM-DD/YYYY-MM-DD`
  *        -> { valid_from: <A>T00:00:00Z, valid_until: <B>T00:00:00Z }
- *   2. ISO-8601 duration `P[n]Y[n]M[n]W[n]D` (relative to `now`)
- *        -> { valid_from: now, valid_until: now + duration }
+ *   2. ISO-8601 duration `P[n]Y[n]M[n]W[n]D`, anchored to a co-occurring
+ *      lone ISO date when present, else to `now`
+ *        -> { valid_from: <anchor>, valid_until: <anchor> + duration }
  *   3. Lone ISO date `YYYY-MM-DD`
  *        -> { valid_from: <date>T00:00:00Z }
  *
@@ -55,10 +56,25 @@ export function extractTemporalConstraints(
     };
   }
 
-  const duration = matchDuration(text, opts.now);
-  if (duration) return duration;
-
   const lone = LONE_DATE_RE.exec(text);
+  const duration = parseDuration(text);
+  if (duration) {
+    // Anchor the window to a co-occurring explicit start date when
+    // present (so "from 2026-06-01 for P1Y" keeps June 1 as the start),
+    // otherwise to `now`.
+    if (lone) {
+      const startIso = `${lone[1]}T00:00:00Z`;
+      return {
+        valid_from: startIso,
+        valid_until: isoSecond(addDuration(new Date(startIso), duration)),
+      };
+    }
+    return {
+      valid_from: isoSecond(opts.now),
+      valid_until: isoSecond(addDuration(opts.now, duration)),
+    };
+  }
+
   if (lone) {
     return { valid_from: `${lone[1]}T00:00:00Z` };
   }
@@ -66,21 +82,31 @@ export function extractTemporalConstraints(
   return {};
 }
 
-function matchDuration(text: string, now: Date): TemporalConstraints | null {
+interface DurationParts {
+  readonly years: number;
+  readonly months: number;
+  readonly weeks: number;
+  readonly days: number;
+}
+
+/** Parse an ISO-8601 date-component duration, or null when none/bare `P`. */
+function parseDuration(text: string): DurationParts | null {
   const m = DURATION_RE.exec(text);
   if (!m) return null;
   const years = m[1] ? Number(m[1]) : 0;
   const months = m[2] ? Number(m[2]) : 0;
   const weeks = m[3] ? Number(m[3]) : 0;
   const days = m[4] ? Number(m[4]) : 0;
-  // Reject a bare `P` (no component matched).
   if (years === 0 && months === 0 && weeks === 0 && days === 0) return null;
+  return { years, months, weeks, days };
+}
 
-  const end = new Date(now.getTime());
-  if (years) end.setUTCFullYear(end.getUTCFullYear() + years);
-  if (months) end.setUTCMonth(end.getUTCMonth() + months);
-  const extraDays = weeks * 7 + days;
+/** Add a duration to an anchor instant via UTC calendar arithmetic. */
+function addDuration(anchor: Date, d: DurationParts): Date {
+  const end = new Date(anchor.getTime());
+  if (d.years) end.setUTCFullYear(end.getUTCFullYear() + d.years);
+  if (d.months) end.setUTCMonth(end.getUTCMonth() + d.months);
+  const extraDays = d.weeks * 7 + d.days;
   if (extraDays) end.setUTCDate(end.getUTCDate() + extraDays);
-
-  return { valid_from: isoSecond(now), valid_until: isoSecond(end) };
+  return end;
 }

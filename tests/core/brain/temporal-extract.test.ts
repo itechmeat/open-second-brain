@@ -52,6 +52,12 @@ describe("extractTemporalConstraints", () => {
     expect(out.valid_until).toBe("2027-05-29T12:00:00Z");
   });
 
+  test("anchors a duration to a co-occurring explicit start date", () => {
+    const out = extractTemporalConstraints("from 2026-06-01 for P1Y", { now });
+    expect(out.valid_from).toBe("2026-06-01T00:00:00Z");
+    expect(out.valid_until).toBe("2027-06-01T00:00:00Z");
+  });
+
   test("treats a lone ISO date as valid_from", () => {
     const out = extractTemporalConstraints("starting 2026-07-01", { now });
     expect(out.valid_from).toBe("2026-07-01T00:00:00Z");

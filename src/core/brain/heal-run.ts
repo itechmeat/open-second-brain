@@ -17,7 +17,12 @@
  * page titles + aliases; no clock, no network, no language heuristics.
  */
 
-import { listVaultPages, parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import {
+  EXCLUDED_DIRS,
+  listVaultPages,
+  parseFrontmatter,
+  writeFrontmatterAtomic,
+} from "../vault.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
 import { planHealEnrichment } from "./heal-enrich.ts";
 
@@ -36,18 +41,35 @@ export interface HealRunResult {
  */
 export function runHealEnrichment(vault: string): HealRunResult {
   // BRAIN_ROOT_REL is the Brain dir name relative to the vault (its
-  // first path segment is the dir to skip).
+  // first path segment is the dir to skip). The skipDirs option REPLACES
+  // the default exclusions, so the Brain root is added to the standard
+  // set (.git / .obsidian / .trash / .stversions) rather than replacing
+  // it - heal must never rewrite Syncthing version history, Obsidian
+  // config, or the trash.
   const brainDir = BRAIN_ROOT_REL.split("/")[0] ?? "Brain";
-  const pages = listVaultPages(vault, { skipDirs: [brainDir] });
+  const pages = listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS, brainDir] });
 
-  // Build the known title/alias index from every page once.
-  const known: string[] = [];
+  // Build the known title/alias index from every page once, plus a
+  // per-page exclusion map so a page is never linked to its own title
+  // OR its own aliases.
+  const known = new Set<string>();
+  const ownTokens = new Map<string, Set<string>>();
   for (const p of pages) {
-    if (p.title.trim().length > 0) known.push(p.title);
+    const own = new Set<string>();
+    if (p.title.trim().length > 0) {
+      known.add(p.title);
+      own.add(p.title);
+    }
     const aliases = p.metadata["aliases"];
     if (Array.isArray(aliases)) {
-      for (const a of aliases) if (typeof a === "string" && a.trim()) known.push(a);
+      for (const a of aliases) {
+        if (typeof a === "string" && a.trim()) {
+          known.add(a);
+          own.add(a);
+        }
+      }
     }
+    ownTokens.set(p.path, own);
   }
 
   const changed: string[] = [];
@@ -60,8 +82,9 @@ export function runHealEnrichment(vault: string): HealRunResult {
       // A page we cannot parse is skipped, not aborted - heal is hygiene.
       continue;
     }
-    // Never link a page to its own title.
-    const others = known.filter((k) => k !== p.title);
+    // Never link a page to its own title or aliases.
+    const own = ownTokens.get(p.path) ?? new Set<string>();
+    const others = [...known].filter((k) => !own.has(k));
     const plan = planHealEnrichment({ frontmatter: meta, body }, others);
     if (!plan.changed) continue;
 
