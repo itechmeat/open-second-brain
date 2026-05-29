@@ -882,12 +882,14 @@ async function toolBrainAudit(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const raw = coerceStr(args, "pref_id", true)!;
-  // The trail is keyed by the original `pref-<slug>` id, so normalise a
-  // `ret-<slug>`, bare `<slug>`, or wikilink-decorated argument to it.
-  const slug = raw
-    .replace(/^\[\[/, "")
-    .replace(/\]\]$/, "")
-    .replace(/^(?:pref-|ret-)/, "");
+  // The trail is keyed by the original `pref-<slug>` id. Run the input
+  // through the shared wikilink normaliser first (handles `[[id]]`,
+  // `[[id|Alias]]`, and `Brain/.../id.md` forms), then strip the
+  // pref-/ret- prefix so every reference resolves to one trail.
+  const slug = normaliseWikilinkTarget(raw).replace(/^(?:pref-|ret-)/, "").trim();
+  if (slug.length === 0) {
+    throw new Error(`brain_audit: empty preference slug after normalising '${raw}'`);
+  }
   const prefId = `pref-${slug}`;
   const { records, warnings } = readPrefAudit(ctx.vault, prefId);
   return {

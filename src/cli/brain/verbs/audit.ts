@@ -15,7 +15,10 @@ export async function cmdBrainAudit(argv: string[]): Promise<number> {
   });
   const raw = positional[0];
   if (!raw) return fail("usage: o2b brain audit <pref-id>");
-  const slug = raw.replace(/^(?:pref-|ret-)/, "");
+  const slug = raw.replace(/^(?:pref-|ret-)/, "").trim();
+  if (slug.length === 0) {
+    return fail(`audit: empty preference slug after stripping prefix from '${raw}'`);
+  }
   const prefId = `pref-${slug}`;
 
   const config = defaultConfigPath();

@@ -17,8 +17,11 @@
  */
 
 const H1_RE = /^#[ \t]+(.+?)[ \t]*$/m;
-// Existing wikilinks and inline code spans are protected from linking.
-const PROTECTED_RE = /(\[\[[^\]]*\]\]|`[^`]*`)/g;
+// Existing wikilinks, fenced code blocks, and inline code spans are
+// protected from linking. The fenced-block alternation comes first so a
+// multi-line ``` block is captured whole before the inline-code branch
+// can match a backtick pair inside it.
+const PROTECTED_RE = /(```[\s\S]*?```|\[\[[^\]]*\]\]|`[^`]*`)/g;
 
 /** First H1 heading text, or null when the page has no H1. */
 export function deriveTitleFromContent(markdown: string): string | null {

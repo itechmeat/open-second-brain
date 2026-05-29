@@ -49,6 +49,13 @@ describe("linkExactMentions", () => {
     expect(linkExactMentions("run `Widget` now", known)).toBe("run `Widget` now");
   });
 
+  test("does not link inside fenced code blocks", () => {
+    const body = "intro\n\n```\nuse Widget here\n```\n\nWidget outside";
+    expect(linkExactMentions(body, known)).toBe(
+      "intro\n\n```\nuse Widget here\n```\n\n[[Widget]] outside",
+    );
+  });
+
   test("does not link a partial token (Acme Corporation)", () => {
     expect(linkExactMentions("Acme Corporation rocks", known)).toBe(
       "Acme Corporation rocks",

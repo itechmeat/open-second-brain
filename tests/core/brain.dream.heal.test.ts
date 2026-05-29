@@ -94,12 +94,19 @@ describe("dream heal phase enrichment", () => {
 
   test("never rewrites Brain-root pages (preferences stay txn-owned)", () => {
     enableHeal();
-    makeNotes();
+    // A Brain preference whose principle literally names a known page
+    // title; heal must NOT inject a wikilink into it (Brain root is
+    // excluded - preference frontmatter is owned by the txn writer).
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(join(vault, "Notes", "Acme.md"), "---\ntitle: Acme\n---\nx\n");
+    const prefPath = join(vault, "Brain", "preferences", "pref-mentions.md");
+    writeFileSync(
+      prefPath,
+      "---\nkind: brain-preference\nid: pref-mentions\n_status: confirmed\ncreated_at: 2026-05-01T00:00:00Z\nunconfirmed_until: 2026-05-08T00:00:00Z\ntopic: mentions\nprinciple: Always cite Acme in reviews\ntags:\n  - brain\n  - brain/preference\npinned: false\n---\nbody mentions Acme here\n",
+      "utf8",
+    );
     seedPromotion();
     dream(vault, { now });
-    // The promoted preference frontmatter must not carry heal-injected
-    // wikilinks; it is owned by the transactional writer, not heal.
-    // (Smoke: the run completed and the user note was enriched instead.)
-    expect(true).toBe(true);
+    expect(readFileSync(prefPath, "utf8")).not.toContain("[[Acme]]");
   });
 });

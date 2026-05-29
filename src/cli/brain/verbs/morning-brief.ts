@@ -21,13 +21,24 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
 
-  const topKFlag = parseOptionalNumberFlag(flags, "top-k");
+  // Positive-integer validation mirroring the MCP tool's
+  // optionalPositiveInt, so the CLI and MCP surfaces share semantics.
+  const positiveInt = (name: string): { value: number | null; error: string | null } => {
+    const parsed = parseOptionalNumberFlag(flags, name);
+    if (parsed.error) return parsed;
+    if (parsed.value !== null && (!Number.isInteger(parsed.value) || parsed.value < 1)) {
+      return { value: null, error: `--${name} must be a positive integer` };
+    }
+    return parsed;
+  };
+
+  const topKFlag = positiveInt("top-k");
   if (topKFlag.error) return fail(topKFlag.error);
-  const lookbackFlag = parseOptionalNumberFlag(flags, "lookback-days");
+  const lookbackFlag = positiveInt("lookback-days");
   if (lookbackFlag.error) return fail(lookbackFlag.error);
-  const perMemFlag = parseOptionalNumberFlag(flags, "max-chars-per-memory");
+  const perMemFlag = positiveInt("max-chars-per-memory");
   if (perMemFlag.error) return fail(perMemFlag.error);
-  const totalFlag = parseOptionalNumberFlag(flags, "max-total-chars");
+  const totalFlag = positiveInt("max-total-chars");
   if (totalFlag.error) return fail(totalFlag.error);
 
   let brief;

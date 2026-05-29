@@ -18,7 +18,7 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 35 tools. The table below highlights the
+The full server currently advertises 44 tools. The table below highlights the
 operator-facing core, agent-source, health, and Pay Memory tools; the full
 surface also includes Brain writer, review, query, temporal, link-graph, and
 search tools. In Claude Code, that full schema can push MCP definitions beyond
