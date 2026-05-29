@@ -949,7 +949,9 @@ async function toolBrainSwitchVault(
   try {
     switchProfile(configPath, name);
   } catch (err) {
-    throw new Error(`brain_switch_vault: ${(err as Error).message ?? String(err)}`);
+    throw new Error(`brain_switch_vault: ${(err as Error).message ?? String(err)}`, {
+      cause: err,
+    });
   }
   // The running server keeps its already-resolved vault; the switch
   // takes effect for the next server launch / CLI invocation.

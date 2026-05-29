@@ -24,7 +24,7 @@ export async function cmdVaultMap(argv: ReadonlyArray<string>): Promise<number> 
     writeJson(map);
     return 0;
   }
-  for (const token of Object.keys(map).sort()) {
+  for (const token of Object.keys(map).toSorted()) {
     info(`{{${token}}} -> ${map[token]}`);
   }
   return 0;

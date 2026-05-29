@@ -50,7 +50,7 @@ const GRAPH: {
 describe("importVaultGraph", () => {
   test("creates page stubs and round-trips links + single relations", () => {
     const res = importVaultGraph(vault, GRAPH, { mode: "skip" });
-    expect(res.created.sort()).toEqual(["Notes/Alpha.md", "Notes/Beta.md"]);
+    expect(res.created.toSorted()).toEqual(["Notes/Alpha.md", "Notes/Beta.md"]);
     expect(existsSync(join(vault, "Notes", "Alpha.md"))).toBe(true);
 
     const re = exportVaultGraph(vault);

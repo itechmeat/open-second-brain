@@ -56,7 +56,7 @@ describe("exportVaultGraph", () => {
     const g2 = exportVaultGraph(vault);
     expect(JSON.stringify(g1)).toBe(JSON.stringify(g2));
     const ids = g1.nodes.map((n) => n.id);
-    expect(ids).toEqual([...ids].sort());
+    expect(ids).toEqual([...ids].toSorted());
     const b = g1.nodes.find((n) => n.id === "B")!;
     expect(b.links).toEqual(["A", "Z"]);
   });

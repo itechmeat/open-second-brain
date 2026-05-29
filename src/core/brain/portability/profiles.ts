@@ -65,7 +65,7 @@ function save(configPath: string, data: ProfilesFile): void {
     active: data.active,
     profiles: Object.fromEntries(
       Object.keys(data.profiles)
-        .sort()
+        .toSorted()
         .map((k) => [k, data.profiles[k]!]),
     ),
   };
@@ -76,7 +76,7 @@ function save(configPath: string, data: ProfilesFile): void {
 export function listProfiles(configPath: string): ProfilesListing {
   const data = load(configPath);
   const profiles = Object.keys(data.profiles)
-    .sort()
+    .toSorted()
     .map((name) => ({
       name,
       vault: data.profiles[name]!.vault,

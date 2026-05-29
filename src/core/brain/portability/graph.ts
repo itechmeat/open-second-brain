@@ -57,7 +57,7 @@ function stem(path: string): string {
 }
 
 function sortedUnique(values: Iterable<string>): string[] {
-  return [...new Set([...values].filter((v) => v.length > 0))].sort();
+  return [...new Set([...values].filter((v) => v.length > 0))].toSorted();
 }
 
 function collectRelations(meta: FrontmatterMap): Record<string, ReadonlyArray<string>> {
@@ -145,7 +145,7 @@ function renderStub(
     if (targets.length === 1) meta[relation] = `[[${targets[0]}]]`;
     else for (const t of targets) bodyTargets.add(t);
   }
-  const sorted = [...bodyTargets].filter((t) => t.length > 0).sort();
+  const sorted = [...bodyTargets].filter((t) => t.length > 0).toSorted();
   const body = sorted.length > 0 ? sorted.map((t) => `- [[${t}]]`).join("\n") + "\n" : "";
   return [meta, body];
 }
@@ -186,10 +186,10 @@ export function importVaultGraph(
   for (const node of graph.nodes ?? []) {
     // Resolve `{{role}}` tokens in the target path via the vault-map so a
     // portable graph can address user folders abstractly (v0.22.0).
-    const rel = resolveTokens(vaultMap, node.path);
+    const relPath = resolveTokens(vaultMap, node.path);
     let path: string;
     try {
-      path = ensureInsideVault(join(vault, rel), vault);
+      path = ensureInsideVault(join(vault, relPath), vault);
     } catch {
       result.rejected.push(node.path);
       continue;

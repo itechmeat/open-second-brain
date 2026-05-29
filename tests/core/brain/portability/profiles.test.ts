@@ -38,7 +38,7 @@ describe("profile registry", () => {
     createProfile(configPath, "work", "/srv/vaults/work");
     createProfile(configPath, "personal", "/srv/vaults/personal");
     const { profiles, active } = listProfiles(configPath);
-    expect(profiles.map((p) => p.name).sort()).toEqual(["personal", "work"]);
+    expect(profiles.map((p) => p.name).toSorted()).toEqual(["personal", "work"]);
     expect(active).toBeNull();
   });
 
