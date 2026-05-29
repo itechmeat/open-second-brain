@@ -11,20 +11,22 @@
  * stubs under three conflict modes.
  */
 
-import { posix, relative } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join, posix, relative } from "node:path";
 
 import {
   EXCLUDED_DIRS,
   extractWikilinks,
   listVaultPages,
   parseFrontmatter,
+  writeFrontmatterAtomic,
 } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import {
   extractFrontmatterRelations,
   normalizeRelationTarget,
 } from "../../graph/frontmatter-relations.ts";
-import { BRAIN_ROOT_REL } from "../paths.ts";
+import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
 
 export const GRAPH_VERSION = "1";
 
@@ -101,4 +103,123 @@ export function exportVaultGraph(vault: string): VaultGraph {
   }
   nodes.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.path < b.path ? -1 : 1));
   return { version: GRAPH_VERSION, nodes };
+}
+
+// ----- Import --------------------------------------------------------------
+
+export type GraphImportMode = "skip" | "overwrite" | "merge";
+
+export interface GraphImportResult {
+  readonly created: string[];
+  readonly skipped: string[];
+  readonly overwritten: string[];
+  readonly merged: string[];
+  /** Node paths refused because they escaped the vault. */
+  readonly rejected: string[];
+}
+
+/** Shape the importer reads from a graph node (loosely typed for JSON input). */
+interface GraphNodeInput {
+  readonly path: string;
+  readonly title?: string;
+  readonly links?: ReadonlyArray<string>;
+  readonly relations?: Readonly<Record<string, ReadonlyArray<string>>>;
+}
+
+/**
+ * Render a deterministic page stub. Single-target relations land in
+ * frontmatter (the only form OSB's frontmatter parser round-trips);
+ * body wikilinks list the links. Multi-target relations are flattened
+ * into the body links (type not preserved - a documented limitation of
+ * the frontmatter parser).
+ */
+function renderStub(
+  title: string,
+  links: ReadonlyArray<string>,
+  relations: Readonly<Record<string, ReadonlyArray<string>>>,
+): [FrontmatterMap, string] {
+  const meta: FrontmatterMap = { title };
+  const bodyTargets = new Set(links);
+  for (const [relation, targets] of Object.entries(relations)) {
+    if (targets.length === 1) meta[relation] = `[[${targets[0]}]]`;
+    else for (const t of targets) bodyTargets.add(t);
+  }
+  const sorted = [...bodyTargets].filter((t) => t.length > 0).sort();
+  const body = sorted.length > 0 ? sorted.map((t) => `- [[${t}]]`).join("\n") + "\n" : "";
+  return [meta, body];
+}
+
+function readExisting(path: string): { links: string[]; relations: Record<string, string[]> } {
+  const [meta, body] = parseFrontmatter(path);
+  const links = extractWikilinks(body)
+    .map((t) => normalizeRelationTarget(t))
+    .filter((t): t is string => t !== null);
+  const relations: Record<string, string[]> = {};
+  for (const edge of extractFrontmatterRelations(meta)) {
+    (relations[edge.relation] ??= []).push(edge.target);
+  }
+  return { links, relations };
+}
+
+/**
+ * Reconstruct vault page stubs from a graph under one conflict mode.
+ * `skip` (default) never overwrites and is idempotent; `overwrite`
+ * replaces; `merge` unions wikilinks + relations with the existing page.
+ * Every write is guarded by {@link ensureInsideVault}.
+ */
+export function importVaultGraph(
+  vault: string,
+  graph: { nodes?: ReadonlyArray<GraphNodeInput> },
+  opts: { mode?: GraphImportMode } = {},
+): GraphImportResult {
+  const mode: GraphImportMode = opts.mode ?? "skip";
+  const result: GraphImportResult = {
+    created: [],
+    skipped: [],
+    overwritten: [],
+    merged: [],
+    rejected: [],
+  };
+
+  for (const node of graph.nodes ?? []) {
+    let path: string;
+    try {
+      path = ensureInsideVault(join(vault, node.path), vault);
+    } catch {
+      result.rejected.push(node.path);
+      continue;
+    }
+    const title = node.title ?? node.path;
+    const incomingLinks = node.links ?? [];
+    const incomingRelations = node.relations ?? {};
+    const exists = existsSync(path);
+
+    if (exists && mode === "skip") {
+      result.skipped.push(node.path);
+      continue;
+    }
+
+    let links: ReadonlyArray<string> = incomingLinks;
+    let relations: Record<string, ReadonlyArray<string>> = { ...incomingRelations };
+    if (exists && mode === "merge") {
+      const prev = readExisting(path);
+      links = [...new Set([...prev.links, ...incomingLinks])];
+      const merged: Record<string, string[]> = {};
+      for (const [rel, targets] of Object.entries(prev.relations)) merged[rel] = [...targets];
+      for (const [rel, targets] of Object.entries(incomingRelations)) {
+        merged[rel] = [...new Set([...(merged[rel] ?? []), ...targets])];
+      }
+      relations = merged;
+    }
+
+    const [meta, body] = renderStub(title, links, relations);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFrontmatterAtomic(path, meta, body, { overwrite: true, vaultForRelativePath: vault });
+
+    if (!exists) result.created.push(node.path);
+    else if (mode === "merge") result.merged.push(node.path);
+    else result.overwritten.push(node.path);
+  }
+
+  return result;
 }
