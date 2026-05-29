@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "./fs-atomic.ts";
 import { isFile } from "./fs-utils.ts";
+import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
 import type { ConfigDiscovery } from "./types.ts";
 
 const SECRET_KEY_PARTS = [
@@ -163,7 +164,12 @@ export function resolveTimezone(configPath?: string): string | null {
 export function resolveVault(configPath?: string): string | null {
   const env = process.env["VAULT_DIR"];
   if (env) return expandTilde(env);
-  const cfg = discoverConfig(configPath).data["vault"];
+  // Multi-vault profiles (v0.22.0): an active named profile overrides the
+  // bare `vault` key. With no profiles registry the result is unchanged.
+  const discovery = discoverConfig(configPath);
+  const profileVault = resolveActiveProfileVault(discovery.path);
+  if (profileVault) return expandTilde(profileVault);
+  const cfg = discovery.data["vault"];
   if (cfg) return expandTilde(cfg);
   return null;
 }
