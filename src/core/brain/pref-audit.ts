@@ -174,6 +174,25 @@ export function readPrefAudit(vault: string, prefId: string): ReadPrefAuditResul
   return { records, warnings };
 }
 
+/**
+ * Render an audit trail as a compact, locale-free text table (oldest
+ * first). One header line plus one line per record. Used by the
+ * `o2b brain audit` CLI verb; the MCP tool returns the structured
+ * records directly.
+ */
+export function renderPrefAudit(prefId: string, records: ReadonlyArray<PrefAuditRecord>): string {
+  if (records.length === 0) {
+    return `${prefId}: no audit records`;
+  }
+  const lines = [`${prefId} - ${records.length} event${records.length === 1 ? "" : "s"}`];
+  for (const r of records) {
+    const rev = `${r.revision_before ?? "-"}->${r.revision_after ?? "-"}`;
+    const reason = r.reason ? ` (${r.reason})` : "";
+    lines.push(`${r.ts}  ${r.op.padEnd(8)} ${r.agent.padEnd(12)} rev ${rev}${reason}`);
+  }
+  return lines.join("\n");
+}
+
 function coerceRecord(
   raw: unknown,
   path: string,

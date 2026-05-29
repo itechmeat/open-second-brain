@@ -38,6 +38,7 @@ Brain verbs (observing memory):
   doctor              Validate Brain invariants (--strict; --remediate [--dry-run])
   health              Semantic-health report: contradictions, concept gaps, stale claims
   history             Render a preference's edit-history timeline
+  audit               Render a preference's full mutation audit trail
   backlinks           List inbound references to a Brain artifact id
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
@@ -165,6 +166,12 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain history <slug> [--vault <path>] [--json]\n" +
     "Render a preference's edit-history timeline (one entry per content\n" +
     "mutation: principle/scope/status before -> after). Read-only.\n",
+  audit:
+    "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
+    "Render a preference's full mutation audit trail (create / promote /\n" +
+    "update / retire / merge) with agent, reason, and revision + content-hash\n" +
+    "before/after. A ret- or bare-slug argument resolves to the same trail.\n" +
+    "Read-only.\n",
   backlinks:
     "usage: o2b brain backlinks <id> [--vault <path>] [--json]\n" +
     "List inbound references to the given Brain artifact id (preference, retired, signal).\n",

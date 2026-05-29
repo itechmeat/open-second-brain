@@ -50,6 +50,7 @@ import {
   type AppendApplyEvidenceInput,
 } from "../core/brain/apply-evidence.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
+import { readPrefAudit } from "../core/brain/pref-audit.ts";
 import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions.ts";
 import { buildConceptCluster } from "../core/brain/link-graph/concept-cluster.ts";
 import { auditMoc, MocAuditError } from "../core/brain/link-graph/moc-audit.ts";
@@ -872,6 +873,27 @@ async function toolBrainBacklinks(
       field: r.field,
       ...(r.timestamp !== undefined ? { timestamp: r.timestamp } : {}),
     })),
+  };
+}
+
+async function toolBrainAudit(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const raw = coerceStr(args, "pref_id", true)!;
+  // The trail is keyed by the original `pref-<slug>` id, so normalise a
+  // `ret-<slug>`, bare `<slug>`, or wikilink-decorated argument to it.
+  const slug = raw
+    .replace(/^\[\[/, "")
+    .replace(/\]\]$/, "")
+    .replace(/^(?:pref-|ret-)/, "");
+  const prefId = `pref-${slug}`;
+  const { records, warnings } = readPrefAudit(ctx.vault, prefId);
+  return {
+    pref_id: prefId,
+    count: records.length,
+    records,
+    warnings: warnings.map((w) => w.message),
   };
 }
 
@@ -2159,6 +2181,24 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainBacklinks,
+  },
+  {
+    name: "brain_audit",
+    description:
+      "Return a preference's full mutation audit trail (create / promote / update / retire / merge), oldest first, with agent, reason, and revision + content-hash before/after. The trail is keyed by the original `pref-<slug>` id; a `ret-<slug>`, bare `<slug>`, or wikilink-decorated argument resolves to the same trail. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pref_id: {
+          type: "string",
+          description:
+            "Preference id (e.g. `pref-foo`). `ret-foo`, bare `foo`, and `[[pref-foo]]` all resolve to the same trail.",
+        },
+      },
+      required: ["pref_id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainAudit,
   },
   {
     name: "brain_context_pack",

@@ -102,7 +102,10 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "or `since` (exactly one). Use this to discover applicable rules " +
     "before calling `brain_apply_evidence`.\n" +
     "  - brain_doctor — invariant / schema health check. With " +
-    "`strict: true`, warnings demote the `ok` flag.\n\n" +
+    "`strict: true`, warnings demote the `ok` flag.\n" +
+    "  - brain_audit — read-only mutation trail for one preference " +
+    "(create / promote / update / retire / merge), with agent, reason, " +
+    "and revision + content-hash before/after.\n\n" +
     "Skip Brain calls for casual chat, exploration without a stated " +
     "rule, read-only inspection, and trivial edits. A misrecorded " +
     "signal is worse than a missed one — the dream pass surfaces " +

@@ -207,6 +207,8 @@ describe("tool listing", () => {
         "brain_health",
         "brain_mcp_landscape",
         "brain_backlinks",
+        // Per-preference mutation audit (added in v0.21.0).
+        "brain_audit",
         "brain_context_pack",
         "brain_unlinked_mentions",
         "brain_concept_synthesis",
@@ -469,7 +471,8 @@ describe("stdio loop", () => {
     // + brain_artifact_get (v0.18.0) = 40.
     // + brain_mcp_landscape (typed graph semantics) = 41.
     // + brain_pre_compress_pack (v0.20.0) = 42.
-    expect(list.result.tools.length).toBe(42);
+    // + brain_audit (v0.21.0) = 43.
+    expect(list.result.tools.length).toBe(43);
   });
 
   test("returns parse error for invalid JSON", async () => {
