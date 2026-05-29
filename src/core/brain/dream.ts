@@ -49,6 +49,11 @@ import {
   type DreamPhase,
   type DreamPhaseSummary,
 } from "./dream-phases.ts";
+import {
+  resolveContradiction,
+  type ContradictionInput,
+  type ReconcileSignal,
+} from "./reconcile-domains.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
 import {
   buildIntentReview,
@@ -90,6 +95,7 @@ import {
   type BrainRetiredReason,
   type BrainSignal,
   type BrainSignalSign,
+  type DreamOpenQuestion,
 } from "./types.ts";
 
 // ----- Public types --------------------------------------------------------
@@ -227,6 +233,15 @@ export interface DreamRunSummary {
    * fields are unchanged.
    */
   readonly phases: ReadonlyArray<DreamPhaseSummary>;
+  /**
+   * Reconcile-phase domain classification (Brain lifecycle suite,
+   * Feature 3). Contradictions that stayed unresolved, each tagged with
+   * a domain. Source-freshness contradictions that auto-resolved are
+   * NOT listed here (they are recorded as `reconcile` log events on a
+   * changed run). The legacy `contradictions` field remains a derived
+   * topic-only view for back-compat.
+   */
+  readonly open_questions: ReadonlyArray<DreamOpenQuestion>;
   /** Snapshot file (absent on a no-op run). */
   readonly snapshot_path?: string;
   /** Log file the run summary landed in (absent on a no-op run). */
@@ -346,6 +361,14 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // 5. Plan signal moves (inbox/ → processed/).
   planSignalMoves(scan, plan);
 
+  // Reconcile phase (F3): classify each contradiction topic into a
+  // domain. Source-freshness with a clear gap auto-resolves (recorded,
+  // never a sub-threshold mutation); everything else becomes an open
+  // question. Computed in-memory before the `changed` gate so the
+  // summary carries open_questions on both the no-op and changed paths;
+  // the `reconcile` log events below are emitted only on a changed run.
+  const reconcile = buildReconcileOutcomes(scan, plan, cfg, now);
+
   // Decide if anything is going to change. We treat any of the
   // following as a state change:
   //   - a new unconfirmed pref
@@ -386,6 +409,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       intent_reviews: Object.freeze([...intentReview.reviews]),
       gated_retires: Object.freeze([] as ReadonlyArray<DreamGatedRetireEntry>),
       phases: Object.freeze([] as ReadonlyArray<DreamPhaseSummary>),
+      open_questions: Object.freeze([...reconcile.openQuestions]),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -636,6 +660,37 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       });
     }
 
+    // Reconcile phase (F3): one event per open question + per
+    // auto-resolution. Persisted only on this changed path so a no-op
+    // run stays byte-identical.
+    for (const q of reconcile.openQuestions) {
+      writeEvent(vault, {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.reconcile,
+        body: {
+          topic: q.topic,
+          domain: q.domain,
+          reason: q.reason,
+          ...(q.scope ? { scope: q.scope } : {}),
+          positives: String(q.positive_count),
+          negatives: String(q.negative_count),
+        },
+      });
+    }
+    for (const r of reconcile.autoResolved) {
+      writeEvent(vault, {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.reconcile,
+        body: {
+          topic: r.topic,
+          domain: r.domain,
+          resolution: "auto-resolved",
+          winner_sign: r.winner_sign,
+          margin_days: String(r.margin_days),
+        },
+      });
+    }
+
     for (const suppressed of plan.signalsSuppressed) {
       writeEvent(vault, {
         timestamp: nextStamp(),
@@ -777,6 +832,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     }),
     phaseSummary(DREAM_PHASE.reconcile, {
       contradictions: plan.contradictionTopics.size,
+      open_questions: reconcile.openQuestions.length,
+      auto_resolved: reconcile.autoResolved.length,
     }),
     phaseSummary(DREAM_PHASE.synthesize, {
       new_unconfirmed: plan.newUnconfirmed.length,
@@ -793,6 +850,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     run_id: runId,
     changed: true,
     phases,
+    open_questions: Object.freeze([...reconcile.openQuestions]),
     new_unconfirmed: plan.newUnconfirmed.map((p) => `pref-${p.slug}`),
     confirmed: Array.from(refresh.confirmed.values()).map((s) => `pref-${s}`),
     retired: plan.retires
@@ -1437,6 +1495,86 @@ function filterWithinWindow(
     const t = Date.parse(s.signal.created_at);
     return Number.isFinite(t) && t >= minTime;
   });
+}
+
+// ----- Reconcile (F3) ------------------------------------------------------
+
+interface ReconcileAutoResolved {
+  readonly topic: string;
+  readonly domain: "source-freshness";
+  readonly winner_sign: "positive" | "negative";
+  readonly margin_days: number;
+}
+
+interface ReconcileOutcomes {
+  readonly openQuestions: DreamOpenQuestion[];
+  readonly autoResolved: ReconcileAutoResolved[];
+}
+
+/**
+ * Classify every contradiction topic the plan flagged into a domain and
+ * decide its outcome. Source-freshness contradictions where the fresher
+ * side leads by at least half the contradiction window auto-resolve
+ * (recorded only - never a sub-threshold mutation); the rest become
+ * operator-facing open questions. Pure; emits nothing.
+ */
+function buildReconcileOutcomes(
+  scan: ScanResult,
+  plan: PlanState,
+  cfg: BrainConfig,
+  now: Date,
+): ReconcileOutcomes {
+  const openQuestions: DreamOpenQuestion[] = [];
+  const autoResolved: ReconcileAutoResolved[] = [];
+  if (plan.contradictionTopics.size === 0) return { openQuestions, autoResolved };
+
+  const windowDays = cfg.dream.contradiction_window_days;
+  // Freshness must be decisive WITHIN the contradiction window, so the
+  // margin is half the window (a gap larger than the window would have
+  // excluded the older signal from the contradiction in the first place).
+  const freshnessMarginDays = Math.max(1, Math.ceil(windowDays / 2));
+
+  const byTopic = new Map<string, SignalRecord[]>();
+  for (const rec of scan.signals) {
+    const arr = byTopic.get(rec.signal.topic);
+    if (arr) arr.push(rec);
+    else byTopic.set(rec.signal.topic, [rec]);
+  }
+
+  const toReconcileSignal = (r: SignalRecord): ReconcileSignal => ({
+    created_at: r.signal.created_at,
+    ...(r.signal.recorded_at ? { recorded_at: r.signal.recorded_at } : {}),
+    ...(r.signal.source ? { source: r.signal.source } : {}),
+  });
+
+  for (const topic of plan.contradictionTopics) {
+    const sigs = filterWithinWindow(byTopic.get(topic) ?? [], windowDays, now);
+    const positives = sigs
+      .filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.positive)
+      .map(toReconcileSignal);
+    const negatives = sigs
+      .filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.negative)
+      .map(toReconcileSignal);
+    const scope = sigs.find((s) => s.signal.scope)?.signal.scope;
+    const input: ContradictionInput = {
+      topic,
+      ...(scope ? { scope } : {}),
+      positives,
+      negatives,
+    };
+    const outcome = resolveContradiction(input, { now, freshnessMarginDays });
+    if (outcome.kind === "auto-resolved") {
+      autoResolved.push({
+        topic,
+        domain: outcome.domain,
+        winner_sign: outcome.winner_sign,
+        margin_days: outcome.margin_days,
+      });
+    } else {
+      openQuestions.push(outcome.question);
+    }
+  }
+  return { openQuestions, autoResolved };
 }
 
 // ----- Refresh + promote --------------------------------------------------

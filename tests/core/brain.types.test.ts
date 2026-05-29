@@ -81,6 +81,8 @@ describe("BRAIN_* const enums", () => {
       "import-claude-memory",
       // §32B (v0.10.8) brain_note narrative milestones
       "note",
+      // Brain lifecycle suite (v0.21.0) reconcile-phase open questions
+      "reconcile",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

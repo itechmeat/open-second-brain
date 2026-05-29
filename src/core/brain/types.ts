@@ -186,6 +186,14 @@ export const BRAIN_LOG_EVENT_KIND = {
    * surface.
    */
   note: "note",
+  /**
+   * `reconcile` (Brain lifecycle suite, Feature 3) - the dream reconcile
+   * phase recorded a domain-classified contradiction. Payload carries
+   * `topic`, `domain`, and either a `reason` (open question) or a
+   * `resolution` + `winner_sign` (source-freshness auto-resolution).
+   * Emitted only on a changed run, so a no-op stays byte-identical.
+   */
+  reconcile: "reconcile",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
