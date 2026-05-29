@@ -27,6 +27,7 @@ import {
   normalizeRelationTarget,
 } from "../../graph/frontmatter-relations.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
+import { loadVaultMap, resolveTokens } from "./role-tokens.ts";
 
 export const GRAPH_VERSION = "1";
 
@@ -181,10 +182,14 @@ export function importVaultGraph(
     rejected: [],
   };
 
+  const vaultMap = loadVaultMap(vault);
   for (const node of graph.nodes ?? []) {
+    // Resolve `{{role}}` tokens in the target path via the vault-map so a
+    // portable graph can address user folders abstractly (v0.22.0).
+    const rel = resolveTokens(vaultMap, node.path);
     let path: string;
     try {
-      path = ensureInsideVault(join(vault, node.path), vault);
+      path = ensureInsideVault(join(vault, rel), vault);
     } catch {
       result.rejected.push(node.path);
       continue;

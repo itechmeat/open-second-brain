@@ -37,6 +37,7 @@ import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
 import { matchIgnore, resolveVaultScope, type VaultIgnoreRule } from "../vault-scope/index.ts";
+import { loadVaultMap, resolveTokens } from "./portability/role-tokens.ts";
 
 const MAX_FILE_SIZE_BYTES = 1_048_576; // 1 MiB
 
@@ -92,8 +93,12 @@ export async function scanInline(
   // resolved list means "no folders to scan" — return immediately so
   // the agent never walks the vault without an operator opt-in.
   const explicitPaths = (opts.paths ?? []).filter((p) => p.trim().length > 0);
-  const resolvedPaths =
-    explicitPaths.length > 0 ? explicitPaths : [...loadNotesConfigSafe(vault).read_paths];
+  // v0.22.0: resolve `{{role}}` tokens in read paths via the optional
+  // vault-map (user content folders only); absent map -> paths unchanged.
+  const vaultMap = loadVaultMap(vault);
+  const resolvedPaths = (
+    explicitPaths.length > 0 ? explicitPaths : [...loadNotesConfigSafe(vault).read_paths]
+  ).map((p) => resolveTokens(vaultMap, p));
   if (resolvedPaths.length === 0) {
     return Object.freeze({
       scanned: 0,
