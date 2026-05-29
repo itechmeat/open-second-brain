@@ -707,6 +707,14 @@ export interface BrainDreamConfig {
   readonly unconfirmed_window_days: number;
   /** Window in which positive/negative signals cancel each other. */
   readonly contradiction_window_days: number;
+  /**
+   * Brain lifecycle suite (Feature 6). When `true`, the dream heal
+   * phase performs deterministic vault enrichment (fill a missing
+   * title from the first H1, link exact title/alias mentions). Default
+   * `false` because it rewrites user files - a default install stays
+   * byte-identical. Absent is treated as `false`.
+   */
+  readonly heal_enrich_enabled?: boolean;
 }
 
 export interface BrainRetireConfig {

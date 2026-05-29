@@ -303,6 +303,7 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = Object.freeze({
     candidate_threshold: 3,
     unconfirmed_window_days: 14,
     contradiction_window_days: 14,
+    heal_enrich_enabled: false,
   }),
   retire: Object.freeze({
     stale_evidence_days: 90,
@@ -1276,6 +1277,10 @@ export function validateBrainConfigDetailed(
       candidate_threshold: dream.candidate_threshold as number,
       unconfirmed_window_days: dream.unconfirmed_window_days as number,
       contradiction_window_days: dream.contradiction_window_days as number,
+      // Brain lifecycle suite F6: opt-in heal-phase enrichment. Absent
+      // or non-boolean coerces to false so the default install stays
+      // byte-identical (the heal phase becomes a checkpoint-only no-op).
+      heal_enrich_enabled: dream.heal_enrich_enabled === true,
     },
     retire: {
       stale_evidence_days: retire.stale_evidence_days as number,
