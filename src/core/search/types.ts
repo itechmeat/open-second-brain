@@ -190,6 +190,15 @@ export interface ResolvedRecallConfig {
   readonly hopDecay: number;
   /** Cap on outbound links followed per node. */
   readonly maxExpansionPerHit: number;
+  /**
+   * Weibull recency decay curve (v0.20.0). `recencyShape` is the Weibull
+   * shape k (> 0); `recencyScale` is the characteristic lifetime in days
+   * (> 0); `recencyAmplitude` is the maximum boost at age 0, in [0, 1].
+   * Amplitude 0 disables the recency layer. See `recency.ts`.
+   */
+  readonly recencyShape: number;
+  readonly recencyScale: number;
+  readonly recencyAmplitude: number;
 }
 
 export interface ResolvedSearchConfig {

@@ -163,6 +163,11 @@ export async function search(
           semanticWeight: opts.semanticWeight ?? config.semanticWeight,
           limit: rankCap,
           semanticEnabled: policy.wantSemantic && semanticAttempted,
+          recency: {
+            shape: config.recall.recencyShape,
+            scale: config.recall.recencyScale,
+            amplitude: config.recall.recencyAmplitude,
+          },
         },
       );
       const capHit = ranked.length >= rankCap;

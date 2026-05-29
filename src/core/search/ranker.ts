@@ -10,6 +10,7 @@
  */
 
 import { PAGE_TIER_DEFAULT, tierWeight, type PageTier } from "../brain/page-meta/tier.ts";
+import { weibullDecay, DEFAULT_RECENCY, type WeibullRecencyOptions } from "./recency.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "./store.ts";
 import type { BrainSearchResult } from "./types.ts";
 
@@ -45,6 +46,12 @@ export interface RankerOptions {
   readonly nowMs?: number;
   /** When false, semantic_score is ignored regardless of inputs. */
   readonly semanticEnabled?: boolean;
+  /**
+   * Weibull recency curve parameters. Absent uses {@link DEFAULT_RECENCY},
+   * which approximates the legacy step function. Callers (search.ts)
+   * thread the resolved config here.
+   */
+  readonly recency?: WeibullRecencyOptions;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -81,13 +88,10 @@ function semanticFromDistance(distance: number): number {
   return clamp01(sim);
 }
 
-function recencyBoost(mtime: number, nowMs: number): number {
+function recencyBoost(mtime: number, nowMs: number, opts: WeibullRecencyOptions): number {
   const ageMs = Math.max(0, nowMs - mtime * 1000);
   const ageDays = ageMs / DAY_MS;
-  if (ageDays <= 7) return 0.05;
-  if (ageDays <= 30) return 0.025;
-  if (ageDays <= 90) return 0.01;
-  return 0;
+  return weibullDecay(ageDays, opts);
 }
 
 interface Candidate {
@@ -134,6 +138,7 @@ function buildReasons(parts: {
 export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSearchResult[] {
   const nowMs = opts.nowMs ?? Date.now();
   const semanticEnabled = opts.semanticEnabled !== false;
+  const recencyOpts = opts.recency ?? DEFAULT_RECENCY;
 
   const kwNorm = normalizeBm25(inputs.keyword);
 
@@ -224,7 +229,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const link = linkBoostFor(c);
     const tag = tagBoostFor(c);
     const linkBoost = Math.min(0.05, link + tag);
-    const recency = recencyBoost(c.mtime, nowMs);
+    const recency = recencyBoost(c.mtime, nowMs, recencyOpts);
     const weighted =
       opts.keywordWeight * c.keywordScore +
       (semanticEnabled ? opts.semanticWeight : 0) * c.semanticScore;

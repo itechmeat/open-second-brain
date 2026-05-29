@@ -35,7 +35,15 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     keywordWeight: 0.6,
     semanticWeight: 0.4,
     semantic,
-    recall: Object.freeze({ mmrLambda: 0.7, maxHops: 1, hopDecay: 0.5, maxExpansionPerHit: 3 }),
+    recall: Object.freeze({
+      mmrLambda: 0.7,
+      maxHops: 1,
+      hopDecay: 0.5,
+      maxExpansionPerHit: 3,
+      recencyShape: 0.8,
+      recencyScale: 30,
+      recencyAmplitude: 0.05,
+    }),
     ...overrides,
   });
 }

@@ -25,6 +25,9 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_EMBEDDING_TIMEOUT",
   "OPEN_SECOND_BRAIN_EMBEDDING_CONCURRENCY",
   "OPEN_SECOND_BRAIN_EMBEDDING_BATCH",
+  "OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE",
+  "OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE",
+  "OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE",
 ];
 
 beforeEach(() => {
@@ -65,6 +68,32 @@ test("defaults are returned when config and env are empty", () => {
   // defaults, not the legacy `search_ignore_paths` plumbing.
   expect(ignoreRaws).toContain(".obsidian");
   expect(ignoreRaws).toContain("Brain/.snapshots");
+});
+
+test("recall recency defaults to the Weibull curve params", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  expect(cfg.recall.recencyShape).toBe(0.8);
+  expect(cfg.recall.recencyScale).toBe(30);
+  expect(cfg.recall.recencyAmplitude).toBe(0.05);
+});
+
+test("recency curve params are overridable via env and config", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_recency_scale: "45"\n`);
+  process.env["OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE"] = "1.2";
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  expect(cfg.recall.recencyShape).toBe(1.2);
+  expect(cfg.recall.recencyScale).toBe(45);
+});
+
+test("non-positive recency scale is rejected", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_recency_scale: "0"\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/search_recency_scale/);
+});
+
+test("recency amplitude outside [0,1] is rejected", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_recency_amplitude: "2"\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/search_recency_amplitude/);
 });
 
 test("OPEN_SECOND_BRAIN_SEARCH_IGNORE has no effect (removed in v0.10.9)", () => {

@@ -43,6 +43,9 @@ function semanticConfig(
       maxHops: 1,
       hopDecay: 0.5,
       maxExpansionPerHit: 3,
+      recencyShape: 0.8,
+      recencyScale: 30,
+      recencyAmplitude: 0.05,
     }),
     ...overrides,
   });

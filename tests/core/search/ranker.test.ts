@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { rankResults } from "../../../src/core/search/ranker.ts";
+import { weibullDecay, DEFAULT_RECENCY } from "../../../src/core/search/recency.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "../../../src/core/search/store.ts";
 
 function hyd(chunkId: number, docId: number, mtime: number): HydratedChunk {
@@ -175,7 +176,7 @@ test("tag_boost adds +0.01 when candidates share a tag", () => {
   expect(ranked[0]?.linkBoost).toBeCloseTo(0.01, 6);
 });
 
-test("recency_boost is 0.05 for ≤7d, 0.025 for ≤30d, 0.01 for ≤90d, 0 older", () => {
+test("recency_boost follows the default Weibull curve (smooth, monotonic)", () => {
   const make = (mt: number) =>
     rankResults(
       {
@@ -189,10 +190,33 @@ test("recency_boost is 0.05 for ≤7d, 0.025 for ≤30d, 0.01 for ≤90d, 0 olde
     )[0]!.recencyBoost;
 
   const baseSec = NOW / 1000;
-  expect(make(baseSec - 3 * 86400)).toBe(0.05);
-  expect(make(baseSec - 20 * 86400)).toBe(0.025);
-  expect(make(baseSec - 60 * 86400)).toBe(0.01);
-  expect(make(baseSec - 200 * 86400)).toBe(0);
+  // The age the ranker derives from mtime is exact, so the boost equals
+  // the pure curve evaluated at that age in days.
+  for (const days of [3, 20, 60, 90]) {
+    expect(make(baseSec - days * 86400)).toBeCloseTo(weibullDecay(days, DEFAULT_RECENCY), 6);
+  }
+  // Monotonic non-increasing with age.
+  expect(make(baseSec - 3 * 86400)).toBeGreaterThan(make(baseSec - 60 * 86400));
+  // Effectively stale content floors to exactly 0 (no recency layer).
+  expect(make(baseSec - 365 * 86400)).toBe(0);
+});
+
+test("ranker honours a custom recency curve passed via options", () => {
+  const custom = { shape: 0.8, scale: 120, amplitude: 0.05 };
+  const boost = rankResults(
+    {
+      keyword: [{ chunkId: 1, documentId: 10, bm25: -5 }],
+      semantic: [],
+      hydrated: new Map([[1, hyd(1, 10, NOW / 1000 - 60 * 86400)]]),
+      inboundLinkSources: new Map(),
+      tagsByDoc: new Map(),
+    },
+    { keywordWeight: 1, semanticWeight: 0, limit: 10, nowMs: NOW, recency: custom },
+  )[0]!.recencyBoost;
+  // A larger scale than the default decays slower, so a 60-day-old hit
+  // keeps a higher boost than it would under the default curve.
+  expect(boost).toBeCloseTo(weibullDecay(60, custom), 6);
+  expect(boost).toBeGreaterThan(weibullDecay(60, DEFAULT_RECENCY));
 });
 
 test("tie-break: equal final_score → higher keywordScore wins; then mtime; then chunkId", () => {
