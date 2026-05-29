@@ -243,6 +243,41 @@ export interface PrefAuditRecord {
   readonly hash_after: string | null;
 }
 
+/**
+ * Reconcile-phase contradiction domains (Brain lifecycle suite,
+ * Feature 3). A contradiction is bucketed by STRUCTURAL signal shape
+ * only - never by language. Only `source-freshness` is eligible for
+ * deterministic auto-resolution; the judgement domains always surface
+ * as operator-facing open questions.
+ */
+export const RECONCILE_DOMAIN = {
+  /** Generic competing assertions; default bucket. Never auto-resolved. */
+  claims: "claims",
+  /** Signals reference named entities (wikilinks). Never auto-resolved. */
+  entity: "entity",
+  /** Signals scoped as decisions/judgement calls. Never auto-resolved. */
+  decisions: "decisions",
+  /** Resolvable by recency: one side is materially fresher. */
+  sourceFreshness: "source-freshness",
+} as const;
+export type ReconcileDomain = (typeof RECONCILE_DOMAIN)[keyof typeof RECONCILE_DOMAIN];
+
+/**
+ * An unresolved contradiction the reconcile phase surfaced for operator
+ * review instead of force-merging. Carried on {@link DreamRunSummary}
+ * and emitted as a `reconcile` log event. The counts are integers so
+ * the question is auditable without re-reading signals.
+ */
+export interface DreamOpenQuestion {
+  readonly topic: string;
+  readonly scope?: string;
+  readonly domain: ReconcileDomain;
+  readonly positive_count: number;
+  readonly negative_count: number;
+  /** Machine-readable reason the contradiction stayed open. */
+  readonly reason: string;
+}
+
 // ----- File-frontmatter shapes ----------------------------------------------
 
 /**
