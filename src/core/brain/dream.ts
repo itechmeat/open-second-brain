@@ -44,6 +44,11 @@ import {
   WORKRUN_PHASE,
   type WorkrunHandle,
 } from "./dream-workrun.ts";
+import {
+  DREAM_PHASE,
+  type DreamPhase,
+  type DreamPhaseSummary,
+} from "./dream-phases.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
 import {
   buildIntentReview,
@@ -215,6 +220,13 @@ export interface DreamRunSummary {
    * when the config field is absent (the default).
    */
   readonly gated_retires: ReadonlyArray<DreamGatedRetireEntry>;
+  /**
+   * Multi-phase dream pipeline (Brain lifecycle suite, Feature 2).
+   * Ordered per-phase summaries (close, reconcile, synthesize, heal,
+   * log) for a changed run; empty on a no-op run. Additive: existing
+   * fields are unchanged.
+   */
+  readonly phases: ReadonlyArray<DreamPhaseSummary>;
   /** Snapshot file (absent on a no-op run). */
   readonly snapshot_path?: string;
   /** Log file the run summary landed in (absent on a no-op run). */
@@ -373,6 +385,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       quarantined: Object.freeze([...plan.quarantined]),
       intent_reviews: Object.freeze([...intentReview.reviews]),
       gated_retires: Object.freeze([] as ReadonlyArray<DreamGatedRetireEntry>),
+      phases: Object.freeze([] as ReadonlyArray<DreamPhaseSummary>),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -413,6 +426,12 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   if (!dryRun) {
     workrun = openWorkrun(vault, runId);
     workrun.checkpoint(WORKRUN_PHASE.clusterComplete);
+    // Multi-phase dream (F2): close + reconcile are complete by the time
+    // we reach the mutation path - the scan and contradiction planning
+    // both ran before the `changed` gate. Emit their checkpoints here in
+    // order; synthesize + heal follow the write loops below.
+    workrun.checkpoint(WORKRUN_PHASE.closeComplete);
+    workrun.checkpoint(WORKRUN_PHASE.reconcileComplete);
   }
 
   if (!dryRun) {
@@ -567,7 +586,13 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // mutations so the workrun stays compact yet recovery-meaningful.
   if (workrun !== null) {
     workrun.checkpoint(WORKRUN_PHASE.promoteComplete);
+    // Multi-phase dream (F2): synthesize = the promote/confirm writes
+    // just completed; heal = the retire (and, when enabled, enrichment)
+    // writes. Emit the phase checkpoints in order alongside the legacy
+    // promote/retire markers (readers tolerate the extra phases).
+    workrun.checkpoint(WORKRUN_PHASE.synthesizeComplete);
     workrun.checkpoint(WORKRUN_PHASE.retireComplete);
+    workrun.checkpoint(WORKRUN_PHASE.healComplete);
   }
 
   // v0.12.0 Brain Integrity Suite: build the gated-slug set once so the
@@ -735,9 +760,39 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // spot. `workrun` is null on dry-run / pre-mutation paths.
   workrun?.finalize();
 
+  // Multi-phase dream (F2): structured per-phase summaries for a changed
+  // run. Metrics are integer counters derived from the plan/refresh that
+  // already ran; additive keys may appear in later versions.
+  const activeSignalCount = scan.signals.filter((s) => s.active).length;
+  const retiredThisRun = plan.retires.filter((r) => !gatedSlugs.has(r.slug)).length;
+  const phaseSummary = (
+    phase: DreamPhase,
+    metrics: Record<string, number>,
+  ): DreamPhaseSummary => ({ phase, metrics });
+  const phases: ReadonlyArray<DreamPhaseSummary> = Object.freeze([
+    phaseSummary(DREAM_PHASE.close, {
+      active_signals: activeSignalCount,
+      preferences: scan.preferences.length,
+      retired_files: scan.retired.length,
+    }),
+    phaseSummary(DREAM_PHASE.reconcile, {
+      contradictions: plan.contradictionTopics.size,
+    }),
+    phaseSummary(DREAM_PHASE.synthesize, {
+      new_unconfirmed: plan.newUnconfirmed.length,
+      confirmed: refresh.confirmed.size,
+    }),
+    phaseSummary(DREAM_PHASE.heal, { retired: retiredThisRun }),
+    phaseSummary(DREAM_PHASE.log, {
+      moved: moved.length,
+      suppressed: plan.signalsSuppressed.length,
+    }),
+  ]);
+
   return Object.freeze({
     run_id: runId,
     changed: true,
+    phases,
     new_unconfirmed: plan.newUnconfirmed.map((p) => `pref-${p.slug}`),
     confirmed: Array.from(refresh.confirmed.values()).map((s) => `pref-${s}`),
     retired: plan.retires
