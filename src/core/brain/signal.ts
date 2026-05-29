@@ -27,6 +27,7 @@
 import type { FrontmatterMap } from "../types.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
+import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
 import { allocateSlug, brainDirs, validateIsoDate } from "./paths.ts";
 import {
   BRAIN_SIGNAL_SIGN,
@@ -77,6 +78,13 @@ export interface WriteSignalInput {
   readonly dedup_hash?: string;
   /** Session coordinates `<path>#<turn-id>` (§16). */
   readonly session_ref?: string;
+  /**
+   * Vault portability suite (v0.22.0). Opt-in: when true and `raw` is
+   * present, the body is stored through the deterministic codec and a
+   * `_raw_codec` marker is stamped so `parseSignal` expands it on read.
+   * Default (absent/false) writes the raw body verbatim - byte-identical.
+   */
+  readonly rawCodec?: boolean;
 }
 
 export interface WriteSignalOptions {
@@ -192,7 +200,18 @@ export function writeSignal(
     metadata["session_ref"] = sanitised.session_ref.trim();
   }
 
-  const body = renderSignalBody(sanitised);
+  // Opt-in codec (v0.22.0): store the raw body compressed and stamp a
+  // `_raw_codec` marker so the reader expands it. Default path is verbatim.
+  let bodyInput = sanitised;
+  if (sanitised.rawCodec === true && sanitised.raw) {
+    // Normalise trailing whitespace first (matching renderSignalBody on the
+    // verbatim path) so the codec and verbatim paths agree byte-for-byte on
+    // read; otherwise a trailing whitespace run would survive inside a marker.
+    const normalised = sanitised.raw.replace(/\s+$/u, "");
+    bodyInput = { ...sanitised, raw: compress(normalised) };
+    metadata["_raw_codec"] = CODEC_VERSION;
+  }
+  const body = renderSignalBody(bodyInput);
   writeFrontmatterAtomic(allocated.path, metadata, body, {
     overwrite: false,
     existsErrorKind: "signal",
@@ -293,7 +312,18 @@ export function parseSignal(path: string): BrainSignal {
     source = [...(meta["source"] as ReadonlyArray<string>)];
   }
 
-  const raw = extractRawSection(body);
+  const rawSection = extractRawSection(body);
+  // Expand a codec-compressed body iff the signal carries a marker that
+  // matches the codec version we support (v0.22.0). Signals without the
+  // marker - i.e. every default-config signal - take the verbatim path
+  // unchanged. A marker with an unknown version fails fast rather than
+  // silently misdecoding a future or hand-authored payload.
+  const rawCodec = meta["_raw_codec"];
+  if (rawCodec !== undefined && rawCodec !== CODEC_VERSION) {
+    throw new Error(`signal field '_raw_codec' must be ${JSON.stringify(CODEC_VERSION)} (${path})`);
+  }
+  const raw =
+    rawSection !== undefined && rawCodec === CODEC_VERSION ? expand(rawSection) : rawSection;
 
   // Capture-extension optional fields. Absence stays as `undefined`
   // on the returned object — never coerced to a default, so callers

@@ -1,0 +1,102 @@
+/**
+ * Sources dashboard projection (Vault portability suite, Feature 2).
+ *
+ * A pure, read-only aggregation over the brain's signals (inbox +
+ * processed), grouped by (agent, source_type) with active/processed and
+ * distinct-topic counts. No new store, no writes; deterministic ordering.
+ *
+ * (The parallel multi-source sync worker pool + connection-budget warning
+ * from the upstream inspiration are intentionally out of scope - only this
+ * read-only dashboard ships.)
+ */
+
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
+import { brainDirs } from "../paths.ts";
+import { parseSignal } from "../signal.ts";
+import { BRAIN_SIGNAL_SOURCE_TYPE } from "../types.ts";
+
+export interface SourceRow {
+  readonly agent: string;
+  readonly source_type: string;
+  readonly active: number;
+  readonly processed: number;
+  readonly distinct_topics: number;
+}
+
+export interface SourcesReport {
+  readonly sources: ReadonlyArray<SourceRow>;
+  readonly total_active: number;
+  readonly total_processed: number;
+}
+
+interface Bucket {
+  agent: string;
+  source_type: string;
+  active: number;
+  processed: number;
+  topics: Set<string>;
+}
+
+function scanDir(dir: string, active: boolean, buckets: Map<string, Bucket>): void {
+  if (!existsSync(dir)) return;
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".md")) continue;
+    let sig;
+    try {
+      sig = parseSignal(join(dir, name));
+    } catch {
+      continue;
+    }
+    const agent = sig.agent || "unknown";
+    // Absent source_type is semantically `live` (never inject a default
+    // into the signal itself; only bucket it here).
+    const sourceType = sig.source_type ?? BRAIN_SIGNAL_SOURCE_TYPE.live;
+    const key = JSON.stringify([agent, sourceType]);
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { agent, source_type: sourceType, active: 0, processed: 0, topics: new Set() };
+      buckets.set(key, bucket);
+    }
+    if (active) bucket.active += 1;
+    else bucket.processed += 1;
+    bucket.topics.add(sig.topic);
+  }
+}
+
+/**
+ * Aggregate the brain's signals into a per-source dashboard. Read-only.
+ */
+export function aggregateSources(vault: string): SourcesReport {
+  const dirs = brainDirs(vault);
+  const buckets = new Map<string, Bucket>();
+  scanDir(dirs.inbox, true, buckets);
+  scanDir(dirs.processed, false, buckets);
+
+  const sources = [...buckets.values()]
+    .map((b) => ({
+      agent: b.agent,
+      source_type: b.source_type,
+      active: b.active,
+      processed: b.processed,
+      distinct_topics: b.topics.size,
+    }))
+    .toSorted((a, b) =>
+      a.agent !== b.agent
+        ? a.agent < b.agent
+          ? -1
+          : 1
+        : a.source_type < b.source_type
+          ? -1
+          : a.source_type > b.source_type
+            ? 1
+            : 0,
+    );
+
+  return {
+    sources,
+    total_active: sources.reduce((n, s) => n + s.active, 0),
+    total_processed: sources.reduce((n, s) => n + s.processed, 0),
+  };
+}

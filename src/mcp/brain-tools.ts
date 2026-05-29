@@ -52,6 +52,9 @@ import {
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import { readPrefAudit } from "../core/brain/pref-audit.ts";
 import { buildMorningBrief } from "../core/brain/morning-brief.ts";
+import { aggregateSources } from "../core/brain/portability/sources.ts";
+import { switchProfile, listProfiles } from "../core/brain/portability/profiles.ts";
+import { defaultConfigPath } from "../core/config.ts";
 import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions.ts";
 import { buildConceptCluster } from "../core/brain/link-graph/concept-cluster.ts";
 import { auditMoc, MocAuditError } from "../core/brain/link-graph/moc-audit.ts";
@@ -921,6 +924,41 @@ async function toolBrainMorningBrief(
     open_questions: brief.openQuestions,
     recent_notes: brief.recentNotes,
     total_chars: brief.totalChars,
+  };
+}
+
+async function toolBrainSources(
+  ctx: ServerContext,
+  _args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  void _args;
+  const report = aggregateSources(ctx.vault);
+  return {
+    sources: report.sources,
+    total_active: report.total_active,
+    total_processed: report.total_processed,
+  };
+}
+
+async function toolBrainSwitchVault(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const name = coerceStr(args, "name", true)!;
+  const configPath = ctx.configPath ?? defaultConfigPath();
+  try {
+    switchProfile(configPath, name);
+  } catch (err) {
+    throw new Error(`brain_switch_vault: ${(err as Error).message ?? String(err)}`, {
+      cause: err,
+    });
+  }
+  // The running server keeps its already-resolved vault; the switch
+  // takes effect for the next server launch / CLI invocation.
+  return {
+    active: name,
+    profiles: listProfiles(configPath).profiles,
+    note: "active profile updated; takes effect on next server launch",
   };
 }
 
@@ -2258,6 +2296,27 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainMorningBrief,
+  },
+  {
+    name: "brain_sources",
+    description:
+      "Read-only dashboard of the brain's signals grouped by (agent, source_type) with active/processed and distinct-topic counts plus totals.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    handler: toolBrainSources,
+  },
+  {
+    name: "brain_switch_vault",
+    description:
+      "Activate a named vault profile (from the profiles registry). Updates the active pointer; the change takes effect on the next server launch - the running server keeps its already-resolved vault.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Profile name to activate." },
+      },
+      required: ["name"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSwitchVault,
   },
   {
     name: "brain_context_pack",

@@ -40,6 +40,10 @@ Brain verbs (observing memory):
   history             Render a preference's edit-history timeline
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
+  codec               Compress/expand session prose with the deterministic codec (stdin/--in)
+  sources             Read-only dashboard of signals by (agent, source_type)
+  graph-export        Serialise the vault knowledge graph to graph.json
+  graph-import        Reconstruct vault pages from graph.json (--mode skip|overwrite|merge)
   backlinks           List inbound references to a Brain artifact id
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
@@ -173,6 +177,22 @@ export const VERB_HELP: Record<string, string> = {
     "update / retire / merge) with agent, reason, and revision + content-hash\n" +
     "before/after. A ret- or bare-slug argument resolves to the same trail.\n" +
     "Read-only.\n",
+  codec:
+    "usage: o2b brain codec --compress | --expand [--in <file>]\n" +
+    "Run the deterministic, lossless session codec over stdin (or --in <file>)\n" +
+    "and print the result to stdout. Read-only; structured content preserved.\n",
+  sources:
+    "usage: o2b brain sources [--vault <path>] [--json]\n" +
+    "Read-only dashboard of the brain's signals grouped by (agent, source_type)\n" +
+    "with active/processed and distinct-topic counts.\n",
+  "graph-export":
+    "usage: o2b brain graph-export [--vault <path>] [--out <file>]\n" +
+    "Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a\n" +
+    "stable graph.json. Prints to stdout, or writes to --out. Read-only.\n",
+  "graph-import":
+    "usage: o2b brain graph-import <file> [--mode skip|overwrite|merge] [--vault <path>] [--json]\n" +
+    "Reconstruct vault page stubs from a graph.json. skip (default) never\n" +
+    "overwrites; merge unions wikilinks/relations; writes are vault-guarded.\n",
   "morning-brief":
     "usage: o2b brain morning-brief [--vault <path>] [--json] [--top-k <n>]\n" +
     "  [--lookback-days <n>] [--max-chars-per-memory <n>] [--max-total-chars <n>]\n" +

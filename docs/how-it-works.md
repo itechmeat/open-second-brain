@@ -309,6 +309,30 @@ labels over the existing seams, so every invariant above still holds.
   pages outside the Brain root. Disabled by default so the install stays
   byte-identical.
 
+### Vault portability + session economy (v0.22.0)
+
+A `portability/` subsystem of deterministic primitives, all opt-in or
+no-op by default:
+
+- **Session codec.** A pure lossless `compress`/`expand` (`expand(compress(x))
+  === x` for all input). Token savings come from reversibly collapsing
+  whitespace/blank-line runs behind a Private-Use-Area marker; code and
+  structured tokens are preserved byte-for-byte. Opt-in on the signal
+  store (gated by a `_raw_codec` marker the reader keys off) and exposed as
+  `o2b brain codec`.
+- **Sources dashboard.** `o2b brain sources` / `brain_sources` aggregate
+  the brain's signals by (agent, source_type) - a read-only projection.
+- **Vault-map tokens.** `{{role}}` tokens resolve to user content folders
+  via an optional `Brain/_vault-map.yaml` (defaults otherwise), wired into
+  scan-inline read paths and graph import. The fixed `Brain/*` layout is
+  never routed through the resolver.
+- **Multi-vault profiles.** A `profiles.json` registry beside the config;
+  `resolveVault` prefers the active profile over the bare `vault` key.
+  Activation is a pointer (no symlinks - they sync inconsistently).
+- **Graph export/import.** A stable `graph.json` of the user's pages
+  (wikilinks + typed relations) and an importer with skip/overwrite/merge
+  modes, every write guarded by `ensureInsideVault`.
+
 ## Confidence formula
 
 Confidence is computed for every active preference on every dream

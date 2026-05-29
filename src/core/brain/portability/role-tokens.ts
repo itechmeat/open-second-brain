@@ -1,0 +1,96 @@
+/**
+ * Vault-map role-token resolution (Vault portability suite, Feature 3).
+ *
+ * Lets tools resolve `{{role}}` tokens (e.g. `{{inbox}}`, `{{projects}}`)
+ * to USER content folder names via an optional `Brain/_vault-map.yaml`,
+ * falling back to built-in defaults when the file or a token is absent.
+ *
+ * Scope: this addresses the user's content folders only (scan read paths,
+ * graph-import target, ...). The FIXED Brain machinery layout in
+ * `paths.ts` (`BRAIN_INBOX_REL` etc.) is intentionally NOT routed through
+ * this resolver - the "one agent-owned Brain root" design stays intact.
+ *
+ * Determinism + safety: mapped values are validated against path traversal
+ * (no `..` segment, not absolute, no NUL); an invalid value falls back to
+ * the built-in default for that role. No language word lists anywhere.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { parseSimpleYaml } from "../../config.ts";
+
+/** Canonical PKM role tokens with their default folder names. */
+export const DEFAULT_ROLE_TOKENS: Readonly<Record<string, string>> = Object.freeze({
+  inbox: "inbox",
+  projects: "projects",
+  areas: "areas",
+  resources: "resources",
+  archive: "archive",
+  "daily-notes": "daily-notes",
+  meetings: "meetings",
+  reference: "reference",
+  scratch: "scratch",
+  templates: "templates",
+  attachments: "attachments",
+});
+
+const VAULT_MAP_FILE = "_vault-map.yaml";
+
+/** A mapped folder value is safe when it stays a relative in-vault subpath. */
+function isSafeFolder(value: string): boolean {
+  const v = value.trim();
+  if (v.length === 0) return false;
+  // Spaces are legal folder names ("Daily Notes"); reject only genuine
+  // hazards: control chars (incl. NUL), absolute paths, `..`/`.` segments.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(v)) return false;
+  if (v.startsWith("/") || v.startsWith("\\")) return false;
+  if (/^[A-Za-z]:/.test(v)) return false; // Windows drive-absolute
+  const segments = v.split(/[\\/]/);
+  return !segments.some((s) => s === ".." || s === ".");
+}
+
+/** Strip surrounding `{{ }}` (if any) and whitespace from a token. */
+function tokenKey(token: string): string {
+  return token.replace(/^\{\{/, "").replace(/\}\}$/, "").trim();
+}
+
+/**
+ * Load the vault-map (token -> folder) merged over the built-in defaults.
+ * Absent file -> defaults; invalid (traversal/absolute) values are dropped
+ * so the default for that role is kept.
+ */
+export function loadVaultMap(vault: string): Record<string, string> {
+  const map: Record<string, string> = { ...DEFAULT_ROLE_TOKENS };
+  const path = join(vault, "Brain", VAULT_MAP_FILE);
+  if (!existsSync(path)) return map;
+  let raw: Record<string, string>;
+  try {
+    raw = parseSimpleYaml(readFileSync(path, "utf8"));
+  } catch {
+    return map;
+  }
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string" && isSafeFolder(value)) {
+      map[key] = value.trim();
+    }
+  }
+  return map;
+}
+
+/**
+ * Resolve a single `{{role}}` (or bare `role`) token to a folder name.
+ * Unknown tokens resolve to their own literal name.
+ */
+export function resolveRoleToken(map: Record<string, string>, token: string): string {
+  const key = tokenKey(token);
+  return map[key] ?? key;
+}
+
+/** Replace every `{{role}}` occurrence in `text` via {@link resolveRoleToken}. */
+export function resolveTokens(map: Record<string, string>, text: string): string {
+  return text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_full, inner: string) =>
+    resolveRoleToken(map, inner),
+  );
+}

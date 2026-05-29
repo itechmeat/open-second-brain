@@ -13,6 +13,9 @@ verbs:
                       report inclusion / exclusion counts.
   inspect <relpath>   Point-check one vault-relative path with the
                       matched rule.
+  profile <sub>       Manage named multi-vault profiles
+                      (list | create <name> <vault> | switch <name>).
+  map [show]          Print the resolved vault-map (role token -> folder).
 
 global flags:
   --vault <path>      Override the configured vault path.
@@ -30,4 +33,13 @@ export const VAULT_VERB_HELP: Record<string, string> = {
     "Resolves the policy and runs matchIgnore against <relpath>. The\n" +
     "relpath is vault-relative (POSIX). Path traversal outside the\n" +
     "vault is rejected with exit 2.\n",
+  profile:
+    "usage: o2b vault profile <list | create <name> <vault> | switch <name>> [--json]\n\n" +
+    "Manage named multi-vault profiles stored in profiles.json beside the\n" +
+    "config. switch sets the active pointer (no symlinks); resolveVault uses\n" +
+    "the active profile before the bare config vault key.\n",
+  map:
+    "usage: o2b vault map [show] [--vault <path>] [--json]\n\n" +
+    "Print the resolved vault-map (role token -> folder), merging an optional\n" +
+    "Brain/_vault-map.yaml over the built-in defaults. Read-only.\n",
 };

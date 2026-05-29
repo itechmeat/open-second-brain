@@ -210,6 +210,9 @@ describe("tool listing", () => {
         // Per-preference mutation audit + morning brief (added in v0.21.0).
         "brain_audit",
         "brain_morning_brief",
+        // Vault portability suite (added in v0.22.0).
+        "brain_sources",
+        "brain_switch_vault",
         "brain_context_pack",
         "brain_unlinked_mentions",
         "brain_concept_synthesis",
@@ -474,7 +477,8 @@ describe("stdio loop", () => {
     // + brain_pre_compress_pack (v0.20.0) = 42.
     // + brain_audit (v0.21.0) = 43.
     // + brain_morning_brief (v0.21.0) = 44.
-    expect(list.result.tools.length).toBe(44);
+    // + brain_sources + brain_switch_vault (v0.22.0) = 46.
+    expect(list.result.tools.length).toBe(46);
   });
 
   test("returns parse error for invalid JSON", async () => {

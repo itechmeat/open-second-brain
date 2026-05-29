@@ -33,6 +33,10 @@ import {
   cmdBrainHistory,
   cmdBrainAudit,
   cmdBrainMorningBrief,
+  cmdBrainCodec,
+  cmdBrainSources,
+  cmdBrainGraphExport,
+  cmdBrainGraphImport,
   cmdBrainBacklinks,
   cmdBrainMcpLandscape,
   cmdBrainMerge,
@@ -131,6 +135,14 @@ export async function handleBrainSubcommand(
         return await cmdBrainAudit(rest);
       case "morning-brief":
         return await cmdBrainMorningBrief(rest);
+      case "codec":
+        return await cmdBrainCodec(rest);
+      case "sources":
+        return await cmdBrainSources(rest);
+      case "graph-export":
+        return await cmdBrainGraphExport(rest);
+      case "graph-import":
+        return await cmdBrainGraphImport(rest);
       case "backlinks":
         return await cmdBrainBacklinks(rest);
       case "mcp-landscape":

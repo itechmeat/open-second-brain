@@ -51,6 +51,10 @@ o2b brain health              Semantic-health report (since v0.14.0): contradict
 o2b brain history             Render a preference's edit-history timeline (since v0.14.0): one entry per content mutation (principle / scope / status before -> after)
 o2b brain audit               Render a preference's full mutation audit trail (since v0.21.0): create / promote / update / retire / merge with agent, reason, revision + content-hash before/after. ret- or bare-slug arg resolves to the same trail
 o2b brain morning-brief       Read-only session-start summary (since v0.21.0): top confirmed preferences, recent reconcile open questions, recent notes; bounded by --max-chars-per-memory / --max-total-chars; --top-k / --lookback-days
+o2b brain codec               Deterministic lossless session codec (since v0.22.0): --compress | --expand over stdin or --in <file>; structured content preserved byte-for-byte
+o2b brain sources             Read-only dashboard of signals by (agent, source_type) (since v0.22.0): active/processed + distinct-topic counts; --json
+o2b brain graph-export        Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a stable graph.json (since v0.22.0): stdout or --out <file>
+o2b brain graph-import        Reconstruct vault page stubs from a graph.json (since v0.22.0): --mode skip|overwrite|merge; vault-guarded writes
 o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain mcp-landscape       List MCP servers configured across the vault (since v0.19.0): name, source file, packages, required env-var names (values never read)
 o2b brain scan-inline         Capture `@osb` markers from folders listed under `notes.read_paths` in _brain.yaml
@@ -90,6 +94,8 @@ Single exclusion policy for every vault walker.
 ```text
 o2b vault status              Walks the vault under the active policy; reports include / exclude counts and which rules fired
 o2b vault inspect <relpath>   Point-check one vault-relative path; reports matched rule, source, and whether the path exists on disk
+o2b vault profile <sub>       Manage named multi-vault profiles (since v0.22.0): list | create <name> <vault> | switch <name>; pointer-based activation in profiles.json
+o2b vault map [show]          Print the resolved vault-map role tokens -> folders (since v0.22.0), merging an optional Brain/_vault-map.yaml over defaults; read-only
 ```
 
 ## Discipline (daily logging cron)

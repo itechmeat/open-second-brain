@@ -70,6 +70,12 @@ export interface ImportSessionOptions {
    * re-scanned per file. Internal contract; CLI does not pass it.
    */
   readonly dedupIndex?: Map<string, DedupIndexEntry>;
+  /**
+   * Vault portability suite (v0.22.0). When true, session-imported
+   * signals store their raw body through the deterministic codec
+   * (`writeSignal({ rawCodec: true })`). Default off -> verbatim bodies.
+   */
+  readonly rawCodec?: boolean;
 }
 
 export interface ImportSessionResult {
@@ -179,6 +185,7 @@ export async function importSession(
         dedup_hash: input.dedupHash,
         session_ref: sessionRef,
         ...(input.note ? { raw: input.note } : {}),
+        ...(opts.rawCodec === true ? { rawCodec: true } : {}),
       });
       dedup.set(input.dedupHash, { id: res.id, path: res.path });
       signalsCreated++;
