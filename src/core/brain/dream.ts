@@ -54,6 +54,8 @@ import {
   type ContradictionInput,
   type ReconcileSignal,
 } from "./reconcile-domains.ts";
+import { extractTemporalConstraints } from "./temporal-extract.ts";
+import { runHealEnrichment } from "./heal-run.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
 import {
   buildIntentReview,
@@ -437,6 +439,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   //   5. Emit log entries (noted-redundant, retain-pinned,
   //      skip-corrupted-frontmatter, dream summary).
   const moved: string[] = [];
+  // F6: count of user pages the opt-in heal phase enriched (0 unless
+  // dream.heal_enrich_enabled).
+  let healEnriched = 0;
   // v0.12.0 Brain Integrity Suite: declined retires accumulate here.
   // Always declared (even when no gate is configured) so the eventual
   // DreamRunSummary.gated_retires field is consistently an array.
@@ -493,6 +498,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           recentViolated: [],
           ...(np.scope ? { scope: np.scope } : {}),
           ...(np.supersedes ? { supersedes: np.supersedes } : {}),
+          // F5: bi-temporal validity extracted from the source signal.
+          ...(np.valid_from ? { valid_from: np.valid_from } : {}),
+          ...(np.valid_until ? { valid_until: np.valid_until } : {}),
         },
         [],
         { overwrite: false },
@@ -595,6 +603,20 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
         // benign on rerun. Still surface so a real I/O issue is visible.
         process.stderr.write(
           `warning: move signal ${sig.id} to processed/ failed: ${(err as Error).message}\n`,
+        );
+      }
+    }
+
+    // Heal phase (F6): opt-in deterministic vault enrichment, run after
+    // the retire/move mutations (heal-after-mutations). Off by default so
+    // the default install stays byte-identical; a failure is a warning,
+    // never fatal to the dream pass.
+    if (cfg.dream.heal_enrich_enabled === true) {
+      try {
+        healEnriched = runHealEnrichment(vault).enriched;
+      } catch (err) {
+        process.stderr.write(
+          `warning: heal enrichment failed: ${(err as Error).message}\n`,
         );
       }
     }
@@ -839,7 +861,10 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       new_unconfirmed: plan.newUnconfirmed.length,
       confirmed: refresh.confirmed.size,
     }),
-    phaseSummary(DREAM_PHASE.heal, { retired: retiredThisRun }),
+    phaseSummary(DREAM_PHASE.heal, {
+      retired: retiredThisRun,
+      enriched: healEnriched,
+    }),
     phaseSummary(DREAM_PHASE.log, {
       moved: moved.length,
       suppressed: plan.signalsSuppressed.length,
@@ -1036,6 +1061,14 @@ interface NewUnconfirmedPlan {
    * `supersedes:` for audit-trail continuity across rebuttals.
    */
   readonly supersedes?: string;
+  /**
+   * Brain lifecycle suite (F5). Bi-temporal validity derived from the
+   * source signal at plan time (explicit signal fields preferred, else
+   * extracted from the signal's ISO temporal text). Threaded to the
+   * preference writer on promotion.
+   */
+  readonly valid_from?: string;
+  readonly valid_until?: string;
 }
 
 interface RetirePlan {
@@ -1270,6 +1303,7 @@ function planTopics(
         principle,
         evidencedBy,
         sign,
+        ...deriveSignalTemporal(dominant[0]!.signal, now),
         ...(supersedesRecord
           ? {
               supersedes: renderPrefLink({
@@ -1423,6 +1457,7 @@ function handleSignalsOnActivePref(
         principle,
         evidencedBy,
         sign: oppositeSign,
+        ...deriveSignalTemporal(opposing[0]!.signal, now),
         supersedes: renderPrefLink({
           id: active.pref.id,
           principle: active.pref.principle,
@@ -1495,6 +1530,27 @@ function filterWithinWindow(
     const t = Date.parse(s.signal.created_at);
     return Number.isFinite(t) && t >= minTime;
   });
+}
+
+/**
+ * Brain lifecycle suite (F5). Derive a preference's bi-temporal validity
+ * from the source signal: prefer the signal's explicit `valid_from` /
+ * `valid_until`, otherwise extract formal ISO temporal tokens from the
+ * signal's principle + raw text. Returns `{}` when neither yields a
+ * constraint, so callers spread it without changing byte output.
+ */
+function deriveSignalTemporal(
+  sig: BrainSignal,
+  now: Date,
+): { valid_from?: string; valid_until?: string } {
+  if (sig.valid_from || sig.valid_until) {
+    return {
+      ...(sig.valid_from ? { valid_from: sig.valid_from } : {}),
+      ...(sig.valid_until ? { valid_until: sig.valid_until } : {}),
+    };
+  }
+  const text = `${sig.principle ?? ""}\n${sig.raw ?? ""}`;
+  return extractTemporalConstraints(text, { now });
 }
 
 // ----- Reconcile (F3) ------------------------------------------------------

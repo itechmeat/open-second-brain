@@ -134,6 +134,13 @@ export interface WritePreferenceInput {
   readonly content_hash?: string;
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
+  /**
+   * Brain lifecycle suite (F5). Bi-temporal validity window, filled by
+   * the dream promotion path from the source signal's ISO temporal
+   * text. Emitted verbatim when supplied; absent leaves the field off.
+   */
+  readonly valid_from?: string;
+  readonly valid_until?: string;
   /** Optional extra tags merged after the canonical set. */
   readonly extraTags?: ReadonlyArray<string>;
   /** Free-form "How to apply" prose (rendered as a section). */
@@ -363,6 +370,12 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   if (input.tier !== undefined) {
     metadata["tier"] = input.tier;
   }
+  // Brain lifecycle suite (F5): bi-temporal validity, emitted only when
+  // supplied (e.g. dream filled it from the source signal's ISO text).
+  // Reader-side support already exists via readBitemporalSlots; legacy
+  // callers stay byte-identical.
+  if (input.valid_from?.trim()) metadata["valid_from"] = input.valid_from.trim();
+  if (input.valid_until?.trim()) metadata["valid_until"] = input.valid_until.trim();
   return metadata;
 }
 
