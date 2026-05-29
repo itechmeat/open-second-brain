@@ -34,8 +34,8 @@ function canonicalProperties(
 ): Array<[string, string[]]> | null {
   if (!props || props.size === 0) return null;
   return [...props.entries()]
-    .map(([k, v]) => [k, [...v].sort()] as [string, string[]])
-    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    .map(([k, v]) => [k, [...v].toSorted()] as [string, string[]])
+    .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 }
 
 /**
@@ -60,7 +60,7 @@ export function buildCacheKey(
     mmrLambda: opts.mmrLambda ?? null,
     maxHops: opts.maxHops ?? null,
     properties: canonicalProperties(opts.properties),
-    visibility: opts.visibility ? [...opts.visibility].sort() : null,
+    visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
     plan: planHash,
     cfg: configFingerprint,
   });

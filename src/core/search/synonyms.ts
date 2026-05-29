@@ -85,7 +85,7 @@ export function deriveExpansionTerms(
 
   return [...docFreq.entries()]
     .filter(([, df]) => df >= opts.minDocFreq)
-    .sort((a, b) => (b[1] !== a[1] ? b[1] - a[1] : a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .toSorted((a, b) => (b[1] !== a[1] ? b[1] - a[1] : a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .slice(0, opts.maxTerms)
     .map(([term]) => term);
 }

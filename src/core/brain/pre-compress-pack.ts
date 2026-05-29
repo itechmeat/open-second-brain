@@ -98,7 +98,7 @@ function readActiveHead(vault: string): string | null {
  * `topK` plus the active head are bounded by the shared char budget.
  */
 export function buildPreCompressPack(vault: string, opts: PreCompressOptions): PreCompressPack {
-  const ranked = collectConfirmed(vault).sort((a, b) => {
+  const ranked = collectConfirmed(vault).toSorted((a, b) => {
     if (b.confidence !== a.confidence) return b.confidence - a.confidence;
     if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
