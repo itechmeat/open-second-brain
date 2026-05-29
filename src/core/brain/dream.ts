@@ -842,10 +842,6 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // already ran; additive keys may appear in later versions.
   const activeSignalCount = scan.signals.filter((s) => s.active).length;
   const retiredThisRun = plan.retires.filter((r) => !gatedSlugs.has(r.slug)).length;
-  const phaseSummary = (
-    phase: DreamPhase,
-    metrics: Record<string, number>,
-  ): DreamPhaseSummary => ({ phase, metrics });
   const phases: ReadonlyArray<DreamPhaseSummary> = Object.freeze([
     phaseSummary(DREAM_PHASE.close, {
       active_signals: activeSignalCount,
@@ -1553,6 +1549,23 @@ function deriveSignalTemporal(
   return extractTemporalConstraints(text, { now });
 }
 
+/** Build one phase summary (module-scoped: captures nothing). */
+function phaseSummary(
+  phase: DreamPhase,
+  metrics: Record<string, number>,
+): DreamPhaseSummary {
+  return { phase, metrics };
+}
+
+/** Project a scanned signal onto the minimal reconcile view. */
+function toReconcileSignal(r: SignalRecord): ReconcileSignal {
+  return {
+    created_at: r.signal.created_at,
+    ...(r.signal.recorded_at ? { recorded_at: r.signal.recorded_at } : {}),
+    ...(r.signal.source ? { source: r.signal.source } : {}),
+  };
+}
+
 // ----- Reconcile (F3) ------------------------------------------------------
 
 interface ReconcileAutoResolved {
@@ -1596,12 +1609,6 @@ function buildReconcileOutcomes(
     if (arr) arr.push(rec);
     else byTopic.set(rec.signal.topic, [rec]);
   }
-
-  const toReconcileSignal = (r: SignalRecord): ReconcileSignal => ({
-    created_at: r.signal.created_at,
-    ...(r.signal.recorded_at ? { recorded_at: r.signal.recorded_at } : {}),
-    ...(r.signal.source ? { source: r.signal.source } : {}),
-  });
 
   for (const topic of plan.contradictionTopics) {
     const sigs = filterWithinWindow(byTopic.get(topic) ?? [], windowDays, now);

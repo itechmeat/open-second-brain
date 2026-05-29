@@ -47,7 +47,7 @@ export function linkExactMentions(
     .filter((k) => k.length > 0)
     // Longest first so a multi-word title wins over a contained shorter
     // one at the same position; lexicographic tie-break for determinism.
-    .sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
+    .toSorted((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
   if (phrases.length === 0) return body;
 
   const alternation = phrases.map(escapeRegExp).join("|");
