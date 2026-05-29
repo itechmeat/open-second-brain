@@ -31,6 +31,8 @@ import { existsSync } from "node:fs";
 
 import { computeContentHash } from "./content-hash.ts";
 import { appendEditHistory, type EditHistoryEntry } from "./health/edit-history.ts";
+import { appendPrefAudit, type PrefAuditSink } from "./pref-audit.ts";
+import { PREF_AUDIT_OP } from "./types.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import {
   parsePreference,
@@ -170,6 +172,7 @@ export function writePreferenceTxn(
   expectations: ReadonlyArray<WritePreferenceExpectation>,
   options: WritePreferenceOptions = {},
   history?: EditHistoryOptions,
+  audit?: PrefAuditSink,
 ): WritePreferenceResult {
   const slug = validateSlug(input.slug);
   const path = preferencePath(vault, slug);
@@ -243,6 +246,33 @@ export function writePreferenceTxn(
         history,
       );
       appendEditHistory(vault, slug, entries);
+    }
+    // Per-preference mutation audit (opt-in, Brain lifecycle suite F1).
+    // Recorded only when the write actually changed bytes; the op is the
+    // lifecycle transition. The audit's own per-op no-op rule then drops
+    // counter-only `update` churn so the byte-identical default holds.
+    if (audit && willChange) {
+      const op =
+        existing === null
+          ? PREF_AUDIT_OP.create
+          : existing.status !== BRAIN_PREFERENCE_STATUS.confirmed &&
+              inputWithDefaults.status === BRAIN_PREFERENCE_STATUS.confirmed
+            ? PREF_AUDIT_OP.promote
+            : PREF_AUDIT_OP.update;
+      appendPrefAudit(
+        vault,
+        {
+          pref_id: `pref-${slug}`,
+          op,
+          agent: audit.agent,
+          ...(audit.reason !== undefined ? { reason: audit.reason } : {}),
+          revision_before: existing?.revision ?? null,
+          revision_after: inputWithDefaults.revision ?? null,
+          hash_before: existing ? computeContentHash(existing.principle, existing.scope) : null,
+          hash_after: computeContentHash(inputWithDefaults.principle, inputWithDefaults.scope),
+        },
+        { now: audit.now?.() ?? new Date() },
+      );
     }
     return result;
   } finally {

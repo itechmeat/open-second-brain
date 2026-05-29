@@ -44,6 +44,18 @@ import {
   WORKRUN_PHASE,
   type WorkrunHandle,
 } from "./dream-workrun.ts";
+import {
+  DREAM_PHASE,
+  type DreamPhase,
+  type DreamPhaseSummary,
+} from "./dream-phases.ts";
+import {
+  resolveContradiction,
+  type ContradictionInput,
+  type ReconcileSignal,
+} from "./reconcile-domains.ts";
+import { extractTemporalConstraints } from "./temporal-extract.ts";
+import { runHealEnrichment } from "./heal-run.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
 import {
   buildIntentReview,
@@ -85,6 +97,7 @@ import {
   type BrainRetiredReason,
   type BrainSignal,
   type BrainSignalSign,
+  type DreamOpenQuestion,
 } from "./types.ts";
 
 // ----- Public types --------------------------------------------------------
@@ -215,6 +228,22 @@ export interface DreamRunSummary {
    * when the config field is absent (the default).
    */
   readonly gated_retires: ReadonlyArray<DreamGatedRetireEntry>;
+  /**
+   * Multi-phase dream pipeline (Brain lifecycle suite, Feature 2).
+   * Ordered per-phase summaries (close, reconcile, synthesize, heal,
+   * log) for a changed run; empty on a no-op run. Additive: existing
+   * fields are unchanged.
+   */
+  readonly phases: ReadonlyArray<DreamPhaseSummary>;
+  /**
+   * Reconcile-phase domain classification (Brain lifecycle suite,
+   * Feature 3). Contradictions that stayed unresolved, each tagged with
+   * a domain. Source-freshness contradictions that auto-resolved are
+   * NOT listed here (they are recorded as `reconcile` log events on a
+   * changed run). The legacy `contradictions` field remains a derived
+   * topic-only view for back-compat.
+   */
+  readonly open_questions: ReadonlyArray<DreamOpenQuestion>;
   /** Snapshot file (absent on a no-op run). */
   readonly snapshot_path?: string;
   /** Log file the run summary landed in (absent on a no-op run). */
@@ -334,6 +363,14 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // 5. Plan signal moves (inbox/ → processed/).
   planSignalMoves(scan, plan);
 
+  // Reconcile phase (F3): classify each contradiction topic into a
+  // domain. Source-freshness with a clear gap auto-resolves (recorded,
+  // never a sub-threshold mutation); everything else becomes an open
+  // question. Computed in-memory before the `changed` gate so the
+  // summary carries open_questions on both the no-op and changed paths;
+  // the `reconcile` log events below are emitted only on a changed run.
+  const reconcile = buildReconcileOutcomes(scan, plan, cfg, now);
+
   // Decide if anything is going to change. We treat any of the
   // following as a state change:
   //   - a new unconfirmed pref
@@ -373,6 +410,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       quarantined: Object.freeze([...plan.quarantined]),
       intent_reviews: Object.freeze([...intentReview.reviews]),
       gated_retires: Object.freeze([] as ReadonlyArray<DreamGatedRetireEntry>),
+      phases: Object.freeze([] as ReadonlyArray<DreamPhaseSummary>),
+      open_questions: Object.freeze([...reconcile.openQuestions]),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
   }
@@ -400,6 +439,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   //   5. Emit log entries (noted-redundant, retain-pinned,
   //      skip-corrupted-frontmatter, dream summary).
   const moved: string[] = [];
+  // F6: count of user pages the opt-in heal phase enriched (0 unless
+  // dream.heal_enrich_enabled).
+  let healEnriched = 0;
   // v0.12.0 Brain Integrity Suite: declined retires accumulate here.
   // Always declared (even when no gate is configured) so the eventual
   // DreamRunSummary.gated_retires field is consistently an array.
@@ -413,6 +455,12 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   if (!dryRun) {
     workrun = openWorkrun(vault, runId);
     workrun.checkpoint(WORKRUN_PHASE.clusterComplete);
+    // Multi-phase dream (F2): close + reconcile are complete by the time
+    // we reach the mutation path - the scan and contradiction planning
+    // both ran before the `changed` gate. Emit their checkpoints here in
+    // order; synthesize + heal follow the write loops below.
+    workrun.checkpoint(WORKRUN_PHASE.closeComplete);
+    workrun.checkpoint(WORKRUN_PHASE.reconcileComplete);
   }
 
   if (!dryRun) {
@@ -450,6 +498,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           recentViolated: [],
           ...(np.scope ? { scope: np.scope } : {}),
           ...(np.supersedes ? { supersedes: np.supersedes } : {}),
+          // F5: bi-temporal validity extracted from the source signal.
+          ...(np.valid_from ? { valid_from: np.valid_from } : {}),
+          ...(np.valid_until ? { valid_until: np.valid_until } : {}),
         },
         [],
         { overwrite: false },
@@ -555,6 +606,20 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
         );
       }
     }
+
+    // Heal phase (F6): opt-in deterministic vault enrichment, run after
+    // the retire/move mutations (heal-after-mutations). Off by default so
+    // the default install stays byte-identical; a failure is a warning,
+    // never fatal to the dream pass.
+    if (cfg.dream.heal_enrich_enabled === true) {
+      try {
+        healEnriched = runHealEnrichment(vault).enriched;
+      } catch (err) {
+        process.stderr.write(
+          `warning: heal enrichment failed: ${(err as Error).message}\n`,
+        );
+      }
+    }
   } else {
     // Dry-run still reports the move list so the caller's summary is
     // accurate, but it does not touch disk.
@@ -567,7 +632,13 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // mutations so the workrun stays compact yet recovery-meaningful.
   if (workrun !== null) {
     workrun.checkpoint(WORKRUN_PHASE.promoteComplete);
+    // Multi-phase dream (F2): synthesize = the promote/confirm writes
+    // just completed; heal = the retire (and, when enabled, enrichment)
+    // writes. Emit the phase checkpoints in order alongside the legacy
+    // promote/retire markers (readers tolerate the extra phases).
+    workrun.checkpoint(WORKRUN_PHASE.synthesizeComplete);
     workrun.checkpoint(WORKRUN_PHASE.retireComplete);
+    workrun.checkpoint(WORKRUN_PHASE.healComplete);
   }
 
   // v0.12.0 Brain Integrity Suite: build the gated-slug set once so the
@@ -607,6 +678,37 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
         body: {
           preference: noted.preference,
           signal: noted.signal,
+        },
+      });
+    }
+
+    // Reconcile phase (F3): one event per open question + per
+    // auto-resolution. Persisted only on this changed path so a no-op
+    // run stays byte-identical.
+    for (const q of reconcile.openQuestions) {
+      writeEvent(vault, {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.reconcile,
+        body: {
+          topic: q.topic,
+          domain: q.domain,
+          reason: q.reason,
+          ...(q.scope ? { scope: q.scope } : {}),
+          positives: String(q.positive_count),
+          negatives: String(q.negative_count),
+        },
+      });
+    }
+    for (const r of reconcile.autoResolved) {
+      writeEvent(vault, {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.reconcile,
+        body: {
+          topic: r.topic,
+          domain: r.domain,
+          resolution: "auto-resolved",
+          winner_sign: r.winner_sign,
+          margin_days: String(r.margin_days),
         },
       });
     }
@@ -735,9 +837,41 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // spot. `workrun` is null on dry-run / pre-mutation paths.
   workrun?.finalize();
 
+  // Multi-phase dream (F2): structured per-phase summaries for a changed
+  // run. Metrics are integer counters derived from the plan/refresh that
+  // already ran; additive keys may appear in later versions.
+  const activeSignalCount = scan.signals.filter((s) => s.active).length;
+  const retiredThisRun = plan.retires.filter((r) => !gatedSlugs.has(r.slug)).length;
+  const phases: ReadonlyArray<DreamPhaseSummary> = Object.freeze([
+    phaseSummary(DREAM_PHASE.close, {
+      active_signals: activeSignalCount,
+      preferences: scan.preferences.length,
+      retired_files: scan.retired.length,
+    }),
+    phaseSummary(DREAM_PHASE.reconcile, {
+      contradictions: plan.contradictionTopics.size,
+      open_questions: reconcile.openQuestions.length,
+      auto_resolved: reconcile.autoResolved.length,
+    }),
+    phaseSummary(DREAM_PHASE.synthesize, {
+      new_unconfirmed: plan.newUnconfirmed.length,
+      confirmed: refresh.confirmed.size,
+    }),
+    phaseSummary(DREAM_PHASE.heal, {
+      retired: retiredThisRun,
+      enriched: healEnriched,
+    }),
+    phaseSummary(DREAM_PHASE.log, {
+      moved: moved.length,
+      suppressed: plan.signalsSuppressed.length,
+    }),
+  ]);
+
   return Object.freeze({
     run_id: runId,
     changed: true,
+    phases,
+    open_questions: Object.freeze([...reconcile.openQuestions]),
     new_unconfirmed: plan.newUnconfirmed.map((p) => `pref-${p.slug}`),
     confirmed: Array.from(refresh.confirmed.values()).map((s) => `pref-${s}`),
     retired: plan.retires
@@ -923,6 +1057,14 @@ interface NewUnconfirmedPlan {
    * `supersedes:` for audit-trail continuity across rebuttals.
    */
   readonly supersedes?: string;
+  /**
+   * Brain lifecycle suite (F5). Bi-temporal validity derived from the
+   * source signal at plan time (explicit signal fields preferred, else
+   * extracted from the signal's ISO temporal text). Threaded to the
+   * preference writer on promotion.
+   */
+  readonly valid_from?: string;
+  readonly valid_until?: string;
 }
 
 interface RetirePlan {
@@ -1157,6 +1299,7 @@ function planTopics(
         principle,
         evidencedBy,
         sign,
+        ...deriveSignalTemporal(dominant[0]!.signal, now),
         ...(supersedesRecord
           ? {
               supersedes: renderPrefLink({
@@ -1310,6 +1453,7 @@ function handleSignalsOnActivePref(
         principle,
         evidencedBy,
         sign: oppositeSign,
+        ...deriveSignalTemporal(opposing[0]!.signal, now),
         supersedes: renderPrefLink({
           id: active.pref.id,
           principle: active.pref.principle,
@@ -1382,6 +1526,118 @@ function filterWithinWindow(
     const t = Date.parse(s.signal.created_at);
     return Number.isFinite(t) && t >= minTime;
   });
+}
+
+/**
+ * Brain lifecycle suite (F5). Derive a preference's bi-temporal validity
+ * from the source signal: prefer the signal's explicit `valid_from` /
+ * `valid_until`, otherwise extract formal ISO temporal tokens from the
+ * signal's principle + raw text. Returns `{}` when neither yields a
+ * constraint, so callers spread it without changing byte output.
+ */
+function deriveSignalTemporal(
+  sig: BrainSignal,
+  now: Date,
+): { valid_from?: string; valid_until?: string } {
+  if (sig.valid_from || sig.valid_until) {
+    return {
+      ...(sig.valid_from ? { valid_from: sig.valid_from } : {}),
+      ...(sig.valid_until ? { valid_until: sig.valid_until } : {}),
+    };
+  }
+  const text = `${sig.principle ?? ""}\n${sig.raw ?? ""}`;
+  return extractTemporalConstraints(text, { now });
+}
+
+/** Build one phase summary (module-scoped: captures nothing). */
+function phaseSummary(
+  phase: DreamPhase,
+  metrics: Record<string, number>,
+): DreamPhaseSummary {
+  return { phase, metrics };
+}
+
+/** Project a scanned signal onto the minimal reconcile view. */
+function toReconcileSignal(r: SignalRecord): ReconcileSignal {
+  return {
+    created_at: r.signal.created_at,
+    ...(r.signal.recorded_at ? { recorded_at: r.signal.recorded_at } : {}),
+    ...(r.signal.source ? { source: r.signal.source } : {}),
+  };
+}
+
+// ----- Reconcile (F3) ------------------------------------------------------
+
+interface ReconcileAutoResolved {
+  readonly topic: string;
+  readonly domain: "source-freshness";
+  readonly winner_sign: "positive" | "negative";
+  readonly margin_days: number;
+}
+
+interface ReconcileOutcomes {
+  readonly openQuestions: DreamOpenQuestion[];
+  readonly autoResolved: ReconcileAutoResolved[];
+}
+
+/**
+ * Classify every contradiction topic the plan flagged into a domain and
+ * decide its outcome. Source-freshness contradictions where the fresher
+ * side leads by at least half the contradiction window auto-resolve
+ * (recorded only - never a sub-threshold mutation); the rest become
+ * operator-facing open questions. Pure; emits nothing.
+ */
+function buildReconcileOutcomes(
+  scan: ScanResult,
+  plan: PlanState,
+  cfg: BrainConfig,
+  now: Date,
+): ReconcileOutcomes {
+  const openQuestions: DreamOpenQuestion[] = [];
+  const autoResolved: ReconcileAutoResolved[] = [];
+  if (plan.contradictionTopics.size === 0) return { openQuestions, autoResolved };
+
+  const windowDays = cfg.dream.contradiction_window_days;
+  // Freshness must be decisive WITHIN the contradiction window, so the
+  // margin is half the window (a gap larger than the window would have
+  // excluded the older signal from the contradiction in the first place).
+  const freshnessMarginDays = Math.max(1, Math.ceil(windowDays / 2));
+
+  const byTopic = new Map<string, SignalRecord[]>();
+  for (const rec of scan.signals) {
+    const arr = byTopic.get(rec.signal.topic);
+    if (arr) arr.push(rec);
+    else byTopic.set(rec.signal.topic, [rec]);
+  }
+
+  for (const topic of plan.contradictionTopics) {
+    const sigs = filterWithinWindow(byTopic.get(topic) ?? [], windowDays, now);
+    const positives = sigs
+      .filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.positive)
+      .map(toReconcileSignal);
+    const negatives = sigs
+      .filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.negative)
+      .map(toReconcileSignal);
+    const scope = sigs.find((s) => s.signal.scope)?.signal.scope;
+    const input: ContradictionInput = {
+      topic,
+      ...(scope ? { scope } : {}),
+      positives,
+      negatives,
+    };
+    const outcome = resolveContradiction(input, { now, freshnessMarginDays });
+    if (outcome.kind === "auto-resolved") {
+      autoResolved.push({
+        topic,
+        domain: outcome.domain,
+        winner_sign: outcome.winner_sign,
+        margin_days: outcome.margin_days,
+      });
+    } else {
+      openQuestions.push(outcome.question);
+    }
+  }
+  return { openQuestions, autoResolved };
 }
 
 // ----- Refresh + promote --------------------------------------------------

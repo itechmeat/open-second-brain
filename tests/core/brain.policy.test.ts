@@ -399,6 +399,19 @@ describe("loadBrainConfig — filesystem integration", () => {
     writeBrainYaml(tmp, "schema_version: 1\ndream: 5\n");
     expect(() => loadBrainConfig(tmp)).toThrow(/dream/);
   });
+
+  test("dream.heal_enrich_enabled defaults to false", () => {
+    writeBrainYaml(tmp, DEFAULT_BRAIN_CONFIG_YAML);
+    expect(loadBrainConfig(tmp).dream.heal_enrich_enabled).toBe(false);
+  });
+
+  test("dream.heal_enrich_enabled can be opted in via YAML", () => {
+    writeBrainYaml(
+      tmp,
+      "schema_version: 1\ndream:\n  candidate_threshold: 3\n  unconfirmed_window_days: 14\n  contradiction_window_days: 14\n  heal_enrich_enabled: true\n",
+    );
+    expect(loadBrainConfig(tmp).dream.heal_enrich_enabled).toBe(true);
+  });
 });
 
 describe("parseBrainYaml", () => {

@@ -46,6 +46,13 @@ export const WORKRUN_PHASE = Object.freeze({
   retireComplete: "retire_complete",
   finalized: "finalized",
   interrupted: "interrupted",
+  // Brain lifecycle suite (Feature 2): multi-phase dream checkpoints.
+  // Emitted in order between `started` and `finalized`. Readers tolerate
+  // unknown phases, so adding these is backward-compatible.
+  closeComplete: "close_complete",
+  reconcileComplete: "reconcile_complete",
+  synthesizeComplete: "synthesize_complete",
+  healComplete: "heal_complete",
 } as const);
 
 export type WorkrunPhase = (typeof WORKRUN_PHASE)[keyof typeof WORKRUN_PHASE];

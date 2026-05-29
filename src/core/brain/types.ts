@@ -186,6 +186,14 @@ export const BRAIN_LOG_EVENT_KIND = {
    * surface.
    */
   note: "note",
+  /**
+   * `reconcile` (Brain lifecycle suite, Feature 3) - the dream reconcile
+   * phase recorded a domain-classified contradiction. Payload carries
+   * `topic`, `domain`, and either a `reason` (open question) or a
+   * `resolution` + `winner_sign` (source-freshness auto-resolution).
+   * Emitted only on a changed run, so a no-op stays byte-identical.
+   */
+  reconcile: "reconcile",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
@@ -207,6 +215,75 @@ export const BRAIN_LOG_EVENT_KIND_SET: ReadonlySet<string> = new Set(
  */
 export function isBrainLogEventKind(value: string): value is BrainLogEventKind {
   return BRAIN_LOG_EVENT_KIND_SET.has(value);
+}
+
+/**
+ * Per-preference mutation audit op kinds (Brain lifecycle suite,
+ * Feature 1). Captured at the mutation chokepoints. The reader
+ * tolerates unknown op strings (forward-compat), so this is the
+ * canonical set the writers emit, not a closed validation gate.
+ */
+export const PREF_AUDIT_OP = {
+  create: "create",
+  update: "update",
+  promote: "promote",
+  retire: "retire",
+  merge: "merge",
+} as const;
+export type PrefAuditOp = (typeof PREF_AUDIT_OP)[keyof typeof PREF_AUDIT_OP];
+
+/**
+ * One append-only audit line for a single preference mutation. Stored
+ * as JSONL under `Brain/log/pref-audit/<pref-id>.jsonl`. `op` is widened
+ * to `string` on read so an unknown future op kind round-trips without
+ * loss. Revision/hash before-after are `null` where not applicable
+ * (e.g. `hash_before` is `null` on a `create`).
+ */
+export interface PrefAuditRecord {
+  readonly ts: string;
+  readonly pref_id: string;
+  readonly op: PrefAuditOp | string;
+  readonly agent: string;
+  readonly reason?: string;
+  readonly revision_before: number | null;
+  readonly revision_after: number | null;
+  readonly hash_before: string | null;
+  readonly hash_after: string | null;
+}
+
+/**
+ * Reconcile-phase contradiction domains (Brain lifecycle suite,
+ * Feature 3). A contradiction is bucketed by STRUCTURAL signal shape
+ * only - never by language. Only `source-freshness` is eligible for
+ * deterministic auto-resolution; the judgement domains always surface
+ * as operator-facing open questions.
+ */
+export const RECONCILE_DOMAIN = {
+  /** Generic competing assertions; default bucket. Never auto-resolved. */
+  claims: "claims",
+  /** Signals reference named entities (wikilinks). Never auto-resolved. */
+  entity: "entity",
+  /** Signals scoped as decisions/judgement calls. Never auto-resolved. */
+  decisions: "decisions",
+  /** Resolvable by recency: one side is materially fresher. */
+  sourceFreshness: "source-freshness",
+} as const;
+export type ReconcileDomain = (typeof RECONCILE_DOMAIN)[keyof typeof RECONCILE_DOMAIN];
+
+/**
+ * An unresolved contradiction the reconcile phase surfaced for operator
+ * review instead of force-merging. Carried on {@link DreamRunSummary}
+ * and emitted as a `reconcile` log event. The counts are integers so
+ * the question is auditable without re-reading signals.
+ */
+export interface DreamOpenQuestion {
+  readonly topic: string;
+  readonly scope?: string;
+  readonly domain: ReconcileDomain;
+  readonly positive_count: number;
+  readonly negative_count: number;
+  /** Machine-readable reason the contradiction stayed open. */
+  readonly reason: string;
 }
 
 // ----- File-frontmatter shapes ----------------------------------------------
@@ -638,6 +715,14 @@ export interface BrainDreamConfig {
   readonly unconfirmed_window_days: number;
   /** Window in which positive/negative signals cancel each other. */
   readonly contradiction_window_days: number;
+  /**
+   * Brain lifecycle suite (Feature 6). When `true`, the dream heal
+   * phase performs deterministic vault enrichment (fill a missing
+   * title from the first H1, link exact title/alias mentions). Default
+   * `false` because it rewrites user files - a default install stays
+   * byte-identical. Absent is treated as `false`.
+   */
+  readonly heal_enrich_enabled?: boolean;
 }
 
 export interface BrainRetireConfig {

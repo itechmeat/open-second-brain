@@ -26,11 +26,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { regenerateActiveQuiet } from "./active.ts";
+import { computeContentHash } from "./content-hash.ts";
 import { appendLogEvent } from "./log.ts";
 import { brainDirs, preferencePath } from "./paths.ts";
+import { appendPrefAudit } from "./pref-audit.ts";
 import { moveToRetired, parsePreference, writePreference } from "./preference.ts";
 import { isoDate, isoSecond } from "./time.ts";
-import { BRAIN_LOG_EVENT_KIND, BRAIN_RETIRED_REASON } from "./types.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_RETIRED_REASON, PREF_AUDIT_OP } from "./types.ts";
 import { renderPrefLink } from "./wikilink.ts";
 
 export type BrainMergeErrorCode =
@@ -214,7 +216,31 @@ export function mergePreferences(
     now,
     retired_by: `[[Brain/log/${isoDate(now)}]]`,
     superseded_by: supersededBy,
+    audit: { agent: opts.agentName ?? "merge" },
   });
+
+  // Per-preference mutation audit (Brain lifecycle suite F1). The keep
+  // pref absorbed evidence + counters; record a `merge` op on its trail.
+  // A merge is a lifecycle event, so it records even though keep's
+  // principle/scope fingerprint is unchanged. The drop's retire(merged-
+  // into) record is written by moveToRetired above.
+  {
+    const keepHash = computeContentHash(keep.principle, keep.scope);
+    appendPrefAudit(
+      vault,
+      {
+        pref_id: keep.id,
+        op: PREF_AUDIT_OP.merge,
+        agent: opts.agentName ?? "merge",
+        reason: `merged-in ${drop.id}`,
+        revision_before: keep.revision ?? null,
+        revision_after: keep.revision ?? null,
+        hash_before: keepHash,
+        hash_after: keepHash,
+      },
+      { now },
+    );
+  }
 
   // 3. Append a `merge` log event with audit-grade payload.
   appendLogEvent(vault, {

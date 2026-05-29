@@ -50,6 +50,8 @@ import {
   type AppendApplyEvidenceInput,
 } from "../core/brain/apply-evidence.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
+import { readPrefAudit } from "../core/brain/pref-audit.ts";
+import { buildMorningBrief } from "../core/brain/morning-brief.ts";
 import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions.ts";
 import { buildConceptCluster } from "../core/brain/link-graph/concept-cluster.ts";
 import { auditMoc, MocAuditError } from "../core/brain/link-graph/moc-audit.ts";
@@ -872,6 +874,53 @@ async function toolBrainBacklinks(
       field: r.field,
       ...(r.timestamp !== undefined ? { timestamp: r.timestamp } : {}),
     })),
+  };
+}
+
+async function toolBrainAudit(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const raw = coerceStr(args, "pref_id", true)!;
+  // The trail is keyed by the original `pref-<slug>` id. Run the input
+  // through the shared wikilink normaliser first (handles `[[id]]`,
+  // `[[id|Alias]]`, and `Brain/.../id.md` forms), then strip the
+  // pref-/ret- prefix so every reference resolves to one trail.
+  const slug = normaliseWikilinkTarget(raw).replace(/^(?:pref-|ret-)/, "").trim();
+  if (slug.length === 0) {
+    throw new Error(`brain_audit: empty preference slug after normalising '${raw}'`);
+  }
+  const prefId = `pref-${slug}`;
+  const { records, warnings } = readPrefAudit(ctx.vault, prefId);
+  return {
+    pref_id: prefId,
+    count: records.length,
+    records,
+    warnings: warnings.map((w) => w.message),
+  };
+}
+
+async function toolBrainMorningBrief(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const topK = optionalPositiveInt(args, "top_k", "brain_morning_brief") ?? 10;
+  const lookbackDays = optionalPositiveInt(args, "lookback_days", "brain_morning_brief") ?? 7;
+  const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_morning_brief");
+  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_morning_brief");
+  const brief = buildMorningBrief(ctx.vault, {
+    now: new Date(),
+    topK,
+    lookbackDays,
+    ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
+    ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+  });
+  return {
+    text: brief.text,
+    preferences: brief.preferences,
+    open_questions: brief.openQuestions,
+    recent_notes: brief.recentNotes,
+    total_chars: brief.totalChars,
   };
 }
 
@@ -2159,6 +2208,56 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainBacklinks,
+  },
+  {
+    name: "brain_audit",
+    description:
+      "Return a preference's full mutation audit trail (create / promote / update / retire / merge), oldest first, with agent, reason, and revision + content-hash before/after. The trail is keyed by the original `pref-<slug>` id; a `ret-<slug>`, bare `<slug>`, or wikilink-decorated argument resolves to the same trail. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pref_id: {
+          type: "string",
+          description:
+            "Preference id (e.g. `pref-foo`). `ret-foo`, bare `foo`, and `[[pref-foo]]` all resolve to the same trail.",
+        },
+      },
+      required: ["pref_id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainAudit,
+  },
+  {
+    name: "brain_morning_brief",
+    description:
+      "Return a read-only session-start summary: top confirmed preferences (confidence then recency), open questions raised by the recent reconcile phase, and recent narrative notes. Bounded by per-entry and total character caps. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        top_k: {
+          type: "integer",
+          minimum: 1,
+          description: "Max confirmed preferences to consider (default 10).",
+        },
+        lookback_days: {
+          type: "integer",
+          minimum: 1,
+          description: "Days of log history scanned for open questions + notes (default 7).",
+        },
+        max_chars_per_memory: {
+          type: "integer",
+          minimum: 1,
+          description: "Per-entry character cap (code points).",
+        },
+        max_total_chars: {
+          type: "integer",
+          minimum: 1,
+          description: "Total character cap across the brief.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainMorningBrief,
   },
   {
     name: "brain_context_pack",

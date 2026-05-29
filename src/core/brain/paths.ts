@@ -202,6 +202,26 @@ export function dreamWorkrunPath(vault: string, runId: string): string {
   return ensureInsideVault(join(dreamRunsDir(vault), `${id}.jsonl`), vault);
 }
 
+/**
+ * Brain lifecycle suite (Feature 1). Per-preference mutation audit
+ * directory: `Brain/log/pref-audit/`. Lives under the log dir so
+ * backups already include it.
+ */
+export function prefAuditDir(vault: string): string {
+  return join(brainDirs(vault).log, "pref-audit");
+}
+
+/**
+ * Brain lifecycle suite (Feature 1). Append-only audit JSONL for a
+ * single preference: `Brain/log/pref-audit/<pref-id>.jsonl`. The pref
+ * id (`pref-<slug>` / `ret-<slug>`) is validated through
+ * {@link validateSlug} so it cannot escape the canonical directory.
+ */
+export function prefAuditPath(vault: string, prefId: string): string {
+  const id = validateSlug(prefId);
+  return ensureInsideVault(join(prefAuditDir(vault), `${id}.jsonl`), vault);
+}
+
 /** Snapshots directory: `Brain/.snapshots/`. */
 export function snapshotsDir(vault: string): string {
   return brainDirs(vault).snapshots;

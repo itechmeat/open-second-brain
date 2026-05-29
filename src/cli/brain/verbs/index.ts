@@ -18,6 +18,8 @@ export { cmdBrainRollback } from "./rollback.ts";
 export { cmdBrainDoctor } from "./doctor.ts";
 export { cmdBrainHealth } from "./health.ts";
 export { cmdBrainHistory } from "./history.ts";
+export { cmdBrainAudit } from "./audit.ts";
+export { cmdBrainMorningBrief } from "./morning-brief.ts";
 export { cmdBrainBacklinks } from "./backlinks.ts";
 export { cmdBrainMcpLandscape } from "./mcp-landscape.ts";
 export { cmdBrainMerge } from "./merge.ts";

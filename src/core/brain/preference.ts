@@ -52,6 +52,9 @@ import {
 } from "./types.ts";
 import type { PageLifecycle } from "./page-meta/lifecycle.ts";
 import type { PageTier } from "./page-meta/tier.ts";
+import { computeContentHash } from "./content-hash.ts";
+import { appendPrefAudit } from "./pref-audit.ts";
+import { PREF_AUDIT_OP } from "./types.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -131,6 +134,13 @@ export interface WritePreferenceInput {
   readonly content_hash?: string;
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
+  /**
+   * Brain lifecycle suite (F5). Bi-temporal validity window, filled by
+   * the dream promotion path from the source signal's ISO temporal
+   * text. Emitted verbatim when supplied; absent leaves the field off.
+   */
+  readonly valid_from?: string;
+  readonly valid_until?: string;
   /** Optional extra tags merged after the canonical set. */
   readonly extraTags?: ReadonlyArray<string>;
   /** Free-form "How to apply" prose (rendered as a section). */
@@ -178,6 +188,15 @@ export interface MoveToRetiredOptions {
    */
   readonly evidenceApplied?: ReadonlyArray<BrainEvidenceSummary>;
   readonly evidenceViolated?: ReadonlyArray<BrainEvidenceSummary>;
+  /**
+   * Opt-in per-preference audit (Brain lifecycle suite F1). When
+   * supplied, a `retire` record is appended to the original
+   * preference's audit trail (`pref-<slug>.jsonl`) so the whole
+   * lifecycle stays in one file. The retire reason is taken from the
+   * `reason` argument, not from the sink. Omitting it preserves
+   * pre-suite behaviour (no audit file).
+   */
+  readonly audit?: { readonly agent: string };
 }
 
 export interface MoveToRetiredResult {
@@ -351,6 +370,12 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   if (input.tier !== undefined) {
     metadata["tier"] = input.tier;
   }
+  // Brain lifecycle suite (F5): bi-temporal validity, emitted only when
+  // supplied (e.g. dream filled it from the source signal's ISO text).
+  // Reader-side support already exists via readBitemporalSlots; legacy
+  // callers stay byte-identical.
+  if (input.valid_from?.trim()) metadata["valid_from"] = input.valid_from.trim();
+  if (input.valid_until?.trim()) metadata["valid_until"] = input.valid_until.trim();
   return metadata;
 }
 
@@ -834,6 +859,31 @@ export function moveToRetired(
     throw new Error(`moveToRetired: write of ${newPath} reported success but file is absent`);
   }
   unlinkSync(prefPath);
+
+  // Per-preference mutation audit (opt-in, Brain lifecycle suite F1).
+  // Keyed by the ORIGINAL `pref-<slug>` id so create -> ... -> retire
+  // all land in one trail. A retire is a lifecycle transition, so it
+  // always records (the audit's no-op rule only suppresses `update`).
+  if (opts.audit) {
+    const principle = requireString(meta, "principle", prefPath);
+    const scope = typeof meta["scope"] === "string" ? (meta["scope"] as string) : undefined;
+    const revRaw = meta["_revision"];
+    const contentHash = computeContentHash(principle, scope);
+    appendPrefAudit(
+      vault,
+      {
+        pref_id: oldId,
+        op: PREF_AUDIT_OP.retire,
+        agent: opts.audit.agent,
+        reason,
+        revision_before: typeof revRaw === "number" ? revRaw : null,
+        revision_after: null,
+        hash_before: contentHash,
+        hash_after: contentHash,
+      },
+      { now: opts.now },
+    );
+  }
 
   return { path: newPath, id: newId };
 }

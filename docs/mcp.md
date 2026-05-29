@@ -18,7 +18,7 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 35 tools. The table below highlights the
+The full server currently advertises 44 tools. The table below highlights the
 operator-facing core, agent-source, health, and Pay Memory tools; the full
 surface also includes Brain writer, review, query, temporal, link-graph, and
 search tools. In Claude Code, that full schema can push MCP definitions beyond
@@ -34,6 +34,8 @@ writer split below for the always-loaded writer subset.
 | `brain_mcp_landscape`      | List the MCP servers configured across the vault: name, source config file, packages, and required env-var names. Env values never read. | —                                |
 | `brain_agent_query`        | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.          | —                                |
 | `brain_agent_diff`         | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                        | —                                |
+| `brain_audit`              | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                   |
+| `brain_morning_brief`      | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.            | —                                |
 | `payment_memory_init`      | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template. | —                                |
 | `payment_receipt_append`   | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting.                                                | `service`, `status`, `reason`    |
 | `asset_capture`            | Save a Markdown note for an asset produced by a paid call, linked to its receipt.                                                         | `title`, `service`, `result_url` |
@@ -259,7 +261,7 @@ server to your Codex MCP config the same way as Hermes.
 
 The plugin's `.mcp.json` ships **two** MCP-server entries:
 
-- `open-second-brain` - the full surface (42 tools, including `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_pinned_context`, and `brain_pre_compress_pack`); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
+- `open-second-brain` - the full surface (44 tools, including `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_pinned_context`, `brain_pre_compress_pack`, `brain_audit`, and `brain_morning_brief`); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
 - `open-second-brain-writer` - a minimal always-loaded surface of five tools: `brain_feedback`, `brain_apply_evidence`, `brain_note`, `brain_pinned_context` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md` plus pinned context, v0.16.0). The agent records taste signals, evidence events, milestone notes, and current-task pinned facts - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).

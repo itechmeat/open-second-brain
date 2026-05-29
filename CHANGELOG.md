@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-05-29
+
+Brain lifecycle suite. The nightly `dream` consolidation becomes an
+explicit ordered pipeline, every preference gains an authoritative
+mutation trail, contradictions are classified by domain instead of a
+flat list, a budgeted session-start brief surfaces what matters, and
+formal temporal constraints are lifted from signal text - all
+deterministic and language-agnostic, with each new layer a no-op until
+it applies or is opted in.
+
+### Added
+
+- Per-preference mutation audit log (`src/core/brain/pref-audit.ts`).
+  An append-only JSONL trail under `Brain/log/pref-audit/<pref-id>.jsonl`
+  captures every mutation (create / promote / update / retire / merge)
+  with agent, reason, and revision + content-hash before/after, written
+  at the mutation chokepoints (`writePreferenceTxn`, `moveToRetired`,
+  `mergePreferences`) so it is authoritative and also records manual
+  edits. Counter-only `update` churn is suppressed, so a no-op dream run
+  writes no audit line. Read surface: `o2b brain audit <pref-id>` and
+  the `brain_audit` MCP tool.
+- Multi-phase dream pipeline (`src/core/brain/dream-phases.ts`). The
+  proven `dream()` internals are unchanged; the existing seams are named
+  as ordered phases (close -> reconcile -> synthesize -> heal -> log),
+  each emitting a workrun checkpoint and a structured
+  `DreamRunSummary.phases` summary. A no-op run returns `phases: []`.
+- Reconcile-phase domain classification
+  (`src/core/brain/reconcile-domains.ts`). Each contradiction is bucketed
+  by structural signal shape into claims / entity / decisions /
+  source-freshness. Only source-freshness with a decisive recency gap
+  auto-resolves (recorded as a `reconcile` log event, never a
+  sub-threshold mutation); the rest surface as `DreamRunSummary.open_questions`.
+  The legacy `contradictions` field stays a derived view. No forced merge,
+  no LLM fan-out.
+- Morning brief (`src/core/brain/morning-brief.ts`). A read-only,
+  character-budgeted session-start summary of the top confirmed
+  preferences (confidence then recency), recent reconcile open questions,
+  and recent notes. Exposed as `o2b brain morning-brief` and the
+  `brain_morning_brief` MCP tool.
+- Language-agnostic temporal extraction
+  (`src/core/brain/temporal-extract.ts`). On promotion, an empty
+  `valid_from` / `valid_until` is filled from the source signal - explicit
+  bi-temporal fields preferred, else formal ISO-8601 tokens (date,
+  interval, duration anchored to a co-occurring date or `now`) parsed from
+  the signal text. No localized month/day names; the preference writer now
+  emits the bi-temporal fields.
+- Opt-in heal-phase vault enrichment (`src/core/brain/heal-enrich.ts` +
+  `heal-run.ts`). When `dream.heal_enrich_enabled` is true, the heal phase
+  completes a missing `title` from the first H1 and inserts wikilinks for
+  exact title/alias matches across user pages, excluding the Brain root and
+  the standard ignored dirs, never self-linking, via atomic writes.
+  Default false, so a default install stays byte-identical.
+
+### Notes
+
+- New config key `dream.heal_enrich_enabled` (default `false`). New MCP
+  tools `brain_audit` and `brain_morning_brief` (tool count 42 -> 44). New
+  `reconcile` log event kind (additive; tolerated by the JSONL reader).
+- Default-install behaviour is byte-identical: the audit is mutation- and
+  content-gated, phases and open questions are additive, temporal fields
+  fill only when empty, and heal enrichment is opt-in.
+- Full suite green on merge: 2771 tests passing.
+
 ## [0.20.0] - 2026-05-29
 
 Recall and ranking quality. The retrieval layer gains a tunable recency
@@ -3327,6 +3390,8 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.21.0]: https://github.com/itechmeat/open-second-brain/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/itechmeat/open-second-brain/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/itechmeat/open-second-brain/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/itechmeat/open-second-brain/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/itechmeat/open-second-brain/compare/v0.16.0...v0.17.0
