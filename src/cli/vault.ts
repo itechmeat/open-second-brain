@@ -9,6 +9,8 @@ import { CliError } from "./argparse.ts";
 import { VAULT_HELP, VAULT_VERB_HELP } from "./vault/help-text.ts";
 import { cmdVaultStatus } from "./vault/verbs/status.ts";
 import { cmdVaultInspect } from "./vault/verbs/inspect.ts";
+import { cmdVaultProfile } from "./vault/verbs/profile.ts";
+import { cmdVaultMap } from "./vault/verbs/map.ts";
 
 export async function handleVaultSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
@@ -34,6 +36,10 @@ export async function handleVaultSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdVaultStatus(rest);
       case "inspect":
         return await cmdVaultInspect(rest);
+      case "profile":
+        return await cmdVaultProfile(rest);
+      case "map":
+        return await cmdVaultMap(rest);
       default:
         process.stderr.write(`error: unknown vault verb: ${verb}\n`);
         process.stdout.write(VAULT_HELP);
