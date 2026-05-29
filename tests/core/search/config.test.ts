@@ -31,6 +31,8 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED",
   "OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED",
   "OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS",
+  "OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED",
+  "OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL",
 ];
 
 beforeEach(() => {
@@ -106,6 +108,18 @@ test("synonym expansion defaults off and is toggleable with a term cap", () => {
   const on = resolveSearchConfig({ vault: tmp, configPath }).recall;
   expect(on.synonymEnabled).toBe(true);
   expect(on.synonymMaxTerms).toBe(5);
+});
+
+test("query cache defaults off with a 300s TTL and is toggleable", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const def = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  expect(def.cacheEnabled).toBe(false);
+  expect(def.cacheTtlSeconds).toBe(300);
+  process.env["OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED"] = "true";
+  process.env["OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL"] = "60";
+  const on = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  expect(on.cacheEnabled).toBe(true);
+  expect(on.cacheTtlSeconds).toBe(60);
 });
 
 test("non-positive recency scale is rejected", () => {

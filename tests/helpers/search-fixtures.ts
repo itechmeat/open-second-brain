@@ -59,6 +59,8 @@ export function makeConfig(opts: {
   intentEnabled?: boolean;
   /** Synonym / query expansion; defaults to false (opt-in). */
   synonymEnabled?: boolean;
+  /** Persistent query cache; defaults to false (opt-in). */
+  cacheEnabled?: boolean;
 }): ResolvedSearchConfig {
   const baseSemantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: false,
@@ -99,6 +101,8 @@ export function makeConfig(opts: {
       intentEnabled: opts.intentEnabled ?? true,
       synonymEnabled: opts.synonymEnabled ?? false,
       synonymMaxTerms: 3,
+      cacheEnabled: opts.cacheEnabled ?? false,
+      cacheTtlSeconds: 300,
     }),
   });
 }

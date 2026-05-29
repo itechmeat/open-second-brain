@@ -46,6 +46,8 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
       intentEnabled: true,
       synonymEnabled: false,
       synonymMaxTerms: 3,
+      cacheEnabled: false,
+      cacheTtlSeconds: 300,
     }),
     ...overrides,
   });

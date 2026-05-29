@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import lockfile from "proper-lockfile";
 
+import { computeCorpusGeneration } from "./corpus-generation.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 import {
@@ -377,6 +378,67 @@ export class Store {
 
   deleteState(key: string): void {
     this.db.run("DELETE FROM index_state WHERE key = ?", [key]);
+  }
+
+  // ── index revision + corpus generation (v0.20.0) ─────────────────────────────
+
+  /** Monotonic counter bumped on every index mutation; 0 if never set. */
+  indexRevision(): number {
+    const raw = this.getState("index_revision");
+    const n = raw === null ? 0 : Number(raw);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  }
+
+  /** Increment the index revision. Called after a mutating index run. */
+  bumpIndexRevision(): void {
+    this.setState("index_revision", String(this.indexRevision() + 1));
+  }
+
+  /**
+   * Current corpus-generation fingerprint: embedding model + dimension +
+   * schema version + index revision. The query cache gates on this so any
+   * embedding change or content reindex invalidates cached results.
+   */
+  corpusGeneration(): string {
+    const dimRaw = this.getState("embedding_dimension");
+    const dim = dimRaw === null ? null : Number(dimRaw);
+    return computeCorpusGeneration({
+      embeddingModel: this.getState("embedding_model"),
+      embeddingDimension: dim !== null && Number.isFinite(dim) ? dim : null,
+      schemaVersion: LATEST_SCHEMA_VERSION,
+      indexRevision: this.indexRevision(),
+    });
+  }
+
+  // ── query cache (v0.20.0) ────────────────────────────────────────────────────
+
+  queryCacheGet(
+    key: string,
+  ): { generation: string; payload: string; createdAt: number } | null {
+    const row = this.db
+      .query<{ generation: string; payload: string; created_at: number }, [string]>(
+        "SELECT generation, payload, created_at FROM query_cache WHERE cache_key = ?",
+      )
+      .get(key);
+    if (!row) return null;
+    return { generation: row.generation, payload: row.payload, createdAt: row.created_at };
+  }
+
+  queryCachePut(key: string, generation: string, payload: string, createdAtMs: number): void {
+    this.db.run(
+      "INSERT INTO query_cache(cache_key, generation, payload, created_at) VALUES (?, ?, ?, ?) " +
+        "ON CONFLICT(cache_key) DO UPDATE SET generation = excluded.generation, " +
+        "payload = excluded.payload, created_at = excluded.created_at",
+      [key, generation, payload, createdAtMs],
+    );
+  }
+
+  /** Delete rows from a stale generation or created before the cutoff. */
+  queryCacheSweep(currentGeneration: string, expiredBeforeMs: number): void {
+    this.db.run("DELETE FROM query_cache WHERE generation <> ? OR created_at < ?", [
+      currentGeneration,
+      expiredBeforeMs,
+    ]);
   }
 
   // ── documents ──────────────────────────────────────────────────────────────

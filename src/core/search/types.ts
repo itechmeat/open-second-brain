@@ -249,6 +249,16 @@ export interface ResolvedRecallConfig {
    */
   readonly synonymEnabled: boolean;
   readonly synonymMaxTerms: number;
+  /**
+   * Persistent query cache (v0.20.0). Off by default: when enabled,
+   * `search()` serves a previously computed result for an identical
+   * request as long as the corpus generation is unchanged and the row is
+   * within `cacheTtlSeconds`. A cache hit is the result that was
+   * computed and stored; generation changes (embedding change or content
+   * reindex) and TTL expiry invalidate it.
+   */
+  readonly cacheEnabled: boolean;
+  readonly cacheTtlSeconds: number;
 }
 
 export interface ResolvedSearchConfig {

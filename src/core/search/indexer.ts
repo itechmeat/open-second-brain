@@ -269,6 +269,14 @@ async function indexInto(
     store.setState("last_indexed_at", now);
     if (opts?.force) store.setState("last_full_index_at", now);
 
+    // Bump the corpus-generation revision whenever the index actually
+    // changed, so the persistent query cache (v0.20.0) is invalidated
+    // after a content reindex even though the embedding model/dimension
+    // and schema are unchanged.
+    if (stats.added + stats.updated + stats.deleted > 0) {
+      store.bumpIndexRevision();
+    }
+
     return freezeStats(stats, Date.now() - t0);
   } finally {
     if (ownsStore) await store.close();

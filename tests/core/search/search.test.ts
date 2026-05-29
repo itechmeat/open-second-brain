@@ -1,4 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
@@ -53,6 +54,52 @@ async function seedKeyword() {
   writeMd(vault, "Notes/ru.md", "# Ru\n\nКириллический текст про брожение тестового зерна.");
   return makeConfig({ vault, dbPath });
 }
+
+function cacheRowCount(): number {
+  const db = new Database(dbPath);
+  try {
+    return db.query<{ c: number }, []>("SELECT count(*) AS c FROM query_cache").get()?.c ?? 0;
+  } finally {
+    db.close();
+  }
+}
+
+test("query cache (opt-in) stores a row and serves an identical request", async () => {
+  await seedKeyword();
+  const cfg = makeConfig({ vault, dbPath, cacheEnabled: true });
+  await indexVault(cfg);
+  expect(cacheRowCount()).toBe(0);
+
+  const r1 = await search(cfg, { query: "fox", limit: 5 });
+  expect(cacheRowCount()).toBeGreaterThan(0);
+
+  const r2 = await search(cfg, { query: "fox", limit: 5 });
+  expect(r2.results.map((x) => x.path)).toEqual(r1.results.map((x) => x.path));
+});
+
+test("query cache is invalidated by a reindex (corpus-generation bump)", async () => {
+  await seedKeyword();
+  const cfg = makeConfig({ vault, dbPath, cacheEnabled: true });
+  await indexVault(cfg);
+
+  const r1 = await search(cfg, { query: "fox", limit: 10 });
+  expect(r1.results.map((x) => x.path)).not.toContain("Notes/fox2.md");
+
+  // A new matching doc + reindex bumps the index revision -> generation
+  // changes -> the cached row is not served and the result reflects it.
+  writeMd(vault, "Notes/fox2.md", "# Fox2\n\nAnother fox appears here.");
+  await indexVault(cfg);
+  const r2 = await search(cfg, { query: "fox", limit: 10 });
+  expect(r2.results.map((x) => x.path)).toContain("Notes/fox2.md");
+});
+
+test("no query_cache rows are written when the cache is disabled", async () => {
+  await seedKeyword();
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  await search(cfg, { query: "fox", limit: 5 });
+  expect(cacheRowCount()).toBe(0);
+});
 
 async function seedExpansion() {
   // d1 + d2 both match "alpha" and co-mention "beta" -> "beta" is a

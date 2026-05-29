@@ -18,6 +18,7 @@ import { extractEntities } from "./entities.ts";
 import { runFtsQuery } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
 import { buildQueryPlan } from "./query-plan.ts";
+import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "./query-cache.ts";
 import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from "./synonyms.ts";
 import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
@@ -45,6 +46,32 @@ function resolveSemanticPolicy(config: ResolvedSearchConfig, opts: SearchOptions
   if (opts.semantic === true) return { explicit: true, wantSemantic: true };
   if (opts.semantic === false) return { explicit: true, wantSemantic: false };
   return { explicit: false, wantSemantic: config.semantic.enabled };
+}
+
+/**
+ * A compact fingerprint of the resolved-config fields that change search
+ * results, folded into the cache key so a config change (weights,
+ * semantic toggle, recall tunables) invalidates cached rows alongside the
+ * corpus generation. Cache-only knobs (enable/TTL) are excluded - they do
+ * not change result content.
+ */
+function configFingerprint(config: ResolvedSearchConfig): string {
+  const r = config.recall;
+  return JSON.stringify({
+    kw: config.keywordWeight,
+    sw: config.semanticWeight,
+    sem: config.semantic.enabled,
+    mmr: r.mmrLambda,
+    hops: r.maxHops,
+    hopDecay: r.hopDecay,
+    maxExp: r.maxExpansionPerHit,
+    rShape: r.recencyShape,
+    rScale: r.recencyScale,
+    rAmp: r.recencyAmplitude,
+    intent: r.intentEnabled,
+    syn: r.synonymEnabled,
+    synMax: r.synonymMaxTerms,
+  });
 }
 
 function assertSafePathPrefix(prefix: string | undefined): string | undefined {
@@ -75,6 +102,35 @@ export async function search(
 
   const store = await Store.open(config, { mode: "read" });
   try {
+    // Persistent query cache (v0.20.0): opt-in. Keyed by the request +
+    // base plan hash + a config fingerprint, gated by the corpus
+    // generation and a TTL. A hit returns the previously computed
+    // outcome; generation changes (embedding change or content reindex)
+    // and TTL expiry invalidate it. Expansion terms are not in the key:
+    // they are determined by (query, index content) and any content
+    // change bumps the generation. The cache write is best-effort.
+    const cacheEnabled = config.recall.cacheEnabled;
+    const ttlMs = config.recall.cacheTtlSeconds * 1000;
+    let cacheKey: string | null = null;
+    let generation = "";
+    if (cacheEnabled) {
+      generation = store.corpusGeneration();
+      cacheKey = buildCacheKey(opts, basePlan.planHash, configFingerprint(config));
+      const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
+      if (hit) return hit;
+    }
+    const finalize = (outcome: SearchOutcome): SearchOutcome => {
+      if (cacheEnabled && cacheKey) {
+        try {
+          store.queryCacheSweep(generation, Date.now() - ttlMs);
+          putCachedOutcome(store, cacheKey, generation, outcome, Date.now());
+        } catch {
+          // Cache persistence is best-effort; never fail a search on it.
+        }
+      }
+      return outcome;
+    };
+
     // Keyword candidates.
     let kwHits = runFtsQuery(store, query, {
       limit: limit * 3,
@@ -124,11 +180,13 @@ export async function search(
     for (const h of semHits) allChunkIds.add(h.chunkId);
     const idsList = Array.from(allChunkIds);
     if (idsList.length === 0) {
-      return Object.freeze({
-        results: Object.freeze([] as ReadonlyArray<BrainSearchResult>),
-        warnings: Object.freeze(warnings),
-        total: 0,
-      });
+      return finalize(
+        Object.freeze({
+          results: Object.freeze([] as ReadonlyArray<BrainSearchResult>),
+          warnings: Object.freeze(warnings),
+          total: 0,
+        }),
+      );
     }
 
     const hydrated = store.hydrateChunks(idsList);
@@ -257,11 +315,13 @@ export async function search(
       return rels && rels.length > 0 ? { ...r, relations: Object.freeze(rels) } : r;
     });
 
-    return Object.freeze({
-      results: Object.freeze(withRelations),
-      warnings: Object.freeze(warnings),
-      total: withRelations.length,
-    });
+    return finalize(
+      Object.freeze({
+        results: Object.freeze(withRelations),
+        warnings: Object.freeze(warnings),
+        total: withRelations.length,
+      }),
+    );
   } finally {
     await store.close();
   }

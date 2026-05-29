@@ -68,6 +68,7 @@ const DEFAULTS = {
   recencyScale: 30,
   recencyAmplitude: 0.05,
   synonymMaxTerms: 3,
+  cacheTtlSeconds: 300,
 };
 
 type IntegerRange = { readonly min?: number; readonly max?: number };
@@ -322,6 +323,17 @@ export function resolveSearchConfig(opts: {
     "search_synonym_max_terms",
     { min: 0 },
   );
+  const cacheEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED", "search_cache_enabled"),
+    false,
+    "search_cache_enabled",
+  );
+  const cacheTtlSeconds = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL", "search_cache_ttl_seconds"),
+    DEFAULTS.cacheTtlSeconds,
+    "search_cache_ttl_seconds",
+    { min: 1 },
+  );
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
@@ -333,6 +345,8 @@ export function resolveSearchConfig(opts: {
     intentEnabled,
     synonymEnabled,
     synonymMaxTerms,
+    cacheEnabled,
+    cacheTtlSeconds,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({
