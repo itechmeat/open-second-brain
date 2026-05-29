@@ -97,4 +97,23 @@ describe("importVaultGraph", () => {
     expect(res.rejected).toContain("../escape.md");
     expect(existsSync(join(vault, "..", "escape.md"))).toBe(false);
   });
+
+  test("rejects a malformed node and continues with the valid ones", () => {
+    const mixed = {
+      version: "1",
+      nodes: [
+        { path: 42 }, // path not a string
+        { path: "Notes/BadLinks.md", links: [7] }, // links not strings
+        { path: "Notes/BadRel.md", relations: { related: "x" } }, // relations value not an array
+        { path: "Notes/Good.md", title: "Good", links: ["Beta"], relations: {} },
+      ],
+    };
+    const res = importVaultGraph(vault, mixed as never, { mode: "overwrite" });
+    expect(res.created).toEqual(["Notes/Good.md"]);
+    expect(res.rejected).toContain("Notes/BadLinks.md");
+    expect(res.rejected).toContain("Notes/BadRel.md");
+    expect(res.rejected).toContain("42");
+    expect(existsSync(join(vault, "Notes", "Good.md"))).toBe(true);
+    expect(existsSync(join(vault, "Notes", "BadLinks.md"))).toBe(false);
+  });
 });

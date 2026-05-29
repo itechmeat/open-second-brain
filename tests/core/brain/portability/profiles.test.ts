@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,14 +24,20 @@ import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 
 let home: string;
 let configPath: string;
+let previousVaultDir: string | undefined;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "o2b-profiles-"));
   configPath = join(home, "config.yaml");
   atomicWriteFileSync(configPath, `vault: ${join(home, "default-vault")}\n`);
+  previousVaultDir = process.env["VAULT_DIR"];
   delete process.env["VAULT_DIR"];
 });
-afterEach(() => rmSync(home, { recursive: true, force: true }));
+afterEach(() => {
+  if (previousVaultDir === undefined) delete process.env["VAULT_DIR"];
+  else process.env["VAULT_DIR"] = previousVaultDir;
+  rmSync(home, { recursive: true, force: true });
+});
 
 describe("profile registry", () => {
   test("create + list", () => {
@@ -55,6 +61,19 @@ describe("profile registry", () => {
 
   test("resolveActiveProfileVault is null with no active profile", () => {
     expect(resolveActiveProfileVault(configPath)).toBeNull();
+  });
+
+  test("a malformed registry never clobbers stored profiles on a mutating call", () => {
+    const registry = join(home, "profiles.json");
+    atomicWriteFileSync(registry, "{ this is not valid json");
+    // Read-only callers tolerate the malformed file (treat as empty)...
+    expect(listProfiles(configPath).profiles).toHaveLength(0);
+    expect(resolveActiveProfileVault(configPath)).toBeNull();
+    // ...but a mutating call fails fast instead of saving over it.
+    expect(() => createProfile(configPath, "work", "/srv/vaults/work")).toThrow(/malformed/);
+    expect(() => switchProfile(configPath, "work")).toThrow(/malformed/);
+    // The original bytes are left untouched.
+    expect(readFileSync(registry, "utf8")).toBe("{ this is not valid json");
   });
 });
 

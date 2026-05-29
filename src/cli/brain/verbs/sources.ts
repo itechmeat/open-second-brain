@@ -10,10 +10,10 @@ import { fail, parse, resolveBrainVault } from "../helpers.ts";
 export async function cmdBrainSources(argv: string[]): Promise<number> {
   const { flags } = parse(argv, { vault: { type: "string" }, json: { type: "boolean" } });
   const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
 
   let report;
   try {
+    const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
     report = aggregateSources(vault);
   } catch (exc) {
     return fail(`sources failed: ${(exc as Error).message ?? exc}`);

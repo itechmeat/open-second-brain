@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -61,5 +61,13 @@ describe("signal raw codec", () => {
     expect(onDisk).not.toContain("_raw_codec");
     expect(onDisk).toContain("Tail after a long blank run.");
     expect(parseSignal(path).raw).toBe(RAW);
+  });
+
+  test("parseSignal fails fast on an unknown _raw_codec version", () => {
+    const path = write(true);
+    // Tamper the marker to an unsupported codec version.
+    const tampered = readFileSync(path, "utf8").replace(/_raw_codec: .*/u, "_raw_codec: 999");
+    writeFileSync(path, tampered, "utf8");
+    expect(() => parseSignal(path)).toThrow(/_raw_codec/);
   });
 });

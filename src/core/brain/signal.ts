@@ -313,13 +313,17 @@ export function parseSignal(path: string): BrainSignal {
   }
 
   const rawSection = extractRawSection(body);
-  // Expand a codec-compressed body iff the signal carries the marker
-  // (v0.22.0). Signals without the marker - i.e. every default-config
-  // signal - take the verbatim path unchanged.
+  // Expand a codec-compressed body iff the signal carries a marker that
+  // matches the codec version we support (v0.22.0). Signals without the
+  // marker - i.e. every default-config signal - take the verbatim path
+  // unchanged. A marker with an unknown version fails fast rather than
+  // silently misdecoding a future or hand-authored payload.
+  const rawCodec = meta["_raw_codec"];
+  if (rawCodec !== undefined && rawCodec !== CODEC_VERSION) {
+    throw new Error(`signal field '_raw_codec' must be ${JSON.stringify(CODEC_VERSION)} (${path})`);
+  }
   const raw =
-    rawSection !== undefined && meta["_raw_codec"] !== undefined
-      ? expand(rawSection)
-      : rawSection;
+    rawSection !== undefined && rawCodec === CODEC_VERSION ? expand(rawSection) : rawSection;
 
   // Capture-extension optional fields. Absence stays as `undefined`
   // on the returned object — never coerced to a default, so callers

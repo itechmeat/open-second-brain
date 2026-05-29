@@ -102,7 +102,9 @@ export function exportVaultGraph(vault: string): VaultGraph {
       relations: collectRelations(meta),
     });
   }
-  nodes.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.path < b.path ? -1 : 1));
+  nodes.sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  );
   return { version: GRAPH_VERSION, nodes };
 }
 
@@ -125,6 +127,29 @@ interface GraphNodeInput {
   readonly title?: string;
   readonly links?: ReadonlyArray<string>;
   readonly relations?: Readonly<Record<string, ReadonlyArray<string>>>;
+}
+
+const isStringArray = (v: unknown): boolean =>
+  Array.isArray(v) && v.every((item) => typeof item === "string");
+
+/**
+ * Runtime guard for one untrusted JSON node. `path` must be a string;
+ * `title` (when present) a string; `links` a string array; `relations`
+ * a plain object whose every value is a string array. Anything else is
+ * rejected so the import skips it rather than throwing mid-run.
+ */
+function isValidGraphNode(node: unknown): node is GraphNodeInput {
+  if (!node || typeof node !== "object") return false;
+  const n = node as Record<string, unknown>;
+  if (typeof n["path"] !== "string") return false;
+  if (n["title"] !== undefined && typeof n["title"] !== "string") return false;
+  if (n["links"] !== undefined && !isStringArray(n["links"])) return false;
+  if (n["relations"] !== undefined) {
+    const rel = n["relations"];
+    if (!rel || typeof rel !== "object" || Array.isArray(rel)) return false;
+    if (!Object.values(rel).every((targets) => isStringArray(targets))) return false;
+  }
+  return true;
 }
 
 /**
@@ -184,6 +209,14 @@ export function importVaultGraph(
 
   const vaultMap = loadVaultMap(vault);
   for (const node of graph.nodes ?? []) {
+    // Validate the node shape per entry: a single malformed JSON node is
+    // rejected and the import continues, instead of throwing and aborting
+    // the whole run. `graph` arrives from untrusted JSON, so the static
+    // GraphNodeInput type is not a runtime guarantee.
+    if (!isValidGraphNode(node)) {
+      result.rejected.push(String((node as { path?: unknown })?.path ?? "<invalid-node>"));
+      continue;
+    }
     // Resolve `{{role}}` tokens in the target path via the vault-map so a
     // portable graph can address user folders abstractly (v0.22.0).
     const relPath = resolveTokens(vaultMap, node.path);

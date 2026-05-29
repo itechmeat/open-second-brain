@@ -19,7 +19,12 @@ export async function cmdVaultProfile(argv: ReadonlyArray<string>): Promise<numb
 
   switch (sub) {
     case "list": {
-      const listing = listProfiles(configPath);
+      let listing;
+      try {
+        listing = listProfiles(configPath);
+      } catch (exc) {
+        return fail(`profile list failed: ${(exc as Error).message ?? exc}`);
+      }
       if (flags["json"]) {
         writeJson(listing);
         return 0;
@@ -39,7 +44,11 @@ export async function cmdVaultProfile(argv: ReadonlyArray<string>): Promise<numb
       if (!name || !vault) {
         return fail("usage: o2b vault profile create <name> <vault-path>");
       }
-      createProfile(configPath, name, vault);
+      try {
+        createProfile(configPath, name, vault);
+      } catch (exc) {
+        return fail(`profile create failed: ${(exc as Error).message ?? exc}`);
+      }
       info(`created profile '${name}' -> ${vault}`);
       return 0;
     }

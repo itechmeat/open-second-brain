@@ -190,7 +190,7 @@ export const VERB_HELP: Record<string, string> = {
     "Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a\n" +
     "stable graph.json. Prints to stdout, or writes to --out. Read-only.\n",
   "graph-import":
-    "usage: o2b brain graph-import <file> [--mode skip|overwrite|merge] [--json]\n" +
+    "usage: o2b brain graph-import <file> [--mode skip|overwrite|merge] [--vault <path>] [--json]\n" +
     "Reconstruct vault page stubs from a graph.json. skip (default) never\n" +
     "overwrites; merge unions wikilinks/relations; writes are vault-guarded.\n",
   "morning-brief":

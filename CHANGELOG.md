@@ -16,8 +16,8 @@ install stays byte-identical.
 ### Added
 
 - Deterministic, lossless session codec (`src/core/brain/portability/codec.ts`).
-  Pure `compress` / `expand` where `expand(compress(x)) === x` for all
-  input; token savings come from reversibly collapsing whitespace and
+  Pure `compress` / `expand` where `expand(compress(x)) === x` for
+  sentinel-free input; token savings come from reversibly collapsing whitespace and
   blank-line runs behind a Private-Use-Area marker, with fenced/inline
   code protected and structured tokens (URLs, paths, identifiers, version
   numbers) preserved byte-for-byte. Opt-in on the signal store via

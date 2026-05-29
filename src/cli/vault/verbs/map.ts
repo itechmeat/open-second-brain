@@ -19,13 +19,17 @@ export async function cmdVaultMap(argv: ReadonlyArray<string>): Promise<number> 
     return fail(`vault map: ${(exc as Error).message ?? exc}`);
   }
 
-  const map = loadVaultMap(vault);
-  if (flags["json"]) {
-    writeJson(map);
+  try {
+    const map = loadVaultMap(vault);
+    if (flags["json"]) {
+      writeJson(map);
+      return 0;
+    }
+    for (const token of Object.keys(map).toSorted()) {
+      info(`{{${token}}} -> ${map[token]}`);
+    }
     return 0;
+  } catch (exc) {
+    return fail(`vault map: ${(exc as Error).message ?? exc}`);
   }
-  for (const token of Object.keys(map).toSorted()) {
-    info(`{{${token}}} -> ${map[token]}`);
-  }
-  return 0;
 }

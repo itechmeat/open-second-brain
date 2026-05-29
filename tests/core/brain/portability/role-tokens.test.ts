@@ -41,9 +41,7 @@ describe("DEFAULT_ROLE_TOKENS", () => {
 
 describe("resolveRoleToken", () => {
   test("returns the default when the map has no override", () => {
-    expect(resolveRoleToken({ ...DEFAULT_ROLE_TOKENS }, "inbox")).toBe(
-      DEFAULT_ROLE_TOKENS["inbox"]!,
-    );
+    expect(resolveRoleToken({}, "inbox")).toBe(DEFAULT_ROLE_TOKENS["inbox"]!);
   });
   test("returns the override when present", () => {
     expect(resolveRoleToken({ inbox: "Zettelkasten/Inbox" }, "inbox")).toBe(

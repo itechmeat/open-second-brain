@@ -28,6 +28,10 @@ export async function cmdBrainCodec(argv: string[]): Promise<number> {
     return fail(`codec: failed to read input: ${(exc as Error).message ?? exc}`);
   }
 
-  process.stdout.write(flags["compress"] ? compress(input) : expand(input));
+  try {
+    process.stdout.write(flags["compress"] ? compress(input) : expand(input));
+  } catch (exc) {
+    return fail(`codec failed: ${(exc as Error).message ?? exc}`);
+  }
   return 0;
 }

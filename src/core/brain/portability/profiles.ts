@@ -40,7 +40,7 @@ export function profilesPath(configPath: string): string {
   return join(dirname(configPath), "profiles.json");
 }
 
-function load(configPath: string): ProfilesFile {
+function load(configPath: string, opts: { tolerateParseError?: boolean } = {}): ProfilesFile {
   const path = profilesPath(configPath);
   if (!existsSync(path)) return { active: null, profiles: {} };
   try {
@@ -56,7 +56,13 @@ function load(configPath: string): ProfilesFile {
       }
     }
     return { active: typeof raw.active === "string" ? raw.active : null, profiles };
-  } catch {
+  } catch (exc) {
+    // Read-only callers tolerate a malformed registry (treat as empty);
+    // mutating callers must fail fast so a save() does not clobber a file
+    // we could not parse, silently dropping every stored profile.
+    if (!opts.tolerateParseError) {
+      throw new Error(`profiles registry is malformed: ${path}`, { cause: exc });
+    }
     return { ...EMPTY };
   }
 }
@@ -78,7 +84,7 @@ function save(configPath: string, data: ProfilesFile): void {
 
 /** List every profile plus the active pointer. */
 export function listProfiles(configPath: string): ProfilesListing {
-  const data = load(configPath);
+  const data = load(configPath, { tolerateParseError: true });
   const profiles = Object.keys(data.profiles)
     .toSorted()
     .map((name) => ({
@@ -114,7 +120,7 @@ export function switchProfile(configPath: string, name: string): void {
  * (or the active pointer dangles). Read-only; never throws.
  */
 export function resolveActiveProfileVault(configPath: string): string | null {
-  const data = load(configPath);
+  const data = load(configPath, { tolerateParseError: true });
   if (data.active === null) return null;
   return data.profiles[data.active]?.vault ?? null;
 }

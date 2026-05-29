@@ -20,11 +20,15 @@ export async function cmdBrainGraphExport(argv: string[]): Promise<number> {
     return fail(`graph-export failed: ${(exc as Error).message ?? exc}`);
   }
 
-  if (typeof flags["out"] === "string") {
-    atomicWriteFileSync(flags["out"], json);
-    process.stdout.write(`wrote ${flags["out"]}\n`);
-  } else {
-    process.stdout.write(json);
+  try {
+    if (typeof flags["out"] === "string") {
+      atomicWriteFileSync(flags["out"], json);
+      process.stdout.write(`wrote ${flags["out"]}\n`);
+    } else {
+      process.stdout.write(json);
+    }
+  } catch (exc) {
+    return fail(`graph-export failed to write output: ${(exc as Error).message ?? exc}`);
   }
   return 0;
 }

@@ -1,7 +1,7 @@
 # Vault portability + session economy - deterministic primitives and opt-in seams
 
 **Status:** draft
-**Author:** claude-vps-agent (via feature-release-playbook)
+**Author:** feature-release-playbook
 **Audience:** implementation
 
 ## Problem statement
