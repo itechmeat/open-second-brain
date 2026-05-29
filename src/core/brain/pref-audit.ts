@@ -8,11 +8,14 @@
  * authoritative (true before/after) and also catches manual edits routed
  * through the same primitives.
  *
- * No-op contract: {@link appendPrefAudit} writes nothing and returns
- * `false` when `hash_before === hash_after` (both present and equal),
- * i.e. the write did not change the preference content. This preserves
- * the byte-identical default-install contract - a dream pass that
- * touches no preference content leaves no audit line.
+ * No-op contract: for an `update` op, {@link appendPrefAudit} writes
+ * nothing and returns `false` when `hash_before === hash_after` (both
+ * present and equal), i.e. the write did not change the preference
+ * content - so counter-only refresh churn leaves no audit line and the
+ * byte-identical default-install contract holds. Lifecycle ops
+ * (`create` / `promote` / `retire` / `merge`) always record: they are
+ * meaningful transitions even when the principle/scope fingerprint is
+ * unchanged (e.g. a merge that only absorbs evidence).
  *
  * Append uses `appendFileSync` (the same `O_APPEND` atomicity assumption
  * as `dream-workrun.ts`); each line is small. The reader tolerates
@@ -25,7 +28,22 @@ import { dirname } from "node:path";
 
 import { prefAuditPath } from "./paths.ts";
 import { isoSecond } from "./time.ts";
-import type { PrefAuditOp, PrefAuditRecord } from "./types.ts";
+import { PREF_AUDIT_OP, type PrefAuditOp, type PrefAuditRecord } from "./types.ts";
+
+/**
+ * Opt-in audit sink threaded through a mutation chokepoint. When
+ * supplied, the chokepoint appends one audit record (subject to the
+ * per-op no-op rule). Omitting it preserves pre-suite behaviour - no
+ * audit file is created.
+ */
+export interface PrefAuditSink {
+  /** Agent identity recorded on the audit line. */
+  readonly agent: string;
+  /** Optional machine-readable reason code. */
+  readonly reason?: string;
+  /** Clock for the audit timestamp; defaults to `new Date()`. */
+  readonly now?: () => Date;
+}
 
 /** Input for {@link appendPrefAudit}. `reason` is optional. */
 export interface AppendPrefAuditInput {
@@ -81,9 +99,11 @@ export function appendPrefAudit(
   input: AppendPrefAuditInput,
   opts: { now?: Date } = {},
 ): boolean {
-  // No-op when the write did not change the preference content. Both
-  // hashes present and equal => nothing meaningful to record.
+  // No-op when an `update` did not change the preference content. Both
+  // hashes present and equal => counter-only churn, nothing meaningful
+  // to record. Lifecycle ops always record (see module docstring).
   if (
+    input.op === PREF_AUDIT_OP.update &&
     input.hash_before !== null &&
     input.hash_after !== null &&
     input.hash_before === input.hash_after
