@@ -40,6 +40,22 @@ describe("packContext", () => {
     expect(r.skipped.length).toBe(0);
   });
 
+  test("maxCharsPerMemory trims an oversized page body and flags it trimmed", () => {
+    const body = "x".repeat(500);
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-big.md"),
+      ["---", "id: pref-big", "topic: t", "principle: p", "tier: core", "---", "", body].join("\n"),
+    );
+
+    const full = packContext(vault, { maxTokens: 100_000 });
+    expect(full.items[0]!.trimmed).toBe(false);
+    expect([...full.items[0]!.body].length).toBeGreaterThanOrEqual(500);
+
+    const capped = packContext(vault, { maxTokens: 100_000, maxCharsPerMemory: 100 });
+    expect([...capped.items[0]!.body].length).toBe(100);
+    expect(capped.items[0]!.trimmed).toBe(true);
+  });
+
   test("orders core → supporting → peripheral", () => {
     writePref("p", { topic: "x", principle: "peripheral one", tier: "peripheral" });
     writePref("s", { topic: "x", principle: "supporting one", tier: "supporting" });

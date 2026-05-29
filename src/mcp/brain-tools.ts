@@ -1606,9 +1606,27 @@ async function toolBrainContextPack(
     throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
+  const perMemRaw = args["max_chars_per_memory"];
+  let maxCharsPerMemory: number | undefined;
+  if (perMemRaw !== undefined) {
+    const n =
+      typeof perMemRaw === "number"
+        ? perMemRaw
+        : typeof perMemRaw === "string" && /^[0-9]+$/.test(perMemRaw.trim())
+          ? Number.parseInt(perMemRaw.trim(), 10)
+          : Number.NaN;
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_pack: max_chars_per_memory must be a positive integer",
+      );
+    }
+    maxCharsPerMemory = n;
+  }
   const report = packContext(ctx.vault, {
     maxTokens,
     ...(query ? { query } : {}),
+    ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
   });
   return {
     vault_path: ctx.vault,
@@ -1620,6 +1638,7 @@ async function toolBrainContextPack(
       tier: i.tier,
       tokens: i.tokens,
       body: i.body,
+      trimmed: i.trimmed,
     })),
     skipped: report.skipped.map((s) => ({
       id: s.id,
@@ -2122,6 +2141,12 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         query: {
           type: "string",
           description: "Optional case/Unicode-insensitive substring filter on topic + principle.",
+        },
+        max_chars_per_memory: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Optional per-page character cap (code points): trim any single oversized page's body before it consumes the token budget, so one huge page cannot crowd out the rest. Trimmed pages carry `trimmed: true`.",
         },
       },
       required: ["max_tokens"],
