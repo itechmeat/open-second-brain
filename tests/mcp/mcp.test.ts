@@ -217,6 +217,8 @@ describe("tool listing", () => {
         "brain_daily_brief",
         "brain_weekly_synthesis",
         "brain_operator_summary",
+        // Pre-compress injection pack (added in v0.20.0).
+        "brain_pre_compress_pack",
         // Pay Memory (unchanged).
         "payment_memory_init",
         "payment_receipt_append",
@@ -466,7 +468,8 @@ describe("stdio loop", () => {
     // tools added in v0.17.0) + 8 Pay Memory + 1 Search
     // + brain_artifact_get (v0.18.0) = 40.
     // + brain_mcp_landscape (typed graph semantics) = 41.
-    expect(list.result.tools.length).toBe(41);
+    // + brain_pre_compress_pack (v0.20.0) = 42.
+    expect(list.result.tools.length).toBe(42);
   });
 
   test("returns parse error for invalid JSON", async () => {

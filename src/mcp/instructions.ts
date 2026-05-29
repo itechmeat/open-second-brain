@@ -110,7 +110,10 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "coverage.\n\n" +
     "Other tools: second_brain_status (config status), " +
     "vault_health (verify vault), second_brain_query (list vault pages " +
-    "by title - read-only).\n\n" +
+    "by title - read-only). brain_pre_compress_pack returns a compact " +
+    "system-prompt addendum (top confirmed preferences + the head of " +
+    "active.md) for a host runtime to inject just before a " +
+    "context-compression event - read-only.\n\n" +
     "Preview budget: large tool results may come back as a preview " +
     "envelope - a JSON object with `preview_truncated: true`, " +
     "`bytes_preview` (a head slice), `full_chars`, and an `artifact_id`. " +
