@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Store } from "../../../src/core/search/store.ts";
+import { LATEST_SCHEMA_VERSION } from "../../../src/core/search/schema.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import type {
   ResolvedSearchConfig,
@@ -51,7 +52,7 @@ afterEach(() => {
 test("open in write mode creates file and applies migrations", async () => {
   const store = await Store.open(makeConfig(), { mode: "write", loadVec: false });
   expect(existsSync(dbPath)).toBe(true);
-  expect(store.schemaVersion()).toBe(2);
+  expect(store.schemaVersion()).toBe(LATEST_SCHEMA_VERSION);
   await store.close();
 });
 
@@ -69,7 +70,7 @@ test("open in read mode succeeds after writer creates the file", async () => {
   const w = await Store.open(makeConfig(), { mode: "write", loadVec: false });
   await w.close();
   const r = await Store.open(makeConfig(), { mode: "read", loadVec: false });
-  expect(r.schemaVersion()).toBe(2);
+  expect(r.schemaVersion()).toBe(LATEST_SCHEMA_VERSION);
   await r.close();
 });
 

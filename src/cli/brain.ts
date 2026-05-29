@@ -32,6 +32,7 @@ import {
   cmdBrainHealth,
   cmdBrainHistory,
   cmdBrainBacklinks,
+  cmdBrainMcpLandscape,
   cmdBrainMerge,
   cmdBrainExplorer,
   cmdBrainExport,
@@ -126,6 +127,8 @@ export async function handleBrainSubcommand(
         return await cmdBrainHistory(rest);
       case "backlinks":
         return await cmdBrainBacklinks(rest);
+      case "mcp-landscape":
+        return await cmdBrainMcpLandscape(rest);
       case "scan-inline":
         return await cmdBrainScanInline(rest);
       case "import-session":

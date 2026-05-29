@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
+import { LATEST_SCHEMA_VERSION } from "../../src/core/search/schema.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
 let tmp: string;
@@ -181,7 +182,7 @@ test("second_brain_status includes search block after indexing", async () => {
   expect(search).toBeDefined();
   expect(search!["exists"]).toBe(true);
   expect(search!["documents"]).toBe(1);
-  expect(search!["schema_version"]).toBe(2);
+  expect(search!["schema_version"]).toBe(LATEST_SCHEMA_VERSION);
 });
 
 test("second_brain_status reports search.exists=false when index missing", async () => {

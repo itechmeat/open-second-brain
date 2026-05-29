@@ -2675,6 +2675,9 @@ function parseFrontmatter(path) {
   } catch {
     return [{}, ""];
   }
+  return parseFrontmatterText(text);
+}
+function parseFrontmatterText(text) {
   const match = FRONTMATTER_RE.exec(text);
   if (!match) {
     return [{}, text.trim()];

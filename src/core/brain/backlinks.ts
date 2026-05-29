@@ -29,6 +29,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import { relationFromFrontmatterField } from "../graph/relation-vocab.ts";
+import { normalizeRelationTarget } from "../graph/frontmatter-relations.ts";
 import { buildAliasIndex } from "./link-graph/alias-index.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import { parseLogDay } from "./log.ts";
@@ -70,6 +72,15 @@ export interface BacklinkRef {
    * want to show how the link was phrased.
    */
   readonly aliasSource?: string;
+  /**
+   * Semantic relation type (v3 / typed graph semantics) when the
+   * carrying frontmatter field is a known relation
+   * (`related` / `extends` / `contradicts` / `superseded_by`). Absent
+   * for body wikilinks and non-relation fields (`evidenced_by`,
+   * `supersedes`, `retired_by`, …). Classified via the single
+   * vocabulary boundary in src/core/graph/relation-vocab.ts.
+   */
+  readonly relation?: string;
 }
 
 /** Frozen target → refs map. Keys are normalised wikilink targets. */
@@ -196,13 +207,28 @@ function collectPreferences(
       push(supersedes, { source, sourceKind: kind, field: "supersedes" });
     }
     if (kind === "retired") {
-      const supersededBy = meta["superseded_by"];
-      if (typeof supersededBy === "string" && supersededBy.length > 0) {
-        push(supersededBy, { source, sourceKind: kind, field: "superseded_by" });
-      }
       const retiredBy = meta["retired_by"];
       if (typeof retiredBy === "string" && retiredBy.length > 0) {
         push(retiredBy, { source, sourceKind: kind, field: "retired_by" });
+      }
+    }
+    // Typed semantic relations (v3): map known relation frontmatter
+    // fields (related / extends / contradicts / superseded_by) to a
+    // relation type via the single vocabulary boundary. Covers any
+    // preference or retired artifact, generalising the prior
+    // retired-only `superseded_by` handling. Runs before the body
+    // wikilink pass so the relation-tagged ref wins dedup over a bare
+    // body reference to the same target.
+    for (const [field, value] of Object.entries(meta)) {
+      const relation = relationFromFrontmatterField(field);
+      if (!relation) continue;
+      const list = Array.isArray(value) ? value : typeof value === "string" && value ? [value] : [];
+      for (const t of list) {
+        if (typeof t !== "string" || t.length === 0) continue;
+        // The lightweight frontmatter parser can mangle `[[id]]` into
+        // `[id]`; recover the bare target before pushing.
+        const target = normalizeRelationTarget(t);
+        if (target) push(target, { source, sourceKind: kind, field, relation });
       }
     }
     for (const body0 of extractWikilinkRichBodies(body)) {

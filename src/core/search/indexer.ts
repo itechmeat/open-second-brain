@@ -28,6 +28,8 @@ import { basename, dirname } from "node:path";
 import { chunkMarkdown } from "./chunker.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { extractLinks } from "./links.ts";
+import { extractFrontmatterRelations } from "../graph/frontmatter-relations.ts";
+import { parseFrontmatterText } from "../vault.ts";
 import { extractEntities } from "./entities.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -216,6 +218,21 @@ async function indexInto(
           // Entity-boosted retrieval (v0.13.0): persist the chunk's
           // deterministic entity set alongside its links.
           store.replaceEntities(cid, extractEntities(content));
+        }
+        // Typed graph semantics (v3): frontmatter relation fields
+        // (related / extends / contradicts / superseded_by) become typed
+        // edges. They belong to the document, not a chunk, so anchor them
+        // on the first chunk (or null when the doc produced no chunks).
+        const [frontmatter] = parseFrontmatterText(content);
+        const relationChunkId = chunkIds[0] ?? null;
+        for (const edge of extractFrontmatterRelations(frontmatter)) {
+          links.push({
+            sourceChunkId: relationChunkId,
+            targetPath: edge.target,
+            linkText: null,
+            linkType: "wikilink",
+            relation: edge.relation,
+          });
         }
         store.replaceLinks(docId, links);
 

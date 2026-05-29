@@ -85,6 +85,13 @@ export interface LinkInput {
   readonly targetPath: string | null;
   readonly linkText: string | null;
   readonly linkType: "wikilink" | "markdown_link" | "tag";
+  /**
+   * Semantic relation type for this edge (v3 / typed graph semantics),
+   * orthogonal to `linkType`. `null`/absent for plain syntactic links;
+   * set for frontmatter-relation and MCP-config edges. Validated
+   * against the open vocabulary in src/core/graph/relation-vocab.ts.
+   */
+  readonly relation?: string | null;
 }
 
 export interface KeywordHit {
@@ -717,14 +724,22 @@ export class Store {
       if (links.length > 0) {
         const insert = this.db.prepare<
           undefined,
-          [number, number | null, string | null, string | null, string, string]
+          [number, number | null, string | null, string | null, string, string | null, string]
         >(
-          "INSERT INTO links(source_document_id, source_chunk_id, target_path, link_text, link_type, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT INTO links(source_document_id, source_chunk_id, target_path, link_text, link_type, relation, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
         );
         const now = nowIso();
         for (const l of links) {
-          insert.run(sourceDocumentId, l.sourceChunkId, l.targetPath, l.linkText, l.linkType, now);
+          insert.run(
+            sourceDocumentId,
+            l.sourceChunkId,
+            l.targetPath,
+            l.linkText,
+            l.linkType,
+            l.relation ?? null,
+            now,
+          );
         }
       }
       this.db.exec("COMMIT");
@@ -739,6 +754,36 @@ export class Store {
       "UPDATE links SET target_document_id = (SELECT id FROM documents WHERE documents.path = links.target_path) " +
         "WHERE target_path IS NOT NULL",
     );
+  }
+
+  /**
+   * For each document id, the typed relation edges it declares
+   * (v3 / typed graph semantics): rows whose `relation` is set, in
+   * insertion order. The target is the edge's `target_path` as written.
+   * Documents with no typed edges are absent from the returned map.
+   */
+  typedRelationsForDocuments(
+    documentIds: ReadonlyArray<number>,
+  ): Map<number, Array<{ relation: string; target: string }>> {
+    const out = new Map<number, Array<{ relation: string; target: string }>>();
+    if (documentIds.length === 0) return out;
+    const placeholders = documentIds.map(() => "?").join(",");
+    const rows = this.db
+      .query<{ source_document_id: number; relation: string; target_path: string | null }, number[]>(
+        "SELECT source_document_id, relation, target_path FROM links " +
+          `WHERE source_document_id IN (${placeholders}) AND relation IS NOT NULL ` +
+          "ORDER BY id",
+      )
+      .all(...(documentIds as number[]));
+    for (const r of rows) {
+      const target = r.target_path ?? "";
+      if (target === "") continue;
+      const arr = out.get(r.source_document_id);
+      const edge = { relation: r.relation, target };
+      if (arr) arr.push(edge);
+      else out.set(r.source_document_id, [edge]);
+    }
+    return out;
   }
 
   // ── search ─────────────────────────────────────────────────────────────────

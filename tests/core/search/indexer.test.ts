@@ -9,6 +9,7 @@ import {
   indexCheck,
 } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
+import { LATEST_SCHEMA_VERSION } from "../../../src/core/search/schema.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 let vault: string;
@@ -101,7 +102,7 @@ test("indexStatus reports accurate counts after an index run", async () => {
 
   const status = await indexStatus(cfg);
   expect(status.exists).toBe(true);
-  expect(status.schemaVersion).toBe(2);
+  expect(status.schemaVersion).toBe(LATEST_SCHEMA_VERSION);
   expect(status.documents).toBe(2);
   expect(status.chunks).toBeGreaterThanOrEqual(2);
   expect(status.lastIndexedAt).toBeTruthy();

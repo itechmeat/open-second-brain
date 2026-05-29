@@ -53,6 +53,14 @@ export interface BrainSearchResult {
    * never empty for a result that surfaced.
    */
   readonly reasons: ReadonlyArray<string>;
+  /**
+   * Typed semantic relations this result's page declares in its
+   * frontmatter (v3 / typed graph semantics): `related` / `extends` /
+   * `contradicts` / `superseded_by` and any other vocabulary relation.
+   * Computed at query time from the links table, never stored on the
+   * result row. Absent when the page declares no typed relations.
+   */
+  readonly relations?: ReadonlyArray<{ readonly relation: string; readonly target: string }>;
 }
 
 export interface IndexStats {
@@ -139,6 +147,14 @@ export interface SearchOptions {
    * resolved config default; `0` disables traversal for this query.
    */
   readonly maxHops?: number;
+  /**
+   * Requested content-visibility scope (v3 / typed graph semantics).
+   * Pages with no `visibility:` frontmatter are always returned;
+   * a page that declares visibility values is returned only when this
+   * scope includes one of them. Absent/empty = default scope (reaches
+   * untagged pages only). See src/core/graph/visibility.ts.
+   */
+  readonly visibility?: ReadonlyArray<string>;
 }
 
 export interface SearchOutcome {

@@ -62,7 +62,15 @@ export function parseFrontmatter(path: string): readonly [FrontmatterMap, string
   } catch {
     return [{}, ""];
   }
+  return parseFrontmatterText(text);
+}
 
+/**
+ * Same parse as {@link parseFrontmatter} but over an in-memory string,
+ * so a caller that already holds the file content (e.g. the search
+ * indexer) does not pay a second `readFileSync`.
+ */
+export function parseFrontmatterText(text: string): readonly [FrontmatterMap, string] {
   const match = FRONTMATTER_RE.exec(text);
   if (!match) {
     return [{}, text.trim()];
