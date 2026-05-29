@@ -45,13 +45,17 @@ function load(configPath: string): ProfilesFile {
   if (!existsSync(path)) return { active: null, profiles: {} };
   try {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<ProfilesFile>;
-    return {
-      active: typeof raw.active === "string" ? raw.active : null,
-      profiles:
-        raw.profiles && typeof raw.profiles === "object"
-          ? (raw.profiles as Record<string, { vault: string }>)
-          : {},
-    };
+    // Keep only well-shaped entries so a hand-edited file can't yield a
+    // profile whose `vault` is undefined downstream.
+    const profiles: Record<string, { vault: string }> = {};
+    if (raw.profiles && typeof raw.profiles === "object") {
+      for (const [name, entry] of Object.entries(raw.profiles)) {
+        if (entry && typeof entry === "object" && typeof entry.vault === "string") {
+          profiles[name] = { vault: entry.vault };
+        }
+      }
+    }
+    return { active: typeof raw.active === "string" ? raw.active : null, profiles };
   } catch {
     return { ...EMPTY };
   }

@@ -88,6 +88,10 @@ describe("loadVaultMap", () => {
     writeMap("inbox: /etc/passwd\n");
     expect(loadVaultMap(vault)["inbox"]).toBe(DEFAULT_ROLE_TOKENS["inbox"]!);
   });
+  test("allows a folder name containing spaces", () => {
+    writeMap("daily-notes: Daily Notes\n");
+    expect(loadVaultMap(vault)["daily-notes"]).toBe("Daily Notes");
+  });
   test("is deterministic", () => {
     writeMap("inbox: A\n");
     expect(loadVaultMap(vault)).toEqual(loadVaultMap(vault));

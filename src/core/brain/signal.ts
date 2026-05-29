@@ -204,7 +204,11 @@ export function writeSignal(
   // `_raw_codec` marker so the reader expands it. Default path is verbatim.
   let bodyInput = sanitised;
   if (sanitised.rawCodec === true && sanitised.raw) {
-    bodyInput = { ...sanitised, raw: compress(sanitised.raw) };
+    // Normalise trailing whitespace first (matching renderSignalBody on the
+    // verbatim path) so the codec and verbatim paths agree byte-for-byte on
+    // read; otherwise a trailing whitespace run would survive inside a marker.
+    const normalised = sanitised.raw.replace(/\s+$/u, "");
+    bodyInput = { ...sanitised, raw: compress(normalised) };
     metadata["_raw_codec"] = CODEC_VERSION;
   }
   const body = renderSignalBody(bodyInput);

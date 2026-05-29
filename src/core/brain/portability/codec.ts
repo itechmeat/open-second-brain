@@ -21,8 +21,12 @@
  *     mistaken for a real marker on expand.
  * ESC is a Unicode Private-Use-Area code point that does not occur in
  * normal text; the escape rule makes correctness unconditional anyway.
- * RUN_MIN = 4 guarantees a marker is never longer than the run it
- * replaces, so the compressed form never exceeds the original length.
+ * RUN_MIN = 4 guarantees a whitespace-run marker is never longer than the
+ * run it replaces, so for normal text (free of the PUA sentinel) the
+ * compressed form never exceeds the original. The only growth case is an
+ * input that already contains the sentinel: escaping adds one byte per
+ * literal ESC - which does not occur in real prose, and round-trip stays
+ * exact regardless.
  */
 
 export const CODEC_VERSION = "1";
