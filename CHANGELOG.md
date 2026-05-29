@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-05-29
+
+Vault portability + session economy. A new `portability/` subsystem makes
+the brain portable across folder layouts and vaults, gives per-source
+visibility into signal intake, and adds a deterministic lossless codec
+for session prose - every new behaviour opt-in or no-op so a default
+install stays byte-identical.
+
+### Added
+
+- Deterministic, lossless session codec (`src/core/brain/portability/codec.ts`).
+  Pure `compress` / `expand` where `expand(compress(x)) === x` for all
+  input; token savings come from reversibly collapsing whitespace and
+  blank-line runs behind a Private-Use-Area marker, with fenced/inline
+  code protected and structured tokens (URLs, paths, identifiers, version
+  numbers) preserved byte-for-byte. Opt-in on the signal store via
+  `writeSignal({ rawCodec })` / the `importSession` `rawCodec` option,
+  gated by a `_raw_codec` marker so `parseSignal` expands only marked
+  bodies; default off -> verbatim, byte-identical. Exposed as
+  `o2b brain codec --compress|--expand`.
+- `o2b brain sources` dashboard + `brain_sources` MCP tool
+  (`portability/sources.ts`). Read-only aggregation of inbox + processed
+  signals by (agent, source_type) with active/processed and
+  distinct-topic counts. (The upstream parallel-sync worker pool +
+  connection-budget warning are out of scope.)
+- Vault-map role tokens (`portability/role-tokens.ts`). Resolve
+  `{{role}}` tokens (`{{inbox}}`, `{{projects}}`, ...) to user content
+  folder names via an optional `Brain/_vault-map.yaml`, falling back to
+  built-in defaults; wired into scan-inline read paths and the
+  graph-import target. Mapped values are validated against traversal /
+  absolute / control characters. The FIXED Brain machinery layout is not
+  routed through the resolver. Inspect with `o2b vault map`.
+- Named multi-vault profiles (`portability/profiles.ts`). A registry in
+  `profiles.json` beside the config with `o2b vault profile list / create
+  / switch` and a `brain_switch_vault` MCP tool; activation is a pointer
+  (no symlinks). `resolveVault` consults the active profile before the
+  bare config `vault` key; with no registry, resolution is unchanged.
+- Vault graph export/import (`portability/graph.ts`). `o2b brain
+  graph-export` serialises the user's pages (wikilinks + typed relations)
+  to a stable, byte-identical `graph.json`; `o2b brain graph-import
+  --mode skip|overwrite|merge` reconstructs page stubs, every write
+  guarded by `ensureInsideVault`.
+
+### Notes
+
+- New MCP tools `brain_sources` and `brain_switch_vault` (tool count
+  44 -> 46). New CLI verbs under `o2b brain` (codec, sources,
+  graph-export, graph-import) and `o2b vault` (profile, map).
+- Default-install behaviour is byte-identical: the codec is opt-in and
+  marker-gated, vault-map and profiles are no-ops without their files,
+  and graph import is operator-invoked.
+- Full suite green on merge: 2825 tests passing.
+
 ## [0.21.0] - 2026-05-29
 
 Brain lifecycle suite. The nightly `dream` consolidation becomes an
@@ -3390,6 +3443,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.22.0]: https://github.com/itechmeat/open-second-brain/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/itechmeat/open-second-brain/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/itechmeat/open-second-brain/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/itechmeat/open-second-brain/compare/v0.18.0...v0.19.0
