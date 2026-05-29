@@ -42,7 +42,7 @@ export interface ContextPackItem {
 export interface ContextPackSkipped {
   readonly id: string;
   readonly tokens: number;
-  readonly reason: "over-budget" | "filter-miss";
+  readonly reason: "over-budget" | "filter-miss" | "over-char-budget";
 }
 
 export interface ContextPackReport {
@@ -62,6 +62,13 @@ export interface ContextPackOptions {
    * oversized page cannot crowd out the rest. <= 0 / undefined disables.
    */
   readonly maxCharsPerMemory?: number;
+  /**
+   * Total recall character cap (v0.20.0): a second ceiling alongside
+   * `maxTokens`, bounding the cumulative code points across the emitted
+   * pages. Lowest-priority overflow is dropped with an
+   * `over-char-budget` skip reason. <= 0 / undefined disables.
+   */
+  readonly maxTotalChars?: number;
 }
 
 interface Candidate {
@@ -177,6 +184,34 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       trimmed,
     });
     used += tokens;
+  }
+
+  // Total recall character cap (v0.20.0): a second ceiling over the
+  // token-budgeted set. Applied via the shared primitive on the emitted
+  // items only (so query-missed pages never count), dropping the
+  // lowest-priority overflow.
+  if (opts.maxTotalChars && opts.maxTotalChars > 0) {
+    const capped = applyCharBudget(
+      items.map((i) => ({ item: i, text: i.body })),
+      { maxTotalChars: opts.maxTotalChars },
+    );
+    if (capped.dropped.length > 0) {
+      const keptItems = capped.kept.map((k) => k.item);
+      const droppedSet = new Set(capped.dropped);
+      let recomputed = 0;
+      for (const i of keptItems) recomputed += i.tokens;
+      for (const d of items) {
+        if (droppedSet.has(d)) {
+          skipped.push({ id: d.id, tokens: d.tokens, reason: "over-char-budget" });
+        }
+      }
+      return Object.freeze({
+        maxTokens: opts.maxTokens,
+        tokensUsed: recomputed,
+        items: Object.freeze(keptItems),
+        skipped: Object.freeze(skipped),
+      });
+    }
   }
 
   return Object.freeze({

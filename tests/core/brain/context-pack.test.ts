@@ -56,6 +56,23 @@ describe("packContext", () => {
     expect(capped.items[0]!.trimmed).toBe(true);
   });
 
+  test("maxTotalChars drops lowest-priority overflow with an over-char-budget reason", () => {
+    const writeBody = (slug: string, tier: string, body: string) =>
+      writeFileSync(
+        join(vault, "Brain", "preferences", `pref-${slug}.md`),
+        ["---", `id: pref-${slug}`, "topic: t", "principle: p", `tier: ${tier}`, "---", "", body].join(
+          "\n",
+        ),
+      );
+    // Core (highest priority) emitted first, then peripheral.
+    writeBody("a", "core", "a".repeat(60));
+    writeBody("z", "peripheral", "z".repeat(60));
+
+    const capped = packContext(vault, { maxTokens: 100_000, maxTotalChars: 60 });
+    expect(capped.items.map((i) => i.id)).toEqual(["pref-a"]);
+    expect(capped.skipped.find((s) => s.id === "pref-z")?.reason).toBe("over-char-budget");
+  });
+
   test("orders core → supporting → peripheral", () => {
     writePref("p", { topic: "x", principle: "peripheral one", tier: "peripheral" });
     writePref("s", { topic: "x", principle: "supporting one", tier: "supporting" });

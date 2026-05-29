@@ -1623,10 +1623,28 @@ async function toolBrainContextPack(
     }
     maxCharsPerMemory = n;
   }
+  const totalRaw = args["max_total_chars"];
+  let maxTotalChars: number | undefined;
+  if (totalRaw !== undefined) {
+    const n =
+      typeof totalRaw === "number"
+        ? totalRaw
+        : typeof totalRaw === "string" && /^[0-9]+$/.test(totalRaw.trim())
+          ? Number.parseInt(totalRaw.trim(), 10)
+          : Number.NaN;
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_pack: max_total_chars must be a positive integer",
+      );
+    }
+    maxTotalChars = n;
+  }
   const report = packContext(ctx.vault, {
     maxTokens,
     ...(query ? { query } : {}),
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
+    ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
   });
   return {
     vault_path: ctx.vault,
@@ -2147,6 +2165,12 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           description:
             "Optional per-page character cap (code points): trim any single oversized page's body before it consumes the token budget, so one huge page cannot crowd out the rest. Trimmed pages carry `trimmed: true`.",
+        },
+        max_total_chars: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Optional second ceiling (code points) on the cumulative size of the returned slice. Lowest-priority overflow is dropped with an `over-char-budget` skip reason.",
         },
       },
       required: ["max_tokens"],
