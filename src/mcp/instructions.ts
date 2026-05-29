@@ -108,7 +108,11 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "and revision + content-hash before/after.\n" +
     "  - brain_morning_brief — read-only session-start summary: top " +
     "confirmed preferences, recent reconcile open questions, and recent " +
-    "notes, bounded by a character budget.\n\n" +
+    "notes, bounded by a character budget.\n" +
+    "  - brain_sources — read-only dashboard of signals grouped by " +
+    "(agent, source_type) with active/processed and distinct-topic counts.\n" +
+    "  - brain_switch_vault — activate a named vault profile; the change " +
+    "takes effect on the next server launch.\n\n" +
     "Skip Brain calls for casual chat, exploration without a stated " +
     "rule, read-only inspection, and trivial edits. A misrecorded " +
     "signal is worse than a missed one — the dream pass surfaces " +
