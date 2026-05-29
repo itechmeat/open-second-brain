@@ -92,6 +92,7 @@ export function makeConfig(opts: {
       recencyShape: 0.8,
       recencyScale: 30,
       recencyAmplitude: 0.05,
+      intentEnabled: true,
     }),
   });
 }

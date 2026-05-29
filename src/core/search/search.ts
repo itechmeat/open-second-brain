@@ -17,6 +17,7 @@ import { makeProvider } from "./embeddings/provider.ts";
 import { extractEntities } from "./entities.ts";
 import { runFtsQuery } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
+import { buildQueryPlan } from "./query-plan.ts";
 import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
@@ -65,6 +66,12 @@ export async function search(
   const pathPrefix = assertSafePathPrefix(opts.pathPrefix);
   const policy = resolveSemanticPolicy(config, opts);
   const warnings: string[] = [];
+
+  // Query plan (v0.20.0): one structural pass yields the intent weight
+  // profile (applied below when intent is enabled) and, later, the
+  // expanded terms and cache key. Pure; no I/O.
+  const plan = buildQueryPlan(query);
+  const weightProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;
 
   const store = await Store.open(config, { mode: "read" });
   try {
@@ -168,6 +175,7 @@ export async function search(
             scale: config.recall.recencyScale,
             amplitude: config.recall.recencyAmplitude,
           },
+          ...(weightProfile !== undefined ? { weightProfile } : {}),
         },
       );
       const capHit = ranked.length >= rankCap;

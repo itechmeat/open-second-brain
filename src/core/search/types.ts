@@ -63,6 +63,40 @@ export interface BrainSearchResult {
   readonly relations?: ReadonlyArray<{ readonly relation: string; readonly target: string }>;
 }
 
+/**
+ * Structural query intent (v0.20.0). Derived purely from query shape -
+ * quoted phrases, FTS wildcards, wikilinks, entity-token share, token
+ * count - never from a natural-language word list. `neutral` trips no
+ * rule and keeps ranking bit-identical.
+ */
+export type QueryIntent = "neutral" | "exact" | "entity" | "broad";
+
+/**
+ * Per-query ranking multipliers emitted by the query plan. Each is a
+ * bounded multiplier applied to the corresponding ranking layer; the
+ * neutral profile is all 1.0 (no effect).
+ */
+export interface WeightProfile {
+  readonly keywordMul: number;
+  readonly semanticMul: number;
+  readonly entityMul: number;
+  readonly recencyMul: number;
+}
+
+/**
+ * Pure analysis of an incoming query (v0.20.0). Computed once before
+ * retrieval and shared by intent-aware ranking (the `weightProfile`) and
+ * candidate augmentation (`expandedTerms`, populated by synonym
+ * expansion). `planHash` is a stable fingerprint of everything in the
+ * plan that affects results - used as part of the query-cache key.
+ */
+export interface QueryPlan {
+  readonly intent: QueryIntent;
+  readonly weightProfile: WeightProfile;
+  readonly expandedTerms: ReadonlyArray<string>;
+  readonly planHash: string;
+}
+
 export interface IndexStats {
   readonly added: number;
   readonly updated: number;
@@ -199,6 +233,13 @@ export interface ResolvedRecallConfig {
   readonly recencyShape: number;
   readonly recencyScale: number;
   readonly recencyAmplitude: number;
+  /**
+   * Query-intent classification (v0.20.0). When true (default) the query
+   * plan's weight profile re-weights ranking per detected intent; when
+   * false the neutral profile is used and ranking is bit-identical to
+   * pre-intent behaviour.
+   */
+  readonly intentEnabled: boolean;
 }
 
 export interface ResolvedSearchConfig {

@@ -300,6 +300,11 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.recencyAmplitude,
     "search_recency_amplitude",
   );
+  const intentEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED", "search_intent_enabled"),
+    true,
+    "search_intent_enabled",
+  );
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
@@ -308,6 +313,7 @@ export function resolveSearchConfig(opts: {
     recencyShape,
     recencyScale,
     recencyAmplitude,
+    intentEnabled,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({

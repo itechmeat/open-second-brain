@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { rankResults } from "../../../src/core/search/ranker.ts";
 import { weibullDecay, DEFAULT_RECENCY } from "../../../src/core/search/recency.ts";
+import { NEUTRAL_PROFILE } from "../../../src/core/search/query-plan.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "../../../src/core/search/store.ts";
 
 function hyd(chunkId: number, docId: number, mtime: number): HydratedChunk {
@@ -217,6 +218,37 @@ test("ranker honours a custom recency curve passed via options", () => {
   // keeps a higher boost than it would under the default curve.
   expect(boost).toBeCloseTo(weibullDecay(60, custom), 6);
   expect(boost).toBeGreaterThan(weibullDecay(60, DEFAULT_RECENCY));
+});
+
+test("an absent weightProfile ranks identically to the neutral profile", () => {
+  const inputs = {
+    keyword: [{ chunkId: 1, documentId: 10, bm25: -5 }],
+    semantic: [{ chunkId: 1, documentId: 10, distance: 0.3 }],
+    hydrated: new Map([[1, hyd(1, 10, RECENT_MTIME)]]),
+    inboundLinkSources: new Map(),
+    tagsByDoc: new Map(),
+  };
+  const opts = { keywordWeight: 0.6, semanticWeight: 0.4, limit: 10, nowMs: NOW };
+  const without = rankResults(inputs, opts)[0]!;
+  const neutral = rankResults(inputs, { ...opts, weightProfile: NEUTRAL_PROFILE })[0]!;
+  expect(neutral.score).toBe(without.score);
+});
+
+test("a keyword-leaning weightProfile raises a keyword hit's score", () => {
+  const inputs = {
+    keyword: [{ chunkId: 1, documentId: 10, bm25: -5 }],
+    semantic: [],
+    hydrated: new Map([[1, hyd(1, 10, OLD_MTIME)]]),
+    inboundLinkSources: new Map(),
+    tagsByDoc: new Map(),
+  };
+  const opts = { keywordWeight: 0.6, semanticWeight: 0.4, limit: 10, nowMs: NOW };
+  const base = rankResults(inputs, opts)[0]!.score;
+  const boosted = rankResults(inputs, {
+    ...opts,
+    weightProfile: { keywordMul: 1.3, semanticMul: 0.7, entityMul: 1, recencyMul: 1 },
+  })[0]!.score;
+  expect(boosted).toBeGreaterThan(base);
 });
 
 test("tie-break: equal final_score → higher keywordScore wins; then mtime; then chunkId", () => {

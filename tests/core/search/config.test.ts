@@ -28,6 +28,7 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE",
   "OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE",
   "OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE",
+  "OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED",
 ];
 
 beforeEach(() => {
@@ -84,6 +85,13 @@ test("recency curve params are overridable via env and config", () => {
   const cfg = resolveSearchConfig({ vault: tmp, configPath });
   expect(cfg.recall.recencyShape).toBe(1.2);
   expect(cfg.recall.recencyScale).toBe(45);
+});
+
+test("query-intent classification defaults on and is toggleable", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.intentEnabled).toBe(true);
+  process.env["OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED"] = "false";
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.intentEnabled).toBe(false);
 });
 
 test("non-positive recency scale is rejected", () => {
