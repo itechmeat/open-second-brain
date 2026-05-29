@@ -114,10 +114,20 @@ export async function search(
     let cacheKey: string | null = null;
     let generation = "";
     if (cacheEnabled) {
-      generation = store.corpusGeneration();
-      cacheKey = buildCacheKey(opts, basePlan.planHash, configFingerprint(config));
-      const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
-      if (hit) return hit;
+      // The whole cache lookup is best-effort: any failure (e.g. a
+      // SQLITE_BUSY past the busy_timeout under a concurrent reindex)
+      // falls through to a normal fresh compute rather than breaking the
+      // search. Key on the EFFECTIVE request (clamped limit, resolved
+      // semantic decision) so equivalent calls share a cache entry.
+      try {
+        generation = store.corpusGeneration();
+        const keyOpts = { ...opts, limit, semantic: policy.wantSemantic, keywordOnly: false };
+        cacheKey = buildCacheKey(keyOpts, basePlan.planHash, configFingerprint(config));
+        const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
+        if (hit) return hit;
+      } catch {
+        cacheKey = null;
+      }
     }
     const finalize = (outcome: SearchOutcome): SearchOutcome => {
       if (cacheEnabled && cacheKey) {

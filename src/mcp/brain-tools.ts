@@ -1607,40 +1607,8 @@ async function toolBrainContextPack(
     throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
-  const perMemRaw = args["max_chars_per_memory"];
-  let maxCharsPerMemory: number | undefined;
-  if (perMemRaw !== undefined) {
-    const n =
-      typeof perMemRaw === "number"
-        ? perMemRaw
-        : typeof perMemRaw === "string" && /^[0-9]+$/.test(perMemRaw.trim())
-          ? Number.parseInt(perMemRaw.trim(), 10)
-          : Number.NaN;
-    if (!Number.isInteger(n) || n <= 0) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        "brain_context_pack: max_chars_per_memory must be a positive integer",
-      );
-    }
-    maxCharsPerMemory = n;
-  }
-  const totalRaw = args["max_total_chars"];
-  let maxTotalChars: number | undefined;
-  if (totalRaw !== undefined) {
-    const n =
-      typeof totalRaw === "number"
-        ? totalRaw
-        : typeof totalRaw === "string" && /^[0-9]+$/.test(totalRaw.trim())
-          ? Number.parseInt(totalRaw.trim(), 10)
-          : Number.NaN;
-    if (!Number.isInteger(n) || n <= 0) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        "brain_context_pack: max_total_chars must be a positive integer",
-      );
-    }
-    maxTotalChars = n;
-  }
+  const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
+  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
   const report = packContext(ctx.vault, {
     maxTokens,
     ...(query ? { query } : {}),

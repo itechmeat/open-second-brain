@@ -84,7 +84,13 @@ export function getCachedOutcome(
   if (row.generation !== generation) return null;
   if (nowMs - row.createdAt > ttlMs) return null;
   try {
-    return Object.freeze(JSON.parse(row.payload) as SearchOutcome);
+    const parsed = JSON.parse(row.payload) as SearchOutcome;
+    // Match the fresh-compute path's immutability: freeze the results
+    // array and each result so a hit is indistinguishable from a miss.
+    for (const r of parsed.results) Object.freeze(r);
+    Object.freeze(parsed.results);
+    Object.freeze(parsed.warnings);
+    return Object.freeze(parsed);
   } catch {
     return null;
   }

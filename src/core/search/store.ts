@@ -144,6 +144,11 @@ function applyPragmas(db: Database): void {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA synchronous = NORMAL");
+  // Wait briefly for a concurrent writer (e.g. an indexer holding the WAL
+  // write lock) instead of failing immediately with SQLITE_BUSY. Matters
+  // for the opportunistic query-cache writes a read-mode connection makes
+  // during search (v0.20.0); search itself also degrades gracefully.
+  db.exec("PRAGMA busy_timeout = 5000");
 }
 
 function ensureFts5(db: Database): void {
