@@ -140,6 +140,25 @@ layer config-tunable and bounded:
 | `search_hop_decay`             | `OPEN_SECOND_BRAIN_SEARCH_HOP_DECAY`             | `0.5`   | Per-hop score multiplier for traversal-surfaced docs              |
 | `search_max_expansion_per_hit` | `OPEN_SECOND_BRAIN_SEARCH_MAX_EXPANSION_PER_HIT` | `3`     | Cap on outbound links followed per node                           |
 
+Recall and ranking quality (v0.20.0), each tunable and bounded:
+
+| Config key                     | Env var                                          | Default | Effect                                                            |
+| ------------------------------ | ------------------------------------------------ | ------- | ----------------------------------------------------------------- |
+| `search_recency_shape`         | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE`         | `0.8`   | Weibull recency curve shape (k)                                   |
+| `search_recency_scale`         | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE`         | `30`    | Weibull characteristic lifetime in days                           |
+| `search_recency_amplitude`     | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE`     | `0.05`  | Max recency boost at age 0; `0` disables the recency layer        |
+| `search_intent_enabled`        | `OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED`        | `true`  | Re-weight ranking by structural query intent; `false` is neutral  |
+| `search_synonym_enabled`       | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED`       | `false` | Opt-in co-occurrence query expansion (language-agnostic)          |
+| `search_synonym_max_terms`     | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS`     | `3`     | Cap on expansion terms OR'd onto the query                        |
+| `search_cache_enabled`         | `OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED`         | `false` | Opt-in persistent query cache, gated by corpus generation         |
+| `search_cache_ttl_seconds`     | `OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL`             | `300`   | Cache row time-to-live in seconds                                 |
+
+`brain_context_pack` also accepts `max_chars_per_memory` and
+`max_total_chars` (code-point caps), and the read-only
+`brain_pre_compress_pack` MCP tool returns a budgeted
+top-preferences-plus-`active.md` addendum for a host runtime to inject
+before a context-compression event.
+
 Entity-boosted retrieval and header-anchored chunking populate on the
 next reindex and need no configuration. Every result carries a
 `why_retrieved` list naming the scoring layers that ranked it.
