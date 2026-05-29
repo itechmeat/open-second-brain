@@ -27,6 +27,7 @@
 import type { FrontmatterMap } from "../types.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
+import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
 import { allocateSlug, brainDirs, validateIsoDate } from "./paths.ts";
 import {
   BRAIN_SIGNAL_SIGN,
@@ -77,6 +78,13 @@ export interface WriteSignalInput {
   readonly dedup_hash?: string;
   /** Session coordinates `<path>#<turn-id>` (§16). */
   readonly session_ref?: string;
+  /**
+   * Vault portability suite (v0.22.0). Opt-in: when true and `raw` is
+   * present, the body is stored through the deterministic codec and a
+   * `_raw_codec` marker is stamped so `parseSignal` expands it on read.
+   * Default (absent/false) writes the raw body verbatim - byte-identical.
+   */
+  readonly rawCodec?: boolean;
 }
 
 export interface WriteSignalOptions {
@@ -192,7 +200,14 @@ export function writeSignal(
     metadata["session_ref"] = sanitised.session_ref.trim();
   }
 
-  const body = renderSignalBody(sanitised);
+  // Opt-in codec (v0.22.0): store the raw body compressed and stamp a
+  // `_raw_codec` marker so the reader expands it. Default path is verbatim.
+  let bodyInput = sanitised;
+  if (sanitised.rawCodec === true && sanitised.raw) {
+    bodyInput = { ...sanitised, raw: compress(sanitised.raw) };
+    metadata["_raw_codec"] = CODEC_VERSION;
+  }
+  const body = renderSignalBody(bodyInput);
   writeFrontmatterAtomic(allocated.path, metadata, body, {
     overwrite: false,
     existsErrorKind: "signal",
@@ -293,7 +308,14 @@ export function parseSignal(path: string): BrainSignal {
     source = [...(meta["source"] as ReadonlyArray<string>)];
   }
 
-  const raw = extractRawSection(body);
+  const rawSection = extractRawSection(body);
+  // Expand a codec-compressed body iff the signal carries the marker
+  // (v0.22.0). Signals without the marker - i.e. every default-config
+  // signal - take the verbatim path unchanged.
+  const raw =
+    rawSection !== undefined && meta["_raw_codec"] !== undefined
+      ? expand(rawSection)
+      : rawSection;
 
   // Capture-extension optional fields. Absence stays as `undefined`
   // on the returned object — never coerced to a default, so callers
