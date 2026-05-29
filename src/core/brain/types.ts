@@ -209,6 +209,40 @@ export function isBrainLogEventKind(value: string): value is BrainLogEventKind {
   return BRAIN_LOG_EVENT_KIND_SET.has(value);
 }
 
+/**
+ * Per-preference mutation audit op kinds (Brain lifecycle suite,
+ * Feature 1). Captured at the mutation chokepoints. The reader
+ * tolerates unknown op strings (forward-compat), so this is the
+ * canonical set the writers emit, not a closed validation gate.
+ */
+export const PREF_AUDIT_OP = {
+  create: "create",
+  update: "update",
+  promote: "promote",
+  retire: "retire",
+  merge: "merge",
+} as const;
+export type PrefAuditOp = (typeof PREF_AUDIT_OP)[keyof typeof PREF_AUDIT_OP];
+
+/**
+ * One append-only audit line for a single preference mutation. Stored
+ * as JSONL under `Brain/log/pref-audit/<pref-id>.jsonl`. `op` is widened
+ * to `string` on read so an unknown future op kind round-trips without
+ * loss. Revision/hash before-after are `null` where not applicable
+ * (e.g. `hash_before` is `null` on a `create`).
+ */
+export interface PrefAuditRecord {
+  readonly ts: string;
+  readonly pref_id: string;
+  readonly op: PrefAuditOp | string;
+  readonly agent: string;
+  readonly reason?: string;
+  readonly revision_before: number | null;
+  readonly revision_after: number | null;
+  readonly hash_before: string | null;
+  readonly hash_after: string | null;
+}
+
 // ----- File-frontmatter shapes ----------------------------------------------
 
 /**
