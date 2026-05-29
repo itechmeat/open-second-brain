@@ -281,6 +281,34 @@ Key rules baked into the pipeline:
   preference is logged as a `skip-corrupted-frontmatter` event; the
   rest of the run proceeds.
 
+### Lifecycle suite (v0.21.0)
+
+The same pipeline is named as five explicit ordered phases - **close**
+(scan) -> **reconcile** (contradictions) -> **synthesize** (promote /
+confirm) -> **heal** (auto-retire stale, optional enrichment) -> **log**
+- each emitting a workrun checkpoint and a structured entry in
+`DreamRunSummary.phases`. The internals are unchanged; the phases are
+labels over the existing seams, so every invariant above still holds.
+
+- **Reconcile classification.** Each contradiction is bucketed by
+  structural signal shape (claims / entity / decisions / source-freshness).
+  Only source-freshness with a decisive recency gap auto-resolves - and
+  even then it is *recorded* as a `reconcile` log event, never a
+  sub-threshold state mutation. Everything else surfaces in
+  `open_questions` for operator review rather than being force-merged.
+- **Per-preference audit.** Every mutation (create / promote / update /
+  retire / merge) appends one line to `Brain/log/pref-audit/<pref-id>.jsonl`
+  with the agent, reason, and revision + content-hash before/after.
+  Counter-only churn is suppressed, so a no-op run writes no audit line.
+- **Temporal extraction.** On promotion an empty `valid_from` /
+  `valid_until` is filled from the source signal - explicit bi-temporal
+  fields first, else formal ISO-8601 tokens parsed from the signal text
+  (no localized month/day names).
+- **Heal enrichment** (opt-in via `dream.heal_enrich_enabled`, default
+  off). The heal phase links exact title/alias mentions across user vault
+  pages outside the Brain root. Disabled by default so the install stays
+  byte-identical.
+
 ## Confidence formula
 
 Confidence is computed for every active preference on every dream
