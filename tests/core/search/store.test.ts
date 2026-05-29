@@ -44,6 +44,8 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
       recencyScale: 30,
       recencyAmplitude: 0.05,
       intentEnabled: true,
+      synonymEnabled: false,
+      synonymMaxTerms: 3,
     }),
     ...overrides,
   });

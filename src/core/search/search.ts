@@ -18,6 +18,7 @@ import { extractEntities } from "./entities.ts";
 import { runFtsQuery } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
 import { buildQueryPlan } from "./query-plan.ts";
+import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from "./synonyms.ts";
 import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
@@ -68,18 +69,40 @@ export async function search(
   const warnings: string[] = [];
 
   // Query plan (v0.20.0): one structural pass yields the intent weight
-  // profile (applied below when intent is enabled) and, later, the
-  // expanded terms and cache key. Pure; no I/O.
-  const plan = buildQueryPlan(query);
-  const weightProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;
+  // profile and the cache key. Pure; no I/O. Expanded terms (if any) are
+  // folded in once they have been derived from the store below.
+  const basePlan = buildQueryPlan(query);
 
   const store = await Store.open(config, { mode: "read" });
   try {
     // Keyword candidates.
-    const kwHits = runFtsQuery(store, query, {
+    let kwHits = runFtsQuery(store, query, {
       limit: limit * 3,
       pathPrefix,
     });
+
+    // Synonym / query expansion (v0.20.0): opt-in and never for an
+    // exact-intent (quoted/wildcard) query. Derive related terms from
+    // the top candidates' own content (local co-occurrence) and re-run
+    // FTS with them OR'd onto the original query to broaden recall. A
+    // no-op - byte-identical kwHits - when disabled or no term qualifies.
+    let plan = basePlan;
+    if (config.recall.synonymEnabled && basePlan.intent !== "exact" && kwHits.length > 0) {
+      const topIds = kwHits.slice(0, 10).map((h) => h.chunkId);
+      const ctx = store.hydrateChunks(topIds);
+      const texts = topIds
+        .map((id) => ctx.get(id)?.content ?? "")
+        .filter((t) => t.length > 0);
+      const expandedTerms = deriveExpansionTerms(tokenizeForExpansion(query), texts, {
+        ...DEFAULT_EXPANSION,
+        maxTerms: config.recall.synonymMaxTerms,
+      });
+      if (expandedTerms.length > 0) {
+        plan = buildQueryPlan(query, expandedTerms);
+        kwHits = runFtsQuery(store, query, { limit: limit * 3, pathPrefix, expandedTerms });
+      }
+    }
+    const weightProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;
 
     // Semantic candidates (may be skipped).
     let semHits: ReturnType<Store["semanticTopK"]> = [];

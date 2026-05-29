@@ -67,6 +67,7 @@ const DEFAULTS = {
   recencyShape: 0.8,
   recencyScale: 30,
   recencyAmplitude: 0.05,
+  synonymMaxTerms: 3,
 };
 
 type IntegerRange = { readonly min?: number; readonly max?: number };
@@ -305,6 +306,22 @@ export function resolveSearchConfig(opts: {
     true,
     "search_intent_enabled",
   );
+  const synonymEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED", "search_synonym_enabled"),
+    false,
+    "search_synonym_enabled",
+  );
+  const synonymMaxTerms = parseInteger(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS",
+      "search_synonym_max_terms",
+    ),
+    DEFAULTS.synonymMaxTerms,
+    "search_synonym_max_terms",
+    { min: 0 },
+  );
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
@@ -314,6 +331,8 @@ export function resolveSearchConfig(opts: {
     recencyScale,
     recencyAmplitude,
     intentEnabled,
+    synonymEnabled,
+    synonymMaxTerms,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({

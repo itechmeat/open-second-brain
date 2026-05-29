@@ -240,6 +240,15 @@ export interface ResolvedRecallConfig {
    * pre-intent behaviour.
    */
   readonly intentEnabled: boolean;
+  /**
+   * Synonym / query expansion (v0.20.0). Off by default: expansion
+   * broadens the candidate set via local co-occurrence, so it changes
+   * results and is opt-in. `synonymMaxTerms` caps how many expansion
+   * terms are OR'd onto the query. Always suppressed for exact-intent
+   * (quoted/wildcard) queries. See `synonyms.ts`.
+   */
+  readonly synonymEnabled: boolean;
+  readonly synonymMaxTerms: number;
 }
 
 export interface ResolvedSearchConfig {

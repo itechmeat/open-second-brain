@@ -55,6 +55,10 @@ export function makeConfig(opts: {
   mmrLambda?: number;
   /** Link-graph traversal depth; defaults to 1. Pass 0 to disable. */
   maxHops?: number;
+  /** Query-intent reweighting; defaults to true. */
+  intentEnabled?: boolean;
+  /** Synonym / query expansion; defaults to false (opt-in). */
+  synonymEnabled?: boolean;
 }): ResolvedSearchConfig {
   const baseSemantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: false,
@@ -92,7 +96,9 @@ export function makeConfig(opts: {
       recencyShape: 0.8,
       recencyScale: 30,
       recencyAmplitude: 0.05,
-      intentEnabled: true,
+      intentEnabled: opts.intentEnabled ?? true,
+      synonymEnabled: opts.synonymEnabled ?? false,
+      synonymMaxTerms: 3,
     }),
   });
 }

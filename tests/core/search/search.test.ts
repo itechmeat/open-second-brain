@@ -54,6 +54,37 @@ async function seedKeyword() {
   return makeConfig({ vault, dbPath });
 }
 
+async function seedExpansion() {
+  // d1 + d2 both match "alpha" and co-mention "beta" -> "beta" is a
+  // co-occurrence expansion term. d3 has "beta" but not "alpha".
+  writeMd(vault, "Notes/d1.md", "# D1\n\nalpha beta gamma notes.");
+  writeMd(vault, "Notes/d2.md", "# D2\n\nalpha beta delta notes.");
+  writeMd(vault, "Notes/d3.md", "# D3\n\nbeta epsilon unrelated content.");
+}
+
+test("synonym expansion (opt-in) broadens recall to a co-occurring-term doc", async () => {
+  await seedExpansion();
+  const off = makeConfig({ vault, dbPath });
+  await indexVault(off);
+
+  const baseline = await search(off, { query: "alpha", limit: 10 });
+  expect(baseline.results.map((r) => r.path)).not.toContain("Notes/d3.md");
+
+  const on = makeConfig({ vault, dbPath, synonymEnabled: true });
+  const expanded = await search(on, { query: "alpha", limit: 10 });
+  // "beta" co-occurs in d1+d2, so expansion pulls in d3 via the OR.
+  expect(expanded.results.map((r) => r.path)).toContain("Notes/d3.md");
+});
+
+test("synonym expansion is suppressed for an exact-intent (quoted) query", async () => {
+  await seedExpansion();
+  const on = makeConfig({ vault, dbPath, synonymEnabled: true });
+  await indexVault(on);
+  const res = await search(on, { query: '"alpha"', limit: 10 });
+  // Quoted -> exact intent -> no expansion -> d3 (no "alpha") stays out.
+  expect(res.results.map((r) => r.path)).not.toContain("Notes/d3.md");
+});
+
 test("search returns keyword-only results when semantic is disabled", async () => {
   const cfg = await seedKeyword();
   await indexVault(cfg);

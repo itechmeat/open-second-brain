@@ -29,6 +29,8 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE",
   "OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE",
   "OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED",
+  "OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED",
+  "OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS",
 ];
 
 beforeEach(() => {
@@ -92,6 +94,18 @@ test("query-intent classification defaults on and is toggleable", () => {
   expect(resolveSearchConfig({ vault: tmp, configPath }).recall.intentEnabled).toBe(true);
   process.env["OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED"] = "false";
   expect(resolveSearchConfig({ vault: tmp, configPath }).recall.intentEnabled).toBe(false);
+});
+
+test("synonym expansion defaults off and is toggleable with a term cap", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const def = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  expect(def.synonymEnabled).toBe(false);
+  expect(def.synonymMaxTerms).toBe(3);
+  process.env["OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED"] = "true";
+  process.env["OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS"] = "5";
+  const on = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  expect(on.synonymEnabled).toBe(true);
+  expect(on.synonymMaxTerms).toBe(5);
 });
 
 test("non-positive recency scale is rejected", () => {
