@@ -63,6 +63,7 @@ import { buildWeeklySynthesis } from "../core/brain/temporal/weekly-brief.ts";
 import { loadTemporalConfigSafe } from "../core/brain/policy.ts";
 import { isBrainLogEventKind, type BrainLogEventKind } from "../core/brain/types.ts";
 import { packContext } from "../core/brain/context-pack.ts";
+import { buildPreCompressPack } from "../core/brain/pre-compress-pack.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
@@ -1606,9 +1607,13 @@ async function toolBrainContextPack(
     throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
+  const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
+  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
   const report = packContext(ctx.vault, {
     maxTokens,
     ...(query ? { query } : {}),
+    ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
+    ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
   });
   return {
     vault_path: ctx.vault,
@@ -1620,12 +1625,61 @@ async function toolBrainContextPack(
       tier: i.tier,
       tokens: i.tokens,
       body: i.body,
+      trimmed: i.trimmed,
     })),
     skipped: report.skipped.map((s) => ({
       id: s.id,
       tokens: s.tokens,
       reason: s.reason,
     })),
+  };
+}
+
+// ----- brain_pre_compress_pack (v0.20.0) -----------------------------------
+
+/** Parse an optional positive-integer arg, throwing INVALID_PARAMS otherwise. */
+function optionalPositiveInt(
+  args: Record<string, unknown>,
+  key: string,
+  tool: string,
+): number | undefined {
+  const raw = args[key];
+  if (raw === undefined) return undefined;
+  const n =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && /^[0-9]+$/.test(raw.trim())
+        ? Number.parseInt(raw.trim(), 10)
+        : Number.NaN;
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${key} must be a positive integer`);
+  }
+  return n;
+}
+
+/**
+ * Read-only bundle of the highest-confidence confirmed preferences plus
+ * the head of active.md, rendered as a system-prompt addendum for a host
+ * runtime to inject just before a context-compression event.
+ */
+async function toolBrainPreCompressPack(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const topK = optionalPositiveInt(args, "top_k", "brain_pre_compress_pack") ?? 10;
+  const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_pre_compress_pack");
+  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_pre_compress_pack");
+  const pack = buildPreCompressPack(ctx.vault, {
+    topK,
+    ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
+    ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+  });
+  return {
+    vault_path: ctx.vault,
+    text: pack.text,
+    active_head_included: pack.activeHeadIncluded,
+    total_chars: pack.totalChars,
+    items: pack.items.map((i) => ({ id: i.id, principle: i.principle, trimmed: i.trimmed })),
   };
 }
 
@@ -2123,11 +2177,52 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description: "Optional case/Unicode-insensitive substring filter on topic + principle.",
         },
+        max_chars_per_memory: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Optional per-page character cap (code points): trim any single oversized page's body before it consumes the token budget, so one huge page cannot crowd out the rest. Trimmed pages carry `trimmed: true`.",
+        },
+        max_total_chars: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Optional second ceiling (code points) on the cumulative size of the returned slice. Lowest-priority overflow is dropped with an `over-char-budget` skip reason.",
+        },
       },
       required: ["max_tokens"],
       additionalProperties: false,
     },
     handler: toolBrainContextPack,
+  },
+  {
+    // No preview budget: the addendum is meant to be injected whole and
+    // is already bounded by its own per-entry / total character caps.
+    name: "brain_pre_compress_pack",
+    description:
+      "Return a compact system-prompt addendum of the top-K highest-confidence confirmed preferences plus the head of active.md, so a host runtime can inject it just before a context-compression event and keep high-salience constraints from rotating out. Bounded by optional per-memory and total character caps. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        top_k: {
+          type: "integer",
+          minimum: 1,
+          description: "Maximum number of preferences to include, highest-confidence first (default 10).",
+        },
+        max_chars_per_memory: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional per-entry character cap (code points); trimmed entries carry `trimmed: true`.",
+        },
+        max_total_chars: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional total character cap (code points) across the addendum; lowest-priority overflow is dropped.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainPreCompressPack,
   },
   {
     name: "brain_unlinked_mentions",

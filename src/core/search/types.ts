@@ -63,6 +63,40 @@ export interface BrainSearchResult {
   readonly relations?: ReadonlyArray<{ readonly relation: string; readonly target: string }>;
 }
 
+/**
+ * Structural query intent (v0.20.0). Derived purely from query shape -
+ * quoted phrases, FTS wildcards, wikilinks, entity-token share, token
+ * count - never from a natural-language word list. `neutral` trips no
+ * rule and keeps ranking bit-identical.
+ */
+export type QueryIntent = "neutral" | "exact" | "entity" | "broad";
+
+/**
+ * Per-query ranking multipliers emitted by the query plan. Each is a
+ * bounded multiplier applied to the corresponding ranking layer; the
+ * neutral profile is all 1.0 (no effect).
+ */
+export interface WeightProfile {
+  readonly keywordMul: number;
+  readonly semanticMul: number;
+  readonly entityMul: number;
+  readonly recencyMul: number;
+}
+
+/**
+ * Pure analysis of an incoming query (v0.20.0). Computed once before
+ * retrieval and shared by intent-aware ranking (the `weightProfile`) and
+ * candidate augmentation (`expandedTerms`, populated by synonym
+ * expansion). `planHash` is a stable fingerprint of everything in the
+ * plan that affects results - used as part of the query-cache key.
+ */
+export interface QueryPlan {
+  readonly intent: QueryIntent;
+  readonly weightProfile: WeightProfile;
+  readonly expandedTerms: ReadonlyArray<string>;
+  readonly planHash: string;
+}
+
 export interface IndexStats {
   readonly added: number;
   readonly updated: number;
@@ -190,6 +224,41 @@ export interface ResolvedRecallConfig {
   readonly hopDecay: number;
   /** Cap on outbound links followed per node. */
   readonly maxExpansionPerHit: number;
+  /**
+   * Weibull recency decay curve (v0.20.0). `recencyShape` is the Weibull
+   * shape k (> 0); `recencyScale` is the characteristic lifetime in days
+   * (> 0); `recencyAmplitude` is the maximum boost at age 0, in [0, 1].
+   * Amplitude 0 disables the recency layer. See `recency.ts`.
+   */
+  readonly recencyShape: number;
+  readonly recencyScale: number;
+  readonly recencyAmplitude: number;
+  /**
+   * Query-intent classification (v0.20.0). When true (default) the query
+   * plan's weight profile re-weights ranking per detected intent; when
+   * false the neutral profile is used and ranking is bit-identical to
+   * pre-intent behaviour.
+   */
+  readonly intentEnabled: boolean;
+  /**
+   * Synonym / query expansion (v0.20.0). Off by default: expansion
+   * broadens the candidate set via local co-occurrence, so it changes
+   * results and is opt-in. `synonymMaxTerms` caps how many expansion
+   * terms are OR'd onto the query. Always suppressed for exact-intent
+   * (quoted/wildcard) queries. See `synonyms.ts`.
+   */
+  readonly synonymEnabled: boolean;
+  readonly synonymMaxTerms: number;
+  /**
+   * Persistent query cache (v0.20.0). Off by default: when enabled,
+   * `search()` serves a previously computed result for an identical
+   * request as long as the corpus generation is unchanged and the row is
+   * within `cacheTtlSeconds`. A cache hit is the result that was
+   * computed and stored; generation changes (embedding change or content
+   * reindex) and TTL expiry invalidate it.
+   */
+  readonly cacheEnabled: boolean;
+  readonly cacheTtlSeconds: number;
 }
 
 export interface ResolvedSearchConfig {

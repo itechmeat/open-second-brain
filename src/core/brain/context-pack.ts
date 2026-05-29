@@ -21,6 +21,7 @@ import { brainDirs } from "./paths.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
+import { applyCharBudget } from "./recall-budget.ts";
 
 const TIER_ORDER: ReadonlyArray<PageTier> = [
   PAGE_TIER.core,
@@ -34,12 +35,14 @@ export interface ContextPackItem {
   readonly tier: PageTier;
   readonly tokens: number;
   readonly body: string;
+  /** True when `body` was truncated by `maxCharsPerMemory` (v0.20.0). */
+  readonly trimmed: boolean;
 }
 
 export interface ContextPackSkipped {
   readonly id: string;
   readonly tokens: number;
-  readonly reason: "over-budget" | "filter-miss";
+  readonly reason: "over-budget" | "filter-miss" | "over-char-budget";
 }
 
 export interface ContextPackReport {
@@ -53,6 +56,19 @@ export interface ContextPackOptions {
   readonly maxTokens: number;
   /** Optional case-insensitive substring filter on topic + principle. */
   readonly query?: string;
+  /**
+   * Per-memory character cap (v0.20.0): trim any single page's body to
+   * this many code points before it consumes the token budget, so one
+   * oversized page cannot crowd out the rest. <= 0 / undefined disables.
+   */
+  readonly maxCharsPerMemory?: number;
+  /**
+   * Total recall character cap (v0.20.0): a second ceiling alongside
+   * `maxTokens`, bounding the cumulative code points across the emitted
+   * pages. Lowest-priority overflow is dropped with an
+   * `over-char-budget` skip reason. <= 0 / undefined disables.
+   */
+  readonly maxTotalChars?: number;
 }
 
 interface Candidate {
@@ -134,10 +150,19 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
+  // Per-memory character cap (v0.20.0): trim oversized bodies in priority
+  // order via the shared budget primitive before the token budget runs,
+  // so one huge page cannot starve the rest. A trimmed body is re-tokenised
+  // so the token budget charges the emitted text, not the original.
+  const budgeted = applyCharBudget(
+    candidates.map((c) => ({ item: c, text: c.body })),
+    { maxCharsPerEntry: opts.maxCharsPerMemory },
+  );
+
   const items: ContextPackItem[] = [];
   const skipped: ContextPackSkipped[] = [];
   let used = 0;
-  for (const c of candidates) {
+  for (const { item: c, text: body, trimmed } of budgeted.kept) {
     if (query !== null) {
       const haystack = normalizeForDedup(`${c.topic} ${c.principle}`);
       if (!haystack.includes(query)) {
@@ -145,18 +170,48 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
         continue;
       }
     }
-    if (used + c.tokens > opts.maxTokens) {
-      skipped.push({ id: c.id, tokens: c.tokens, reason: "over-budget" });
+    const tokens = trimmed ? estimateTokens(body) : c.tokens;
+    if (used + tokens > opts.maxTokens) {
+      skipped.push({ id: c.id, tokens, reason: "over-budget" });
       continue;
     }
     items.push({
       id: c.id,
       path: c.path,
       tier: c.tier,
-      tokens: c.tokens,
-      body: c.body,
+      tokens,
+      body,
+      trimmed,
     });
-    used += c.tokens;
+    used += tokens;
+  }
+
+  // Total recall character cap (v0.20.0): a second ceiling over the
+  // token-budgeted set. Applied via the shared primitive on the emitted
+  // items only (so query-missed pages never count), dropping the
+  // lowest-priority overflow.
+  if (opts.maxTotalChars && opts.maxTotalChars > 0) {
+    const capped = applyCharBudget(
+      items.map((i) => ({ item: i, text: i.body })),
+      { maxTotalChars: opts.maxTotalChars },
+    );
+    if (capped.dropped.length > 0) {
+      const keptItems = capped.kept.map((k) => k.item);
+      const droppedSet = new Set(capped.dropped);
+      let recomputed = 0;
+      for (const i of keptItems) recomputed += i.tokens;
+      for (const d of items) {
+        if (droppedSet.has(d)) {
+          skipped.push({ id: d.id, tokens: d.tokens, reason: "over-char-budget" });
+        }
+      }
+      return Object.freeze({
+        maxTokens: opts.maxTokens,
+        tokensUsed: recomputed,
+        items: Object.freeze(keptItems),
+        skipped: Object.freeze(skipped),
+      });
+    }
   }
 
   return Object.freeze({

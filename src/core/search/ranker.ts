@@ -10,8 +10,9 @@
  */
 
 import { PAGE_TIER_DEFAULT, tierWeight, type PageTier } from "../brain/page-meta/tier.ts";
+import { weibullDecay, DEFAULT_RECENCY, type WeibullRecencyOptions } from "./recency.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "./store.ts";
-import type { BrainSearchResult } from "./types.ts";
+import type { BrainSearchResult, WeightProfile } from "./types.ts";
 
 export interface RankerInputs {
   readonly keyword: ReadonlyArray<KeywordHit>;
@@ -45,6 +46,18 @@ export interface RankerOptions {
   readonly nowMs?: number;
   /** When false, semantic_score is ignored regardless of inputs. */
   readonly semanticEnabled?: boolean;
+  /**
+   * Weibull recency curve parameters. Absent uses {@link DEFAULT_RECENCY},
+   * which approximates the legacy step function. Callers (search.ts)
+   * thread the resolved config here.
+   */
+  readonly recency?: WeibullRecencyOptions;
+  /**
+   * Per-query ranking multipliers from the query plan (v0.20.0). Absent
+   * (or an all-1.0 neutral profile) leaves every layer at its configured
+   * weight, so ranking is bit-identical to pre-intent behaviour.
+   */
+  readonly weightProfile?: WeightProfile;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -81,13 +94,10 @@ function semanticFromDistance(distance: number): number {
   return clamp01(sim);
 }
 
-function recencyBoost(mtime: number, nowMs: number): number {
+function recencyBoost(mtime: number, nowMs: number, opts: WeibullRecencyOptions): number {
   const ageMs = Math.max(0, nowMs - mtime * 1000);
   const ageDays = ageMs / DAY_MS;
-  if (ageDays <= 7) return 0.05;
-  if (ageDays <= 30) return 0.025;
-  if (ageDays <= 90) return 0.01;
-  return 0;
+  return weibullDecay(ageDays, opts);
 }
 
 interface Candidate {
@@ -134,6 +144,13 @@ function buildReasons(parts: {
 export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSearchResult[] {
   const nowMs = opts.nowMs ?? Date.now();
   const semanticEnabled = opts.semanticEnabled !== false;
+  const recencyOpts = opts.recency ?? DEFAULT_RECENCY;
+  // Per-query intent multipliers. Absent or neutral (all 1.0) leaves the
+  // score bit-identical to pre-intent behaviour.
+  const kwMul = opts.weightProfile?.keywordMul ?? 1;
+  const semMul = opts.weightProfile?.semanticMul ?? 1;
+  const entMul = opts.weightProfile?.entityMul ?? 1;
+  const recMul = opts.weightProfile?.recencyMul ?? 1;
 
   const kwNorm = normalizeBm25(inputs.keyword);
 
@@ -224,10 +241,10 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const link = linkBoostFor(c);
     const tag = tagBoostFor(c);
     const linkBoost = Math.min(0.05, link + tag);
-    const recency = recencyBoost(c.mtime, nowMs);
+    const recency = recencyBoost(c.mtime, nowMs, recencyOpts) * recMul;
     const weighted =
-      opts.keywordWeight * c.keywordScore +
-      (semanticEnabled ? opts.semanticWeight : 0) * c.semanticScore;
+      opts.keywordWeight * kwMul * c.keywordScore +
+      (semanticEnabled ? opts.semanticWeight * semMul : 0) * c.semanticScore;
     // Tier multiplier applied to the relevance portion only so the
     // tag / link / recency boosts stay tier-neutral. Default
     // `supporting` → 1.0 keeps untagged vaults bit-identical.
@@ -237,7 +254,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // Per-match 0.02, capped at 0.04 so it only re-ranks an already
     // relevant set - never enough to float an irrelevant chunk.
     const entityMatches = inputs.entityMatchByChunk?.get(c.chunkId) ?? 0;
-    const entityBoost = Math.min(0.04, entityMatches * 0.02);
+    const entityBoost = Math.min(0.04, entityMatches * 0.02 * entMul);
     const score = clamp01(weighted * tierMul + linkBoost + recency + entityBoost);
 
     ranked.push(

@@ -16,7 +16,7 @@ import { SearchError } from "./types.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 3;
+export const LATEST_SCHEMA_VERSION = 4;
 
 const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS documents (
@@ -198,6 +198,27 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       if (!cols.some((c) => c.name === "relation")) {
         db.exec("ALTER TABLE links ADD COLUMN relation TEXT");
       }
+    },
+  },
+  {
+    // v4 (v0.20.0) - persistent query cache. `query_cache` stores a
+    // serialized search result keyed by a hash of the result-affecting
+    // request, tagged with the corpus generation it was computed under
+    // and a creation timestamp for TTL. The generation tag is what makes
+    // the cache self-invalidating: a row whose generation no longer
+    // matches the current one is never served and is swept. Additive and
+    // reindex-safe; existing data is untouched.
+    version: 4,
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS query_cache (
+          cache_key   TEXT PRIMARY KEY,
+          generation  TEXT NOT NULL,
+          payload     TEXT NOT NULL,
+          created_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_query_cache_generation ON query_cache(generation);
+      `);
     },
   },
 ]);

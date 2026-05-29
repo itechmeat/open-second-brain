@@ -17,6 +17,9 @@ import { makeProvider } from "./embeddings/provider.ts";
 import { extractEntities } from "./entities.ts";
 import { runFtsQuery } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
+import { buildQueryPlan } from "./query-plan.ts";
+import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "./query-cache.ts";
+import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from "./synonyms.ts";
 import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
@@ -45,6 +48,32 @@ function resolveSemanticPolicy(config: ResolvedSearchConfig, opts: SearchOptions
   return { explicit: false, wantSemantic: config.semantic.enabled };
 }
 
+/**
+ * A compact fingerprint of the resolved-config fields that change search
+ * results, folded into the cache key so a config change (weights,
+ * semantic toggle, recall tunables) invalidates cached rows alongside the
+ * corpus generation. Cache-only knobs (enable/TTL) are excluded - they do
+ * not change result content.
+ */
+function configFingerprint(config: ResolvedSearchConfig): string {
+  const r = config.recall;
+  return JSON.stringify({
+    kw: config.keywordWeight,
+    sw: config.semanticWeight,
+    sem: config.semantic.enabled,
+    mmr: r.mmrLambda,
+    hops: r.maxHops,
+    hopDecay: r.hopDecay,
+    maxExp: r.maxExpansionPerHit,
+    rShape: r.recencyShape,
+    rScale: r.recencyScale,
+    rAmp: r.recencyAmplitude,
+    intent: r.intentEnabled,
+    syn: r.synonymEnabled,
+    synMax: r.synonymMaxTerms,
+  });
+}
+
 function assertSafePathPrefix(prefix: string | undefined): string | undefined {
   if (!prefix) return undefined;
   if (prefix.includes("..") || prefix.startsWith("/")) {
@@ -66,13 +95,80 @@ export async function search(
   const policy = resolveSemanticPolicy(config, opts);
   const warnings: string[] = [];
 
+  // Query plan (v0.20.0): one structural pass yields the intent weight
+  // profile and the cache key. Pure; no I/O. Expanded terms (if any) are
+  // folded in once they have been derived from the store below.
+  const basePlan = buildQueryPlan(query);
+
   const store = await Store.open(config, { mode: "read" });
   try {
+    // Persistent query cache (v0.20.0): opt-in. Keyed by the request +
+    // base plan hash + a config fingerprint, gated by the corpus
+    // generation and a TTL. A hit returns the previously computed
+    // outcome; generation changes (embedding change or content reindex)
+    // and TTL expiry invalidate it. Expansion terms are not in the key:
+    // they are determined by (query, index content) and any content
+    // change bumps the generation. The cache write is best-effort.
+    const cacheEnabled = config.recall.cacheEnabled;
+    const ttlMs = config.recall.cacheTtlSeconds * 1000;
+    let cacheKey: string | null = null;
+    let generation = "";
+    if (cacheEnabled) {
+      // The whole cache lookup is best-effort: any failure (e.g. a
+      // SQLITE_BUSY past the busy_timeout under a concurrent reindex)
+      // falls through to a normal fresh compute rather than breaking the
+      // search. Key on the EFFECTIVE request (clamped limit, resolved
+      // semantic decision) so equivalent calls share a cache entry.
+      try {
+        generation = store.corpusGeneration();
+        const keyOpts = { ...opts, limit, semantic: policy.wantSemantic, keywordOnly: false };
+        cacheKey = buildCacheKey(keyOpts, basePlan.planHash, configFingerprint(config));
+        const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
+        if (hit) return hit;
+      } catch {
+        cacheKey = null;
+      }
+    }
+    const finalize = (outcome: SearchOutcome): SearchOutcome => {
+      if (cacheEnabled && cacheKey) {
+        try {
+          store.queryCacheSweep(generation, Date.now() - ttlMs);
+          putCachedOutcome(store, cacheKey, generation, outcome, Date.now());
+        } catch {
+          // Cache persistence is best-effort; never fail a search on it.
+        }
+      }
+      return outcome;
+    };
+
     // Keyword candidates.
-    const kwHits = runFtsQuery(store, query, {
+    let kwHits = runFtsQuery(store, query, {
       limit: limit * 3,
       pathPrefix,
     });
+
+    // Synonym / query expansion (v0.20.0): opt-in and never for an
+    // exact-intent (quoted/wildcard) query. Derive related terms from
+    // the top candidates' own content (local co-occurrence) and re-run
+    // FTS with them OR'd onto the original query to broaden recall. A
+    // no-op - byte-identical kwHits - when disabled or no term qualifies.
+    let plan = basePlan;
+    if (config.recall.synonymEnabled && basePlan.intent !== "exact" && kwHits.length > 0) {
+      const topIds = kwHits.slice(0, 10).map((h) => h.chunkId);
+      const ctx = store.hydrateChunks(topIds);
+      const texts = topIds
+        .map((id) => ctx.get(id)?.content ?? "")
+        .filter((t) => t.length > 0);
+      const expandedTerms = deriveExpansionTerms(tokenizeForExpansion(query), texts, {
+        ...DEFAULT_EXPANSION,
+        maxTerms: config.recall.synonymMaxTerms,
+      });
+      if (expandedTerms.length > 0) {
+        plan = buildQueryPlan(query, expandedTerms);
+        kwHits = runFtsQuery(store, query, { limit: limit * 3, pathPrefix, expandedTerms });
+      }
+    }
+    const weightProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;
 
     // Semantic candidates (may be skipped).
     let semHits: ReturnType<Store["semanticTopK"]> = [];
@@ -94,11 +190,13 @@ export async function search(
     for (const h of semHits) allChunkIds.add(h.chunkId);
     const idsList = Array.from(allChunkIds);
     if (idsList.length === 0) {
-      return Object.freeze({
-        results: Object.freeze([] as ReadonlyArray<BrainSearchResult>),
-        warnings: Object.freeze(warnings),
-        total: 0,
-      });
+      return finalize(
+        Object.freeze({
+          results: Object.freeze([] as ReadonlyArray<BrainSearchResult>),
+          warnings: Object.freeze(warnings),
+          total: 0,
+        }),
+      );
     }
 
     const hydrated = store.hydrateChunks(idsList);
@@ -163,6 +261,12 @@ export async function search(
           semanticWeight: opts.semanticWeight ?? config.semanticWeight,
           limit: rankCap,
           semanticEnabled: policy.wantSemantic && semanticAttempted,
+          recency: {
+            shape: config.recall.recencyShape,
+            scale: config.recall.recencyScale,
+            amplitude: config.recall.recencyAmplitude,
+          },
+          ...(weightProfile !== undefined ? { weightProfile } : {}),
         },
       );
       const capHit = ranked.length >= rankCap;
@@ -221,11 +325,13 @@ export async function search(
       return rels && rels.length > 0 ? { ...r, relations: Object.freeze(rels) } : r;
     });
 
-    return Object.freeze({
-      results: Object.freeze(withRelations),
-      warnings: Object.freeze(warnings),
-      total: withRelations.length,
-    });
+    return finalize(
+      Object.freeze({
+        results: Object.freeze(withRelations),
+        warnings: Object.freeze(warnings),
+        total: withRelations.length,
+      }),
+    );
   } finally {
     await store.close();
   }

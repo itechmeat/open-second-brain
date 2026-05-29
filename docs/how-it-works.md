@@ -669,9 +669,13 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`.
   `1 - L2² / 2` on unit-normalised vectors; link boost rewards
   candidates that other candidates reference via `[[wikilink]]` /
   markdown link (capped at 0.03) or share a tag with (capped at
-  0.02); recency is a step function on `mtime`; entity boost (capped
-  at 0.04) rewards proper-noun overlap between query and chunk. Every
-  result carries a `why_retrieved` list of the layers that fired.
+  0.02); recency is a configurable Weibull decay curve on `mtime`
+  (`search_recency_shape` / `search_recency_scale` /
+  `search_recency_amplitude`, v0.20.0), defaulting close to the prior
+  step function and flooring effectively-stale content to zero; entity
+  boost (capped at 0.04) rewards proper-noun overlap between query and
+  chunk. Every result carries a `why_retrieved` list of the layers that
+  fired.
 - **Recall layers (v0.13.0).** After ranking, link-graph traversal
   walks outbound wikilinks from the top hits and merges in related
   documents scored `parent·hop_decay^hop` (bounded by `search_max_hops`
@@ -681,6 +685,22 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`.
   indexes each chunk's heading breadcrumb in a dedicated FTS column
   (weighted below content) so a mid-document chunk keeps its topical
   anchor. Entity and heading layers populate on the next reindex.
+- **Query plan + recall economy (v0.20.0).** A pure structural pass
+  classifies each query's intent (neutral / exact / entity / broad) from
+  its shape - quoted phrases, FTS wildcards, wikilinks, entity-token
+  share, token count, no language word lists - and emits a bounded weight
+  profile that re-weights the ranking layers (on by default,
+  `search_intent_enabled`; neutral is bit-identical). Opt-in synonym
+  expansion (`search_synonym_enabled`) broadens recall by OR-ing in terms
+  that co-occur across the top candidates' own content - language-agnostic,
+  suppressed for exact intent. An opt-in persistent query cache
+  (`search_cache_enabled`, `search_cache_ttl_seconds`) serves an identical
+  request while the corpus generation (embedding model + dimension +
+  schema + a content-reindex revision) is unchanged; cache reads and
+  writes are best-effort. `brain_context_pack` additionally accepts
+  per-memory and total character caps, and `brain_pre_compress_pack`
+  returns a budgeted top-preferences-plus-active.md addendum for
+  pre-compression injection.
 - **Semantic policy.** Implicit semantic (config default) warns and
   falls back to keyword-only when sqlite-vec is unavailable, the key
   is missing, the provider is down, or no embeddings exist yet.

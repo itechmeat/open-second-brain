@@ -38,17 +38,17 @@ function linksColumns(db: Database): string[] {
 
 test("fresh migration reaches v3 and links carries a relation column", () => {
   const db = new Database(dbPath);
-  expect(applyMigrations(db)).toBe(3);
-  expect(LATEST_SCHEMA_VERSION).toBe(3);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
+  // The relation column lands at v3 and persists through later versions.
   expect(linksColumns(db)).toContain("relation");
   db.close();
 });
 
 test("applyMigrations is idempotent at the latest version", () => {
   const db = new Database(dbPath);
-  expect(applyMigrations(db)).toBe(3);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   // Re-running must not throw and must not double-add the column.
-  expect(applyMigrations(db)).toBe(3);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(linksColumns(db).filter((c) => c === "relation")).toHaveLength(1);
   db.close();
 });
@@ -70,7 +70,7 @@ test("a v2 index upgrades to v3, adding relation and preserving link rows", () =
   expect(readSchemaVersion(db)).toBe(2);
   expect(linksColumns(db)).not.toContain("relation");
 
-  expect(applyMigrations(db)).toBe(3);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(linksColumns(db)).toContain("relation");
   // The pre-existing link row survives, with a NULL relation.
   const row = db

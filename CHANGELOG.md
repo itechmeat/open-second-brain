@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-05-29
+
+Recall and ranking quality. The retrieval layer gains a tunable recency
+curve, query-shape awareness, and language-agnostic recall broadening;
+the context-injection surface gains character budgets and a
+pre-compression bundle; and repeated searches can be served from a
+self-invalidating cache.
+
+### Added
+
+- Configurable Weibull recency decay (`src/core/search/recency.ts`).
+  The previous stepwise recency boost becomes a continuous Weibull
+  survival curve with `search_recency_shape`, `search_recency_scale`
+  (days), and `search_recency_amplitude` config keys. Defaults
+  approximate the prior curve; a sub-display epsilon floors effectively
+  stale content to exactly zero. Pure and deterministic.
+- Query-intent classification via a pure `QueryPlan`
+  (`src/core/search/query-plan.ts`). One structural pass classifies a
+  query (neutral / exact / entity / broad) and emits a bounded ranking
+  weight profile that re-weights the keyword / semantic / entity /
+  recency layers. Intent derives only from query shape - quoted phrases,
+  FTS wildcards, wikilinks, entity-token share, token count - never from
+  any natural-language word list. On by default
+  (`search_intent_enabled`); the neutral profile is bit-identical to
+  prior ranking.
+- Language-agnostic synonym / query expansion
+  (`src/core/search/synonyms.ts`). Local co-occurrence (pseudo-relevance
+  feedback) over the top candidates' own content surfaces related terms
+  that are OR'd onto the FTS query to broaden recall, with no synonym
+  dictionary or per-language list. Off by default
+  (`search_synonym_enabled`), capped by `search_synonym_max_terms`, and
+  always suppressed for exact-intent queries.
+- Per-memory and total character caps for `brain_context_pack`, backed
+  by a shared `recall-budget` primitive (`src/core/brain/recall-budget.ts`).
+  `max_chars_per_memory` trims an oversized page before it consumes the
+  token budget; `max_total_chars` bounds the cumulative size and drops
+  the lowest-priority overflow. Caps are measured in Unicode code points.
+- Persistent query cache with corpus-generation invalidation (schema
+  migration v4, `query_cache` table). A search result is served for an
+  identical request while the corpus generation - embedding model +
+  dimension + schema version + a monotonic index revision bumped on every
+  content reindex - is unchanged and the row is within the TTL. Off by
+  default (`search_cache_enabled`, `search_cache_ttl_seconds`); cache
+  reads and writes are best-effort and never fail a search.
+- `brain_pre_compress_pack` MCP tool: a read-only, budgeted
+  system-prompt addendum of the top confirmed preferences (by confidence,
+  then recency) plus the head of `active.md`, for a host runtime to
+  inject just before a context-compression event.
+
+### Changed
+
+- Search ranking now reflects the resolved recency curve and, when query
+  intent is enabled, the per-query weight profile. Vaults that opt out of
+  intent and keep the default recency parameters see ranking consistent
+  with prior behaviour aside from the intentional recency-curve smoothing.
+
+### Notes
+
+- The schema migration to v4 is additive and reindex-safe; existing
+  rows are preserved and a newer-than-supported index still raises
+  `SCHEMA_MISMATCH`. As with prior schema bumps, run `o2b search reindex`
+  after upgrading.
+- Synonym expansion and the query cache are opt-in, so a default install
+  keeps byte-identical search results (apart from the recency-curve
+  change) until they are enabled.
+
 ## [0.19.0] - 2026-05-28
 
 Typed graph semantics. The vault's link graph and page frontmatter gain

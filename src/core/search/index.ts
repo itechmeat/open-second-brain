@@ -64,6 +64,11 @@ const DEFAULTS = {
   maxHops: 1,
   hopDecay: 0.5,
   maxExpansionPerHit: 3,
+  recencyShape: 0.8,
+  recencyScale: 30,
+  recencyAmplitude: 0.05,
+  synonymMaxTerms: 3,
+  cacheTtlSeconds: 300,
 };
 
 type IntegerRange = { readonly min?: number; readonly max?: number };
@@ -95,6 +100,16 @@ function parseBool(raw: string | null, fallback: boolean, fieldName: string): bo
   } catch (e) {
     throw new SearchError("INVALID_INPUT", (e as Error).message);
   }
+}
+
+/** Parse a strictly-positive finite float (e.g. Weibull shape / scale). */
+function parsePositiveFloat(raw: string | null, fallback: number, fieldName: string): number {
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be a number > 0, got '${raw}'`);
+  }
+  return n;
 }
 
 function validateIntegerRange(n: number, fieldName: string, range?: IntegerRange): void {
@@ -267,11 +282,71 @@ export function resolveSearchConfig(opts: {
     "search_max_expansion_per_hit",
     { min: 0 },
   );
+  const recencyShape = parsePositiveFloat(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE", "search_recency_shape"),
+    DEFAULTS.recencyShape,
+    "search_recency_shape",
+  );
+  const recencyScale = parsePositiveFloat(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE", "search_recency_scale"),
+    DEFAULTS.recencyScale,
+    "search_recency_scale",
+  );
+  const recencyAmplitude = parseFloat01(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE",
+      "search_recency_amplitude",
+    ),
+    DEFAULTS.recencyAmplitude,
+    "search_recency_amplitude",
+  );
+  const intentEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED", "search_intent_enabled"),
+    true,
+    "search_intent_enabled",
+  );
+  const synonymEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED", "search_synonym_enabled"),
+    false,
+    "search_synonym_enabled",
+  );
+  const synonymMaxTerms = parseInteger(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS",
+      "search_synonym_max_terms",
+    ),
+    DEFAULTS.synonymMaxTerms,
+    "search_synonym_max_terms",
+    { min: 0 },
+  );
+  const cacheEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED", "search_cache_enabled"),
+    false,
+    "search_cache_enabled",
+  );
+  const cacheTtlSeconds = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL", "search_cache_ttl_seconds"),
+    DEFAULTS.cacheTtlSeconds,
+    "search_cache_ttl_seconds",
+    { min: 1 },
+  );
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
     hopDecay,
     maxExpansionPerHit,
+    recencyShape,
+    recencyScale,
+    recencyAmplitude,
+    intentEnabled,
+    synonymEnabled,
+    synonymMaxTerms,
+    cacheEnabled,
+    cacheTtlSeconds,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({

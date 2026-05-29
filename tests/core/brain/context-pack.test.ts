@@ -40,6 +40,39 @@ describe("packContext", () => {
     expect(r.skipped.length).toBe(0);
   });
 
+  test("maxCharsPerMemory trims an oversized page body and flags it trimmed", () => {
+    const body = "x".repeat(500);
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-big.md"),
+      ["---", "id: pref-big", "topic: t", "principle: p", "tier: core", "---", "", body].join("\n"),
+    );
+
+    const full = packContext(vault, { maxTokens: 100_000 });
+    expect(full.items[0]!.trimmed).toBe(false);
+    expect([...full.items[0]!.body].length).toBeGreaterThanOrEqual(500);
+
+    const capped = packContext(vault, { maxTokens: 100_000, maxCharsPerMemory: 100 });
+    expect([...capped.items[0]!.body].length).toBe(100);
+    expect(capped.items[0]!.trimmed).toBe(true);
+  });
+
+  test("maxTotalChars drops lowest-priority overflow with an over-char-budget reason", () => {
+    const writeBody = (slug: string, tier: string, body: string) =>
+      writeFileSync(
+        join(vault, "Brain", "preferences", `pref-${slug}.md`),
+        ["---", `id: pref-${slug}`, "topic: t", "principle: p", `tier: ${tier}`, "---", "", body].join(
+          "\n",
+        ),
+      );
+    // Core (highest priority) emitted first, then peripheral.
+    writeBody("a", "core", "a".repeat(60));
+    writeBody("z", "peripheral", "z".repeat(60));
+
+    const capped = packContext(vault, { maxTokens: 100_000, maxTotalChars: 60 });
+    expect(capped.items.map((i) => i.id)).toEqual(["pref-a"]);
+    expect(capped.skipped.find((s) => s.id === "pref-z")?.reason).toBe("over-char-budget");
+  });
+
   test("orders core → supporting → peripheral", () => {
     writePref("p", { topic: "x", principle: "peripheral one", tier: "peripheral" });
     writePref("s", { topic: "x", principle: "supporting one", tier: "supporting" });

@@ -55,6 +55,12 @@ export function makeConfig(opts: {
   mmrLambda?: number;
   /** Link-graph traversal depth; defaults to 1. Pass 0 to disable. */
   maxHops?: number;
+  /** Query-intent reweighting; defaults to true. */
+  intentEnabled?: boolean;
+  /** Synonym / query expansion; defaults to false (opt-in). */
+  synonymEnabled?: boolean;
+  /** Persistent query cache; defaults to false (opt-in). */
+  cacheEnabled?: boolean;
 }): ResolvedSearchConfig {
   const baseSemantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: false,
@@ -89,6 +95,14 @@ export function makeConfig(opts: {
       maxHops: opts.maxHops ?? 1,
       hopDecay: 0.5,
       maxExpansionPerHit: 3,
+      recencyShape: 0.8,
+      recencyScale: 30,
+      recencyAmplitude: 0.05,
+      intentEnabled: opts.intentEnabled ?? true,
+      synonymEnabled: opts.synonymEnabled ?? false,
+      synonymMaxTerms: 3,
+      cacheEnabled: opts.cacheEnabled ?? false,
+      cacheTtlSeconds: 300,
     }),
   });
 }
