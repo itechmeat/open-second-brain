@@ -37,7 +37,7 @@ describe("o2b brain watchdog", () => {
       expect.objectContaining({ name: "search-index", status: "warning" }),
     );
     expect(body.remediation_plan).toContainEqual(
-      expect.objectContaining({ command: "o2b search index" }),
+      expect.objectContaining({ command: "o2b search reindex" }),
     );
   });
 
@@ -60,5 +60,14 @@ describe("o2b brain watchdog", () => {
 
     expect(result.returncode).toBe(2);
     expect(JSON.parse(result.stdout).restore.refused).toBe(true);
+  });
+
+  test("rejects partially numeric --attempt values", async () => {
+    const result = await runCli(["brain", "watchdog", "--attempt", "1foo"], {
+      env: env(),
+    });
+
+    expect(result.returncode).toBe(1);
+    expect(result.stderr).toContain("--attempt must be a non-negative integer");
   });
 });

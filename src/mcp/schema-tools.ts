@@ -9,6 +9,7 @@ import {
   listSchemaPacks,
   reviewSchemaOrphans,
 } from "../core/brain/schema-admin.ts";
+import type { SchemaMutation } from "../core/brain/schema-mutate.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import { coerceStr } from "./coerce.ts";
 import type { ToolDefinition } from "./tools.ts";
@@ -91,18 +92,20 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
       additionalProperties: false,
     },
     handler: async (ctx, args) => {
+      let mutations: SchemaMutation[];
+      let actor: string;
+      let reason: string | undefined;
       try {
-        return await applySchemaAdminMutations(
-          ctx.vault,
-          coerceSchemaMutations(args["mutations"]),
-          {
-            actor: coerceStr(args, "actor", false, "mcp")!,
-            reason: coerceStr(args, "reason", false) ?? undefined,
-          },
-        );
+        mutations = coerceSchemaMutations(args["mutations"]);
+        actor = coerceStr(args, "actor", false, "mcp")!;
+        reason = coerceStr(args, "reason", false) ?? undefined;
       } catch (err) {
         throw new MCPError(INVALID_PARAMS, (err as Error).message);
       }
+      return await applySchemaAdminMutations(ctx.vault, mutations, {
+        actor,
+        reason,
+      });
     },
   },
   {

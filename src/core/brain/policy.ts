@@ -1309,7 +1309,15 @@ export function validateBrainConfigDetailed(
             source,
           );
         }
-        return entry.trim();
+        const trimmed = entry.trim();
+        if (trimmed.length === 0) {
+          throw new BrainConfigError(
+            "must be a non-empty schema metadata entry",
+            `schema.${key}[${index}]`,
+            source,
+          );
+        }
+        return trimmed;
       });
     }
     for (const key of Object.keys(schemaObj)) {

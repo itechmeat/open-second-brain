@@ -87,6 +87,39 @@ describe("applySchemaMutations", () => {
     expect(readFileSync(configPath, "utf8")).toBe(before);
   });
 
+  test("rejects update_type when the source token is missing", async () => {
+    await expect(
+      applySchemaMutations(
+        vault,
+        [
+          {
+            op: "update_type",
+            category: "preference_types",
+            token: "missing",
+            new_token: "renamed",
+          },
+        ],
+        { actor: "tester" },
+      ),
+    ).rejects.toThrow("schema.preference_types: missing is not declared");
+  });
+
+  test("rejects multi-line expert routing values before rendering", async () => {
+    await expect(
+      applySchemaMutations(
+        vault,
+        [
+          {
+            op: "set_expert_routing",
+            token: "research",
+            expert: "schema-author\nother",
+          },
+        ],
+        { actor: "tester" },
+      ),
+    ).rejects.toThrow("expert must be a single line");
+  });
+
   test("writes redacted mutation audit records", async () => {
     const result = await applySchemaMutations(
       vault,

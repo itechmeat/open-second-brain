@@ -14,9 +14,10 @@ export async function cmdBrainWatchdog(argv: string[]): Promise<number> {
   });
   const config = defaultConfigPath();
   try {
-    const attempt = Number.parseInt(flags["attempt"] as string, 10);
-    if (!Number.isInteger(attempt) || attempt < 0)
-      return fail("--attempt must be a non-negative integer");
+    const rawAttempt = flags["attempt"] as string;
+    if (!/^\d+$/.test(rawAttempt)) return fail("--attempt must be a non-negative integer");
+    const attempt = Number(rawAttempt);
+    if (!Number.isSafeInteger(attempt)) return fail("--attempt must be a non-negative integer");
     const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
     const result = runBrainWatchdog(vault, {
       remediate: Boolean(flags["remediate"]),

@@ -116,7 +116,32 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("morning-brief", "Render session-start summary"),
         command("codec", "Compress or expand session prose"),
         command("sources", "Show signal source dashboard"),
-        command("schema", "Inspect Brain schema vocabulary"),
+        command(
+          "schema",
+          "Inspect Brain schema vocabulary",
+          [flag("vault", "string")],
+          [
+            command("report", "Inspect Brain schema vocabulary", [flag("vault", "string")]),
+            command("stats", "Summarise Brain schema vocabulary", [flag("vault", "string")]),
+            command("lint", "Lint Brain schema vocabulary", [flag("vault", "string")]),
+            command("graph", "Render Brain schema graph", [flag("vault", "string")]),
+            command("explain", "Explain a Brain schema token", [flag("vault", "string")]),
+            command("orphans", "Review unused Brain schema declarations", [
+              flag("vault", "string"),
+            ]),
+            command("apply", "Apply audited Brain schema mutations", [
+              flag("vault", "string"),
+              flag("mutation", "string-array"),
+              flag("actor", "string"),
+              flag("reason", "string"),
+            ]),
+            command("sync", "Preview Brain schema sync", [
+              flag("vault", "string"),
+              flag("dry-run", "boolean"),
+              flag("batch-size", "string"),
+            ]),
+          ],
+        ),
         command("graph-export", "Export vault graph"),
         command("graph-import", "Import vault graph stubs"),
         command("backlinks", "List inbound Brain references"),

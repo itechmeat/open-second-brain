@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import lockfile from "proper-lockfile";
@@ -25,7 +25,6 @@ export async function withFileLock<T>(
   callback: () => Promise<T> | T,
 ): Promise<T> {
   mkdirSync(dirname(targetPath), { recursive: true });
-  writeFileSync(targetPath, "", { flag: "a" });
 
   let release: (() => Promise<void>) | null = null;
   try {

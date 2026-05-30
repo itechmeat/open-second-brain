@@ -54,10 +54,30 @@ describe("runBrainWatchdog", () => {
     expect(result.remediation_plan).toContainEqual(
       expect.objectContaining({
         action: "run-command",
-        command: "o2b search index",
+        command: "o2b search reindex",
       }),
     );
     expect(existsSync(brainDirs(vault).inbox)).toBe(false);
+  });
+
+  test("reports wrong filesystem entry types as degraded", () => {
+    bootstrapBrain(vault);
+    rmSync(brainDirs(vault).log, { recursive: true, force: true });
+    writeFileSync(brainDirs(vault).log, "not a directory", "utf8");
+    const indexPath = join(vault, ".open-second-brain", "brain.sqlite");
+    mkdirSync(indexPath, { recursive: true });
+
+    const result = runBrainWatchdog(vault, {
+      now: new Date("2026-05-30T12:07:00Z"),
+    });
+
+    expect(result.report.ok).toBe(false);
+    expect(result.report.checks).toContainEqual(
+      expect.objectContaining({ name: "dir:Brain/log", status: "warning" }),
+    );
+    expect(result.report.checks).toContainEqual(
+      expect.objectContaining({ name: "search-index", status: "warning" }),
+    );
   });
 
   test("executes only safe remediations when explicitly requested", () => {
@@ -97,5 +117,13 @@ describe("runBrainWatchdog", () => {
     });
     expect(allowed.restore.refused).toBe(false);
     expect(allowed.restore.command).toBe("o2b brain rollback run-1 --yes --force-rollback");
+
+    const invalid = runBrainWatchdog(vault, {
+      restoreRunId: "run-1;rm",
+      forceRestore: true,
+      now: new Date("2026-05-30T12:17:00Z"),
+    });
+    expect(invalid.restore.refused).toBe(true);
+    expect(invalid.restore.command).toBeUndefined();
   });
 });

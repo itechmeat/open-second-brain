@@ -187,6 +187,15 @@ describe("validateBrainConfig — schema block", () => {
       "schema.aliases: unknown field ignored (forward-compat)",
     );
   });
+
+  test("rejects blank schema metadata entries after trimming", () => {
+    expect(() =>
+      validateBrainConfig(
+        parseBrainYaml("schema_version: 1\nschema:\n  aliases:\n    - '   '\n"),
+        "<schema>",
+      ),
+    ).toThrow("schema.aliases[0]");
+  });
 });
 
 describe("validateBrainConfig — primary_agent", () => {

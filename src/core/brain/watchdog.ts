@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { appendAuditRecord } from "../reliability/audit.ts";
+import { appendAuditRecord, type AuditRecord } from "../reliability/audit.ts";
 import { buildProbeReport, type ProbeCheck, type ProbeReport } from "../reliability/probe.ts";
 import { resolveIndexPath } from "../search/paths.ts";
 import {
@@ -75,7 +75,8 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
   const dirs = brainDirs(vault);
 
   const configPath = brainConfigPath(vault);
-  if (existsSync(configPath)) {
+  const configKind = pathKind(configPath);
+  if (configKind === "file") {
     checks.push({
       name: "brain-config",
       status: "ok",
@@ -85,7 +86,10 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
     checks.push({
       name: "brain-config",
       status: "critical",
-      message: `${BRAIN_CONFIG_FILE} is missing`,
+      message:
+        configKind === "missing"
+          ? `${BRAIN_CONFIG_FILE} is missing`
+          : `${BRAIN_CONFIG_FILE} is not a file`,
       remediation: "run o2b brain init",
     });
     remediationPlan.push({
@@ -97,7 +101,8 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
 
   for (const dir of REQUIRED_DIRS) {
     const abs = dirs[dir.pathKey];
-    if (existsSync(abs)) {
+    const kind = pathKind(abs);
+    if (kind === "directory") {
       checks.push({
         name: `dir:${dir.rel}`,
         status: "ok",
@@ -108,8 +113,8 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
     checks.push({
       name: `dir:${dir.rel}`,
       status: "warning",
-      message: `${dir.rel} is missing`,
-      remediation: `create ${dir.rel}`,
+      message: kind === "missing" ? `${dir.rel} is missing` : `${dir.rel} is not a directory`,
+      remediation: kind === "missing" ? `create ${dir.rel}` : `replace with directory ${dir.rel}`,
     });
     const remediation: WatchdogRemediation = {
       action: "create-dir",
@@ -118,13 +123,15 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
     };
     remediationPlan.push(remediation);
     if (opts.remediate && !opts.dryRun) {
+      if (kind !== "missing") rmSync(abs, { recursive: true, force: true });
       mkdirSync(abs, { recursive: true });
       applied.push({ ...remediation, applied: true });
     }
   }
 
   const indexPath = resolveIndexPath(vault, null);
-  if (existsSync(indexPath)) {
+  const indexKind = pathKind(indexPath);
+  if (indexKind === "file") {
     checks.push({
       name: "search-index",
       status: "ok",
@@ -134,12 +141,15 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
     checks.push({
       name: "search-index",
       status: "warning",
-      message: "search index is missing or not yet built",
-      remediation: "run o2b search index",
+      message:
+        indexKind === "missing"
+          ? "search index is missing or not yet built"
+          : "search index path is not a file",
+      remediation: "run o2b search reindex",
     });
     remediationPlan.push({
       action: "run-command",
-      command: "o2b search index",
+      command: "o2b search reindex",
       safe: true,
     });
   }
@@ -165,7 +175,7 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
 
   const report = buildProbeReport(checks);
   const backoff = buildBackoff(opts.attempt ?? 0);
-  const auditPath = appendAuditRecord(join(dirs.log, "watchdog"), {
+  const auditRecord: AuditRecord = {
     timestamp: now.toISOString(),
     actor: "watchdog",
     action: "brain_watchdog",
@@ -179,7 +189,8 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
       restore,
       backoff,
     },
-  });
+  };
+  const auditPath = appendWatchdogAudit(vault, dirs.log, auditRecord);
 
   return {
     report,
@@ -194,6 +205,15 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
 function buildRestoreState(runId: string | undefined, force: boolean): WatchdogRestoreState {
   if (runId === undefined || runId.trim() === "") return { requested: false, refused: false };
   const trimmed = runId.trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
+    return {
+      requested: true,
+      refused: true,
+      run_id: trimmed,
+      reason:
+        "snapshot restore run id must contain only letters, numbers, dot, dash, and underscore",
+    };
+  }
   if (!force) {
     return {
       requested: true,
@@ -209,6 +229,33 @@ function buildRestoreState(runId: string | undefined, force: boolean): WatchdogR
     run_id: trimmed,
     command: `o2b brain rollback ${trimmed} --yes --force-rollback`,
   };
+}
+
+function pathKind(path: string): "file" | "directory" | "other" | "missing" {
+  try {
+    const stat = statSync(path);
+    if (stat.isFile()) return "file";
+    if (stat.isDirectory()) return "directory";
+    return "other";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+}
+
+function appendWatchdogAudit(vault: string, logDir: string, record: AuditRecord): string {
+  try {
+    return appendAuditRecord(join(logDir, "watchdog"), record);
+  } catch (error) {
+    return appendAuditRecord(join(vault, ".open-second-brain", "watchdog-audit"), {
+      ...record,
+      ok: false,
+      details: {
+        ...record.details,
+        audit_fallback_reason: (error as Error).message ?? String(error),
+      },
+    });
+  }
 }
 
 function buildBackoff(attempt: number): WatchdogBackoff {

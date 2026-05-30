@@ -43,7 +43,11 @@ export async function captureSessionLifecycleEvent(
 ): Promise<CaptureSessionLifecycleResult> {
   const now = opts.now ?? new Date();
   const normalized = normalizePayload(payload);
-  const dedup = buildDedupIndex(vault);
+  let dedup: Map<string, DedupIndexEntry> | undefined;
+  const ensureDedup = (): Map<string, DedupIndexEntry> => {
+    dedup ??= buildDedupIndex(vault);
+    return dedup;
+  };
   const counters = {
     signals_created: 0,
     signals_deduped: 0,
@@ -52,11 +56,11 @@ export async function captureSessionLifecycleEvent(
   };
 
   if (normalized.promptText !== undefined) {
-    captureMarkers(vault, normalized, normalized.promptText, opts, now, dedup, counters);
+    captureMarkers(vault, normalized, normalized.promptText, opts, now, ensureDedup(), counters);
   }
 
   if (normalized.toolName === "brain_feedback") {
-    captureToolFeedback(vault, normalized, opts, now, dedup, counters);
+    captureToolFeedback(vault, normalized, opts, now, ensureDedup(), counters);
   }
 
   let logPath: string | undefined;

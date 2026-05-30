@@ -13,8 +13,12 @@ export interface AuditRecord {
 }
 
 export function appendAuditRecord(auditRoot: string, record: AuditRecord): string {
+  const timestamp = new Date(record.timestamp);
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new Error(`invalid audit timestamp: ${record.timestamp}`);
+  }
   mkdirSync(auditRoot, { recursive: true });
-  const path = join(auditRoot, `${isoWeekLabel(new Date(record.timestamp))}.jsonl`);
+  const path = join(auditRoot, `${isoWeekLabel(timestamp)}.jsonl`);
   const line = redactRawOutput(JSON.stringify(record), {
     maxInput: Number.POSITIVE_INFINITY,
   });

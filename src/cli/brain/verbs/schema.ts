@@ -28,8 +28,14 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
     "apply",
     "sync",
   ]);
-  const subcommand = argv[0] && subcommands.has(argv[0]) ? argv[0] : "report";
-  const args = subcommand === "report" && argv[0] !== "report" ? argv : argv.slice(1);
+  const firstArg = argv[0];
+  let subcommand = "report";
+  let args = argv;
+  if (firstArg !== undefined && !firstArg.startsWith("-")) {
+    if (!subcommands.has(firstArg)) return fail(`schema failed: unknown subcommand ${firstArg}`);
+    subcommand = firstArg;
+    args = argv.slice(1);
+  }
   const { flags, positional } = parse(args, {
     vault: { type: "string" },
     json: { type: "boolean" },

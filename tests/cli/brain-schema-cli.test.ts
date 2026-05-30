@@ -156,8 +156,11 @@ describe("o2b brain schema", () => {
     const mutation = JSON.stringify({
       op: "add_type",
       category: "preference_types",
-      token: "decision",
+      token: "strategy",
     });
+
+    const before = await runCli(["brain", "schema", "--json"], { env: env() });
+    expect(JSON.parse(before.stdout).vocabulary.preference_types).not.toContain("strategy");
 
     const applied = await runCli(["brain", "schema", "apply", "--mutation", mutation, "--json"], {
       env: env(),
@@ -167,6 +170,15 @@ describe("o2b brain schema", () => {
     expect(JSON.parse(applied.stdout).applied).toBe(1);
 
     const report = await runCli(["brain", "schema", "--json"], { env: env() });
-    expect(JSON.parse(report.stdout).vocabulary.preference_types).toContain("decision");
+    expect(JSON.parse(report.stdout).vocabulary.preference_types).toContain("strategy");
+  });
+
+  test("rejects unknown schema subcommands", async () => {
+    const result = await runCli(["brain", "schema", "reprot", "--json"], {
+      env: env(),
+    });
+
+    expect(result.returncode).toBe(1);
+    expect(result.stderr).toContain("unknown subcommand reprot");
   });
 });

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 
 let tmp: string;
 let vault: string;
@@ -110,5 +111,34 @@ describe("schema MCP tools", () => {
     expect((pack as any).result.structuredContent.pack.declarations.preference_types).toContain(
       "decision",
     );
+  });
+
+  test("schema graph namespaces link type node ids", async () => {
+    const server = makeServer();
+    await initialize(server);
+
+    await call(server, "schema_apply_mutations", {
+      mutations: [
+        { op: "add_type", category: "preference_types", token: "decision" },
+        { op: "add_link_type", token: "decision" },
+      ],
+    });
+    const graph = await call(server, "schema_graph");
+    const nodes = (graph as any).result.structuredContent.nodes as ReadonlyArray<{ id: string }>;
+
+    expect(nodes.map((node) => node.id)).toContain("decision");
+    expect(nodes.map((node) => node.id)).toContain("link:decision");
+  });
+
+  test("schema apply reports coercion failures as invalid params", async () => {
+    const server = makeServer();
+    await initialize(server);
+
+    const response = await call(server, "schema_apply_mutations", {
+      mutations: "not an array",
+    });
+
+    expect((response as any).error.code).toBe(INVALID_PARAMS);
+    expect((response as any).error.message).toContain("mutations must be an array");
   });
 });

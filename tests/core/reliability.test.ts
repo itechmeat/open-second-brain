@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { appendAuditRecord } from "../../src/core/reliability/audit.ts";
 import { atomicWriteText } from "../../src/core/reliability/atomic.ts";
@@ -33,7 +33,10 @@ describe("atomicWriteText", () => {
     ).toThrow("candidate failed lint");
 
     expect(readFileSync(target, "utf8")).toBe("schema_version: 1\n");
-    expect(existsSync(`${target}.tmp`)).toBe(false);
+    const leakedTemps = readdirSync(dirname(target)).filter(
+      (name) => name.startsWith(`.${basename(target)}.`) && name.endsWith(".tmp"),
+    );
+    expect(leakedTemps).toHaveLength(0);
   });
 
   test("writes the candidate atomically after validation passes", () => {
@@ -53,15 +56,46 @@ describe("withFileLock", () => {
     mkdirSync(join(tmp, "Brain"), { recursive: true });
     writeFileSync(target, "schema_version: 1\n", "utf8");
     const events: string[] = [];
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstCanRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
 
-    await withFileLock(target, { staleMs: 1_000, retries: 0 }, async () => {
+    const first = withFileLock(target, { staleMs: 1_000, retries: 0 }, async () => {
       events.push("first");
+      markFirstStarted();
+      await firstCanRelease;
     });
-    await withFileLock(target, { staleMs: 1_000, retries: 0 }, async () => {
-      events.push("second");
-    });
+    await firstStarted;
+
+    const second = withFileLock(
+      target,
+      { staleMs: 1_000, retries: 20, retryDelayMs: 10 },
+      async () => {
+        events.push("second");
+      },
+    );
+
+    await Promise.resolve();
+    expect(events).toEqual(["first"]);
+    releaseFirst();
+    await Promise.all([first, second]);
 
     expect(events).toEqual(["first", "second"]);
+  });
+
+  test("does not create the target file while acquiring a lock", async () => {
+    const target = join(tmp, "Brain", "_brain.yaml");
+
+    await withFileLock(target, { staleMs: 1_000, retries: 0 }, () => {
+      expect(existsSync(target)).toBe(false);
+    });
+
+    expect(existsSync(target)).toBe(false);
   });
 });
 
@@ -83,6 +117,18 @@ describe("appendAuditRecord", () => {
     expect(lines[0]).toContain("schema_apply_mutations");
     expect(lines[0]).toContain("***REDACTED***");
     expect(lines[0]).not.toContain("secret-value");
+  });
+
+  test("rejects invalid timestamps before week bucketing", () => {
+    expect(() =>
+      appendAuditRecord(join(tmp, "Brain", "log", "schema-mutations"), {
+        timestamp: "not-a-date",
+        actor: "tester",
+        action: "schema_apply_mutations",
+        target: "Brain/_brain.yaml",
+        ok: true,
+      }),
+    ).toThrow("invalid audit timestamp");
   });
 });
 

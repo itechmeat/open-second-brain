@@ -205,9 +205,9 @@ All four paths share a normalised payload hash so the same rule captured twice f
 Brain config, required directories, and rebuildable search index, emits
 exponential backoff metadata for schedulers, and writes an audit record. By
 default it only reports a remediation plan; `--remediate` may create missing
-Brain directories, but search repair remains a recommendation (`o2b search
-index`) and snapshot restore is refused unless `--restore <run_id>` and
-`--force-restore` are both explicit.
+Brain directories, but search repair remains a recommendation (`o2b search reindex`)
+and snapshot restore is refused unless `--restore <run_id>` and `--force-restore`
+are both explicit.
 
 ### Cross-project setup
 

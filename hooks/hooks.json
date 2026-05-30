@@ -65,6 +65,12 @@
             "command": "o2b-hook session-capture",
             "timeout": 10,
             "statusMessage": "OSB: capturing session stop"
+          },
+          {
+            "type": "command",
+            "command": "o2b-hook stop-log-guardrail",
+            "timeout": 10,
+            "statusMessage": "OSB: checking stop log guardrail"
           }
         ]
       }

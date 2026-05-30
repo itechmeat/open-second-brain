@@ -149,7 +149,8 @@ function isCjk(char: string): boolean {
 }
 
 function charAt(text: string, index: number): string {
-  return Array.from(text.slice(index))[0] ?? "";
+  const codePoint = text.codePointAt(index);
+  return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
 }
 
 function unique(tokens: ReadonlyArray<string>): string[] {

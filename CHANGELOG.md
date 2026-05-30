@@ -2227,7 +2227,7 @@ with `source_type: inline`, the source-file wikilink in `source`,
 and a `dedup_hash`over the normalised payload. After capture
 the source line is annotated`@osb✓ [[sig-...]]`(inline form)
 or the info-string flips to`osb-checked`with a`<!-- @osb✓
-                [[sig-...]] -->`comment line (block form), making re-runs
+                  [[sig-...]] -->`comment line (block form), making re-runs
 idempotent. Default ignore set covers`Brain/`, `.git`,
 `node_modules`, `.obsidian`, `.trash`, `.stversions`,
 `.open-second-brain`; additional excludes via `--exclude`,
@@ -3573,6 +3573,10 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.26.0]: https://github.com/itechmeat/open-second-brain/compare/v0.25.0...v0.26.0
+[0.25.0]: https://github.com/itechmeat/open-second-brain/compare/v0.24.0...v0.25.0
+[0.24.0]: https://github.com/itechmeat/open-second-brain/compare/v0.23.0...v0.24.0
+[0.23.0]: https://github.com/itechmeat/open-second-brain/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/itechmeat/open-second-brain/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/itechmeat/open-second-brain/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/itechmeat/open-second-brain/compare/v0.19.0...v0.20.0

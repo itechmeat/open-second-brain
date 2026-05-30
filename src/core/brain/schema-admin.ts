@@ -138,7 +138,7 @@ export function buildSchemaGraph(vault: string): SchemaGraph {
     }
   }
   for (const token of pack.link_types) {
-    nodes.set(`link:${token}`, { id: token, kind: "link_type" });
+    nodes.set(`link:${token}`, { id: `link:${token}`, kind: "link_type" });
   }
   for (const [token, aliases] of Object.entries(pack.aliases)) {
     for (const alias of aliases) {

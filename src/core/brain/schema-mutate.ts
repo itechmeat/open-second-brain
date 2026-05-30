@@ -152,7 +152,7 @@ function applyOne(pack: MutableSchemaPack, mutation: SchemaMutation): void {
     case "update_type": {
       const token = validateSchemaToken(mutation.token, `schema.${mutation.category}`);
       const next = validateSchemaToken(mutation.new_token, `schema.${mutation.category}`);
-      replaceDeclaredValue(pack.declarations[mutation.category], token, next);
+      replaceDeclaredValue(pack.declarations[mutation.category], token, next, mutation.category);
       if (pack.aliases[token]) {
         pack.aliases[next] = pack.aliases[token]!;
         delete pack.aliases[token];
@@ -210,10 +210,13 @@ function applyOne(pack: MutableSchemaPack, mutation: SchemaMutation): void {
     }
     case "set_expert_routing": {
       const token = validateSchemaToken(mutation.token, "schema.expert_routing");
-      if (mutation.expert === null || mutation.expert.trim() === "") {
+      const expert = mutation.expert?.trim() ?? "";
+      if (mutation.expert === null || expert === "") {
         delete pack.expert_routing[token];
+      } else if (/[\r\n]/.test(mutation.expert)) {
+        throw new Error(`schema.expert_routing.${token}: expert must be a single line`);
       } else {
-        pack.expert_routing[token] = mutation.expert.trim();
+        pack.expert_routing[token] = expert;
       }
       return;
     }
@@ -305,10 +308,15 @@ function removeValue(values: string[], token: string): void {
   if (index >= 0) values.splice(index, 1);
 }
 
-function replaceDeclaredValue(values: string[], token: string, next: string): void {
+function replaceDeclaredValue(
+  values: string[],
+  token: string,
+  next: string,
+  category: SchemaVocabularyCategory,
+): void {
   const index = values.indexOf(token);
-  if (index >= 0) values[index] = next;
-  else values.push(next);
+  if (index < 0) throw new Error(`schema.${category}: ${token} is not declared`);
+  values[index] = next;
 }
 
 function replaceExistingValue(values: string[], token: string, next: string): void {
