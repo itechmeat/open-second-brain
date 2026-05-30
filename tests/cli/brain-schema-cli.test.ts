@@ -75,7 +75,7 @@ function seedSchemaVault(): void {
     vault,
     basePref("research-pref", {
       schema_type: "research",
-    } as Partial<WritePreferenceInput>),
+    }),
   );
   writeSignal(vault, {
     topic: "research",

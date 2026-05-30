@@ -1406,7 +1406,10 @@ export function validateBrainConfigDetailed(
       schema = validateSchemaDeclarations(partialSchema) as BrainSchemaConfig;
     } catch (err) {
       if (err instanceof SchemaVocabularyError) {
-        throw new BrainConfigError((err as Error).message, err.field, source);
+        const detail = err.message.startsWith(`${err.field}: `)
+          ? err.message.slice(err.field.length + 2)
+          : err.message;
+        throw new BrainConfigError(detail, err.field, source);
       }
       throw err;
     }

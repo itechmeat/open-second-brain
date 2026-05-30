@@ -1,6 +1,7 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { listVaultPages } from "../vault.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
@@ -54,6 +55,8 @@ export function buildSchemaReport(vault: string): BrainSchemaReport {
 
   scanPreferences(vault, vocabulary, usageMaps.preference_types, findings);
   scanSignals(vault, vocabulary, usageMaps.signal_types, findings);
+  scanPageTypes(vault, vocabulary, usageMaps.page_types, findings);
+  scanLogEventKinds(vault, vocabulary, usageMaps.log_event_kinds, findings);
   addUnusedDeclarationFindings(cfg.schema ?? {}, usageMaps, findings);
 
   return deepFreezeReport({
@@ -132,6 +135,61 @@ function scanSignals(
       counts,
       findings,
     );
+  }
+}
+
+function scanPageTypes(
+  vault: string,
+  vocabulary: BrainSchemaVocabulary,
+  counts: Map<string, number>,
+  findings: SchemaReportFinding[],
+): void {
+  for (const page of listVaultPages(vault)) {
+    const rel = vaultRelative(page.path, vault);
+    if (rel === "Brain" || rel.startsWith("Brain/")) continue;
+    const raw = page.metadata["schema_type"];
+    if (typeof raw !== "string") continue;
+    recordSchemaType(
+      vault,
+      page.path,
+      "page_types",
+      raw,
+      vocabulary,
+      counts,
+      findings,
+    );
+  }
+}
+
+const LOG_EVENT_HEADER_RE =
+  /^##\s+\d{2}:\d{2}:\d{2}\s+([\p{L}][\p{L}\p{N}_-]*)\s*$/u;
+
+function scanLogEventKinds(
+  vault: string,
+  vocabulary: BrainSchemaVocabulary,
+  counts: Map<string, number>,
+  findings: SchemaReportFinding[],
+): void {
+  for (const path of listMarkdown(brainDirs(vault).log, "")) {
+    let text: string;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split(/\r?\n/)) {
+      const match = LOG_EVENT_HEADER_RE.exec(line.trim());
+      if (!match) continue;
+      recordSchemaType(
+        vault,
+        path,
+        "log_event_kinds",
+        match[1]!,
+        vocabulary,
+        counts,
+        findings,
+      );
+    }
   }
 }
 

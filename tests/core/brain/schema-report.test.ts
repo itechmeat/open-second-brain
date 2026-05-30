@@ -61,13 +61,15 @@ describe("buildSchemaReport", () => {
         "schema:",
         "  preference_types: [research, decision]",
         "  signal_types: [observation]",
+        "  page_types: [paper, unused-page]",
+        "  log_event_kinds: [milestone, unused-event]",
       ].join("\n"),
     );
     writePreference(
       vault,
       basePref("research-pref", {
         schema_type: "research",
-      } as Partial<WritePreferenceInput>),
+      }),
     );
     writeSignal(vault, {
       topic: "research",
@@ -79,6 +81,24 @@ describe("buildSchemaReport", () => {
       slug: "external",
       schema_type: "external",
     });
+    mkdirSync(join(vault, "Papers"), { recursive: true });
+    writeFileSync(
+      join(vault, "Papers", "paper.md"),
+      ["---", "title: Paper", "schema_type: paper", "---", "", "Body"].join(
+        "\n",
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(vault, "Brain", "log", "2026-05-30.md"),
+      [
+        "# Brain log — 2026-05-30",
+        "",
+        "## 12:00:00 milestone",
+        "- text: shipped schema report",
+      ].join("\n"),
+      "utf8",
+    );
 
     const report = buildSchemaReport(vault);
 
@@ -93,6 +113,10 @@ describe("buildSchemaReport", () => {
     ]);
     expect(report.usage.signal_types).toEqual([
       { token: "external", count: 1 },
+    ]);
+    expect(report.usage.page_types).toEqual([{ token: "paper", count: 1 }]);
+    expect(report.usage.log_event_kinds).toEqual([
+      { token: "milestone", count: 1 },
     ]);
     expect(report.findings).toContainEqual({
       kind: "unknown-token",
@@ -109,6 +133,16 @@ describe("buildSchemaReport", () => {
       kind: "unused-declaration",
       category: "signal_types",
       token: "observation",
+    });
+    expect(report.findings).toContainEqual({
+      kind: "unused-declaration",
+      category: "page_types",
+      token: "unused-page",
+    });
+    expect(report.findings).toContainEqual({
+      kind: "unused-declaration",
+      category: "log_event_kinds",
+      token: "unused-event",
     });
   });
 

@@ -137,14 +137,22 @@ describe("validateBrainConfig — schema block", () => {
   });
 
   test("rejects invalid schema tokens with a field-named error", () => {
-    expect(() =>
+    let thrown: unknown;
+    try {
       validateBrainConfig(
         parseBrainYaml(
           "schema_version: 1\nschema:\n  preference_types: [research, ../escape]\n",
         ),
         "<schema>",
-      ),
-    ).toThrow(/schema\.preference_types\[1\]/);
+      );
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain("schema.preference_types[1]");
+    expect(message.match(/schema\.preference_types\[1\]/g)?.length).toBe(1);
   });
 
   test("unknown schema subkeys warn without failing validation", () => {
