@@ -64,7 +64,6 @@ describe("MCP runtime capability window", () => {
     );
 
     expect(names).toContain("brain_feedback");
-    expect(names).toContain("second_brain_capabilities");
     expect(names).not.toContain("second_brain_status");
   });
 

@@ -699,12 +699,35 @@ function commandHasSemanticJson(
   rest: ReadonlyArray<string>,
 ): boolean {
   if (!wantsJsonFlag(rest)) return false;
-  if (command === "status" || command === "update" || command === "tool-call")
+  if (COMMANDS_WITH_INTERNAL_JSON.has(command)) {
     return true;
+  }
   if (command === "mcp" && rest.includes("--probe")) return true;
   if (command === "help") return true;
   return false;
 }
+
+const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
+  "status",
+  "install",
+  "update",
+  "tool-call",
+  "brain",
+  "search",
+  "vault",
+  "discipline",
+  "init-pay-memory",
+  "append-payment-receipt",
+  "capture-asset",
+  "payment-report",
+  "check-payment-policy",
+  "request-payment-approval",
+  "approve-payment-request",
+  "reject-payment-request",
+  "consume-payment-request",
+  "list-pending-payments",
+  "payment-digest",
+]);
 
 async function dispatchCommand(
   command: string,

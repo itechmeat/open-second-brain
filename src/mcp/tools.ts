@@ -291,7 +291,6 @@ export type ToolScope = "full" | "writer";
 // MCP server itself is deferred — see
 // `docs/plans/2026-05-20-v0.10.10-design.md` §12.
 const WRITER_TOOL_NAMES: ReadonlySet<string> = new Set([
-  CAPABILITY_DIAGNOSTIC_TOOL,
   "brain_apply_evidence",
   "brain_context",
   "brain_feedback",
@@ -311,7 +310,6 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         additionalProperties: false,
       },
       outputSchema: CAPABILITIES_OUTPUT_SCHEMA,
-      previewBudget: MCP_PREVIEW_BUDGET,
       handler: toolCapabilities,
     },
     {
