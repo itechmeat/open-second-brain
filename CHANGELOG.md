@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-05-30
+
+Runtime schema packs foundation. Vaults can now declare custom taxonomy tokens
+in `Brain/_brain.yaml` and inspect resolved schema usage without introducing a
+mutation-heavy registry or changing deterministic dream behavior.
+
+### Added
+
+- Shared runtime schema vocabulary boundary with built-in `preference`,
+  `feedback`, `note`, and Brain log event kinds plus deterministic
+  normalization and validation for optional `_brain.yaml schema:` declarations.
+- Optional inert `schema_type:` metadata on preferences, retired preferences,
+  and signals. Writers omit the field unless supplied; parsers normalize token
+  shape and can validate against a resolved vocabulary when callers opt in.
+- Read-only schema inspection report plus `o2b brain schema [--json]`, showing
+  resolved vocabulary, artifact token usage, unknown tokens, and unused custom
+  declarations.
+
+### Notes
+
+- Full schema mutation primitives, MCP admin operations, schema-author skill,
+  and lifecycle/control enum widening remain deferred behind the foundation ADR.
+
 ## [0.24.0] - 2026-05-30
 
 Brain model semantics foundation. Preferences can now carry explicit typed
@@ -2159,7 +2182,7 @@ with `source_type: inline`, the source-file wikilink in `source`,
 and a `dedup_hash`over the normalised payload. After capture
 the source line is annotated`@osb✓ [[sig-...]]`(inline form)
 or the info-string flips to`osb-checked`with a`<!-- @osb✓
-          [[sig-...]] -->`comment line (block form), making re-runs
+            [[sig-...]] -->`comment line (block form), making re-runs
 idempotent. Default ignore set covers`Brain/`, `.git`,
 `node_modules`, `.obsidian`, `.trash`, `.stversions`,
 `.open-second-brain`; additional excludes via `--exclude`,

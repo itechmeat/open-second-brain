@@ -41,7 +41,7 @@ export const DEFAULT_SCHEMA_VOCAB: BrainSchemaVocabulary = Object.freeze({
   preference_types: Object.freeze(["preference"]),
   signal_types: Object.freeze(["feedback"]),
   page_types: Object.freeze(["note"]),
-  log_event_kinds: Object.freeze([...Object.values(BRAIN_LOG_EVENT_KIND)]),
+  log_event_kinds: Object.freeze(Object.values(BRAIN_LOG_EVENT_KIND)),
 });
 
 export function normalizeSchemaToken(raw: string): string {

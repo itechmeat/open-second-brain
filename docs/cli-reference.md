@@ -55,6 +55,7 @@ o2b brain audit               Render a preference's full mutation audit trail (s
 o2b brain morning-brief       Read-only session-start summary (since v0.21.0): top confirmed preferences, recent reconcile open questions, recent notes; bounded by --max-chars-per-memory / --max-total-chars; --top-k / --lookback-days
 o2b brain codec               Deterministic lossless session codec (since v0.22.0): --compress | --expand over stdin or --in <file>; structured content preserved byte-for-byte
 o2b brain sources             Read-only dashboard of signals by (agent, source_type) (since v0.22.0): active/processed + distinct-topic counts; --json
+o2b brain schema              Read-only runtime schema report (since v0.25.0): resolved vocabulary, artifact schema_type usage, unknown tokens, unused declarations; --json
 o2b brain graph-export        Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a stable graph.json (since v0.22.0): stdout or --out <file>
 o2b brain graph-import        Reconstruct vault page stubs from a graph.json (since v0.22.0): --mode skip|overwrite|merge; vault-guarded writes
 o2b brain backlinks           List inbound references to a Brain artifact id

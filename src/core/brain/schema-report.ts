@@ -65,7 +65,7 @@ export function buildSchemaReport(vault: string): BrainSchemaReport {
       page_types: freezeUsage(usageMaps.page_types),
       log_event_kinds: freezeUsage(usageMaps.log_event_kinds),
     },
-    findings: Object.freeze([...findings].sort(compareFindings)),
+    findings: Object.freeze(findings.toSorted(compareFindings)),
   });
 }
 
@@ -182,7 +182,7 @@ function listMarkdown(dir: string, prefix: string): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => name.startsWith(prefix) && name.endsWith(".md"))
-    .sort()
+    .toSorted()
     .map((name) => join(dir, name));
 }
 
@@ -203,7 +203,7 @@ function freezeUsage(
 ): ReadonlyArray<SchemaTokenUsage> {
   return Object.freeze(
     [...counts.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
+      .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([token, count]) => Object.freeze({ token, count })),
   );
 }
