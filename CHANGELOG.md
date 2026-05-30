@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-05-30
+
+Brain model semantics foundation. Preferences can now carry explicit typed
+relationship metadata, memory-layer labels, and branch labels while preserving
+the existing Markdown-first source of truth and deterministic dream behavior.
+
+### Added
+
+- Preference-oriented relation vocabulary (`depends_on`, `refines`) layered on
+  the existing typed graph semantics boundary. Brain backlinks and the explorer
+  now surface typed preference relations without introducing a parallel graph.
+- Optional preference frontmatter metadata: `memory_layer: L0|L1|L2|L3`,
+  `memory_branch: <slug>`, and typed relation fields such as `depends_on:` /
+  `refines:` / `contradicts:`. Absent fields remain byte-identical for legacy
+  preferences.
+- Deterministic dry-run semantics backfill planner plus
+  `o2b brain semantics-backfill --json`, currently previewing missing inverse
+  `superseded_by` pointers when an active preference already declares
+  `supersedes` against a retired one.
+
+### Notes
+
+- Full branch isolation, selective branch pick mutation, and per-layer dream /
+  retention policy are intentionally deferred behind the ADR in
+  `docs/brainstorm/brain-model-semantics-foundation/adr.md`.
+- Full suite green on merge: 2854 tests passing.
+
 ## [0.23.0] - 2026-05-30
 
 Agent capability and CLI integration. MCP servers can now narrow the advertised
@@ -2132,7 +2159,7 @@ with `source_type: inline`, the source-file wikilink in `source`,
 and a `dedup_hash`over the normalised payload. After capture
 the source line is annotated`@osb✓ [[sig-...]]`(inline form)
 or the info-string flips to`osb-checked`with a`<!-- @osb✓
-        [[sig-...]] -->`comment line (block form), making re-runs
+          [[sig-...]] -->`comment line (block form), making re-runs
 idempotent. Default ignore set covers`Brain/`, `.git`,
 `node_modules`, `.obsidian`, `.trash`, `.stversions`,
 `.open-second-brain`; additional excludes via `--exclude`,
