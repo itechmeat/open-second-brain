@@ -43,6 +43,10 @@ import {
   writeFrontmatterAtomic,
 } from "../vault.ts";
 import {
+  DEFAULT_RELATION_TYPES,
+  type DefaultRelationType,
+} from "../graph/relation-vocab.ts";
+import {
   brainDirs,
   preferencePath,
   retiredPath,
@@ -656,15 +660,13 @@ export function parsePreference(path: string): BrainPreference {
   return Object.freeze(result);
 }
 
-const PREFERENCE_RELATION_FIELDS = Object.freeze([
-  "related",
-  "extends",
-  "depends_on",
-  "refines",
-  "contradicts",
-] as const);
+type PreferenceRelationField = Exclude<DefaultRelationType, "superseded_by">;
 
-type PreferenceRelationField = (typeof PREFERENCE_RELATION_FIELDS)[number];
+const PREFERENCE_RELATION_FIELDS = Object.freeze(
+  DEFAULT_RELATION_TYPES.filter(
+    (field): field is PreferenceRelationField => field !== "superseded_by",
+  ),
+);
 
 function spreadMemorySemantics(
   meta: Record<string, unknown>,
