@@ -45,6 +45,7 @@ Brain verbs (observing memory):
   graph-export        Serialise the vault knowledge graph to graph.json
   graph-import        Reconstruct vault pages from graph.json (--mode skip|overwrite|merge)
   backlinks           List inbound references to a Brain artifact id
+  semantics-backfill  Preview deterministic typed preference-edge backfill proposals
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a registered agent session .jsonl (or directory)
@@ -177,6 +178,11 @@ export const VERB_HELP: Record<string, string> = {
     "update / retire / merge) with agent, reason, and revision + content-hash\n" +
     "before/after. A ret- or bare-slug argument resolves to the same trail.\n" +
     "Read-only.\n",
+  "semantics-backfill":
+    "usage: o2b brain semantics-backfill [--vault <path>] [--json]\n" +
+    "Dry-run only. Previews deterministic typed preference-edge backfill\n" +
+    "proposals, currently the inverse superseded_by edge when an active\n" +
+    "preference supersedes a retired preference that lacks the pointer.\n",
   codec:
     "usage: o2b brain codec --compress | --expand [--in <file>]\n" +
     "Run the deterministic, lossless session codec over stdin (or --in <file>)\n" +

@@ -29,6 +29,8 @@
 export const DEFAULT_RELATION_TYPES = Object.freeze([
   "related",
   "extends",
+  "depends_on",
+  "refines",
   "contradicts",
   "superseded_by",
 ] as const);

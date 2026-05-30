@@ -58,6 +58,7 @@ o2b brain sources             Read-only dashboard of signals by (agent, source_t
 o2b brain graph-export        Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a stable graph.json (since v0.22.0): stdout or --out <file>
 o2b brain graph-import        Reconstruct vault page stubs from a graph.json (since v0.22.0): --mode skip|overwrite|merge; vault-guarded writes
 o2b brain backlinks           List inbound references to a Brain artifact id
+o2b brain semantics-backfill  Dry-run typed preference-edge backfill preview (since v0.24.0): --json returns missing inverse superseded_by proposals; no writes
 o2b brain mcp-landscape       List MCP servers configured across the vault (since v0.19.0): name, source file, packages, required env-var names (values never read)
 o2b brain scan-inline         Capture `@osb` markers from folders listed under `notes.read_paths` in _brain.yaml
 o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory)

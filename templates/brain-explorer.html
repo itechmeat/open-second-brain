@@ -1,763 +1,1132 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>Open Second Brain — Explorer</title>
-<style>
-  :root {
-    color-scheme: light dark;
-    --bg: #fafafa;
-    --panel: #ffffff;
-    --border: #e0e0e0;
-    --text: #1a1a1a;
-    --muted: #666;
-    --accent: #4263eb;
-    --confirmed: #2f9e44;
-    --unconfirmed: #f59f00;
-    --quarantine: #e8590c;
-    --retired: #868e96;
-    --pinned: #f9c74f;
-    --edge: #cfcfcf;
-    --edge-supersedes: #c92a2a;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #1a1a1a;
-      --panel: #242424;
-      --border: #383838;
-      --text: #f0f0f0;
-      --muted: #999;
-      --edge: #444;
-    }
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  body { display: grid; grid-template-columns: 240px 1fr 320px; grid-template-rows: 36px 1fr; }
-  header { grid-column: 1 / -1; padding: 0 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--panel); }
-  header .title { font-weight: 600; }
-  header .meta { color: var(--muted); font-size: 12px; }
-  aside { background: var(--panel); border-right: 1px solid var(--border); padding: 10px 12px; overflow: auto; }
-  aside.right { border-right: none; border-left: 1px solid var(--border); }
-  aside h3 { margin: 12px 0 6px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-  aside h3:first-child { margin-top: 0; }
-  aside label { display: block; padding: 2px 0; cursor: pointer; }
-  aside input[type="search"] { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); }
-  main { position: relative; overflow: hidden; background: var(--bg); }
-  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
-  canvas:active { cursor: grabbing; }
-  .legend { display: flex; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
-  .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 4px; }
-  .stats { color: var(--muted); font-size: 12px; }
-  .panel-empty { color: var(--muted); font-style: italic; }
-  .field { display: flex; gap: 6px; margin: 3px 0; }
-  .field .k { color: var(--muted); min-width: 100px; }
-  .field .v { word-break: break-word; }
-  .principle { padding: 6px 8px; background: var(--bg); border-left: 3px solid var(--accent); margin: 6px 0; }
-  .pill { display: inline-block; padding: 1px 6px; border-radius: 10px; font-size: 11px; background: var(--bg); border: 1px solid var(--border); }
-  .pill.confirmed { border-color: var(--confirmed); color: var(--confirmed); }
-  .pill.unconfirmed { border-color: var(--unconfirmed); color: var(--unconfirmed); }
-  .pill.quarantine { border-color: var(--quarantine); color: var(--quarantine); }
-  .pill.retired { border-color: var(--retired); color: var(--retired); }
-  ul.edge-list { list-style: none; padding-left: 0; margin: 4px 0; }
-  ul.edge-list li { padding: 2px 0; }
-  ul.edge-list .kind { color: var(--muted); font-size: 11px; }
-  button.id-copy { font-size: 11px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); cursor: pointer; }
-  /* §14 polish: keyboard-accessible node listbox. The canvas remains
+  <head>
+    <meta charset="utf-8" />
+    <title>Open Second Brain — Explorer</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fafafa;
+        --panel: #ffffff;
+        --border: #e0e0e0;
+        --text: #1a1a1a;
+        --muted: #666;
+        --accent: #4263eb;
+        --confirmed: #2f9e44;
+        --unconfirmed: #f59f00;
+        --quarantine: #e8590c;
+        --retired: #868e96;
+        --pinned: #f9c74f;
+        --edge: #cfcfcf;
+        --edge-supersedes: #c92a2a;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1a1a1a;
+          --panel: #242424;
+          --border: #383838;
+          --text: #f0f0f0;
+          --muted: #999;
+          --edge: #444;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          13px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      body {
+        display: grid;
+        grid-template-columns: 240px 1fr 320px;
+        grid-template-rows: 36px 1fr;
+      }
+      header {
+        grid-column: 1 / -1;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: var(--panel);
+      }
+      header .title {
+        font-weight: 600;
+      }
+      header .meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      aside {
+        background: var(--panel);
+        border-right: 1px solid var(--border);
+        padding: 10px 12px;
+        overflow: auto;
+      }
+      aside.right {
+        border-right: none;
+        border-left: 1px solid var(--border);
+      }
+      aside h3 {
+        margin: 12px 0 6px 0;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      aside h3:first-child {
+        margin-top: 0;
+      }
+      aside label {
+        display: block;
+        padding: 2px 0;
+        cursor: pointer;
+      }
+      aside input[type="search"] {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main {
+        position: relative;
+        overflow: hidden;
+        background: var(--bg);
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        cursor: grab;
+      }
+      canvas:active {
+        cursor: grabbing;
+      }
+      .legend {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .legend .dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        vertical-align: middle;
+        margin-right: 4px;
+      }
+      .stats {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .panel-empty {
+        color: var(--muted);
+        font-style: italic;
+      }
+      .field {
+        display: flex;
+        gap: 6px;
+        margin: 3px 0;
+      }
+      .field .k {
+        color: var(--muted);
+        min-width: 100px;
+      }
+      .field .v {
+        word-break: break-word;
+      }
+      .principle {
+        padding: 6px 8px;
+        background: var(--bg);
+        border-left: 3px solid var(--accent);
+        margin: 6px 0;
+      }
+      .pill {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 10px;
+        font-size: 11px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+      }
+      .pill.confirmed {
+        border-color: var(--confirmed);
+        color: var(--confirmed);
+      }
+      .pill.unconfirmed {
+        border-color: var(--unconfirmed);
+        color: var(--unconfirmed);
+      }
+      .pill.quarantine {
+        border-color: var(--quarantine);
+        color: var(--quarantine);
+      }
+      .pill.retired {
+        border-color: var(--retired);
+        color: var(--retired);
+      }
+      ul.edge-list {
+        list-style: none;
+        padding-left: 0;
+        margin: 4px 0;
+      }
+      ul.edge-list li {
+        padding: 2px 0;
+      }
+      ul.edge-list .kind {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      button.id-copy {
+        font-size: 11px;
+        padding: 1px 6px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg);
+        color: var(--text);
+        cursor: pointer;
+      }
+      /* §14 polish: keyboard-accessible node listbox. The canvas remains
      the visual surface; this listbox is the accessible source of
      truth so screen readers and keyboard-only operators can
      navigate the graph. */
-  #node-list { list-style: none; margin: 0 0 6px 0; padding: 0; max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
-  #node-list li { padding: 4px 8px; cursor: pointer; font-size: 12px; border-bottom: 1px solid transparent; }
-  #node-list li .topic { color: var(--muted); font-size: 11px; margin-right: 4px; }
-  #node-list li[aria-selected="true"] { background: var(--accent); color: #fff; }
-  #node-list li[aria-selected="true"] .topic { color: rgba(255,255,255,0.85); }
-  #node-list:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-  #node-list-empty { padding: 6px 8px; color: var(--muted); font-style: italic; font-size: 12px; }
-</style>
-</head>
-<body>
-<header>
-  <span class="title">Brain Explorer</span>
-  <span id="vault-name" class="meta"></span>
-  <span id="stats" class="stats"></span>
-</header>
-<aside class="left">
-  <h3>Search</h3>
-  <input id="search" type="search" placeholder="topic or principle..." />
-  <h3>Status</h3>
-  <label><input type="checkbox" class="status-filter" value="confirmed" checked /> <span class="legend"><span class="dot" style="background: var(--confirmed)"></span>confirmed</span></label>
-  <label><input type="checkbox" class="status-filter" value="unconfirmed" checked /> <span class="legend"><span class="dot" style="background: var(--unconfirmed)"></span>unconfirmed</span></label>
-  <label><input type="checkbox" class="status-filter" value="quarantine" checked /> <span class="legend"><span class="dot" style="background: var(--quarantine)"></span>quarantine</span></label>
-  <label><input type="checkbox" class="status-filter" value="retired" checked /> <span class="legend"><span class="dot" style="background: var(--retired)"></span>retired</span></label>
-  <h3>Legend</h3>
-  <div class="stats">
-    Node size grows with applied_count.<br />
-    Gold ring = pinned.<br />
-    Red dashed edge = supersedes.<br />
-    Grey edge = wikilink.
-  </div>
-</aside>
-<main>
-  <canvas id="canvas"></canvas>
-</main>
-<aside id="details" class="right">
-  <h3>Nodes</h3>
-  <ul
-    id="node-list"
-    role="listbox"
-    tabindex="0"
-    aria-label="Brain preferences"
-    aria-activedescendant=""
-  ></ul>
-  <button id="reset-layout" type="button" class="id-copy">Reset layout</button>
-  <hr />
-  <div id="details-body">
-    <p class="panel-empty">Select a node to inspect.</p>
-  </div>
-</aside>
+      #node-list {
+        list-style: none;
+        margin: 0 0 6px 0;
+        padding: 0;
+        max-height: 220px;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg);
+      }
+      #node-list li {
+        padding: 4px 8px;
+        cursor: pointer;
+        font-size: 12px;
+        border-bottom: 1px solid transparent;
+      }
+      #node-list li .topic {
+        color: var(--muted);
+        font-size: 11px;
+        margin-right: 4px;
+      }
+      #node-list li[aria-selected="true"] {
+        background: var(--accent);
+        color: #fff;
+      }
+      #node-list li[aria-selected="true"] .topic {
+        color: rgba(255, 255, 255, 0.85);
+      }
+      #node-list:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      #node-list-empty {
+        padding: 6px 8px;
+        color: var(--muted);
+        font-style: italic;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="title">Brain Explorer</span>
+      <span id="vault-name" class="meta"></span>
+      <span id="stats" class="stats"></span>
+    </header>
+    <aside class="left">
+      <h3>Search</h3>
+      <input id="search" type="search" placeholder="topic or principle..." />
+      <h3>Status</h3>
+      <label
+        ><input
+          type="checkbox"
+          class="status-filter"
+          value="confirmed"
+          checked
+        />
+        <span class="legend"
+          ><span class="dot" style="background: var(--confirmed)"></span
+          >confirmed</span
+        ></label
+      >
+      <label
+        ><input
+          type="checkbox"
+          class="status-filter"
+          value="unconfirmed"
+          checked
+        />
+        <span class="legend"
+          ><span class="dot" style="background: var(--unconfirmed)"></span
+          >unconfirmed</span
+        ></label
+      >
+      <label
+        ><input
+          type="checkbox"
+          class="status-filter"
+          value="quarantine"
+          checked
+        />
+        <span class="legend"
+          ><span class="dot" style="background: var(--quarantine)"></span
+          >quarantine</span
+        ></label
+      >
+      <label
+        ><input type="checkbox" class="status-filter" value="retired" checked />
+        <span class="legend"
+          ><span class="dot" style="background: var(--retired)"></span
+          >retired</span
+        ></label
+      >
+      <h3>Legend</h3>
+      <div class="stats">
+        Node size grows with applied_count.<br />
+        Gold ring = pinned.<br />
+        Red dashed edge = supersedes.<br />
+        Grey edge = wikilink.
+      </div>
+    </aside>
+    <main>
+      <canvas id="canvas"></canvas>
+    </main>
+    <aside id="details" class="right">
+      <h3>Nodes</h3>
+      <ul
+        id="node-list"
+        role="listbox"
+        tabindex="0"
+        aria-label="Brain preferences"
+        aria-activedescendant=""
+      ></ul>
+      <button id="reset-layout" type="button" class="id-copy">
+        Reset layout
+      </button>
+      <hr />
+      <div id="details-body">
+        <p class="panel-empty">Select a node to inspect.</p>
+      </div>
+    </aside>
 
-<script type="application/json" id="brain-data">__GRAPH_JSON__</script>
-<script>
-"use strict";
+    <script type="application/json" id="brain-data">
+      __GRAPH_JSON__
+    </script>
+    <script>
+      "use strict";
 
-(function () {
-  const dataEl = document.getElementById("brain-data");
-  let graph;
-  try {
-    graph = JSON.parse(dataEl.textContent);
-  } catch (e) {
-    document.getElementById("details-body").textContent = "Failed to parse graph data: " + e.message;
-    return;
-  }
-  const VAULT_PATH = "__VAULT_PATH__";
-
-  document.getElementById("vault-name").textContent = graph.vault_basename || "(unnamed vault)";
-  document.getElementById("stats").textContent =
-    graph.nodes.length + " nodes, " + graph.edges.length + " edges";
-
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
-  const COLORS = {
-    confirmed: "#2f9e44",
-    unconfirmed: "#f59f00",
-    quarantine: "#e8590c",
-    retired: "#868e96",
-    pinned: "#f9c74f",
-    edge: "#cfcfcf",
-    "edge-supersedes": "#c92a2a",
-  };
-
-  function showTooltip(text) {
-    let tip = document.getElementById("deeplink-tooltip");
-    if (!tip) {
-      tip = document.createElement("div");
-      tip.id = "deeplink-tooltip";
-      tip.style.cssText = "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:8px 16px;border-radius:4px;font-size:12px;z-index:9999;transition:opacity 0.3s;";
-      document.body.appendChild(tip);
-    }
-    tip.textContent = text;
-    tip.style.opacity = "1";
-    clearTimeout(tip._timer);
-    tip._timer = setTimeout(() => { tip.style.opacity = "0"; }, 3000);
-  }
-
-  // ---- State -------------------------------------------------------------
-  const nodes = graph.nodes.map((n) => ({
-    ...n,
-    x: 0,
-    y: 0,
-    vx: 0,
-    vy: 0,
-    radius: Math.max(8, Math.min(40, 8 + Math.sqrt(n.applied_count) * 6)),
-    visible: true,
-  }));
-  const nodeById = new Map(nodes.map((n) => [n.id, n]));
-  const edges = graph.edges
-    .map((e) => ({ ...e, sNode: nodeById.get(e.source), tNode: nodeById.get(e.target) }))
-    .filter((e) => e.sNode && e.tNode);
-
-  // Topic centres for soft clustering.
-  const topics = new Map();
-  for (const n of nodes) {
-    if (!topics.has(n.topic)) {
-      topics.set(n.topic, { x: 0, y: 0, count: 0 });
-    }
-    topics.get(n.topic).count++;
-  }
-
-  // Filter state.
-  const statusFilters = new Set(["confirmed", "unconfirmed", "quarantine", "retired"]);
-  let searchTerm = "";
-
-  // §14 polish: layout + filter persistence (localStorage). Per-vault
-  // key so multiple explorer tabs against different vaults stay
-  // separate. Stored shape:
-  //   { schema: 1, positions: { id: [x, y] }, filters: { status: [...], search: string } }
-  // Failures (private mode, quota, malformed JSON) degrade silently
-  // to a non-persistent session.
-  const STORAGE_KEY =
-    "osb-explorer-layout:" + (graph.vault_basename || "default");
-  const STORAGE_SCHEMA = 1;
-  let storedLayout = null;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw !== null) {
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.schema === STORAGE_SCHEMA) storedLayout = parsed;
-    }
-  } catch (e) {
-    storedLayout = null;
-  }
-  if (storedLayout && storedLayout.filters) {
-    if (Array.isArray(storedLayout.filters.status)) {
-      statusFilters.clear();
-      for (const s of storedLayout.filters.status) statusFilters.add(s);
-    }
-    if (typeof storedLayout.filters.search === "string") {
-      searchTerm = storedLayout.filters.search;
-    }
-  }
-
-  // ---- Layout -----------------------------------------------------------
-  function placeInitial() {
-    const w = canvas.width;
-    const h = canvas.height;
-    const cx = w / 2;
-    const cy = h / 2;
-    // Place topic centres on a circle.
-    const topicNames = Array.from(topics.keys());
-    topicNames.forEach((name, i) => {
-      const angle = (i / Math.max(1, topicNames.length)) * Math.PI * 2;
-      const r = Math.min(w, h) * 0.25;
-      const t = topics.get(name);
-      t.x = cx + Math.cos(angle) * r;
-      t.y = cy + Math.sin(angle) * r;
-    });
-    // Place each node near its topic centre with jitter.
-    for (const n of nodes) {
-      const t = topics.get(n.topic);
-      n.x = t.x + (Math.random() - 0.5) * 80;
-      n.y = t.y + (Math.random() - 0.5) * 80;
-    }
-    // Overlay stored positions on top of the topic-based seed. New
-    // nodes (no entry in the stored map) keep their topic-anchored
-    // placement; previously-seen nodes warm-start to the last
-    // observed location so the layout no longer "jumps" between
-    // reloads. We zero velocity so the physics relaxes from rest.
-    if (storedLayout && storedLayout.positions) {
-      for (const n of nodes) {
-        const stored = storedLayout.positions[n.id];
-        if (Array.isArray(stored) && stored.length === 2
-            && Number.isFinite(stored[0]) && Number.isFinite(stored[1])) {
-          n.x = stored[0];
-          n.y = stored[1];
-          n.vx = 0;
-          n.vy = 0;
+      (function () {
+        const dataEl = document.getElementById("brain-data");
+        let graph;
+        try {
+          graph = JSON.parse(dataEl.textContent);
+        } catch (e) {
+          document.getElementById("details-body").textContent =
+            "Failed to parse graph data: " + e.message;
+          return;
         }
-      }
-    }
-  }
+        const VAULT_PATH = "__VAULT_PATH__";
 
-  function saveLayout() {
-    try {
-      const positions = {};
-      for (const n of nodes) {
-        if (Number.isFinite(n.x) && Number.isFinite(n.y)) {
-          positions[n.id] = [Math.round(n.x * 10) / 10, Math.round(n.y * 10) / 10];
+        document.getElementById("vault-name").textContent =
+          graph.vault_basename || "(unnamed vault)";
+        document.getElementById("stats").textContent =
+          graph.nodes.length + " nodes, " + graph.edges.length + " edges";
+
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d");
+        const COLORS = {
+          confirmed: "#2f9e44",
+          unconfirmed: "#f59f00",
+          quarantine: "#e8590c",
+          retired: "#868e96",
+          pinned: "#f9c74f",
+          edge: "#cfcfcf",
+          "edge-supersedes": "#c92a2a",
+        };
+
+        function showTooltip(text) {
+          let tip = document.getElementById("deeplink-tooltip");
+          if (!tip) {
+            tip = document.createElement("div");
+            tip.id = "deeplink-tooltip";
+            tip.style.cssText =
+              "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:8px 16px;border-radius:4px;font-size:12px;z-index:9999;transition:opacity 0.3s;";
+            document.body.appendChild(tip);
+          }
+          tip.textContent = text;
+          tip.style.opacity = "1";
+          clearTimeout(tip._timer);
+          tip._timer = setTimeout(() => {
+            tip.style.opacity = "0";
+          }, 3000);
         }
-      }
-      const payload = {
-        schema: STORAGE_SCHEMA,
-        positions,
-        filters: {
-          status: Array.from(statusFilters),
-          search: searchTerm,
-        },
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch (e) {
-      // Quota or disabled storage — non-persistent session.
-    }
-  }
 
-  let saveTimer = null;
-  function scheduleSave(delayMs) {
-    if (saveTimer !== null) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      saveLayout();
-    }, delayMs);
-  }
+        // ---- State -------------------------------------------------------------
+        const nodes = graph.nodes.map((n) => ({
+          ...n,
+          x: 0,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          radius: Math.max(8, Math.min(40, 8 + Math.sqrt(n.applied_count) * 6)),
+          visible: true,
+        }));
+        const nodeById = new Map(nodes.map((n) => [n.id, n]));
+        const edges = graph.edges
+          .map((e) => ({
+            ...e,
+            sNode: nodeById.get(e.source),
+            tNode: nodeById.get(e.target),
+          }))
+          .filter((e) => e.sNode && e.tNode);
 
-  const K_TOPIC = 0.006;
-  const K_CHARGE = 700;
-  const K_SPRING = 0.04;
-  const DAMPING = 0.85;
-  const MAX_V = 12;
-
-  function step() {
-    const w = canvas.width;
-    const h = canvas.height;
-    // Topic attraction.
-    for (const n of nodes) {
-      if (!n.visible) continue;
-      const t = topics.get(n.topic);
-      n.vx += (t.x - n.x) * K_TOPIC;
-      n.vy += (t.y - n.y) * K_TOPIC;
-    }
-    // Charge repulsion (pairwise — fine for O(N^2) at N ≤ 300).
-    for (let i = 0; i < nodes.length; i++) {
-      const a = nodes[i];
-      if (!a.visible) continue;
-      for (let j = i + 1; j < nodes.length; j++) {
-        const b = nodes[j];
-        if (!b.visible) continue;
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const d2 = dx * dx + dy * dy + 0.01;
-        const f = K_CHARGE / d2;
-        const d = Math.sqrt(d2);
-        const fx = (dx / d) * f;
-        const fy = (dy / d) * f;
-        a.vx += fx; a.vy += fy;
-        b.vx -= fx; b.vy -= fy;
-      }
-    }
-    // Edge springs.
-    for (const e of edges) {
-      if (!e.sNode.visible || !e.tNode.visible) continue;
-      const dx = e.tNode.x - e.sNode.x;
-      const dy = e.tNode.y - e.sNode.y;
-      const d = Math.sqrt(dx * dx + dy * dy) + 0.01;
-      const rest = e.sNode.radius + e.tNode.radius + 40;
-      const f = (d - rest) * K_SPRING;
-      const fx = (dx / d) * f;
-      const fy = (dy / d) * f;
-      e.sNode.vx += fx; e.sNode.vy += fy;
-      e.tNode.vx -= fx; e.tNode.vy -= fy;
-    }
-    // Damping + integrate + clamp.
-    for (const n of nodes) {
-      if (!n.visible) continue;
-      n.vx *= DAMPING;
-      n.vy *= DAMPING;
-      if (n.vx > MAX_V) n.vx = MAX_V; else if (n.vx < -MAX_V) n.vx = -MAX_V;
-      if (n.vy > MAX_V) n.vy = MAX_V; else if (n.vy < -MAX_V) n.vy = -MAX_V;
-      n.x += n.vx;
-      n.y += n.vy;
-      // Soft wall.
-      const pad = 30;
-      if (n.x < pad) { n.x = pad; n.vx *= -0.3; }
-      if (n.x > w - pad) { n.x = w - pad; n.vx *= -0.3; }
-      if (n.y < pad) { n.y = pad; n.vy *= -0.3; }
-      if (n.y > h - pad) { n.y = h - pad; n.vy *= -0.3; }
-    }
-  }
-
-  // ---- Render -----------------------------------------------------------
-  let selectedId = null;
-  let hoverId = null;
-
-  function render() {
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-    // Edges.
-    ctx.lineWidth = 1;
-    for (const e of edges) {
-      if (!e.sNode.visible || !e.tNode.visible) continue;
-      ctx.beginPath();
-      ctx.moveTo(e.sNode.x, e.sNode.y);
-      ctx.lineTo(e.tNode.x, e.tNode.y);
-      if (e.kind === "supersedes") {
-        ctx.strokeStyle = COLORS["edge-supersedes"];
-        ctx.setLineDash([4, 4]);
-      } else {
-        ctx.strokeStyle = COLORS.edge;
-        ctx.setLineDash([]);
-      }
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-    // Nodes.
-    for (const n of nodes) {
-      if (!n.visible) continue;
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
-      ctx.fillStyle = COLORS[n.status] || COLORS.unconfirmed;
-      ctx.fill();
-      if (n.pinned) {
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = COLORS.pinned;
-        ctx.stroke();
-      }
-      if (n.id === selectedId || n.id === hoverId) {
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = "#1a1a1a";
-        ctx.stroke();
-      }
-    }
-    // Hover tooltip.
-    if (hoverId) {
-      const h = nodeById.get(hoverId);
-      if (h && h.visible) {
-        const label = h.principle.length > 80 ? h.principle.slice(0, 77) + "..." : h.principle;
-        ctx.font = "12px system-ui";
-        const metrics = ctx.measureText(label);
-        const padX = 6, padY = 4;
-        const x = h.x + h.radius + 6;
-        const y = h.y - h.radius;
-        ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
-        ctx.fillRect(x, y, metrics.width + padX * 2, 18 + padY);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(label, x + padX, y + 14);
-      }
-    }
-  }
-
-  // ---- Hit test, panel render ------------------------------------------
-  function findNode(px, py) {
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const n = nodes[i];
-      if (!n.visible) continue;
-      const dx = px - n.x;
-      const dy = py - n.y;
-      if (dx * dx + dy * dy <= n.radius * n.radius) return n;
-    }
-    return null;
-  }
-
-  function renderPanel(n) {
-    const root = document.getElementById("details-body");
-    if (!n) {
-      root.innerHTML = '<p class="panel-empty">Select a node to inspect.</p>';
-      return;
-    }
-    const inbound = edges.filter((e) => e.target === n.id);
-    const outbound = edges.filter((e) => e.source === n.id);
-    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-    const html = [
-      '<div class="field"><span class="k">id</span><span class="v"><code>' + esc(n.id) + '</code></span></div>',
-      '<div class="principle">' + esc(n.principle) + '</div>',
-      '<div class="field"><span class="k">topic</span><span class="v">' + esc(n.topic) + '</span></div>',
-      n.scope ? '<div class="field"><span class="k">scope</span><span class="v">' + esc(n.scope) + '</span></div>' : "",
-      '<div class="field"><span class="k">status</span><span class="v"><span class="pill ' + n.status + '">' + n.status + '</span>'
-        + (n.confidence ? ' <span class="pill">' + n.confidence + (n.confidence_value !== null ? ' (' + n.confidence_value.toFixed(2) + ')' : '') + '</span>' : '')
-        + '</span></div>',
-      '<div class="field"><span class="k">applied</span><span class="v">' + n.applied_count + '</span></div>',
-      '<div class="field"><span class="k">violated</span><span class="v">' + n.violated_count + '</span></div>',
-      n.pinned ? '<div class="field"><span class="k">pinned</span><span class="v">yes</span></div>' : "",
-      n.last_evidence_at ? '<div class="field"><span class="k">last evidence</span><span class="v">' + esc(n.last_evidence_at) + '</span></div>' : "",
-      '<div class="field"><span class="k">backlinks</span><span class="v">' + n.backlink_count + ' inbound</span></div>',
-      n.retired_reason ? '<div class="field"><span class="k">retired reason</span><span class="v">' + esc(n.retired_reason) + '</span></div>' : "",
-      "<h3>Outbound</h3>",
-      outbound.length === 0
-        ? '<p class="panel-empty">none</p>'
-        : '<ul class="edge-list">' + outbound.map((e) => '<li>' + esc(e.target) + ' <span class="kind">[' + e.kind + ']</span></li>').join("") + '</ul>',
-      "<h3>Inbound</h3>",
-      inbound.length === 0
-        ? '<p class="panel-empty">none</p>'
-        : '<ul class="edge-list">' + inbound.map((e) => '<li>' + esc(e.source) + ' <span class="kind">[' + e.kind + ']</span></li>').join("") + '</ul>',
-    ].join("");
-    root.innerHTML = html;
-  }
-
-  // ---- Filtering -------------------------------------------------------
-  function applyFilters() {
-    const term = searchTerm.toLowerCase();
-    for (const n of nodes) {
-      const statusOk = statusFilters.has(n.status);
-      const textOk = !term
-        || n.principle.toLowerCase().includes(term)
-        || n.topic.toLowerCase().includes(term)
-        || n.id.toLowerCase().includes(term);
-      n.visible = statusOk && textOk;
-    }
-    rebuildVisibleSorted();
-    scheduleListRender();
-  }
-
-  // ---- Listbox (keyboard-accessible mirror of the canvas) --------------
-  // The visible nodes are also presented as a focusable <ul role="listbox">.
-  // Pointer users keep the canvas; keyboard and screen reader users get
-  // the listbox. Both surfaces call `selectNode(id)` so state stays in
-  // lockstep across input devices.
-  // `visibleSortedCache` is rebuilt by `applyFilters` and consumed by
-  // `renderNodeList` / `moveListboxFocus` — saves an O(N log N) sort
-  // on every Arrow key on large vaults.
-  let visibleSortedCache = [];
-  let renderNodeListPending = false;
-
-  function escHtml(s) {
-    return String(s).replace(/[&<>"]/g, (c) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-    }[c]));
-  }
-
-  function rebuildVisibleSorted() {
-    visibleSortedCache = nodes
-      .filter((n) => n.visible)
-      .slice()
-      .sort((a, b) => {
-        const t = a.topic.localeCompare(b.topic);
-        return t !== 0 ? t : a.id.localeCompare(b.id);
-      });
-  }
-
-  function renderNodeList() {
-    const list = document.getElementById("node-list");
-    const visible = visibleSortedCache;
-    if (visible.length === 0) {
-      list.innerHTML = '<li id="node-list-empty">No matching nodes.</li>';
-      list.setAttribute("aria-activedescendant", "");
-      return;
-    }
-    list.innerHTML = visible
-      .map((n) => {
-        const selected = n.id === selectedId ? ' aria-selected="true"' : ' aria-selected="false"';
-        const title = n.principle.length > 80 ? n.principle.slice(0, 77) + "..." : n.principle;
-        return (
-          '<li role="option" id="node-opt-' + escHtml(n.id) + '"' + selected +
-          ' data-node-id="' + escHtml(n.id) + '">' +
-          '<span class="topic">' + escHtml(n.topic) + '</span>' +
-          escHtml(title) +
-          '</li>'
-        );
-      })
-      .join("");
-    list.setAttribute(
-      "aria-activedescendant",
-      selectedId ? "node-opt-" + selectedId : "",
-    );
-    // Bind per-item click handlers via event delegation (cheap and
-    // survives the full re-render above).
-    list.onclick = (ev) => {
-      const li = ev.target.closest("li[data-node-id]");
-      if (!li) return;
-      selectNode(li.getAttribute("data-node-id"));
-    };
-    list.ondblclick = (ev) => {
-      if (!VAULT_PATH) return;
-      const li = ev.target.closest("li[data-node-id]");
-      if (!li) return;
-      const nodeId = li.getAttribute("data-node-id");
-      const filePath = VAULT_PATH + (nodeId.startsWith("ret-")
-        ? "/Brain/retired/" : "/Brain/preferences/") + nodeId + ".md";
-      const uri = "obsidian://open?path=" + encodeURIComponent(filePath);
-      window.open(uri, "_blank");
-    };
-  }
-
-  // Defer the listbox rebuild to the next animation frame so a held-
-  // down filter key only re-renders the <ul> once per paint instead
-  // of per keystroke. The canvas-side render is on its own rAF loop
-  // and is unaffected.
-  function scheduleListRender() {
-    if (renderNodeListPending) return;
-    renderNodeListPending = true;
-    requestAnimationFrame(() => {
-      renderNodeListPending = false;
-      renderNodeList();
-    });
-  }
-
-  function selectNode(id) {
-    selectedId = id || null;
-    const n = id ? nodeById.get(id) : null;
-    renderPanel(n);
-    // Mirror selection into the listbox without rebuilding the full
-    // DOM (cheaper, preserves scroll position).
-    const list = document.getElementById("node-list");
-    for (const li of list.querySelectorAll('li[data-node-id]')) {
-      li.setAttribute("aria-selected", li.getAttribute("data-node-id") === id ? "true" : "false");
-    }
-    list.setAttribute("aria-activedescendant", id ? "node-opt-" + id : "");
-    if (id) {
-      const focused = list.querySelector('li[data-node-id="' + id + '"]');
-      if (focused && focused.scrollIntoView) {
-        focused.scrollIntoView({ block: "nearest" });
-      }
-    }
-  }
-
-  function moveListboxFocus(delta) {
-    const visible = visibleSortedCache;
-    if (visible.length === 0) return;
-    const cur = selectedId
-      ? visible.findIndex((n) => n.id === selectedId)
-      : -1;
-    let next;
-    if (cur === -1) {
-      next = delta > 0 ? 0 : visible.length - 1;
-    } else {
-      next = (cur + delta + visible.length) % visible.length;
-    }
-    selectNode(visible[next].id);
-  }
-
-  // ---- Wire up DOM events ----------------------------------------------
-  function resizeCanvas() {
-    const r = canvas.getBoundingClientRect();
-    canvas.width = Math.max(100, Math.floor(r.width));
-    canvas.height = Math.max(100, Math.floor(r.height));
-  }
-  window.addEventListener("resize", resizeCanvas);
-
-  canvas.addEventListener("mousemove", (e) => {
-    const r = canvas.getBoundingClientRect();
-    const x = e.clientX - r.left;
-    const y = e.clientY - r.top;
-    const n = findNode(x, y);
-    hoverId = n ? n.id : null;
-  });
-  canvas.addEventListener("click", (e) => {
-    const r = canvas.getBoundingClientRect();
-    const x = e.clientX - r.left;
-    const y = e.clientY - r.top;
-    const n = findNode(x, y);
-    selectNode(n ? n.id : null);
-  });
-  canvas.addEventListener("dblclick", (e) => {
-    if (!VAULT_PATH) return;
-    const r = canvas.getBoundingClientRect();
-    const x = e.clientX - r.left;
-    const y = e.clientY - r.top;
-    const n = findNode(x, y);
-    if (!n) return;
-    const filePath = VAULT_PATH + (n.id.startsWith("ret-")
-      ? "/Brain/retired/" : "/Brain/preferences/") + n.id + ".md";
-    const uri = "obsidian://open?path=" + encodeURIComponent(filePath);
-    const opened = window.open(uri, "_blank");
-    if (!opened) {
-      navigator.clipboard.writeText(filePath).then(() => {
-        showTooltip("Obsidian not detected — path copied to clipboard");
-      }).catch(() => {
-        showTooltip("Path: " + filePath);
-      });
-    }
-  });
-
-  // §14 polish: keyboard handlers on the listbox. The listbox is
-  // `tabindex="0"`, so it joins the natural tab order after the
-  // search input.
-  const nodeList = document.getElementById("node-list");
-  nodeList.addEventListener("keydown", (e) => {
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        moveListboxFocus(+1);
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        moveListboxFocus(-1);
-        break;
-      case "Home":
-        e.preventDefault();
-        if (visibleSortedCache.length > 0) {
-          selectNode(visibleSortedCache[0].id);
+        // Topic centres for soft clustering.
+        const topics = new Map();
+        for (const n of nodes) {
+          if (!topics.has(n.topic)) {
+            topics.set(n.topic, { x: 0, y: 0, count: 0 });
+          }
+          topics.get(n.topic).count++;
         }
-        break;
-      case "End":
-        e.preventDefault();
-        if (visibleSortedCache.length > 0) {
-          selectNode(visibleSortedCache[visibleSortedCache.length - 1].id);
+
+        // Filter state.
+        const statusFilters = new Set([
+          "confirmed",
+          "unconfirmed",
+          "quarantine",
+          "retired",
+        ]);
+        let searchTerm = "";
+
+        // §14 polish: layout + filter persistence (localStorage). Per-vault
+        // key so multiple explorer tabs against different vaults stay
+        // separate. Stored shape:
+        //   { schema: 1, positions: { id: [x, y] }, filters: { status: [...], search: string } }
+        // Failures (private mode, quota, malformed JSON) degrade silently
+        // to a non-persistent session.
+        const STORAGE_KEY =
+          "osb-explorer-layout:" + (graph.vault_basename || "default");
+        const STORAGE_SCHEMA = 1;
+        let storedLayout = null;
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (raw !== null) {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.schema === STORAGE_SCHEMA)
+              storedLayout = parsed;
+          }
+        } catch (e) {
+          storedLayout = null;
         }
-        break;
-      case "Enter":
-      case " ":
-        // Enter / Space commit on the currently focused option. The
-        // visual / panel state already follows focus, so this is a
-        // no-op when something is already selected — but we keep the
-        // explicit handler so screen-readers announce the commit.
-        e.preventDefault();
-        if (selectedId) selectNode(selectedId);
-        break;
-      case "Escape":
-        e.preventDefault();
-        selectNode(null);
-        break;
-      default:
-        break;
-    }
-  });
+        if (storedLayout && storedLayout.filters) {
+          if (Array.isArray(storedLayout.filters.status)) {
+            statusFilters.clear();
+            for (const s of storedLayout.filters.status) statusFilters.add(s);
+          }
+          if (typeof storedLayout.filters.search === "string") {
+            searchTerm = storedLayout.filters.search;
+          }
+        }
 
-  // Hydrate the search box and status checkboxes from stored filters
-  // before wiring listeners — otherwise the first reload still flashes
-  // the unchecked default.
-  const searchInput = document.getElementById("search");
-  searchInput.value = searchTerm;
-  for (const cb of document.querySelectorAll(".status-filter")) {
-    cb.checked = statusFilters.has(cb.value);
-  }
+        // ---- Layout -----------------------------------------------------------
+        function placeInitial() {
+          const w = canvas.width;
+          const h = canvas.height;
+          const cx = w / 2;
+          const cy = h / 2;
+          // Place topic centres on a circle.
+          const topicNames = Array.from(topics.keys());
+          topicNames.forEach((name, i) => {
+            const angle = (i / Math.max(1, topicNames.length)) * Math.PI * 2;
+            const r = Math.min(w, h) * 0.25;
+            const t = topics.get(name);
+            t.x = cx + Math.cos(angle) * r;
+            t.y = cy + Math.sin(angle) * r;
+          });
+          // Place each node near its topic centre with jitter.
+          for (const n of nodes) {
+            const t = topics.get(n.topic);
+            n.x = t.x + (Math.random() - 0.5) * 80;
+            n.y = t.y + (Math.random() - 0.5) * 80;
+          }
+          // Overlay stored positions on top of the topic-based seed. New
+          // nodes (no entry in the stored map) keep their topic-anchored
+          // placement; previously-seen nodes warm-start to the last
+          // observed location so the layout no longer "jumps" between
+          // reloads. We zero velocity so the physics relaxes from rest.
+          if (storedLayout && storedLayout.positions) {
+            for (const n of nodes) {
+              const stored = storedLayout.positions[n.id];
+              if (
+                Array.isArray(stored) &&
+                stored.length === 2 &&
+                Number.isFinite(stored[0]) &&
+                Number.isFinite(stored[1])
+              ) {
+                n.x = stored[0];
+                n.y = stored[1];
+                n.vx = 0;
+                n.vy = 0;
+              }
+            }
+          }
+        }
 
-  searchInput.addEventListener("input", (e) => {
-    searchTerm = e.target.value;
-    applyFilters();
-    scheduleSave(500);
-  });
-  for (const cb of document.querySelectorAll(".status-filter")) {
-    cb.addEventListener("change", (e) => {
-      const v = e.target.value;
-      if (e.target.checked) statusFilters.add(v);
-      else statusFilters.delete(v);
-      applyFilters();
-      scheduleSave(500);
-    });
-  }
+        function saveLayout() {
+          try {
+            const positions = {};
+            for (const n of nodes) {
+              if (Number.isFinite(n.x) && Number.isFinite(n.y)) {
+                positions[n.id] = [
+                  Math.round(n.x * 10) / 10,
+                  Math.round(n.y * 10) / 10,
+                ];
+              }
+            }
+            const payload = {
+              schema: STORAGE_SCHEMA,
+              positions,
+              filters: {
+                status: Array.from(statusFilters),
+                search: searchTerm,
+              },
+            };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+          } catch (e) {
+            // Quota or disabled storage — non-persistent session.
+          }
+        }
 
-  // Reset layout button: clears the persisted state and reloads so
-  // physics seeds from `placeInitial` instead of the stored coords.
-  document.getElementById("reset-layout").addEventListener("click", () => {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch (e) {
-      // No-op: nothing to clear in non-persistent mode.
-    }
-    location.reload();
-  });
+        let saveTimer = null;
+        function scheduleSave(delayMs) {
+          if (saveTimer !== null) clearTimeout(saveTimer);
+          saveTimer = setTimeout(() => {
+            saveTimer = null;
+            saveLayout();
+          }, delayMs);
+        }
 
-  // Flush on tab close / reload. `pagehide` is the cross-browser
-  // best-effort hook; `beforeunload` is intentionally avoided
-  // because it triggers the browser's "leave site?" prompt under
-  // some configurations.
-  window.addEventListener("pagehide", saveLayout);
+        const K_TOPIC = 0.006;
+        const K_CHARGE = 700;
+        const K_SPRING = 0.04;
+        const DAMPING = 0.85;
+        const MAX_V = 12;
 
-  // ---- Boot ------------------------------------------------------------
-  resizeCanvas();
-  placeInitial();
-  applyFilters();
+        function step() {
+          const w = canvas.width;
+          const h = canvas.height;
+          // Topic attraction.
+          for (const n of nodes) {
+            if (!n.visible) continue;
+            const t = topics.get(n.topic);
+            n.vx += (t.x - n.x) * K_TOPIC;
+            n.vy += (t.y - n.y) * K_TOPIC;
+          }
+          // Charge repulsion (pairwise — fine for O(N^2) at N ≤ 300).
+          for (let i = 0; i < nodes.length; i++) {
+            const a = nodes[i];
+            if (!a.visible) continue;
+            for (let j = i + 1; j < nodes.length; j++) {
+              const b = nodes[j];
+              if (!b.visible) continue;
+              const dx = a.x - b.x;
+              const dy = a.y - b.y;
+              const d2 = dx * dx + dy * dy + 0.01;
+              const f = K_CHARGE / d2;
+              const d = Math.sqrt(d2);
+              const fx = (dx / d) * f;
+              const fy = (dy / d) * f;
+              a.vx += fx;
+              a.vy += fy;
+              b.vx -= fx;
+              b.vy -= fy;
+            }
+          }
+          // Edge springs.
+          for (const e of edges) {
+            if (!e.sNode.visible || !e.tNode.visible) continue;
+            const dx = e.tNode.x - e.sNode.x;
+            const dy = e.tNode.y - e.sNode.y;
+            const d = Math.sqrt(dx * dx + dy * dy) + 0.01;
+            const rest = e.sNode.radius + e.tNode.radius + 40;
+            const f = (d - rest) * K_SPRING;
+            const fx = (dx / d) * f;
+            const fy = (dy / d) * f;
+            e.sNode.vx += fx;
+            e.sNode.vy += fy;
+            e.tNode.vx -= fx;
+            e.tNode.vy -= fy;
+          }
+          // Damping + integrate + clamp.
+          for (const n of nodes) {
+            if (!n.visible) continue;
+            n.vx *= DAMPING;
+            n.vy *= DAMPING;
+            if (n.vx > MAX_V) n.vx = MAX_V;
+            else if (n.vx < -MAX_V) n.vx = -MAX_V;
+            if (n.vy > MAX_V) n.vy = MAX_V;
+            else if (n.vy < -MAX_V) n.vy = -MAX_V;
+            n.x += n.vx;
+            n.y += n.vy;
+            // Soft wall.
+            const pad = 30;
+            if (n.x < pad) {
+              n.x = pad;
+              n.vx *= -0.3;
+            }
+            if (n.x > w - pad) {
+              n.x = w - pad;
+              n.vx *= -0.3;
+            }
+            if (n.y < pad) {
+              n.y = pad;
+              n.vy *= -0.3;
+            }
+            if (n.y > h - pad) {
+              n.y = h - pad;
+              n.vy *= -0.3;
+            }
+          }
+        }
 
-  // Persist the layout once after each settle. `unsavedMotion`
-  // latches true whenever any visible node has non-trivial velocity
-  // and resets only after `saveLayout` runs; otherwise an idle graph
-  // would JSON.stringify-and-write every 250 ms forever.
-  let settleSavedAt = -Infinity;
-  let unsavedMotion = true;
-  function frame() {
-    step();
-    render();
-    const now = performance.now();
-    if (now - settleSavedAt > 250) {
-      let totalV = 0;
-      for (const n of nodes) {
-        if (!n.visible) continue;
-        const v = Math.abs(n.vx) + Math.abs(n.vy);
-        if (v > 0.05) unsavedMotion = true;
-        totalV += v;
-      }
-      if (totalV < 0.5 && unsavedMotion) {
-        settleSavedAt = now;
-        unsavedMotion = false;
-        saveLayout();
-      }
-    }
-    requestAnimationFrame(frame);
-  }
-  frame();
-})();
-</script>
-</body>
+        // ---- Render -----------------------------------------------------------
+        let selectedId = null;
+        let hoverId = null;
+
+        function render() {
+          const w = canvas.width;
+          const h = canvas.height;
+          ctx.clearRect(0, 0, w, h);
+          // Edges.
+          ctx.lineWidth = 1;
+          for (const e of edges) {
+            if (!e.sNode.visible || !e.tNode.visible) continue;
+            ctx.beginPath();
+            ctx.moveTo(e.sNode.x, e.sNode.y);
+            ctx.lineTo(e.tNode.x, e.tNode.y);
+            if (e.kind === "supersedes") {
+              ctx.strokeStyle = COLORS["edge-supersedes"];
+              ctx.setLineDash([4, 4]);
+            } else {
+              ctx.strokeStyle = COLORS.edge;
+              ctx.setLineDash([]);
+            }
+            ctx.stroke();
+          }
+          ctx.setLineDash([]);
+          // Nodes.
+          for (const n of nodes) {
+            if (!n.visible) continue;
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
+            ctx.fillStyle = COLORS[n.status] || COLORS.unconfirmed;
+            ctx.fill();
+            if (n.pinned) {
+              ctx.lineWidth = 3;
+              ctx.strokeStyle = COLORS.pinned;
+              ctx.stroke();
+            }
+            if (n.id === selectedId || n.id === hoverId) {
+              ctx.lineWidth = 2;
+              ctx.strokeStyle = "#1a1a1a";
+              ctx.stroke();
+            }
+          }
+          // Hover tooltip.
+          if (hoverId) {
+            const h = nodeById.get(hoverId);
+            if (h && h.visible) {
+              const label =
+                h.principle.length > 80
+                  ? h.principle.slice(0, 77) + "..."
+                  : h.principle;
+              ctx.font = "12px system-ui";
+              const metrics = ctx.measureText(label);
+              const padX = 6,
+                padY = 4;
+              const x = h.x + h.radius + 6;
+              const y = h.y - h.radius;
+              ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
+              ctx.fillRect(x, y, metrics.width + padX * 2, 18 + padY);
+              ctx.fillStyle = "#fff";
+              ctx.fillText(label, x + padX, y + 14);
+            }
+          }
+        }
+
+        // ---- Hit test, panel render ------------------------------------------
+        function findNode(px, py) {
+          for (let i = nodes.length - 1; i >= 0; i--) {
+            const n = nodes[i];
+            if (!n.visible) continue;
+            const dx = px - n.x;
+            const dy = py - n.y;
+            if (dx * dx + dy * dy <= n.radius * n.radius) return n;
+          }
+          return null;
+        }
+
+        function renderPanel(n) {
+          const root = document.getElementById("details-body");
+          if (!n) {
+            root.innerHTML =
+              '<p class="panel-empty">Select a node to inspect.</p>';
+            return;
+          }
+          const inbound = edges.filter((e) => e.target === n.id);
+          const outbound = edges.filter((e) => e.source === n.id);
+          const esc = (s) =>
+            String(s).replace(
+              /[&<>]/g,
+              (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+            );
+          const edgeLabel = (e) => e.relation || e.kind;
+          const html = [
+            '<div class="field"><span class="k">id</span><span class="v"><code>' +
+              esc(n.id) +
+              "</code></span></div>",
+            '<div class="principle">' + esc(n.principle) + "</div>",
+            '<div class="field"><span class="k">topic</span><span class="v">' +
+              esc(n.topic) +
+              "</span></div>",
+            n.scope
+              ? '<div class="field"><span class="k">scope</span><span class="v">' +
+                esc(n.scope) +
+                "</span></div>"
+              : "",
+            n.memory_layer
+              ? '<div class="field"><span class="k">memory layer</span><span class="v">' +
+                esc(n.memory_layer) +
+                "</span></div>"
+              : "",
+            n.memory_branch
+              ? '<div class="field"><span class="k">memory branch</span><span class="v">' +
+                esc(n.memory_branch) +
+                "</span></div>"
+              : "",
+            '<div class="field"><span class="k">status</span><span class="v"><span class="pill ' +
+              n.status +
+              '">' +
+              n.status +
+              "</span>" +
+              (n.confidence
+                ? ' <span class="pill">' +
+                  n.confidence +
+                  (n.confidence_value !== null
+                    ? " (" + n.confidence_value.toFixed(2) + ")"
+                    : "") +
+                  "</span>"
+                : "") +
+              "</span></div>",
+            '<div class="field"><span class="k">applied</span><span class="v">' +
+              n.applied_count +
+              "</span></div>",
+            '<div class="field"><span class="k">violated</span><span class="v">' +
+              n.violated_count +
+              "</span></div>",
+            n.pinned
+              ? '<div class="field"><span class="k">pinned</span><span class="v">yes</span></div>'
+              : "",
+            n.last_evidence_at
+              ? '<div class="field"><span class="k">last evidence</span><span class="v">' +
+                esc(n.last_evidence_at) +
+                "</span></div>"
+              : "",
+            '<div class="field"><span class="k">backlinks</span><span class="v">' +
+              n.backlink_count +
+              " inbound</span></div>",
+            n.retired_reason
+              ? '<div class="field"><span class="k">retired reason</span><span class="v">' +
+                esc(n.retired_reason) +
+                "</span></div>"
+              : "",
+            "<h3>Outbound</h3>",
+            outbound.length === 0
+              ? '<p class="panel-empty">none</p>'
+              : '<ul class="edge-list">' +
+                outbound
+                  .map(
+                    (e) =>
+                      "<li>" +
+                      esc(e.target) +
+                      ' <span class="kind">[' +
+                      esc(edgeLabel(e)) +
+                      "]</span></li>",
+                  )
+                  .join("") +
+                "</ul>",
+            "<h3>Inbound</h3>",
+            inbound.length === 0
+              ? '<p class="panel-empty">none</p>'
+              : '<ul class="edge-list">' +
+                inbound
+                  .map(
+                    (e) =>
+                      "<li>" +
+                      esc(e.source) +
+                      ' <span class="kind">[' +
+                      esc(edgeLabel(e)) +
+                      "]</span></li>",
+                  )
+                  .join("") +
+                "</ul>",
+          ].join("");
+          root.innerHTML = html;
+        }
+
+        // ---- Filtering -------------------------------------------------------
+        function applyFilters() {
+          const term = searchTerm.toLowerCase();
+          for (const n of nodes) {
+            const statusOk = statusFilters.has(n.status);
+            const textOk =
+              !term ||
+              n.principle.toLowerCase().includes(term) ||
+              n.topic.toLowerCase().includes(term) ||
+              n.id.toLowerCase().includes(term);
+            n.visible = statusOk && textOk;
+          }
+          rebuildVisibleSorted();
+          scheduleListRender();
+        }
+
+        // ---- Listbox (keyboard-accessible mirror of the canvas) --------------
+        // The visible nodes are also presented as a focusable <ul role="listbox">.
+        // Pointer users keep the canvas; keyboard and screen reader users get
+        // the listbox. Both surfaces call `selectNode(id)` so state stays in
+        // lockstep across input devices.
+        // `visibleSortedCache` is rebuilt by `applyFilters` and consumed by
+        // `renderNodeList` / `moveListboxFocus` — saves an O(N log N) sort
+        // on every Arrow key on large vaults.
+        let visibleSortedCache = [];
+        let renderNodeListPending = false;
+
+        function escHtml(s) {
+          return String(s).replace(
+            /[&<>"]/g,
+            (c) =>
+              ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+              })[c],
+          );
+        }
+
+        function rebuildVisibleSorted() {
+          visibleSortedCache = nodes
+            .filter((n) => n.visible)
+            .slice()
+            .sort((a, b) => {
+              const t = a.topic.localeCompare(b.topic);
+              return t !== 0 ? t : a.id.localeCompare(b.id);
+            });
+        }
+
+        function renderNodeList() {
+          const list = document.getElementById("node-list");
+          const visible = visibleSortedCache;
+          if (visible.length === 0) {
+            list.innerHTML = '<li id="node-list-empty">No matching nodes.</li>';
+            list.setAttribute("aria-activedescendant", "");
+            return;
+          }
+          list.innerHTML = visible
+            .map((n) => {
+              const selected =
+                n.id === selectedId
+                  ? ' aria-selected="true"'
+                  : ' aria-selected="false"';
+              const title =
+                n.principle.length > 80
+                  ? n.principle.slice(0, 77) + "..."
+                  : n.principle;
+              return (
+                '<li role="option" id="node-opt-' +
+                escHtml(n.id) +
+                '"' +
+                selected +
+                ' data-node-id="' +
+                escHtml(n.id) +
+                '">' +
+                '<span class="topic">' +
+                escHtml(n.topic) +
+                "</span>" +
+                escHtml(title) +
+                "</li>"
+              );
+            })
+            .join("");
+          list.setAttribute(
+            "aria-activedescendant",
+            selectedId ? "node-opt-" + selectedId : "",
+          );
+          // Bind per-item click handlers via event delegation (cheap and
+          // survives the full re-render above).
+          list.onclick = (ev) => {
+            const li = ev.target.closest("li[data-node-id]");
+            if (!li) return;
+            selectNode(li.getAttribute("data-node-id"));
+          };
+          list.ondblclick = (ev) => {
+            if (!VAULT_PATH) return;
+            const li = ev.target.closest("li[data-node-id]");
+            if (!li) return;
+            const nodeId = li.getAttribute("data-node-id");
+            const filePath =
+              VAULT_PATH +
+              (nodeId.startsWith("ret-")
+                ? "/Brain/retired/"
+                : "/Brain/preferences/") +
+              nodeId +
+              ".md";
+            const uri = "obsidian://open?path=" + encodeURIComponent(filePath);
+            window.open(uri, "_blank");
+          };
+        }
+
+        // Defer the listbox rebuild to the next animation frame so a held-
+        // down filter key only re-renders the <ul> once per paint instead
+        // of per keystroke. The canvas-side render is on its own rAF loop
+        // and is unaffected.
+        function scheduleListRender() {
+          if (renderNodeListPending) return;
+          renderNodeListPending = true;
+          requestAnimationFrame(() => {
+            renderNodeListPending = false;
+            renderNodeList();
+          });
+        }
+
+        function selectNode(id) {
+          selectedId = id || null;
+          const n = id ? nodeById.get(id) : null;
+          renderPanel(n);
+          // Mirror selection into the listbox without rebuilding the full
+          // DOM (cheaper, preserves scroll position).
+          const list = document.getElementById("node-list");
+          for (const li of list.querySelectorAll("li[data-node-id]")) {
+            li.setAttribute(
+              "aria-selected",
+              li.getAttribute("data-node-id") === id ? "true" : "false",
+            );
+          }
+          list.setAttribute(
+            "aria-activedescendant",
+            id ? "node-opt-" + id : "",
+          );
+          if (id) {
+            const focused = list.querySelector('li[data-node-id="' + id + '"]');
+            if (focused && focused.scrollIntoView) {
+              focused.scrollIntoView({ block: "nearest" });
+            }
+          }
+        }
+
+        function moveListboxFocus(delta) {
+          const visible = visibleSortedCache;
+          if (visible.length === 0) return;
+          const cur = selectedId
+            ? visible.findIndex((n) => n.id === selectedId)
+            : -1;
+          let next;
+          if (cur === -1) {
+            next = delta > 0 ? 0 : visible.length - 1;
+          } else {
+            next = (cur + delta + visible.length) % visible.length;
+          }
+          selectNode(visible[next].id);
+        }
+
+        // ---- Wire up DOM events ----------------------------------------------
+        function resizeCanvas() {
+          const r = canvas.getBoundingClientRect();
+          canvas.width = Math.max(100, Math.floor(r.width));
+          canvas.height = Math.max(100, Math.floor(r.height));
+        }
+        window.addEventListener("resize", resizeCanvas);
+
+        canvas.addEventListener("mousemove", (e) => {
+          const r = canvas.getBoundingClientRect();
+          const x = e.clientX - r.left;
+          const y = e.clientY - r.top;
+          const n = findNode(x, y);
+          hoverId = n ? n.id : null;
+        });
+        canvas.addEventListener("click", (e) => {
+          const r = canvas.getBoundingClientRect();
+          const x = e.clientX - r.left;
+          const y = e.clientY - r.top;
+          const n = findNode(x, y);
+          selectNode(n ? n.id : null);
+        });
+        canvas.addEventListener("dblclick", (e) => {
+          if (!VAULT_PATH) return;
+          const r = canvas.getBoundingClientRect();
+          const x = e.clientX - r.left;
+          const y = e.clientY - r.top;
+          const n = findNode(x, y);
+          if (!n) return;
+          const filePath =
+            VAULT_PATH +
+            (n.id.startsWith("ret-")
+              ? "/Brain/retired/"
+              : "/Brain/preferences/") +
+            n.id +
+            ".md";
+          const uri = "obsidian://open?path=" + encodeURIComponent(filePath);
+          const opened = window.open(uri, "_blank");
+          if (!opened) {
+            navigator.clipboard
+              .writeText(filePath)
+              .then(() => {
+                showTooltip("Obsidian not detected — path copied to clipboard");
+              })
+              .catch(() => {
+                showTooltip("Path: " + filePath);
+              });
+          }
+        });
+
+        // §14 polish: keyboard handlers on the listbox. The listbox is
+        // `tabindex="0"`, so it joins the natural tab order after the
+        // search input.
+        const nodeList = document.getElementById("node-list");
+        nodeList.addEventListener("keydown", (e) => {
+          switch (e.key) {
+            case "ArrowDown":
+              e.preventDefault();
+              moveListboxFocus(+1);
+              break;
+            case "ArrowUp":
+              e.preventDefault();
+              moveListboxFocus(-1);
+              break;
+            case "Home":
+              e.preventDefault();
+              if (visibleSortedCache.length > 0) {
+                selectNode(visibleSortedCache[0].id);
+              }
+              break;
+            case "End":
+              e.preventDefault();
+              if (visibleSortedCache.length > 0) {
+                selectNode(
+                  visibleSortedCache[visibleSortedCache.length - 1].id,
+                );
+              }
+              break;
+            case "Enter":
+            case " ":
+              // Enter / Space commit on the currently focused option. The
+              // visual / panel state already follows focus, so this is a
+              // no-op when something is already selected — but we keep the
+              // explicit handler so screen-readers announce the commit.
+              e.preventDefault();
+              if (selectedId) selectNode(selectedId);
+              break;
+            case "Escape":
+              e.preventDefault();
+              selectNode(null);
+              break;
+            default:
+              break;
+          }
+        });
+
+        // Hydrate the search box and status checkboxes from stored filters
+        // before wiring listeners — otherwise the first reload still flashes
+        // the unchecked default.
+        const searchInput = document.getElementById("search");
+        searchInput.value = searchTerm;
+        for (const cb of document.querySelectorAll(".status-filter")) {
+          cb.checked = statusFilters.has(cb.value);
+        }
+
+        searchInput.addEventListener("input", (e) => {
+          searchTerm = e.target.value;
+          applyFilters();
+          scheduleSave(500);
+        });
+        for (const cb of document.querySelectorAll(".status-filter")) {
+          cb.addEventListener("change", (e) => {
+            const v = e.target.value;
+            if (e.target.checked) statusFilters.add(v);
+            else statusFilters.delete(v);
+            applyFilters();
+            scheduleSave(500);
+          });
+        }
+
+        // Reset layout button: clears the persisted state and reloads so
+        // physics seeds from `placeInitial` instead of the stored coords.
+        document
+          .getElementById("reset-layout")
+          .addEventListener("click", () => {
+            try {
+              localStorage.removeItem(STORAGE_KEY);
+            } catch (e) {
+              // No-op: nothing to clear in non-persistent mode.
+            }
+            location.reload();
+          });
+
+        // Flush on tab close / reload. `pagehide` is the cross-browser
+        // best-effort hook; `beforeunload` is intentionally avoided
+        // because it triggers the browser's "leave site?" prompt under
+        // some configurations.
+        window.addEventListener("pagehide", saveLayout);
+
+        // ---- Boot ------------------------------------------------------------
+        resizeCanvas();
+        placeInitial();
+        applyFilters();
+
+        // Persist the layout once after each settle. `unsavedMotion`
+        // latches true whenever any visible node has non-trivial velocity
+        // and resets only after `saveLayout` runs; otherwise an idle graph
+        // would JSON.stringify-and-write every 250 ms forever.
+        let settleSavedAt = -Infinity;
+        let unsavedMotion = true;
+        function frame() {
+          step();
+          render();
+          const now = performance.now();
+          if (now - settleSavedAt > 250) {
+            let totalV = 0;
+            for (const n of nodes) {
+              if (!n.visible) continue;
+              const v = Math.abs(n.vx) + Math.abs(n.vy);
+              if (v > 0.05) unsavedMotion = true;
+              totalV += v;
+            }
+            if (totalV < 0.5 && unsavedMotion) {
+              settleSavedAt = now;
+              unsavedMotion = false;
+              saveLayout();
+            }
+          }
+          requestAnimationFrame(frame);
+        }
+        frame();
+      })();
+    </script>
+  </body>
 </html>

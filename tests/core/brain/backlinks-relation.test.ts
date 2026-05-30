@@ -67,6 +67,36 @@ test("a retired pref's superseded_by ref carries relation 'superseded_by'", () =
   expect(superseded?.relation).toBe("superseded_by");
 });
 
+test("preference-specific relation fields carry relation tokens", () => {
+  writeFileSync(
+    join(vault, "Brain", "preferences", "pref-foo.md"),
+    [
+      "---",
+      "kind: brain-preference",
+      "id: pref-foo",
+      "topic: foo",
+      "_status: confirmed",
+      "principle: example",
+      "depends_on: [[pref-base]]",
+      "refines: [[pref-draft]]",
+      "---",
+      "",
+      "body",
+    ].join("\n"),
+  );
+  const idx = buildBacklinkIndex(vault);
+
+  const depends = idx.get("pref-base") ?? [];
+  expect(depends).toHaveLength(1);
+  expect(depends[0]?.field).toBe("depends_on");
+  expect(depends[0]?.relation).toBe("depends_on");
+
+  const refines = idx.get("pref-draft") ?? [];
+  expect(refines).toHaveLength(1);
+  expect(refines[0]?.field).toBe("refines");
+  expect(refines[0]?.relation).toBe("refines");
+});
+
 test("a non-vocabulary field (supersedes) carries no relation", () => {
   // `supersedes` is the inverse of `superseded_by` and is deliberately
   // NOT part of the relation vocabulary, so its ref must stay untyped.

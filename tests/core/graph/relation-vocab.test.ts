@@ -15,9 +15,16 @@ import {
   relationFromFrontmatterField,
 } from "../../../src/core/graph/relation-vocab.ts";
 
-test("the default vocabulary covers the four declared relation types", () => {
+test("the default vocabulary covers the declared relation types", () => {
   const actual: string[] = [...DEFAULT_RELATION_TYPES];
-  expect(actual.toSorted()).toEqual(["contradicts", "extends", "related", "superseded_by"]);
+  expect(actual.toSorted()).toEqual([
+    "contradicts",
+    "depends_on",
+    "extends",
+    "refines",
+    "related",
+    "superseded_by",
+  ]);
 });
 
 test("normalizeRelation is NFC + trimmed + lower-cased", () => {
@@ -35,6 +42,8 @@ test("isKnownRelation accepts the vocabulary and rejects anything else", () => {
 
 test("relationFromFrontmatterField maps a known relation field to its relation, else null", () => {
   expect(relationFromFrontmatterField("contradicts")).toBe("contradicts");
+  expect(relationFromFrontmatterField("Depends_On")).toBe("depends_on");
+  expect(relationFromFrontmatterField("refines")).toBe("refines");
   expect(relationFromFrontmatterField("Superseded_By")).toBe("superseded_by");
   expect(relationFromFrontmatterField("title")).toBeNull();
   expect(relationFromFrontmatterField("aliases")).toBeNull();
