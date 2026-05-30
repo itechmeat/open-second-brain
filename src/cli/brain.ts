@@ -35,6 +35,7 @@ import {
   cmdBrainMorningBrief,
   cmdBrainCodec,
   cmdBrainSources,
+  cmdBrainSchema,
   cmdBrainGraphExport,
   cmdBrainGraphImport,
   cmdBrainBacklinks,
@@ -140,6 +141,8 @@ export async function handleBrainSubcommand(
         return await cmdBrainCodec(rest);
       case "sources":
         return await cmdBrainSources(rest);
+      case "schema":
+        return await cmdBrainSchema(rest);
       case "graph-export":
         return await cmdBrainGraphExport(rest);
       case "graph-import":

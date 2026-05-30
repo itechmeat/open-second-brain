@@ -22,6 +22,7 @@ export { cmdBrainAudit } from "./audit.ts";
 export { cmdBrainMorningBrief } from "./morning-brief.ts";
 export { cmdBrainCodec } from "./codec.ts";
 export { cmdBrainSources } from "./sources.ts";
+export { cmdBrainSchema } from "./schema.ts";
 export { cmdBrainGraphExport } from "./graph-export.ts";
 export { cmdBrainGraphImport } from "./graph-import.ts";
 export { cmdBrainBacklinks } from "./backlinks.ts";

@@ -47,6 +47,11 @@ import {
   type DefaultRelationType,
 } from "../graph/relation-vocab.ts";
 import {
+  isKnownSchemaToken,
+  validateSchemaToken,
+  type BrainSchemaVocabulary,
+} from "./schema-vocab.ts";
+import {
   brainDirs,
   preferencePath,
   retiredPath,
@@ -155,6 +160,7 @@ export interface WritePreferenceInput {
   readonly content_hash?: string;
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
+  readonly schema_type?: string;
   readonly memory_layer?: BrainMemoryLayer;
   readonly memory_branch?: string;
   readonly related?: ReadonlyArray<string>;
@@ -189,6 +195,10 @@ export interface WritePreferenceInput {
 export interface WritePreferenceOptions {
   /** When true, overwrite an existing file at the target path. */
   readonly overwrite?: boolean;
+}
+
+export interface ParsePreferenceOptions {
+  readonly schemaVocabulary?: BrainSchemaVocabulary;
 }
 
 export interface WritePreferenceResult {
@@ -393,6 +403,12 @@ function preferenceFrontmatter(
   if (input.aliases && input.aliases.length > 0) {
     metadata["aliases"] = [...input.aliases];
   }
+  if (input.schema_type?.trim()) {
+    metadata["schema_type"] = validateSchemaToken(
+      input.schema_type,
+      "schema_type",
+    );
+  }
   if (input.memory_layer !== undefined) {
     metadata["memory_layer"] = validateMemoryLayer(
       input.memory_layer,
@@ -582,7 +598,10 @@ export function normalizeDerivedKeys(
  * (`_status:`, `_applied_count:`, ...); {@link normalizeDerivedKeys}
  * renames them to the un-prefixed form for downstream readers.
  */
-export function parsePreference(path: string): BrainPreference {
+export function parsePreference(
+  path: string,
+  options: ParsePreferenceOptions = {},
+): BrainPreference {
   const [rawMeta, _body] = parseFrontmatter(path);
   const meta = normalizeDerivedKeys(rawMeta);
   // `_body` is unused for preferences — the body is purely human prose;
@@ -654,6 +673,7 @@ export function parsePreference(path: string): BrainPreference {
     ...(meta["aliases"] !== undefined && Array.isArray(meta["aliases"])
       ? { aliases: [...(meta["aliases"] as ReadonlyArray<string>)] }
       : {}),
+    ...spreadSchemaMetadata(meta, path, "preference_types", options),
     ...spreadMemorySemantics(meta, path),
     ...spreadBiTemporal(meta),
   };
@@ -695,6 +715,24 @@ function spreadMemorySemantics(
     if (values !== undefined) out[field] = values;
   }
   return out;
+}
+
+function spreadSchemaMetadata(
+  meta: Record<string, unknown>,
+  path: string,
+  category: "preference_types" | "signal_types",
+  options: ParsePreferenceOptions,
+): { readonly schema_type?: string } {
+  const raw = optionalScalarString(meta, "schema_type");
+  if (raw === undefined) return {};
+  const schemaType = validateSchemaToken(raw, "schema_type");
+  const vocab = options.schemaVocabulary;
+  if (vocab !== undefined && !isKnownSchemaToken(vocab, category, schemaType)) {
+    throw new Error(
+      `schema_type ${JSON.stringify(schemaType)} is not declared in ${category} (${path})`,
+    );
+  }
+  return { schema_type: schemaType };
 }
 
 function validateMemoryLayer(value: string, path: string): BrainMemoryLayer {
@@ -748,7 +786,10 @@ function spreadBiTemporal(meta: Record<string, unknown>): {
  * Shares {@link normalizeDerivedKeys} with `parsePreference` so
  * both forms of Group C frontmatter parse identically.
  */
-export function parseRetired(path: string): BrainRetired {
+export function parseRetired(
+  path: string,
+  options: ParsePreferenceOptions = {},
+): BrainRetired {
   const [rawMeta] = parseFrontmatter(path);
   const meta = normalizeDerivedKeys(rawMeta);
 
@@ -814,6 +855,7 @@ export function parseRetired(path: string): BrainRetired {
     ...(meta["aliases"] !== undefined && Array.isArray(meta["aliases"])
       ? { aliases: [...(meta["aliases"] as ReadonlyArray<string>)] }
       : {}),
+    ...spreadSchemaMetadata(meta, path, "preference_types", options),
     ...spreadMemorySemantics(meta, path),
     ...(optionalScalarString(meta, "user_rejected_reason") !== undefined
       ? {

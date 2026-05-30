@@ -358,6 +358,8 @@ export interface BrainSignal {
    * semantically equivalent to `live`, never inject a default.
    */
   readonly source_type?: BrainSignalSourceType;
+  /** Optional runtime schema taxonomy token. Inert metadata. */
+  readonly schema_type?: string;
   /**
    * Normalised payload hash anchored to (topic, signal, principle,
    * scope). Idempotency anchor for `scan-inline` (§9) and
@@ -450,6 +452,8 @@ export interface BrainPreference {
   /** Optional wikilink to a retired pref this one replaces. */
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
+  /** Optional runtime schema taxonomy token. Inert metadata. */
+  readonly schema_type?: string;
   readonly memory_layer?: BrainMemoryLayer;
   readonly memory_branch?: string;
   readonly related?: ReadonlyArray<string>;
@@ -516,6 +520,8 @@ export interface BrainRetired {
   readonly confidence_value: number | null;
   readonly pinned: boolean;
   readonly aliases?: ReadonlyArray<string>;
+  /** Optional runtime schema taxonomy token. Inert metadata. */
+  readonly schema_type?: string;
   readonly memory_layer?: BrainMemoryLayer;
   readonly memory_branch?: string;
   readonly related?: ReadonlyArray<string>;
@@ -898,6 +904,18 @@ export interface BrainGuardrailConfig {
 }
 
 /**
+ * Optional runtime schema vocabulary declarations (v0.25.0 foundation).
+ * These are taxonomy tokens, not replacements for operational lifecycle
+ * states such as `preference.status` or `apply-evidence` results.
+ */
+export interface BrainSchemaConfig {
+  readonly preference_types?: ReadonlyArray<string>;
+  readonly signal_types?: ReadonlyArray<string>;
+  readonly page_types?: ReadonlyArray<string>;
+  readonly log_event_kinds?: ReadonlyArray<string>;
+}
+
+/**
  * Root of `Brain/_brain.yaml`. `schema_version` is mandatory; unknown
  * top-level keys are tolerated as forward-compat (logged as a warning by
  * the validator, not an error).
@@ -970,6 +988,11 @@ export interface BrainConfig {
    * to `BRAIN_HEALTH_DEFAULTS` via `resolveHealth`.
    */
   readonly health?: BrainHealthConfig;
+  /**
+   * Optional runtime schema vocabulary declarations. Absent by default;
+   * consumers resolve built-ins through `resolveSchemaVocabulary`.
+   */
+  readonly schema?: BrainSchemaConfig;
 }
 
 /**

@@ -119,6 +119,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("morning-brief", "Render session-start summary"),
         command("codec", "Compress or expand session prose"),
         command("sources", "Show signal source dashboard"),
+        command("schema", "Inspect Brain schema vocabulary"),
         command("graph-export", "Export vault graph"),
         command("graph-import", "Import vault graph stubs"),
         command("backlinks", "List inbound Brain references"),
