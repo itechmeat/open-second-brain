@@ -358,6 +358,8 @@ export interface BrainSignal {
    * semantically equivalent to `live`, never inject a default.
    */
   readonly source_type?: BrainSignalSourceType;
+  /** Optional runtime schema taxonomy token. Inert metadata. */
+  readonly schema_type?: string;
   /**
    * Normalised payload hash anchored to (topic, signal, principle,
    * scope). Idempotency anchor for `scan-inline` (§9) and
@@ -450,6 +452,8 @@ export interface BrainPreference {
   /** Optional wikilink to a retired pref this one replaces. */
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;
+  /** Optional runtime schema taxonomy token. Inert metadata. */
+  readonly schema_type?: string;
   readonly memory_layer?: BrainMemoryLayer;
   readonly memory_branch?: string;
   readonly related?: ReadonlyArray<string>;
@@ -516,6 +520,8 @@ export interface BrainRetired {
   readonly confidence_value: number | null;
   readonly pinned: boolean;
   readonly aliases?: ReadonlyArray<string>;
+  /** Optional runtime schema taxonomy token. Inert metadata. */
+  readonly schema_type?: string;
   readonly memory_layer?: BrainMemoryLayer;
   readonly memory_branch?: string;
   readonly related?: ReadonlyArray<string>;

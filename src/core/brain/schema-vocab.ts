@@ -125,7 +125,7 @@ function mergeCategory(
   return Object.freeze(merged);
 }
 
-function validateSchemaToken(value: unknown, field: string): string {
+export function validateSchemaToken(value: unknown, field: string): string {
   if (typeof value !== "string") {
     throw new SchemaVocabularyError(field, value, "must be a string token");
   }
