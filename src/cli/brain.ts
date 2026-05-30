@@ -38,6 +38,7 @@ import {
   cmdBrainGraphExport,
   cmdBrainGraphImport,
   cmdBrainBacklinks,
+  cmdBrainSemanticsBackfill,
   cmdBrainMcpLandscape,
   cmdBrainMerge,
   cmdBrainExplorer,
@@ -145,6 +146,8 @@ export async function handleBrainSubcommand(
         return await cmdBrainGraphImport(rest);
       case "backlinks":
         return await cmdBrainBacklinks(rest);
+      case "semantics-backfill":
+        return await cmdBrainSemanticsBackfill(rest);
       case "mcp-landscape":
         return await cmdBrainMcpLandscape(rest);
       case "scan-inline":

@@ -25,6 +25,7 @@ export { cmdBrainSources } from "./sources.ts";
 export { cmdBrainGraphExport } from "./graph-export.ts";
 export { cmdBrainGraphImport } from "./graph-import.ts";
 export { cmdBrainBacklinks } from "./backlinks.ts";
+export { cmdBrainSemanticsBackfill } from "./semantics-backfill.ts";
 export { cmdBrainMcpLandscape } from "./mcp-landscape.ts";
 export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";

@@ -122,6 +122,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("graph-export", "Export vault graph"),
         command("graph-import", "Import vault graph stubs"),
         command("backlinks", "List inbound Brain references"),
+        command("semantics-backfill", "Preview Brain semantics backfill"),
         command(
           "mcp-landscape",
           "List MCP servers configured across the vault",
