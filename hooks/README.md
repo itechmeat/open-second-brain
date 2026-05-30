@@ -20,8 +20,13 @@ hook payload shape, not on the runtime.
 
 | Event         | Matcher                              | Behaviour                                                                                                                                 |
 |---------------|--------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `SessionStart` | `startup\|resume\|clear`           | Injects `Brain/active.md` and records a non-blocking `session-lifecycle` observation.                                                     |
+| `UserPromptSubmit` | `*`                              | Captures explicit `@osb feedback ...` markers from the submitted prompt immediately through the signal/dedup boundary.                    |
+| `PostToolUse` | `brain_feedback`                    | Replays successful `brain_feedback` tool input immediately through the same signal/dedup boundary.                                        |
 | `PostToolUse` | `Write\|Edit\|MultiEdit\|apply_patch` | Emits `additionalContext` pointing at the three Brain writer tools (`brain_feedback`, `brain_apply_evidence`, `brain_note`) for a durable edit. |
+| `PostCompact` | `manual\|auto`                      | Re-injects `Brain/active.md` and records a post-compact lifecycle observation.                                                            |
 | `Stop`        | (every Stop)                         | If the turn produced a durable artifact and none of `brain_feedback` / `brain_apply_evidence` / `brain_note` landed, returns `decision: "block"` once, then lets the second Stop pass.       |
+| `SessionEnd`  | `*`                                  | Records a non-blocking lifecycle observation for session close.                                                                            |
 
 The Stop guardrail respects the runtime-provided `stop_hook_active`
 flag: it fires at most once per turn, so the agent can deliberately
@@ -69,6 +74,10 @@ call would.
   Codex ever switches to a "ship subtree only" extraction model, the
   symlink will dangle and the hooks tree will need to move
   physically under `plugins/codex/hooks/` (or be duplicated).
+- `session-capture.ts` — Bun entry script that handles lifecycle
+  observations and immediate marker/tool-feedback capture. It emits
+  no stdout to the runtime; writes go to Brain signals plus
+  `session-lifecycle` audit/log rows.
 - `post-write-reminder.ts` / `stop-log-guardrail.ts` — Bun entry
   scripts. They are tiny by design: they parse stdin, query
   `lib/transcript.ts` and `lib/detect.ts`, and emit the hook's JSON

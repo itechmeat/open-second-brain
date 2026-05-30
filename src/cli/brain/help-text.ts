@@ -50,6 +50,7 @@ Brain verbs (observing memory):
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a registered agent session .jsonl (or directory)
+  session-hook        Capture one runtime hook payload from stdin (internal hook bridge)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
   token-footprint     Report per-category vault token size with a warn threshold
@@ -193,9 +194,12 @@ export const VERB_HELP: Record<string, string> = {
     "Read-only dashboard of the brain's signals grouped by (agent, source_type)\n" +
     "with active/processed and distinct-topic counts.\n",
   schema:
-    "usage: o2b brain schema [--vault <path>] [--json]\n" +
-    "Read-only report of the resolved runtime schema vocabulary, artifact\n" +
-    "schema_type usage counts, and unknown/unused taxonomy findings.\n",
+    "usage: o2b brain schema [report|stats|lint|graph|explain|orphans|apply|sync] [--vault <path>] [--json]\n" +
+    "Inspect and mutate the active runtime schema vocabulary through locked, audited writes.\n",
+  "session-hook":
+    "usage: o2b brain session-hook [--vault <path>] [--agent <name>] [--dry-run] [--json]\n" +
+    "Read one runtime hook JSON payload from stdin, capture inline @osb markers / brain_feedback tool calls,\n" +
+    "and append a non-blocking session-lifecycle audit/log observation. Intended for hooks/session-capture.ts.\n",
   "graph-export":
     "usage: o2b brain graph-export [--vault <path>] [--out <file>]\n" +
     "Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a\n" +

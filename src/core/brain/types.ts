@@ -202,6 +202,12 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   note: "note",
   /**
+   * `session-lifecycle` — runtime hook observation for session starts,
+   * prompt submits, tool uses, stops, and session ends. Payload carries
+   * event counters and never blocks the runtime.
+   */
+  sessionLifecycle: "session-lifecycle",
+  /**
    * `reconcile` (Brain lifecycle suite, Feature 3) - the dream reconcile
    * phase recorded a domain-classified contradiction. Payload carries
    * `topic`, `domain`, and either a `reason` (open question) or a
@@ -720,6 +726,17 @@ export interface BrainNoteLogEvent extends BrainLogEventBase {
   readonly agent: string;
 }
 
+export interface BrainSessionLifecycleLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.sessionLifecycle;
+  readonly event: string;
+  readonly agent: string;
+  readonly signals_created: string;
+  readonly signals_deduped: string;
+  readonly tool_replays: string;
+  readonly malformed: string;
+  readonly session_id?: string;
+}
+
 /** Discriminated union of every concrete log event type. */
 export type BrainLogEvent =
   | BrainDreamLogEvent
@@ -739,7 +756,8 @@ export type BrainLogEvent =
   | BrainMergeLogEvent
   | BrainUpgradeLogEvent
   | BrainImportClaudeMemoryLogEvent
-  | BrainNoteLogEvent;
+  | BrainNoteLogEvent
+  | BrainSessionLifecycleLogEvent;
 
 // ----- Configuration (`Brain/_brain.yaml`) ----------------------------------
 
