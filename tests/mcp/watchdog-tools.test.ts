@@ -50,7 +50,10 @@ async function initialize(server: MCPServer): Promise<void> {
       clientInfo: { name: "watchdog-test", version: "0" },
     },
   });
-  await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
+  await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    method: "notifications/initialized",
+  });
 }
 
 async function call(

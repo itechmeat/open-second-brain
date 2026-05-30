@@ -27,7 +27,9 @@ const env = () => ({ OPEN_SECOND_BRAIN_CONFIG: configPath });
 
 describe("o2b brain watchdog", () => {
   test("prints JSON probe report and search-index recommendation", async () => {
-    const result = await runCli(["brain", "watchdog", "--json"], { env: env() });
+    const result = await runCli(["brain", "watchdog", "--json"], {
+      env: env(),
+    });
 
     expect(result.returncode).toBe(0);
     const body = JSON.parse(result.stdout);

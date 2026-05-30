@@ -75,7 +75,10 @@ export interface SchemaSyncResult {
   readonly note: string;
 }
 
-export function getActiveSchemaPack(vault: string): { path: string; pack: SchemaPack } {
+export function getActiveSchemaPack(vault: string): {
+  path: string;
+  pack: SchemaPack;
+} {
   return { path: brainConfigPath(vault), pack: loadSchemaPack(vault) };
 }
 
@@ -113,7 +116,9 @@ export function buildSchemaStats(vault: string): SchemaStats {
   };
 }
 
-export function buildSchemaLint(vault: string): { findings: ReadonlyArray<SchemaReportFinding> } {
+export function buildSchemaLint(vault: string): {
+  findings: ReadonlyArray<SchemaReportFinding>;
+} {
   return { findings: buildSchemaReport(vault).findings };
 }
 
@@ -124,7 +129,12 @@ export function buildSchemaGraph(vault: string): SchemaGraph {
   for (const category of SCHEMA_VOCAB_CATEGORIES) {
     const builtin = new Set(DEFAULT_SCHEMA_VOCAB[category]);
     for (const token of pack.vocabulary[category]) {
-      nodes.set(token, { id: token, kind: "type", category, builtin: builtin.has(token) });
+      nodes.set(token, {
+        id: token,
+        kind: "type",
+        category,
+        builtin: builtin.has(token),
+      });
     }
   }
   for (const token of pack.link_types) {
@@ -242,7 +252,11 @@ function coerceSchemaMutation(value: unknown): SchemaMutation {
   switch (op) {
     case "add_type":
     case "remove_type":
-      return { op, category: readCategory(value), token: readString(value, "token") };
+      return {
+        op,
+        category: readCategory(value),
+        token: readString(value, "token"),
+      };
     case "update_type":
       return {
         op,
@@ -252,16 +266,28 @@ function coerceSchemaMutation(value: unknown): SchemaMutation {
       };
     case "add_alias":
     case "remove_alias":
-      return { op, token: readString(value, "token"), alias: readString(value, "alias") };
+      return {
+        op,
+        token: readString(value, "token"),
+        alias: readString(value, "alias"),
+      };
     case "add_prefix":
-      return { op, prefix: readString(value, "prefix"), token: readString(value, "token") };
+      return {
+        op,
+        prefix: readString(value, "prefix"),
+        token: readString(value, "token"),
+      };
     case "remove_prefix":
       return { op, prefix: readString(value, "prefix") };
     case "add_link_type":
     case "remove_link_type":
       return { op, token: readString(value, "token") };
     case "set_extractable":
-      return { op, token: readString(value, "token"), enabled: readBoolean(value, "enabled") };
+      return {
+        op,
+        token: readString(value, "token"),
+        enabled: readBoolean(value, "enabled"),
+      };
     case "set_expert_routing": {
       const expert = value["expert"];
       if (expert !== null && typeof expert !== "string")

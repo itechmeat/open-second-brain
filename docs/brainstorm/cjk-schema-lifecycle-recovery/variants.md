@@ -3,6 +3,7 @@
 ## Consultant output
 
 ### Variant 1: Four Isolated Vertical Slices
+
 - **Approach**: Treat each task as a self-contained module that touches only its own existing boundary - CJK at `search/schema.ts`+`indexer.ts`, schema mutation at `schema-vocab.ts`+a new `schema-mutate.ts`, session hooks as a new `sessions/hooks.ts` adapter feeding `writeSignal`, watchdog as a standalone gateway background task. Each ships behind its own default-off config key with no shared scaffolding between them. The PR is the sum of four independently reviewable diffs.
 - **Trade-offs**:
   - Pro: maximum reviewability and rollback granularity; each slice can be reverted without touching the others.
@@ -15,6 +16,7 @@
 - **Risk**: medium
 
 ### Variant 2: Shared Atomic/Audit/Probe Spine
+
 - **Approach**: Extract the cross-cutting primitives the three write-heavy tasks share - an atomic `withMutation` (.tmp+fsync+rename), a file-level lock with stale/liveness detection, an ISO-week JSONL audit writer with redaction, and a health-probe/invariant harness - into a small internal substrate, then build schema mutation, session-hook capture, and the watchdog on top of it. CJK remains the deliberate outlier wired only into the search layer. The schema pack-lock and watchdog probe become two consumers of one locking/probe abstraction rather than parallel implementations.
 - **Trade-offs**:
   - Pro: strongest DRY/SOLID alignment - one atomic-write boundary, one audit boundary, one probe harness reused 3x.
@@ -27,6 +29,7 @@
 - **Risk**: medium
 
 ### Variant 3: Risk-Tiered (Full Read/Foundation, Opt-In Writes)
+
 - **Approach**: Ship the low-risk and well-bounded paths in full - CJK tokenization (indexing + query, optionalDeps soft-fail) and the complete schema mutation surface (the explicitly-deferred remainder of t_cbf4967f, already ADR-gated) - while deliberately scoping the two architecturally-novel tasks down to their safe core: session "hooks" implemented as an eager capture adapter that reuses the existing import pipeline rather than a new synchronous hook runtime, and the watchdog implemented as detect-and-recommend (plan-only health probe emitting a remediation plan, auto-restore strictly opt-in/off-by-default). Riskier real-time and auto-recovery behavior is deferred to a follow-up.
 - **Trade-offs**:
   - Pro: directly satisfies the hard constraints - auto-restore is never default, session import behavior is untouched, theme count stays low.
@@ -39,6 +42,7 @@
 - **Risk**: low
 
 ### Recommended: Variant 3
+
 **Rationale**: The two upstream-derived tasks (session hooks, watchdog) are both flagged "needs design" and carry the project's sharpest constraints - no default auto-restore, no break to session import - so reducing them to their safe, default-off core is the lowest-risk way to keep all four tasks in one PR under the 10-theme ceiling. It still delivers the two best-specified tasks (CJK with an upstream reference, schema mutation with an accepted ADR) at full scope, and the smaller write surface keeps the DRY cost of skipping Variant 2's shared spine modest while avoiding that spine's three-feature blast radius.
 
 ## Orchestrator decision

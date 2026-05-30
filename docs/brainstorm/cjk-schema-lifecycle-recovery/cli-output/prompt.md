@@ -7,20 +7,24 @@ This is a multi-task Open Second Brain feature-release PR. The operator explicit
 ## t_327f1876 - [upstream:agentmemory] CJK tokenizer for vault search
 
 **Source**: https://github.com/rohitg00/agentmemory/releases/tag/v0.9.13
-**Repo**: rohitg00/agentmemory (9500*)
+**Repo**: rohitg00/agentmemory (9500\*)
 **Released**: v0.9.13 (2026-05-15T09:15:55Z)
 
 ### What
+
 agentmemory added CJK-aware BM25 tokenization: jieba for Chinese, tiny-segmenter for Japanese, rule-based syllable split for Korean. Mixed CJK+Latin runs preserve token order in a single pass. Segmenters are optionalDependencies so the base install stays lean.
 
 ### Why useful for OSB
+
 OSB vault search uses FTS5 which does not segment CJK text - Chinese/Japanese/Korean content is indexed as individual Unicode codepoints rather than words, degrading recall and relevance. Porting the CJK segmentation approach (with the same soft-fail optionalDependencies pattern) would improve search quality for CJK vault content without bloating the default install.
 
 ### Status in OSB
+
 - Verdict: not_in_osb_useful
 - Code hints: src/core/search/schema.ts (FTS5 chunk_fts table), src/core/search/index.ts (search pipeline entry)
 
 ### Notes and comments
+
 agentmemory uses @node-rs/jieba (native, no model download) and tiny-segmenter (~25 KB pure JS). OSB already ships native Node addons via Bun, so jieba would fit the same pattern. The segmenter-optional pattern (soft-fail with one-time hint) is also worth copying.
 
 Also surfaced upstream in safishamsi/graphify v0.8.19. graphify uses jieba for Chinese query segmentation with character bigram fallback when jieba is not installed. Original compound tokens preserved alongside segments for exact-match. Corroborating signal: same CJK segmentation approach, different application (query-time vs indexing-time).
@@ -34,6 +38,7 @@ Validator: clean, priority 2. Caveat: CJK segmentation pulls in segmenter deps a
 **Builds on**: the runtime schema-packs foundation released in v0.25.0 - shared schema vocabulary (`src/core/brain/schema-vocab.ts`), `_brain.yaml schema:` parsing, inert `schema_type:` artifact metadata, and the read-only `o2b brain schema` report. ADR: `docs/brainstorm/runtime-schema-packs-foundation/adr.md`.
 
 ### What (deferred scope, not yet implemented)
+
 The full "Schema Cathedral v3" surface from gbrain commit 3c1cc8a, on top of the now-shipped read-only foundation:
 
 1. Mutation primitives - the 11 ops (`add_type`, `remove_type`, `update_type`, `add_alias`, `remove_alias`, `add_prefix`, `remove_prefix`, `add_link_type`, `remove_link_type`, `set_extractable`, `set_expert_routing`), each wrapped in an atomic `withMutation` (.tmp + fsync + rename) with a pre-write lint-validation gate.
@@ -44,34 +49,41 @@ The full "Schema Cathedral v3" surface from gbrain commit 3c1cc8a, on top of the
 6. Mutate-audit - ISO-week JSONL audit log with privacy redaction.
 
 ### Why
+
 The v0.25.0 foundation makes taxonomy declarable and inspectable but read-only. This task adds the safe write path so agents/operators can evolve the schema vocabulary at runtime with atomic guarantees, locking, and an audit trail - the production-grade authoring layer.
 
 ### Constraints / sequencing
+
 - Gated by the foundation ADR; needs its own design pass before build.
 - Must reuse the single validation boundary (`schema-vocab.ts`) rather than introduce a parallel vocabulary.
 - Keep Markdown/YAML as the source of truth; mutations write through atomic file ops, no hidden registry DB.
 
 ### Status in OSB
+
 - Verdict: foundation present (v0.25.0); mutation/admin surface absent.
 - This is the explicitly-deferred remainder of t_cbf4967f.
 
 ## t_9eaebcad - [upstream:cavemem] Real-time session lifecycle hooks for memory capture
 
 **Source**: https://github.com/JuliusBrussee/cavemem/releases/tag/v0.1.0
-**Repo**: JuliusBrussee/cavemem (446*)
+**Repo**: JuliusBrussee/cavemem (446\*)
 **Released**: v0.1.0 (2026-04-18T00:48:33Z)
 
 ### What
+
 cavemem hooks fire synchronously at session boundaries (SessionStart, UserPromptSubmit, PostToolUse, Stop, SessionEnd) to capture observations and write them to local SQLite storage in real-time. Hook handlers complete in under 150ms. A local worker auto-spawns on first hook to build embeddings and self-exits when idle.
 
 ### Why useful for OSB
+
 OSB imports sessions post-hoc by parsing JSONL and rollout files (`src/core/brain/sessions/import.ts:117 importSession`) after they have been written by the IDE. Real-time lifecycle hooks would allow OSB to capture observations as they happen, enabling immediate memory availability during active sessions rather than waiting for the next import cycle. Particularly valuable for MCP search tool path where agents query memory mid-session.
 
 ### Status in OSB
+
 - Verdict: not_in_osb_useful
 - Code hints: `src/core/brain/sessions/import.ts`, `src/core/brain/sessions/claude.ts`, `src/core/brain/sessions/codex.ts`. No real-time hook system exists.
 
 ### Notes and comments
+
 Five hook types map to natural OSB extension points: SessionStart (initialize context), UserPromptSubmit (capture intent), PostToolUse (capture tool outcomes), Stop/SessionEnd (finalize and compress). Auto-spawning worker pattern for embeddings could replace OSB current embedding strategy for session content.
 
 Validator: clean, priority 2. Caveat: real-time lifecycle hooks are an architectural shift from post-hoc batch import; needs design.
@@ -79,20 +91,24 @@ Validator: clean, priority 2. Caveat: real-time lifecycle hooks are an architect
 ## t_8d8ec450 - [upstream:TencentDB-Agent-Memory] Self-healing watchdog for brain gateway auto-recovery
 
 **Source**: https://github.com/Tencent/TencentDB-Agent-Memory/releases/tag/v0.3.3
-**Repo**: Tencent/TencentDB-Agent-Memory (3891*)
+**Repo**: Tencent/TencentDB-Agent-Memory (3891\*)
 **Released**: v0.3.3 (2026-05-08)
 
 ### What
+
 TencentDB Agent Memory Hermes plugin includes a watchdog + lazy probe mechanism that detects gateway anomalies and automatically recovers without human intervention. The watchdog monitors plugin health and triggers lazy probe on failures, restoring connectivity and state automatically.
 
 ### Why useful for OSB
+
 OSB has brain snapshot/restore (`src/core/brain/snapshot.ts:597 restoreSnapshot`) and rollback CLI (`src/cli/brain/verbs/rollback.ts:12 cmdBrainRollback`) but no continuous health monitoring or auto-recovery. A watchdog would detect vault corruption, MCP server disconnects, or search index degradation and attempt automatic remediation before requiring user intervention. This would improve reliability for always-on agent sessions.
 
 ### Status in OSB
+
 - Verdict: not_in_osb_useful
 - Code hints: `src/core/brain/snapshot.ts`, `src/cli/brain/verbs/rollback.ts`. Recovery is manual/CLI-driven, no background watchdog or health probe exists.
 
 ### Notes and comments
+
 The watchdog pattern is lightweight - periodic health checks with exponential backoff retry. Could be implemented as a gateway background task that validates vault invariants (similar to brain_doctor) and triggers auto-restore from latest snapshot on critical failures.
 
 Validator: clean, priority 2. Caveat: background watchdog / auto-recovery needs design on triggers and safety before any auto-restore from snapshot.
@@ -102,6 +118,7 @@ Validator: clean, priority 2. Caveat: background watchdog / auto-recovery needs 
 Project: Open Second Brain, TypeScript/Bun runtime, Obsidian-compatible Markdown vaults, CLI + MCP server surfaces.
 
 Recent commits:
+
 - f62918c feat: runtime schema packs foundation - schema vocabulary, artifact taxonomy, schema inspection (#52)
 - 14d1ee1 feat: brain model semantics foundation - typed preference relations, memory labels, dry-run backfill (#51)
 - 3a5d5c3 feat: agent capability CLI integration - runtime MCP capabilities, inherited JSON, completions (#50)
@@ -124,6 +141,7 @@ Recent commits:
 - d0598af v0.10.17 - link graph surfaces (#33)
 
 Related files:
+
 - `src/core/search/schema.ts`: FTS5 chunk_fts currently uses `tokenize='unicode61 remove_diacritics 2'`.
 - `src/core/search/indexer.ts`: chunk content is read, chunked, and persisted through `Store.replaceChunks`; content currently goes to FTS unchanged.
 - `src/core/search/search.ts`: query string goes directly into `runFtsQuery`; synonym/entity layers tokenize Latin-style terms only.
@@ -138,6 +156,7 @@ Related files:
 - `docs/brainstorm/runtime-schema-packs-foundation/adr.md`: accepted ADR says future mutation primitives should edit `_brain.yaml` atomically and keep no second store.
 
 Conventions:
+
 - Plain Markdown and `_brain.yaml` remain the source of truth; no hidden service or registry DB.
 - New behavior should be default-off or byte-compatible when config is absent.
 - CLI commands should support stable `--json` output where useful.
@@ -147,6 +166,7 @@ Conventions:
 - Active Brain preferences: no `Brain/active.md` exists in this repository workspace.
 
 Constraints:
+
 - Do not create a second schema registry DB.
 - Do not make auto-restore from snapshots the default; recovery must be explicit/safe or plan-only unless the operator opts in.
 - Do not break existing session import behavior.
@@ -159,6 +179,7 @@ Constraints:
 Produce exactly 3 distinct architectural variants. For each variant:
 
 ### Variant N: <short name>
+
 - **Approach**: 2-3 sentences describing the variant.
 - **Trade-offs**: bullet list of pros and cons.
 - **Complexity**: small | medium | large
@@ -167,6 +188,7 @@ Produce exactly 3 distinct architectural variants. For each variant:
 After the three variants, add exactly one recommendation:
 
 ### Recommended: Variant N
+
 **Rationale**: 2-3 sentences explaining why this variant over the others, considering the project context and constraints above.
 
 Output nothing outside of these sections.

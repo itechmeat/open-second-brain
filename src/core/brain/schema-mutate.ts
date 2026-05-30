@@ -32,12 +32,31 @@ export type SchemaMutation =
       readonly token: string;
       readonly new_token: string;
     }
-  | { readonly op: "add_alias" | "remove_alias"; readonly token: string; readonly alias: string }
-  | { readonly op: "add_prefix"; readonly prefix: string; readonly token: string }
+  | {
+      readonly op: "add_alias" | "remove_alias";
+      readonly token: string;
+      readonly alias: string;
+    }
+  | {
+      readonly op: "add_prefix";
+      readonly prefix: string;
+      readonly token: string;
+    }
   | { readonly op: "remove_prefix"; readonly prefix: string }
-  | { readonly op: "add_link_type" | "remove_link_type"; readonly token: string }
-  | { readonly op: "set_extractable"; readonly token: string; readonly enabled: boolean }
-  | { readonly op: "set_expert_routing"; readonly token: string; readonly expert: string | null };
+  | {
+      readonly op: "add_link_type" | "remove_link_type";
+      readonly token: string;
+    }
+  | {
+      readonly op: "set_extractable";
+      readonly token: string;
+      readonly enabled: boolean;
+    }
+  | {
+      readonly op: "set_expert_routing";
+      readonly token: string;
+      readonly expert: string | null;
+    };
 
 export interface ApplySchemaMutationsOptions {
   readonly actor: string;
@@ -91,7 +110,11 @@ export async function applySchemaMutations(
         ...(opts.reason ? { reason: opts.reason } : {}),
       },
     });
-    return { applied: mutations.length, audit_path: auditPath, pack: nextPack };
+    return {
+      applied: mutations.length,
+      audit_path: auditPath,
+      pack: nextPack,
+    };
   });
 }
 

@@ -115,15 +115,21 @@ describe("o2b brain schema", () => {
   test("management subcommands expose stats, lint, graph, explain, orphans, and sync", async () => {
     seedSchemaVault();
 
-    const stats = await runCli(["brain", "schema", "stats", "--json"], { env: env() });
+    const stats = await runCli(["brain", "schema", "stats", "--json"], {
+      env: env(),
+    });
     expect(stats.returncode).toBe(0);
     expect(JSON.parse(stats.stdout).declared.preference_types).toBe(2);
 
-    const lint = await runCli(["brain", "schema", "lint", "--json"], { env: env() });
+    const lint = await runCli(["brain", "schema", "lint", "--json"], {
+      env: env(),
+    });
     expect(lint.returncode).toBe(0);
     expect(JSON.parse(lint.stdout).findings.length).toBeGreaterThan(0);
 
-    const graph = await runCli(["brain", "schema", "graph", "--json"], { env: env() });
+    const graph = await runCli(["brain", "schema", "graph", "--json"], {
+      env: env(),
+    });
     expect(graph.returncode).toBe(0);
     expect(
       JSON.parse(graph.stdout).nodes.some((node: { id: string }) => node.id === "research"),
@@ -135,7 +141,9 @@ describe("o2b brain schema", () => {
     expect(explain.returncode).toBe(0);
     expect(JSON.parse(explain.stdout).token).toBe("research");
 
-    const orphans = await runCli(["brain", "schema", "orphans", "--json"], { env: env() });
+    const orphans = await runCli(["brain", "schema", "orphans", "--json"], {
+      env: env(),
+    });
     expect(orphans.returncode).toBe(0);
     expect(JSON.parse(orphans.stdout).orphans.length).toBeGreaterThan(0);
 

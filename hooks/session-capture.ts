@@ -18,7 +18,9 @@ async function main(): Promise<void> {
   } catch {
     payload = null;
   }
-  await captureSessionLifecycleEvent(vault, payload, { agent: resolveAgentName() });
+  await captureSessionLifecycleEvent(vault, payload, {
+    agent: resolveAgentName(),
+  });
 }
 
 main().catch(() => {

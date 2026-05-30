@@ -14,8 +14,14 @@ export const WATCHDOG_TOOLS: ReadonlyArray<ToolDefinition> = [
           type: "boolean",
           description: "Apply safe remediations such as missing directory creation.",
         },
-        dry_run: { type: "boolean", description: "Preview remediation without applying it." },
-        restore: { type: "string", description: "Snapshot run id to check restore readiness for." },
+        dry_run: {
+          type: "boolean",
+          description: "Preview remediation without applying it.",
+        },
+        restore: {
+          type: "string",
+          description: "Snapshot run id to check restore readiness for.",
+        },
         force_restore: {
           type: "boolean",
           description: "Allow restore recommendation to be emitted.",

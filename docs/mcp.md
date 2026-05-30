@@ -18,10 +18,10 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 47 tools. The table below highlights the
-operator-facing core, agent-source, health, and Pay Memory tools; the full
-surface also includes Brain writer, review, query, temporal, link-graph, and
-search tools. In Claude Code, that full schema can push MCP definitions beyond
+The full server currently advertises 57 tools. The table below highlights the
+operator-facing core, schema, agent-source, health, recovery, and Pay Memory
+tools; the full surface also includes Brain writer, review, query, temporal,
+link-graph, and search tools. In Claude Code, that full schema can push MCP definitions beyond
 10% of the context window, causing `MCPSearch` tool-search deferral; use the
 writer split below for the always-loaded writer subset, or the runtime
 capability flags for a narrower per-process full server.
@@ -39,6 +39,16 @@ capability flags for a narrower per-process full server.
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                        |
 | `brain_morning_brief`       | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.                 | —                                |
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                |
+| `get_active_schema_pack`    | Return the active runtime schema pack resolved from `Brain/_brain.yaml`.                                                                       | —                                |
+| `list_schema_packs`         | List schema packs available to the vault/runtime.                                                                                              | —                                |
+| `schema_stats`              | Summarise declared schema tokens and observed artifact usage.                                                                                  | —                                |
+| `schema_lint`               | Report unknown, unused, and invalid schema references without writing.                                                                         | —                                |
+| `schema_graph`              | Return a schema relationship graph for declared types, aliases, prefixes, and link types.                                                      | —                                |
+| `schema_explain_type`       | Explain one schema token, including aliases, references, and usage.                                                                            | `token`                          |
+| `schema_review_orphans`     | Review declared schema tokens that have no observed usage.                                                                                     | —                                |
+| `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                      |
+| `reload_schema_pack`        | Reload and validate the active schema pack after local edits.                                                                                  | —                                |
+| `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                |
 | `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                           |
 | `payment_memory_init`       | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template.      | —                                |
 | `payment_receipt_append`    | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting.                                                     | `service`, `status`, `reason`    |

@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-05-30
+
+CJK search, schema administration, real-time lifecycle capture, and safe
+watchdog recovery probes. This release completes the runtime schema pack work
+from v0.25.0 and makes recovery/capture paths explicit and auditable.
+
+### Added
+
+- CJK-aware search indexing and query tokenization for Chinese/Japanese/Korean
+  text. FTS stores expanded shadow content for recall while returned snippets
+  keep the original vault text clean; optional `@node-rs/jieba` and
+  `tiny-segmenter` improve segmentation when available, with deterministic
+  fallback n-grams when they are not.
+- Atomic schema mutation engine for all schema primitives: add/remove/update
+  types, aliases, prefixes, link types, extractability, and expert routing.
+  Writes to `Brain/_brain.yaml` are file-locked, atomically replaced, validated
+  before commit, and audited under `Brain/log/schema-mutations` JSONL roots.
+- Schema admin CLI and MCP surfaces: `o2b brain schema stats|lint|graph|explain|orphans|apply|sync`
+  plus MCP tools `get_active_schema_pack`, `list_schema_packs`, `schema_stats`,
+  `schema_lint`, `schema_graph`, `schema_explain_type`, `schema_review_orphans`,
+  `schema_apply_mutations`, and `reload_schema_pack`.
+- `skills/schema-author`, a dedicated agent skill for reviewing and applying
+  schema changes through the audited mutation path.
+- Real-time lifecycle capture through `hooks/session-capture.ts` and
+  `o2b brain session-hook`. SessionStart, UserPromptSubmit, PostToolUse,
+  Stop, PostCompact, and SessionEnd events now produce non-blocking lifecycle
+  audit/log observations; prompt `@osb` markers and `brain_feedback` tool calls
+  are captured immediately through the existing signal dedup boundary.
+- `o2b brain watchdog` and MCP `brain_watchdog` for Brain config/dir/search-index
+  probes, exponential backoff metadata, safe directory remediation, and snapshot
+  restore refusal unless restore intent and force are explicit.
+
+### Changed
+
+- MCP full-server tool count is now 57 after adding schema admin tools and
+  `brain_watchdog`.
+- `o2b brain schema` is now an admin command group; the original read-only
+  report remains available as the default `report` mode.
+
+### Notes
+
+- `bun run lint` remains warning-only on the existing repository baseline.
+- `bun run fmt:check` still fails on the pre-existing formatter baseline; files
+  touched by this release were formatted with targeted `oxfmt --write`.
+
 ## [0.25.0] - 2026-05-30
 
 Runtime schema packs foundation. Vaults can now declare custom taxonomy tokens
@@ -2182,7 +2227,7 @@ with `source_type: inline`, the source-file wikilink in `source`,
 and a `dedup_hash`over the normalised payload. After capture
 the source line is annotated`@osb✓ [[sig-...]]`(inline form)
 or the info-string flips to`osb-checked`with a`<!-- @osb✓
-            [[sig-...]] -->`comment line (block form), making re-runs
+                [[sig-...]] -->`comment line (block form), making re-runs
 idempotent. Default ignore set covers`Brain/`, `.git`,
 `node_modules`, `.obsidian`, `.trash`, `.stversions`,
 `.open-second-brain`; additional excludes via `--exclude`,

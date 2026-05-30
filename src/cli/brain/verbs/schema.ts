@@ -92,7 +92,10 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
           throw new Error("--batch-size must be a positive integer");
         }
         return writeResult(
-          buildSchemaSyncResult({ dryRun: Boolean(flags["dry-run"]), batchSize }),
+          buildSchemaSyncResult({
+            dryRun: Boolean(flags["dry-run"]),
+            batchSize,
+          }),
           Boolean(flags["json"]),
           renderGenericText,
         );

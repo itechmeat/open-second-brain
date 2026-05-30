@@ -43,14 +43,19 @@ describe("runBrainWatchdog", () => {
     bootstrapBrain(vault);
     rmSync(brainDirs(vault).inbox, { recursive: true, force: true });
 
-    const result = runBrainWatchdog(vault, { now: new Date("2026-05-30T12:05:00Z") });
+    const result = runBrainWatchdog(vault, {
+      now: new Date("2026-05-30T12:05:00Z"),
+    });
 
     expect(result.report.ok).toBe(false);
     expect(result.remediation_plan).toContainEqual(
       expect.objectContaining({ action: "create-dir", target: "Brain/inbox" }),
     );
     expect(result.remediation_plan).toContainEqual(
-      expect.objectContaining({ action: "run-command", command: "o2b search index" }),
+      expect.objectContaining({
+        action: "run-command",
+        command: "o2b search index",
+      }),
     );
     expect(existsSync(brainDirs(vault).inbox)).toBe(false);
   });
@@ -65,7 +70,10 @@ describe("runBrainWatchdog", () => {
     });
 
     expect(result.applied_remediations).toContainEqual(
-      expect.objectContaining({ action: "create-dir", target: "Brain/inbox/processed" }),
+      expect.objectContaining({
+        action: "create-dir",
+        target: "Brain/inbox/processed",
+      }),
     );
     expect(existsSync(brainDirs(vault).processed)).toBe(true);
   });

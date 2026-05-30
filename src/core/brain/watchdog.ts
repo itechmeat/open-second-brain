@@ -56,7 +56,10 @@ export interface BrainWatchdogResult {
   readonly audit_path: string;
 }
 
-const REQUIRED_DIRS: ReadonlyArray<{ rel: string; pathKey: keyof ReturnType<typeof brainDirs> }> = [
+const REQUIRED_DIRS: ReadonlyArray<{
+  rel: string;
+  pathKey: keyof ReturnType<typeof brainDirs>;
+}> = [
   { rel: BRAIN_PREFERENCES_REL, pathKey: "preferences" },
   { rel: BRAIN_RETIRED_REL, pathKey: "retired" },
   { rel: BRAIN_INBOX_REL, pathKey: "inbox" },
@@ -73,7 +76,11 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
 
   const configPath = brainConfigPath(vault);
   if (existsSync(configPath)) {
-    checks.push({ name: "brain-config", status: "ok", message: `${BRAIN_CONFIG_FILE} exists` });
+    checks.push({
+      name: "brain-config",
+      status: "ok",
+      message: `${BRAIN_CONFIG_FILE} exists`,
+    });
   } else {
     checks.push({
       name: "brain-config",
@@ -81,13 +88,21 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
       message: `${BRAIN_CONFIG_FILE} is missing`,
       remediation: "run o2b brain init",
     });
-    remediationPlan.push({ action: "run-command", command: "o2b brain init", safe: false });
+    remediationPlan.push({
+      action: "run-command",
+      command: "o2b brain init",
+      safe: false,
+    });
   }
 
   for (const dir of REQUIRED_DIRS) {
     const abs = dirs[dir.pathKey];
     if (existsSync(abs)) {
-      checks.push({ name: `dir:${dir.rel}`, status: "ok", message: `${dir.rel} exists` });
+      checks.push({
+        name: `dir:${dir.rel}`,
+        status: "ok",
+        message: `${dir.rel} exists`,
+      });
       continue;
     }
     checks.push({
@@ -96,7 +111,11 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
       message: `${dir.rel} is missing`,
       remediation: `create ${dir.rel}`,
     });
-    const remediation: WatchdogRemediation = { action: "create-dir", target: dir.rel, safe: true };
+    const remediation: WatchdogRemediation = {
+      action: "create-dir",
+      target: dir.rel,
+      safe: true,
+    };
     remediationPlan.push(remediation);
     if (opts.remediate && !opts.dryRun) {
       mkdirSync(abs, { recursive: true });
@@ -106,7 +125,11 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
 
   const indexPath = resolveIndexPath(vault, null);
   if (existsSync(indexPath)) {
-    checks.push({ name: "search-index", status: "ok", message: "search index exists" });
+    checks.push({
+      name: "search-index",
+      status: "ok",
+      message: "search index exists",
+    });
   } else {
     checks.push({
       name: "search-index",
@@ -114,7 +137,11 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
       message: "search index is missing or not yet built",
       remediation: "run o2b search index",
     });
-    remediationPlan.push({ action: "run-command", command: "o2b search index", safe: true });
+    remediationPlan.push({
+      action: "run-command",
+      command: "o2b search index",
+      safe: true,
+    });
   }
 
   const restore = buildRestoreState(opts.restoreRunId, opts.forceRestore === true);
@@ -128,7 +155,11 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
       remediation: restore.command,
     });
     if (restore.command) {
-      remediationPlan.push({ action: "restore-snapshot", command: restore.command, safe: false });
+      remediationPlan.push({
+        action: "restore-snapshot",
+        command: restore.command,
+        safe: false,
+      });
     }
   }
 
