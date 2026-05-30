@@ -57,6 +57,12 @@ import { planUninstall, renderPlan } from "./uninstall.ts";
 import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
 import { cmdInitInteractive } from "./install/init-interactive.ts";
+import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
+import {
+  COMPLETION_SHELLS,
+  isCompletionShell,
+  renderCompletions,
+} from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
@@ -556,6 +562,39 @@ async function cmdToolCall(argv: string[]): Promise<number> {
   }
 }
 
+function cmdHelp(argv: ReadonlyArray<string>): number {
+  const { flags, positional } = parseFlags(argv, {});
+  if (positional.length > 0) {
+    process.stderr.write(
+      `error: help does not accept positional arguments: ${positional.join(" ")}\n`,
+    );
+    return 2;
+  }
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify(manifestForJson(), null, 2) + "\n");
+  } else {
+    process.stdout.write(HELP);
+  }
+  return 0;
+}
+
+function cmdCompletions(argv: ReadonlyArray<string>): number {
+  const { positional } = parseFlags(argv, {});
+  if (positional.length !== 1) {
+    process.stderr.write(
+      `error: completions requires one shell (${COMPLETION_SHELLS.join("|")})\n`,
+    );
+    return 2;
+  }
+  const shell = positional[0]!;
+  if (!isCompletionShell(shell)) {
+    process.stderr.write(`error: unsupported completion shell: ${shell}\n`);
+    return 2;
+  }
+  process.stdout.write(renderCompletions(shell, CLI_COMMAND_MANIFEST));
+  return 0;
+}
+
 const HELP = `usage: o2b <command> [args...]
 
 Commands:
@@ -570,6 +609,8 @@ Commands:
   update                    Update OSB installation across all detected runtimes
   uninstall                 Print an uninstall plan; --target X removes a per-runtime install
   tool-call                 Invoke an MCP tool handler from the CLI and print JSON to stdout
+  help                      Print this help text; --json prints command metadata
+  completions               Print shell completions for bash, zsh, fish, elvish, nushell, powershell
 
 Pay Memory:
   init-pay-memory           Bootstrap policies/, payments/, assets/, drafts/, reports/
@@ -661,12 +702,13 @@ function commandHasSemanticJson(
   if (command === "status" || command === "update" || command === "tool-call")
     return true;
   if (command === "mcp" && rest.includes("--probe")) return true;
+  if (command === "help") return true;
   return false;
 }
 
 async function dispatchCommand(
   command: string,
-  rest: ReadonlyArray<string>,
+  rest: string[],
 ): Promise<number> {
   try {
     switch (command) {
@@ -692,6 +734,10 @@ async function dispatchCommand(
         return await cmdUninstall(rest);
       case "tool-call":
         return await cmdToolCall(rest);
+      case "help":
+        return cmdHelp(rest);
+      case "completions":
+        return cmdCompletions(rest);
       case "init-pay-memory":
         return await cmdInitPayMemory(rest);
       case "append-payment-receipt":
