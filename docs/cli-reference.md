@@ -2,7 +2,7 @@
 
 The full set of `o2b` verbs. After `o2b install-cli` they are on PATH; the local checkout can also be used without installing the symlinks by running commands through `scripts/o2b` and `scripts/vault-log`.
 
-Most verbs accept `--vault <path>` and `--config <path>`; the values default to the active profile from `o2b init`. JSON output is available via `--json` on every read verb.
+Most verbs accept `--vault <path>` and `--config <path>`; the values default to the active profile from `o2b init`. JSON output is available via `--json` on every read verb. Commands that do not own a semantic JSON contract return a redacted fallback envelope when `--json` is passed.
 
 ## Core
 
@@ -14,8 +14,10 @@ o2b install-cli               Symlink o2b and o2b-hook into ~/.local/bin
 o2b doctor                    Run vault + adapter checks
 o2b index                     Rebuild the Markdown page index
 o2b export-config             Write a redacted config snapshot
-o2b mcp                       Run the MCP tool server (stdio)
+o2b mcp                       Run the MCP tool server (stdio); --scope full|writer, --probe, --allow-tool, --disable-tool, --max-tools
 o2b tool-call                 Invoke an MCP tool handler from the CLI
+o2b help --json               Print the command/flag manifest as JSON
+o2b completions --shell zsh   Print completions for bash|zsh|fish|elvish|nushell|powershell
 o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
 o2b update                    Update Open Second Brain across all detected runtimes; --target <name> / --dry-run / --force / --json
 ```
@@ -150,16 +152,16 @@ layer config-tunable and bounded:
 
 Recall and ranking quality (v0.20.0), each tunable and bounded:
 
-| Config key                     | Env var                                          | Default | Effect                                                            |
-| ------------------------------ | ------------------------------------------------ | ------- | ----------------------------------------------------------------- |
-| `search_recency_shape`         | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE`         | `0.8`   | Weibull recency curve shape (k)                                   |
-| `search_recency_scale`         | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE`         | `30`    | Weibull characteristic lifetime in days                           |
-| `search_recency_amplitude`     | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE`     | `0.05`  | Max recency boost at age 0; `0` disables the recency layer        |
-| `search_intent_enabled`        | `OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED`        | `true`  | Re-weight ranking by structural query intent; `false` is neutral  |
-| `search_synonym_enabled`       | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED`       | `false` | Opt-in co-occurrence query expansion (language-agnostic)          |
-| `search_synonym_max_terms`     | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS`     | `3`     | Cap on expansion terms OR'd onto the query                        |
-| `search_cache_enabled`         | `OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED`         | `false` | Opt-in persistent query cache, gated by corpus generation         |
-| `search_cache_ttl_seconds`     | `OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL`             | `300`   | Cache row time-to-live in seconds                                 |
+| Config key                 | Env var                                      | Default | Effect                                                           |
+| -------------------------- | -------------------------------------------- | ------- | ---------------------------------------------------------------- |
+| `search_recency_shape`     | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE`     | `0.8`   | Weibull recency curve shape (k)                                  |
+| `search_recency_scale`     | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE`     | `30`    | Weibull characteristic lifetime in days                          |
+| `search_recency_amplitude` | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE` | `0.05`  | Max recency boost at age 0; `0` disables the recency layer       |
+| `search_intent_enabled`    | `OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED`    | `true`  | Re-weight ranking by structural query intent; `false` is neutral |
+| `search_synonym_enabled`   | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED`   | `false` | Opt-in co-occurrence query expansion (language-agnostic)         |
+| `search_synonym_max_terms` | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS` | `3`     | Cap on expansion terms OR'd onto the query                       |
+| `search_cache_enabled`     | `OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED`     | `false` | Opt-in persistent query cache, gated by corpus generation        |
+| `search_cache_ttl_seconds` | `OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL`         | `300`   | Cache row time-to-live in seconds                                |
 
 `brain_context_pack` also accepts `max_chars_per_memory` and
 `max_total_chars` (code-point caps), and the read-only
@@ -182,6 +184,7 @@ vault-log                     Shell mirror of brain_note (one-liner narrative mi
 
 - Every CLI mutation that touches Brain takes a pre-run snapshot under `Brain/.snapshots/` with a SHA-256 sidecar manifest. `o2b brain rollback` aborts on drift unless `--force-rollback`.
 - `o2b ... --json` exists on every read verb and most write verbs (the JSON payload mirrors the MCP tool's response shape).
+- Root-level `--json` is inherited by every command parser; existing semantic JSON commands keep their native payloads, while other commands emit a redacted fallback envelope.
 - MCP-only `brain_pinned_context` manages `Brain/pinned.md`, a transient current-task scratchpad loaded by `brain_context`; it is intentionally not a learned preference CLI verb.
 - `--dry-run` is supported by every mutating verb that touches more than a single file (`brain merge`, `brain rollback`, `brain upgrade`, `brain import-claude-memory`, `update`, ...).
 - `--vault` always overrides the profile path; useful for multi-vault hosts where the config-resolved default is not the right target.

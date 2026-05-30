@@ -133,6 +133,9 @@ o2b vault profile switch work         # Activate a named multi-vault profile
 o2b brain agent-query --agent claude --json   # Source-agent provenance query
 o2b brain agent-diff --mode diff --agent claude --agent codex
 o2b search "<query>"          # FTS5 over the vault
+o2b help --json               # Machine-readable command/flag manifest
+o2b completions --shell zsh   # Completion script for bash/zsh/fish/elvish/nushell/powershell
+o2b mcp --probe --json --disable-tool second_brain_query # Capability-aware MCP probe
 o2b update                    # Update across detected runtimes
 ```
 
@@ -142,6 +145,7 @@ Full list (~50 verbs across `o2b`, `o2b brain`, `o2b vault`, `o2b discipline`, P
 
 - Plain Markdown on your filesystem. No daemon, no background writes.
 - The MCP server is a stdio subprocess that exits with the parent runtime.
+- MCP runtime capability flags (`--allow-tool`, `--disable-tool`, `--max-tools`) can narrow the advertised tool surface per process without widening the writer-only scope.
 - Secrets are not supposed to live in the vault. Daily logs and config exports go through a best-effort redactor for common secret-name patterns.
 - Brain mutations (`dream`, `merge`, `upgrade`) take a pre-run snapshot with a SHA-256 sidecar; `o2b brain rollback` aborts on drift unless `--force-rollback`.
 - Lifecycle review commands (`intent-review`, `retention`, `monthly`) are read-only. Retention emits recommendations only; it never deletes, moves, or edits Brain artifacts.
