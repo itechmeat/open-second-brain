@@ -1,0 +1,226 @@
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
+import { loadBrainConfig } from "./policy.ts";
+import { brainDirs, vaultRelative } from "./paths.ts";
+import { parsePreference, parseRetired } from "./preference.ts";
+import {
+  DEFAULT_SCHEMA_VOCAB,
+  SCHEMA_VOCAB_CATEGORIES,
+  normalizeSchemaToken,
+  resolveSchemaVocabulary,
+  type BrainSchemaVocabulary,
+  type SchemaVocabularyCategory,
+} from "./schema-vocab.ts";
+import { parseSignal } from "./signal.ts";
+
+export interface SchemaTokenUsage {
+  readonly token: string;
+  readonly count: number;
+}
+
+export type SchemaReportFinding =
+  | {
+      readonly kind: "unknown-token";
+      readonly category: SchemaVocabularyCategory;
+      readonly token: string;
+      readonly path: string;
+    }
+  | {
+      readonly kind: "unused-declaration";
+      readonly category: SchemaVocabularyCategory;
+      readonly token: string;
+    };
+
+export interface BrainSchemaUsage {
+  readonly preference_types: ReadonlyArray<SchemaTokenUsage>;
+  readonly signal_types: ReadonlyArray<SchemaTokenUsage>;
+  readonly page_types: ReadonlyArray<SchemaTokenUsage>;
+  readonly log_event_kinds: ReadonlyArray<SchemaTokenUsage>;
+}
+
+export interface BrainSchemaReport {
+  readonly schema_version: 1;
+  readonly vocabulary: BrainSchemaVocabulary;
+  readonly usage: BrainSchemaUsage;
+  readonly findings: ReadonlyArray<SchemaReportFinding>;
+}
+
+export function buildSchemaReport(vault: string): BrainSchemaReport {
+  const cfg = loadBrainConfig(vault);
+  const vocabulary = resolveSchemaVocabulary(cfg.schema);
+  const usageMaps = emptyUsageMaps();
+  const findings: SchemaReportFinding[] = [];
+
+  scanPreferences(vault, vocabulary, usageMaps.preference_types, findings);
+  scanSignals(vault, vocabulary, usageMaps.signal_types, findings);
+  addUnusedDeclarationFindings(cfg.schema ?? {}, usageMaps, findings);
+
+  return deepFreezeReport({
+    schema_version: 1,
+    vocabulary,
+    usage: {
+      preference_types: freezeUsage(usageMaps.preference_types),
+      signal_types: freezeUsage(usageMaps.signal_types),
+      page_types: freezeUsage(usageMaps.page_types),
+      log_event_kinds: freezeUsage(usageMaps.log_event_kinds),
+    },
+    findings: Object.freeze([...findings].sort(compareFindings)),
+  });
+}
+
+function scanPreferences(
+  vault: string,
+  vocabulary: BrainSchemaVocabulary,
+  counts: Map<string, number>,
+  findings: SchemaReportFinding[],
+): void {
+  const dirs = brainDirs(vault);
+  for (const path of listMarkdown(dirs.preferences, "pref-")) {
+    const pref = parsePreference(path);
+    recordSchemaType(
+      vault,
+      path,
+      "preference_types",
+      pref.schema_type,
+      vocabulary,
+      counts,
+      findings,
+    );
+  }
+  for (const path of listMarkdown(dirs.retired, "ret-")) {
+    const retired = parseRetired(path);
+    recordSchemaType(
+      vault,
+      path,
+      "preference_types",
+      retired.schema_type,
+      vocabulary,
+      counts,
+      findings,
+    );
+  }
+}
+
+function scanSignals(
+  vault: string,
+  vocabulary: BrainSchemaVocabulary,
+  counts: Map<string, number>,
+  findings: SchemaReportFinding[],
+): void {
+  const dirs = brainDirs(vault);
+  for (const path of listMarkdown(dirs.inbox, "sig-")) {
+    const signal = parseSignal(path);
+    recordSchemaType(
+      vault,
+      path,
+      "signal_types",
+      signal.schema_type,
+      vocabulary,
+      counts,
+      findings,
+    );
+  }
+  for (const path of listMarkdown(dirs.processed, "sig-")) {
+    const signal = parseSignal(path);
+    recordSchemaType(
+      vault,
+      path,
+      "signal_types",
+      signal.schema_type,
+      vocabulary,
+      counts,
+      findings,
+    );
+  }
+}
+
+function recordSchemaType(
+  vault: string,
+  path: string,
+  category: SchemaVocabularyCategory,
+  rawToken: string | undefined,
+  vocabulary: BrainSchemaVocabulary,
+  counts: Map<string, number>,
+  findings: SchemaReportFinding[],
+): void {
+  if (rawToken === undefined) return;
+  const token = normalizeSchemaToken(rawToken);
+  counts.set(token, (counts.get(token) ?? 0) + 1);
+  if (!vocabulary[category].includes(token)) {
+    findings.push({
+      kind: "unknown-token",
+      category,
+      token,
+      path: vaultRelative(path, vault),
+    });
+  }
+}
+
+function addUnusedDeclarationFindings(
+  declarations: Partial<
+    Record<SchemaVocabularyCategory, ReadonlyArray<string>>
+  >,
+  usageMaps: Record<SchemaVocabularyCategory, Map<string, number>>,
+  findings: SchemaReportFinding[],
+): void {
+  for (const category of SCHEMA_VOCAB_CATEGORIES) {
+    const declared = declarations[category] ?? [];
+    const builtin = new Set(DEFAULT_SCHEMA_VOCAB[category]);
+    const used = usageMaps[category];
+    for (const raw of declared) {
+      const token = normalizeSchemaToken(raw);
+      if (builtin.has(token)) continue;
+      if (!used.has(token)) {
+        findings.push({ kind: "unused-declaration", category, token });
+      }
+    }
+  }
+}
+
+function listMarkdown(dir: string, prefix: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.startsWith(prefix) && name.endsWith(".md"))
+    .sort()
+    .map((name) => join(dir, name));
+}
+
+function emptyUsageMaps(): Record<
+  SchemaVocabularyCategory,
+  Map<string, number>
+> {
+  return {
+    preference_types: new Map<string, number>(),
+    signal_types: new Map<string, number>(),
+    page_types: new Map<string, number>(),
+    log_event_kinds: new Map<string, number>(),
+  };
+}
+
+function freezeUsage(
+  counts: Map<string, number>,
+): ReadonlyArray<SchemaTokenUsage> {
+  return Object.freeze(
+    [...counts.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([token, count]) => Object.freeze({ token, count })),
+  );
+}
+
+function compareFindings(
+  a: SchemaReportFinding,
+  b: SchemaReportFinding,
+): number {
+  return (
+    a.kind.localeCompare(b.kind) ||
+    a.category.localeCompare(b.category) ||
+    a.token.localeCompare(b.token) ||
+    ("path" in a ? a.path : "").localeCompare("path" in b ? b.path : "")
+  );
+}
+
+function deepFreezeReport(report: BrainSchemaReport): BrainSchemaReport {
+  Object.freeze(report.usage);
+  return Object.freeze(report);
+}

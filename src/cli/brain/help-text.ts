@@ -42,6 +42,7 @@ Brain verbs (observing memory):
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
   sources             Read-only dashboard of signals by (agent, source_type)
+  schema              Inspect resolved schema vocabulary and artifact token usage
   graph-export        Serialise the vault knowledge graph to graph.json
   graph-import        Reconstruct vault pages from graph.json (--mode skip|overwrite|merge)
   backlinks           List inbound references to a Brain artifact id
@@ -191,6 +192,10 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain sources [--vault <path>] [--json]\n" +
     "Read-only dashboard of the brain's signals grouped by (agent, source_type)\n" +
     "with active/processed and distinct-topic counts.\n",
+  schema:
+    "usage: o2b brain schema [--vault <path>] [--json]\n" +
+    "Read-only report of the resolved runtime schema vocabulary, artifact\n" +
+    "schema_type usage counts, and unknown/unused taxonomy findings.\n",
   "graph-export":
     "usage: o2b brain graph-export [--vault <path>] [--out <file>]\n" +
     "Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a\n" +
