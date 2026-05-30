@@ -48,9 +48,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("config", "string"),
       flag("output", "string"),
     ]),
-    command("index", "Regenerate the vault index from discovered pages", [
-      flag("vault", "string"),
-    ]),
+    command("index", "Regenerate the vault index from discovered pages", [flag("vault", "string")]),
     command("mcp", "Run the optional MCP tool server", [
       flag("vault", "string"),
       flag("config", "string"),
@@ -63,9 +61,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("max-tools", "string"),
     ]),
     command("help", "Print command help or the command manifest"),
-    command("completions", "Print shell completion script for o2b", [
-      flag("shell", "string"),
-    ]),
+    command("completions", "Print shell completion script for o2b", [flag("shell", "string")]),
     command("install-cli", "Create symlinks for o2b and vault-log"),
     command("install", "Multi-runtime install orchestrator"),
     command("update", "Update Open Second Brain across detected runtimes", [
@@ -113,23 +109,47 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("export", "Export active preferences"),
         command("explorer", "Open or export Brain graph explorer"),
         command("doctor", "Check Brain invariants"),
+        command("watchdog", "Probe Brain recovery status"),
         command("health", "Render semantic Brain health"),
         command("history", "Render preference edit history"),
         command("audit", "Render mutation audit trail"),
         command("morning-brief", "Render session-start summary"),
         command("codec", "Compress or expand session prose"),
         command("sources", "Show signal source dashboard"),
-        command("schema", "Inspect Brain schema vocabulary"),
+        command(
+          "schema",
+          "Inspect Brain schema vocabulary",
+          [flag("vault", "string")],
+          [
+            command("report", "Inspect Brain schema vocabulary", [flag("vault", "string")]),
+            command("stats", "Summarise Brain schema vocabulary", [flag("vault", "string")]),
+            command("lint", "Lint Brain schema vocabulary", [flag("vault", "string")]),
+            command("graph", "Render Brain schema graph", [flag("vault", "string")]),
+            command("explain", "Explain a Brain schema token", [flag("vault", "string")]),
+            command("orphans", "Review unused Brain schema declarations", [
+              flag("vault", "string"),
+            ]),
+            command("apply", "Apply audited Brain schema mutations", [
+              flag("vault", "string"),
+              flag("mutation", "string-array"),
+              flag("actor", "string"),
+              flag("reason", "string"),
+            ]),
+            command("sync", "Preview Brain schema sync", [
+              flag("vault", "string"),
+              flag("dry-run", "boolean"),
+              flag("batch-size", "string"),
+            ]),
+          ],
+        ),
         command("graph-export", "Export vault graph"),
         command("graph-import", "Import vault graph stubs"),
         command("backlinks", "List inbound Brain references"),
         command("semantics-backfill", "Preview Brain semantics backfill"),
-        command(
-          "mcp-landscape",
-          "List MCP servers configured across the vault",
-        ),
+        command("mcp-landscape", "List MCP servers configured across the vault"),
         command("scan-inline", "Capture inline @osb markers"),
         command("import-session", "Replay registered agent sessions"),
+        command("session-hook", "Capture runtime lifecycle hook payloads"),
         command("import-claude-memory", "Import Claude memory feedback"),
       ],
     ),
@@ -184,22 +204,16 @@ export function manifestForJson(): CliRootManifest {
   return addInheritedFlags(CLI_COMMAND_MANIFEST);
 }
 
-export function commandNames(
-  manifest: CliRootManifest = CLI_COMMAND_MANIFEST,
-): string[] {
+export function commandNames(manifest: CliRootManifest = CLI_COMMAND_MANIFEST): string[] {
   return manifest.commands.map((item) => item.name);
 }
 
 export function nestedCommandNames(parent: string): string[] {
-  const node = CLI_COMMAND_MANIFEST.commands.find(
-    (item) => item.name === parent,
-  );
+  const node = CLI_COMMAND_MANIFEST.commands.find((item) => item.name === parent);
   return node?.commands?.map((item) => item.name) ?? [];
 }
 
-export function allFlagNames(
-  manifest: CliRootManifest = manifestForJson(),
-): string[] {
+export function allFlagNames(manifest: CliRootManifest = manifestForJson()): string[] {
   const names = new Set<string>();
   for (const flagSpec of manifest.flags) names.add(flagSpec.name);
   const visit = (items: ReadonlyArray<CliCommandManifest>): void => {
@@ -237,21 +251,15 @@ function addInheritedFlags(root: CliRootManifest): CliRootManifest {
   };
 }
 
-function addInheritedFlagsToCommand(
-  commandSpec: CliCommandManifest,
-): CliCommandManifest {
+function addInheritedFlagsToCommand(commandSpec: CliCommandManifest): CliCommandManifest {
   const ownFlags = commandSpec.flags ?? [];
-  const hasJson = ownFlags.some(
-    (item) => item.name === INHERITED_JSON_FLAG.name,
-  );
+  const hasJson = ownFlags.some((item) => item.name === INHERITED_JSON_FLAG.name);
   return {
     ...commandSpec,
     flags: hasJson ? ownFlags : [...ownFlags, INHERITED_JSON_FLAG],
     ...(commandSpec.commands
       ? {
-          commands: commandSpec.commands.map((item) =>
-            addInheritedFlagsToCommand(item),
-          ),
+          commands: commandSpec.commands.map((item) => addInheritedFlagsToCommand(item)),
         }
       : {}),
   };

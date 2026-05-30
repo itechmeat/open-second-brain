@@ -36,6 +36,7 @@ Brain verbs (observing memory):
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
   doctor              Validate Brain invariants (--strict; --remediate [--dry-run])
+  watchdog            Probe Brain health and plan safe recovery (--remediate, --restore, --force-restore)
   health              Semantic-health report: contradictions, concept gaps, stale claims
   history             Render a preference's edit-history timeline
   audit               Render a preference's full mutation audit trail
@@ -50,6 +51,7 @@ Brain verbs (observing memory):
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a registered agent session .jsonl (or directory)
+  session-hook        Capture one runtime hook payload from stdin (internal hook bridge)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
   token-footprint     Report per-category vault token size with a warn threshold
@@ -164,6 +166,11 @@ export const VERB_HELP: Record<string, string> = {
     "Validate invariants. Warnings exit 0 (or 2 with --strict). Errors always exit 1.\n" +
     "--remediate builds a dependency-ordered repair plan and applies the\n" +
     "auto-safe steps (content-hash re-stamp); --dry-run previews without writing.\n",
+  watchdog:
+    "usage: o2b brain watchdog [--vault <path>] [--json] [--remediate [--dry-run]]\n" +
+    "                           [--restore <run_id> [--force-restore]] [--attempt <n>]\n" +
+    "Probe Brain config/dirs/search index, emit recovery recommendations, and apply only explicit safe repairs.\n" +
+    "Snapshot restore is refused unless --restore and --force-restore are both explicit; use rollback for execution.\n",
   health:
     "usage: o2b brain health [--vault <path>] [--json]\n" +
     "Semantic-health report: contradictory confirmed preferences, recurring\n" +
@@ -193,9 +200,12 @@ export const VERB_HELP: Record<string, string> = {
     "Read-only dashboard of the brain's signals grouped by (agent, source_type)\n" +
     "with active/processed and distinct-topic counts.\n",
   schema:
-    "usage: o2b brain schema [--vault <path>] [--json]\n" +
-    "Read-only report of the resolved runtime schema vocabulary, artifact\n" +
-    "schema_type usage counts, and unknown/unused taxonomy findings.\n",
+    "usage: o2b brain schema [report|stats|lint|graph|explain|orphans|apply|sync] [--vault <path>] [--json]\n" +
+    "Inspect and mutate the active runtime schema vocabulary through locked, audited writes.\n",
+  "session-hook":
+    "usage: o2b brain session-hook [--vault <path>] [--agent <name>] [--dry-run] [--json]\n" +
+    "Read one runtime hook JSON payload from stdin, capture inline @osb markers / brain_feedback tool calls,\n" +
+    "and append a non-blocking session-lifecycle audit/log observation. Intended for hooks/session-capture.ts.\n",
   "graph-export":
     "usage: o2b brain graph-export [--vault <path>] [--out <file>]\n" +
     "Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a\n" +

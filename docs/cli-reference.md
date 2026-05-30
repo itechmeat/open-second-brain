@@ -55,7 +55,8 @@ o2b brain audit               Render a preference's full mutation audit trail (s
 o2b brain morning-brief       Read-only session-start summary (since v0.21.0): top confirmed preferences, recent reconcile open questions, recent notes; bounded by --max-chars-per-memory / --max-total-chars; --top-k / --lookback-days
 o2b brain codec               Deterministic lossless session codec (since v0.22.0): --compress | --expand over stdin or --in <file>; structured content preserved byte-for-byte
 o2b brain sources             Read-only dashboard of signals by (agent, source_type) (since v0.22.0): active/processed + distinct-topic counts; --json
-o2b brain schema              Read-only runtime schema report (since v0.25.0): resolved vocabulary, artifact schema_type usage, unknown tokens, unused declarations; --json
+o2b brain schema              Runtime schema report/admin (since v0.26.0): report|stats|lint|graph|explain|orphans|apply|sync; mutation writes are locked and audited
+o2b brain watchdog            Probe Brain config/dirs/search index and plan safe recovery (since v0.26.0): --remediate [--dry-run], --restore <run_id> [--force-restore], --json
 o2b brain graph-export        Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a stable graph.json (since v0.22.0): stdout or --out <file>
 o2b brain graph-import        Reconstruct vault page stubs from a graph.json (since v0.22.0): --mode skip|overwrite|merge; vault-guarded writes
 o2b brain backlinks           List inbound references to a Brain artifact id
@@ -63,6 +64,7 @@ o2b brain semantics-backfill  Dry-run typed preference-edge backfill preview (si
 o2b brain mcp-landscape       List MCP servers configured across the vault (since v0.19.0): name, source file, packages, required env-var names (values never read)
 o2b brain scan-inline         Capture `@osb` markers from folders listed under `notes.read_paths` in _brain.yaml
 o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory)
+o2b brain session-hook        Internal hook bridge: read one lifecycle payload from stdin, capture prompt markers / brain_feedback, append lifecycle audit/log rows
 o2b brain import-claude-memory (CLI-only) Import metadata.type=feedback entries from a Claude Code memory directory into Brain/preferences/. --dry-run / --apply, sidecar manifest for idempotency, UPDATE preserves accumulated evidence
 ```
 
@@ -138,8 +140,9 @@ o2b search "<query>"          Hybrid full-text + semantic search across the vaul
                               filters on frontmatter scalars (post-FTS phase)
                               --verbose adds per-result why_retrieved reasons
                               --json for structured output (includes reasons[])
+                              CJK text is expanded for FTS recall without polluting returned content
 o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
-                              (required after upgrading to the v0.13.0 schema)
+                              (required after upgrading to v0.13.0 recall schema or v0.26.0 CJK FTS content)
 ```
 
 The fused ranking is sharpened by a recall-quality suite (v0.13.0), each

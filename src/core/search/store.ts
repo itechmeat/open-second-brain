@@ -58,6 +58,7 @@ export interface DocumentSummary {
 export interface ChunkInput {
   readonly chunkIndex: number;
   readonly content: string;
+  readonly ftsContent?: string;
   readonly contentHash: string;
   readonly startLine: number;
   readonly endLine: number;
@@ -417,16 +418,18 @@ export class Store {
 
   // ── query cache (v0.20.0) ────────────────────────────────────────────────────
 
-  queryCacheGet(
-    key: string,
-  ): { generation: string; payload: string; createdAt: number } | null {
+  queryCacheGet(key: string): { generation: string; payload: string; createdAt: number } | null {
     const row = this.db
       .query<{ generation: string; payload: string; created_at: number }, [string]>(
         "SELECT generation, payload, created_at FROM query_cache WHERE cache_key = ?",
       )
       .get(key);
     if (!row) return null;
-    return { generation: row.generation, payload: row.payload, createdAt: row.created_at };
+    return {
+      generation: row.generation,
+      payload: row.payload,
+      createdAt: row.created_at,
+    };
   }
 
   queryCachePut(key: string, generation: string, payload: string, createdAtMs: number): void {
@@ -450,13 +453,25 @@ export class Store {
 
   listDocuments(): Map<string, DocumentSummary> {
     const rows = this.db
-      .query<{ id: number; path: string; content_hash: string; mtime: number; size: number }, []>(
-        "SELECT id, path, content_hash, mtime, size FROM documents",
-      )
+      .query<
+        {
+          id: number;
+          path: string;
+          content_hash: string;
+          mtime: number;
+          size: number;
+        },
+        []
+      >("SELECT id, path, content_hash, mtime, size FROM documents")
       .all();
     const map = new Map<string, DocumentSummary>();
     for (const r of rows) {
-      map.set(r.path, { id: r.id, contentHash: r.content_hash, mtime: r.mtime, size: r.size });
+      map.set(r.path, {
+        id: r.id,
+        contentHash: r.content_hash,
+        mtime: r.mtime,
+        size: r.size,
+      });
     }
     return map;
   }
@@ -566,10 +581,10 @@ export class Store {
       this.db.run("DELETE FROM chunks WHERE document_id = ?", [documentId]);
       const insert = this.db.prepare<
         { id: number },
-        [number, number, string, string, number, number, number, string, string, string]
+        [number, number, string, string, string, number, number, number, string, string, string]
       >(
-        "INSERT INTO chunks(document_id, chunk_index, content, content_hash, start_line, end_line, token_count, heading_path, created_at, updated_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, heading_path, created_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       );
       const now = nowIso();
       for (const c of chunks) {
@@ -577,6 +592,7 @@ export class Store {
           documentId,
           c.chunkIndex,
           c.content,
+          c.ftsContent ?? c.content,
           c.contentHash,
           c.startLine,
           c.endLine,
@@ -836,7 +852,14 @@ export class Store {
     if (documentIds.length === 0) return out;
     const placeholders = documentIds.map(() => "?").join(",");
     const rows = this.db
-      .query<{ source_document_id: number; relation: string; target_path: string | null }, number[]>(
+      .query<
+        {
+          source_document_id: number;
+          relation: string;
+          target_path: string | null;
+        },
+        number[]
+      >(
         "SELECT source_document_id, relation, target_path FROM links " +
           `WHERE source_document_id IN (${placeholders}) AND relation IS NOT NULL ` +
           "ORDER BY id",
@@ -880,7 +903,11 @@ export class Store {
             "ORDER BY bm25 ASC LIMIT ?",
         )
         .all(fts5Query, prefix, prefix, limit);
-      return rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 }));
+      return rows.map((r) => ({
+        chunkId: r.chunk_id,
+        documentId: r.document_id,
+        bm25: r.bm25,
+      }));
     }
 
     const rows = this.db
@@ -890,7 +917,11 @@ export class Store {
           "WHERE chunk_fts MATCH ? ORDER BY bm25 ASC LIMIT ?",
       )
       .all(fts5Query, limit);
-    return rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 }));
+    return rows.map((r) => ({
+      chunkId: r.chunk_id,
+      documentId: r.document_id,
+      bm25: r.bm25,
+    }));
   }
 
   semanticTopK(

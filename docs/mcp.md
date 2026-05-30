@@ -18,10 +18,10 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 47 tools. The table below highlights the
-operator-facing core, agent-source, health, and Pay Memory tools; the full
-surface also includes Brain writer, review, query, temporal, link-graph, and
-search tools. In Claude Code, that full schema can push MCP definitions beyond
+The full server currently advertises 57 tools. The table below highlights the
+operator-facing core, schema, agent-source, health, recovery, and Pay Memory
+tools; the full surface also includes Brain writer, review, query, temporal,
+link-graph, and search tools. In Claude Code, that full schema can push MCP definitions beyond
 10% of the context window, causing `MCPSearch` tool-search deferral; use the
 writer split below for the always-loaded writer subset, or the runtime
 capability flags for a narrower per-process full server.
@@ -39,6 +39,16 @@ capability flags for a narrower per-process full server.
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                        |
 | `brain_morning_brief`       | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.                 | —                                |
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                |
+| `get_active_schema_pack`    | Return the active runtime schema pack resolved from `Brain/_brain.yaml`.                                                                       | —                                |
+| `list_schema_packs`         | List schema packs available to the vault/runtime.                                                                                              | —                                |
+| `schema_stats`              | Summarise declared schema tokens and observed artifact usage.                                                                                  | —                                |
+| `schema_lint`               | Report unknown, unused, and invalid schema references without writing.                                                                         | —                                |
+| `schema_graph`              | Return a schema relationship graph for declared types, aliases, prefixes, and link types.                                                      | —                                |
+| `schema_explain_type`       | Explain one schema token, including aliases, references, and usage.                                                                            | `token`                          |
+| `schema_review_orphans`     | Review declared schema tokens that have no observed usage.                                                                                     | —                                |
+| `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                      |
+| `reload_schema_pack`        | Reload and validate the active schema pack after local edits.                                                                                  | —                                |
+| `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                |
 | `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                           |
 | `payment_memory_init`       | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template.      | —                                |
 | `payment_receipt_append`    | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting.                                                     | `service`, `status`, `reason`    |
@@ -293,7 +303,7 @@ server to your Codex MCP config the same way as Hermes.
 
 The plugin's `.mcp.json` ships **two** MCP-server entries:
 
-- `open-second-brain` - the full surface (46 tools, including `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_pinned_context`, `brain_pre_compress_pack`, `brain_audit`, `brain_morning_brief`, `brain_sources`, and `brain_switch_vault`); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
+- `open-second-brain` - the full surface (57 tools, including `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_pinned_context`, `brain_pre_compress_pack`, `brain_audit`, `brain_morning_brief`, `brain_sources`, and `brain_switch_vault`); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
 - `open-second-brain-writer` - a minimal always-loaded surface of five tools: `brain_feedback`, `brain_apply_evidence`, `brain_note`, `brain_pinned_context` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md` plus pinned context, v0.16.0). The agent records taste signals, evidence events, milestone notes, and current-task pinned facts - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).

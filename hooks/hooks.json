@@ -2,6 +2,17 @@
   "hooks": {
     "PostToolUse": [
       {
+        "matcher": "brain_feedback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "o2b-hook session-capture",
+            "timeout": 10,
+            "statusMessage": "OSB: capturing brain_feedback lifecycle event"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit|MultiEdit|apply_patch",
         "hooks": [
           {
@@ -22,6 +33,57 @@
             "command": "o2b-hook active-inject",
             "timeout": 10,
             "statusMessage": "OSB: injecting active preferences"
+          },
+          {
+            "type": "command",
+            "command": "o2b-hook session-capture",
+            "timeout": 10,
+            "statusMessage": "OSB: capturing session start"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "o2b-hook session-capture",
+            "timeout": 10,
+            "statusMessage": "OSB: capturing prompt markers"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "o2b-hook session-capture",
+            "timeout": 10,
+            "statusMessage": "OSB: capturing session stop"
+          },
+          {
+            "type": "command",
+            "command": "o2b-hook stop-log-guardrail",
+            "timeout": 10,
+            "statusMessage": "OSB: checking stop log guardrail"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "o2b-hook session-capture",
+            "timeout": 10,
+            "statusMessage": "OSB: capturing session end"
           }
         ]
       }
@@ -35,6 +97,12 @@
             "command": "o2b-hook active-inject",
             "timeout": 10,
             "statusMessage": "OSB: re-injecting active preferences after compact"
+          },
+          {
+            "type": "command",
+            "command": "o2b-hook session-capture",
+            "timeout": 10,
+            "statusMessage": "OSB: capturing post-compact lifecycle event"
           }
         ]
       }

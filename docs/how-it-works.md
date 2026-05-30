@@ -192,13 +192,22 @@ Two important properties of this flow:
 
 ## Capture surfaces
 
-Three independent paths land a signal in `Brain/inbox/`:
+Four independent paths land a signal in `Brain/inbox/`:
 
 - **Live** - the agent calls `brain_feedback` (MCP) or `o2b brain feedback` (CLI) the moment the rule is formulated. This is the path the end-to-end sequence above documents.
 - **Inline** - the user (or agent) writes an `@osb` marker into any vault Markdown file. `o2b brain scan-inline` finds every marker, creates the corresponding signal, and annotates the source file with `@osb✓ [[sig-...]]` so a re-run is a no-op. Two marker shapes: a single line `@osb feedback negative topic=... principle="..."` or a fenced ` ```osb` block with YAML inside.
 - **Session import** - `o2b brain import-session <path>` reads a Claude Code / Codex CLI / Hermes session JSONL and extracts both `@osb` markers from message text and replays of `brain_feedback` tool-use calls. Useful when MCP was not available at recording time or the agent did not make the call live.
+- **Lifecycle hook** - Claude Code / Codex hooks call `o2b brain session-hook` through `hooks/session-capture.ts`. `UserPromptSubmit` prompt markers and `PostToolUse` `brain_feedback` inputs are captured immediately through the same signal dedup hash, while SessionStart / Stop / SessionEnd / PostCompact observations append non-blocking lifecycle audit/log rows.
 
-All three paths share a normalised payload hash so the same rule captured twice from different surfaces dedups automatically. Pinned preferences are exempt from automatic retire (`stale-no-evidence`, `expired-unconfirmed`, `rebutted`); only `o2b brain reject` can retire them.
+All four paths share a normalised payload hash so the same rule captured twice from different surfaces dedups automatically. Pinned preferences are exempt from automatic retire (`stale-no-evidence`, `expired-unconfirmed`, `rebutted`); only `o2b brain reject` can retire them.
+
+`o2b brain watchdog` is the recovery surface for this layout. It checks the
+Brain config, required directories, and rebuildable search index, emits
+exponential backoff metadata for schedulers, and writes an audit record. By
+default it only reports a remediation plan; `--remediate` may create missing
+Brain directories, but search repair remains a recommendation (`o2b search reindex`)
+and snapshot restore is refused unless `--restore <run_id>` and `--force-restore`
+are both explicit.
 
 ### Cross-project setup
 
@@ -286,14 +295,15 @@ Key rules baked into the pipeline:
 The same pipeline is named as five explicit ordered phases - **close**
 (scan) -> **reconcile** (contradictions) -> **synthesize** (promote /
 confirm) -> **heal** (auto-retire stale, optional enrichment) -> **log**
+
 - each emitting a workrun checkpoint and a structured entry in
-`DreamRunSummary.phases`. The internals are unchanged; the phases are
-labels over the existing seams, so every invariant above still holds.
+  `DreamRunSummary.phases`. The internals are unchanged; the phases are
+  labels over the existing seams, so every invariant above still holds.
 
 - **Reconcile classification.** Each contradiction is bucketed by
   structural signal shape (claims / entity / decisions / source-freshness).
   Only source-freshness with a decisive recency gap auto-resolves - and
-  even then it is *recorded* as a `reconcile` log event, never a
+  even then it is _recorded_ as a `reconcile` log event, never a
   sub-threshold state mutation. Everything else surfaces in
   `open_questions` for operator review rather than being force-merged.
 - **Per-preference audit.** Every mutation (create / promote / update /
@@ -315,7 +325,7 @@ A `portability/` subsystem of deterministic primitives, all opt-in or
 no-op by default:
 
 - **Session codec.** A pure lossless `compress`/`expand` (`expand(compress(x))
-  === x` for all input). Token savings come from reversibly collapsing
+=== x` for all input). Token savings come from reversibly collapsing
   whitespace/blank-line runs behind a Private-Use-Area marker; code and
   structured tokens are preserved byte-for-byte. Opt-in on the signal
   store (gated by a `_raw_codec` marker the reader keys off) and exposed as

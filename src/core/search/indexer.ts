@@ -26,6 +26,7 @@ import {
 import { basename, dirname } from "node:path";
 
 import { chunkMarkdown } from "./chunker.ts";
+import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { extractLinks } from "./links.ts";
 import { extractFrontmatterRelations } from "../graph/frontmatter-relations.ts";
@@ -194,6 +195,7 @@ async function indexInto(
         const chunkInputs: ChunkInput[] = chunkResult.chunks.map((c) => ({
           chunkIndex: c.chunkIndex,
           content: c.content,
+          ftsContent: expandTextForCjkFts(c.content),
           contentHash: sha256(c.content),
           startLine: c.startLine,
           endLine: c.endLine,

@@ -29,6 +29,7 @@ import {
   cmdBrainUnprotect,
   cmdBrainRollback,
   cmdBrainDoctor,
+  cmdBrainWatchdog,
   cmdBrainHealth,
   cmdBrainHistory,
   cmdBrainAudit,
@@ -48,6 +49,7 @@ import {
   handleBrainSnapshotSubcommand,
   cmdBrainScanInline,
   cmdBrainImportSession,
+  cmdBrainSessionHook,
   cmdBrainImportClaudeMemory,
   cmdBrainPageDedup,
   cmdBrainTokenFootprint,
@@ -65,9 +67,7 @@ import {
   cmdBrainWeekly,
 } from "./brain/verbs/index.ts";
 
-export async function handleBrainSubcommand(
-  argv: ReadonlyArray<string>,
-): Promise<number> {
+export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(BRAIN_HELP);
     return argv.length === 0 ? 2 : 0;
@@ -129,6 +129,8 @@ export async function handleBrainSubcommand(
         return await cmdBrainRollback(rest);
       case "doctor":
         return await cmdBrainDoctor(rest);
+      case "watchdog":
+        return await cmdBrainWatchdog(rest);
       case "health":
         return await cmdBrainHealth(rest);
       case "history":
@@ -157,6 +159,8 @@ export async function handleBrainSubcommand(
         return await cmdBrainScanInline(rest);
       case "import-session":
         return await cmdBrainImportSession(rest);
+      case "session-hook":
+        return await cmdBrainSessionHook(rest);
       case "import-claude-memory":
         return await cmdBrainImportClaudeMemory(rest);
       case "merge":

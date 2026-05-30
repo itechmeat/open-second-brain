@@ -1,8 +1,8 @@
 /**
- * Schema migration v3 -> v4 (query cache). v4 adds a `query_cache` table
- * backing the persistent, corpus-generation-gated query result cache. A
- * fresh index lands at v4; an existing v3 index upgrades without losing
- * any prior data.
+ * Schema migration v3 -> latest, with v4 query-cache coverage. v4 adds a
+ * `query_cache` table backing the persistent, corpus-generation-gated query
+ * result cache. Later migrations may run after it; this test keeps locking
+ * that a v3 index upgrades without losing any prior data.
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
@@ -38,24 +38,31 @@ function hasTable(db: Database, name: string): boolean {
   );
 }
 
-test("fresh migration reaches v4 and creates query_cache", () => {
+function hasColumn(db: Database, table: string, name: string): boolean {
+  return db
+    .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+    .all()
+    .some((c) => c.name === name);
+}
+
+test("fresh migration reaches latest and creates query_cache", () => {
   const db = new Database(dbPath);
-  expect(applyMigrations(db)).toBe(4);
-  expect(LATEST_SCHEMA_VERSION).toBe(4);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(hasTable(db, "query_cache")).toBe(true);
+  expect(hasColumn(db, "chunks", "fts_content")).toBe(true);
   db.close();
 });
 
-test("applyMigrations is idempotent at v4", () => {
+test("applyMigrations is idempotent at latest", () => {
   const db = new Database(dbPath);
-  expect(applyMigrations(db)).toBe(4);
-  expect(applyMigrations(db)).toBe(4);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   db.close();
 });
 
-test("a v3 index upgrades to v4 preserving prior data", () => {
+test("a v3 index upgrades to latest preserving prior data", () => {
   const db = new Database(dbPath);
-  applyMigrations(db); // -> v4
+  applyMigrations(db); // -> latest
   db.run(
     "INSERT INTO documents(id, path, title, content_hash, mtime, size, created_at, updated_at, indexed_at) " +
       "VALUES (1, 'a.md', 'A', 'h', 1, 1, 't', 't', 't')",
@@ -66,8 +73,9 @@ test("a v3 index upgrades to v4 preserving prior data", () => {
   expect(readSchemaVersion(db)).toBe(3);
   expect(hasTable(db, "query_cache")).toBe(false);
 
-  expect(applyMigrations(db)).toBe(4);
+  expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(hasTable(db, "query_cache")).toBe(true);
+  expect(hasColumn(db, "chunks", "fts_content")).toBe(true);
   const row = db.query<{ c: number }, []>("SELECT count(*) AS c FROM documents").get();
   expect(row?.c).toBe(1);
   db.close();

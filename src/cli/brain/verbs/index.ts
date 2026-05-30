@@ -16,6 +16,7 @@ export { cmdBrainSetPrimary } from "./set-primary.ts";
 export { cmdBrainProtect, cmdBrainUnprotect } from "./protect.ts";
 export { cmdBrainRollback } from "./rollback.ts";
 export { cmdBrainDoctor } from "./doctor.ts";
+export { cmdBrainWatchdog } from "./watchdog.ts";
 export { cmdBrainHealth } from "./health.ts";
 export { cmdBrainHistory } from "./history.ts";
 export { cmdBrainAudit } from "./audit.ts";
@@ -32,12 +33,10 @@ export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";
 export { cmdBrainExport } from "./export.ts";
 export { cmdBrainUpgrade } from "./upgrade.ts";
-export {
-  cmdBrainSnapshotDiff,
-  handleBrainSnapshotSubcommand,
-} from "./snapshot.ts";
+export { cmdBrainSnapshotDiff, handleBrainSnapshotSubcommand } from "./snapshot.ts";
 export { cmdBrainScanInline } from "./scan-inline.ts";
 export { cmdBrainImportSession } from "./import-session.ts";
+export { cmdBrainSessionHook } from "./session-hook.ts";
 export { cmdBrainImportClaudeMemory } from "./import-claude-memory.ts";
 export { cmdBrainPageDedup } from "./page-dedup.ts";
 export { cmdBrainTokenFootprint } from "./token-footprint.ts";

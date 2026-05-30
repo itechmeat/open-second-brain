@@ -48,10 +48,7 @@ import {
 // break the module-init cycle: the resolver lives in `index.ts` and
 // itself imports `loadBrainConfig` from this file. See the
 // `defaults.ts` header for the rationale.
-import {
-  classifyVaultIgnoreRule,
-  DEFAULT_VAULT_IGNORE_PATHS,
-} from "../vault-scope/defaults.ts";
+import { classifyVaultIgnoreRule, DEFAULT_VAULT_IGNORE_PATHS } from "../vault-scope/defaults.ts";
 import { brainConfigPath } from "./paths.ts";
 
 /** Schema versions this build understands. Bump on incompatible changes. */
@@ -99,36 +96,30 @@ export const INSTRUCTION_FILE_MAX_LINES_CEILING = 10000;
  *   - `instruction_file_max_lines: 200` matches the documented
  *     compliance ceiling.
  */
-export const BRAIN_GUARDRAIL_DEFAULTS: ResolvedBrainGuardrailConfig =
-  Object.freeze({
-    promotion_min_signals: 1,
-    promotion_min_distinct_agents: 1,
-    promotion_min_age_days: 0,
-    instruction_file_max_lines: 200,
-  }) as ResolvedBrainGuardrailConfig;
+export const BRAIN_GUARDRAIL_DEFAULTS: ResolvedBrainGuardrailConfig = Object.freeze({
+  promotion_min_signals: 1,
+  promotion_min_distinct_agents: 1,
+  promotion_min_age_days: 0,
+  instruction_file_max_lines: 200,
+}) as ResolvedBrainGuardrailConfig;
 
 /**
  * Merge a parsed `guardrails` block (or `undefined`) with
  * `BRAIN_GUARDRAIL_DEFAULTS`. Returns a fully-populated struct so
  * consumers do not branch on optional fields.
  */
-export function resolveGuardrails(
-  cfg: BrainConfig,
-): ResolvedBrainGuardrailConfig {
+export function resolveGuardrails(cfg: BrainConfig): ResolvedBrainGuardrailConfig {
   const g = cfg.guardrails;
   if (g === undefined) return BRAIN_GUARDRAIL_DEFAULTS;
   return {
     promotion_min_signals:
       g.promotion_min_signals ?? BRAIN_GUARDRAIL_DEFAULTS.promotion_min_signals,
     promotion_min_distinct_agents:
-      g.promotion_min_distinct_agents ??
-      BRAIN_GUARDRAIL_DEFAULTS.promotion_min_distinct_agents,
+      g.promotion_min_distinct_agents ?? BRAIN_GUARDRAIL_DEFAULTS.promotion_min_distinct_agents,
     promotion_min_age_days:
-      g.promotion_min_age_days ??
-      BRAIN_GUARDRAIL_DEFAULTS.promotion_min_age_days,
+      g.promotion_min_age_days ?? BRAIN_GUARDRAIL_DEFAULTS.promotion_min_age_days,
     instruction_file_max_lines:
-      g.instruction_file_max_lines ??
-      BRAIN_GUARDRAIL_DEFAULTS.instruction_file_max_lines,
+      g.instruction_file_max_lines ?? BRAIN_GUARDRAIL_DEFAULTS.instruction_file_max_lines,
   };
 }
 
@@ -149,31 +140,25 @@ export function resolveGuardrails(
  *     vault-root instruction file `brain_context` surfaces when
  *     present. Configurable per vault.
  */
-export const BRAIN_LINK_GRAPH_DEFAULTS: ResolvedBrainLinkGraphConfig =
-  Object.freeze({
-    moc_min_outbound_links: 5,
-    moc_min_link_ratio: 0.3,
-    vault_instruction_file: "VAULT.md",
-  }) as ResolvedBrainLinkGraphConfig;
+export const BRAIN_LINK_GRAPH_DEFAULTS: ResolvedBrainLinkGraphConfig = Object.freeze({
+  moc_min_outbound_links: 5,
+  moc_min_link_ratio: 0.3,
+  vault_instruction_file: "VAULT.md",
+}) as ResolvedBrainLinkGraphConfig;
 
 /**
  * Merge a parsed `link_graph` block (or `undefined`) with
  * `BRAIN_LINK_GRAPH_DEFAULTS`.
  */
-export function resolveLinkGraph(
-  cfg: BrainConfig,
-): ResolvedBrainLinkGraphConfig {
+export function resolveLinkGraph(cfg: BrainConfig): ResolvedBrainLinkGraphConfig {
   const lg = cfg.link_graph;
   if (lg === undefined) return BRAIN_LINK_GRAPH_DEFAULTS;
   return {
     moc_min_outbound_links:
-      lg.moc_min_outbound_links ??
-      BRAIN_LINK_GRAPH_DEFAULTS.moc_min_outbound_links,
-    moc_min_link_ratio:
-      lg.moc_min_link_ratio ?? BRAIN_LINK_GRAPH_DEFAULTS.moc_min_link_ratio,
+      lg.moc_min_outbound_links ?? BRAIN_LINK_GRAPH_DEFAULTS.moc_min_outbound_links,
+    moc_min_link_ratio: lg.moc_min_link_ratio ?? BRAIN_LINK_GRAPH_DEFAULTS.moc_min_link_ratio,
     vault_instruction_file:
-      lg.vault_instruction_file ??
-      BRAIN_LINK_GRAPH_DEFAULTS.vault_instruction_file,
+      lg.vault_instruction_file ?? BRAIN_LINK_GRAPH_DEFAULTS.vault_instruction_file,
   };
 }
 
@@ -192,14 +177,13 @@ export function resolveLinkGraph(
  *   - `daily_window_offset_hours: 0` - daily-brief windows align
  *     with UTC midnight by default.
  */
-export const BRAIN_TEMPORAL_DEFAULTS: ResolvedBrainTemporalConfig =
-  Object.freeze({
-    stale_pref_days: 90,
-    stale_signal_days: 30,
-    stale_log_days: 180,
-    weekly_start_dow: 1,
-    daily_window_offset_hours: 0,
-  }) as ResolvedBrainTemporalConfig;
+export const BRAIN_TEMPORAL_DEFAULTS: ResolvedBrainTemporalConfig = Object.freeze({
+  stale_pref_days: 90,
+  stale_signal_days: 30,
+  stale_log_days: 180,
+  weekly_start_dow: 1,
+  daily_window_offset_hours: 0,
+}) as ResolvedBrainTemporalConfig;
 
 /**
  * Merge a parsed `temporal` block (or `undefined`) with
@@ -209,16 +193,12 @@ export function resolveTemporal(cfg: BrainConfig): ResolvedBrainTemporalConfig {
   const tp = cfg.temporal;
   if (tp === undefined) return BRAIN_TEMPORAL_DEFAULTS;
   return {
-    stale_pref_days:
-      tp.stale_pref_days ?? BRAIN_TEMPORAL_DEFAULTS.stale_pref_days,
-    stale_signal_days:
-      tp.stale_signal_days ?? BRAIN_TEMPORAL_DEFAULTS.stale_signal_days,
+    stale_pref_days: tp.stale_pref_days ?? BRAIN_TEMPORAL_DEFAULTS.stale_pref_days,
+    stale_signal_days: tp.stale_signal_days ?? BRAIN_TEMPORAL_DEFAULTS.stale_signal_days,
     stale_log_days: tp.stale_log_days ?? BRAIN_TEMPORAL_DEFAULTS.stale_log_days,
-    weekly_start_dow:
-      tp.weekly_start_dow ?? BRAIN_TEMPORAL_DEFAULTS.weekly_start_dow,
+    weekly_start_dow: tp.weekly_start_dow ?? BRAIN_TEMPORAL_DEFAULTS.weekly_start_dow,
     daily_window_offset_hours:
-      tp.daily_window_offset_hours ??
-      BRAIN_TEMPORAL_DEFAULTS.daily_window_offset_hours,
+      tp.daily_window_offset_hours ?? BRAIN_TEMPORAL_DEFAULTS.daily_window_offset_hours,
   };
 }
 
@@ -252,16 +232,12 @@ export function resolveHealth(cfg: BrainConfig): ResolvedBrainHealthConfig {
   const h = cfg.health;
   if (h === undefined) return BRAIN_HEALTH_DEFAULTS;
   return {
-    contradiction_jaccard:
-      h.contradiction_jaccard ?? BRAIN_HEALTH_DEFAULTS.contradiction_jaccard,
+    contradiction_jaccard: h.contradiction_jaccard ?? BRAIN_HEALTH_DEFAULTS.contradiction_jaccard,
     concept_gap_min_frequency:
-      h.concept_gap_min_frequency ??
-      BRAIN_HEALTH_DEFAULTS.concept_gap_min_frequency,
+      h.concept_gap_min_frequency ?? BRAIN_HEALTH_DEFAULTS.concept_gap_min_frequency,
     stale_claim_max_age_days:
-      h.stale_claim_max_age_days ??
-      BRAIN_HEALTH_DEFAULTS.stale_claim_max_age_days,
-    remediation_step_cap:
-      h.remediation_step_cap ?? BRAIN_HEALTH_DEFAULTS.remediation_step_cap,
+      h.stale_claim_max_age_days ?? BRAIN_HEALTH_DEFAULTS.stale_claim_max_age_days,
+    remediation_step_cap: h.remediation_step_cap ?? BRAIN_HEALTH_DEFAULTS.remediation_step_cap,
   };
 }
 
@@ -312,9 +288,7 @@ export function loadNotesConfigSafe(vault: string): ResolvedBrainNotesConfig {
  * consumer (MCP wrappers, CLI verbs) so a freshly-initialised vault
  * still produces a useful report.
  */
-export function loadTemporalConfigSafe(
-  vault: string,
-): ResolvedBrainTemporalConfig {
+export function loadTemporalConfigSafe(vault: string): ResolvedBrainTemporalConfig {
   try {
     return resolveTemporal(loadBrainConfig(vault));
   } catch {
@@ -538,10 +512,7 @@ export function loadBrainConfigDetailed(vault: string): LoadBrainConfigResult {
  * a synthetic label like `"<test fixture>"` so the failure points at
  * something useful.
  */
-export function validateBrainConfig(
-  parsed: unknown,
-  source: string | null = null,
-): BrainConfig {
+export function validateBrainConfig(parsed: unknown, source: string | null = null): BrainConfig {
   return validateBrainConfigDetailed(parsed, source).config;
 }
 
@@ -555,11 +526,7 @@ export function validateBrainConfigDetailed(
   source: string | null = null,
 ): ValidateResult {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new BrainConfigError(
-      "config root must be a map of keys",
-      null,
-      source,
-    );
+    throw new BrainConfigError("config root must be a map of keys", null, source);
   }
   const obj = parsed as Record<string, unknown>;
   const warnings: BrainConfigLoadWarning[] = [];
@@ -636,16 +603,8 @@ export function validateBrainConfigDetailed(
     DEFAULT_BRAIN_CONFIG.dream as unknown as Readonly<Record<string, number>>,
     source,
   );
-  requirePositiveInteger(
-    "dream.candidate_threshold",
-    dream.candidate_threshold,
-    source,
-  );
-  requirePositiveInteger(
-    "dream.unconfirmed_window_days",
-    dream.unconfirmed_window_days,
-    source,
-  );
+  requirePositiveInteger("dream.candidate_threshold", dream.candidate_threshold, source);
+  requirePositiveInteger("dream.unconfirmed_window_days", dream.unconfirmed_window_days, source);
   requirePositiveInteger(
     "dream.contradiction_window_days",
     dream.contradiction_window_days,
@@ -658,25 +617,15 @@ export function validateBrainConfigDetailed(
     DEFAULT_BRAIN_CONFIG.retire as unknown as Readonly<Record<string, number>>,
     source,
   );
-  requirePositiveInteger(
-    "retire.stale_evidence_days",
-    retire.stale_evidence_days,
-    source,
-  );
+  requirePositiveInteger("retire.stale_evidence_days", retire.stale_evidence_days, source);
 
   const confidence = mergeBlock(
     "confidence",
     obj["confidence"],
-    DEFAULT_BRAIN_CONFIG.confidence as unknown as Readonly<
-      Record<string, number>
-    >,
+    DEFAULT_BRAIN_CONFIG.confidence as unknown as Readonly<Record<string, number>>,
     source,
   );
-  requireNonNegativeInteger(
-    "confidence.low_max_applied",
-    confidence.low_max_applied,
-    source,
-  );
+  requireNonNegativeInteger("confidence.low_max_applied", confidence.low_max_applied, source);
   requireUnitInterval("confidence.medium_min", confidence.medium_min, source);
   requireUnitInterval("confidence.high_min", confidence.high_min, source);
   if ((confidence.medium_min as number) >= (confidence.high_min as number)) {
@@ -691,16 +640,10 @@ export function validateBrainConfigDetailed(
   const snapshots = mergeBlock(
     "snapshots",
     obj["snapshots"],
-    DEFAULT_BRAIN_CONFIG.snapshots as unknown as Readonly<
-      Record<string, number>
-    >,
+    DEFAULT_BRAIN_CONFIG.snapshots as unknown as Readonly<Record<string, number>>,
     source,
   );
-  requirePositiveInteger(
-    "snapshots.retention_count",
-    snapshots.retention_count,
-    source,
-  );
+  requirePositiveInteger("snapshots.retention_count", snapshots.retention_count, source);
 
   // Optional `vault` block (v0.10.9). Hard-error on shape problems —
   // exclusions affect every walker, silent ignore would be a footgun.
@@ -803,11 +746,7 @@ export function validateBrainConfigDetailed(
   let active: BrainActiveConfig | undefined;
   if ("active" in obj) {
     const rawActive = obj["active"];
-    if (
-      typeof rawActive !== "object" ||
-      rawActive === null ||
-      Array.isArray(rawActive)
-    ) {
+    if (typeof rawActive !== "object" || rawActive === null || Array.isArray(rawActive)) {
       throw new BrainConfigError(
         `block must be a map of keys; got ${describe(rawActive)}`,
         "active",
@@ -822,9 +761,7 @@ export function validateBrainConfigDetailed(
       const windowDays = hasWindow
         ? activeMap["most_applied_window_days"]
         : MOST_APPLIED_WINDOW_DAYS_DEFAULT;
-      const limit = hasLimit
-        ? activeMap["most_applied_limit"]
-        : MOST_APPLIED_LIMIT_DEFAULT;
+      const limit = hasLimit ? activeMap["most_applied_limit"] : MOST_APPLIED_LIMIT_DEFAULT;
       if (
         typeof windowDays !== "number" ||
         !Number.isInteger(windowDays) ||
@@ -926,9 +863,7 @@ export function validateBrainConfigDetailed(
         });
         ok = false;
       } else {
-        const badIdx = (drObj["known_agents"] as unknown[]).findIndex(
-          (v) => typeof v !== "string",
-        );
+        const badIdx = (drObj["known_agents"] as unknown[]).findIndex((v) => typeof v !== "string");
         if (badIdx >= 0) {
           warnings.push({
             path: source ?? "<config>",
@@ -986,9 +921,7 @@ export function validateBrainConfigDetailed(
         rawMap["promotion_min_distinct_agents"],
         source,
       );
-      partial.promotion_min_distinct_agents = rawMap[
-        "promotion_min_distinct_agents"
-      ] as number;
+      partial.promotion_min_distinct_agents = rawMap["promotion_min_distinct_agents"] as number;
     }
     if ("promotion_min_age_days" in rawMap) {
       requireNonNegativeInteger(
@@ -996,9 +929,7 @@ export function validateBrainConfigDetailed(
         rawMap["promotion_min_age_days"],
         source,
       );
-      partial.promotion_min_age_days = rawMap[
-        "promotion_min_age_days"
-      ] as number;
+      partial.promotion_min_age_days = rawMap["promotion_min_age_days"] as number;
     }
     if ("instruction_file_max_lines" in rawMap) {
       requirePositiveInteger(
@@ -1054,11 +985,7 @@ export function validateBrainConfigDetailed(
   if ("link_graph" in obj) {
     const rawLg = obj["link_graph"];
     if (typeof rawLg !== "object" || rawLg === null || Array.isArray(rawLg)) {
-      throw new BrainConfigError(
-        "link_graph must be a mapping",
-        "link_graph",
-        source,
-      );
+      throw new BrainConfigError("link_graph must be a mapping", "link_graph", source);
     }
     const lgObj = rawLg as Record<string, unknown>;
     const partialLg: Record<string, unknown> = {};
@@ -1100,11 +1027,7 @@ export function validateBrainConfigDetailed(
       // Reject absolute paths and `..` traversal at load time so
       // the config surface fails loudly instead of silently
       // omitting the envelope field at read time.
-      if (
-        trimmed.startsWith("/") ||
-        trimmed.startsWith("\\") ||
-        trimmed.includes("..")
-      ) {
+      if (trimmed.startsWith("/") || trimmed.startsWith("\\") || trimmed.includes("..")) {
         throw new BrainConfigError(
           "must be a vault-relative path without '..' segments",
           "link_graph.vault_instruction_file",
@@ -1126,10 +1049,7 @@ export function validateBrainConfigDetailed(
         });
       }
     }
-    linkGraph =
-      Object.keys(partialLg).length > 0
-        ? (partialLg as BrainLinkGraphConfig)
-        : {};
+    linkGraph = Object.keys(partialLg).length > 0 ? (partialLg as BrainLinkGraphConfig) : {};
   }
 
   // Optional `temporal` block (v0.10.18). Shape:
@@ -1145,11 +1065,7 @@ export function validateBrainConfigDetailed(
   if ("temporal" in obj) {
     const rawTp = obj["temporal"];
     if (typeof rawTp !== "object" || rawTp === null || Array.isArray(rawTp)) {
-      throw new BrainConfigError(
-        "temporal must be a mapping",
-        "temporal",
-        source,
-      );
+      throw new BrainConfigError("temporal must be a mapping", "temporal", source);
     }
     const tpObj = rawTp as Record<string, unknown>;
     const partialTp: Record<string, unknown> = {};
@@ -1160,11 +1076,7 @@ export function validateBrainConfigDetailed(
       if (key in tpObj) {
         const v = tpObj[key];
         if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
-          throw new BrainConfigError(
-            "must be a positive integer",
-            `temporal.${key}`,
-            source,
-          );
+          throw new BrainConfigError("must be a positive integer", `temporal.${key}`, source);
         }
         partialTp[key] = v;
       }
@@ -1207,10 +1119,7 @@ export function validateBrainConfigDetailed(
         });
       }
     }
-    temporal =
-      Object.keys(partialTp).length > 0
-        ? (partialTp as BrainTemporalConfig)
-        : {};
+    temporal = Object.keys(partialTp).length > 0 ? (partialTp as BrainTemporalConfig) : {};
   }
 
   // Optional `health:` block (v0.14.0). Shape:
@@ -1241,23 +1150,13 @@ export function validateBrainConfigDetailed(
       partialH["contradiction_jaccard"] = v;
     }
     const positiveIntKeys: ReadonlyArray<
-      | "concept_gap_min_frequency"
-      | "stale_claim_max_age_days"
-      | "remediation_step_cap"
-    > = [
-      "concept_gap_min_frequency",
-      "stale_claim_max_age_days",
-      "remediation_step_cap",
-    ];
+      "concept_gap_min_frequency" | "stale_claim_max_age_days" | "remediation_step_cap"
+    > = ["concept_gap_min_frequency", "stale_claim_max_age_days", "remediation_step_cap"];
     for (const key of positiveIntKeys) {
       if (key in hObj) {
         const v = hObj[key];
         if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
-          throw new BrainConfigError(
-            "must be a positive integer",
-            `health.${key}`,
-            source,
-          );
+          throw new BrainConfigError("must be a positive integer", `health.${key}`, source);
         }
         partialH[key] = v;
       }
@@ -1276,8 +1175,7 @@ export function validateBrainConfigDetailed(
         });
       }
     }
-    health =
-      Object.keys(partialH).length > 0 ? (partialH as BrainHealthConfig) : {};
+    health = Object.keys(partialH).length > 0 ? (partialH as BrainHealthConfig) : {};
   }
 
   // Optional `notes:` block (v0.11.0). Shape:
@@ -1291,11 +1189,7 @@ export function validateBrainConfigDetailed(
   let notes: BrainNotesConfig | undefined;
   if ("notes" in obj) {
     const rawNotes = obj["notes"];
-    if (
-      typeof rawNotes !== "object" ||
-      rawNotes === null ||
-      Array.isArray(rawNotes)
-    ) {
+    if (typeof rawNotes !== "object" || rawNotes === null || Array.isArray(rawNotes)) {
       throw new BrainConfigError("notes must be a mapping", "notes", source);
     }
     const notesObj = rawNotes as Record<string, unknown>;
@@ -1354,10 +1248,7 @@ export function validateBrainConfigDetailed(
         });
       }
     }
-    notes =
-      Object.keys(partialNotes).length > 0
-        ? (partialNotes as BrainNotesConfig)
-        : {};
+    notes = Object.keys(partialNotes).length > 0 ? (partialNotes as BrainNotesConfig) : {};
   }
 
   // Optional `schema:` block (runtime schema-pack foundation). Shape:
@@ -1366,22 +1257,21 @@ export function validateBrainConfigDetailed(
   //     signal_types: [observation]
   //     page_types: [paper]
   //     log_event_kinds: [milestone]
+  //     aliases: [decision=choice]
+  //     prefixes: [pref=decision]
+  //     link_types: [supports]
+  //     extractable: [decision]
+  //     expert_routing: [decision=schema-author]
   // Absent block leaves cfg.schema undefined; consumers merge built-ins
   // through resolveSchemaVocabulary.
   let schema: BrainSchemaConfig | undefined;
   if ("schema" in obj) {
     const rawSchema = obj["schema"];
-    if (
-      typeof rawSchema !== "object" ||
-      rawSchema === null ||
-      Array.isArray(rawSchema)
-    ) {
+    if (typeof rawSchema !== "object" || rawSchema === null || Array.isArray(rawSchema)) {
       throw new BrainConfigError("schema must be a mapping", "schema", source);
     }
     const schemaObj = rawSchema as Record<string, unknown>;
-    const partialSchema: Partial<
-      Record<keyof BrainSchemaConfig, ReadonlyArray<string>>
-    > = {};
+    const partialSchema: Partial<Record<keyof BrainSchemaConfig, ReadonlyArray<string>>> = {};
     for (const category of SCHEMA_VOCAB_CATEGORIES) {
       if (!(category in schemaObj)) continue;
       const value = schemaObj[category];
@@ -1394,8 +1284,47 @@ export function validateBrainConfigDetailed(
       }
       partialSchema[category] = value;
     }
+    const schemaMetaKeys = [
+      "aliases",
+      "prefixes",
+      "link_types",
+      "extractable",
+      "expert_routing",
+    ] as const;
+    for (const key of schemaMetaKeys) {
+      if (!(key in schemaObj)) continue;
+      const value = schemaObj[key];
+      if (!Array.isArray(value)) {
+        throw new BrainConfigError(
+          "must be an array of schema metadata entries",
+          `schema.${key}`,
+          source,
+        );
+      }
+      partialSchema[key] = value.map((entry, index) => {
+        if (typeof entry !== "string") {
+          throw new BrainConfigError(
+            "must be a string schema metadata entry",
+            `schema.${key}[${index}]`,
+            source,
+          );
+        }
+        const trimmed = entry.trim();
+        if (trimmed.length === 0) {
+          throw new BrainConfigError(
+            "must be a non-empty schema metadata entry",
+            `schema.${key}[${index}]`,
+            source,
+          );
+        }
+        return trimmed;
+      });
+    }
     for (const key of Object.keys(schemaObj)) {
-      if (!(SCHEMA_VOCAB_CATEGORIES as ReadonlyArray<string>).includes(key)) {
+      if (
+        !(SCHEMA_VOCAB_CATEGORIES as ReadonlyArray<string>).includes(key) &&
+        !(schemaMetaKeys as ReadonlyArray<string>).includes(key)
+      ) {
         warnings.push({
           path: source ?? "<config>",
           message: `schema.${key}: unknown field ignored (forward-compat)`,
@@ -1403,7 +1332,15 @@ export function validateBrainConfigDetailed(
       }
     }
     try {
-      schema = validateSchemaDeclarations(partialSchema) as BrainSchemaConfig;
+      const declarations = validateSchemaDeclarations(partialSchema);
+      schema = {
+        ...declarations,
+        ...(partialSchema.aliases ? { aliases: partialSchema.aliases } : {}),
+        ...(partialSchema.prefixes ? { prefixes: partialSchema.prefixes } : {}),
+        ...(partialSchema.link_types ? { link_types: partialSchema.link_types } : {}),
+        ...(partialSchema.extractable ? { extractable: partialSchema.extractable } : {}),
+        ...(partialSchema.expert_routing ? { expert_routing: partialSchema.expert_routing } : {}),
+      } as BrainSchemaConfig;
     } catch (err) {
       if (err instanceof SchemaVocabularyError) {
         const detail = err.message.startsWith(`${err.field}: `)
@@ -1466,9 +1403,7 @@ export function validateBrainConfigDetailed(
     },
     ...(vault !== undefined ? { vault } : {}),
     ...(active !== undefined ? { active } : {}),
-    ...(disciplineReport !== undefined
-      ? { discipline_report: disciplineReport }
-      : {}),
+    ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
     ...(guardrails !== undefined ? { guardrails } : {}),
     ...(linkGraph !== undefined ? { link_graph: linkGraph } : {}),
     ...(temporal !== undefined ? { temporal } : {}),
@@ -1511,25 +1446,13 @@ function mergeBlock(
   return merged;
 }
 
-function requirePositiveInteger(
-  field: string,
-  value: unknown,
-  source: string | null,
-): void {
+function requirePositiveInteger(field: string, value: unknown, source: string | null): void {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new BrainConfigError(
-      `must be a positive integer; got ${describe(value)}`,
-      field,
-      source,
-    );
+    throw new BrainConfigError(`must be a positive integer; got ${describe(value)}`, field, source);
   }
 }
 
-function requireNonNegativeInteger(
-  field: string,
-  value: unknown,
-  source: string | null,
-): void {
+function requireNonNegativeInteger(field: string, value: unknown, source: string | null): void {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new BrainConfigError(
       `must be a non-negative integer; got ${describe(value)}`,
@@ -1539,22 +1462,9 @@ function requireNonNegativeInteger(
   }
 }
 
-function requireUnitInterval(
-  field: string,
-  value: unknown,
-  source: string | null,
-): void {
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    value < 0 ||
-    value > 1
-  ) {
-    throw new BrainConfigError(
-      `must be a number in [0, 1]; got ${describe(value)}`,
-      field,
-      source,
-    );
+function requireUnitInterval(field: string, value: unknown, source: string | null): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new BrainConfigError(`must be a number in [0, 1]; got ${describe(value)}`, field, source);
   }
 }
 
@@ -1606,9 +1516,7 @@ export function parseBrainYaml(text: string): ParsedBlock {
   while (i < lines.length) {
     const line = lines[i]!;
     if (line.indent !== 0) {
-      throw new Error(
-        `line ${line.lineNumber}: unexpected indentation at top level`,
-      );
+      throw new Error(`line ${line.lineNumber}: unexpected indentation at top level`);
     }
     const kv = splitKeyValue(line);
     if (kv.value === "") {
@@ -1619,11 +1527,7 @@ export function parseBrainYaml(text: string): ParsedBlock {
       const child: Record<string, ParsedScalar | ParsedScalar[]> = {};
       i++;
       const blockIndent = detectBlockIndent(lines, i);
-      while (
-        i < lines.length &&
-        lines[i]!.indent >= blockIndent &&
-        blockIndent > 0
-      ) {
+      while (i < lines.length && lines[i]!.indent >= blockIndent && blockIndent > 0) {
         const inner = lines[i]!;
         if (inner.indent !== blockIndent) {
           throw new Error(
@@ -1656,10 +1560,7 @@ export function parseBrainYaml(text: string): ParsedBlock {
                   `(expected ${listIndent} spaces, got ${listLine.indent})`,
               );
             }
-            if (
-              !listLine.content.startsWith("- ") &&
-              listLine.content !== "-"
-            ) {
+            if (!listLine.content.startsWith("- ") && listLine.content !== "-") {
               // If it looks like a `key: value` pair, it's a deeper block — not
               // supported. Preserve the original error message so existing tests
               // that assert on the wording keep passing.
@@ -1732,8 +1633,7 @@ function splitLines(text: string): Line[] {
     let content = stripped;
     if (!/['"]/.test(stripped)) {
       const hashIdx = stripped.indexOf(" #");
-      if (hashIdx >= 0)
-        content = stripped.slice(0, hashIdx).replace(/\s+$/, "");
+      if (hashIdx >= 0) content = stripped.slice(0, hashIdx).replace(/\s+$/, "");
     }
     const indent = content.length - content.trimStart().length;
     out.push({
@@ -1760,9 +1660,7 @@ function splitKeyValue(line: Line): KeyValue {
   }
   const key = line.content.slice(0, idx).trim();
   if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)) {
-    throw new Error(
-      `line ${line.lineNumber}: invalid key name: ${JSON.stringify(key)}`,
-    );
+    throw new Error(`line ${line.lineNumber}: invalid key name: ${JSON.stringify(key)}`);
   }
   const value = line.content.slice(idx + 1).trim();
   return { key, value };
@@ -1775,17 +1673,13 @@ function detectBlockIndent(lines: Line[], cursor: number): number {
   return first.indent;
 }
 
-function parseScalar(
-  text: string,
-  lineNumber: number,
-): ParsedScalar | ParsedScalar[] {
+function parseScalar(text: string, lineNumber: number): ParsedScalar | ParsedScalar[] {
   if (text.startsWith("[") && text.endsWith("]")) {
     return parseInlineArray(text.slice(1, -1), lineNumber);
   }
   if (
     text.length >= 2 &&
-    ((text.startsWith('"') && text.endsWith('"')) ||
-      (text.startsWith("'") && text.endsWith("'")))
+    ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'")))
   ) {
     return text.slice(1, -1);
   }
@@ -1807,10 +1701,7 @@ function parseScalar(
   return text;
 }
 
-function parseInlineArray(
-  innerRaw: string,
-  lineNumber: number,
-): ParsedScalar[] {
+function parseInlineArray(innerRaw: string, lineNumber: number): ParsedScalar[] {
   const inner = innerRaw.trim();
   if (inner === "") return [];
 
@@ -1843,9 +1734,7 @@ function parseInlineArray(
     current += ch;
   }
   if (inQuote) {
-    throw new Error(
-      `line ${lineNumber}: unterminated quoted string in inline array`,
-    );
+    throw new Error(`line ${lineNumber}: unterminated quoted string in inline array`);
   }
   out.push(parseInlineArrayItem(current, lineNumber));
   return out;
@@ -1858,9 +1747,7 @@ function parseInlineArrayItem(text: string, lineNumber: number): ParsedScalar {
   }
   const parsed = parseScalar(trimmed, lineNumber);
   if (Array.isArray(parsed)) {
-    throw new Error(
-      `line ${lineNumber}: nested inline arrays are not supported`,
-    );
+    throw new Error(`line ${lineNumber}: nested inline arrays are not supported`);
   }
   return parsed;
 }
