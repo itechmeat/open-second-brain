@@ -22,8 +22,7 @@ export const BRAIN_SIGNAL_SIGN = {
   positive: "positive",
   negative: "negative",
 } as const;
-export type BrainSignalSign =
-  (typeof BRAIN_SIGNAL_SIGN)[keyof typeof BRAIN_SIGNAL_SIGN];
+export type BrainSignalSign = (typeof BRAIN_SIGNAL_SIGN)[keyof typeof BRAIN_SIGNAL_SIGN];
 
 /**
  * Where the signal came from (§9 / §16 capture extensions). Absent
@@ -48,12 +47,9 @@ const BRAIN_SIGNAL_SOURCE_TYPE_VALUES: ReadonlyArray<BrainSignalSourceType> =
   Object.values(BRAIN_SIGNAL_SOURCE_TYPE);
 
 /** Type-guard for the enum union — used by writer + parser. */
-export function isBrainSignalSourceType(
-  v: unknown,
-): v is BrainSignalSourceType {
+export function isBrainSignalSourceType(v: unknown): v is BrainSignalSourceType {
   return (
-    typeof v === "string" &&
-    (BRAIN_SIGNAL_SOURCE_TYPE_VALUES as ReadonlyArray<string>).includes(v)
+    typeof v === "string" && (BRAIN_SIGNAL_SOURCE_TYPE_VALUES as ReadonlyArray<string>).includes(v)
   );
 }
 
@@ -78,8 +74,7 @@ export const BRAIN_CONFIDENCE = {
   medium: "medium",
   high: "high",
 } as const;
-export type BrainConfidence =
-  (typeof BRAIN_CONFIDENCE)[keyof typeof BRAIN_CONFIDENCE];
+export type BrainConfidence = (typeof BRAIN_CONFIDENCE)[keyof typeof BRAIN_CONFIDENCE];
 
 export const BRAIN_MEMORY_LAYER = {
   L0: "L0",
@@ -87,17 +82,13 @@ export const BRAIN_MEMORY_LAYER = {
   L2: "L2",
   L3: "L3",
 } as const;
-export type BrainMemoryLayer =
-  (typeof BRAIN_MEMORY_LAYER)[keyof typeof BRAIN_MEMORY_LAYER];
+export type BrainMemoryLayer = (typeof BRAIN_MEMORY_LAYER)[keyof typeof BRAIN_MEMORY_LAYER];
 
 const BRAIN_MEMORY_LAYER_VALUES: ReadonlyArray<BrainMemoryLayer> =
   Object.values(BRAIN_MEMORY_LAYER);
 
 export function isBrainMemoryLayer(value: unknown): value is BrainMemoryLayer {
-  return (
-    typeof value === "string" &&
-    BRAIN_MEMORY_LAYER_VALUES.includes(value as BrainMemoryLayer)
-  );
+  return typeof value === "string" && BRAIN_MEMORY_LAYER_VALUES.includes(value as BrainMemoryLayer);
 }
 
 export const BRAIN_RETIRED_REASON = {
@@ -123,8 +114,7 @@ export const BRAIN_RETIRED_REASON = {
   // no contradiction, the two rules said the same thing.
   mergedInto: "merged-into",
 } as const;
-export type BrainRetiredReason =
-  (typeof BRAIN_RETIRED_REASON)[keyof typeof BRAIN_RETIRED_REASON];
+export type BrainRetiredReason = (typeof BRAIN_RETIRED_REASON)[keyof typeof BRAIN_RETIRED_REASON];
 
 export const BRAIN_APPLY_RESULT = {
   applied: "applied",
@@ -137,8 +127,7 @@ export const BRAIN_APPLY_RESULT = {
   // `retain-pinned` log entry instead.
   outdated: "outdated",
 } as const;
-export type BrainApplyResult =
-  (typeof BRAIN_APPLY_RESULT)[keyof typeof BRAIN_APPLY_RESULT];
+export type BrainApplyResult = (typeof BRAIN_APPLY_RESULT)[keyof typeof BRAIN_APPLY_RESULT];
 
 /**
  * All possible log event types. `dream` summarises a run; `feedback`
@@ -221,8 +210,7 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   reconcile: "reconcile",
 } as const;
-export type BrainLogEventKind =
-  (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
+export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
 /**
  * Precomputed set of every event-kind string. Both the markdown
@@ -295,8 +283,7 @@ export const RECONCILE_DOMAIN = {
   /** Resolvable by recency: one side is materially fresher. */
   sourceFreshness: "source-freshness",
 } as const;
-export type ReconcileDomain =
-  (typeof RECONCILE_DOMAIN)[keyof typeof RECONCILE_DOMAIN];
+export type ReconcileDomain = (typeof RECONCILE_DOMAIN)[keyof typeof RECONCILE_DOMAIN];
 
 /**
  * An unresolved contradiction the reconcile phase surfaced for operator
@@ -660,9 +647,7 @@ export interface BrainSkipCorruptedLogEvent extends BrainLogEventBase {
 
 /** `pin` / `unpin` entry — protected-set change. */
 export interface BrainPinLogEvent extends BrainLogEventBase {
-  readonly kind:
-    | typeof BRAIN_LOG_EVENT_KIND.pin
-    | typeof BRAIN_LOG_EVENT_KIND.unpin;
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.pin | typeof BRAIN_LOG_EVENT_KIND.unpin;
   readonly preference: string;
 }
 
@@ -913,6 +898,11 @@ export interface BrainSchemaConfig {
   readonly signal_types?: ReadonlyArray<string>;
   readonly page_types?: ReadonlyArray<string>;
   readonly log_event_kinds?: ReadonlyArray<string>;
+  readonly aliases?: ReadonlyArray<string>;
+  readonly prefixes?: ReadonlyArray<string>;
+  readonly link_types?: ReadonlyArray<string>;
+  readonly extractable?: ReadonlyArray<string>;
+  readonly expert_routing?: ReadonlyArray<string>;
 }
 
 /**

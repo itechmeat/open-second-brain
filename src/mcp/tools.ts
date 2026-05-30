@@ -12,6 +12,8 @@
  *     (`BRAIN_TOOLS`).
  *   - Brain Search (`brain_search`) — `./search-tools.ts`
  *     (`SEARCH_TOOLS`).
+ *   - Brain schema administration (`schema_*`) — `./schema-tools.ts`
+ *     (`SCHEMA_TOOLS`).
  *   - Pay Memory tools (`payment_*`, `asset_capture`) —
  *     `./pay-memory-tools.ts` (`PAY_MEMORY_TOOLS`).
  *
@@ -23,17 +25,12 @@ import { discoverConfig, redactMapping } from "../core/config.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { isDir } from "../core/fs-utils.ts";
-import {
-  resolveVaultScope,
-  walkVaultScope,
-} from "../core/vault-scope/index.ts";
+import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
+import { SCHEMA_TOOLS } from "./schema-tools.ts";
 import { PAY_MEMORY_TOOLS } from "./pay-memory-tools.ts";
-import {
-  normalizeAgentArgument,
-  PLACEHOLDER_AGENT_VALUES,
-} from "../core/agent-identity.ts";
+import { normalizeAgentArgument, PLACEHOLDER_AGENT_VALUES } from "../core/agent-identity.ts";
 import { vaultRelative } from "../core/path-safety.ts";
 import { listVaultPages } from "../core/vault.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
@@ -99,9 +96,7 @@ function vaultRelpath(target: string, vault: string): string {
 
 // ── Tool implementations ────────────────────────────────────────────────────
 
-async function toolStatus(
-  ctx: ServerContext,
-): Promise<Record<string, unknown>> {
+async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> {
   const discovery = discoverConfig(ctx.configPath ?? undefined);
   const vaultExists = isDir(ctx.vault);
   const configKeys = Object.keys(discovery.data).toSorted();
@@ -109,8 +104,7 @@ async function toolStatus(
   // `present: false` with zero counts.
   const brain = vaultExists ? computeBrainStatus(ctx.vault) : null;
   const searchDisabled = discovery.data["search_enabled"] === "false";
-  const search =
-    vaultExists && !searchDisabled ? await buildSearchStatusBlock(ctx) : null;
+  const search = vaultExists && !searchDisabled ? await buildSearchStatusBlock(ctx) : null;
   // v0.10.9 — `vault` block exposes the shared exclusion policy plus
   // aggregate include/exclude counts. Per-path detail lives in the CLI
   // (`o2b vault status`); MCP payloads stay small.
@@ -331,15 +325,13 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         properties: {
           pattern: {
             type: "string",
-            description:
-              "Optional case-insensitive substring matched against page titles.",
+            description: "Optional case-insensitive substring matched against page titles.",
           },
           limit: {
             type: "integer",
             minimum: 1,
             maximum: 500,
-            description:
-              "Maximum number of matched pages to return (default 50).",
+            description: "Maximum number of matched pages to return (default 50).",
           },
         },
         additionalProperties: false,
@@ -360,8 +352,7 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description:
-              "Optional repository root to validate plugin manifests.",
+            description: "Optional repository root to validate plugin manifests.",
           },
         },
         additionalProperties: false,
@@ -377,8 +368,7 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         properties: {
           artifact_id: {
             type: "string",
-            description:
-              "The artifact_id returned in a preview-truncated tool result envelope.",
+            description: "The artifact_id returned in a preview-truncated tool result envelope.",
           },
         },
         required: ["artifact_id"],
@@ -387,16 +377,14 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
       outputSchema: ARTIFACT_GET_OUTPUT_SCHEMA,
       handler: toolArtifactGet,
     },
+    ...SCHEMA_TOOLS,
     ...PAY_MEMORY_TOOLS,
   ];
   if (scope === "full") return all;
   return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));
 }
 
-export function findTool(
-  tools: ReadonlyArray<ToolDefinition>,
-  name: string,
-): ToolDefinition {
+export function findTool(tools: ReadonlyArray<ToolDefinition>, name: string): ToolDefinition {
   const tool = tools.find((t) => t.name === name);
   if (!tool) throw new MCPError(METHOD_NOT_FOUND, `unknown tool: ${name}`);
   return tool;
