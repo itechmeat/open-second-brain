@@ -60,6 +60,10 @@ import { MCPServer } from "../mcp/server.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
+import {
+  evaluateToolCapabilities,
+  type RuntimeCapabilityWindow,
+} from "../mcp/capabilities.ts";
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
 
@@ -89,7 +93,9 @@ async function cmdStatus(argv: string[]): Promise<number> {
     process.stdout.write(JSON.stringify(output, sortedReplacer, 2) + "\n");
   } else {
     process.stdout.write(`config_path: ${result.path}\n`);
-    process.stdout.write(`config_exists: ${result.exists ? "true" : "false"}\n`);
+    process.stdout.write(
+      `config_exists: ${result.exists ? "true" : "false"}\n`,
+    );
     if (Object.keys(result.data).length > 0) {
       process.stdout.write("config_keys:\n");
       for (const key of Object.keys(result.data).toSorted()) {
@@ -175,7 +181,9 @@ async function cmdInit(argv: string[]): Promise<number> {
  */
 function writeSearchInitBlock(configPath: string): void {
   process.stdout.write("\nSearch:\n");
-  process.stdout.write("  next: o2b search index   # build the vault search index\n");
+  process.stdout.write(
+    "  next: o2b search index   # build the vault search index\n",
+  );
 
   const data = discoverConfig(configPath).data;
   // v0.10.10 — share the truthy / key-present logic with `o2b status`
@@ -186,7 +194,11 @@ function writeSearchInitBlock(configPath: string): void {
   // Skip the embedding-key prompt when search is explicitly disabled
   // (no point onboarding semantic when the whole layer is off), the
   // semantic flag is off, or the key is already present.
-  if (semantic.search_disabled || !semantic.semantic_enabled || semantic.embedding_key_present) {
+  if (
+    semantic.search_disabled ||
+    !semantic.semantic_enabled ||
+    semantic.embedding_key_present
+  ) {
     return;
   }
 
@@ -233,7 +245,9 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       repoRoot: (flags["repo"] as string | undefined) ?? null,
     });
   } catch (exc) {
-    process.stderr.write(`error: doctor failed: ${(exc as Error).message ?? exc}\n`);
+    process.stderr.write(
+      `error: doctor failed: ${(exc as Error).message ?? exc}\n`,
+    );
     return 1;
   }
   let allOk = true;
@@ -258,9 +272,15 @@ async function cmdExportConfig(argv: string[]): Promise<number> {
   const output = String(flags["output"]);
   try {
     mkdirSync(resolve(output, ".."), { recursive: true });
-    writeFileSync(output, JSON.stringify(snapshot, sortedReplacer, 2) + "\n", "utf8");
+    writeFileSync(
+      output,
+      JSON.stringify(snapshot, sortedReplacer, 2) + "\n",
+      "utf8",
+    );
   } catch (exc) {
-    process.stderr.write(`error: failed to export config: ${(exc as Error).message ?? exc}\n`);
+    process.stderr.write(
+      `error: failed to export config: ${(exc as Error).message ?? exc}\n`,
+    );
     return 1;
   }
   process.stdout.write(`exported: ${output}\n`);
@@ -269,12 +289,17 @@ async function cmdExportConfig(argv: string[]): Promise<number> {
 
 async function cmdIndex(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, { vault: { type: "string" } });
-  const vault = requireVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = requireVault(
+    flags["vault"] as string | undefined,
+    defaultConfigPath(),
+  );
   let pages;
   try {
     pages = listVaultPages(vault);
   } catch (exc) {
-    process.stderr.write(`error: failed to list vault pages: ${(exc as Error).message ?? exc}\n`);
+    process.stderr.write(
+      `error: failed to list vault pages: ${(exc as Error).message ?? exc}\n`,
+    );
     return 1;
   }
   if (pages.length === 0) {
@@ -288,17 +313,27 @@ async function cmdIndex(argv: string[]): Promise<number> {
     "",
   ];
   for (const p of pages) {
-    const rel = p.path.startsWith(vault) ? p.path.slice(vault.length).replace(/^\/+/, "") : p.path;
+    const rel = p.path.startsWith(vault)
+      ? p.path.slice(vault.length).replace(/^\/+/, "")
+      : p.path;
     lines.push(`- [[${p.title}]]  \`${rel}\``);
   }
   const indexPath = resolve(vault, BRAIN_INDEX_REL);
   try {
-    writeFrontmatter(indexPath, { title: "Index", type: "index" }, lines.join("\n"));
+    writeFrontmatter(
+      indexPath,
+      { title: "Index", type: "index" },
+      lines.join("\n"),
+    );
   } catch (exc) {
-    process.stderr.write(`error: failed to write index: ${(exc as Error).message ?? exc}\n`);
+    process.stderr.write(
+      `error: failed to write index: ${(exc as Error).message ?? exc}\n`,
+    );
     return 1;
   }
-  process.stdout.write(`index regenerated: ${indexPath} (${pages.length} pages)\n`);
+  process.stdout.write(
+    `index regenerated: ${indexPath} (${pages.length} pages)\n`,
+  );
   return 0;
 }
 
@@ -310,6 +345,10 @@ async function cmdMcp(argv: string[]): Promise<number> {
     scope: { type: "string" },
     "writer-only": { type: "boolean" },
     probe: { type: "boolean" },
+    json: { type: "boolean" },
+    "allow-tool": { type: "string-array" },
+    "disable-tool": { type: "string-array" },
+    "max-tools": { type: "string" },
   });
 
   // `--writer-only` is an alias for `--scope writer`. The two flags
@@ -318,7 +357,8 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // contradictory pair (e.g. `--scope full --writer-only`) is
   // rejected to avoid silent surprises.
   const writerOnly = Boolean(flags["writer-only"]);
-  const rawScope = (flags["scope"] as string | undefined) ?? (writerOnly ? "writer" : "full");
+  const rawScope =
+    (flags["scope"] as string | undefined) ?? (writerOnly ? "writer" : "full");
   if (rawScope !== "full" && rawScope !== "writer") {
     process.stderr.write(
       `o2b mcp: invalid --scope value: ${rawScope}; expected one of: full, writer\n`,
@@ -326,11 +366,15 @@ async function cmdMcp(argv: string[]): Promise<number> {
     return 2;
   }
   if (writerOnly && rawScope !== "writer") {
-    process.stderr.write(`o2b mcp: --writer-only conflicts with --scope ${rawScope}\n`);
+    process.stderr.write(
+      `o2b mcp: --writer-only conflicts with --scope ${rawScope}\n`,
+    );
     return 2;
   }
   const scope = rawScope;
-  const serverName = scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
+  const serverName =
+    scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
+  const capabilityWindow = parseCapabilityWindow(flags);
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
 
@@ -340,6 +384,8 @@ async function cmdMcp(argv: string[]): Promise<number> {
       config,
       scope,
       serverName,
+      json: Boolean(flags["json"]),
+      capabilityWindow,
     });
   }
 
@@ -349,7 +395,34 @@ async function cmdMcp(argv: string[]): Promise<number> {
   process.stderr.write(
     `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
   );
-  return await serveStdio({ vault, configPath: config, repoRoot }, {}, { scope, serverName });
+  return await serveStdio(
+    { vault, configPath: config, repoRoot },
+    {},
+    { scope, serverName, capabilityWindow },
+  );
+}
+
+function parseCapabilityWindow(
+  flags: Record<string, string | boolean | string[] | undefined>,
+): RuntimeCapabilityWindow | undefined {
+  const allowedTools = flags["allow-tool"] as string[] | undefined;
+  const disabledTools = flags["disable-tool"] as string[] | undefined;
+  const rawMaxTools = flags["max-tools"] as string | undefined;
+  let maxTools: number | undefined;
+  if (rawMaxTools !== undefined) {
+    const parsed = Number(rawMaxTools);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw new CliError("--max-tools must be a positive integer");
+    }
+    maxTools = parsed;
+  }
+  if (!allowedTools && !disabledTools && maxTools === undefined)
+    return undefined;
+  return {
+    ...(allowedTools ? { allowedTools } : {}),
+    ...(disabledTools ? { disabledTools } : {}),
+    ...(maxTools !== undefined ? { maxTools } : {}),
+  };
 }
 
 async function runMcpProbe(args: {
@@ -357,6 +430,8 @@ async function runMcpProbe(args: {
   config: string;
   scope: "full" | "writer";
   serverName: string;
+  json: boolean;
+  capabilityWindow: RuntimeCapabilityWindow | undefined;
 }): Promise<number> {
   // The probe is an in-process MCP handshake: it counts the tools the
   // server would advertise and exits. Used by `o2b install --check`
@@ -365,11 +440,33 @@ async function runMcpProbe(args: {
   try {
     vault = requireVault(args.vault, args.config);
   } catch (e) {
-    process.stdout.write(`mcp probe FAIL: vault not configured (${(e as Error).message})\n`);
+    process.stdout.write(
+      `mcp probe FAIL: vault not configured (${(e as Error).message})\n`,
+    );
     return 1;
   }
   try {
-    const tools = buildToolTable(args.scope);
+    const evaluated = evaluateToolCapabilities(buildToolTable(args.scope), {
+      scope: args.scope,
+      serverName: args.serverName,
+      window: args.capabilityWindow,
+    });
+    if (args.json) {
+      process.stdout.write(
+        JSON.stringify(
+          {
+            ok: true,
+            server_name: args.serverName,
+            vault,
+            capabilities: evaluated.report,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      return 0;
+    }
+    const tools = evaluated.tools;
     process.stdout.write(
       `mcp probe ok: ${args.serverName} (${tools.length} tools, vault=${vault})\n`,
     );
@@ -434,7 +531,9 @@ async function cmdToolCall(argv: string[]): Promise<number> {
     if (eq === -1) {
       // Argument-shape error: align with the dispatcher convention
       // (CliError → exit 2). Tool execution failures keep using exit 1.
-      process.stderr.write(`error: --tool-arg must be key=value, got: ${pair}\n`);
+      process.stderr.write(
+        `error: --tool-arg must be key=value, got: ${pair}\n`,
+      );
       return 2;
     }
     const k = pair.slice(0, eq);
@@ -530,7 +629,9 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
     command !== "brain" &&
     command !== "vault"
   ) {
-    process.stdout.write(`${command}: see https://github.com/itechmeat/open-second-brain\n`);
+    process.stdout.write(
+      `${command}: see https://github.com/itechmeat/open-second-brain\n`,
+    );
     if (command === "uninstall") {
       process.stdout.write(
         "Read-only by default. Prints the Hermes commands you must run yourself " +
