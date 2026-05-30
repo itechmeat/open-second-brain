@@ -898,6 +898,18 @@ export interface BrainGuardrailConfig {
 }
 
 /**
+ * Optional runtime schema vocabulary declarations (v0.25.0 foundation).
+ * These are taxonomy tokens, not replacements for operational lifecycle
+ * states such as `preference.status` or `apply-evidence` results.
+ */
+export interface BrainSchemaConfig {
+  readonly preference_types?: ReadonlyArray<string>;
+  readonly signal_types?: ReadonlyArray<string>;
+  readonly page_types?: ReadonlyArray<string>;
+  readonly log_event_kinds?: ReadonlyArray<string>;
+}
+
+/**
  * Root of `Brain/_brain.yaml`. `schema_version` is mandatory; unknown
  * top-level keys are tolerated as forward-compat (logged as a warning by
  * the validator, not an error).
@@ -970,6 +982,11 @@ export interface BrainConfig {
    * to `BRAIN_HEALTH_DEFAULTS` via `resolveHealth`.
    */
   readonly health?: BrainHealthConfig;
+  /**
+   * Optional runtime schema vocabulary declarations. Absent by default;
+   * consumers resolve built-ins through `resolveSchemaVocabulary`.
+   */
+  readonly schema?: BrainSchemaConfig;
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   validateBrainConfig,
   validateBrainConfigDetailed,
 } from "../../src/core/brain/policy.ts";
+import { resolveSchemaVocabulary } from "../../src/core/brain/schema-vocab.ts";
 
 let tmp: string;
 
@@ -67,7 +68,10 @@ describe("DEFAULT_BRAIN_CONFIG", () => {
 
 describe("validateBrainConfig — happy path", () => {
   test("accepts the default config", () => {
-    const config = validateBrainConfig(JSON.parse(JSON.stringify(DEFAULT_BRAIN_CONFIG)), "<test>");
+    const config = validateBrainConfig(
+      JSON.parse(JSON.stringify(DEFAULT_BRAIN_CONFIG)),
+      "<test>",
+    );
     expect(config.schema_version).toBe(1);
     expect(config.snapshots.retention_count).toBe(10);
   });
@@ -94,6 +98,70 @@ describe("validateBrainConfig — happy path", () => {
   });
 });
 
+describe("validateBrainConfig — schema block", () => {
+  test("absent schema block keeps the default config unchanged", () => {
+    expect(DEFAULT_BRAIN_CONFIG).not.toHaveProperty("schema");
+
+    const cfg = validateBrainConfig({ schema_version: 1 }, "<test>");
+    expect(cfg.schema).toBeUndefined();
+    expect(resolveSchemaVocabulary(cfg.schema).preference_types).toEqual([
+      "preference",
+    ]);
+  });
+
+  test("accepts inline array declarations and resolves them through schema vocabulary", () => {
+    const cfg = validateBrainConfig(
+      parseBrainYaml(
+        [
+          "schema_version: 1",
+          "schema:",
+          "  preference_types: [research, decision]",
+          "  signal_types: [observation]",
+          "  page_types: [paper, researcher]",
+          "  log_event_kinds: [milestone]",
+        ].join("\n"),
+      ),
+      "<schema>",
+    );
+
+    expect(cfg.schema?.preference_types).toEqual(["research", "decision"]);
+    const vocab = resolveSchemaVocabulary(cfg.schema);
+    expect(vocab.preference_types).toEqual([
+      "preference",
+      "research",
+      "decision",
+    ]);
+    expect(vocab.signal_types).toEqual(["feedback", "observation"]);
+    expect(vocab.page_types).toEqual(["note", "paper", "researcher"]);
+    expect(vocab.log_event_kinds).toContain("milestone");
+  });
+
+  test("rejects invalid schema tokens with a field-named error", () => {
+    expect(() =>
+      validateBrainConfig(
+        parseBrainYaml(
+          "schema_version: 1\nschema:\n  preference_types: [research, ../escape]\n",
+        ),
+        "<schema>",
+      ),
+    ).toThrow(/schema\.preference_types\[1\]/);
+  });
+
+  test("unknown schema subkeys warn without failing validation", () => {
+    const result = validateBrainConfigDetailed(
+      parseBrainYaml(
+        "schema_version: 1\nschema:\n  preference_types: [research]\n  routing_hints: [later]\n",
+      ),
+      "<schema>",
+    );
+
+    expect(result.config.schema?.preference_types).toEqual(["research"]);
+    expect(result.warnings.map((warning) => warning.message)).toContain(
+      "schema.routing_hints: unknown field ignored (forward-compat)",
+    );
+  });
+});
+
 describe("validateBrainConfig — primary_agent", () => {
   test("absent → null (default)", () => {
     const cfg = validateBrainConfig({ schema_version: 1 }, "<test>");
@@ -101,7 +169,10 @@ describe("validateBrainConfig — primary_agent", () => {
   });
 
   test("explicit null is accepted", () => {
-    const cfg = validateBrainConfig({ schema_version: 1, primary_agent: null }, "<test>");
+    const cfg = validateBrainConfig(
+      { schema_version: 1, primary_agent: null },
+      "<test>",
+    );
     expect(cfg.primary_agent).toBeNull();
   });
 
@@ -125,14 +196,17 @@ describe("validateBrainConfig — primary_agent", () => {
 
   test("whitespace-only string rejected", () => {
     expect(() =>
-      validateBrainConfig({ schema_version: 1, primary_agent: "   " }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, primary_agent: "   " },
+        "<test>",
+      ),
     ).toThrow(/primary_agent/);
   });
 
   test("non-string non-null rejected", () => {
-    expect(() => validateBrainConfig({ schema_version: 1, primary_agent: 42 }, "<test>")).toThrow(
-      /primary_agent/,
-    );
+    expect(() =>
+      validateBrainConfig({ schema_version: 1, primary_agent: 42 }, "<test>"),
+    ).toThrow(/primary_agent/);
   });
 });
 
@@ -147,10 +221,18 @@ describe("formatPrimaryAgentYamlValue", () => {
   });
 
   test("rejects values that would need escaping in the tiny YAML parser", () => {
-    expect(() => formatPrimaryAgentYamlValue("agent\nnext")).toThrow(/disallowed character/);
-    expect(() => formatPrimaryAgentYamlValue("agent\rnext")).toThrow(/disallowed character/);
-    expect(() => formatPrimaryAgentYamlValue("agent\\path")).toThrow(/disallowed character/);
-    expect(() => formatPrimaryAgentYamlValue('agent "quoted"')).toThrow(/disallowed character/);
+    expect(() => formatPrimaryAgentYamlValue("agent\nnext")).toThrow(
+      /disallowed character/,
+    );
+    expect(() => formatPrimaryAgentYamlValue("agent\rnext")).toThrow(
+      /disallowed character/,
+    );
+    expect(() => formatPrimaryAgentYamlValue("agent\\path")).toThrow(
+      /disallowed character/,
+    );
+    expect(() => formatPrimaryAgentYamlValue('agent "quoted"')).toThrow(
+      /disallowed character/,
+    );
   });
 });
 
@@ -166,17 +248,26 @@ describe("validateBrainConfig — error cases", () => {
   });
 
   test("unsupported schema_version → error", () => {
-    expect(() => validateBrainConfig({ schema_version: 99 }, "<test>")).toThrow(/schema_version/);
+    expect(() => validateBrainConfig({ schema_version: 99 }, "<test>")).toThrow(
+      /schema_version/,
+    );
   });
 
   test("non-integer schema_version → error", () => {
-    expect(() => validateBrainConfig({ schema_version: "1" }, "<test>")).toThrow(/schema_version/);
-    expect(() => validateBrainConfig({ schema_version: 1.5 }, "<test>")).toThrow(/schema_version/);
+    expect(() =>
+      validateBrainConfig({ schema_version: "1" }, "<test>"),
+    ).toThrow(/schema_version/);
+    expect(() =>
+      validateBrainConfig({ schema_version: 1.5 }, "<test>"),
+    ).toThrow(/schema_version/);
   });
 
   test("negative threshold → error naming the field", () => {
     try {
-      validateBrainConfig({ schema_version: 1, dream: { candidate_threshold: -1 } }, "<test>");
+      validateBrainConfig(
+        { schema_version: 1, dream: { candidate_threshold: -1 } },
+        "<test>",
+      );
       throw new Error("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(BrainConfigError);
@@ -186,25 +277,40 @@ describe("validateBrainConfig — error cases", () => {
 
   test("non-integer threshold → error", () => {
     expect(() =>
-      validateBrainConfig({ schema_version: 1, dream: { candidate_threshold: 3.5 } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, dream: { candidate_threshold: 3.5 } },
+        "<test>",
+      ),
     ).toThrow(/positive integer/);
   });
 
   test("zero candidate_threshold → error (must be positive)", () => {
     expect(() =>
-      validateBrainConfig({ schema_version: 1, dream: { candidate_threshold: 0 } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, dream: { candidate_threshold: 0 } },
+        "<test>",
+      ),
     ).toThrow(/positive integer/);
   });
 
   test("snapshots.retention_count must be positive integer", () => {
     expect(() =>
-      validateBrainConfig({ schema_version: 1, snapshots: { retention_count: 0 } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, snapshots: { retention_count: 0 } },
+        "<test>",
+      ),
     ).toThrow(/positive integer/);
     expect(() =>
-      validateBrainConfig({ schema_version: 1, snapshots: { retention_count: -5 } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, snapshots: { retention_count: -5 } },
+        "<test>",
+      ),
     ).toThrow(/positive integer/);
     expect(() =>
-      validateBrainConfig({ schema_version: 1, snapshots: { retention_count: 1.5 } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, snapshots: { retention_count: 1.5 } },
+        "<test>",
+      ),
     ).toThrow(/positive integer/);
   });
 
@@ -215,7 +321,9 @@ describe("validateBrainConfig — error cases", () => {
   });
 
   test("non-object block → error", () => {
-    expect(() => validateBrainConfig({ schema_version: 1, dream: 5 }, "<test>")).toThrow(/dream/);
+    expect(() =>
+      validateBrainConfig({ schema_version: 1, dream: 5 }, "<test>"),
+    ).toThrow(/dream/);
   });
 
   test("confidence.low_max_applied = 0 is allowed (non-negative)", () => {
@@ -234,8 +342,12 @@ describe("validateBrainConfig — warnings (forward-compat)", () => {
       "<test>",
     );
     expect(result.warnings.length).toBe(2);
-    expect(result.warnings.map((w) => w.message).join("\n")).toContain("future_field");
-    expect(result.warnings.map((w) => w.message).join("\n")).toContain("another");
+    expect(result.warnings.map((w) => w.message).join("\n")).toContain(
+      "future_field",
+    );
+    expect(result.warnings.map((w) => w.message).join("\n")).toContain(
+      "another",
+    );
     expect(result.config.schema_version).toBe(1);
   });
 
@@ -269,11 +381,18 @@ describe("validateBrainConfig — vault block (v0.10.9)", () => {
       },
       "<test>",
     );
-    expect(cfg.vault?.ignore_paths).toEqual([".git", "node_modules", "Brain/.snapshots"]);
+    expect(cfg.vault?.ignore_paths).toEqual([
+      ".git",
+      "node_modules",
+      "Brain/.snapshots",
+    ]);
   });
 
   test("vault.ignore_paths empty array honoured as explicit empty", () => {
-    const cfg = validateBrainConfig({ schema_version: 1, vault: { ignore_paths: [] } }, "<test>");
+    const cfg = validateBrainConfig(
+      { schema_version: 1, vault: { ignore_paths: [] } },
+      "<test>",
+    );
     expect(cfg.vault?.ignore_paths).toEqual([]);
   });
 
@@ -286,30 +405,44 @@ describe("validateBrainConfig — vault block (v0.10.9)", () => {
   });
 
   test("vault block not a map → BrainConfigError naming the field", () => {
-    expect(() => validateBrainConfig({ schema_version: 1, vault: 5 }, "<test>")).toThrow(/vault/);
+    expect(() =>
+      validateBrainConfig({ schema_version: 1, vault: 5 }, "<test>"),
+    ).toThrow(/vault/);
   });
 
   test("vault.ignore_paths not an array → BrainConfigError", () => {
     expect(() =>
-      validateBrainConfig({ schema_version: 1, vault: { ignore_paths: "not-a-list" } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: "not-a-list" } },
+        "<test>",
+      ),
     ).toThrow(/vault\.ignore_paths/);
   });
 
   test("non-string entry → BrainConfigError naming the index", () => {
     expect(() =>
-      validateBrainConfig({ schema_version: 1, vault: { ignore_paths: [".git", 42] } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: [".git", 42] } },
+        "<test>",
+      ),
     ).toThrow(/vault\.ignore_paths\[1\]/);
   });
 
   test("empty-string entry rejected", () => {
     expect(() =>
-      validateBrainConfig({ schema_version: 1, vault: { ignore_paths: ["   "] } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["   "] } },
+        "<test>",
+      ),
     ).toThrow(/non-empty/);
   });
 
   test("entry with newline is rejected", () => {
     expect(() =>
-      validateBrainConfig({ schema_version: 1, vault: { ignore_paths: ["bad\nentry"] } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["bad\nentry"] } },
+        "<test>",
+      ),
     ).toThrow(/vault\.ignore_paths\[0\]/);
   });
 
@@ -322,7 +455,9 @@ describe("validateBrainConfig — vault block (v0.10.9)", () => {
       "<test>",
     );
     expect(result.config.vault?.ignore_paths).toEqual([".git"]);
-    expect(result.warnings.some((w) => w.message.includes("unknown_extra"))).toBe(true);
+    expect(
+      result.warnings.some((w) => w.message.includes("unknown_extra")),
+    ).toBe(true);
   });
 
   test("DEFAULT_BRAIN_CONFIG_YAML parses with the vault block populated", () => {
@@ -350,10 +485,16 @@ describe("validateBrainConfig — vault block (v0.10.9)", () => {
 
   test("entry that normalises to empty (e.g. './' / '/') is rejected", () => {
     expect(() =>
-      validateBrainConfig({ schema_version: 1, vault: { ignore_paths: ["./"] } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["./"] } },
+        "<test>",
+      ),
     ).toThrow(/vault\.ignore_paths\[0\].*empty/);
     expect(() =>
-      validateBrainConfig({ schema_version: 1, vault: { ignore_paths: ["///"] } }, "<test>"),
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["///"] } },
+        "<test>",
+      ),
     ).toThrow(/vault\.ignore_paths\[0\].*empty/);
   });
 
@@ -432,10 +573,9 @@ describe("parseBrainYaml", () => {
     const parsed = parseBrainYaml(
       `schema_version: 1\nvault:\n  ignore_paths: [Drafts, "Drafts/cache"]\n`,
     );
-    expect((parsed["vault"] as { ignore_paths: unknown }).ignore_paths).toEqual([
-      "Drafts",
-      "Drafts/cache",
-    ]);
+    expect((parsed["vault"] as { ignore_paths: unknown }).ignore_paths).toEqual(
+      ["Drafts", "Drafts/cache"],
+    );
   });
 
   test("parses one-level indented blocks", () => {
@@ -457,10 +597,14 @@ describe("parseBrainYaml", () => {
   });
 
   test("rejects nested blocks deeper than one level", () => {
-    expect(() => parseBrainYaml(`top:\n  middle:\n    leaf: 1\n`)).toThrow(/deeper than one level/);
+    expect(() => parseBrainYaml(`top:\n  middle:\n    leaf: 1\n`)).toThrow(
+      /deeper than one level/,
+    );
   });
 
   test("rejects duplicate top-level key", () => {
-    expect(() => parseBrainYaml(`schema_version: 1\nschema_version: 2\n`)).toThrow(/duplicate/);
+    expect(() =>
+      parseBrainYaml(`schema_version: 1\nschema_version: 2\n`),
+    ).toThrow(/duplicate/);
   });
 });
