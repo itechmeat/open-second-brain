@@ -712,6 +712,7 @@ function validateMemoryBranch(value: string, path: string): string {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(
       `preference field 'memory_branch' is invalid: ${reason} (${path})`,
+      { cause: err },
     );
   }
 }
