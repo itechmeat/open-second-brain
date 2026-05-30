@@ -18,34 +18,36 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 46 tools. The table below highlights the
+The full server currently advertises 47 tools. The table below highlights the
 operator-facing core, agent-source, health, and Pay Memory tools; the full
 surface also includes Brain writer, review, query, temporal, link-graph, and
 search tools. In Claude Code, that full schema can push MCP definitions beyond
 10% of the context window, causing `MCPSearch` tool-search deferral; use the
-writer split below for the always-loaded writer subset.
+writer split below for the always-loaded writer subset, or the runtime
+capability flags for a narrower per-process full server.
 
-| Tool                       | Purpose                                                                                                                                   | Required arguments               |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `second_brain_status`      | Report config and vault status, with secrets redacted.                                                                                    | —                                |
-| `second_brain_query`       | List vault pages with an optional case-insensitive title substring.                                                                       | —                                |
-| `vault_health`             | Run vault, config, and plugin manifest health checks.                                                                                     | —                                |
-| `brain_health`             | Run semantic Brain Health checks and return the health verdict/domains.                                                                   | —                                |
-| `brain_mcp_landscape`      | List the MCP servers configured across the vault: name, source config file, packages, and required env-var names. Env values never read. | —                                |
-| `brain_agent_query`        | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.          | —                                |
-| `brain_agent_diff`         | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                        | —                                |
-| `brain_audit`              | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                   |
-| `brain_morning_brief`      | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.            | —                                |
-| `brain_sources`            | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                          | —                                |
-| `brain_switch_vault`       | Activate a named vault profile; the change takes effect on the next server launch.                                                       | `name`                           |
-| `payment_memory_init`      | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template. | —                                |
-| `payment_receipt_append`   | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting.                                                | `service`, `status`, `reason`    |
-| `asset_capture`            | Save a Markdown note for an asset produced by a paid call, linked to its receipt.                                                         | `title`, `service`, `result_url` |
-| `payment_report_generate`  | Aggregate a date's receipts into a Markdown report under `Brain/payments/reports/`.                                                       | `date`                           |
-| `payment_policy_check`     | Evaluate a prospective paid call against `policies/spending.json` (allowed / approval_required / denied).                                 | `service`                        |
-| `payment_request_approval` | Create a pending-payment-request the user must approve before the agent runs `pay`.                                                       | `service`, `reason`              |
-| `payment_request_status`   | Look up a pending request by id; agent uses this to poll for approval.                                                                    | `id`                             |
-| `payment_request_consume`  | Mark an `approved` request as `consumed` and link the resulting receipt.                                                                  | `id`, `receipt`                  |
+| Tool                        | Purpose                                                                                                                                        | Required arguments               |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `second_brain_capabilities` | Report the tools available to this MCP process and the withheld-tool reasons after runtime capability filtering.                               | —                                |
+| `second_brain_status`       | Report config and vault status, with secrets redacted.                                                                                         | —                                |
+| `second_brain_query`        | List vault pages with an optional case-insensitive title substring.                                                                            | —                                |
+| `vault_health`              | Run vault, config, and plugin manifest health checks.                                                                                          | —                                |
+| `brain_health`              | Run semantic Brain Health checks and return the health verdict/domains.                                                                        | —                                |
+| `brain_mcp_landscape`       | List the MCP servers configured across the vault: name, source config file, packages, and required env-var names. Env values never read.       | —                                |
+| `brain_agent_query`         | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.               | —                                |
+| `brain_agent_diff`          | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                             | —                                |
+| `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                        |
+| `brain_morning_brief`       | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.                 | —                                |
+| `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                |
+| `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                           |
+| `payment_memory_init`       | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template.      | —                                |
+| `payment_receipt_append`    | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting.                                                     | `service`, `status`, `reason`    |
+| `asset_capture`             | Save a Markdown note for an asset produced by a paid call, linked to its receipt.                                                              | `title`, `service`, `result_url` |
+| `payment_report_generate`   | Aggregate a date's receipts into a Markdown report under `Brain/payments/reports/`.                                                            | `date`                           |
+| `payment_policy_check`      | Evaluate a prospective paid call against `policies/spending.json` (allowed / approval_required / denied).                                      | `service`                        |
+| `payment_request_approval`  | Create a pending-payment-request the user must approve before the agent runs `pay`.                                                            | `service`, `reason`              |
+| `payment_request_status`    | Look up a pending request by id; agent uses this to poll for approval.                                                                         | `id`                             |
+| `payment_request_consume`   | Mark an `approved` request as `consumed` and link the resulting receipt.                                                                       | `id`, `receipt`                  |
 
 `second_brain_query` accepts `pattern` (string) and `limit` (1–500, default 50).
 `vault_health` accepts `repo` (string) for plugin manifest validation.
@@ -138,9 +140,37 @@ Optional flags:
 
 - `--config PATH` — override the Open Second Brain config file location.
 - `--repo PATH` — repository root used for plugin manifest checks.
+- `--scope full|writer` — choose the full server or the always-loaded writer subset.
+- `--writer-only` — alias for `--scope writer`.
+- `--probe` — start an in-process handshake and print whether the server can advertise tools, then exit.
+- `--json` — with `--probe`, print a machine-readable capability report.
+- `--allow-tool NAME` — expose only named tools from the static scope. Repeatable.
+- `--disable-tool NAME` — withhold named tools from the static scope. Repeatable.
+- `--max-tools N` — expose only the first N non-diagnostic tools from the static scope.
 
 The server logs its banner to `stderr` and only writes JSON-RPC frames to
 `stdout`, so it is safe to use as a subprocess in any MCP client.
+
+## Runtime capability window
+
+Runtime capability flags are evaluated after the static scope. They can narrow
+the tool list a process advertises, but they cannot widen `--scope writer` into
+full-server tools. The full server always keeps `second_brain_capabilities`
+available so clients and operators can inspect which tools were available or
+withheld and why.
+
+Examples:
+
+```bash
+o2b mcp --vault /path/to/vault --probe --json --disable-tool second_brain_query
+o2b mcp --vault /path/to/vault --allow-tool brain_context --allow-tool brain_feedback
+o2b mcp --vault /path/to/vault --max-tools 12
+```
+
+`second_brain_capabilities` returns `scope`, `server_name`, static and available
+tool counts, an `available[]` list, and a `withheld[]` list. Withheld reasons
+are stable strings such as `disabled by runtime capability window`, `not allowed
+by runtime capability window`, and `outside runtime capability max tool window`.
 
 ## Hermes integration
 

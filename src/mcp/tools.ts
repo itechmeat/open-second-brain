@@ -23,11 +23,17 @@ import { discoverConfig, redactMapping } from "../core/config.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { isDir } from "../core/fs-utils.ts";
-import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts";
+import {
+  resolveVaultScope,
+  walkVaultScope,
+} from "../core/vault-scope/index.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import { PAY_MEMORY_TOOLS } from "./pay-memory-tools.ts";
-import { normalizeAgentArgument, PLACEHOLDER_AGENT_VALUES } from "../core/agent-identity.ts";
+import {
+  normalizeAgentArgument,
+  PLACEHOLDER_AGENT_VALUES,
+} from "../core/agent-identity.ts";
 import { vaultRelative } from "../core/path-safety.ts";
 import { listVaultPages } from "../core/vault.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
@@ -35,11 +41,14 @@ import { coerceStr, coerceInt } from "./coerce.ts";
 import type { OutputSchema } from "./output-contract.ts";
 import type { ArtifactStore } from "./artifact-store.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
+import type { ToolCapabilityReport } from "./capabilities.ts";
+import { CAPABILITY_DIAGNOSTIC_TOOL } from "./capabilities.ts";
 
 export interface ServerContext {
   readonly vault: string;
   readonly configPath: string | null;
   readonly repoRoot: string | null;
+  readonly capabilityReport?: ToolCapabilityReport;
   /**
    * Per-process preview-artifact store (v0.18.0). Present on the live MCP
    * server context; `brain_artifact_get` reads parked tool-result payloads
@@ -90,7 +99,9 @@ function vaultRelpath(target: string, vault: string): string {
 
 // ── Tool implementations ────────────────────────────────────────────────────
 
-async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> {
+async function toolStatus(
+  ctx: ServerContext,
+): Promise<Record<string, unknown>> {
   const discovery = discoverConfig(ctx.configPath ?? undefined);
   const vaultExists = isDir(ctx.vault);
   const configKeys = Object.keys(discovery.data).toSorted();
@@ -98,7 +109,8 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
   // `present: false` with zero counts.
   const brain = vaultExists ? computeBrainStatus(ctx.vault) : null;
   const searchDisabled = discovery.data["search_enabled"] === "false";
-  const search = vaultExists && !searchDisabled ? await buildSearchStatusBlock(ctx) : null;
+  const search =
+    vaultExists && !searchDisabled ? await buildSearchStatusBlock(ctx) : null;
   // v0.10.9 — `vault` block exposes the shared exclusion policy plus
   // aggregate include/exclude counts. Per-path detail lives in the CLI
   // (`o2b vault status`); MCP payloads stay small.
@@ -184,7 +196,11 @@ async function toolVaultHealth(
     config: ctx.configPath,
     repoRoot: repoRoot ?? null,
   });
-  const payload = results.map((r) => ({ name: r.name, ok: r.ok, message: r.message }));
+  const payload = results.map((r) => ({
+    name: r.name,
+    ok: r.ok,
+    message: r.message,
+  }));
   return {
     vault_path: ctx.vault,
     config_path: ctx.configPath ? String(ctx.configPath) : null,
@@ -216,6 +232,13 @@ async function toolArtifactGet(
   return { artifact_id: artifactId, full_chars: content.length, content };
 }
 
+function toolCapabilities(ctx: ServerContext): ToolCapabilityReport {
+  if (!ctx.capabilityReport) {
+    throw new Error("capability report unavailable in this context");
+  }
+  return ctx.capabilityReport;
+}
+
 const ARTIFACT_GET_OUTPUT_SCHEMA: OutputSchema = {
   type: "object",
   required: ["artifact_id", "full_chars", "content"],
@@ -223,6 +246,40 @@ const ARTIFACT_GET_OUTPUT_SCHEMA: OutputSchema = {
     artifact_id: { type: "string" },
     full_chars: { type: "integer" },
     content: { type: "string" },
+  },
+};
+
+const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
+  type: "object",
+  required: [
+    "scope",
+    "server_name",
+    "static_tool_count",
+    "available_tool_count",
+    "available",
+    "withheld",
+  ],
+  properties: {
+    scope: { type: "string", enum: ["full", "writer"] },
+    server_name: { type: "string" },
+    static_tool_count: { type: "integer" },
+    available_tool_count: { type: "integer" },
+    available: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["name", "reason"],
+        properties: { name: { type: "string" }, reason: { type: "string" } },
+      },
+    },
+    withheld: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["name", "reason"],
+        properties: { name: { type: "string" }, reason: { type: "string" } },
+      },
+    },
   },
 };
 
@@ -244,9 +301,25 @@ const WRITER_TOOL_NAMES: ReadonlySet<string> = new Set([
 export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
   const all: ToolDefinition[] = [
     {
+      name: CAPABILITY_DIAGNOSTIC_TOOL,
+      description:
+        "Report runtime MCP tool availability and withheld-tool reasons for this server process.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      outputSchema: CAPABILITIES_OUTPUT_SCHEMA,
+      handler: toolCapabilities,
+    },
+    {
       name: "second_brain_status",
       description: "Report Open Second Brain configuration and vault status.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      inputSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
       previewBudget: MCP_PREVIEW_BUDGET,
       handler: toolStatus,
     },
@@ -258,13 +331,15 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         properties: {
           pattern: {
             type: "string",
-            description: "Optional case-insensitive substring matched against page titles.",
+            description:
+              "Optional case-insensitive substring matched against page titles.",
           },
           limit: {
             type: "integer",
             minimum: 1,
             maximum: 500,
-            description: "Maximum number of matched pages to return (default 50).",
+            description:
+              "Maximum number of matched pages to return (default 50).",
           },
         },
         additionalProperties: false,
@@ -285,7 +360,8 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description: "Optional repository root to validate plugin manifests.",
+            description:
+              "Optional repository root to validate plugin manifests.",
           },
         },
         additionalProperties: false,
@@ -301,7 +377,8 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         properties: {
           artifact_id: {
             type: "string",
-            description: "The artifact_id returned in a preview-truncated tool result envelope.",
+            description:
+              "The artifact_id returned in a preview-truncated tool result envelope.",
           },
         },
         required: ["artifact_id"],
@@ -316,7 +393,10 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
   return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));
 }
 
-export function findTool(tools: ReadonlyArray<ToolDefinition>, name: string): ToolDefinition {
+export function findTool(
+  tools: ReadonlyArray<ToolDefinition>,
+  name: string,
+): ToolDefinition {
   const tool = tools.find((t) => t.name === name);
   if (!tool) throw new MCPError(METHOD_NOT_FOUND, `unknown tool: ${name}`);
   return tool;

@@ -173,6 +173,8 @@ describe("tool listing", () => {
       .toSorted();
     expect(names).toEqual(
       [
+        // Runtime capability diagnostics (v0.23.0).
+        "second_brain_capabilities",
         // Core read/health (writable legacy tools removed in v0.9.0).
         "second_brain_status",
         "second_brain_query",
@@ -478,7 +480,8 @@ describe("stdio loop", () => {
     // + brain_audit (v0.21.0) = 43.
     // + brain_morning_brief (v0.21.0) = 44.
     // + brain_sources + brain_switch_vault (v0.22.0) = 46.
-    expect(list.result.tools.length).toBe(46);
+    // + second_brain_capabilities (v0.23.0) = 47.
+    expect(list.result.tools.length).toBe(47);
   });
 
   test("returns parse error for invalid JSON", async () => {

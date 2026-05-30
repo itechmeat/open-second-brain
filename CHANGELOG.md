@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-05-30
+
+Agent capability and CLI integration. MCP servers can now narrow the advertised
+tool surface at runtime without changing the static registry, while the CLI gains
+a shared command manifest, shell completions, and inherited JSON fallback for
+commands that did not previously have a machine-readable output mode.
+
+### Added
+
+- Runtime MCP capability window (`src/mcp/capabilities.ts`) with repeatable
+  `o2b mcp --allow-tool`, `--disable-tool`, and `--max-tools` flags. The
+  evaluator runs after static scope filtering, so it can narrow the full server
+  but cannot expose full-server tools through the writer-only scope.
+- Full-scope diagnostic MCP tool `second_brain_capabilities`, returning the
+  available tool list and stable withheld-tool reasons for the current server
+  process. `o2b mcp --probe --json` emits the same report for install checks and
+  operator diagnostics.
+- Shared CLI command manifest (`o2b help --json`) and generated shell completion
+  scripts via `o2b completions --shell bash|zsh|fish|elvish|nushell|powershell`.
+- Inherited `--json` parsing for CLI commands plus a redacted fallback envelope
+  for commands without an existing semantic JSON contract.
+
+### Changed
+
+- Existing semantic JSON commands keep their native payloads instead of being
+  wrapped by the fallback envelope, including nested Brain/Search/Vault/Pay
+  Memory command groups and `o2b install --json`.
+
+### Notes
+
+- New full-server MCP tool count: 46 -> 47. Writer scope remains the same five
+  always-loaded tools (`brain_feedback`, `brain_apply_evidence`, `brain_note`,
+  `brain_context`, `brain_pinned_context`).
+- Full suite green on merge: 2842 tests passing.
+
 ## [0.22.0] - 2026-05-29
 
 Vault portability + session economy. A new `portability/` subsystem makes
@@ -39,13 +74,13 @@ install stays byte-identical.
   routed through the resolver. Inspect with `o2b vault map`.
 - Named multi-vault profiles (`portability/profiles.ts`). A registry in
   `profiles.json` beside the config with `o2b vault profile list / create
-  / switch` and a `brain_switch_vault` MCP tool; activation is a pointer
+/ switch` and a `brain_switch_vault` MCP tool; activation is a pointer
   (no symlinks). `resolveVault` consults the active profile before the
   bare config `vault` key; with no registry, resolution is unchanged.
 - Vault graph export/import (`portability/graph.ts`). `o2b brain
-  graph-export` serialises the user's pages (wikilinks + typed relations)
+graph-export` serialises the user's pages (wikilinks + typed relations)
   to a stable, byte-identical `graph.json`; `o2b brain graph-import
-  --mode skip|overwrite|merge` reconstructs page stubs, every write
+--mode skip|overwrite|merge` reconstructs page stubs, every write
   guarded by `ensureInsideVault`.
 
 ### Notes
@@ -2097,7 +2132,7 @@ with `source_type: inline`, the source-file wikilink in `source`,
 and a `dedup_hash`over the normalised payload. After capture
 the source line is annotated`@osb✓ [[sig-...]]`(inline form)
 or the info-string flips to`osb-checked`with a`<!-- @osb✓
-      [[sig-...]] -->`comment line (block form), making re-runs
+        [[sig-...]] -->`comment line (block form), making re-runs
 idempotent. Default ignore set covers`Brain/`, `.git`,
 `node_modules`, `.obsidian`, `.trash`, `.stversions`,
 `.open-second-brain`; additional excludes via `--exclude`,

@@ -35,7 +35,14 @@ export interface ParsedArgs {
  * Parse argv-tail for one subcommand. `argv` should be everything AFTER the
  * subcommand name. Unknown flags raise `CliError`.
  */
-export function parseFlags(argv: ReadonlyArray<string>, schema: FlagsSchema): ParsedArgs {
+export function parseFlags(
+  argv: ReadonlyArray<string>,
+  schema: FlagsSchema,
+): ParsedArgs {
+  const effectiveSchema: FlagsSchema =
+    schema["json"] !== undefined
+      ? schema
+      : { ...schema, json: { type: "boolean" } };
   const flags: Record<string, string | boolean | string[] | undefined> = {};
   const positional: string[] = [];
 
@@ -49,7 +56,7 @@ export function parseFlags(argv: ReadonlyArray<string>, schema: FlagsSchema): Pa
       const eqIdx = tok.indexOf("=");
       const name = eqIdx === -1 ? tok.slice(2) : tok.slice(2, eqIdx);
       const inlineVal = eqIdx === -1 ? null : tok.slice(eqIdx + 1);
-      const spec = schema[name];
+      const spec = effectiveSchema[name];
       if (!spec) {
         throw new CliError(`unknown flag: --${name}`);
       }
@@ -65,7 +72,8 @@ export function parseFlags(argv: ReadonlyArray<string>, schema: FlagsSchema): Pa
         value = inlineVal;
       } else {
         const next = argv[++i];
-        if (next === undefined) throw new CliError(`flag --${name} requires a value`);
+        if (next === undefined)
+          throw new CliError(`flag --${name} requires a value`);
         value = next;
       }
       if (spec.type === "string") {
@@ -81,7 +89,7 @@ export function parseFlags(argv: ReadonlyArray<string>, schema: FlagsSchema): Pa
   }
 
   // Apply defaults and check required flags.
-  for (const [name, spec] of Object.entries(schema)) {
+  for (const [name, spec] of Object.entries(effectiveSchema)) {
     if (flags[name] === undefined) {
       if (spec.type === "string" && spec.default !== undefined) {
         flags[name] = spec.default;

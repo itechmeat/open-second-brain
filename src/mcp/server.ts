@@ -17,7 +17,11 @@ import {
   SERVER_NAME,
   SERVER_VERSION,
 } from "./protocol.ts";
-import { listResources, listResourceTemplates, readResource } from "./resources.ts";
+import {
+  listResources,
+  listResourceTemplates,
+  readResource,
+} from "./resources.ts";
 import {
   buildToolTable,
   findTool,
@@ -28,6 +32,11 @@ import {
 import { assertOutputContract } from "./output-contract.ts";
 import { ArtifactStore } from "./artifact-store.ts";
 import { applyPreviewBudget } from "./preview-budget.ts";
+import {
+  evaluateToolCapabilities,
+  type RuntimeCapabilityWindow,
+  type ToolCapabilityReport,
+} from "./capabilities.ts";
 
 /** TTL after which a prior process's artifact run directory is pruned. */
 const ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -41,6 +50,7 @@ export interface MCPServerOptions {
 export interface MCPServerRuntimeOptions {
   readonly serverName?: string;
   readonly scope?: ToolScope;
+  readonly capabilityWindow?: RuntimeCapabilityWindow;
   /**
    * Run id grouping this process's preview artifacts under
    * `Brain/.artifacts/<run-id>/`. Defaults to a per-process id;
@@ -71,16 +81,27 @@ export class MCPServer {
   private readonly serverName: string;
   private readonly scope: ToolScope;
   private readonly artifactStore: ArtifactStore;
+  private readonly capabilityReport: ToolCapabilityReport;
 
-  constructor(opts: MCPServerOptions, runtimeOpts: MCPServerRuntimeOptions = {}) {
+  constructor(
+    opts: MCPServerOptions,
+    runtimeOpts: MCPServerRuntimeOptions = {},
+  ) {
     this.vault = opts.vault;
     this.configPath = opts.configPath ?? null;
     this.repoRoot = opts.repoRoot ?? null;
     this.serverName = runtimeOpts.serverName ?? SERVER_NAME;
     this.scope = runtimeOpts.scope ?? "full";
-    this.tools = buildToolTable(this.scope);
+    const evaluated = evaluateToolCapabilities(buildToolTable(this.scope), {
+      scope: this.scope,
+      serverName: this.serverName,
+      window: runtimeOpts.capabilityWindow,
+    });
+    this.tools = evaluated.tools;
+    this.capabilityReport = evaluated.report;
     const runId =
-      runtimeOpts.artifactRunId ?? `run-${process.pid}-${Date.now().toString(36)}`;
+      runtimeOpts.artifactRunId ??
+      `run-${process.pid}-${Date.now().toString(36)}`;
     this.artifactStore = new ArtifactStore({ vault: this.vault, runId });
     // Best-effort housekeeping: clear prior processes' stale artifacts.
     // Never fatal - a missing/unwritable vault just yields zero pruned.
@@ -96,31 +117,53 @@ export class MCPServer {
       vault: this.vault,
       configPath: this.configPath,
       repoRoot: this.repoRoot,
+      capabilityReport: this.capabilityReport,
       artifactStore: this.artifactStore,
     };
   }
 
   /** Public method for CLI tool-call bridge — the legacy code reached into `_tools`. */
-  async callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     const tool = findTool(this.tools, name);
     return toolResult(tool, await tool.handler(this.context, args));
   }
 
   /** Process one JSON-RPC request or notification. Returns null for notifications. */
-  async handleRequest(request: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+  async handleRequest(
+    request: JsonRpcRequest,
+  ): Promise<JsonRpcResponse | null> {
     if (typeof request !== "object" || request === null) {
       return errorResponse(null, INVALID_REQUEST, "request must be an object");
     }
     if (request.jsonrpc !== JSONRPC_VERSION) {
-      return errorResponse(request.id ?? null, INVALID_REQUEST, "unsupported jsonrpc version");
+      return errorResponse(
+        request.id ?? null,
+        INVALID_REQUEST,
+        "unsupported jsonrpc version",
+      );
     }
     const method = request.method;
     if (typeof method !== "string") {
-      return errorResponse(request.id ?? null, INVALID_REQUEST, "method must be a string");
+      return errorResponse(
+        request.id ?? null,
+        INVALID_REQUEST,
+        "method must be a string",
+      );
     }
     const paramsRaw = request.params ?? {};
-    if (typeof paramsRaw !== "object" || paramsRaw === null || Array.isArray(paramsRaw)) {
-      return errorResponse(request.id ?? null, INVALID_PARAMS, "params must be an object");
+    if (
+      typeof paramsRaw !== "object" ||
+      paramsRaw === null ||
+      Array.isArray(paramsRaw)
+    ) {
+      return errorResponse(
+        request.id ?? null,
+        INVALID_PARAMS,
+        "params must be an object",
+      );
     }
     const params = paramsRaw as Record<string, unknown>;
     // JSON-RPC 2.0 §4.1: `id` MUST be a string, number, or null. Anything
@@ -131,7 +174,11 @@ export class MCPServer {
     if (!isNotification) {
       const idType = typeof request.id;
       if (idType !== "string" && idType !== "number" && request.id !== null) {
-        return errorResponse(null, INVALID_REQUEST, "id must be string, number, or null");
+        return errorResponse(
+          null,
+          INVALID_REQUEST,
+          "id must be string, number, or null",
+        );
       }
     }
     const requestId = request.id;
@@ -169,13 +216,20 @@ export class MCPServer {
         return errorResponse(requestId, exc.code, exc.message, exc.data);
       }
       const message = (exc as Error).message ?? String(exc);
-      return errorResponse(requestId, INTERNAL_ERROR, `internal error: ${message}`);
+      return errorResponse(
+        requestId,
+        INTERNAL_ERROR,
+        `internal error: ${message}`,
+      );
     }
   }
 
-  private handleInitialize(params: Record<string, unknown>): Record<string, unknown> {
+  private handleInitialize(
+    params: Record<string, unknown>,
+  ): Record<string, unknown> {
     const clientVersion = params["protocolVersion"];
-    const negotiated = typeof clientVersion === "string" ? clientVersion : PROTOCOL_VERSION;
+    const negotiated =
+      typeof clientVersion === "string" ? clientVersion : PROTOCOL_VERSION;
     const defaultAgent = resolveAgentName(this.configPath ?? undefined);
     return {
       protocolVersion: negotiated,
@@ -184,7 +238,10 @@ export class MCPServer {
         resources: { listChanged: false, subscribe: false },
       },
       serverInfo: { name: this.serverName, version: SERVER_VERSION },
-      instructions: buildInstructions({ agent: defaultAgent, scope: this.scope }),
+      instructions: buildInstructions({
+        agent: defaultAgent,
+        scope: this.scope,
+      }),
     };
   }
 
@@ -207,24 +264,38 @@ export class MCPServer {
     return { resourceTemplates: listResourceTemplates() };
   }
 
-  private handleResourcesRead(params: Record<string, unknown>): Record<string, unknown> {
+  private handleResourcesRead(
+    params: Record<string, unknown>,
+  ): Record<string, unknown> {
     const uri = params["uri"];
     if (typeof uri !== "string") {
-      throw new MCPError(INVALID_PARAMS, "resources/read requires a string `uri`");
+      throw new MCPError(
+        INVALID_PARAMS,
+        "resources/read requires a string `uri`",
+      );
     }
     const content = readResource({ vault: this.vault }, uri);
     return { contents: [content] };
   }
 
-  private async handleToolsCall(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async handleToolsCall(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     const name = params["name"];
     if (typeof name !== "string") {
       throw new MCPError(INVALID_PARAMS, "tools/call requires a string name");
     }
     const tool = findTool(this.tools, name);
     const argsRaw = params["arguments"] ?? {};
-    if (typeof argsRaw !== "object" || argsRaw === null || Array.isArray(argsRaw)) {
-      throw new MCPError(INVALID_PARAMS, "tools/call arguments must be an object");
+    if (
+      typeof argsRaw !== "object" ||
+      argsRaw === null ||
+      Array.isArray(argsRaw)
+    ) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "tools/call arguments must be an object",
+      );
     }
     const args = argsRaw as Record<string, unknown>;
     try {
@@ -241,7 +312,10 @@ export class MCPServer {
   }
 }
 
-function toolResult(tool: ToolDefinition, structured: unknown): Record<string, unknown> {
+function toolResult(
+  tool: ToolDefinition,
+  structured: unknown,
+): Record<string, unknown> {
   assertOutputContract(tool.name, tool.outputSchema, structured);
   const text = JSON.stringify(structured, sortedReplacer, 2);
   return {
@@ -284,7 +358,9 @@ function toolError(message: string): Record<string, unknown> {
 
 function sortedReplacer(_key: string, value: unknown): unknown {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    const entries = Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
+    const entries = Object.entries(value).toSorted(([a], [b]) =>
+      a.localeCompare(b),
+    );
     return Object.fromEntries(entries);
   }
   return value;
@@ -296,7 +372,10 @@ export function errorResponse(
   message: string,
   data?: unknown,
 ): JsonRpcResponse {
-  const error: { code: number; message: string; data?: unknown } = { code, message };
+  const error: { code: number; message: string; data?: unknown } = {
+    code,
+    message,
+  };
   if (data !== undefined) error.data = data;
   return { jsonrpc: JSONRPC_VERSION, id: requestId ?? null, error };
 }
