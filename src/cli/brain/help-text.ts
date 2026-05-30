@@ -36,6 +36,7 @@ Brain verbs (observing memory):
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
   doctor              Validate Brain invariants (--strict; --remediate [--dry-run])
+  watchdog            Probe Brain health and plan safe recovery (--remediate, --restore, --force-restore)
   health              Semantic-health report: contradictions, concept gaps, stale claims
   history             Render a preference's edit-history timeline
   audit               Render a preference's full mutation audit trail
@@ -165,6 +166,11 @@ export const VERB_HELP: Record<string, string> = {
     "Validate invariants. Warnings exit 0 (or 2 with --strict). Errors always exit 1.\n" +
     "--remediate builds a dependency-ordered repair plan and applies the\n" +
     "auto-safe steps (content-hash re-stamp); --dry-run previews without writing.\n",
+  watchdog:
+    "usage: o2b brain watchdog [--vault <path>] [--json] [--remediate [--dry-run]]\n" +
+    "                           [--restore <run_id> [--force-restore]] [--attempt <n>]\n" +
+    "Probe Brain config/dirs/search index, emit recovery recommendations, and apply only explicit safe repairs.\n" +
+    "Snapshot restore is refused unless --restore and --force-restore are both explicit; use rollback for execution.\n",
   health:
     "usage: o2b brain health [--vault <path>] [--json]\n" +
     "Semantic-health report: contradictory confirmed preferences, recurring\n" +

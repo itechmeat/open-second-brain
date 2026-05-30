@@ -14,6 +14,8 @@
  *     (`SEARCH_TOOLS`).
  *   - Brain schema administration (`schema_*`) — `./schema-tools.ts`
  *     (`SCHEMA_TOOLS`).
+ *   - Brain watchdog recovery probes (`brain_watchdog`) —
+ *     `./watchdog-tools.ts` (`WATCHDOG_TOOLS`).
  *   - Pay Memory tools (`payment_*`, `asset_capture`) —
  *     `./pay-memory-tools.ts` (`PAY_MEMORY_TOOLS`).
  *
@@ -29,6 +31,7 @@ import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts"
 import { BRAIN_TOOLS } from "./brain-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import { SCHEMA_TOOLS } from "./schema-tools.ts";
+import { WATCHDOG_TOOLS } from "./watchdog-tools.ts";
 import { PAY_MEMORY_TOOLS } from "./pay-memory-tools.ts";
 import { normalizeAgentArgument, PLACEHOLDER_AGENT_VALUES } from "../core/agent-identity.ts";
 import { vaultRelative } from "../core/path-safety.ts";
@@ -378,6 +381,7 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
       handler: toolArtifactGet,
     },
     ...SCHEMA_TOOLS,
+    ...WATCHDOG_TOOLS,
     ...PAY_MEMORY_TOOLS,
   ];
   if (scope === "full") return all;

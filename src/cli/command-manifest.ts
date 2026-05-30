@@ -109,6 +109,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("export", "Export active preferences"),
         command("explorer", "Open or export Brain graph explorer"),
         command("doctor", "Check Brain invariants"),
+        command("watchdog", "Probe Brain recovery status"),
         command("health", "Render semantic Brain health"),
         command("history", "Render preference edit history"),
         command("audit", "Render mutation audit trail"),

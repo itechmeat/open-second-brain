@@ -19,12 +19,7 @@ const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-test-"));
-  for (const k of [
-    "VAULT_AGENT_NAME",
-    "VAULT_TIMEZONE",
-    "VAULT_DIR",
-    "OPEN_SECOND_BRAIN_CONFIG",
-  ]) {
+  for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -168,9 +163,7 @@ describe("tool listing", () => {
       id: 2,
       method: "tools/list",
     })) as any;
-    const names = r.result.tools
-      .map((tool: { name: string }) => tool.name)
-      .toSorted();
+    const names = r.result.tools.map((tool: { name: string }) => tool.name).toSorted();
     expect(names).toEqual(
       [
         // Runtime capability diagnostics (v0.23.0).
@@ -238,6 +231,17 @@ describe("tool listing", () => {
         "payment_request_consume",
         // Search (added in v0.10.0).
         "brain_search",
+        // Schema admin + watchdog recovery probes.
+        "get_active_schema_pack",
+        "list_schema_packs",
+        "schema_stats",
+        "schema_lint",
+        "schema_graph",
+        "schema_explain_type",
+        "schema_review_orphans",
+        "schema_apply_mutations",
+        "reload_schema_pack",
+        "brain_watchdog",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -298,9 +302,7 @@ describe("tool calls", () => {
     expect(s.vault.ignore_source).toBeDefined();
     expect(["_brain.yaml", "defaults"]).toContain(s.vault.ignore_source);
     expect(Array.isArray(s.vault.rules)).toBe(true);
-    expect(
-      s.vault.rules.some((r: { raw: string }) => r.raw === ".obsidian"),
-    ).toBe(true);
+    expect(s.vault.rules.some((r: { raw: string }) => r.raw === ".obsidian")).toBe(true);
     expect(typeof s.vault.included.files).toBe("number");
     expect(typeof s.vault.included.dirs).toBe("number");
     expect(typeof s.vault.excluded.dirs).toBe("number");
@@ -361,9 +363,7 @@ describe("tool calls", () => {
     const s = r.result.structuredContent;
     expect(s.limit).toBe(5);
     expect(s.total_pages).toBeGreaterThanOrEqual(1);
-    expect(
-      s.pages.some((p: { title: string }) => p.title.includes("Sandbox")),
-    ).toBe(true);
+    expect(s.pages.some((p: { title: string }) => p.title.includes("Sandbox"))).toBe(true);
   });
 
   // `second_brain_capture` and `event_log_append` are no longer
@@ -430,9 +430,7 @@ describe("tool calls", () => {
     const r = (await callTool(server, "bad_contract")) as any;
     expect(r.result.isError).toBe(true);
     expect(r.result.structuredContent).toBeUndefined();
-    expect(r.result.content[0].text).toContain(
-      "bad_contract output contract failed",
-    );
+    expect(r.result.content[0].text).toContain("bad_contract output contract failed");
   });
 });
 
@@ -481,7 +479,8 @@ describe("stdio loop", () => {
     // + brain_morning_brief (v0.21.0) = 44.
     // + brain_sources + brain_switch_vault (v0.22.0) = 46.
     // + second_brain_capabilities (v0.23.0) = 47.
-    expect(list.result.tools.length).toBe(47);
+    // + 9 schema admin tools + brain_watchdog = 57.
+    expect(list.result.tools.length).toBe(57);
   });
 
   test("returns parse error for invalid JSON", async () => {
