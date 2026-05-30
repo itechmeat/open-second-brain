@@ -16,7 +16,7 @@ import { SearchError } from "./types.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 4;
+export const LATEST_SCHEMA_VERSION = 5;
 
 const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS documents (
@@ -218,6 +218,50 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
           created_at  INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_query_cache_generation ON query_cache(generation);
+      `);
+    },
+  },
+  {
+    // v5 (CJK search) - keep display content untouched while indexing
+    // an expanded FTS shadow column. Existing rows default to their
+    // current content until a reindex computes CJK token expansions.
+    version: 5,
+    up(db) {
+      const cols = db.query<{ name: string }, []>("PRAGMA table_info(chunks)").all();
+      if (!cols.some((c) => c.name === "fts_content")) {
+        db.exec("ALTER TABLE chunks ADD COLUMN fts_content TEXT NOT NULL DEFAULT ''");
+        db.exec("UPDATE chunks SET fts_content = content WHERE fts_content = ''");
+      }
+      db.exec(`
+        DROP TRIGGER IF EXISTS chunks_ai;
+        DROP TRIGGER IF EXISTS chunks_ad;
+        DROP TRIGGER IF EXISTS chunks_au;
+        DROP TABLE IF EXISTS chunk_fts;
+
+        CREATE VIRTUAL TABLE chunk_fts USING fts5(
+          fts_content,
+          heading_path,
+          content='chunks',
+          content_rowid='id',
+          tokenize='unicode61 remove_diacritics 2'
+        );
+
+        CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+          INSERT INTO chunk_fts(rowid, fts_content, heading_path)
+            VALUES (new.id, new.fts_content, new.heading_path);
+        END;
+        CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+          INSERT INTO chunk_fts(chunk_fts, rowid, fts_content, heading_path)
+            VALUES('delete', old.id, old.fts_content, old.heading_path);
+        END;
+        CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
+          INSERT INTO chunk_fts(chunk_fts, rowid, fts_content, heading_path)
+            VALUES('delete', old.id, old.fts_content, old.heading_path);
+          INSERT INTO chunk_fts(rowid, fts_content, heading_path)
+            VALUES (new.id, new.fts_content, new.heading_path);
+        END;
+
+        INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild');
       `);
     },
   },

@@ -58,6 +58,7 @@ export interface DocumentSummary {
 export interface ChunkInput {
   readonly chunkIndex: number;
   readonly content: string;
+  readonly ftsContent?: string;
   readonly contentHash: string;
   readonly startLine: number;
   readonly endLine: number;
@@ -417,9 +418,7 @@ export class Store {
 
   // ── query cache (v0.20.0) ────────────────────────────────────────────────────
 
-  queryCacheGet(
-    key: string,
-  ): { generation: string; payload: string; createdAt: number } | null {
+  queryCacheGet(key: string): { generation: string; payload: string; createdAt: number } | null {
     const row = this.db
       .query<{ generation: string; payload: string; created_at: number }, [string]>(
         "SELECT generation, payload, created_at FROM query_cache WHERE cache_key = ?",
@@ -566,10 +565,10 @@ export class Store {
       this.db.run("DELETE FROM chunks WHERE document_id = ?", [documentId]);
       const insert = this.db.prepare<
         { id: number },
-        [number, number, string, string, number, number, number, string, string, string]
+        [number, number, string, string, string, number, number, number, string, string, string]
       >(
-        "INSERT INTO chunks(document_id, chunk_index, content, content_hash, start_line, end_line, token_count, heading_path, created_at, updated_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, heading_path, created_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       );
       const now = nowIso();
       for (const c of chunks) {
@@ -577,6 +576,7 @@ export class Store {
           documentId,
           c.chunkIndex,
           c.content,
+          c.ftsContent ?? c.content,
           c.contentHash,
           c.startLine,
           c.endLine,
@@ -836,7 +836,10 @@ export class Store {
     if (documentIds.length === 0) return out;
     const placeholders = documentIds.map(() => "?").join(",");
     const rows = this.db
-      .query<{ source_document_id: number; relation: string; target_path: string | null }, number[]>(
+      .query<
+        { source_document_id: number; relation: string; target_path: string | null },
+        number[]
+      >(
         "SELECT source_document_id, relation, target_path FROM links " +
           `WHERE source_document_id IN (${placeholders}) AND relation IS NOT NULL ` +
           "ORDER BY id",

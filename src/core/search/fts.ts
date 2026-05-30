@@ -11,18 +11,17 @@
  */
 
 import type { KeywordHit, Store } from "./store.ts";
+import { containsCjk, tokenizeCjkSearchText } from "./cjk-tokenizer.ts";
 
 function quoteToken(t: string): string {
   return `"${t.replace(/"/g, '""')}"`;
 }
 
 export function buildFtsMatch(rawQuery: string): string {
-  const tokens = rawQuery
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0);
-  if (tokens.length === 0) return "";
-  return tokens.map(quoteToken).join(" ");
+  const tokens = containsCjk(rawQuery) ? tokenizeCjkSearchText(rawQuery) : rawQuery.split(/\s+/);
+  const cleaned = tokens.map((t) => t.trim()).filter((t) => t.length > 0);
+  if (cleaned.length === 0) return "";
+  return cleaned.map(quoteToken).join(" ");
 }
 
 /**

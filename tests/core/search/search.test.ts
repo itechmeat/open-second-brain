@@ -159,6 +159,19 @@ test("search supports Cyrillic query against Cyrillic content", async () => {
   expect(out.results[0]?.path).toBe("Notes/ru.md");
 });
 
+test("search supports unspaced CJK query segments without polluting result content", async () => {
+  writeMd(vault, "Notes/cjk.md", "# CJK\n\n我喜欢苹果派，也喜欢机器学习。");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+
+  const out = await search(cfg, { query: "苹果", limit: 5 });
+
+  expect(out.results.map((r) => r.path)).toContain("Notes/cjk.md");
+  const hit = out.results.find((r) => r.path === "Notes/cjk.md");
+  expect(hit?.content).toContain("我喜欢苹果派");
+  expect(hit?.content).not.toContain("苹果 果派");
+});
+
 test("path_prefix filter scopes results", async () => {
   const cfg = await seedKeyword();
   await indexVault(cfg);

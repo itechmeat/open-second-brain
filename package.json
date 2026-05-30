@@ -58,7 +58,9 @@
     "typescript": "^5.5.0"
   },
   "optionalDependencies": {
-    "sqlite-vec": "^0.1.9"
+    "@node-rs/jieba": "^2.0.1",
+    "sqlite-vec": "^0.1.9",
+    "tiny-segmenter": "^0.2.0"
   },
   "openclaw": {
     "extensions": [
