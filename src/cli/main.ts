@@ -32,6 +32,7 @@ import {
   resolveSemanticConfigState,
   sortedReplacer,
 } from "./helpers.ts";
+import { wantsJsonFlag, withJsonFallback } from "./json-helpers.ts";
 import {
   cmdInitPayMemory,
   cmdAppendPaymentReceipt,
@@ -645,6 +646,28 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
     return 0;
   }
 
+  const run = () => dispatchCommand(command, rest);
+  if (wantsJsonFlag(rest) && !commandHasSemanticJson(command, rest)) {
+    return await withJsonFallback(command, run);
+  }
+  return await run();
+}
+
+function commandHasSemanticJson(
+  command: string,
+  rest: ReadonlyArray<string>,
+): boolean {
+  if (!wantsJsonFlag(rest)) return false;
+  if (command === "status" || command === "update" || command === "tool-call")
+    return true;
+  if (command === "mcp" && rest.includes("--probe")) return true;
+  return false;
+}
+
+async function dispatchCommand(
+  command: string,
+  rest: ReadonlyArray<string>,
+): Promise<number> {
   try {
     switch (command) {
       case "status":
