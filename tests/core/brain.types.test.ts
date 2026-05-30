@@ -83,6 +83,8 @@ describe("BRAIN_* const enums", () => {
       "note",
       // Brain lifecycle suite (v0.21.0) reconcile-phase open questions
       "reconcile",
+      // Runtime lifecycle hooks (v0.26.0)
+      "session-lifecycle",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);
