@@ -35,7 +35,11 @@ import {
 export const EXPLORER_SCHEMA_VERSION = 1 as const;
 
 export type ExplorerNodeKind = "preference" | "retired";
-export type ExplorerNodeStatus = "unconfirmed" | "confirmed" | "quarantine" | "retired";
+export type ExplorerNodeStatus =
+  | "unconfirmed"
+  | "confirmed"
+  | "quarantine"
+  | "retired";
 export type ExplorerEdgeKind = "supersedes" | "wikilink";
 
 export interface ExplorerNode {
@@ -53,12 +57,15 @@ export interface ExplorerNode {
   readonly retired_reason: string | null;
   readonly last_evidence_at: string | null;
   readonly backlink_count: number;
+  readonly memory_layer?: BrainPreference["memory_layer"];
+  readonly memory_branch?: string;
 }
 
 export interface ExplorerEdge {
   readonly source: string;
   readonly target: string;
   readonly kind: ExplorerEdgeKind;
+  readonly relation?: string;
 }
 
 export interface ExplorerGraph {
@@ -89,7 +96,9 @@ export function collectExplorerData(
   const knownIds = new Set<string>();
 
   if (existsSync(dirs.preferences)) {
-    for (const entry of readdirSync(dirs.preferences, { withFileTypes: true })) {
+    for (const entry of readdirSync(dirs.preferences, {
+      withFileTypes: true,
+    })) {
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
       if (!entry.name.startsWith("pref-")) continue;
       const path = join(dirs.preferences, entry.name);
@@ -150,7 +159,10 @@ export function collectExplorerData(
   });
 }
 
-function nodeFromPreference(pref: BrainPreference, backlinkCount: number): ExplorerNode {
+function nodeFromPreference(
+  pref: BrainPreference,
+  backlinkCount: number,
+): ExplorerNode {
   return {
     id: pref.id,
     kind: "preference",
@@ -166,10 +178,19 @@ function nodeFromPreference(pref: BrainPreference, backlinkCount: number): Explo
     retired_reason: null,
     last_evidence_at: pref.last_evidence_at,
     backlink_count: backlinkCount,
+    ...(pref.memory_layer !== undefined
+      ? { memory_layer: pref.memory_layer }
+      : {}),
+    ...(pref.memory_branch !== undefined
+      ? { memory_branch: pref.memory_branch }
+      : {}),
   };
 }
 
-function nodeFromRetired(ret: BrainRetired, backlinkCount: number): ExplorerNode {
+function nodeFromRetired(
+  ret: BrainRetired,
+  backlinkCount: number,
+): ExplorerNode {
   return {
     id: ret.id,
     kind: "retired",
@@ -185,6 +206,12 @@ function nodeFromRetired(ret: BrainRetired, backlinkCount: number): ExplorerNode
     retired_reason: ret.retired_reason,
     last_evidence_at: ret.last_evidence_at,
     backlink_count: backlinkCount,
+    ...(ret.memory_layer !== undefined
+      ? { memory_layer: ret.memory_layer }
+      : {}),
+    ...(ret.memory_branch !== undefined
+      ? { memory_branch: ret.memory_branch }
+      : {}),
   };
 }
 
@@ -232,14 +259,19 @@ function loadTemplate(): string {
     raw = readFileSync(TEMPLATE_PATH, "utf8");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to load brain-explorer template from ${TEMPLATE_PATH}: ${msg}`, {
-      cause: err,
-    });
+    throw new Error(
+      `Failed to load brain-explorer template from ${TEMPLATE_PATH}: ${msg}`,
+      {
+        cause: err,
+      },
+    );
   }
   const first = raw.indexOf(PLACEHOLDER);
   const last = raw.lastIndexOf(PLACEHOLDER);
   if (first === -1) {
-    throw new Error(`brain-explorer.html template is missing the ${PLACEHOLDER} marker`);
+    throw new Error(
+      `brain-explorer.html template is missing the ${PLACEHOLDER} marker`,
+    );
   }
   if (first !== last) {
     throw new Error(
@@ -260,7 +292,10 @@ function loadTemplate(): string {
  * / `$1` injection through the JSON body (principle bodies are free
  * text and may contain `$`).
  */
-export function renderExportedHtml(graph: ExplorerGraph, vaultPath?: string): string {
+export function renderExportedHtml(
+  graph: ExplorerGraph,
+  vaultPath?: string,
+): string {
   const json = JSON.stringify(graph).replace(/[<>&]/g, (c) => {
     switch (c) {
       case "<":
@@ -350,7 +385,10 @@ export function buildLiveServer(vault: string, port: number): LiveServerHandle {
 
 // ---- Helpers ------------------------------------------------------------
 
-function deriveEdges(index: BacklinkIndex, knownIds: ReadonlySet<string>): ExplorerEdge[] {
+function deriveEdges(
+  index: BacklinkIndex,
+  knownIds: ReadonlySet<string>,
+): ExplorerEdge[] {
   const edges: ExplorerEdge[] = [];
   const seen = new Set<string>();
   for (const [target, refs] of index) {
@@ -359,11 +397,19 @@ function deriveEdges(index: BacklinkIndex, knownIds: ReadonlySet<string>): Explo
       if (!knownIds.has(ref.source)) continue; // logs / signals
       if (ref.source === target) continue;
       const kind: ExplorerEdgeKind =
-        ref.field === "supersedes" || ref.field === "superseded_by" ? "supersedes" : "wikilink";
-      const key = `${ref.source}\x00${target}\x00${kind}`;
+        ref.field === "supersedes" || ref.field === "superseded_by"
+          ? "supersedes"
+          : "wikilink";
+      const relation = ref.relation;
+      const key = `${ref.source}\x00${target}\x00${kind}\x00${relation ?? ""}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      edges.push({ source: ref.source, target, kind });
+      edges.push({
+        source: ref.source,
+        target,
+        kind,
+        ...(relation ? { relation } : {}),
+      });
     }
   }
   return edges;
