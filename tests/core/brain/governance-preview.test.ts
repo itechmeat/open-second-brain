@@ -36,7 +36,7 @@ describe("buildForgetPlan", () => {
 
     expect(plan.mode).toBe("dry-run");
     expect(plan.source).toBe("session-a");
-    expect(plan.entries.map((entry) => entry.id).sort()).toEqual(["pref-one", "sig-one"]);
+    expect(plan.entries.map((entry) => entry.id).toSorted()).toEqual(["pref-one", "sig-one"]);
     expect(plan.entries.every((entry) => entry.action === "would-remove-source-support")).toBe(
       true,
     );
