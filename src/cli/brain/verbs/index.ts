@@ -43,6 +43,7 @@ export { cmdBrainTokenFootprint } from "./token-footprint.ts";
 export { cmdBrainContextPack } from "./context-pack.ts";
 export { cmdBrainContextReceipts } from "./context-receipts.ts";
 export { cmdBrainContextPresets } from "./context-presets.ts";
+export { cmdBrainPreCompactExtract } from "./pre-compact-extract.ts";
 export { cmdBrainRecallTelemetry } from "./recall-telemetry.ts";
 export { cmdBrainLint } from "./lint.ts";
 export { cmdBrainActions } from "./actions.ts";

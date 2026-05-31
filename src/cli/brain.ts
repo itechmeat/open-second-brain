@@ -56,6 +56,7 @@ import {
   cmdBrainContextPack,
   cmdBrainContextReceipts,
   cmdBrainContextPresets,
+  cmdBrainPreCompactExtract,
   cmdBrainRecallTelemetry,
   cmdBrainLint,
   cmdBrainActions,
@@ -184,6 +185,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainContextReceipts(rest);
       case "context-presets":
         return await cmdBrainContextPresets(rest);
+      case "pre-compact-extract":
+        return await cmdBrainPreCompactExtract(rest);
       case "recall-telemetry":
         return await cmdBrainRecallTelemetry(rest);
       case "lint":

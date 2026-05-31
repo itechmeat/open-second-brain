@@ -92,6 +92,7 @@ import {
   suggestContextPreset,
   type ContextPresetCurrentConfig,
 } from "../core/brain/context-presets.ts";
+import { extractPreCompactRecords } from "../core/brain/pre-compact-extract.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
@@ -1836,6 +1837,12 @@ function optionalStringArg(
   return raw.trim();
 }
 
+function requiredStringArg(tool: string, args: Record<string, unknown>, key: string): string {
+  const value = optionalStringArg(tool, args, key);
+  if (value === undefined) throw new MCPError(INVALID_PARAMS, `${tool}: ${key} is required`);
+  return value;
+}
+
 // ----- brain_recall_telemetry ---------------------------------------------
 
 async function toolBrainRecallTelemetry(
@@ -1946,6 +1953,34 @@ function contextPresetCurrentConfig(raw: unknown): ContextPresetCurrentConfig {
     throw new MCPError(INVALID_PARAMS, "brain_context_presets: current must be an object");
   }
   return raw as ContextPresetCurrentConfig;
+}
+
+// ----- brain_pre_compact_extract ------------------------------------------
+
+async function toolBrainPreCompactExtract(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const sessionId = requiredStringArg("brain_pre_compact_extract", args, "session_id");
+  const turnStart = requiredStringArg("brain_pre_compact_extract", args, "turn_start");
+  const turnEnd = requiredStringArg("brain_pre_compact_extract", args, "turn_end");
+  const text = requiredStringArg("brain_pre_compact_extract", args, "text");
+  const maxChars = coercePositiveInteger(
+    "brain_pre_compact_extract",
+    "max_chars",
+    args["max_chars"],
+  );
+  const result = extractPreCompactRecords(ctx.vault, {
+    sessionId,
+    turnStart,
+    turnEnd,
+    text,
+    ...(optionalStringArg("brain_pre_compact_extract", args, "host") !== undefined
+      ? { host: optionalStringArg("brain_pre_compact_extract", args, "host") }
+      : {}),
+    ...(maxChars !== undefined ? { maxChars } : {}),
+  });
+  return { count: result.records.length, ...result };
 }
 
 // ----- brain_pre_compress_pack (v0.20.0) -----------------------------------
@@ -2766,6 +2801,38 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainContextPresets,
+  },
+  {
+    name: "brain_pre_compact_extract",
+    description:
+      "Extract typed Decision/Commitment/Outcome/Rule/Open question records from bounded text into continuity storage.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: {
+          type: "string",
+          description: "Session identifier used for idempotency and source refs.",
+        },
+        turn_start: {
+          type: "string",
+          description: "First source turn id in the extracted segment.",
+        },
+        turn_end: { type: "string", description: "Last source turn id in the extracted segment." },
+        text: {
+          type: "string",
+          description: "Bounded text segment to scan for labeled extraction lines.",
+        },
+        host: { type: "string", description: "Optional host/client label." },
+        max_chars: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum input characters to scan before extracting.",
+        },
+      },
+      required: ["session_id", "turn_start", "turn_end", "text"],
+      additionalProperties: false,
+    },
+    handler: toolBrainPreCompactExtract,
   },
   {
     // No preview budget: the addendum is meant to be injected whole and

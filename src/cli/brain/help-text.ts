@@ -58,6 +58,7 @@ Brain verbs (observing memory):
   context-pack        Return a tier-then-recency vault slice under a token budget
   context-receipts    List/show prompt context receipt records
   context-presets     Show/suggest/diff read-only context budget presets
+  pre-compact-extract Extract typed continuity records from bounded text
   recall-telemetry    List/summarize opt-in recall telemetry records
   lint                Self-healing structural checks (--consolidate); --apply to write
   actions             Ranked maintenance action list (dedup + lint + footprint)
@@ -345,6 +346,9 @@ export const VERB_HELP: Record<string, string> = {
     "       o2b brain context-presets suggest [--model <name>] [--context-window <tokens>] [--json]\n" +
     "       o2b brain context-presets diff <preset-id> [current-value flags] [--override <path>...] [--json]\n" +
     "Dry-run model-aware context budget preset diagnostics. Never writes config.\n",
+  "pre-compact-extract":
+    "usage: o2b brain pre-compact-extract --vault <path> --session-id <id> --turn-start <id> --turn-end <id> --text <text> [--host <name>] [--max-chars <n>] [--json]\n" +
+    "Extract Decision/Commitment/Outcome/Rule/Open question lines into idempotent continuity records.\n",
   "recall-telemetry":
     "usage: o2b brain recall-telemetry list [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +
