@@ -22,6 +22,7 @@ import { brainActivePath, brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
+import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
 import {
   contextSafetyReport,
   guardBrainContextSnippet,
@@ -49,6 +50,7 @@ export interface PreCompressPack {
   readonly activeHeadIncluded: boolean;
   readonly activeHeadSafety?: ContextSafetyReport;
   readonly receiptId?: string;
+  readonly telemetryId?: string;
   readonly totalChars: number;
 }
 
@@ -61,6 +63,8 @@ export interface PreCompressOptions {
   readonly maxTotalChars?: number;
   /** Opt-in audit receipt for the final emitted addendum. */
   readonly receipt?: ContextReceiptOptions;
+  /** Opt-in telemetry for recall coverage and gap diagnostics. */
+  readonly telemetry?: RecallTelemetryOptions;
 }
 
 interface ConfirmedPref {
@@ -110,6 +114,7 @@ function readActiveHead(vault: string): string | null {
  * `topK` plus the active head are bounded by the shared char budget.
  */
 export function buildPreCompressPack(vault: string, opts: PreCompressOptions): PreCompressPack {
+  const startedAtMs = Date.now();
   const ranked = collectConfirmed(vault).toSorted((a, b) => {
     if (b.confidence !== a.confidence) return b.confidence - a.confidence;
     if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
@@ -191,12 +196,42 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
       })
     : null;
 
+  const telemetry = opts.telemetry
+    ? emitRecallTelemetry(vault, {
+        createdAt: opts.telemetry.createdAt,
+        host: opts.telemetry.host,
+        sessionId: opts.telemetry.sessionId,
+        turnId: opts.telemetry.turnId,
+        mode: "pre_compress",
+        status: activeText !== null || items.length > 0 ? "ok" : "empty",
+        durationMs: Date.now() - startedAtMs,
+        resultCount: items.length + (activeText !== null ? 1 : 0),
+        topArtifacts: [
+          ...(activeText !== null ? [{ id: ACTIVE_ID, path: brainActivePath(vault) }] : []),
+          ...items.slice(0, 10).map((item) => ({ id: item.id })),
+        ],
+        gaps: activeText === null && items.length === 0 ? ["no_matching_context"] : [],
+        metadata: {
+          ...(opts.telemetry.metadata ?? {}),
+          top_k: opts.topK,
+          total_chars: budgeted.totalChars,
+          active_head_included: activeText !== null,
+          ...(opts.maxCharsPerMemory !== undefined
+            ? { max_chars_per_memory: opts.maxCharsPerMemory }
+            : {}),
+          ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
+          ...(receipt ? { receipt_id: receipt.id } : {}),
+        },
+      })
+    : null;
+
   return Object.freeze({
     text,
     items: Object.freeze(items),
     activeHeadIncluded: activeText !== null,
     ...(safetyById.get(ACTIVE_ID) ? { activeHeadSafety: safetyById.get(ACTIVE_ID) } : {}),
     ...(receipt ? { receiptId: receipt.id } : {}),
+    ...(telemetry ? { telemetryId: telemetry.id } : {}),
     totalChars: budgeted.totalChars,
   });
 }

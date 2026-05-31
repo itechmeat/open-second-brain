@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
+import { listRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
 
 let vault: string;
 
@@ -38,4 +39,31 @@ test("brain context-pack --lanes --json returns polarity lanes", async () => {
   expect(json.lanes.constraints.map((item: { id: string }) => item.id)).toContain(
     "pref-constraint",
   );
+});
+
+test("brain context-pack can opt in to recall telemetry", async () => {
+  writePref("telemetry", "Prefer auditable context", "tier: core");
+
+  const out = await runCli(
+    [
+      "brain",
+      "context-pack",
+      "--vault",
+      vault,
+      "--max-tokens",
+      "10000",
+      "--telemetry",
+      "--telemetry-host",
+      "cli-test",
+      "--json",
+    ],
+    {},
+  );
+
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout);
+  expect(json.telemetry_id).toStartWith("ctn_");
+  const records = listRecallTelemetry(vault, { mode: "context_pack", host: "cli-test" });
+  expect(records).toHaveLength(1);
+  expect(records[0]!.payload).toMatchObject({ status: "ok", result_count: 1 });
 });

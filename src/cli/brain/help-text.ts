@@ -57,6 +57,7 @@ Brain verbs (observing memory):
   token-footprint     Report per-category vault token size with a warn threshold
   context-pack        Return a tier-then-recency vault slice under a token budget
   context-receipts    List/show prompt context receipt records
+  recall-telemetry    List/summarize opt-in recall telemetry records
   lint                Self-healing structural checks (--consolidate); --apply to write
   actions             Ranked maintenance action list (dedup + lint + footprint)
   summary             Operator dashboard: trust verdict, doctor/dream counts, actions
@@ -327,7 +328,7 @@ export const VERB_HELP: Record<string, string> = {
     "threshold (default 200000; override via --warn-threshold or the\n" +
     "BRAIN_TOKEN_WARN_THRESHOLD env var).\n",
   "context-pack":
-    "usage: o2b brain context-pack --max-tokens <n> [--query <q>] [--lanes] [--vault <path>] [--json]\n" +
+    "usage: o2b brain context-pack --max-tokens <n> [--query <q>] [--lanes] [--telemetry] [--telemetry-host <name>] [--vault <path>] [--json]\n" +
     "Return the highest-tier, most recent vault slice that fits under\n" +
     "<n> tokens. Items ordered core → supporting → peripheral, then\n" +
     "newest first. Stops adding pages when the next page would exceed\n" +
@@ -338,6 +339,10 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain context-receipts list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain context-receipts show <receipt-id> [--vault <path>] [--json]\n" +
     "Read prompt context receipt continuity records emitted by opt-in callers.\n",
+  "recall-telemetry":
+    "usage: o2b brain recall-telemetry list [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
+    "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +
+    "Read opt-in recall telemetry continuity records and aggregate coverage gaps.\n",
   lint:
     "usage: o2b brain lint --consolidate [--apply] [--yes] [--vault <path>] [--json]\n" +
     "Self-healing structural lint. Dry-run by default; --apply writes\n" +

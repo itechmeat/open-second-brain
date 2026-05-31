@@ -17,6 +17,10 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     "max-tokens": { type: "string" },
     query: { type: "string" },
     lanes: { type: "boolean" },
+    telemetry: { type: "boolean" },
+    "telemetry-host": { type: "string" },
+    "session-id": { type: "string" },
+    "turn-id": { type: "string" },
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
@@ -36,6 +40,19 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     maxTokens,
     ...(flags["query"] ? { query: flags["query"] as string } : {}),
     ...(flags["lanes"] === true ? { includeLanes: true } : {}),
+    ...(flags["telemetry"] === true
+      ? {
+          telemetry: {
+            host: trimOrDefault(flags["telemetry-host"], "cli"),
+            ...(trimOrUndefined(flags["session-id"]) !== undefined
+              ? { sessionId: trimOrUndefined(flags["session-id"]) }
+              : {}),
+            ...(trimOrUndefined(flags["turn-id"]) !== undefined
+              ? { turnId: trimOrUndefined(flags["turn-id"]) }
+              : {}),
+          },
+        }
+      : {}),
   });
 
   if (flags["json"]) {
@@ -49,6 +66,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
         tokens: i.tokens,
       })),
       skipped: report.skipped,
+      ...(report.telemetryId ? { telemetry_id: report.telemetryId } : {}),
       ...(report.lanes ? { lanes: report.lanes } : {}),
     });
     return 0;
@@ -61,4 +79,14 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     process.stdout.write(`[${i.tier}] ${i.id} (${i.tokens} tokens)\n`);
   }
   return 0;
+}
+
+function trimOrDefault(value: string | boolean | string[] | undefined, fallback: string): string {
+  return trimOrUndefined(value) ?? fallback;
+}
+
+function trimOrUndefined(value: string | boolean | string[] | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }

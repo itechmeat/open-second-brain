@@ -28,6 +28,7 @@ import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
+import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
 import {
   buildContextLanes,
   normalizeContextLane,
@@ -67,6 +68,7 @@ export interface ContextPackReport {
   readonly items: ReadonlyArray<ContextPackItem>;
   readonly skipped: ReadonlyArray<ContextPackSkipped>;
   readonly receiptId?: string;
+  readonly telemetryId?: string;
   readonly lanes?: ContextLanesReport;
 }
 
@@ -91,6 +93,8 @@ export interface ContextPackOptions {
   readonly includeLanes?: boolean;
   /** Opt-in audit receipt for the final emitted context. */
   readonly receipt?: ContextReceiptOptions;
+  /** Opt-in telemetry for recall coverage and gap diagnostics. */
+  readonly telemetry?: RecallTelemetryOptions;
 }
 
 interface Candidate {
@@ -186,14 +190,20 @@ function collectCandidates(vault: string): Candidate[] {
 }
 
 export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport {
+  const startedAtMs = Date.now();
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
-    return finalizeContextPackReport(vault, opts, {
-      maxTokens: 0,
-      tokensUsed: 0,
-      items: Object.freeze([]),
-      skipped: Object.freeze([]),
-      ...withOptionalLanes(opts, []),
-    });
+    return finalizeContextPackReport(
+      vault,
+      opts,
+      {
+        maxTokens: 0,
+        tokensUsed: 0,
+        items: Object.freeze([]),
+        skipped: Object.freeze([]),
+        ...withOptionalLanes(opts, []),
+      },
+      startedAtMs,
+    );
   }
   const query = opts.query ? normalizeForDedup(opts.query) : null;
   const candidates = collectCandidates(vault);
@@ -268,55 +278,105 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
           });
         }
       }
-      return finalizeContextPackReport(vault, opts, {
-        maxTokens: opts.maxTokens,
-        tokensUsed: recomputed,
-        items: Object.freeze(keptItems),
-        skipped: Object.freeze(skipped),
-        ...withOptionalLanes(opts, keptItems),
-      });
+      return finalizeContextPackReport(
+        vault,
+        opts,
+        {
+          maxTokens: opts.maxTokens,
+          tokensUsed: recomputed,
+          items: Object.freeze(keptItems),
+          skipped: Object.freeze(skipped),
+          ...withOptionalLanes(opts, keptItems),
+        },
+        startedAtMs,
+      );
     }
   }
 
-  return finalizeContextPackReport(vault, opts, {
-    maxTokens: opts.maxTokens,
-    tokensUsed: used,
-    items: Object.freeze(items),
-    skipped: Object.freeze(skipped),
-    ...withOptionalLanes(opts, items),
-  });
+  return finalizeContextPackReport(
+    vault,
+    opts,
+    {
+      maxTokens: opts.maxTokens,
+      tokensUsed: used,
+      items: Object.freeze(items),
+      skipped: Object.freeze(skipped),
+      ...withOptionalLanes(opts, items),
+    },
+    startedAtMs,
+  );
 }
 
 function finalizeContextPackReport(
   vault: string,
   opts: ContextPackOptions,
   report: ContextPackReport,
+  startedAtMs: number,
 ): ContextPackReport {
-  if (!opts.receipt) return Object.freeze(report);
-  const receipt = emitContextReceipt(vault, {
-    options: opts.receipt,
-    items: report.items.map((item) => ({
-      id: item.id,
-      path: item.path,
-      text: item.body,
-      tokens: item.tokens,
-      tier: item.tier,
-      trimmed: item.trimmed,
-      safetyFiltered: item.safety?.filtered,
-    })),
-    finalText: report.items.map((item) => item.body).join("\n\n"),
-    budget: {
-      max_tokens: report.maxTokens,
-      tokens_used: report.tokensUsed,
-      ...(opts.maxCharsPerMemory !== undefined
-        ? { max_chars_per_memory: opts.maxCharsPerMemory }
-        : {}),
-      ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
-    },
-    extra: {
-      skipped_count: report.skipped.length,
-      lanes: opts.includeLanes === true,
-    },
-  });
-  return Object.freeze({ ...report, receiptId: receipt.id });
+  let enriched = report;
+  if (opts.receipt) {
+    const receipt = emitContextReceipt(vault, {
+      options: opts.receipt,
+      items: report.items.map((item) => ({
+        id: item.id,
+        path: item.path,
+        text: item.body,
+        tokens: item.tokens,
+        tier: item.tier,
+        trimmed: item.trimmed,
+        safetyFiltered: item.safety?.filtered,
+      })),
+      finalText: report.items.map((item) => item.body).join("\n\n"),
+      budget: contextPackBudgetMetadata(opts, report),
+      extra: {
+        skipped_count: report.skipped.length,
+        lanes: opts.includeLanes === true,
+      },
+    });
+    enriched = { ...enriched, receiptId: receipt.id };
+  }
+  if (opts.telemetry) {
+    const telemetry = emitRecallTelemetry(vault, {
+      createdAt: opts.telemetry.createdAt,
+      host: opts.telemetry.host,
+      sessionId: opts.telemetry.sessionId,
+      turnId: opts.telemetry.turnId,
+      mode: "context_pack",
+      status: report.items.length > 0 ? "ok" : "empty",
+      durationMs: Date.now() - startedAtMs,
+      resultCount: report.items.length,
+      topArtifacts: report.items.slice(0, 10).map((item) => ({ id: item.id, path: item.path })),
+      gaps: contextPackGaps(report),
+      metadata: {
+        ...(opts.telemetry.metadata ?? {}),
+        ...contextPackBudgetMetadata(opts, report),
+        skipped_count: report.skipped.length,
+        lanes: opts.includeLanes === true,
+        ...(enriched.receiptId ? { receipt_id: enriched.receiptId } : {}),
+      },
+    });
+    enriched = { ...enriched, telemetryId: telemetry.id };
+  }
+  return Object.freeze(enriched);
+}
+
+function contextPackBudgetMetadata(
+  opts: ContextPackOptions,
+  report: ContextPackReport,
+): Record<string, unknown> {
+  return {
+    max_tokens: report.maxTokens,
+    tokens_used: report.tokensUsed,
+    ...(opts.maxCharsPerMemory !== undefined
+      ? { max_chars_per_memory: opts.maxCharsPerMemory }
+      : {}),
+    ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
+  };
+}
+
+function contextPackGaps(report: ContextPackReport): ReadonlyArray<string> {
+  const gaps = new Set<string>();
+  if (report.items.length === 0 && report.skipped.length === 0) gaps.add("no_matching_context");
+  for (const skipped of report.skipped) gaps.add(skipped.reason.replace(/-/g, "_"));
+  return [...gaps];
 }

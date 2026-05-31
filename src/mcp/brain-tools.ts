@@ -75,6 +75,16 @@ import {
   listContextReceipts,
   summarizeContextReceipt,
 } from "../core/brain/context-receipts.ts";
+import {
+  isRecallTelemetryMode,
+  isRecallTelemetryStatus,
+  listRecallTelemetry,
+  summarizeRecallTelemetry,
+  type RecallTelemetryFilter,
+  type RecallTelemetryMode,
+  type RecallTelemetryOptions,
+  type RecallTelemetryStatus,
+} from "../core/brain/recall-telemetry.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
@@ -1709,12 +1719,14 @@ async function toolBrainContextPack(
   const includeLanes = coerceBool(args, "lanes");
   const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
+  const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
   const report = packContext(ctx.vault, {
     maxTokens,
     ...(query ? { query } : {}),
     ...(includeLanes ? { includeLanes: true } : {}),
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+    ...(telemetry !== undefined ? { telemetry } : {}),
   });
   return {
     vault_path: ctx.vault,
@@ -1734,6 +1746,7 @@ async function toolBrainContextPack(
       tokens: s.tokens,
       reason: s.reason,
     })),
+    ...(report.telemetryId ? { telemetry_id: report.telemetryId } : {}),
     ...(report.lanes ? { lanes: report.lanes } : {}),
   };
 }
@@ -1802,6 +1815,67 @@ function optionalStringArg(
   return raw.trim();
 }
 
+// ----- brain_recall_telemetry ---------------------------------------------
+
+async function toolBrainRecallTelemetry(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_recall_telemetry", args, "operation");
+  const filter = recallTelemetryFilter(args);
+
+  if (operation === "list") {
+    const records = listRecallTelemetry(ctx.vault, filter);
+    return { vault_path: ctx.vault, total: records.length, records };
+  }
+  if (operation === "summary") {
+    const summary = summarizeRecallTelemetry(ctx.vault, filter);
+    return { ...summary };
+  }
+  throw new MCPError(INVALID_PARAMS, "brain_recall_telemetry: operation must be list or summary");
+}
+
+function recallTelemetryFilter(args: Record<string, unknown>): RecallTelemetryFilter {
+  const mode = coerceRecallTelemetryMode(args["mode"]);
+  const status = coerceRecallTelemetryStatus(args["status"]);
+  const host = optionalStringArg("brain_recall_telemetry", args, "host");
+  const since = optionalStringArg("brain_recall_telemetry", args, "since");
+  const until = optionalStringArg("brain_recall_telemetry", args, "until");
+  const limit = coercePositiveInteger("brain_recall_telemetry", "limit", args["limit"]);
+  return {
+    ...(mode !== undefined ? { mode } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(host !== undefined ? { host } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  };
+}
+
+function coerceRecallTelemetryMode(raw: unknown): RecallTelemetryMode | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isRecallTelemetryMode(trimmed)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_recall_telemetry: mode must be search, context_pack, or pre_compress",
+    );
+  }
+  return trimmed;
+}
+
+function coerceRecallTelemetryStatus(raw: unknown): RecallTelemetryStatus | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isRecallTelemetryStatus(trimmed)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_recall_telemetry: status must be ok, empty, error, or timeout",
+    );
+  }
+  return trimmed;
+}
+
 // ----- brain_pre_compress_pack (v0.20.0) -----------------------------------
 
 /** Parse an optional positive-integer arg, throwing INVALID_PARAMS otherwise. */
@@ -1840,10 +1914,12 @@ async function toolBrainPreCompressPack(
     "brain_pre_compress_pack",
   );
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_pre_compress_pack");
+  const telemetry = telemetryOptionsFromArgs("brain_pre_compress_pack", args, "mcp");
   const pack = buildPreCompressPack(ctx.vault, {
     topK,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+    ...(telemetry !== undefined ? { telemetry } : {}),
   });
   return {
     vault_path: ctx.vault,
@@ -1851,12 +1927,30 @@ async function toolBrainPreCompressPack(
     active_head_included: pack.activeHeadIncluded,
     ...(pack.activeHeadSafety ? { active_head_safety: pack.activeHeadSafety } : {}),
     total_chars: pack.totalChars,
+    ...(pack.telemetryId ? { telemetry_id: pack.telemetryId } : {}),
     items: pack.items.map((i) => ({
       id: i.id,
       principle: i.principle,
       trimmed: i.trimmed,
       ...(i.safety ? { safety: i.safety } : {}),
     })),
+  };
+}
+
+function telemetryOptionsFromArgs(
+  tool: string,
+  args: Record<string, unknown>,
+  defaultHost: string,
+): RecallTelemetryOptions | undefined {
+  if (!coerceBool(args, "telemetry")) return undefined;
+  return {
+    host: optionalStringArg(tool, args, "telemetry_host") ?? defaultHost,
+    ...(optionalStringArg(tool, args, "session_id") !== undefined
+      ? { sessionId: optionalStringArg(tool, args, "session_id") }
+      : {}),
+    ...(optionalStringArg(tool, args, "turn_id") !== undefined
+      ? { turnId: optionalStringArg(tool, args, "turn_id") }
+      : {}),
   };
 }
 
@@ -2446,6 +2540,23 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "When true, also return polarity-aware directives, constraints, and consider lanes. Legacy flat `items` remains present.",
         },
+        telemetry: {
+          type: "boolean",
+          description:
+            "When true, emit an opt-in recall telemetry record for this context-pack run.",
+        },
+        telemetry_host: {
+          type: "string",
+          description: "Optional host/runtime name for emitted telemetry; defaults to `mcp`.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional session id recorded on emitted telemetry.",
+        },
+        turn_id: {
+          type: "string",
+          description: "Optional turn id recorded on emitted telemetry.",
+        },
       },
       required: ["max_tokens"],
       additionalProperties: false,
@@ -2493,6 +2604,51 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainContextReceipts,
   },
   {
+    name: "brain_recall_telemetry",
+    description:
+      "List recall telemetry records or summarize recall coverage and knowledge gaps. Records are emitted only by opt-in callers. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["list", "summary"],
+          description: "Use list for raw records, summary for aggregate counts.",
+        },
+        mode: {
+          type: "string",
+          enum: ["search", "context_pack", "pre_compress"],
+          description: "Optional filter by recall mode.",
+        },
+        status: {
+          type: "string",
+          enum: ["ok", "empty", "error", "timeout"],
+          description: "Optional filter by telemetry status.",
+        },
+        host: {
+          type: "string",
+          description: "Optional filter by host/runtime name.",
+        },
+        since: {
+          type: "string",
+          description: "Optional inclusive lower timestamp bound.",
+        },
+        until: {
+          type: "string",
+          description: "Optional inclusive upper timestamp bound.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum record count for list.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainRecallTelemetry,
+  },
+  {
     // No preview budget: the addendum is meant to be injected whole and
     // is already bounded by its own per-entry / total character caps.
     name: "brain_pre_compress_pack",
@@ -2518,6 +2674,23 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           description:
             "Optional total character cap (code points) across the addendum; lowest-priority overflow is dropped.",
+        },
+        telemetry: {
+          type: "boolean",
+          description:
+            "When true, emit an opt-in recall telemetry record for this pre-compress run.",
+        },
+        telemetry_host: {
+          type: "string",
+          description: "Optional host/runtime name for emitted telemetry; defaults to `mcp`.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional session id recorded on emitted telemetry.",
+        },
+        turn_id: {
+          type: "string",
+          description: "Optional turn id recorded on emitted telemetry.",
         },
       },
       additionalProperties: false,
