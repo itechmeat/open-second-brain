@@ -8,7 +8,11 @@
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
 
-import { isVisible, normalizeVisibilityScope, pageVisibility } from "../../../src/core/graph/visibility.ts";
+import {
+  isVisible,
+  normalizeVisibilityScope,
+  pageVisibility,
+} from "../../../src/core/graph/visibility.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -53,7 +57,11 @@ describe("visibility scoping in search", () => {
     const defPaths = def.results.map((r) => r.path).toSorted();
     expect(defPaths).toEqual(["public.md"]);
 
-    const scoped = await search(cfg, { query: "lattice widgets", limit: 10, visibility: ["private"] });
+    const scoped = await search(cfg, {
+      query: "lattice widgets",
+      limit: 10,
+      visibility: ["private"],
+    });
     const scopedPaths = scoped.results.map((r) => r.path).toSorted();
     expect(scopedPaths).toEqual(["public.md", "secret.md"]);
   });
@@ -63,7 +71,11 @@ describe("visibility scoping in search", () => {
     // would otherwise let tagged pages truncate the window below `limit`.
     // The backfill must still surface `limit` untagged matches.
     for (let i = 0; i < 6; i++) {
-      writeMd(vault, `secret-${i}.md`, "---\nvisibility: [private]\n---\nlattice widget secret " + i);
+      writeMd(
+        vault,
+        `secret-${i}.md`,
+        "---\nvisibility: [private]\n---\nlattice widget secret " + i,
+      );
     }
     for (let i = 0; i < 4; i++) {
       writeMd(vault, `public-${i}.md`, "# Public " + i + "\n\nlattice widget public " + i);

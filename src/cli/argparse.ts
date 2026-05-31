@@ -35,14 +35,9 @@ export interface ParsedArgs {
  * Parse argv-tail for one subcommand. `argv` should be everything AFTER the
  * subcommand name. Unknown flags raise `CliError`.
  */
-export function parseFlags(
-  argv: ReadonlyArray<string>,
-  schema: FlagsSchema,
-): ParsedArgs {
+export function parseFlags(argv: ReadonlyArray<string>, schema: FlagsSchema): ParsedArgs {
   const effectiveSchema: FlagsSchema =
-    schema["json"] !== undefined
-      ? schema
-      : { ...schema, json: { type: "boolean" } };
+    schema["json"] !== undefined ? schema : { ...schema, json: { type: "boolean" } };
   const flags: Record<string, string | boolean | string[] | undefined> = {};
   const positional: string[] = [];
 
@@ -72,8 +67,7 @@ export function parseFlags(
         value = inlineVal;
       } else {
         const next = argv[++i];
-        if (next === undefined)
-          throw new CliError(`flag --${name} requires a value`);
+        if (next === undefined) throw new CliError(`flag --${name} requires a value`);
         value = next;
       }
       if (spec.type === "string") {

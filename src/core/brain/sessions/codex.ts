@@ -30,19 +30,14 @@ interface CodexBlock {
   readonly text?: string;
 }
 
-function buildMessageTurn(
-  obj: Record<string, unknown>,
-  fallbackIndex: number,
-): SessionTurn | null {
+function buildMessageTurn(obj: Record<string, unknown>, fallbackIndex: number): SessionTurn | null {
   const payload = obj["payload"] as Record<string, unknown> | undefined;
   if (!payload) return null;
   const role = payload["role"];
   if (role !== "user" && role !== "assistant" && role !== "system") return null;
   const turnId = `codex-msg-${fallbackIndex}`;
   const timestamp =
-    typeof obj["timestamp"] === "string"
-      ? (obj["timestamp"] as string)
-      : new Date(0).toISOString();
+    typeof obj["timestamp"] === "string" ? (obj["timestamp"] as string) : new Date(0).toISOString();
 
   const content = payload["content"];
   if (!Array.isArray(content)) {
@@ -52,10 +47,7 @@ function buildMessageTurn(
   for (const raw of content) {
     if (raw === null || typeof raw !== "object") continue;
     const b = raw as CodexBlock;
-    if (
-      (b.type === "input_text" || b.type === "output_text") &&
-      typeof b.text === "string"
-    ) {
+    if ((b.type === "input_text" || b.type === "output_text") && typeof b.text === "string") {
       texts.push(b.text);
     }
   }
@@ -76,9 +68,7 @@ function buildFunctionCallTurn(
   const name = payload["name"];
   if (typeof name !== "string" || name.length === 0) return null;
   const callId =
-    typeof payload["call_id"] === "string"
-      ? (payload["call_id"] as string)
-      : undefined;
+    typeof payload["call_id"] === "string" ? (payload["call_id"] as string) : undefined;
   // `arguments` is a JSON-encoded string in Codex's schema. Decode
   // defensively — a malformed JSON string surfaces as the raw text
   // under `_raw_arguments` so downstream validation can still report
@@ -88,11 +78,7 @@ function buildFunctionCallTurn(
   if (typeof rawArgs === "string" && rawArgs.length > 0) {
     try {
       const parsed = JSON.parse(rawArgs);
-      if (
-        parsed !== null &&
-        typeof parsed === "object" &&
-        !Array.isArray(parsed)
-      ) {
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
         input = parsed as Record<string, unknown>;
       } else {
         input = { _raw_arguments: rawArgs };
@@ -100,11 +86,7 @@ function buildFunctionCallTurn(
     } catch {
       input = { _raw_arguments: rawArgs };
     }
-  } else if (
-    rawArgs !== undefined &&
-    rawArgs !== null &&
-    typeof rawArgs === "object"
-  ) {
+  } else if (rawArgs !== undefined && rawArgs !== null && typeof rawArgs === "object") {
     input = rawArgs as Record<string, unknown>;
   }
   const tc: SessionToolCall = {
@@ -112,12 +94,9 @@ function buildFunctionCallTurn(
     input,
     ...(callId !== undefined ? { id: callId } : {}),
   };
-  const turnId =
-    callId !== undefined ? `codex-fc-${callId}` : `codex-fc-${fallbackIndex}`;
+  const turnId = callId !== undefined ? `codex-fc-${callId}` : `codex-fc-${fallbackIndex}`;
   const timestamp =
-    typeof obj["timestamp"] === "string"
-      ? (obj["timestamp"] as string)
-      : new Date(0).toISOString();
+    typeof obj["timestamp"] === "string" ? (obj["timestamp"] as string) : new Date(0).toISOString();
   return {
     turnId,
     timestamp,
@@ -142,9 +121,7 @@ export const codexAdapter: SessionAdapter = {
     const payload = o["payload"];
     if (payload === null || typeof payload !== "object") return false;
     const p = payload as Record<string, unknown>;
-    return (
-      p["originator"] === "codex_exec" || typeof p["cli_version"] === "string"
-    );
+    return p["originator"] === "codex_exec" || typeof p["cli_version"] === "string";
   },
   async *iterate(path: string): AsyncIterable<SessionTurn> {
     const text = readFileSync(path, "utf8");

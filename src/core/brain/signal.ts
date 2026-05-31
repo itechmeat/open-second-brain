@@ -153,10 +153,7 @@ export function writeSignal(
       `signal field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(sanitised.signal)}`,
     );
   }
-  if (
-    sanitised.source_type !== undefined &&
-    !isBrainSignalSourceType(sanitised.source_type)
-  ) {
+  if (sanitised.source_type !== undefined && !isBrainSignalSourceType(sanitised.source_type)) {
     throw new Error(
       `signal field 'source_type' must be 'live', 'inline', or 'session'; got ${JSON.stringify(sanitised.source_type)}`,
     );
@@ -207,10 +204,7 @@ export function writeSignal(
     metadata["source_type"] = sanitised.source_type;
   }
   if (sanitised.schema_type?.trim()) {
-    metadata["schema_type"] = validateSchemaToken(
-      sanitised.schema_type,
-      "schema_type",
-    );
+    metadata["schema_type"] = validateSchemaToken(sanitised.schema_type, "schema_type");
   }
   if (sanitised.dedup_hash && sanitised.dedup_hash.trim()) {
     metadata["dedup_hash"] = sanitised.dedup_hash.trim();
@@ -263,9 +257,7 @@ function sanitiseSignalInput(input: WriteSignalInput): WriteSignalInput {
         singleLine: true,
       })
     : input.scope;
-  const raw = input.raw
-    ? sanitiseTextField(input.raw, { maxLen: RAW_MAX_LEN })
-    : input.raw;
+  const raw = input.raw ? sanitiseTextField(input.raw, { maxLen: RAW_MAX_LEN }) : input.raw;
   const source = input.source
     ? input.source.map((s) =>
         sanitiseTextField(s, { maxLen: SOURCE_ITEM_MAX_LEN, singleLine: true }),
@@ -289,10 +281,7 @@ function sanitiseSignalInput(input: WriteSignalInput): WriteSignalInput {
  * field. `signal` value mismatch (anything outside positive/negative)
  * surfaces as a separate, distinguishable error.
  */
-export function parseSignal(
-  path: string,
-  options: ParseSignalOptions = {},
-): BrainSignal {
+export function parseSignal(path: string, options: ParseSignalOptions = {}): BrainSignal {
   const [meta, body] = parseFrontmatter(path);
 
   requireField(meta, "kind");
@@ -306,10 +295,7 @@ export function parseSignal(
   const tags = requireStringArray(meta, "tags");
   const topic = requireString(meta, "topic");
   const signalValue = requireString(meta, "signal");
-  if (
-    signalValue !== BRAIN_SIGNAL_SIGN.positive &&
-    signalValue !== BRAIN_SIGNAL_SIGN.negative
-  ) {
+  if (signalValue !== BRAIN_SIGNAL_SIGN.positive && signalValue !== BRAIN_SIGNAL_SIGN.negative) {
     throw new Error(
       `signal field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(signalValue)} (${path})`,
     );
@@ -336,9 +322,7 @@ export function parseSignal(
     }
     for (const item of meta["source"]) {
       if (typeof item !== "string") {
-        throw new Error(
-          `signal field 'source' must be an array of strings (${path})`,
-        );
+        throw new Error(`signal field 'source' must be an array of strings (${path})`);
       }
     }
     source = [...(meta["source"] as ReadonlyArray<string>)];
@@ -352,14 +336,10 @@ export function parseSignal(
   // silently misdecoding a future or hand-authored payload.
   const rawCodec = meta["_raw_codec"];
   if (rawCodec !== undefined && rawCodec !== CODEC_VERSION) {
-    throw new Error(
-      `signal field '_raw_codec' must be ${JSON.stringify(CODEC_VERSION)} (${path})`,
-    );
+    throw new Error(`signal field '_raw_codec' must be ${JSON.stringify(CODEC_VERSION)} (${path})`);
   }
   const raw =
-    rawSection !== undefined && rawCodec === CODEC_VERSION
-      ? expand(rawSection)
-      : rawSection;
+    rawSection !== undefined && rawCodec === CODEC_VERSION ? expand(rawSection) : rawSection;
 
   // Capture-extension optional fields. Absence stays as `undefined`
   // on the returned object — never coerced to a default, so callers
@@ -386,10 +366,7 @@ export function parseSignal(
   if (meta["schema_type"] !== undefined) {
     schema_type = validateSchemaToken(meta["schema_type"], "schema_type");
     const vocab = options.schemaVocabulary;
-    if (
-      vocab !== undefined &&
-      !isKnownSchemaToken(vocab, "signal_types", schema_type)
-    ) {
+    if (vocab !== undefined && !isKnownSchemaToken(vocab, "signal_types", schema_type)) {
       throw new Error(
         `schema_type ${JSON.stringify(schema_type)} is not declared in signal_types (${path})`,
       );
@@ -502,10 +479,7 @@ function composeSignalTags(input: WriteSignalInput): string[] {
   // Non-default source_type gets its own tag so Obsidian users can
   // filter `tag:brain/source/inline` etc. `live` is the implicit
   // default and stays tag-less.
-  if (
-    input.source_type !== undefined &&
-    input.source_type !== BRAIN_SIGNAL_SOURCE_TYPE.live
-  ) {
+  if (input.source_type !== undefined && input.source_type !== BRAIN_SIGNAL_SOURCE_TYPE.live) {
     push(`brain/source/${input.source_type}`);
   }
   for (const t of input.extraTags ?? []) {
@@ -551,10 +525,7 @@ function requireField(meta: Record<string, unknown>, field: string): void {
   if (!(field in meta) || meta[field] === undefined || meta[field] === null) {
     throw new Error(`signal missing field: ${field}`);
   }
-  if (
-    typeof meta[field] === "string" &&
-    (meta[field] as string).trim() === ""
-  ) {
+  if (typeof meta[field] === "string" && (meta[field] as string).trim() === "") {
     throw new Error(`signal missing field: ${field}`);
   }
 }
@@ -568,10 +539,7 @@ function requireString(meta: Record<string, unknown>, field: string): string {
   return v;
 }
 
-function requireStringArray(
-  meta: Record<string, unknown>,
-  field: string,
-): ReadonlyArray<string> {
+function requireStringArray(meta: Record<string, unknown>, field: string): ReadonlyArray<string> {
   requireField(meta, field);
   const v = meta[field];
   if (!Array.isArray(v)) {

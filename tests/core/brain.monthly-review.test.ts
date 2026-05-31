@@ -6,10 +6,7 @@ import { join } from "node:path";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { buildMonthlyReview } from "../../src/core/brain/monthly-review.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
-import {
-  BRAIN_APPLY_RESULT,
-  BRAIN_LOG_EVENT_KIND,
-} from "../../src/core/brain/types.ts";
+import { BRAIN_APPLY_RESULT, BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 
 let vault: string;
 

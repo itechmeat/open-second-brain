@@ -31,12 +31,9 @@ afterEach(() => {
 
 describe("o2b brain monthly", () => {
   test("prints JSON monthly review", async () => {
-    const result = await runCli(
-      ["brain", "monthly", "--json", "--month", "2026-05"],
-      {
-        env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
-      },
-    );
+    const result = await runCli(["brain", "monthly", "--json", "--month", "2026-05"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(result.returncode).toBe(0);
     const payload = JSON.parse(result.stdout) as {
       month: string;

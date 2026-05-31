@@ -417,7 +417,10 @@ describe("brain_digest", () => {
   });
 
   test("uses configured markdown link output in Markdown digest", async () => {
-    atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\nlink_output_format: markdown\n`);
+    atomicWriteFileSync(
+      configPath,
+      `vault: ${vault}\nagent_name: claude\nlink_output_format: markdown\n`,
+    );
     writePreference(vault, {
       slug: "confirmed-rule",
       topic: "confirmed-rule",

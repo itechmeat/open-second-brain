@@ -53,12 +53,9 @@ describe("o2b brain intent-review", () => {
   });
 
   test("rejects malformed --now", async () => {
-    const result = await runCli(
-      ["brain", "intent-review", "--now", "not-a-date"],
-      {
-        env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
-      },
-    );
+    const result = await runCli(["brain", "intent-review", "--now", "not-a-date"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(result.returncode).toBe(1);
     expect(result.stderr).toContain("invalid --now");
   });

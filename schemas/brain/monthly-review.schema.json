@@ -20,13 +20,7 @@
     },
     "summary": {
       "type": "object",
-      "required": [
-        "events",
-        "status_transitions",
-        "retired",
-        "contradictions",
-        "neglected_areas"
-      ],
+      "required": ["events", "status_transitions", "retired", "contradictions", "neglected_areas"],
       "additionalProperties": false,
       "properties": {
         "events": { "type": "integer" },

@@ -36,7 +36,9 @@ describe("help", () => {
 describe("status", () => {
   test("reports missing config", async () => {
     const config = join(tmp, "missing.yaml");
-    const r = await runCli(["status"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+    const r = await runCli(["status"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("config_exists: false");
     expect(r.stdout).toContain(config);
@@ -129,7 +131,9 @@ describe("init", () => {
 describe("doctor", () => {
   test("errors when no vault anywhere", async () => {
     const cfg = join(tmp, "config.yaml");
-    const r = await runCli(["doctor"], { env: { OPEN_SECOND_BRAIN_CONFIG: cfg } });
+    const r = await runCli(["doctor"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: cfg },
+    });
     expect(r.returncode).not.toBe(0);
     expect(r.stderr.toLowerCase()).toContain("no vault configured");
   });
@@ -172,7 +176,9 @@ describe("doctor", () => {
 describe("index", () => {
   test("errors when no vault anywhere", async () => {
     const cfg = join(tmp, "config.yaml");
-    const r = await runCli(["index"], { env: { OPEN_SECOND_BRAIN_CONFIG: cfg } });
+    const r = await runCli(["index"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: cfg },
+    });
     expect(r.returncode).not.toBe(0);
     expect(r.stderr.toLowerCase()).toContain("no vault configured");
   });
@@ -211,7 +217,10 @@ describe("secrets", () => {
     writeFileSync(config, 'github_token: "$secret:GITHUB_TOKEN"\nplain: visible\n');
 
     const r = await runCli(["secrets", "list", "--config", config, "--json"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config, GITHUB_TOKEN: "ghp_secret_value" },
+      env: {
+        OPEN_SECOND_BRAIN_CONFIG: config,
+        GITHUB_TOKEN: "ghp_secret_value",
+      },
     });
 
     expect(r.returncode).toBe(0);
@@ -230,7 +239,10 @@ describe("secrets", () => {
     const config = join(tmp, "config.yaml");
 
     const r = await runCli(["secrets", "status", "GITHUB_TOKEN", "--config", config, "--json"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config, GITHUB_TOKEN: "ghp_secret_value" },
+      env: {
+        OPEN_SECOND_BRAIN_CONFIG: config,
+        GITHUB_TOKEN: "ghp_secret_value",
+      },
     });
 
     expect(r.returncode).toBe(0);

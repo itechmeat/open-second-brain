@@ -20,10 +20,7 @@ export function isCompletionShell(value: string): value is CompletionShell {
   return (COMPLETION_SHELLS as ReadonlyArray<string>).includes(value);
 }
 
-export function renderCompletions(
-  shell: CompletionShell,
-  manifest: CliRootManifest,
-): string {
+export function renderCompletions(shell: CompletionShell, manifest: CliRootManifest): string {
   const roots = commandNames(manifest);
   const brain = nestedCommandNames("brain");
   const search = nestedCommandNames("search");

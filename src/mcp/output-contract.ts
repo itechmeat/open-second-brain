@@ -16,20 +16,11 @@ export interface OutputSchema {
   readonly additionalProperties?: boolean | OutputSchema;
 }
 
-export function validateOutputContract(
-  schema: OutputSchema,
-  value: unknown,
-  path = "$",
-): string[] {
+export function validateOutputContract(schema: OutputSchema, value: unknown, path = "$"): string[] {
   const errors: string[] = [];
 
-  if (
-    schema.enum &&
-    !schema.enum.some((expected) => Object.is(expected, value))
-  ) {
-    errors.push(
-      `${path}: expected one of ${schema.enum.map(String).join(", ")}`,
-    );
+  if (schema.enum && !schema.enum.some((expected) => Object.is(expected, value))) {
+    errors.push(`${path}: expected one of ${schema.enum.map(String).join(", ")}`);
     return errors;
   }
 
@@ -53,24 +44,19 @@ export function validateOutputContract(
     const properties = schema.properties ?? {};
     for (const [key, childSchema] of Object.entries(properties)) {
       if (hasOwn(value, key)) {
-        errors.push(
-          ...validateOutputContract(childSchema, value[key], `${path}.${key}`),
-        );
+        errors.push(...validateOutputContract(childSchema, value[key], `${path}.${key}`));
       }
     }
 
     const additional = schema.additionalProperties;
     if (additional === false) {
       for (const key of Object.keys(value)) {
-        if (!hasOwn(properties, key))
-          errors.push(`${path}: unexpected property '${key}'`);
+        if (!hasOwn(properties, key)) errors.push(`${path}: unexpected property '${key}'`);
       }
     } else if (typeof additional === "object") {
       for (const [key, childValue] of Object.entries(value)) {
         if (!hasOwn(properties, key)) {
-          errors.push(
-            ...validateOutputContract(additional, childValue, `${path}.${key}`),
-          );
+          errors.push(...validateOutputContract(additional, childValue, `${path}.${key}`));
         }
       }
     }
@@ -83,9 +69,7 @@ export function validateOutputContract(
     }
     if (schema.items) {
       value.forEach((item, index) => {
-        errors.push(
-          ...validateOutputContract(schema.items!, item, `${path}[${index}]`),
-        );
+        errors.push(...validateOutputContract(schema.items!, item, `${path}[${index}]`));
       });
     }
   }
@@ -109,10 +93,8 @@ function matchesType(value: unknown, type: OutputSchemaType): boolean {
   if (type === "null") return value === null;
   if (type === "array") return Array.isArray(value);
   if (type === "object") return isRecord(value);
-  if (type === "integer")
-    return typeof value === "number" && Number.isInteger(value);
-  if (type === "number")
-    return typeof value === "number" && Number.isFinite(value);
+  if (type === "integer") return typeof value === "number" && Number.isInteger(value);
+  if (type === "number") return typeof value === "number" && Number.isFinite(value);
   return typeof value === type;
 }
 

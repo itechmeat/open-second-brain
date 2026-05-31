@@ -177,9 +177,7 @@ export function buildMorningBrief(vault: string, opts: MorningBriefOptions): Mor
 
   const sections: string[] = [];
   if (preferences.length > 0) {
-    sections.push(
-      ["## Top preferences", ...preferences.map((p) => `- ${p.principle}`)].join("\n"),
-    );
+    sections.push(["## Top preferences", ...preferences.map((p) => `- ${p.principle}`)].join("\n"));
   }
   if (keptQuestions.length > 0) {
     sections.push(

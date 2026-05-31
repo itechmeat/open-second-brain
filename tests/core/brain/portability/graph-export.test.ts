@@ -12,10 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  exportVaultGraph,
-  GRAPH_VERSION,
-} from "../../../../src/core/brain/portability/graph.ts";
+import { exportVaultGraph, GRAPH_VERSION } from "../../../../src/core/brain/portability/graph.ts";
 
 let vault: string;
 beforeEach(() => {
@@ -43,7 +40,10 @@ describe("exportVaultGraph", () => {
 
   test("excludes the Brain machinery root", () => {
     note("Notes/User.md", "---\ntitle: User\n---\nx\n");
-    note("Brain/preferences/pref-x.md", "---\nkind: brain-preference\nid: pref-x\ntitle: PrefX\n---\ny\n");
+    note(
+      "Brain/preferences/pref-x.md",
+      "---\nkind: brain-preference\nid: pref-x\ntitle: PrefX\n---\ny\n",
+    );
     const ids = exportVaultGraph(vault).nodes.map((n) => n.id);
     expect(ids).toContain("User");
     expect(ids).not.toContain("pref-x");

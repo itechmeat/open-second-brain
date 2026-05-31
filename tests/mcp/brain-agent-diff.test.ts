@@ -6,11 +6,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import {
-  JSONRPC_VERSION,
-  MCPServer,
-  PROTOCOL_VERSION,
-} from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
 let tmp: string;
 let vault: string;
@@ -63,11 +59,7 @@ async function initialize(server: MCPServer): Promise<void> {
   });
 }
 
-async function call(
-  server: MCPServer,
-  name: string,
-  args: Record<string, unknown>,
-): Promise<any> {
+async function call(server: MCPServer, name: string, args: Record<string, unknown>): Promise<any> {
   return server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 99,

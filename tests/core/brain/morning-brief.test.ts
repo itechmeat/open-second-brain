@@ -74,7 +74,12 @@ describe("buildMorningBrief", () => {
     appendLogEvent(vault, {
       timestamp: "2026-05-28T09:01:00Z",
       eventType: "reconcile",
-      body: { topic: "freshness-one", domain: "source-freshness", resolution: "auto-resolved", winner_sign: "negative" },
+      body: {
+        topic: "freshness-one",
+        domain: "source-freshness",
+        resolution: "auto-resolved",
+        winner_sign: "negative",
+      },
     });
     const brief = buildMorningBrief(vault, { now, topK: 5, lookbackDays: 7 });
     expect(brief.openQuestions.map((q) => q.topic)).toEqual(["commit-style"]);

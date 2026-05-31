@@ -1,10 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { defaultConfigPath } from "../../../core/config.ts";
-import {
-  importVaultGraph,
-  type GraphImportMode,
-} from "../../../core/brain/portability/graph.ts";
+import { importVaultGraph, type GraphImportMode } from "../../../core/brain/portability/graph.ts";
 import { fail, parse, resolveBrainVault } from "../helpers.ts";
 
 const MODES: ReadonlyArray<GraphImportMode> = ["skip", "overwrite", "merge"];

@@ -91,9 +91,7 @@ describe("queryAgentSources", () => {
       "signal:sig-2026-05-20-agent-query",
       "preference:pref-agent-query",
     ]);
-    expect(result.summary).toBe(
-      "claude: 2 contributions across 1 topic (preference, signal).",
-    );
+    expect(result.summary).toBe("claude: 2 contributions across 1 topic (preference, signal).");
   });
 
   test("filters by kind, topic, free-text query, and limit", () => {
@@ -122,8 +120,6 @@ describe("queryAgentSources", () => {
     expect(result.unknown_agents).toEqual(["copilot"]);
     expect(result.total_matched).toBe(0);
     expect(result.contributions).toEqual([]);
-    expect(result.summary).toBe(
-      "No contributions matched the selected filters.",
-    );
+    expect(result.summary).toBe("No contributions matched the selected filters.");
   });
 });

@@ -60,7 +60,11 @@ test("confirmed preferences are ranked by confidence then capped to topK", () =>
 });
 
 test("unconfirmed and quarantine preferences are excluded", () => {
-  makePref({ slug: "ok", principle: "confirmed one", status: BRAIN_PREFERENCE_STATUS.confirmed });
+  makePref({
+    slug: "ok",
+    principle: "confirmed one",
+    status: BRAIN_PREFERENCE_STATUS.confirmed,
+  });
   makePref({
     slug: "trial",
     principle: "unconfirmed one",

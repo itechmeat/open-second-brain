@@ -44,9 +44,7 @@ describe("resolveRoleToken", () => {
     expect(resolveRoleToken({}, "inbox")).toBe(DEFAULT_ROLE_TOKENS["inbox"]!);
   });
   test("returns the override when present", () => {
-    expect(resolveRoleToken({ inbox: "Zettelkasten/Inbox" }, "inbox")).toBe(
-      "Zettelkasten/Inbox",
-    );
+    expect(resolveRoleToken({ inbox: "Zettelkasten/Inbox" }, "inbox")).toBe("Zettelkasten/Inbox");
   });
   test("strips surrounding braces and whitespace", () => {
     expect(resolveRoleToken({ inbox: "In" }, "{{ inbox }}")).toBe("In");

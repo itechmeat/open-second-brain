@@ -16,10 +16,7 @@ import { moveToRetired } from "../../../src/core/brain/preference.ts";
 import { mergePreferences } from "../../../src/core/brain/merge.ts";
 import { readPrefAudit } from "../../../src/core/brain/pref-audit.ts";
 import { preferencePath } from "../../../src/core/brain/paths.ts";
-import {
-  BRAIN_PREFERENCE_STATUS,
-  BRAIN_RETIRED_REASON,
-} from "../../../src/core/brain/types.ts";
+import { BRAIN_PREFERENCE_STATUS, BRAIN_RETIRED_REASON } from "../../../src/core/brain/types.ts";
 import type { WritePreferenceInput } from "../../../src/core/brain/preference.ts";
 
 let vault: string;
@@ -57,7 +54,14 @@ const audit = (agent = "dream", reason?: string) => ({
 
 describe("writePreferenceTxn audit sink", () => {
   test("records a create on the first write", () => {
-    writePreferenceTxn(vault, baseInput(), [], { overwrite: false }, undefined, audit("dream", "promoted from cluster"));
+    writePreferenceTxn(
+      vault,
+      baseInput(),
+      [],
+      { overwrite: false },
+      undefined,
+      audit("dream", "promoted from cluster"),
+    );
     const { records } = readPrefAudit(vault, "pref-foo");
     expect(records).toHaveLength(1);
     expect(records[0]!.op).toBe("create");
@@ -71,7 +75,10 @@ describe("writePreferenceTxn audit sink", () => {
     writePreferenceTxn(vault, baseInput(), [], { overwrite: false }, undefined, audit());
     writePreferenceTxn(
       vault,
-      baseInput({ status: BRAIN_PREFERENCE_STATUS.confirmed, confirmed_at: "2026-05-29T12:00:00Z" }),
+      baseInput({
+        status: BRAIN_PREFERENCE_STATUS.confirmed,
+        confirmed_at: "2026-05-29T12:00:00Z",
+      }),
       [],
       { overwrite: true },
       undefined,
@@ -84,7 +91,10 @@ describe("writePreferenceTxn audit sink", () => {
   test("does NOT record a counter-only update (content unchanged)", () => {
     writePreferenceTxn(
       vault,
-      baseInput({ status: BRAIN_PREFERENCE_STATUS.confirmed, confirmed_at: "2026-05-29T12:00:00Z" }),
+      baseInput({
+        status: BRAIN_PREFERENCE_STATUS.confirmed,
+        confirmed_at: "2026-05-29T12:00:00Z",
+      }),
       [],
       { overwrite: false },
       undefined,
@@ -118,7 +128,10 @@ describe("moveToRetired audit sink", () => {
   test("records a retire keyed by the original pref id", () => {
     writePreferenceTxn(
       vault,
-      baseInput({ status: BRAIN_PREFERENCE_STATUS.confirmed, confirmed_at: "2026-05-29T12:00:00Z" }),
+      baseInput({
+        status: BRAIN_PREFERENCE_STATUS.confirmed,
+        confirmed_at: "2026-05-29T12:00:00Z",
+      }),
       [],
       { overwrite: false },
       undefined,

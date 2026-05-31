@@ -76,7 +76,7 @@ function writePackPref(slug: string, topic: string, principle: string, body: str
     status: BRAIN_PREFERENCE_STATUS.confirmed,
     evidenced_by: [`[[sig-2026-05-31-${slug}]]`],
     confirmed_at: "2026-05-31T00:00:00Z",
-    how_to_apply: body,
+    howToApply: body,
   });
 }
 
@@ -90,7 +90,10 @@ describe("PayloadRegistry", () => {
     expect(result.text).not.toContain("A".repeat(80));
     expect(result.payloads).toHaveLength(1);
     expect(result.payloads[0]!.placeholder).toContain("osb-payload://");
-    const page = registry.get(result.payloads[0]!.ref, { offset: 0, limit: 22 });
+    const page = registry.get(result.payloads[0]!.ref, {
+      offset: 0,
+      limit: 22,
+    });
     expect(page.content).toBe("data:image/png;base64,");
     expect(page.nextOffset).toBe(22);
   });

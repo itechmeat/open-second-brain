@@ -104,8 +104,6 @@ describe("session codec", () => {
   });
 
   test("expand tolerates non-codec text (no markers) by returning it unchanged", () => {
-    expect(expand("just plain text, never compressed")).toBe(
-      "just plain text, never compressed",
-    );
+    expect(expand("just plain text, never compressed")).toBe("just plain text, never compressed");
   });
 });

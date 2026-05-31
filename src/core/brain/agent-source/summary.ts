@@ -10,9 +10,7 @@ export function summarizeAgentContributions(
 
   const lines: string[] = [];
   for (const agent of agents) {
-    const agentContributions = contributions.filter((c) =>
-      c.agents.includes(agent),
-    );
+    const agentContributions = contributions.filter((c) => c.agents.includes(agent));
     if (agentContributions.length === 0) continue;
     const topics = new Set<string>();
     const kinds = new Set<string>();
@@ -26,7 +24,5 @@ export function summarizeAgentContributions(
     );
   }
 
-  return lines.length > 0
-    ? lines.join("\n")
-    : "No contributions matched the selected filters.";
+  return lines.length > 0 ? lines.join("\n") : "No contributions matched the selected filters.";
 }

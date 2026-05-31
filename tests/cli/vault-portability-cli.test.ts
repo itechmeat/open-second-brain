@@ -25,12 +25,18 @@ afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
 async function bootstrap(): Promise<void> {
   expect(
-    (await runCli(["init", "--vault", vault, "--name", "T"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } }))
-      .returncode,
+    (
+      await runCli(["init", "--vault", vault, "--name", "T"], {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      })
+    ).returncode,
   ).toBe(0);
   expect(
-    (await runCli(["brain", "init", "--vault", vault], { env: { OPEN_SECOND_BRAIN_CONFIG: config } }))
-      .returncode,
+    (
+      await runCli(["brain", "init", "--vault", vault], {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      })
+    ).returncode,
   ).toBe(0);
 }
 
@@ -48,7 +54,9 @@ describe("o2b brain codec", () => {
 describe("o2b brain sources / graph", () => {
   test("sources --json on a fresh vault", async () => {
     await bootstrap();
-    const r = await runCli(["brain", "sources", "--json"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+    const r = await runCli(["brain", "sources", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(JSON.parse(r.stdout).sources).toEqual([]);
   });
@@ -56,7 +64,9 @@ describe("o2b brain sources / graph", () => {
   test("graph-export then graph-import round-trips a user page", async () => {
     await bootstrap();
     writeFileSync(join(vault, "Note.md"), "---\ntitle: Note\n---\nlinks to [[Other]].\n");
-    const exp = await runCli(["brain", "graph-export"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+    const exp = await runCli(["brain", "graph-export"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(exp.returncode).toBe(0);
     const graphFile = join(tmp, "graph.json");
     writeFileSync(graphFile, exp.stdout);
@@ -82,7 +92,9 @@ describe("o2b vault profile / map", () => {
   test("profile create / switch / list", async () => {
     await bootstrap();
     const env = { OPEN_SECOND_BRAIN_CONFIG: config };
-    expect((await runCli(["vault", "profile", "create", "work", "/srv/v/work"], { env })).returncode).toBe(0);
+    expect(
+      (await runCli(["vault", "profile", "create", "work", "/srv/v/work"], { env })).returncode,
+    ).toBe(0);
     expect((await runCli(["vault", "profile", "switch", "work"], { env })).returncode).toBe(0);
     const list = await runCli(["vault", "profile", "list", "--json"], { env });
     expect(list.returncode).toBe(0);
@@ -91,7 +103,9 @@ describe("o2b vault profile / map", () => {
 
   test("map --json shows the default token table", async () => {
     await bootstrap();
-    const r = await runCli(["vault", "map", "--json"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+    const r = await runCli(["vault", "map", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(JSON.parse(r.stdout).inbox).toBe("inbox");
   });

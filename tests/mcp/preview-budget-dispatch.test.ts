@@ -34,7 +34,9 @@ afterEach(() => {
 
 describe("buildMcpToolResult preview budget", () => {
   test("over-budget output: content is a preview envelope, structuredContent stays full", () => {
-    const structured = { rows: Array.from({ length: 200 }, (_, i) => ({ i, pad: "x".repeat(40) })) };
+    const structured = {
+      rows: Array.from({ length: 200 }, (_, i) => ({ i, pad: "x".repeat(40) })),
+    };
     const result = buildMcpToolResult(tool({ previewBudget: 300 }), structured, store);
 
     const content = result["content"] as Array<{ type: string; text: string }>;
@@ -61,7 +63,9 @@ describe("buildMcpToolResult preview budget", () => {
   });
 
   test("a tool with no budget is never truncated regardless of size", () => {
-    const structured = { rows: Array.from({ length: 500 }, (_, i) => ({ i, pad: "y".repeat(40) })) };
+    const structured = {
+      rows: Array.from({ length: 500 }, (_, i) => ({ i, pad: "y".repeat(40) })),
+    };
     const result = buildMcpToolResult(tool({}), structured, store);
     const content = result["content"] as Array<{ type: string; text: string }>;
     expect(content[0]!.text).not.toContain("preview_truncated");

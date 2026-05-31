@@ -37,7 +37,10 @@ export function buildKnowledgePackPreview(
   const entries: KnowledgePackPreviewEntry[] = [];
   for (const row of rows) {
     const guarded = guardBrainContextSnippet(`${row.principle}\n${row.body}`, {
-      source: { id: row.id, metadata: { topic: row.topic, principle: row.principle } },
+      source: {
+        id: row.id,
+        metadata: { topic: row.topic, principle: row.principle },
+      },
     });
     const safety = contextSafetyReport(guarded);
     if (safety?.filtered) {

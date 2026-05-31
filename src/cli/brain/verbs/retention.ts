@@ -35,9 +35,7 @@ export async function cmdBrainRetention(argv: string[]): Promise<number> {
   return 0;
 }
 
-function parseNow(
-  raw: string | boolean | string[] | undefined,
-): Date | undefined {
+function parseNow(raw: string | boolean | string[] | undefined): Date | undefined {
   if (raw === undefined || raw === false) return undefined;
   if (typeof raw !== "string" || raw.trim().length === 0) {
     throw new CliError("brain retention: --now must be an ISO-8601 timestamp");

@@ -374,7 +374,9 @@ export function renderDigest(vault: string, opts: RenderDigestOptions = {}): Ren
 
   // Markdown.
   const linkOutputFormat = opts.linkOutputFormat ?? "wikilink";
-  const baseMd = empty ? renderEmptyMarkdown(until) : renderMarkdown(data, since, until, linkOutputFormat);
+  const baseMd = empty
+    ? renderEmptyMarkdown(until)
+    : renderMarkdown(data, since, until, linkOutputFormat);
   const trustSection = renderTrustSection(opts.doctorResult, opts.dreamSummary);
   const content = trustSection ? `${baseMd}\n${trustSection}` : baseMd;
   return Object.freeze({ content, empty });

@@ -39,16 +39,8 @@ import { basename, join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { regenerateActiveQuiet } from "./active.ts";
-import {
-  openWorkrun,
-  WORKRUN_PHASE,
-  type WorkrunHandle,
-} from "./dream-workrun.ts";
-import {
-  DREAM_PHASE,
-  type DreamPhase,
-  type DreamPhaseSummary,
-} from "./dream-phases.ts";
+import { openWorkrun, WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
+import { DREAM_PHASE, type DreamPhase, type DreamPhaseSummary } from "./dream-phases.ts";
 import {
   resolveContradiction,
   type ContradictionInput,
@@ -57,17 +49,10 @@ import {
 import { extractTemporalConstraints } from "./temporal-extract.ts";
 import { runHealEnrichment } from "./heal-run.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
-import {
-  buildIntentReview,
-  type BrainIntentReviewEntry,
-} from "./intent-review.ts";
+import { buildIntentReview, type BrainIntentReviewEntry } from "./intent-review.ts";
 import { writePreferenceTxn } from "./preference-txn.ts";
 import { appendLogEvent, parseLogDay, type BrainLogEntry } from "./log.ts";
-import {
-  moveToRetired,
-  parsePreference,
-  wouldRewritePreference,
-} from "./preference.ts";
+import { moveToRetired, parsePreference, wouldRewritePreference } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
 import { isPinned } from "./pin.ts";
 import { createSnapshot, pruneSnapshots } from "./snapshot.ts";
@@ -324,9 +309,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   const warnings: DreamWarning[] = [];
   const callerAgent = opts.agentName?.trim() ?? "";
   const isNonPrimary =
-    cfg.primary_agent !== null &&
-    callerAgent.length > 0 &&
-    callerAgent !== cfg.primary_agent;
+    cfg.primary_agent !== null && callerAgent.length > 0 && callerAgent !== cfg.primary_agent;
   if (isNonPrimary) {
     warnings.push({
       code: "non-primary-dream-run",
@@ -484,9 +467,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           topic: np.topic,
           principle: np.principle,
           created_at: isoSecond(now),
-          unconfirmed_until: isoSecond(
-            addDays(now, cfg.dream.unconfirmed_window_days),
-          ),
+          unconfirmed_until: isoSecond(addDays(now, cfg.dream.unconfirmed_window_days)),
           status: BRAIN_PREFERENCE_STATUS.unconfirmed,
           evidenced_by: np.evidencedBy,
           // No evidence yet → Wilson lower bound on (0, 0) is 0. Pre-
@@ -557,9 +538,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       if (gateThreshold !== undefined && gateThreshold > 0) {
         try {
           const existing = parsePreference(fromPath);
-          if (
-            shouldGateRetireFromConfirmed(existing, r.reason, gateThreshold)
-          ) {
+          if (shouldGateRetireFromConfirmed(existing, r.reason, gateThreshold)) {
             gatedRetires.push({
               pref_id: existing.id,
               topic: existing.topic,
@@ -615,9 +594,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       try {
         healEnriched = runHealEnrichment(vault).enriched;
       } catch (err) {
-        process.stderr.write(
-          `warning: heal enrichment failed: ${(err as Error).message}\n`,
-        );
+        process.stderr.write(`warning: heal enrichment failed: ${(err as Error).message}\n`);
       }
     }
   } else {
@@ -646,9 +623,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // exclude retires the destructive-from-confirmed gate skipped, or
   // the next dream pass would parse a `pref-foo` log claiming the
   // pref was retired while the file is still in `preferences/`.
-  const gatedSlugs = new Set(
-    gatedRetires.map((g) => g.pref_id.replace(/^pref-/, "")),
-  );
+  const gatedSlugs = new Set(gatedRetires.map((g) => g.pref_id.replace(/^pref-/, "")));
 
   // Emit log entries: skip-corrupted-frontmatter first (chronological
   // sense: corruption was detected during planning), then per-topic
@@ -759,23 +734,18 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     const confirmedIds = Array.from(refresh.confirmed.values()).map((slug) =>
       renderPrefLink({
         id: `pref-${slug}`,
-        principle:
-          refresh.updated.get(slug)?.principle ??
-          slugToPrefPrinciple.get(slug) ??
-          "",
+        principle: refresh.updated.get(slug)?.principle ?? slugToPrefPrinciple.get(slug) ?? "",
       }),
     );
     const retiredEntries = plan.retires
       .filter((r) => !gatedSlugs.has(r.slug))
       .map(
-        (r) =>
-          `${renderPrefLink({ id: `ret-${r.slug}`, principle: r.principle })} (${r.reason})`,
+        (r) => `${renderPrefLink({ id: `ret-${r.slug}`, principle: r.principle })} (${r.reason})`,
       );
     const summaryBody: Record<string, string | ReadonlyArray<string>> = {
       run_id: runId,
     };
-    if (newUnconfirmedIds.length > 0)
-      summaryBody["new_unconfirmed"] = newUnconfirmedIds;
+    if (newUnconfirmedIds.length > 0) summaryBody["new_unconfirmed"] = newUnconfirmedIds;
     if (confirmedIds.length > 0) summaryBody["confirmed"] = confirmedIds;
     if (retiredEntries.length > 0) summaryBody["retired"] = retiredEntries;
     if (moved.length > 0) summaryBody["moved_to_processed"] = moved;
@@ -783,9 +753,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       summaryBody["contradictions"] = Array.from(plan.contradictionTopics);
     }
     if (plan.signalsSuppressed.length > 0) {
-      summaryBody["suppressed"] = plan.signalsSuppressed.map(
-        (s) => `${s.signal} ← ${s.retired}`,
-      );
+      summaryBody["suppressed"] = plan.signalsSuppressed.map((s) => `${s.signal} ← ${s.retired}`);
     }
     if (refresh.bandDrops.length > 0) {
       // Format matches the digest's tolerant `parseShiftLine` parser:
@@ -824,9 +792,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       // successful dream run into an error. The next run will retry.
       // Surface so an operator can spot a recurring disk/permission
       // issue instead of wondering why retention stopped.
-      process.stderr.write(
-        `warning: prune snapshots failed: ${(err as Error).message}\n`,
-      );
+      process.stderr.write(`warning: prune snapshots failed: ${(err as Error).message}\n`);
     }
     regenerateActiveQuiet(vault, { now });
   }
@@ -913,8 +879,7 @@ export function shouldGateRetireFromConfirmed(
   if (reason === BRAIN_RETIRED_REASON.mergedInto) return false;
   if (existing.status !== BRAIN_PREFERENCE_STATUS.confirmed) return false;
   if (existing.pinned) return false;
-  const evidenceCount =
-    (existing.applied_count ?? 0) + (existing.violated_count ?? 0);
+  const evidenceCount = (existing.applied_count ?? 0) + (existing.violated_count ?? 0);
   return evidenceCount < threshold;
 }
 
@@ -976,10 +941,8 @@ function scanBrain(vault: string): ScanResult {
         const [meta] = parseFrontmatter(full);
         const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
         const id = typeof meta["id"] === "string" ? meta["id"] : "";
-        const principle =
-          typeof meta["principle"] === "string" ? meta["principle"] : "";
-        const scope =
-          typeof meta["scope"] === "string" ? meta["scope"] : undefined;
+        const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
+        const scope = typeof meta["scope"] === "string" ? meta["scope"] : undefined;
         const userReason =
           typeof meta["user_rejected_reason"] === "string"
             ? (meta["user_rejected_reason"] as string).trim()
@@ -1153,15 +1116,7 @@ function planTopics(
   for (const [topic, sigs] of byTopic) {
     const active = prefByTopic.get(topic);
     if (active) {
-      handleSignalsOnActivePref(
-        active,
-        sigs,
-        plan,
-        cfg,
-        now,
-        scan.signals,
-        reservedSlugs,
-      );
+      handleSignalsOnActivePref(active, sigs, plan, cfg, now, scan.signals, reservedSlugs);
       continue;
     }
     // v0.10.1 _summary §6: when a retired pref for this topic carries
@@ -1178,9 +1133,7 @@ function planTopics(
     // prefs on the same topic are tried in order — the first matching
     // suppressor wins. Non-matching signals fall through and remain
     // eligible for candidate-pref planning below.
-    const suppressors = (retiredByTopic.get(topic) ?? []).filter(
-      (r) => !!r.user_rejected_reason,
-    );
+    const suppressors = (retiredByTopic.get(topic) ?? []).filter((r) => !!r.user_rejected_reason);
     let candidateSigs: SignalRecord[] = sigs;
     if (suppressors.length > 0) {
       const remaining: SignalRecord[] = [];
@@ -1215,14 +1168,9 @@ function planTopics(
       cfg.dream.contradiction_window_days,
       now,
     );
-    const positives = windowedSigs.filter(
-      (s) => s.signal.signal === BRAIN_SIGNAL_SIGN.positive,
-    );
-    const negatives = windowedSigs.filter(
-      (s) => s.signal.signal === BRAIN_SIGNAL_SIGN.negative,
-    );
-    const dominant =
-      positives.length >= negatives.length ? positives : negatives;
+    const positives = windowedSigs.filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.positive);
+    const negatives = windowedSigs.filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.negative);
+    const dominant = positives.length >= negatives.length ? positives : negatives;
     const minoritySize = Math.min(positives.length, negatives.length);
     const dominantSize = dominant.length - minoritySize; // cancellation
     if (dominantSize >= cfg.dream.candidate_threshold) {
@@ -1243,12 +1191,7 @@ function planTopics(
         if (Number.isFinite(t) && t < earliestSignalMs) earliestSignalMs = t;
       }
       const ageDays = Number.isFinite(earliestSignalMs)
-        ? Math.max(
-            0,
-            Math.floor(
-              (now.getTime() - earliestSignalMs) / (24 * 60 * 60 * 1000),
-            ),
-          )
+        ? Math.max(0, Math.floor((now.getTime() - earliestSignalMs) / (24 * 60 * 60 * 1000)))
         : 0;
       const verdict = applySelfApprovalGuardrail(
         {
@@ -1272,9 +1215,7 @@ function planTopics(
       // wire it through.
       const retiredForTopic = retiredByTopic.get(topic);
       const supersedes =
-        retiredForTopic && retiredForTopic.length > 0
-          ? retiredForTopic[0]!.id
-          : undefined;
+        retiredForTopic && retiredForTopic.length > 0 ? retiredForTopic[0]!.id : undefined;
       const sign = dominant[0]!.signal.signal;
       // Slug from topic for the canonical filename, but reserve slugs
       // already present in retired/. Otherwise a superseding preference
@@ -1346,9 +1287,7 @@ function handleSignalsOnActivePref(
   //      conservative, fail-loud choice: the operator gets a clear
   //      rebut/retire signal and can manually intervene if the system
   //      misread their intent.
-  const signCounts = (
-    records: ReadonlyArray<SignalRecord>,
-  ): { pos: number; neg: number } =>
+  const signCounts = (records: ReadonlyArray<SignalRecord>): { pos: number; neg: number } =>
     countSigns(records.map((r) => r.signal.signal));
 
   // Tier-1 derivation now lives in the shared `sign.ts` helper so the
@@ -1357,12 +1296,8 @@ function handleSignalsOnActivePref(
   // the old `evidenceRecords.length > 0` branch (every signal carries a
   // polarity, so a resolved evidence link always counts); `"unknown"`
   // is the old "no evidenced signal resolved" fall-through.
-  const signSignById = new Map(
-    allSignals.map((r) => [r.signal.id, r.signal.signal]),
-  );
-  const topicRecords = allSignals.filter(
-    (r) => r.signal.topic === active.pref.topic,
-  );
+  const signSignById = new Map(allSignals.map((r) => [r.signal.id, r.signal.signal]));
+  const topicRecords = allSignals.filter((r) => r.signal.topic === active.pref.topic);
 
   const evidenceSign = dominantSignOf(active.pref.evidenced_by, signSignById);
   let activeSign: BrainSignalSign;
@@ -1373,14 +1308,12 @@ function handleSignalsOnActivePref(
     // the active inbox set — use them.
     const historical = topicRecords.filter((r) => !sigs.includes(r));
     const c = signCounts(historical);
-    activeSign =
-      c.pos >= c.neg ? BRAIN_SIGNAL_SIGN.positive : BRAIN_SIGNAL_SIGN.negative;
+    activeSign = c.pos >= c.neg ? BRAIN_SIGNAL_SIGN.positive : BRAIN_SIGNAL_SIGN.negative;
   } else {
     // Fallback: assume the active pref is OPPOSITE to the incoming
     // dominant sign. A unanimous flood thus reads as rebuttal.
     const c = signCounts(sigs);
-    activeSign =
-      c.pos > c.neg ? BRAIN_SIGNAL_SIGN.negative : BRAIN_SIGNAL_SIGN.positive;
+    activeSign = c.pos > c.neg ? BRAIN_SIGNAL_SIGN.negative : BRAIN_SIGNAL_SIGN.positive;
   }
 
   const oppositeSign: BrainSignalSign =
@@ -1388,11 +1321,7 @@ function handleSignalsOnActivePref(
       ? BRAIN_SIGNAL_SIGN.negative
       : BRAIN_SIGNAL_SIGN.positive;
 
-  const windowed = filterWithinWindow(
-    sigs,
-    cfg.dream.contradiction_window_days,
-    now,
-  );
+  const windowed = filterWithinWindow(sigs, cfg.dream.contradiction_window_days, now);
   const sameSign = windowed.filter((s) => s.signal.signal === activeSign);
   const opposing = windowed.filter((s) => s.signal.signal === oppositeSign);
 
@@ -1439,10 +1368,7 @@ function handleSignalsOnActivePref(
       // same slug, since `moveToRetired` unlinks the source first.
       // For safety against a half-completed move, we suffix with
       // `-rebut`.
-      const newSlug = allocatePreferencePlanSlug(
-        `${slug}-rebut`,
-        reservedSlugs,
-      );
+      const newSlug = allocatePreferencePlanSlug(`${slug}-rebut`, reservedSlugs);
       const principle = opposing[0]!.signal.principle;
       const scope = opposing[0]!.signal.scope;
       const evidencedBy = opposing.map((s) => `[[${s.signal.id}]]`);
@@ -1478,19 +1404,11 @@ function collectReservedPreferenceSlugs(scan: ScanResult): Set<string> {
   return out;
 }
 
-function preferenceSlugFromId(
-  id: string,
-  prefix: "pref-" | "ret-",
-): string | null {
-  return id.startsWith(prefix) && id.length > prefix.length
-    ? id.slice(prefix.length)
-    : null;
+function preferenceSlugFromId(id: string, prefix: "pref-" | "ret-"): string | null {
+  return id.startsWith(prefix) && id.length > prefix.length ? id.slice(prefix.length) : null;
 }
 
-function allocatePreferencePlanSlug(
-  base: string,
-  reserved: Set<string>,
-): string {
+function allocatePreferencePlanSlug(base: string, reserved: Set<string>): string {
   let candidate = base;
   let suffix = 2;
   while (reserved.has(candidate)) {
@@ -1516,11 +1434,7 @@ function recordSignalMove(plan: PlanState, rec: SignalRecord): void {
   });
 }
 
-function filterWithinWindow(
-  sigs: SignalRecord[],
-  windowDays: number,
-  now: Date,
-): SignalRecord[] {
+function filterWithinWindow(sigs: SignalRecord[], windowDays: number, now: Date): SignalRecord[] {
   const minTime = now.getTime() - windowDays * 24 * 3600 * 1000;
   return sigs.filter((s) => {
     const t = Date.parse(s.signal.created_at);
@@ -1550,10 +1464,7 @@ function deriveSignalTemporal(
 }
 
 /** Build one phase summary (module-scoped: captures nothing). */
-function phaseSummary(
-  phase: DreamPhase,
-  metrics: Record<string, number>,
-): DreamPhaseSummary {
+function phaseSummary(phase: DreamPhase, metrics: Record<string, number>): DreamPhaseSummary {
   return { phase, metrics };
 }
 
@@ -1751,10 +1662,7 @@ function parseWikilinkFromBodyValue(value: unknown): string | null {
   return typeof value === "string" ? parseWikilink(value) : null;
 }
 
-function resolveMergeAlias(
-  slug: string,
-  aliases: ReadonlyMap<string, string>,
-): string {
+function resolveMergeAlias(slug: string, aliases: ReadonlyMap<string, string>): string {
   let current = slug;
   const seen = new Set<string>();
   while (!seen.has(current)) {
@@ -1792,25 +1700,15 @@ function planRefresh(
   const retiringSlugs = new Set(plan.retires.map((r) => r.slug));
 
   for (const rec of scan.preferences) {
-    const slug = rec.pref.id.startsWith("pref-")
-      ? rec.pref.id.slice("pref-".length)
-      : rec.pref.id;
+    const slug = rec.pref.id.startsWith("pref-") ? rec.pref.id.slice("pref-".length) : rec.pref.id;
     if (retiringSlugs.has(slug)) continue;
 
     const ev = bySlug.get(slug) ?? [];
-    const applied = ev.filter(
-      (e) => e.result === BRAIN_APPLY_RESULT.applied,
-    ).length;
-    const violated = ev.filter(
-      (e) => e.result === BRAIN_APPLY_RESULT.violated,
-    ).length;
-    const outdatedCount = ev.filter(
-      (e) => e.result === BRAIN_APPLY_RESULT.outdated,
-    ).length;
+    const applied = ev.filter((e) => e.result === BRAIN_APPLY_RESULT.applied).length;
+    const violated = ev.filter((e) => e.result === BRAIN_APPLY_RESULT.violated).length;
+    const outdatedCount = ev.filter((e) => e.result === BRAIN_APPLY_RESULT.outdated).length;
     const lastEvidence = ev.length > 0 ? ev[ev.length - 1]!.timestamp : null;
-    const firstApplied = ev.find(
-      (e) => e.result === BRAIN_APPLY_RESULT.applied,
-    );
+    const firstApplied = ev.find((e) => e.result === BRAIN_APPLY_RESULT.applied);
 
     // `outdated` is a context-driven retire signal: a single event
     // means the rule's scope still matches but the artifact shows
@@ -1876,13 +1774,7 @@ function planRefresh(
       }
     }
 
-    const confidence = computeConfidence(
-      applied,
-      violated,
-      lastEvidence,
-      cfg,
-      now,
-    );
+    const confidence = computeConfidence(applied, violated, lastEvidence, cfg, now);
 
     // Idempotency on a no-op rerun: skip refresh for prefs where
     // counters AND status are unchanged AND the on-disk body already
@@ -1897,8 +1789,7 @@ function planRefresh(
     // body-bytes check in `wouldRewritePreference` is what triggers
     // the write that populates the field.
     const valueDifferent =
-      previousValue !== null &&
-      Math.abs(previousValue - confidence.value) > 1e-6;
+      previousValue !== null && Math.abs(previousValue - confidence.value) > 1e-6;
     const countersChanged =
       applied !== rec.pref.applied_count ||
       violated !== rec.pref.violated_count ||
@@ -1950,9 +1841,7 @@ function planRefresh(
           ...(rec.pref.revision !== undefined && rec.pref.revision > 0
             ? { revision: rec.pref.revision }
             : {}),
-          ...(rec.pref.content_hash !== undefined
-            ? { content_hash: rec.pref.content_hash }
-            : {}),
+          ...(rec.pref.content_hash !== undefined ? { content_hash: rec.pref.content_hash } : {}),
         })
       ) {
         // Counters and body both unchanged — true no-op for this pref.
@@ -2028,8 +1917,7 @@ export function computeConfidence(
     const pHat = applied / n;
     const denom = 1 + z2 / n;
     const centre = (pHat + z2 / (2 * n)) / denom;
-    const margin =
-      (z * Math.sqrt((pHat * (1 - pHat)) / n + z2 / (4 * n * n))) / denom;
+    const margin = (z * Math.sqrt((pHat * (1 - pHat)) / n + z2 / (4 * n * n))) / denom;
     wilsonLow = Math.max(0, centre - margin);
   }
   let freshness = 0;
@@ -2066,9 +1954,7 @@ function planAutoRetires(
   refresh: RefreshResult,
 ): void {
   for (const rec of scan.preferences) {
-    const slug = rec.pref.id.startsWith("pref-")
-      ? rec.pref.id.slice("pref-".length)
-      : rec.pref.id;
+    const slug = rec.pref.id.startsWith("pref-") ? rec.pref.id.slice("pref-".length) : rec.pref.id;
     // Already planned to retire (rebutted)? Skip.
     if (plan.retires.some((r) => r.slug === slug)) continue;
 
@@ -2121,9 +2007,7 @@ function planAutoRetires(
         // gate on the same staleness rule using `confirmed_at`. We
         // measure from confirmation in that case (cheaper than a
         // hand-crafted invariant check).
-        const confirmedAt = refreshed
-          ? refreshed.confirmed_at
-          : rec.pref.confirmed_at;
+        const confirmedAt = refreshed ? refreshed.confirmed_at : rec.pref.confirmed_at;
         if (!confirmedAt) continue;
         const days = daysBetween(Date.parse(confirmedAt), now.getTime());
         if (days > cfg.retire.stale_evidence_days) {
@@ -2146,10 +2030,7 @@ function planAutoRetires(
         }
         continue;
       }
-      const days = daysBetween(
-        Date.parse(effectiveLastEvidence),
-        now.getTime(),
-      );
+      const days = daysBetween(Date.parse(effectiveLastEvidence), now.getTime());
       if (days > cfg.retire.stale_evidence_days) {
         if (isPinned(rec.pref)) {
           plan.retainPinned.push({
@@ -2217,8 +2098,7 @@ function nextAvailableDreamRunId(vault: string, baseRunId: string): string {
   let candidate = baseRunId;
   for (
     let n = 2;
-    existsSync(snapshotPath(vault, candidate)) ||
-    existsSync(dreamWorkrunPath(vault, candidate));
+    existsSync(snapshotPath(vault, candidate)) || existsSync(dreamWorkrunPath(vault, candidate));
     n++
   ) {
     candidate = `${baseRunId}-${n}`;

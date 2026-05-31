@@ -57,7 +57,10 @@ export function buildForgetPlan(vault: string, opts: { readonly source: string }
     mode: "dry-run",
     source,
     entries: Object.freeze(entries),
-    audit: Object.freeze({ contentIncluded: false, entryCount: entries.length }),
+    audit: Object.freeze({
+      contentIncluded: false,
+      entryCount: entries.length,
+    }),
   });
 }
 

@@ -18,10 +18,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import {
-  buildBacklinkIndex,
-  backlinkCount,
-} from "../../../src/core/brain/backlinks.ts";
+import { buildBacklinkIndex, backlinkCount } from "../../../src/core/brain/backlinks.ts";
 import {
   collectExplorerData,
   EXPLORER_SCHEMA_VERSION,
@@ -153,9 +150,7 @@ describe("collectExplorerData", () => {
     const g = collectExplorerData(vault);
     const supersedesEdges = g.edges.filter((e) => e.kind === "supersedes");
     expect(supersedesEdges.length).toBeGreaterThanOrEqual(1);
-    const e = supersedesEdges.find(
-      (x) => x.source === "pref-new" && x.target === "ret-old",
-    );
+    const e = supersedesEdges.find((x) => x.source === "pref-new" && x.target === "ret-old");
     expect(e).toBeDefined();
   });
 
@@ -174,9 +169,7 @@ describe("collectExplorerData", () => {
     );
     const g = collectExplorerData(vault);
     const wlEdges = g.edges.filter((e) => e.kind === "wikilink");
-    const bToA = wlEdges.find(
-      (e) => e.source === "pref-b" && e.target === "pref-a",
-    );
+    const bToA = wlEdges.find((e) => e.source === "pref-b" && e.target === "pref-a");
     expect(bToA).toBeDefined();
     // No edge to the signal — sig-foo is not in the node set.
     expect(g.edges.find((e) => e.target === "sig-foo")).toBeUndefined();
@@ -201,9 +194,7 @@ describe("collectExplorerData", () => {
     expect(node!.memory_layer).toBe("L2");
     expect(node!.memory_branch).toBe("research");
 
-    const edge = g.edges.find(
-      (e) => e.source === "pref-semantic" && e.target === "pref-base",
-    );
+    const edge = g.edges.find((e) => e.source === "pref-semantic" && e.target === "pref-base");
     expect(edge).toBeDefined();
     expect(edge!.kind).toBe("wikilink");
     expect(edge!.relation).toBe("depends_on");
@@ -242,14 +233,8 @@ describe("collectExplorerData", () => {
     writePreference(vault, basePref("target"));
     // Two sources, both reaching target via `evidenced_by` (the
     // canonical inter-pref reference field).
-    writePreference(
-      vault,
-      basePref("source1", { evidenced_by: ["[[pref-target]]"] }),
-    );
-    writePreference(
-      vault,
-      basePref("source2", { evidenced_by: ["[[pref-target]]"] }),
-    );
+    writePreference(vault, basePref("source1", { evidenced_by: ["[[pref-target]]"] }));
+    writePreference(vault, basePref("source2", { evidenced_by: ["[[pref-target]]"] }));
     const g = collectExplorerData(vault);
     const node = g.nodes.find((n) => n.id === "pref-target");
     const expected = backlinkCount(buildBacklinkIndex(vault), "pref-target");
@@ -280,9 +265,7 @@ describe("collectExplorerData", () => {
     // then retired. Within each kind, ids ascend.
     const kinds = g.nodes.map((n) => n.kind);
     expect(kinds).toEqual(["preference", "preference", "retired"]);
-    const prefIds = g.nodes
-      .filter((n) => n.kind === "preference")
-      .map((n) => n.id);
+    const prefIds = g.nodes.filter((n) => n.kind === "preference").map((n) => n.id);
     expect(prefIds).toEqual([...prefIds].toSorted());
   });
 });
@@ -317,9 +300,7 @@ describe("renderExportedHtml", () => {
       /<script type="application\/json" id="brain-data">([\s\S]+?)<\/script>/,
     );
     const parsed = JSON.parse(match![1]!);
-    const node = parsed.nodes.find(
-      (n: { id: string }) => n.id === "pref-dollars",
-    );
+    const node = parsed.nodes.find((n: { id: string }) => n.id === "pref-dollars");
     expect(node.principle).toBe("Money is $100 or $$abc — keep this exact");
   });
 
@@ -327,8 +308,7 @@ describe("renderExportedHtml", () => {
     writePreference(
       vault,
       basePref("script-close", {
-        principle:
-          "Never let </script><script>bad()</script> split the data block",
+        principle: "Never let </script><script>bad()</script> split the data block",
       }),
     );
     const g = collectExplorerData(vault);
@@ -339,12 +319,8 @@ describe("renderExportedHtml", () => {
     );
     expect(match).not.toBeNull();
     const parsed = JSON.parse(match![1]!);
-    const node = parsed.nodes.find(
-      (n: { id: string }) => n.id === "pref-script-close",
-    );
-    expect(node.principle).toBe(
-      "Never let </script><script>bad()</script> split the data block",
-    );
+    const node = parsed.nodes.find((n: { id: string }) => n.id === "pref-script-close");
+    expect(node.principle).toBe("Never let </script><script>bad()</script> split the data block");
   });
 
   // §14 polish (v0.10.6) — the keyboard-accessible listbox markup and

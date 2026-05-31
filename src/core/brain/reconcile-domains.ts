@@ -16,11 +16,7 @@
  * reconciliation" idea: no LLM fan-out, no network, injectable clock.
  */
 
-import {
-  RECONCILE_DOMAIN,
-  type DreamOpenQuestion,
-  type ReconcileDomain,
-} from "./types.ts";
+import { RECONCILE_DOMAIN, type DreamOpenQuestion, type ReconcileDomain } from "./types.ts";
 
 // Re-export so callers can reach the domain enum + type from the
 // reconciler module without also importing types.ts.
@@ -88,19 +84,12 @@ function hasEntityReference(signals: ReadonlyArray<ReconcileSignal>): boolean {
  */
 export function classifyContradiction(input: ContradictionInput): ReconcileDomain {
   if (input.scope === DECISIONS_SCOPE) return RECONCILE_DOMAIN.decisions;
-  if (
-    hasEntityReference(input.positives) ||
-    hasEntityReference(input.negatives)
-  ) {
+  if (hasEntityReference(input.positives) || hasEntityReference(input.negatives)) {
     return RECONCILE_DOMAIN.entity;
   }
   const posNewest = newestMs(input.positives);
   const negNewest = newestMs(input.negatives);
-  if (
-    Number.isFinite(posNewest) &&
-    Number.isFinite(negNewest) &&
-    posNewest !== negNewest
-  ) {
+  if (Number.isFinite(posNewest) && Number.isFinite(negNewest) && posNewest !== negNewest) {
     return RECONCILE_DOMAIN.sourceFreshness;
   }
   return RECONCILE_DOMAIN.claims;

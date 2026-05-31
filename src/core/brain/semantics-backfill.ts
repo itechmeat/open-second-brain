@@ -32,9 +32,7 @@ interface ParsedRetiredEntry {
 
 export function planSemanticsBackfill(vault: string): SemanticsBackfillPlan {
   const active = readPreferences(vault);
-  const retiredById = new Map(
-    readRetired(vault).map((entry) => [entry.retired.id, entry]),
-  );
+  const retiredById = new Map(readRetired(vault).map((entry) => [entry.retired.id, entry]));
   const proposals: SemanticsBackfillProposal[] = [];
 
   for (const entry of active) {

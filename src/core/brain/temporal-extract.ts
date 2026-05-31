@@ -42,10 +42,7 @@ const DURATION_RE = /\bP(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?\b/;
  * Extract bi-temporal constraints from `text` against the injected
  * clock. Returns `{}` when no ISO token is present.
  */
-export function extractTemporalConstraints(
-  text: string,
-  opts: { now: Date },
-): TemporalConstraints {
+export function extractTemporalConstraints(text: string, opts: { now: Date }): TemporalConstraints {
   if (typeof text !== "string" || text.length === 0) return {};
 
   const interval = INTERVAL_RE.exec(text);

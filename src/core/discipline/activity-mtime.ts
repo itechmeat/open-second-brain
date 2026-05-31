@@ -22,10 +22,7 @@ export interface MtimeActivity {
   readonly modifiedPaths: ReadonlyArray<string>;
 }
 
-export function mtimeActivity(
-  root: string,
-  win: ActivityWindow,
-): MtimeActivity {
+export function mtimeActivity(root: string, win: ActivityWindow): MtimeActivity {
   const startMs = win.startUtc.getTime();
   const endMs = win.endUtc.getTime();
   let count = 0;

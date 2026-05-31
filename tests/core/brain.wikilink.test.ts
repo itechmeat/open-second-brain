@@ -202,9 +202,9 @@ describe("renderPrefLink", () => {
   });
 
   test("renders retired references as Markdown links when requested", () => {
-    expect(
-      renderPrefLink({ id: "ret-bar", principle: "Old rule", format: "markdown" }),
-    ).toBe("[Old rule](Brain/retired/ret-bar.md)");
+    expect(renderPrefLink({ id: "ret-bar", principle: "Old rule", format: "markdown" })).toBe(
+      "[Old rule](Brain/retired/ret-bar.md)",
+    );
   });
 
   test("uses the id as Markdown label when the title sanitises empty", () => {

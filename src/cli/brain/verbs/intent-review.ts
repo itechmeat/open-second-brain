@@ -35,20 +35,14 @@ export async function cmdBrainIntentReview(argv: string[]): Promise<number> {
   return 0;
 }
 
-function parseNow(
-  raw: string | boolean | string[] | undefined,
-): Date | undefined {
+function parseNow(raw: string | boolean | string[] | undefined): Date | undefined {
   if (raw === undefined || raw === false) return undefined;
   if (typeof raw !== "string" || raw.trim().length === 0) {
-    throw new CliError(
-      "brain intent-review: --now must be an ISO-8601 timestamp",
-    );
+    throw new CliError("brain intent-review: --now must be an ISO-8601 timestamp");
   }
   const date = new Date(raw);
   if (!Number.isFinite(date.getTime())) {
-    throw new CliError(
-      `brain intent-review: invalid --now ${JSON.stringify(raw)}`,
-    );
+    throw new CliError(`brain intent-review: invalid --now ${JSON.stringify(raw)}`);
   }
   return date;
 }

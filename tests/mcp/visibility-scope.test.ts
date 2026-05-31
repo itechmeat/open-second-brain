@@ -67,8 +67,8 @@ describe("brain_search visibility scope", () => {
   test("a non-array visibility argument is rejected", async () => {
     const tool = SEARCH_TOOLS.find((t) => t.name === "brain_search")!;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await expect(tool.handler(ctx as any, { query: "lattice", visibility: "private" })).rejects.toThrow(
-      /visibility/,
-    );
+    await expect(
+      tool.handler(ctx as any, { query: "lattice", visibility: "private" }),
+    ).rejects.toThrow(/visibility/);
   });
 });

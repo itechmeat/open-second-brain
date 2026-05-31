@@ -70,12 +70,9 @@ test("brain semantics-backfill --json prints a dry-run proposal plan", async () 
   });
   writePreference(vault, basePref("new", { supersedes: "[[ret-old]]" }));
 
-  const result = await runCli(
-    ["brain", "semantics-backfill", "--vault", vault, "--json"],
-    {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config },
-    },
-  );
+  const result = await runCli(["brain", "semantics-backfill", "--vault", vault, "--json"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
 
   expect(result.returncode).toBe(0);
   const payload = JSON.parse(result.stdout);

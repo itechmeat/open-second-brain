@@ -115,11 +115,7 @@ describe("runDisciplineReport", () => {
   test("malformed Brain config is not silently disabled", () => {
     const vault = mkdtempSync(join(tmpdir(), "o2b-disc-bad-"));
     mkdirSync(join(vault, "Brain"), { recursive: true });
-    writeFileSync(
-      join(vault, "Brain", "_brain.yaml"),
-      "not: valid: yaml\n",
-      "utf8",
-    );
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), "not: valid: yaml\n", "utf8");
     expect(() => runDisciplineReport({ vault, now: new Date() })).toThrow();
     rmSync(vault, { recursive: true });
   });

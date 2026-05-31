@@ -13,10 +13,7 @@ import {
 
 describe("SessionImportError", () => {
   test("carries a typed code", () => {
-    const err = new SessionImportError(
-      "DETECT_FAIL",
-      "no adapter recognised this file",
-    );
+    const err = new SessionImportError("DETECT_FAIL", "no adapter recognised this file");
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe("SessionImportError");
     expect(err.code).toBe("DETECT_FAIL");

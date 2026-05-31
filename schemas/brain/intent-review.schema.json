@@ -12,14 +12,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "topic",
-          "decision",
-          "signal_count",
-          "risk_band",
-          "risk_score",
-          "reasons"
-        ],
+        "required": ["topic", "decision", "signal_count", "risk_band", "risk_score", "reasons"],
         "additionalProperties": false,
         "properties": {
           "topic": { "type": "string" },

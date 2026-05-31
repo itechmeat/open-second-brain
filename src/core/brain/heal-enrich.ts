@@ -41,10 +41,7 @@ function escapeRegExp(s: string): string {
  * untouched, so the function is idempotent. Returns the input unchanged
  * when `known` is empty.
  */
-export function linkExactMentions(
-  body: string,
-  known: ReadonlyArray<string>,
-): string {
+export function linkExactMentions(body: string, known: ReadonlyArray<string>): string {
   const phrases = known
     .map((k) => k.trim())
     .filter((k) => k.length > 0)

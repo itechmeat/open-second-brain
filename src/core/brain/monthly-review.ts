@@ -39,15 +39,11 @@ export function buildMonthlyReview(
   options: BuildMonthlyReviewOptions = {},
 ): MonthlyReviewReport {
   const now = options.now ?? new Date();
-  const month = normalizeMonthlyReviewMonth(
-    options.month ?? now.toISOString().slice(0, 7),
-  );
+  const month = normalizeMonthlyReviewMonth(options.month ?? now.toISOString().slice(0, 7));
   const window = monthWindow(month);
   const index = buildTimelineIndex(vault, window);
   const transitions = collectTransitions(index.events);
-  const retired = transitions.filter(
-    (transition) => transition.kind === "retirement",
-  ).length;
+  const retired = transitions.filter((transition) => transition.kind === "retirement").length;
   const contradictions = countContradictions(index.events);
 
   return Object.freeze({
@@ -60,9 +56,7 @@ export function buildMonthlyReview(
       status_transitions: transitions.length,
       retired,
       contradictions,
-      neglected_areas: Object.freeze(
-        neglectedAreas(index.events, options.expectedAreas ?? []),
-      ),
+      neglected_areas: Object.freeze(neglectedAreas(index.events, options.expectedAreas ?? [])),
     }),
   });
 }
@@ -70,15 +64,11 @@ export function buildMonthlyReview(
 export function normalizeMonthlyReviewMonth(month: string): string {
   const normalized = month.trim();
   if (!MONTH_RE.test(normalized)) {
-    throw new Error(
-      `buildMonthlyReview: month must be YYYY-MM; got ${JSON.stringify(month)}`,
-    );
+    throw new Error(`buildMonthlyReview: month must be YYYY-MM; got ${JSON.stringify(month)}`);
   }
   const monthNumber = Number(normalized.slice(5, 7));
   if (monthNumber < 1 || monthNumber > 12) {
-    throw new Error(
-      `buildMonthlyReview: invalid month ${JSON.stringify(month)}`,
-    );
+    throw new Error(`buildMonthlyReview: invalid month ${JSON.stringify(month)}`);
   }
   return normalized;
 }
@@ -86,14 +76,10 @@ export function normalizeMonthlyReviewMonth(month: string): string {
 function monthWindow(month: string): MonthlyReviewWindow {
   const start = Date.parse(`${month}-01T00:00:00Z`);
   if (!Number.isFinite(start)) {
-    throw new Error(
-      `buildMonthlyReview: invalid month ${JSON.stringify(month)}`,
-    );
+    throw new Error(`buildMonthlyReview: invalid month ${JSON.stringify(month)}`);
   }
   const startDate = new Date(start);
-  const endDate = new Date(
-    Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 1),
-  );
+  const endDate = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 1));
   return Object.freeze({
     since: `${month}-01T00:00:00Z`,
     until: endDate.toISOString().replace(".000Z", "Z"),
@@ -119,10 +105,6 @@ function neglectedAreas(
   expectedAreas: ReadonlyArray<string>,
 ): string[] {
   if (expectedAreas.length === 0) return [];
-  const lowerText = events
-    .map((event) => JSON.stringify(event).toLowerCase())
-    .join("\n");
-  return expectedAreas
-    .filter((area) => !lowerText.includes(area.toLowerCase()))
-    .toSorted();
+  const lowerText = events.map((event) => JSON.stringify(event).toLowerCase()).join("\n");
+  return expectedAreas.filter((area) => !lowerText.includes(area.toLowerCase())).toSorted();
 }

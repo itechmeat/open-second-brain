@@ -21,9 +21,7 @@ export async function cmdBrainCodec(argv: string[]): Promise<number> {
   let input: string;
   try {
     input =
-      typeof flags["in"] === "string"
-        ? readFileSync(flags["in"], "utf8")
-        : await Bun.stdin.text();
+      typeof flags["in"] === "string" ? readFileSync(flags["in"], "utf8") : await Bun.stdin.text();
   } catch (exc) {
     return fail(`codec: failed to read input: ${(exc as Error).message ?? exc}`);
   }

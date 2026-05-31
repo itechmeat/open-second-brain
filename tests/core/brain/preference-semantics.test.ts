@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -154,16 +148,11 @@ describe("preference memory semantics frontmatter", () => {
       } as Partial<WritePreferenceInput>),
     );
 
-    const retired = moveToRetired(
-      vault,
-      res.path,
-      BRAIN_RETIRED_REASON.userRejected,
-      {
-        now: new Date("2026-06-01T00:00:00Z"),
-        retired_by: "[[Brain/log/2026-06-01]]",
-        user_rejected_reason: "test",
-      },
-    );
+    const retired = moveToRetired(vault, res.path, BRAIN_RETIRED_REASON.userRejected, {
+      now: new Date("2026-06-01T00:00:00Z"),
+      retired_by: "[[Brain/log/2026-06-01]]",
+      user_rejected_reason: "test",
+    });
 
     const parsed = parseRetired(retired.path);
     expect(parsed.memory_layer).toBe("L1");

@@ -9,6 +9,7 @@ Implement a Brain Safety & Governance Suite for Open Second Brain, based on thes
 Open Second Brain stores operator-authored and agent-authored Markdown, then surfaces selected content through MCP tools, context packs, pre-compress packs, session briefs, and future host hooks. Privacy redaction and private-region stripping protect secrets, but they do not address a different failure mode: a note, transcript, tool output, or imported document can contain instructions aimed at the agent rather than facts about the world. Add an OSB context-safety guard that runs on automatically injected or MCP-rendered Brain snippets. It should classify risky content, sanitize or suppress unsafe snippets, expose deterministic reasons, preserve deterministic behavior, and avoid mutating the source note.
 
 Acceptance criteria:
+
 - Prompt-injection-like vault content is not injected verbatim by context-pack or MCP preview paths.
 - Filtered results include deterministic reasons inspectable by the operator.
 - Legitimate trusted instruction files can be explicitly allowed without weakening the default guard for ordinary notes.
@@ -16,6 +17,7 @@ Acceptance criteria:
 - Tests cover direct phrases, delimiter spoofing, metadata/title injection, Unicode-obfuscated variants, and false-positive-safe ordinary notes.
 
 Out of scope:
+
 - LLM-based security classification.
 - Deleting or rewriting source vault files automatically.
 - Treating all Markdown instructions as malicious; protect automatic surfacing, not intentional instruction surfaces.
@@ -25,6 +27,7 @@ Out of scope:
 Support secret references such as `$secret:GITHUB_TOKEN` in source connector config, hook config, and future provider settings. OSB should store only references in Brain/config files, resolve values only in trusted local process boundaries, redact known resolved values from logs/results, and never include decrypted values in agent-facing prompts, MCP output, task cards, or Brain Markdown.
 
 Acceptance criteria:
+
 - OSB config can reference a secret by name without storing the raw value.
 - Agents can trigger connector operations that require a secret without seeing the decrypted value.
 - Secret list/status commands never reveal secret values.
@@ -37,6 +40,7 @@ Acceptance criteria:
 Add a dry-run-first forget workflow that computes a dependency closure from a source session, event, file, artifact, or imported connector record to derived Brain artifacts and search/cache/index entries. Applying the plan should remove or retire source-owned derived records, decrement support for multi-source records, invalidate affected caches, and emit an audit receipt without re-exposing private content.
 
 Acceptance criteria:
+
 - A dry-run forget plan shows every source and derived artifact that would be affected.
 - Applying a forget plan removes source-only derived artifacts from recall, context packs, graph traversal, and search indexes.
 - Multi-source facts lose the forgotten source as support and are quarantined or retired only when policy requires it.
@@ -49,6 +53,7 @@ Acceptance criteria:
 Add portable Brain knowledge packs for selected confirmed memories, rules, runbooks, and project conventions. Packs should be local-first, human-readable, previewable before install, privacy-scanned before export/import, and removable without touching unrelated Brain content.
 
 Acceptance criteria:
+
 - OSB can export a selected subset of Brain knowledge as a portable pack without exporting the whole vault.
 - Export runs a privacy scan and blocks or strips unsafe/private content by default.
 - Pack preview shows manifest, count, sample entries, integrity, conflicts, and privacy warnings before install.
@@ -61,6 +66,7 @@ Acceptance criteria:
 Add a storage-boundary payload registry for session ingestion and future session recall: large media blobs, base64 strings, and giant tool outputs should not bloat a searchable index or Brain log, but should remain recoverable when the operator explicitly asks for the exact source content.
 
 Acceptance criteria:
+
 - Session import externalizes configured oversized payloads before indexing while preserving a recoverable ref.
 - Exact payload content can be retrieved in bounded pages by explicit ref, subject to the same vault/security policy as other Brain reads.
 - Search results and extracted summaries include compact placeholders/metadata rather than raw media or base64 blobs.
@@ -72,6 +78,7 @@ Acceptance criteria:
 Project: Open Second Brain, TypeScript/Bun, Obsidian-native local-first Brain stored as Markdown under `Brain/`.
 
 Recent commits:
+
 - 794ee45 feat(search): ship recall control and trust surfaces (#54)
 - 40d4e2b feat: cjk schema lifecycle recovery - CJK search, schema admin, lifecycle hooks, watchdog (#53)
 - f62918c feat: runtime schema packs foundation - schema vocabulary, artifact taxonomy, schema inspection (#52)
@@ -84,6 +91,7 @@ Recent commits:
 - 5fa7eb0 feat: MCP context economy - preview budget, artifact fetch, recall hint (#45)
 
 Related files and current surfaces:
+
 - `src/core/redactor.ts`: shared private-region stripping and secret-shaped redaction. Current behavior protects writes/logs but does not classify prompt injection.
 - `src/core/brain/context-pack.ts`: collects preference/retired Markdown bodies for context-pack output; optional polarity lanes added in v0.27.0.
 - `src/core/brain/pre-compress-pack.ts`: builds a system-prompt addendum from `Brain/active.md` and high-confidence preferences before host compression.
@@ -95,6 +103,7 @@ Related files and current surfaces:
 - Docs: `README.md`, `docs/cli-reference.md`, `docs/mcp.md`, `CHANGELOG.md`.
 
 Conventions:
+
 - Local-first, Markdown-first. Avoid hidden services or opaque remote dependencies.
 - Deterministic core behavior. No LLM-based classification in core safety paths.
 - Prefer additive, opt-in surfaces that preserve existing public APIs unless task requires changes.
@@ -104,6 +113,7 @@ Conventions:
 - Version bump before GitHub push.
 
 Constraints:
+
 - Do not use Hermes kanban MCP tools. Task data comes from `.ai-notes/export_triage_snapshot.py` and `.ai-notes/tasks.json`.
 - Keep the PR cohesive and useful. It may ship a foundation slice for the largest tasks if full scope would become an unsafe platform rewrite.
 - No new external dependencies unless clearly necessary.
@@ -116,6 +126,7 @@ Constraints:
 Produce exactly 3 distinct architectural variants. For each variant:
 
 ### Variant N: <short name>
+
 - **Approach**: 2-3 sentences describing the variant.
 - **Trade-offs**: bullet list of pros and cons.
 - **Complexity**: small | medium | large
@@ -124,6 +135,7 @@ Produce exactly 3 distinct architectural variants. For each variant:
 After the three variants, add exactly one recommendation:
 
 ### Recommended: Variant N
+
 **Rationale**: 2-3 sentences explaining why this variant over the others, considering the project context and constraints above.
 
 Output nothing outside of these sections.

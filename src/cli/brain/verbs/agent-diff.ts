@@ -20,17 +20,11 @@ export async function cmdBrainAgentDiff(argv: string[]): Promise<number> {
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const { value: mode, error: modeError } = parseMode(
-    flags["mode"] as string | undefined,
-  );
+  const { value: mode, error: modeError } = parseMode(flags["mode"] as string | undefined);
   if (modeError) return fail(modeError);
-  const { value: kind, error: kindError } = parseKind(
-    flags["kind"] as string | undefined,
-  );
+  const { value: kind, error: kindError } = parseKind(flags["kind"] as string | undefined);
   if (kindError) return fail(kindError);
-  const { value: limit, error: limitError } = parseLimit(
-    flags["limit"] as string | undefined,
-  );
+  const { value: limit, error: limitError } = parseLimit(flags["limit"] as string | undefined);
   if (limitError) return fail(limitError);
 
   const result = diffAgentSources(vault, {
@@ -55,22 +49,16 @@ function renderAgentDiffText(result: AgentSourceDiffResult): void {
   process.stdout.write(`summary: ${result.summary}\n`);
   process.stdout.write(`agents: ${result.agents.join(", ") || "(none)"}\n`);
   if (result.unknown_agents.length > 0) {
-    process.stdout.write(
-      `unknown agents: ${result.unknown_agents.join(", ")}\n`,
-    );
+    process.stdout.write(`unknown agents: ${result.unknown_agents.join(", ")}\n`);
   }
-  process.stdout.write(
-    `shared topics: ${result.shared_topics.join(", ") || "(none)"}\n`,
-  );
+  process.stdout.write(`shared topics: ${result.shared_topics.join(", ") || "(none)"}\n`);
   for (const agent of result.agents) {
     const topics = result.unique_topics[agent] ?? [];
     process.stdout.write(`${agent} unique: ${topics.join(", ") || "(none)"}\n`);
   }
   process.stdout.write("topic map:\n");
   for (const row of result.topic_map) {
-    process.stdout.write(
-      `- ${row.topic}: ${row.agents.join(", ")} (${row.contribution_count})\n`,
-    );
+    process.stdout.write(`- ${row.topic}: ${row.agents.join(", ")} (${row.contribution_count})\n`);
   }
 }
 
@@ -90,8 +78,7 @@ function parseKind(raw: string | undefined): {
   readonly error?: string;
 } {
   if (raw === undefined) return {};
-  if (raw === "signal" || raw === "preference" || raw === "log")
-    return { value: raw };
+  if (raw === "signal" || raw === "preference" || raw === "log") return { value: raw };
   return { error: "--kind must be one of signal|preference|log" };
 }
 

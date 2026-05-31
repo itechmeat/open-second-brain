@@ -32,9 +32,7 @@ export async function cmdBrainAudit(argv: string[]): Promise<number> {
   }
 
   if (flags["json"]) {
-    process.stdout.write(
-      JSON.stringify({ pref_id: prefId, ...result }, null, 2) + "\n",
-    );
+    process.stdout.write(JSON.stringify({ pref_id: prefId, ...result }, null, 2) + "\n");
   } else {
     process.stdout.write(renderPrefAudit(prefId, result.records) + "\n");
   }

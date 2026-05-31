@@ -3,10 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  writePreference,
-  type WritePreferenceInput,
-} from "../../../src/core/brain/preference.ts";
+import { writePreference, type WritePreferenceInput } from "../../../src/core/brain/preference.ts";
 import { buildSchemaReport } from "../../../src/core/brain/schema-report.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import {
@@ -84,9 +81,7 @@ describe("buildSchemaReport", () => {
     mkdirSync(join(vault, "Papers"), { recursive: true });
     writeFileSync(
       join(vault, "Papers", "paper.md"),
-      ["---", "title: Paper", "schema_type: paper", "---", "", "Body"].join(
-        "\n",
-      ),
+      ["---", "title: Paper", "schema_type: paper", "---", "", "Body"].join("\n"),
       "utf8",
     );
     writeFileSync(
@@ -102,22 +97,12 @@ describe("buildSchemaReport", () => {
 
     const report = buildSchemaReport(vault);
 
-    expect(report.vocabulary.preference_types).toEqual([
-      "preference",
-      "research",
-      "decision",
-    ]);
+    expect(report.vocabulary.preference_types).toEqual(["preference", "research", "decision"]);
     expect(report.vocabulary.signal_types).toEqual(["feedback", "observation"]);
-    expect(report.usage.preference_types).toEqual([
-      { token: "research", count: 1 },
-    ]);
-    expect(report.usage.signal_types).toEqual([
-      { token: "external", count: 1 },
-    ]);
+    expect(report.usage.preference_types).toEqual([{ token: "research", count: 1 }]);
+    expect(report.usage.signal_types).toEqual([{ token: "external", count: 1 }]);
     expect(report.usage.page_types).toEqual([{ token: "paper", count: 1 }]);
-    expect(report.usage.log_event_kinds).toEqual([
-      { token: "milestone", count: 1 },
-    ]);
+    expect(report.usage.log_event_kinds).toEqual([{ token: "milestone", count: 1 }]);
     expect(report.findings).toContainEqual({
       kind: "unknown-token",
       category: "signal_types",

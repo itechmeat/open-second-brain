@@ -1,7 +1,4 @@
-import {
-  collectAgentSourceContributions,
-  listAgentSources,
-} from "./registry.ts";
+import { collectAgentSourceContributions, listAgentSources } from "./registry.ts";
 import { summarizeAgentContributions } from "./summary.ts";
 import type {
   AgentSourceContribution,
@@ -49,24 +46,18 @@ export function queryAgentSources(
     availableAgents.map((a) => a.id),
   );
   const selectedSet = new Set(selectedAgents);
-  const unknownAgents = selectedAgents.filter(
-    (agent) => !availableIds.has(agent),
-  );
+  const unknownAgents = selectedAgents.filter((agent) => !availableIds.has(agent));
   const topic = normalizeTextFilter(opts.topic);
   const query = normalizeTextFilter(opts.query);
   const limit = normalizeLimit(opts.limit);
 
-  const matched = collectAgentSourceContributions(vault).filter(
-    (contribution) => {
-      if (!contribution.agents.some((agent) => selectedSet.has(agent)))
-        return false;
-      if (opts.kind !== undefined && contribution.kind !== opts.kind)
-        return false;
-      if (topic !== null && contribution.topic !== topic) return false;
-      if (query !== null && !matchesText(contribution, query)) return false;
-      return true;
-    },
-  );
+  const matched = collectAgentSourceContributions(vault).filter((contribution) => {
+    if (!contribution.agents.some((agent) => selectedSet.has(agent))) return false;
+    if (opts.kind !== undefined && contribution.kind !== opts.kind) return false;
+    if (topic !== null && contribution.topic !== topic) return false;
+    if (query !== null && !matchesText(contribution, query)) return false;
+    return true;
+  });
   const returned = Object.freeze(matched.slice(0, limit));
 
   return Object.freeze({
@@ -91,8 +82,7 @@ function normalizeAgents(
   agents: ReadonlyArray<string> | undefined,
   fallbackAgents: ReadonlyArray<string>,
 ): string[] {
-  const raw =
-    agents === undefined || agents.length === 0 ? fallbackAgents : agents;
+  const raw = agents === undefined || agents.length === 0 ? fallbackAgents : agents;
   const out: string[] = [];
   const seen = new Set<string>();
   for (const value of raw) {
@@ -118,10 +108,7 @@ function normalizeLimit(value: number | undefined): number {
   return value;
 }
 
-function matchesText(
-  contribution: AgentSourceContribution,
-  query: string,
-): boolean {
+function matchesText(contribution: AgentSourceContribution, query: string): boolean {
   const needle = query.toLowerCase();
   const fields = [
     contribution.id,

@@ -37,7 +37,12 @@ test("a bumped index revision (content reindex) changes the fingerprint", () => 
 });
 
 test("a null model / dimension (keyword-only vault) is stable and distinct from a set one", () => {
-  const keywordOnly = { embeddingModel: null, embeddingDimension: null, schemaVersion: 4, indexRevision: 1 };
+  const keywordOnly = {
+    embeddingModel: null,
+    embeddingDimension: null,
+    schemaVersion: 4,
+    indexRevision: 1,
+  };
   expect(computeCorpusGeneration(keywordOnly)).toBe(computeCorpusGeneration({ ...keywordOnly }));
   expect(computeCorpusGeneration(keywordOnly)).not.toBe(computeCorpusGeneration(base));
 });

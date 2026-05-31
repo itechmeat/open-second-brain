@@ -52,7 +52,9 @@ test("classification is structural, not lexical: any-script tokens behave the sa
 });
 
 test("is deterministic: identical query yields a deep-equal plan", () => {
-  expect(buildQueryPlan("deploy the [[Gateway]]")).toEqual(buildQueryPlan("deploy the [[Gateway]]"));
+  expect(buildQueryPlan("deploy the [[Gateway]]")).toEqual(
+    buildQueryPlan("deploy the [[Gateway]]"),
+  );
 });
 
 test("planHash collapses surrounding/internal whitespace but distinguishes content", () => {

@@ -103,8 +103,9 @@ describe("planSemanticsBackfill", () => {
 
     const plan = planSemanticsBackfill(vault);
 
-    expect(plan.proposals.map((p) => `${p.source_id}->${p.target_id}`)).toEqual(
-      ["ret-a-old->pref-a-new", "ret-z-old->pref-z-new"],
-    );
+    expect(plan.proposals.map((p) => `${p.source_id}->${p.target_id}`)).toEqual([
+      "ret-a-old->pref-a-new",
+      "ret-z-old->pref-z-new",
+    ]);
   });
 });

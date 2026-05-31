@@ -157,7 +157,10 @@ describe("brain_context_pack tool — round trip", () => {
 
     const out = await callPack(server, { max_tokens: 10_000 });
     const item = (out["items"] as Array<Record<string, unknown>>)[0]!;
-    const safety = item["safety"] as { filtered: boolean; reasons: Array<{ code: string }> };
+    const safety = item["safety"] as {
+      filtered: boolean;
+      reasons: Array<{ code: string }>;
+    };
 
     expect(item["body"]).toBe(CONTEXT_GUARD_PLACEHOLDER);
     expect(JSON.stringify(out)).not.toContain("hidden system prompt");
