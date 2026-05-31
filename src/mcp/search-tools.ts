@@ -10,7 +10,13 @@
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §9.
  */
 
-import { indexStatus, resolveSearchConfig, search, SearchError } from "../core/search/index.ts";
+import {
+  evaluateSurfacingGate,
+  indexStatus,
+  resolveSearchConfig,
+  search,
+  SearchError,
+} from "../core/search/index.ts";
 import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
@@ -99,6 +105,26 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
     warnings: { type: "array", items: { type: "string" } },
     total: { type: "integer" },
     recall_hint: { type: "string" },
+  },
+};
+
+const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    prompt: { type: "string", minLength: 1, maxLength: 4000 },
+    previous_prompt: { type: "string", maxLength: 4000 },
+    explicit: { type: "boolean" },
+  },
+  required: ["prompt"],
+  additionalProperties: false,
+};
+
+const RECALL_GATE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  required: ["retrieve", "reason"],
+  properties: {
+    retrieve: { type: "boolean" },
+    reason: { type: "string" },
   },
 };
 
@@ -273,7 +299,32 @@ async function toolBrainSearch(
   };
 }
 
+async function toolBrainRecallGate(
+  _ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const prompt = args["prompt"];
+  if (typeof prompt !== "string" || prompt.trim() === "") {
+    throw new MCPError(INVALID_PARAMS, "missing required argument: prompt");
+  }
+  if (prompt.length > 4000) {
+    throw new MCPError(INVALID_PARAMS, "argument 'prompt' exceeds 4000 characters");
+  }
+  const previousPrompt = coerceStringOptional(args, "previous_prompt", 4000);
+  const explicit = coerceBoolOptional(args, "explicit") ?? false;
+  return evaluateSurfacingGate({ prompt, previousPrompt: previousPrompt ?? null, explicit });
+}
+
 export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: "brain_recall_gate",
+    description:
+      "Classify whether an automatic recall/surfacing attempt should run. Diagnostics only; does not search.",
+    inputSchema: RECALL_GATE_INPUT_SCHEMA,
+    outputSchema: RECALL_GATE_OUTPUT_SCHEMA,
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainRecallGate,
+  },
   {
     name: "brain_search",
     description:

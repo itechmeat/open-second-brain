@@ -52,6 +52,7 @@ export {
   writeSessionFocus,
   type SearchSessionFocus,
 } from "./session-focus.ts";
+export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-gate.ts";
 
 export { resolveIndexPath } from "./paths.ts";
 export {

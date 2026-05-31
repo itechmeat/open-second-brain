@@ -171,6 +171,22 @@ test("brain_search accepts explicit session focus input", async () => {
   expect(results[0]?.reasons.some((reason) => reason.startsWith("session_focus:"))).toBe(true);
 });
 
+test("brain_recall_gate reports skip reasons without affecting explicit brain_search", async () => {
+  writeMd("notes/shell.md", "# Shell\n\ngit status troubleshooting note.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const gate = await call(server, "brain_recall_gate", { prompt: "git status" });
+  expect(extractToolResult(gate)).toEqual({ retrieve: false, reason: "shell_command" });
+
+  const explicit = await call(server, "brain_search", { query: "git status", limit: 1 });
+  const body = extractToolResult(explicit);
+  const results = body["results"] as Array<{ path: string }>;
+  expect(results[0]?.path).toBe("notes/shell.md");
+});
+
 test("brain_search rejects missing query with INVALID_PARAMS", async () => {
   const server = makeServer();
   await initialize(server);
