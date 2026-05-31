@@ -21,6 +21,8 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     "telemetry-host": { type: "string" },
     "session-id": { type: "string" },
     "turn-id": { type: "string" },
+    "cache-stable": { type: "boolean" },
+    "dedup-repeated": { type: "boolean" },
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
@@ -40,6 +42,14 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     maxTokens,
     ...(flags["query"] ? { query: flags["query"] as string } : {}),
     ...(flags["lanes"] === true ? { includeLanes: true } : {}),
+    ...(flags["cache-stable"] === true || flags["dedup-repeated"] === true
+      ? {
+          transforms: {
+            ...(flags["cache-stable"] === true ? { cacheStableOrdering: true } : {}),
+            ...(flags["dedup-repeated"] === true ? { deduplicateRepeatedContext: true } : {}),
+          },
+        }
+      : {}),
     ...(flags["telemetry"] === true
       ? {
           telemetry: {
@@ -64,6 +74,10 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
         path: i.path,
         tier: i.tier,
         tokens: i.tokens,
+        ...(i.originalRank !== undefined ? { original_rank: i.originalRank } : {}),
+        ...(i.stableRank !== undefined ? { stable_rank: i.stableRank } : {}),
+        ...(i.dedupedFrom !== undefined ? { deduped_from: i.dedupedFrom } : {}),
+        ...(i.referenceHint !== undefined ? { reference_hint: i.referenceHint } : {}),
       })),
       skipped: report.skipped,
       ...(report.telemetryId ? { telemetry_id: report.telemetryId } : {}),

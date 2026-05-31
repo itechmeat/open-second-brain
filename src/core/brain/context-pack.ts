@@ -30,6 +30,11 @@ import { applyCharBudget } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
 import {
+  applyContextTransforms,
+  type ContextTransformOptions,
+  type ContextTransformAnnotations,
+} from "./context-transforms.ts";
+import {
   buildContextLanes,
   normalizeContextLane,
   type ContextLaneName,
@@ -42,7 +47,7 @@ const TIER_ORDER: ReadonlyArray<PageTier> = [
   PAGE_TIER.peripheral,
 ];
 
-export interface ContextPackItem {
+export interface ContextPackItem extends ContextTransformAnnotations {
   readonly id: string;
   readonly path: string;
   readonly tier: PageTier;
@@ -95,6 +100,8 @@ export interface ContextPackOptions {
   readonly receipt?: ContextReceiptOptions;
   /** Opt-in telemetry for recall coverage and gap diagnostics. */
   readonly telemetry?: RecallTelemetryOptions;
+  /** Opt-in post-selection context transforms. Defaults preserve legacy order and bodies. */
+  readonly transforms?: ContextTransformOptions;
 }
 
 interface Candidate {
@@ -265,7 +272,10 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       { maxTotalChars: opts.maxTotalChars },
     );
     if (capped.dropped.length > 0) {
-      const keptItems = capped.kept.map((k) => k.item);
+      const keptItems = applyContextTransforms(
+        capped.kept.map((k) => k.item),
+        opts.transforms,
+      );
       const droppedSet = new Set(capped.dropped);
       let recomputed = 0;
       for (const i of keptItems) recomputed += i.tokens;
@@ -293,15 +303,17 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     }
   }
 
+  const finalItems = applyContextTransforms(items, opts.transforms);
+  const finalTokensUsed = finalItems.reduce((sum, item) => sum + item.tokens, 0);
   return finalizeContextPackReport(
     vault,
     opts,
     {
       maxTokens: opts.maxTokens,
-      tokensUsed: used,
-      items: Object.freeze(items),
+      tokensUsed: finalTokensUsed,
+      items: Object.freeze(finalItems),
       skipped: Object.freeze(skipped),
-      ...withOptionalLanes(opts, items),
+      ...withOptionalLanes(opts, finalItems),
     },
     startedAtMs,
   );

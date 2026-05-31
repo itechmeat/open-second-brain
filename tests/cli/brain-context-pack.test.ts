@@ -67,3 +67,58 @@ test("brain context-pack can opt in to recall telemetry", async () => {
   expect(records).toHaveLength(1);
   expect(records[0]!.payload).toMatchObject({ status: "ok", result_count: 1 });
 });
+
+test("brain context-pack exposes opt-in transform annotations", async () => {
+  writeFileSync(
+    join(vault, "Brain", "preferences", "pref-zulu.md"),
+    [
+      "---",
+      "id: pref-zulu",
+      "topic: t",
+      "principle: shared body",
+      "tier: core",
+      "created_at: 2026-05-02T00:00:00Z",
+      "---",
+      "",
+      "shared body",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(vault, "Brain", "preferences", "pref-alpha.md"),
+    [
+      "---",
+      "id: pref-alpha",
+      "topic: t",
+      "principle: shared body",
+      "tier: core",
+      "created_at: 2026-05-01T00:00:00Z",
+      "---",
+      "",
+      "shared body",
+    ].join("\n"),
+  );
+
+  const out = await runCli(
+    [
+      "brain",
+      "context-pack",
+      "--vault",
+      vault,
+      "--max-tokens",
+      "10000",
+      "--cache-stable",
+      "--dedup-repeated",
+      "--json",
+    ],
+    {},
+  );
+
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout);
+  expect(json.items.map((item: { id: string }) => item.id)).toEqual(["pref-alpha", "pref-zulu"]);
+  expect(json.items[0]).toMatchObject({ original_rank: 2, stable_rank: 1 });
+  expect(json.items[1]).toMatchObject({
+    deduped_from: "pref-alpha",
+    reference_hint: "see pref-alpha",
+  });
+});

@@ -126,6 +126,51 @@ describe("brain_context_pack tool — round trip", () => {
     expect(lanes.constraints.map((item) => item.id)).toContain("pref-constraint");
   });
 
+  test("returns transform annotations when requested", async () => {
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-zulu.md"),
+      [
+        "---",
+        "id: pref-zulu",
+        "topic: t",
+        "principle: shared body",
+        "tier: core",
+        "created_at: 2026-05-02T00:00:00Z",
+        "---",
+        "",
+        "shared body",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-alpha.md"),
+      [
+        "---",
+        "id: pref-alpha",
+        "topic: t",
+        "principle: shared body",
+        "tier: core",
+        "created_at: 2026-05-01T00:00:00Z",
+        "---",
+        "",
+        "shared body",
+      ].join("\n"),
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, {
+      max_tokens: 10_000,
+      cache_stable: true,
+      dedup_repeated: true,
+    });
+    const items = out["items"] as Array<Record<string, unknown>>;
+    expect(items.map((item) => item["id"])).toEqual(["pref-alpha", "pref-zulu"]);
+    expect(items[0]).toMatchObject({ original_rank: 2, stable_rank: 1 });
+    expect(items[1]).toMatchObject({
+      deduped_from: "pref-alpha",
+      reference_hint: "see pref-alpha",
+    });
+  });
+
   test("rejects non-positive max_tokens via INVALID_PARAMS", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

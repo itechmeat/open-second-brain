@@ -1717,6 +1717,8 @@ async function toolBrainContextPack(
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
   const includeLanes = coerceBool(args, "lanes");
+  const cacheStable = coerceBool(args, "cache_stable");
+  const dedupRepeated = coerceBool(args, "dedup_repeated");
   const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
   const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
@@ -1724,6 +1726,14 @@ async function toolBrainContextPack(
     maxTokens,
     ...(query ? { query } : {}),
     ...(includeLanes ? { includeLanes: true } : {}),
+    ...(cacheStable || dedupRepeated
+      ? {
+          transforms: {
+            ...(cacheStable ? { cacheStableOrdering: true } : {}),
+            ...(dedupRepeated ? { deduplicateRepeatedContext: true } : {}),
+          },
+        }
+      : {}),
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
@@ -1739,6 +1749,10 @@ async function toolBrainContextPack(
       tokens: i.tokens,
       body: i.body,
       trimmed: i.trimmed,
+      ...(i.originalRank !== undefined ? { original_rank: i.originalRank } : {}),
+      ...(i.stableRank !== undefined ? { stable_rank: i.stableRank } : {}),
+      ...(i.dedupedFrom !== undefined ? { deduped_from: i.dedupedFrom } : {}),
+      ...(i.referenceHint !== undefined ? { reference_hint: i.referenceHint } : {}),
       ...(i.safety ? { safety: i.safety } : {}),
     })),
     skipped: report.skipped.map((s) => ({
@@ -2539,6 +2553,16 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "boolean",
           description:
             "When true, also return polarity-aware directives, constraints, and consider lanes. Legacy flat `items` remains present.",
+        },
+        cache_stable: {
+          type: "boolean",
+          description:
+            "When true, reorder the selected items by stable id and annotate their original rank.",
+        },
+        dedup_repeated: {
+          type: "boolean",
+          description:
+            "When true, replace repeated context bodies with reference hints to an earlier emitted item.",
         },
         telemetry: {
           type: "boolean",
