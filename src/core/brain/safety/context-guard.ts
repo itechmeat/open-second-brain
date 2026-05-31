@@ -15,6 +15,12 @@ export interface ContextSafetyReason {
   readonly field?: string;
 }
 
+export interface ContextSafetyReport {
+  readonly filtered: boolean;
+  readonly trusted: boolean;
+  readonly reasons: ReadonlyArray<ContextSafetyReason>;
+}
+
 export interface ContextGuardSource {
   readonly id?: string;
   readonly path?: string;
@@ -31,6 +37,17 @@ export interface GuardedContextSnippet {
   readonly filtered: boolean;
   readonly trusted: boolean;
   readonly reasons: ReadonlyArray<ContextSafetyReason>;
+}
+
+export function contextSafetyReport(
+  snippet: GuardedContextSnippet,
+): ContextSafetyReport | undefined {
+  if (!snippet.filtered && !snippet.trusted) return undefined;
+  return Object.freeze({
+    filtered: snippet.filtered,
+    trusted: snippet.trusted,
+    reasons: snippet.reasons,
+  });
 }
 
 interface DetectionPattern {

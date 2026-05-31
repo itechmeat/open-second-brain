@@ -17,6 +17,11 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import {
+  contextSafetyReport,
+  guardBrainContextSnippet,
+  type ContextSafetyReport,
+} from "./safety/context-guard.ts";
 import { brainDirs } from "./paths.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
@@ -45,6 +50,8 @@ export interface ContextPackItem {
   readonly contextLane: ContextLaneName | null;
   /** True when `body` was truncated by `maxCharsPerMemory` (v0.20.0). */
   readonly trimmed: boolean;
+  /** Present when the surfaced body was filtered or explicitly trusted. */
+  readonly safety?: ContextSafetyReport;
 }
 
 export interface ContextPackSkipped {
@@ -92,6 +99,7 @@ interface Candidate {
   readonly contextLane: ContextLaneName | null;
   readonly body: string;
   readonly tokens: number;
+  readonly safety?: ContextSafetyReport;
 }
 
 function withOptionalLanes(
@@ -145,10 +153,17 @@ function collectCandidates(vault: string): Candidate[] {
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
       const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
       const contextLane = normalizeContextLane(meta["context_lane"]);
+      const guarded = guardBrainContextSnippet(body, {
+        source: { id, path: full, metadata: meta },
+        ...(meta["context_safety"] === "trusted-instruction"
+          ? { trust: "trusted-instruction" as const }
+          : {}),
+      });
       // Token budget is computed against the body the pack actually
       // emits, not the full file - frontmatter tokens are never
       // returned to the caller, so charging them would under-fill
-      // the context window.
+      // the context window. Safety filtering therefore happens before
+      // token accounting.
       out.push({
         id,
         path: full,
@@ -157,8 +172,9 @@ function collectCandidates(vault: string): Candidate[] {
         topic,
         principle,
         contextLane,
-        body,
-        tokens: estimateTokens(body),
+        body: guarded.safeText,
+        tokens: estimateTokens(guarded.safeText),
+        ...(contextSafetyReport(guarded) ? { safety: contextSafetyReport(guarded) } : {}),
       });
     }
   }
@@ -220,6 +236,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       principle: c.principle,
       contextLane: c.contextLane,
       trimmed,
+      ...(c.safety ? { safety: c.safety } : {}),
     });
     used += tokens;
   }

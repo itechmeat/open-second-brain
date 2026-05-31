@@ -1721,6 +1721,7 @@ async function toolBrainContextPack(
       tokens: i.tokens,
       body: i.body,
       trimmed: i.trimmed,
+      ...(i.safety ? { safety: i.safety } : {}),
     })),
     skipped: report.skipped.map((s) => ({
       id: s.id,
@@ -1778,11 +1779,13 @@ async function toolBrainPreCompressPack(
     vault_path: ctx.vault,
     text: pack.text,
     active_head_included: pack.activeHeadIncluded,
+    ...(pack.activeHeadSafety ? { active_head_safety: pack.activeHeadSafety } : {}),
     total_chars: pack.totalChars,
     items: pack.items.map((i) => ({
       id: i.id,
       principle: i.principle,
       trimmed: i.trimmed,
+      ...(i.safety ? { safety: i.safety } : {}),
     })),
   };
 }
