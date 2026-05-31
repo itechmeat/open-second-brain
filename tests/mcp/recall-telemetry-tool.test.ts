@@ -141,7 +141,7 @@ describe("brain_recall_telemetry tool", () => {
     });
   });
 
-  test("context-pack and pre-compress tools can opt in to telemetry", async () => {
+  test("context-pack and pre-compress tools can opt in to receipts and telemetry", async () => {
     writePreference(vault, {
       slug: "alpha",
       topic: "alpha",
@@ -162,16 +162,31 @@ describe("brain_recall_telemetry tool", () => {
 
     const contextPack = await callTool(server, "brain_context_pack", {
       max_tokens: 10000,
+      receipt: true,
+      receipt_host: "mcp-test",
       telemetry: true,
       telemetry_host: "mcp-test",
     });
+    expect(contextPack["receipt_id"]).toStartWith("ctn_");
     expect(contextPack["telemetry_id"]).toStartWith("ctn_");
 
     const preCompress = await callTool(server, "brain_pre_compress_pack", {
+      receipt: true,
+      receipt_host: "mcp-test",
       telemetry: true,
       telemetry_host: "mcp-test",
     });
+    expect(preCompress["receipt_id"]).toStartWith("ctn_");
     expect(preCompress["telemetry_id"]).toStartWith("ctn_");
+
+    const receipts = await callTool(server, "brain_context_receipts", {
+      operation: "list",
+      host: "mcp-test",
+    });
+    expect(receipts["total"]).toBe(2);
+    expect(
+      (receipts["receipts"] as Array<Record<string, unknown>>).map((receipt) => receipt["trigger"]),
+    ).toEqual(["pre_compress", "context_pack"]);
 
     const summary = await callTelemetry(server, {
       operation: "summary",

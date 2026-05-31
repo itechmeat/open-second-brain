@@ -74,6 +74,7 @@ import {
   isContextReceiptTrigger,
   listContextReceipts,
   summarizeContextReceipt,
+  type ContextReceiptOptions,
 } from "../core/brain/context-receipts.ts";
 import {
   isRecallTelemetryMode,
@@ -1734,11 +1735,13 @@ async function toolBrainContextPack(
   const dedupRepeated = coerceBool(args, "dedup_repeated");
   const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
+  const receipt = receiptOptionsFromArgs("brain_context_pack", args, "context_pack", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
   const report = packContext(ctx.vault, {
     maxTokens,
     ...(query ? { query } : {}),
     ...(includeLanes ? { includeLanes: true } : {}),
+    ...(receipt !== undefined ? { receipt } : {}),
     ...(cacheStable || dedupRepeated
       ? {
           transforms: {
@@ -1773,6 +1776,7 @@ async function toolBrainContextPack(
       tokens: s.tokens,
       reason: s.reason,
     })),
+    ...(report.receiptId ? { receipt_id: report.receiptId } : {}),
     ...(report.telemetryId ? { telemetry_id: report.telemetryId } : {}),
     ...(report.lanes ? { lanes: report.lanes } : {}),
   };
@@ -2085,11 +2089,13 @@ async function toolBrainPreCompressPack(
     "brain_pre_compress_pack",
   );
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_pre_compress_pack");
+  const receipt = receiptOptionsFromArgs("brain_pre_compress_pack", args, "pre_compress", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_pre_compress_pack", args, "mcp");
   const pack = buildPreCompressPack(ctx.vault, {
     topK,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+    ...(receipt !== undefined ? { receipt } : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
   });
   return {
@@ -2098,6 +2104,7 @@ async function toolBrainPreCompressPack(
     active_head_included: pack.activeHeadIncluded,
     ...(pack.activeHeadSafety ? { active_head_safety: pack.activeHeadSafety } : {}),
     total_chars: pack.totalChars,
+    ...(pack.receiptId ? { receipt_id: pack.receiptId } : {}),
     ...(pack.telemetryId ? { telemetry_id: pack.telemetryId } : {}),
     items: pack.items.map((i) => ({
       id: i.id,
@@ -2105,6 +2112,25 @@ async function toolBrainPreCompressPack(
       trimmed: i.trimmed,
       ...(i.safety ? { safety: i.safety } : {}),
     })),
+  };
+}
+
+function receiptOptionsFromArgs(
+  tool: string,
+  args: Record<string, unknown>,
+  trigger: "context_pack" | "pre_compress",
+  defaultHost: string,
+): ContextReceiptOptions | undefined {
+  if (!coerceBool(args, "receipt")) return undefined;
+  return {
+    host: optionalStringArg(tool, args, "receipt_host") ?? defaultHost,
+    trigger,
+    ...(optionalStringArg(tool, args, "session_id") !== undefined
+      ? { sessionId: optionalStringArg(tool, args, "session_id") }
+      : {}),
+    ...(optionalStringArg(tool, args, "turn_id") !== undefined
+      ? { turnId: optionalStringArg(tool, args, "turn_id") }
+      : {}),
   };
 }
 
@@ -2721,6 +2747,14 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "When true, replace repeated context bodies with reference hints to an earlier emitted item.",
         },
+        receipt: {
+          type: "boolean",
+          description: "When true, emit an opt-in context receipt for this context-pack run.",
+        },
+        receipt_host: {
+          type: "string",
+          description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
+        },
         telemetry: {
           type: "boolean",
           description:
@@ -2990,6 +3024,14 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           description:
             "Optional total character cap (code points) across the addendum; lowest-priority overflow is dropped.",
+        },
+        receipt: {
+          type: "boolean",
+          description: "When true, emit an opt-in context receipt for this pre-compress run.",
+        },
+        receipt_host: {
+          type: "string",
+          description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
         },
         telemetry: {
           type: "boolean",

@@ -95,7 +95,7 @@ o2b brain summary             Operator dashboard - trust verdict (clean | watch 
 o2b brain page-dedup          Page-level duplicate detector (by content hash + frontmatter similarity)
 o2b brain lint                Self-healing structural drift fixer; --consolidate folds multi-source duplicates
 o2b brain token-footprint     Token-budget monitor across instruction files and active.md
-o2b brain context-pack        Bounded-token vault slice for priming an agent's context window (--max-tokens N, --lanes for directives/constraints/consider; v0.29.0 adds opt-in --telemetry, --cache-stable, --dedup-repeated)
+o2b brain context-pack        Bounded-token vault slice for priming an agent's context window (--max-tokens N, --lanes for directives/constraints/consider; v0.29.0 adds opt-in --receipt, --telemetry, --cache-stable, --dedup-repeated)
 o2b brain synthesise          Concept-scoped JSON envelope: target node + linkers + optional unlinked mentions
 o2b brain moc-audit           Per-MOC coverage audit: classify cluster members into well-covered / fragile / candidate-missing
 o2b brain unlinked            Raw-text mentions outside `[[...]]` (Unicode-aware boundaries)
@@ -104,7 +104,7 @@ o2b brain unlinked            Raw-text mentions outside `[[...]]` (Unicode-aware
 ### Context continuity and receipts (since v0.29.0)
 
 ```text
-o2b brain context-pack        Existing budgeted context pack; add --telemetry to emit redacted recall telemetry, --cache-stable for stable ordering diagnostics, and --dedup-repeated for repeated-context reference hints
+o2b brain context-pack        Existing budgeted context pack; add --receipt to emit a context receipt, --telemetry to emit redacted recall telemetry, --cache-stable for stable ordering diagnostics, and --dedup-repeated for repeated-context reference hints
 o2b brain context-receipts    list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--json]; show <receipt-id> [--json]
 o2b brain recall-telemetry    list|summary [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json]
 o2b brain context-presets     show [tight-context|long-context] --json; suggest --model <name> --context-window <tokens> --json; diff <preset-id> [current-value flags] [--override <path>...] --json
@@ -115,7 +115,7 @@ o2b brain session-describe    --session-id <id> [--json]
 o2b brain session-expand      <record-id> [--raw-limit <n>] [--cursor <offset>] [--json]
 ```
 
-Receipts, telemetry, transforms, and session recall import are opt-in. The stored continuity records use redaction-safe payloads, source references, hashes, counters, and bounded snippets rather than raw private prompt context.
+Receipts, telemetry, transforms, and session recall import are opt-in. Receipt and telemetry records store redaction-safe payloads, source references, hashes, counters, and bounded snippets rather than raw private prompt context; session recall stores redacted turn text only when explicitly imported for later expansion.
 
 ## Vault scope
 

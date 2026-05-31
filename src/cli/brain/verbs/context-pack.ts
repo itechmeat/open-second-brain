@@ -17,6 +17,8 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     "max-tokens": { type: "string" },
     query: { type: "string" },
     lanes: { type: "boolean" },
+    receipt: { type: "boolean" },
+    "receipt-host": { type: "string" },
     telemetry: { type: "boolean" },
     "telemetry-host": { type: "string" },
     "session-id": { type: "string" },
@@ -42,6 +44,20 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     maxTokens,
     ...(flags["query"] ? { query: flags["query"] as string } : {}),
     ...(flags["lanes"] === true ? { includeLanes: true } : {}),
+    ...(flags["receipt"] === true
+      ? {
+          receipt: {
+            host: trimOrDefault(flags["receipt-host"], "cli"),
+            trigger: "context_pack" as const,
+            ...(trimOrUndefined(flags["session-id"]) !== undefined
+              ? { sessionId: trimOrUndefined(flags["session-id"]) }
+              : {}),
+            ...(trimOrUndefined(flags["turn-id"]) !== undefined
+              ? { turnId: trimOrUndefined(flags["turn-id"]) }
+              : {}),
+          },
+        }
+      : {}),
     ...(flags["cache-stable"] === true || flags["dedup-repeated"] === true
       ? {
           transforms: {
@@ -80,6 +96,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
         ...(i.referenceHint !== undefined ? { reference_hint: i.referenceHint } : {}),
       })),
       skipped: report.skipped,
+      ...(report.receiptId ? { receipt_id: report.receiptId } : {}),
       ...(report.telemetryId ? { telemetry_id: report.telemetryId } : {}),
       ...(report.lanes ? { lanes: report.lanes } : {}),
     });
@@ -89,6 +106,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
   process.stdout.write(`tokens used: ${report.tokensUsed} / ${report.maxTokens}\n`);
   process.stdout.write(`pages included: ${report.items.length}\n`);
   process.stdout.write(`pages skipped: ${report.skipped.length}\n\n`);
+  if (report.receiptId) process.stdout.write(`receipt: ${report.receiptId}\n`);
   for (const i of report.items) {
     process.stdout.write(`[${i.tier}] ${i.id} (${i.tokens} tokens)\n`);
   }
