@@ -57,6 +57,7 @@ Brain verbs (observing memory):
   token-footprint     Report per-category vault token size with a warn threshold
   context-pack        Return a tier-then-recency vault slice under a token budget
   context-receipts    List/show prompt context receipt records
+  context-presets     Show/suggest/diff read-only context budget presets
   recall-telemetry    List/summarize opt-in recall telemetry records
   lint                Self-healing structural checks (--consolidate); --apply to write
   actions             Ranked maintenance action list (dedup + lint + footprint)
@@ -339,6 +340,11 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain context-receipts list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain context-receipts show <receipt-id> [--vault <path>] [--json]\n" +
     "Read prompt context receipt continuity records emitted by opt-in callers.\n",
+  "context-presets":
+    "usage: o2b brain context-presets show [preset-id] [--json]\n" +
+    "       o2b brain context-presets suggest [--model <name>] [--context-window <tokens>] [--json]\n" +
+    "       o2b brain context-presets diff <preset-id> [current-value flags] [--override <path>...] [--json]\n" +
+    "Dry-run model-aware context budget preset diagnostics. Never writes config.\n",
   "recall-telemetry":
     "usage: o2b brain recall-telemetry list [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +

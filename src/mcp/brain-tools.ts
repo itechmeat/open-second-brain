@@ -85,6 +85,13 @@ import {
   type RecallTelemetryOptions,
   type RecallTelemetryStatus,
 } from "../core/brain/recall-telemetry.ts";
+import {
+  diffContextPreset,
+  getContextPreset,
+  listContextPresets,
+  suggestContextPreset,
+  type ContextPresetCurrentConfig,
+} from "../core/brain/context-presets.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
@@ -1890,6 +1897,57 @@ function coerceRecallTelemetryStatus(raw: unknown): RecallTelemetryStatus | unde
   return trimmed;
 }
 
+// ----- brain_context_presets ----------------------------------------------
+
+async function toolBrainContextPresets(
+  _ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_context_presets", args, "operation");
+  if (operation === "show") {
+    const presetId = optionalStringArg("brain_context_presets", args, "preset_id");
+    const result =
+      presetId === undefined ? { presets: listContextPresets() } : getContextPreset(presetId);
+    if (result === null) {
+      throw new MCPError(INVALID_PARAMS, `brain_context_presets: unknown preset ${presetId}`);
+    }
+    return Array.isArray(result) ? { presets: result } : { ...result };
+  }
+  if (operation === "suggest") {
+    const model = optionalStringArg("brain_context_presets", args, "model");
+    const window = coercePositiveInteger(
+      "brain_context_presets",
+      "context_window_tokens",
+      args["context_window_tokens"],
+    );
+    return {
+      ...suggestContextPreset({
+        ...(model !== undefined ? { model } : {}),
+        ...(window !== undefined ? { contextWindowTokens: window } : {}),
+      }),
+    };
+  }
+  if (operation === "diff") {
+    const presetId = optionalStringArg("brain_context_presets", args, "preset_id");
+    if (presetId === undefined) {
+      throw new MCPError(INVALID_PARAMS, "brain_context_presets: preset_id is required for diff");
+    }
+    return { ...diffContextPreset(presetId, contextPresetCurrentConfig(args["current"])) };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_context_presets: operation must be show, suggest, or diff",
+  );
+}
+
+function contextPresetCurrentConfig(raw: unknown): ContextPresetCurrentConfig {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new MCPError(INVALID_PARAMS, "brain_context_presets: current must be an object");
+  }
+  return raw as ContextPresetCurrentConfig;
+}
+
 // ----- brain_pre_compress_pack (v0.20.0) -----------------------------------
 
 /** Parse an optional positive-integer arg, throwing INVALID_PARAMS otherwise. */
@@ -2671,6 +2729,43 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRecallTelemetry,
+  },
+  {
+    name: "brain_context_presets",
+    description:
+      "Show, suggest, or diff read-only context budget presets. Diagnostics only; never writes configuration.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["show", "suggest", "diff"],
+          description:
+            "show returns presets, suggest chooses by model/window, diff compares current values.",
+        },
+        preset_id: {
+          type: "string",
+          description: "Preset id for show/diff, e.g. tight-context or long-context.",
+        },
+        model: {
+          type: "string",
+          description: "Optional model name hint for suggest.",
+        },
+        context_window_tokens: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional context-window size hint for suggest.",
+        },
+        current: {
+          type: "object",
+          description:
+            "Optional current values for diff: { context_pack, pre_compress, overrides }. Overrides preserve caller-managed paths.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainContextPresets,
   },
   {
     // No preview budget: the addendum is meant to be injected whole and

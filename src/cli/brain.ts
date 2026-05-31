@@ -55,6 +55,7 @@ import {
   cmdBrainTokenFootprint,
   cmdBrainContextPack,
   cmdBrainContextReceipts,
+  cmdBrainContextPresets,
   cmdBrainRecallTelemetry,
   cmdBrainLint,
   cmdBrainActions,
@@ -181,6 +182,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainContextPack(rest);
       case "context-receipts":
         return await cmdBrainContextReceipts(rest);
+      case "context-presets":
+        return await cmdBrainContextPresets(rest);
       case "recall-telemetry":
         return await cmdBrainRecallTelemetry(rest);
       case "lint":
