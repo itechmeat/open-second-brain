@@ -1199,6 +1199,47 @@ describe("brain import-session", () => {
     expect(parsed.files[0].format).toBe("codex");
   });
 
+  test("--recall populates session recall DAG", async () => {
+    await bootstrap();
+    const fixture = join(process.cwd(), "tests/fixtures/sessions/codex-minimal.jsonl");
+    const r = await runCli(
+      [
+        "brain",
+        "import-session",
+        fixture,
+        "--vault",
+        vault,
+        "--recall",
+        "--recall-session-id",
+        "cli-import-recall",
+        "--json",
+      ],
+      {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      },
+    );
+    expect(r.returncode).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.files[0].recall_turns_imported).toBeGreaterThan(0);
+
+    const describe = await runCli(
+      [
+        "brain",
+        "session-describe",
+        "--vault",
+        vault,
+        "--session-id",
+        "cli-import-recall",
+        "--json",
+      ],
+      {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      },
+    );
+    expect(describe.returncode).toBe(0);
+    expect(JSON.parse(describe.stdout).raw_turns).toBe(parsed.files[0].recall_turns_imported);
+  });
+
   test("exit 2 on unknown format without --format flag", async () => {
     await bootstrap();
     const junk = join(tmp, "junk.jsonl");

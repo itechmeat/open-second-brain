@@ -18,6 +18,7 @@ import {
   okJson,
   resolveBrainVault,
   parseOptionalIsoDate,
+  CliError,
 } from "../helpers.ts";
 
 export async function cmdBrainImportSession(argv: string[]): Promise<number> {
@@ -27,6 +28,9 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     since: { type: "string" },
     "dry-run": { type: "boolean" },
     agent: { type: "string" },
+    recall: { type: "boolean" },
+    "recall-session-id": { type: "string" },
+    "recall-summary-group-size": { type: "string" },
     json: { type: "boolean" },
   });
   if (positional.length < 1) return fail("brain import-session requires a <path> argument");
@@ -38,6 +42,14 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     return fail("--agent must be a non-empty string when provided");
   }
   const agent = explicitAgent ?? resolveAgentName(config);
+  const recallSessionId = normalizeFlagString(flags["recall-session-id"]);
+  if (flags["recall-session-id"] !== undefined && recallSessionId === null) {
+    return fail("--recall-session-id must be a non-empty string when provided");
+  }
+  const recallSummaryGroupSize = parsePositiveIntegerFlag(
+    flags["recall-summary-group-size"],
+    "--recall-summary-group-size",
+  );
 
   const formatRaw = flags["format"] as string | undefined;
   let format: SessionAdapterId | undefined;
@@ -64,6 +76,11 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
           ...(format ? { format } : {}),
           ...(since ? { since } : {}),
           dryRun: Boolean(flags["dry-run"]),
+          recall: Boolean(flags["recall"]),
+          ...(recallSessionId !== null ? { recallSessionId } : {}),
+          ...(recallSummaryGroupSize !== undefined
+            ? { recallSummaryGroupSize: recallSummaryGroupSize }
+            : {}),
         })
       : {
           files: [
@@ -72,6 +89,11 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
               ...(format ? { format } : {}),
               ...(since ? { since } : {}),
               dryRun: Boolean(flags["dry-run"]),
+              recall: Boolean(flags["recall"]),
+              ...(recallSessionId !== null ? { recallSessionId } : {}),
+              ...(recallSummaryGroupSize !== undefined
+                ? { recallSummaryGroupSize: recallSummaryGroupSize }
+                : {}),
             }),
           ],
           warnings: [],
@@ -112,6 +134,8 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
           signals_deduped: f.signals_deduped,
           tool_replays: f.tool_replays,
           malformed: f.malformed,
+          recall_turns_imported: f.recall_turns_imported,
+          recall_summary_nodes: f.recall_summary_nodes,
           errors: f.errors,
         })),
         warnings: result.warnings,
@@ -124,6 +148,10 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
         ok(`  signals_created: ${f.signals_created}`);
         ok(`  signals_deduped: ${f.signals_deduped}`);
         ok(`  tool_replays: ${f.tool_replays}`);
+        if (flags["recall"]) {
+          ok(`  recall_turns_imported: ${f.recall_turns_imported}`);
+          ok(`  recall_summary_nodes: ${f.recall_summary_nodes}`);
+        }
         if (f.malformed > 0) ok(`  malformed: ${f.malformed}`);
         for (const e of f.errors) info(`  error: ${e.path}: ${e.message}`);
       }
@@ -138,4 +166,17 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     }
     return fail(`import-session failed: ${(exc as Error).message ?? exc}`);
   }
+}
+
+function parsePositiveIntegerFlag(
+  value: string | boolean | string[] | undefined,
+  flag: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^[0-9]+$/.test(value)) {
+    throw new CliError(`${flag} must be a positive integer`);
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (parsed < 1) throw new CliError(`${flag} must be a positive integer`);
+  return parsed;
 }

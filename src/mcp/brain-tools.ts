@@ -93,6 +93,11 @@ import {
   type ContextPresetCurrentConfig,
 } from "../core/brain/context-presets.ts";
 import { extractPreCompactRecords } from "../core/brain/pre-compact-extract.ts";
+import {
+  describeSessionRecall,
+  expandSessionRecall,
+  searchSessionRecall,
+} from "../core/brain/session-recall.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
@@ -1983,6 +1988,57 @@ async function toolBrainPreCompactExtract(
   return { count: result.records.length, ...result };
 }
 
+// ----- session recall DAG --------------------------------------------------
+
+async function toolBrainSessionGrep(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const limit = coercePositiveInteger("brain_session_grep", "limit", args["limit"]);
+  const snippetChars = coercePositiveInteger(
+    "brain_session_grep",
+    "snippet_chars",
+    args["snippet_chars"],
+  );
+  return {
+    ...searchSessionRecall(ctx.vault, {
+      query: requiredStringArg("brain_session_grep", args, "query"),
+      ...(optionalStringArg("brain_session_grep", args, "session_id") !== undefined
+        ? { sessionId: optionalStringArg("brain_session_grep", args, "session_id") }
+        : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      ...(snippetChars !== undefined ? { snippetChars } : {}),
+    }),
+  };
+}
+
+async function toolBrainSessionDescribe(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return {
+    ...describeSessionRecall(ctx.vault, {
+      sessionId: requiredStringArg("brain_session_describe", args, "session_id"),
+    }),
+  };
+}
+
+async function toolBrainSessionExpand(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const rawLimit = coercePositiveInteger("brain_session_expand", "raw_limit", args["raw_limit"]);
+  return {
+    ...expandSessionRecall(ctx.vault, {
+      id: requiredStringArg("brain_session_expand", args, "id"),
+      ...(rawLimit !== undefined ? { rawLimit } : {}),
+      ...(optionalStringArg("brain_session_expand", args, "cursor") !== undefined
+        ? { cursor: optionalStringArg("brain_session_expand", args, "cursor") }
+        : {}),
+    }),
+  };
+}
+
 // ----- brain_pre_compress_pack (v0.20.0) -----------------------------------
 
 /** Parse an optional positive-integer arg, throwing INVALID_PARAMS otherwise. */
@@ -2833,6 +2889,62 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainPreCompactExtract,
+  },
+  {
+    name: "brain_session_grep",
+    description: "Search imported session recall raw turns and summary nodes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search text." },
+        session_id: { type: "string", description: "Optional session id filter." },
+        limit: { type: "integer", minimum: 1, description: "Maximum hits to return." },
+        snippet_chars: {
+          type: "integer",
+          minimum: 1,
+          description: "Maximum chars per hit snippet.",
+        },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSessionGrep,
+  },
+  {
+    name: "brain_session_describe",
+    description: "Describe counts and summary depths for an imported session recall DAG.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Session id to describe." },
+      },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSessionDescribe,
+  },
+  {
+    name: "brain_session_expand",
+    description:
+      "Expand a session recall raw or summary node to immediate sources and paginated exact raw turn content.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Session recall record id." },
+        raw_limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Maximum raw turn items to return.",
+        },
+        cursor: {
+          type: "string",
+          description: "Raw turn pagination cursor from a previous response.",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSessionExpand,
   },
   {
     // No preview budget: the addendum is meant to be injected whole and

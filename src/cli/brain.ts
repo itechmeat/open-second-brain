@@ -58,6 +58,9 @@ import {
   cmdBrainContextPresets,
   cmdBrainPreCompactExtract,
   cmdBrainRecallTelemetry,
+  cmdBrainSessionDescribe,
+  cmdBrainSessionExpand,
+  cmdBrainSessionGrep,
   cmdBrainLint,
   cmdBrainActions,
   cmdBrainSummary,
@@ -189,6 +192,12 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainPreCompactExtract(rest);
       case "recall-telemetry":
         return await cmdBrainRecallTelemetry(rest);
+      case "session-grep":
+        return await cmdBrainSessionGrep(rest);
+      case "session-describe":
+        return await cmdBrainSessionDescribe(rest);
+      case "session-expand":
+        return await cmdBrainSessionExpand(rest);
       case "lint":
         return await cmdBrainLint(rest);
       case "actions":

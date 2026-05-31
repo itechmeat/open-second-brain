@@ -60,6 +60,9 @@ Brain verbs (observing memory):
   context-presets     Show/suggest/diff read-only context budget presets
   pre-compact-extract Extract typed continuity records from bounded text
   recall-telemetry    List/summarize opt-in recall telemetry records
+  session-grep        Search imported session recall turns and summaries
+  session-describe    Describe an imported session recall DAG
+  session-expand      Expand a session recall node to source turns
   lint                Self-healing structural checks (--consolidate); --apply to write
   actions             Ranked maintenance action list (dedup + lint + footprint)
   summary             Operator dashboard: trust verdict, doctor/dream counts, actions
@@ -259,11 +262,14 @@ export const VERB_HELP: Record<string, string> = {
   "import-session":
     "usage: o2b brain import-session <path> [--vault <vault>]\n" +
     "                                [--format auto|<registered-adapter>]\n" +
-    "                                [--since <ISO>] [--dry-run] [--json]\n" +
+    "                                [--since <ISO>] [--dry-run] [--recall]\n" +
+    "                                [--recall-session-id <id>] [--recall-summary-group-size <n>] [--json]\n" +
     "Extract signals from a registered agent session .jsonl file (or\n" +
     "directory of .jsonl files). Two extraction paths run in parallel:\n" +
     "@osb markers in user/assistant messages, and replay of brain_feedback\n" +
     "tool_use calls. Dedup against the inbox by normalised payload hash.\n" +
+    "With --recall, also stores normalized turns in the continuity-backed\n" +
+    "session recall DAG.\n" +
     "Autodetect failure exits 2 — pass --format to override.\n",
   merge:
     "usage: o2b brain merge <keep-pref-id> <drop-pref-id>\n" +
@@ -353,6 +359,15 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain recall-telemetry list [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +
     "Read opt-in recall telemetry continuity records and aggregate coverage gaps.\n",
+  "session-grep":
+    "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--vault <path>] [--json]\n" +
+    "Search imported session recall raw turns and summary nodes.\n",
+  "session-describe":
+    "usage: o2b brain session-describe --session-id <id> [--vault <path>] [--json]\n" +
+    "Describe counts and summary depths for an imported session recall DAG.\n",
+  "session-expand":
+    "usage: o2b brain session-expand <record-id> [--raw-limit <n>] [--cursor <offset>] [--vault <path>] [--json]\n" +
+    "Expand a raw or summary session recall node to immediate sources and paginated raw turn content.\n",
   lint:
     "usage: o2b brain lint --consolidate [--apply] [--yes] [--vault <path>] [--json]\n" +
     "Self-healing structural lint. Dry-run by default; --apply writes\n" +
