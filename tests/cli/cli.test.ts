@@ -205,6 +205,57 @@ describe("export-config", () => {
   });
 });
 
+describe("secrets", () => {
+  test("list reports references without resolved values", async () => {
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, 'github_token: "$secret:GITHUB_TOKEN"\nplain: visible\n');
+
+    const r = await runCli(["secrets", "list", "--config", config, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config, GITHUB_TOKEN: "ghp_secret_value" },
+    });
+
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).not.toContain("ghp_secret_value");
+    const data = JSON.parse(r.stdout);
+    expect(data.secrets).toEqual([
+      {
+        config_key: "github_token",
+        name: "GITHUB_TOKEN",
+        available: true,
+      },
+    ]);
+  });
+
+  test("status never prints the resolved value", async () => {
+    const config = join(tmp, "config.yaml");
+
+    const r = await runCli(["secrets", "status", "GITHUB_TOKEN", "--config", config, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config, GITHUB_TOKEN: "ghp_secret_value" },
+    });
+
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).not.toContain("ghp_secret_value");
+    expect(JSON.parse(r.stdout)).toEqual({
+      name: "GITHUB_TOKEN",
+      available: true,
+    });
+  });
+
+  test("status exits non-zero for missing secrets", async () => {
+    const config = join(tmp, "config.yaml");
+
+    const r = await runCli(["secrets", "status", "MISSING_SECRET", "--config", config, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+
+    expect(r.returncode).toBe(1);
+    expect(JSON.parse(r.stdout)).toEqual({
+      name: "MISSING_SECRET",
+      available: false,
+    });
+  });
+});
+
 describe("mcp subcommand", () => {
   test("errors when no vault anywhere", async () => {
     const cfg = join(tmp, "config.yaml");

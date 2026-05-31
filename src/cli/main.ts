@@ -18,6 +18,7 @@ import {
   setConfigValue,
   validateTimezoneName,
 } from "../core/config.ts";
+import { listSecretReferences } from "../core/secret-ref.ts";
 import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
 import { doctor } from "../core/doctor.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
@@ -58,19 +59,12 @@ import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
 import { cmdInitInteractive } from "./install/init-interactive.ts";
 import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
-import {
-  COMPLETION_SHELLS,
-  isCompletionShell,
-  renderCompletions,
-} from "./completions.ts";
+import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
-import {
-  evaluateToolCapabilities,
-  type RuntimeCapabilityWindow,
-} from "../mcp/capabilities.ts";
+import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "../mcp/capabilities.ts";
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
 
@@ -100,9 +94,7 @@ async function cmdStatus(argv: string[]): Promise<number> {
     process.stdout.write(JSON.stringify(output, sortedReplacer, 2) + "\n");
   } else {
     process.stdout.write(`config_path: ${result.path}\n`);
-    process.stdout.write(
-      `config_exists: ${result.exists ? "true" : "false"}\n`,
-    );
+    process.stdout.write(`config_exists: ${result.exists ? "true" : "false"}\n`);
     if (Object.keys(result.data).length > 0) {
       process.stdout.write("config_keys:\n");
       for (const key of Object.keys(result.data).toSorted()) {
@@ -188,9 +180,7 @@ async function cmdInit(argv: string[]): Promise<number> {
  */
 function writeSearchInitBlock(configPath: string): void {
   process.stdout.write("\nSearch:\n");
-  process.stdout.write(
-    "  next: o2b search index   # build the vault search index\n",
-  );
+  process.stdout.write("  next: o2b search index   # build the vault search index\n");
 
   const data = discoverConfig(configPath).data;
   // v0.10.10 — share the truthy / key-present logic with `o2b status`
@@ -201,11 +191,7 @@ function writeSearchInitBlock(configPath: string): void {
   // Skip the embedding-key prompt when search is explicitly disabled
   // (no point onboarding semantic when the whole layer is off), the
   // semantic flag is off, or the key is already present.
-  if (
-    semantic.search_disabled ||
-    !semantic.semantic_enabled ||
-    semantic.embedding_key_present
-  ) {
+  if (semantic.search_disabled || !semantic.semantic_enabled || semantic.embedding_key_present) {
     return;
   }
 
@@ -252,9 +238,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       repoRoot: (flags["repo"] as string | undefined) ?? null,
     });
   } catch (exc) {
-    process.stderr.write(
-      `error: doctor failed: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: doctor failed: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
   let allOk = true;
@@ -279,34 +263,100 @@ async function cmdExportConfig(argv: string[]): Promise<number> {
   const output = String(flags["output"]);
   try {
     mkdirSync(resolve(output, ".."), { recursive: true });
-    writeFileSync(
-      output,
-      JSON.stringify(snapshot, sortedReplacer, 2) + "\n",
-      "utf8",
-    );
+    writeFileSync(output, JSON.stringify(snapshot, sortedReplacer, 2) + "\n", "utf8");
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to export config: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to export config: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
   process.stdout.write(`exported: ${output}\n`);
   return 0;
 }
 
+async function cmdSecrets(argv: string[]): Promise<number> {
+  if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
+    process.stdout.write("usage: o2b secrets list|status [args...]\n");
+    return argv.length === 0 ? 2 : 0;
+  }
+  const verb = argv[0]!;
+  const rest = argv.slice(1);
+  switch (verb) {
+    case "list":
+      return cmdSecretsList(rest);
+    case "status":
+      return cmdSecretsStatus(rest);
+    default:
+      process.stderr.write(`error: unknown secrets verb: ${verb}\n`);
+      return 2;
+  }
+}
+
+function cmdSecretsList(argv: string[]): number {
+  const { flags, positional } = parseFlags(argv, {
+    config: { type: "string" },
+    json: { type: "boolean" },
+  });
+  if (positional.length > 0) {
+    process.stderr.write(
+      `error: secrets list does not accept positional arguments: ${positional.join(" ")}\n`,
+    );
+    return 2;
+  }
+  const discovery = discoverConfig(flags["config"] as string | undefined);
+  const refs = listSecretReferences(discovery.data, process.env);
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          config_path: discovery.path,
+          config_exists: discovery.exists,
+          secrets: refs.map((ref) => ({
+            config_key: ref.configKey,
+            name: ref.name,
+            available: ref.available,
+          })),
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return 0;
+  }
+  for (const ref of refs) {
+    process.stdout.write(
+      `${ref.configKey}: ${ref.name} (${ref.available ? "available" : "missing"})\n`,
+    );
+  }
+  return 0;
+}
+
+function cmdSecretsStatus(argv: string[]): number {
+  const { flags, positional } = parseFlags(argv, {
+    config: { type: "string" },
+    json: { type: "boolean" },
+  });
+  if (positional.length !== 1) {
+    process.stderr.write("error: secrets status requires exactly one secret name\n");
+    return 2;
+  }
+  void flags["config"];
+  const name = positional[0]!;
+  const available = Boolean(process.env[name]);
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify({ name, available }, null, 2) + "\n");
+  } else {
+    process.stdout.write(`${name}: ${available ? "available" : "missing"}\n`);
+  }
+  return available ? 0 : 1;
+}
+
 async function cmdIndex(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, { vault: { type: "string" } });
-  const vault = requireVault(
-    flags["vault"] as string | undefined,
-    defaultConfigPath(),
-  );
+  const vault = requireVault(flags["vault"] as string | undefined, defaultConfigPath());
   let pages;
   try {
     pages = listVaultPages(vault);
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to list vault pages: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to list vault pages: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
   if (pages.length === 0) {
@@ -320,27 +370,17 @@ async function cmdIndex(argv: string[]): Promise<number> {
     "",
   ];
   for (const p of pages) {
-    const rel = p.path.startsWith(vault)
-      ? p.path.slice(vault.length).replace(/^\/+/, "")
-      : p.path;
+    const rel = p.path.startsWith(vault) ? p.path.slice(vault.length).replace(/^\/+/, "") : p.path;
     lines.push(`- [[${p.title}]]  \`${rel}\``);
   }
   const indexPath = resolve(vault, BRAIN_INDEX_REL);
   try {
-    writeFrontmatter(
-      indexPath,
-      { title: "Index", type: "index" },
-      lines.join("\n"),
-    );
+    writeFrontmatter(indexPath, { title: "Index", type: "index" }, lines.join("\n"));
   } catch (exc) {
-    process.stderr.write(
-      `error: failed to write index: ${(exc as Error).message ?? exc}\n`,
-    );
+    process.stderr.write(`error: failed to write index: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
-  process.stdout.write(
-    `index regenerated: ${indexPath} (${pages.length} pages)\n`,
-  );
+  process.stdout.write(`index regenerated: ${indexPath} (${pages.length} pages)\n`);
   return 0;
 }
 
@@ -364,8 +404,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // contradictory pair (e.g. `--scope full --writer-only`) is
   // rejected to avoid silent surprises.
   const writerOnly = Boolean(flags["writer-only"]);
-  const rawScope =
-    (flags["scope"] as string | undefined) ?? (writerOnly ? "writer" : "full");
+  const rawScope = (flags["scope"] as string | undefined) ?? (writerOnly ? "writer" : "full");
   if (rawScope !== "full" && rawScope !== "writer") {
     process.stderr.write(
       `o2b mcp: invalid --scope value: ${rawScope}; expected one of: full, writer\n`,
@@ -373,14 +412,11 @@ async function cmdMcp(argv: string[]): Promise<number> {
     return 2;
   }
   if (writerOnly && rawScope !== "writer") {
-    process.stderr.write(
-      `o2b mcp: --writer-only conflicts with --scope ${rawScope}\n`,
-    );
+    process.stderr.write(`o2b mcp: --writer-only conflicts with --scope ${rawScope}\n`);
     return 2;
   }
   const scope = rawScope;
-  const serverName =
-    scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
+  const serverName = scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
   const capabilityWindow = parseCapabilityWindow(flags);
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
@@ -423,8 +459,7 @@ function parseCapabilityWindow(
     }
     maxTools = parsed;
   }
-  if (!allowedTools && !disabledTools && maxTools === undefined)
-    return undefined;
+  if (!allowedTools && !disabledTools && maxTools === undefined) return undefined;
   return {
     ...(allowedTools ? { allowedTools } : {}),
     ...(disabledTools ? { disabledTools } : {}),
@@ -447,9 +482,7 @@ async function runMcpProbe(args: {
   try {
     vault = requireVault(args.vault, args.config);
   } catch (e) {
-    process.stdout.write(
-      `mcp probe FAIL: vault not configured (${(e as Error).message})\n`,
-    );
+    process.stdout.write(`mcp probe FAIL: vault not configured (${(e as Error).message})\n`);
     return 1;
   }
   try {
@@ -538,9 +571,7 @@ async function cmdToolCall(argv: string[]): Promise<number> {
     if (eq === -1) {
       // Argument-shape error: align with the dispatcher convention
       // (CliError → exit 2). Tool execution failures keep using exit 1.
-      process.stderr.write(
-        `error: --tool-arg must be key=value, got: ${pair}\n`,
-      );
+      process.stderr.write(`error: --tool-arg must be key=value, got: ${pair}\n`);
       return 2;
     }
     const k = pair.slice(0, eq);
@@ -609,6 +640,7 @@ Commands:
   update                    Update OSB installation across all detected runtimes
   uninstall                 Print an uninstall plan; --target X removes a per-runtime install
   tool-call                 Invoke an MCP tool handler from the CLI and print JSON to stdout
+  secrets                   Inspect $secret:NAME references without printing values
   help                      Print this help text; --json prints command metadata
   completions               Print shell completions for bash, zsh, fish, elvish, nushell, powershell
 
@@ -671,9 +703,7 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
     command !== "brain" &&
     command !== "vault"
   ) {
-    process.stdout.write(
-      `${command}: see https://github.com/itechmeat/open-second-brain\n`,
-    );
+    process.stdout.write(`${command}: see https://github.com/itechmeat/open-second-brain\n`);
     if (command === "uninstall") {
       process.stdout.write(
         "Read-only by default. Prints the Hermes commands you must run yourself " +
@@ -694,10 +724,7 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
   return await run();
 }
 
-function commandHasSemanticJson(
-  command: string,
-  rest: ReadonlyArray<string>,
-): boolean {
+function commandHasSemanticJson(command: string, rest: ReadonlyArray<string>): boolean {
   if (!wantsJsonFlag(rest)) return false;
   if (COMMANDS_WITH_INTERNAL_JSON.has(command)) {
     return true;
@@ -712,6 +739,7 @@ const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "install",
   "update",
   "tool-call",
+  "secrets",
   "brain",
   "search",
   "vault",
@@ -729,10 +757,7 @@ const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "payment-digest",
 ]);
 
-async function dispatchCommand(
-  command: string,
-  rest: string[],
-): Promise<number> {
+async function dispatchCommand(command: string, rest: string[]): Promise<number> {
   try {
     switch (command) {
       case "status":
@@ -757,6 +782,8 @@ async function dispatchCommand(
         return await cmdUninstall(rest);
       case "tool-call":
         return await cmdToolCall(rest);
+      case "secrets":
+        return await cmdSecrets(rest);
       case "help":
         return cmdHelp(rest);
       case "completions":
