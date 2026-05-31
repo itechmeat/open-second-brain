@@ -69,6 +69,12 @@ import { loadTemporalConfigSafe } from "../core/brain/policy.ts";
 import { isBrainLogEventKind, type BrainLogEventKind } from "../core/brain/types.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { buildPreCompressPack } from "../core/brain/pre-compress-pack.ts";
+import {
+  getContextReceipt,
+  isContextReceiptTrigger,
+  listContextReceipts,
+  summarizeContextReceipt,
+} from "../core/brain/context-receipts.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
@@ -1732,6 +1738,70 @@ async function toolBrainContextPack(
   };
 }
 
+// ----- brain_context_receipts ---------------------------------------------
+
+async function toolBrainContextReceipts(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_context_receipts", args, "operation");
+  if (operation === "list") {
+    const trigger = optionalStringArg("brain_context_receipts", args, "trigger");
+    if (trigger !== undefined && !isContextReceiptTrigger(trigger)) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_receipts: trigger must be context_pack or pre_compress",
+      );
+    }
+    const host = optionalStringArg("brain_context_receipts", args, "host");
+    const sessionId = optionalStringArg("brain_context_receipts", args, "session_id");
+    const limit = coercePositiveInteger("brain_context_receipts", "limit", args["limit"]);
+    const receipts = listContextReceipts(ctx.vault, {
+      ...(trigger !== undefined ? { trigger } : {}),
+      ...(host !== undefined ? { host } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    });
+    const summaries = receipts.map(summarizeContextReceipt);
+    return { vault_path: ctx.vault, total: summaries.length, receipts: summaries };
+  }
+
+  if (operation === "show") {
+    const id = optionalStringArg("brain_context_receipts", args, "id");
+    if (id === undefined) {
+      throw new MCPError(INVALID_PARAMS, "brain_context_receipts: id is required for show");
+    }
+    const receipt = getContextReceipt(ctx.vault, id);
+    if (receipt === null) {
+      throw new MCPError(INVALID_PARAMS, `brain_context_receipts: receipt not found: ${id}`);
+    }
+    return {
+      id: receipt.id,
+      kind: receipt.kind,
+      createdAt: receipt.createdAt,
+      sourceRefs: receipt.sourceRefs,
+      payload: receipt.payload,
+      private: receipt.private,
+      redacted: receipt.redacted,
+    };
+  }
+
+  throw new MCPError(INVALID_PARAMS, "brain_context_receipts: operation must be list or show");
+}
+
+function optionalStringArg(
+  tool: string,
+  args: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const raw = args[key];
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${key} must be a non-empty string`);
+  }
+  return raw.trim();
+}
+
 // ----- brain_pre_compress_pack (v0.20.0) -----------------------------------
 
 /** Parse an optional positive-integer arg, throwing INVALID_PARAMS otherwise. */
@@ -2381,6 +2451,46 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainContextPack,
+  },
+  {
+    name: "brain_context_receipts",
+    description:
+      "List context receipt summaries or show one full receipt by id. Receipts are append-only continuity records emitted by opt-in context injection callers. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["list", "show"],
+          description: "Use list for summaries, show for one full receipt by id.",
+        },
+        id: {
+          type: "string",
+          description: "Receipt id required when operation is show.",
+        },
+        trigger: {
+          type: "string",
+          enum: ["context_pack", "pre_compress"],
+          description: "Optional list filter by injection trigger.",
+        },
+        host: {
+          type: "string",
+          description: "Optional list filter by host/runtime name.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional list filter by recorded session id.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum number of summaries to return.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainContextReceipts,
   },
   {
     // No preview budget: the addendum is meant to be injected whole and

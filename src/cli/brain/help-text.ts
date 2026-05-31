@@ -56,6 +56,7 @@ Brain verbs (observing memory):
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
   token-footprint     Report per-category vault token size with a warn threshold
   context-pack        Return a tier-then-recency vault slice under a token budget
+  context-receipts    List/show prompt context receipt records
   lint                Self-healing structural checks (--consolidate); --apply to write
   actions             Ranked maintenance action list (dedup + lint + footprint)
   summary             Operator dashboard: trust verdict, doctor/dream counts, actions
@@ -333,6 +334,10 @@ export const VERB_HELP: Record<string, string> = {
     "the budget. --query <q> filters by NFKC+casefold substring match\n" +
     "on topic + principle. --lanes also returns directives, constraints,\n" +
     "and consider lanes alongside the legacy flat items list.\n",
+  "context-receipts":
+    "usage: o2b brain context-receipts list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--vault <path>] [--json]\n" +
+    "       o2b brain context-receipts show <receipt-id> [--vault <path>] [--json]\n" +
+    "Read prompt context receipt continuity records emitted by opt-in callers.\n",
   lint:
     "usage: o2b brain lint --consolidate [--apply] [--yes] [--vault <path>] [--json]\n" +
     "Self-healing structural lint. Dry-run by default; --apply writes\n" +
