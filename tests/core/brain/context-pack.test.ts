@@ -18,7 +18,13 @@ afterEach(() => {
 
 function writePref(
   slug: string,
-  fields: { topic: string; principle: string; tier?: string; created_at?: string },
+  fields: {
+    topic: string;
+    principle: string;
+    tier?: string;
+    created_at?: string;
+    context_lane?: string;
+  },
 ) {
   const lines = [
     "---",
@@ -28,6 +34,7 @@ function writePref(
   ];
   if (fields.tier) lines.push(`tier: ${fields.tier}`);
   if (fields.created_at) lines.push(`created_at: ${fields.created_at}`);
+  if (fields.context_lane) lines.push(`context_lane: ${fields.context_lane}`);
   lines.push("---", "");
   writeFileSync(join(vault, "Brain", "preferences", `pref-${slug}.md`), lines.join("\n"));
 }
@@ -60,9 +67,16 @@ describe("packContext", () => {
     const writeBody = (slug: string, tier: string, body: string) =>
       writeFileSync(
         join(vault, "Brain", "preferences", `pref-${slug}.md`),
-        ["---", `id: pref-${slug}`, "topic: t", "principle: p", `tier: ${tier}`, "---", "", body].join(
-          "\n",
-        ),
+        [
+          "---",
+          `id: pref-${slug}`,
+          "topic: t",
+          "principle: p",
+          `tier: ${tier}`,
+          "---",
+          "",
+          body,
+        ].join("\n"),
       );
     // Core (highest priority) emitted first, then peripheral.
     writeBody("a", "core", "a".repeat(60));
@@ -153,5 +167,49 @@ describe("packContext", () => {
     writePref("a", { topic: "x", principle: "alpha", tier: "core" });
     expect(packContext(vault, { maxTokens: 0 }).items.length).toBe(0);
     expect(packContext(vault, { maxTokens: -5 }).items.length).toBe(0);
+  });
+
+  test("includeLanes classifies directives, constraints, consider, and manual overrides", () => {
+    writePref("directive", {
+      topic: "style",
+      principle: "Prefer short direct answers",
+      tier: "core",
+    });
+    writePref("constraint", {
+      topic: "security",
+      principle: "Never expose secret tokens",
+      tier: "core",
+    });
+    writePref("consider", {
+      topic: "taste",
+      principle: "Maybe use a quiet tone",
+      tier: "peripheral",
+    });
+    writePref("manual", {
+      topic: "ops",
+      principle: "Use release notes",
+      tier: "supporting",
+      context_lane: "constraints",
+    });
+
+    const lanes = packContext(vault, { maxTokens: 10_000, includeLanes: true }).lanes!;
+
+    expect(lanes.directives.map((item) => item.id)).toContain("pref-directive");
+    expect(lanes.constraints.map((item) => item.id)).toContain("pref-manual");
+    expect(lanes.constraints.map((item) => item.id)).toContain("pref-constraint");
+    expect(lanes.consider.map((item) => item.id)).toContain("pref-consider");
+    const manual = lanes.constraints.find((item) => item.id === "pref-manual")!;
+    expect(manual.sourceId).toBe("pref-manual");
+    expect(manual.sourcePath.endsWith("pref-manual.md")).toBe(true);
+  });
+
+  test("legacy context pack output omits lanes unless requested", () => {
+    writePref("directive", {
+      topic: "style",
+      principle: "Prefer short direct answers",
+      tier: "core",
+    });
+
+    expect(packContext(vault, { maxTokens: 10_000 }).lanes).toBeUndefined();
   });
 });

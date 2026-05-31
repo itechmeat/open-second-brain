@@ -104,6 +104,27 @@ describe("brain_context_pack tool — round trip", () => {
     expect(items[1]!.id).toBe("pref-supp");
   });
 
+  test("returns polarity lanes when requested", async () => {
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-directive.md"),
+      "---\nid: pref-directive\ntopic: t\nprinciple: Prefer concise answers\ntier: core\n---\n",
+    );
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-constraint.md"),
+      "---\nid: pref-constraint\ntopic: t\nprinciple: Never expose tokens\ntier: core\n---\n",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { max_tokens: 10_000, lanes: true });
+    const lanes = out["lanes"] as {
+      directives: Array<{ id: string }>;
+      constraints: Array<{ id: string }>;
+    };
+
+    expect(lanes.directives.map((item) => item.id)).toContain("pref-directive");
+    expect(lanes.constraints.map((item) => item.id)).toContain("pref-constraint");
+  });
+
   test("rejects non-positive max_tokens via INVALID_PARAMS", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

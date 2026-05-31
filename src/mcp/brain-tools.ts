@@ -889,7 +889,9 @@ async function toolBrainAudit(
   // through the shared wikilink normaliser first (handles `[[id]]`,
   // `[[id|Alias]]`, and `Brain/.../id.md` forms), then strip the
   // pref-/ret- prefix so every reference resolves to one trail.
-  const slug = normaliseWikilinkTarget(raw).replace(/^(?:pref-|ret-)/, "").trim();
+  const slug = normaliseWikilinkTarget(raw)
+    .replace(/^(?:pref-|ret-)/, "")
+    .trim();
   if (slug.length === 0) {
     throw new Error(`brain_audit: empty preference slug after normalising '${raw}'`);
   }
@@ -909,7 +911,11 @@ async function toolBrainMorningBrief(
 ): Promise<Record<string, unknown>> {
   const topK = optionalPositiveInt(args, "top_k", "brain_morning_brief") ?? 10;
   const lookbackDays = optionalPositiveInt(args, "lookback_days", "brain_morning_brief") ?? 7;
-  const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_morning_brief");
+  const maxCharsPerMemory = optionalPositiveInt(
+    args,
+    "max_chars_per_memory",
+    "brain_morning_brief",
+  );
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_morning_brief");
   const brief = buildMorningBrief(ctx.vault, {
     now: new Date(),
@@ -1694,11 +1700,13 @@ async function toolBrainContextPack(
     throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
+  const includeLanes = coerceBool(args, "lanes");
   const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
   const report = packContext(ctx.vault, {
     maxTokens,
     ...(query ? { query } : {}),
+    ...(includeLanes ? { includeLanes: true } : {}),
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
   });
@@ -1719,6 +1727,7 @@ async function toolBrainContextPack(
       tokens: s.tokens,
       reason: s.reason,
     })),
+    ...(report.lanes ? { lanes: report.lanes } : {}),
   };
 }
 
@@ -1754,7 +1763,11 @@ async function toolBrainPreCompressPack(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const topK = optionalPositiveInt(args, "top_k", "brain_pre_compress_pack") ?? 10;
-  const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_pre_compress_pack");
+  const maxCharsPerMemory = optionalPositiveInt(
+    args,
+    "max_chars_per_memory",
+    "brain_pre_compress_pack",
+  );
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_pre_compress_pack");
   const pack = buildPreCompressPack(ctx.vault, {
     topK,
@@ -2347,6 +2360,11 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "Optional second ceiling (code points) on the cumulative size of the returned slice. Lowest-priority overflow is dropped with an `over-char-budget` skip reason.",
         },
+        lanes: {
+          type: "boolean",
+          description:
+            "When true, also return polarity-aware directives, constraints, and consider lanes. Legacy flat `items` remains present.",
+        },
       },
       required: ["max_tokens"],
       additionalProperties: false,
@@ -2365,17 +2383,20 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         top_k: {
           type: "integer",
           minimum: 1,
-          description: "Maximum number of preferences to include, highest-confidence first (default 10).",
+          description:
+            "Maximum number of preferences to include, highest-confidence first (default 10).",
         },
         max_chars_per_memory: {
           type: "integer",
           minimum: 1,
-          description: "Optional per-entry character cap (code points); trimmed entries carry `trimmed: true`.",
+          description:
+            "Optional per-entry character cap (code points); trimmed entries carry `trimmed: true`.",
         },
         max_total_chars: {
           type: "integer",
           minimum: 1,
-          description: "Optional total character cap (code points) across the addendum; lowest-priority overflow is dropped.",
+          description:
+            "Optional total character cap (code points) across the addendum; lowest-priority overflow is dropped.",
         },
       },
       additionalProperties: false,

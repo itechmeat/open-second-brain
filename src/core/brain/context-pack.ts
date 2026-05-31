@@ -22,6 +22,12 @@ import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget } from "./recall-budget.ts";
+import {
+  buildContextLanes,
+  normalizeContextLane,
+  type ContextLaneName,
+  type ContextLanesReport,
+} from "./context-lanes.ts";
 
 const TIER_ORDER: ReadonlyArray<PageTier> = [
   PAGE_TIER.core,
@@ -35,6 +41,8 @@ export interface ContextPackItem {
   readonly tier: PageTier;
   readonly tokens: number;
   readonly body: string;
+  readonly principle: string;
+  readonly contextLane: ContextLaneName | null;
   /** True when `body` was truncated by `maxCharsPerMemory` (v0.20.0). */
   readonly trimmed: boolean;
 }
@@ -50,6 +58,7 @@ export interface ContextPackReport {
   readonly tokensUsed: number;
   readonly items: ReadonlyArray<ContextPackItem>;
   readonly skipped: ReadonlyArray<ContextPackSkipped>;
+  readonly lanes?: ContextLanesReport;
 }
 
 export interface ContextPackOptions {
@@ -69,6 +78,8 @@ export interface ContextPackOptions {
    * `over-char-budget` skip reason. <= 0 / undefined disables.
    */
   readonly maxTotalChars?: number;
+  /** Opt-in polarity-aware lanes. Omitted preserves the legacy flat output shape. */
+  readonly includeLanes?: boolean;
 }
 
 interface Candidate {
@@ -78,8 +89,30 @@ interface Candidate {
   readonly createdAtMs: number;
   readonly topic: string;
   readonly principle: string;
+  readonly contextLane: ContextLaneName | null;
   readonly body: string;
   readonly tokens: number;
+}
+
+function withOptionalLanes(
+  opts: ContextPackOptions,
+  items: ReadonlyArray<ContextPackItem>,
+): { readonly lanes?: ContextLanesReport } {
+  if (opts.includeLanes !== true) return {};
+  return {
+    lanes: buildContextLanes(
+      items.map((item) => ({
+        id: item.id,
+        path: item.path,
+        tier: item.tier,
+        tokens: item.tokens,
+        body: item.body,
+        trimmed: item.trimmed,
+        principle: item.principle,
+        manualLane: item.contextLane,
+      })),
+    ),
+  };
 }
 
 function collectCandidates(vault: string): Candidate[] {
@@ -111,6 +144,7 @@ function collectCandidates(vault: string): Candidate[] {
       const createdAtMs = created ? Date.parse(created) : fallbackMtimeMs;
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
       const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
+      const contextLane = normalizeContextLane(meta["context_lane"]);
       // Token budget is computed against the body the pack actually
       // emits, not the full file - frontmatter tokens are never
       // returned to the caller, so charging them would under-fill
@@ -122,6 +156,7 @@ function collectCandidates(vault: string): Candidate[] {
         createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : 0,
         topic,
         principle,
+        contextLane,
         body,
         tokens: estimateTokens(body),
       });
@@ -137,6 +172,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       tokensUsed: 0,
       items: Object.freeze([]),
       skipped: Object.freeze([]),
+      ...withOptionalLanes(opts, []),
     });
   }
   const query = opts.query ? normalizeForDedup(opts.query) : null;
@@ -181,6 +217,8 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       tier: c.tier,
       tokens,
       body,
+      principle: c.principle,
+      contextLane: c.contextLane,
       trimmed,
     });
     used += tokens;
@@ -210,6 +248,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
         tokensUsed: recomputed,
         items: Object.freeze(keptItems),
         skipped: Object.freeze(skipped),
+        ...withOptionalLanes(opts, keptItems),
       });
     }
   }
@@ -219,5 +258,6 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     tokensUsed: used,
     items: Object.freeze(items),
     skipped: Object.freeze(skipped),
+    ...withOptionalLanes(opts, items),
   });
 }

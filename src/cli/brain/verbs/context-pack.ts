@@ -16,6 +16,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     json: { type: "boolean" },
     "max-tokens": { type: "string" },
     query: { type: "string" },
+    lanes: { type: "boolean" },
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
@@ -34,6 +35,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
   const report = packContext(vault, {
     maxTokens,
     ...(flags["query"] ? { query: flags["query"] as string } : {}),
+    ...(flags["lanes"] === true ? { includeLanes: true } : {}),
   });
 
   if (flags["json"]) {
@@ -47,6 +49,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
         tokens: i.tokens,
       })),
       skipped: report.skipped,
+      ...(report.lanes ? { lanes: report.lanes } : {}),
     });
     return 0;
   }
