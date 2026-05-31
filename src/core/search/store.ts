@@ -878,6 +878,18 @@ export class Store {
 
   // ── search ─────────────────────────────────────────────────────────────────
 
+  ftsIntegrityCounts(): { readonly chunks: number; readonly ftsRows: number } {
+    const chunks =
+      this.db.query<{ c: number }, []>("SELECT count(*) AS c FROM chunks").get()?.c ?? 0;
+    const ftsRows =
+      this.db.query<{ c: number }, []>("SELECT count(*) AS c FROM chunk_fts_docsize").get()?.c ?? 0;
+    return Object.freeze({ chunks, ftsRows });
+  }
+
+  rebuildFtsIndex(): void {
+    this.db.run("INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')");
+  }
+
   /**
    * Top-K BM25 keyword hits. `fts5Query` is an already-escaped FTS5
    * MATCH expression; building it is fts.ts's job.

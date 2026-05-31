@@ -15,7 +15,7 @@ import { parseFrontmatter } from "../vault.ts";
 import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { extractEntities } from "./entities.ts";
-import { runFtsQuery } from "./fts.ts";
+import { runFtsQueryDetailed } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
 import { buildQueryPlan } from "./query-plan.ts";
 import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "./query-cache.ts";
@@ -142,10 +142,12 @@ export async function search(
     };
 
     // Keyword candidates.
-    let kwHits = runFtsQuery(store, query, {
+    let kwOutcome = runFtsQueryDetailed(store, query, {
       limit: limit * 3,
       pathPrefix,
     });
+    let kwHits = kwOutcome.hits;
+    for (const w of kwOutcome.warnings) warnings.push(w);
 
     // Synonym / query expansion (v0.20.0): opt-in and never for an
     // exact-intent (quoted/wildcard) query. Derive related terms from
@@ -156,16 +158,20 @@ export async function search(
     if (config.recall.synonymEnabled && basePlan.intent !== "exact" && kwHits.length > 0) {
       const topIds = kwHits.slice(0, 10).map((h) => h.chunkId);
       const ctx = store.hydrateChunks(topIds);
-      const texts = topIds
-        .map((id) => ctx.get(id)?.content ?? "")
-        .filter((t) => t.length > 0);
+      const texts = topIds.map((id) => ctx.get(id)?.content ?? "").filter((t) => t.length > 0);
       const expandedTerms = deriveExpansionTerms(tokenizeForExpansion(query), texts, {
         ...DEFAULT_EXPANSION,
         maxTerms: config.recall.synonymMaxTerms,
       });
       if (expandedTerms.length > 0) {
         plan = buildQueryPlan(query, expandedTerms);
-        kwHits = runFtsQuery(store, query, { limit: limit * 3, pathPrefix, expandedTerms });
+        kwOutcome = runFtsQueryDetailed(store, query, {
+          limit: limit * 3,
+          pathPrefix,
+          expandedTerms,
+        });
+        kwHits = kwOutcome.hits;
+        for (const w of kwOutcome.warnings) warnings.push(w);
       }
     }
     const weightProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;

@@ -143,6 +143,22 @@ test("search returns keyword-only results when semantic is disabled", async () =
   expect(out.warnings).toEqual([]);
 });
 
+test("search warns when keyword retrieval rebuilds a desynced FTS table", async () => {
+  const cfg = await seedKeyword();
+  await indexVault(cfg);
+  const db = new Database(dbPath);
+  try {
+    db.run("DELETE FROM chunk_fts");
+  } finally {
+    db.close();
+  }
+
+  const out = await search(cfg, { query: "fox", limit: 5 });
+
+  expect(out.results.map((r) => r.path)).toContain("Notes/foo.md");
+  expect(out.warnings.some((w) => w.includes("rebuilt FTS"))).toBe(true);
+});
+
 test("search returns empty (no error) when no results match", async () => {
   const cfg = await seedKeyword();
   await indexVault(cfg);
