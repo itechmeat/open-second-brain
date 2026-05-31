@@ -58,6 +58,7 @@ interface DetectionPattern {
 
 const ZERO_WIDTH_RE = /\u200B|\u200C|\u200D|\uFEFF/g;
 const SPACE_RE = /\s+/g;
+const HORIZONTAL_SPACE_RE = /[^\S\r\n]+/g;
 
 const TEXT_PATTERNS: ReadonlyArray<DetectionPattern> = Object.freeze([
   {
@@ -144,9 +145,15 @@ function detectMetadata(source: ContextGuardSource | undefined): ContextSafetyRe
 
 function detectText(text: string, source: ContextGuardSource | undefined): ContextSafetyReason[] {
   if (!text) return [];
-  const normalised = normaliseForDetection(text);
+  const lineAware = normaliseForDelimiterDetection(text);
+  const normalised = normaliseForTextDetection(text);
   const reasons: ContextSafetyReason[] = [];
-  for (const pattern of [...DELIMITER_PATTERNS, ...TEXT_PATTERNS]) {
+  for (const pattern of DELIMITER_PATTERNS) {
+    if (pattern.pattern.test(lineAware)) {
+      reasons.push(reason(pattern.code, pattern.message, source));
+    }
+  }
+  for (const pattern of TEXT_PATTERNS) {
     if (pattern.pattern.test(normalised)) {
       reasons.push(reason(pattern.code, pattern.message, source));
     }
@@ -154,12 +161,21 @@ function detectText(text: string, source: ContextGuardSource | undefined): Conte
   return reasons;
 }
 
-function normaliseForDetection(text: string): string {
+function normaliseForTextDetection(text: string): string {
   return text
     .normalize("NFKC")
     .replace(ZERO_WIDTH_RE, "")
     .toLowerCase()
     .replace(SPACE_RE, " ")
+    .trim();
+}
+
+function normaliseForDelimiterDetection(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(ZERO_WIDTH_RE, "")
+    .toLowerCase()
+    .replace(HORIZONTAL_SPACE_RE, " ")
     .trim();
 }
 

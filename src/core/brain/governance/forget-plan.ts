@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 
 import { parseFrontmatter } from "../../vault.ts";
 import { brainDirs, vaultRelative } from "../paths.ts";
@@ -69,7 +69,13 @@ function walkBrainMarkdown(vault: string): string[] {
   if (!existsSync(root)) return [];
   const out: string[] = [];
   const visit = (dir: string): void => {
-    for (const name of readdirSync(dir)) {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
       if (name.startsWith(".")) continue;
       const full = join(dir, name);
       let st;
@@ -102,10 +108,14 @@ function readId(path: string): string {
 
 function classify(vault: string, path: string): ForgetPlanEntry["kind"] {
   const dirs = brainDirs(vault);
-  if (path.startsWith(dirs.processed)) return "processed";
-  if (path.startsWith(dirs.inbox)) return "inbox";
-  if (path.startsWith(dirs.preferences)) return "preference";
-  if (path.startsWith(dirs.retired)) return "retired";
-  if (path.startsWith(dirs.log)) return "log";
+  if (insideDir(path, dirs.processed)) return "processed";
+  if (insideDir(path, dirs.inbox)) return "inbox";
+  if (insideDir(path, dirs.preferences)) return "preference";
+  if (insideDir(path, dirs.retired)) return "retired";
+  if (insideDir(path, dirs.log)) return "log";
   return "other";
+}
+
+function insideDir(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(`${dir}${sep}`);
 }

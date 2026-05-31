@@ -70,11 +70,16 @@ export function redactKnownSecretValues(
   provider: SecretProvider = process.env,
 ): string {
   let out = text;
-  for (const raw of references) {
-    const ref = parseSecretReference(raw);
-    if (!ref) continue;
-    const value = provider[ref.name];
-    if (!value) continue;
+  const values = Array.from(
+    new Set(
+      references
+        .map((raw) => parseSecretReference(raw))
+        .filter((ref): ref is SecretReference => ref !== null)
+        .map((ref) => provider[ref.name])
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ).sort((a, b) => b.length - a.length);
+  for (const value of values) {
     out = out.replaceAll(value, REDACTED);
   }
   return out;

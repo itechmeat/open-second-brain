@@ -31,7 +31,7 @@ export interface PayloadPage {
 }
 
 const PAYLOAD_REF_PREFIX = "osb-payload://";
-const DATA_URI_RE = /data:[^\s]+/g;
+const DATA_URI_RE = /data:[^\s\])"'>]+/g;
 const BASE64_RUN_RE = /\b[A-Za-z0-9+/]{80,}={0,2}\b/g;
 
 export class PayloadRegistry {

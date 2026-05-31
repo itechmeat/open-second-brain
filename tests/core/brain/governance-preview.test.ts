@@ -31,12 +31,22 @@ describe("buildForgetPlan", () => {
       join(vault, "Brain", "preferences", "pref-one.md"),
       "---\nid: pref-one\n---\n\nEvidenced by session-a#turn-1\n",
     );
+    mkdirSync(join(vault, "Brain", "processed-archive"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "processed-archive", "note.md"),
+      "---\nid: archived-note\n---\n\nsource: session-a#turn-1\n",
+    );
 
     const plan = buildForgetPlan(vault, { source: "session-a" });
 
     expect(plan.mode).toBe("dry-run");
     expect(plan.source).toBe("session-a");
-    expect(plan.entries.map((entry) => entry.id).toSorted()).toEqual(["pref-one", "sig-one"]);
+    expect(plan.entries.map((entry) => entry.id).toSorted()).toEqual([
+      "archived-note",
+      "pref-one",
+      "sig-one",
+    ]);
+    expect(plan.entries.find((entry) => entry.id === "archived-note")?.kind).toBe("other");
     expect(plan.entries.every((entry) => entry.action === "would-remove-source-support")).toBe(
       true,
     );
@@ -96,5 +106,16 @@ describe("PayloadRegistry", () => {
     });
     expect(page.content).toBe("data:image/png;base64,");
     expect(page.nextOffset).toBe(22);
+  });
+
+  test("externalizes data URIs without consuming markdown delimiters", () => {
+    const registry = new PayloadRegistry({ vault, maxInlineChars: 40 });
+    const payload = `data:image/png;base64,${"A".repeat(80)}`;
+
+    const result = registry.externalizeOversized(`![diagram](${payload})`);
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.text).toEndWith(")");
+    expect(result.text).toContain(result.payloads[0]!.placeholder);
   });
 });

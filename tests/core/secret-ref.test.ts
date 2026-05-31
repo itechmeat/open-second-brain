@@ -56,4 +56,13 @@ describe("secret references", () => {
     expect(out).toContain("***REDACTED***");
     expect(out).not.toContain("ghp_secret_value");
   });
+
+  test("redacts overlapping values longest first", () => {
+    const out = redactKnownSecretValues("token=abcdef", ["$secret:SHORT", "$secret:LONG"], {
+      SHORT: "abc",
+      LONG: "abcdef",
+    });
+
+    expect(out).toBe("token=***REDACTED***");
+  });
 });
