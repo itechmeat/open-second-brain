@@ -313,11 +313,13 @@ export async function search(
     // narrow pool lets a high-parent expansion crowd a genuine but
     // lower-ranked hit out of the final window). When both are disabled
     // the pool collapses back to the historical rankLimit.
+    const hasStructuredExclusions = (structured?.lex.exclude.length ?? 0) > 0;
     const mmrLambda = opts.mmrLambda ?? config.recall.mmrLambda;
     const mmrActive = mmrLambda < 1;
     const maxHops = opts.maxHops ?? config.recall.maxHops;
     const traversalActive = maxHops > 0;
-    const baseRankLimit = hasFrontmatterFilter ? Math.max(limit * 5, 50) : limit;
+    const baseRankLimit =
+      hasFrontmatterFilter || hasStructuredExclusions ? Math.max(limit * 5, 50) : limit;
     const rankLimit =
       mmrActive || traversalActive ? Math.max(baseRankLimit, limit * 3, 30) : baseRankLimit;
 

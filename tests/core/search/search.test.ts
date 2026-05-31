@@ -178,6 +178,29 @@ test("search accepts structured lexical lanes with safe exclusions", async () =>
   expect(out.results[0]?.reasons.some((reason) => reason.includes("lane:lex/fts5"))).toBe(true);
 });
 
+test("search backfills structured lexical exclusions before applying limit", async () => {
+  writeMd(vault, "Notes/draft-a.md", "# Draft A\n\nalpha alpha alpha draft.");
+  writeMd(vault, "Notes/draft-b.md", "# Draft B\n\nalpha alpha draft.");
+  writeMd(vault, "Notes/final-a.md", "# Final A\n\nalpha current.");
+  writeMd(vault, "Notes/final-b.md", "# Final B\n\nalpha stable.");
+  const cfg = makeConfig({ vault, dbPath, mmrLambda: 1, maxHops: 0 });
+  await indexVault(cfg);
+  const structuredQuery = parseStructuredRecallQueryDocument("lex: alpha -draft");
+
+  const out = await search(cfg, {
+    query: "alpha",
+    structuredQuery,
+    limit: 2,
+    mmrLambda: 1,
+    maxHops: 0,
+  });
+
+  expect(out.results.map((r) => r.path).toSorted()).toEqual([
+    "Notes/final-a.md",
+    "Notes/final-b.md",
+  ]);
+});
+
 test("search degrades semantic structured lanes when semantic search is disabled", async () => {
   const cfg = await seedKeyword();
   await indexVault(cfg);

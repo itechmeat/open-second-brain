@@ -90,11 +90,13 @@ export function readSessionFocus(
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as SearchSessionFocus;
-    const focus = Object.freeze({
-      query: typeof parsed.query === "string" ? parsed.query : null,
-      pathPrefix: typeof parsed.pathPrefix === "string" ? parsed.pathPrefix : null,
-      expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : null,
-    });
+    const query = normalizeQuery(typeof parsed.query === "string" ? parsed.query : null);
+    const pathPrefix = normalizePathPrefix(
+      typeof parsed.pathPrefix === "string" ? parsed.pathPrefix : null,
+    );
+    const expiresAt = typeof parsed.expiresAt === "number" ? parsed.expiresAt : null;
+    if (expiresAt === null || (query === null && pathPrefix === null)) return null;
+    const focus = Object.freeze({ query, pathPrefix, expiresAt });
     return sessionFocusIsActive(focus, nowMs) ? focus : null;
   } catch {
     return null;

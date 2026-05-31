@@ -30,6 +30,15 @@ vec: delta
   expect(parsed.vec).toEqual(["gamma", "delta"]);
 });
 
+test("parseStructuredRecallQueryDocument rejects repeated intent lanes", () => {
+  expect(() =>
+    parseStructuredRecallQueryDocument(`
+intent: neutral
+intent: broad
+`),
+  ).toThrow(SearchError);
+});
+
 test("parseStructuredRecallQueryDocument rejects malformed lane syntax", () => {
   let err: SearchError | null = null;
   try {

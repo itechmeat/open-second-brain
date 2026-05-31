@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { normalizeContextLane } from "../../../src/core/brain/context-lanes.ts";
 import { packContext } from "../../../src/core/brain/context-pack.ts";
 
 let vault: string;
@@ -40,6 +41,10 @@ function writePref(
 }
 
 describe("packContext", () => {
+  test("normalizeContextLane handles uppercase lane names deterministically", () => {
+    expect(normalizeContextLane("DIRECTIVES")).toBe("directives");
+  });
+
   test("empty vault returns empty pack", () => {
     const r = packContext(vault, { maxTokens: 1000 });
     expect(r.tokensUsed).toBe(0);

@@ -102,6 +102,7 @@ export function parseStructuredRecallQueryDocument(
     if (value.length === 0) throw invalid(lineNumber, `${lane} lane must not be empty`);
 
     if (lane === "intent") {
+      if (intent !== null) throw invalid(lineNumber, "intent lane must not be repeated");
       if (!ALLOWED_INTENTS.has(value as QueryIntent)) {
         throw invalid(lineNumber, `intent must be neutral, exact, entity, or broad`);
       }

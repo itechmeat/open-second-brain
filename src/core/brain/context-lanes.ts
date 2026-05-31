@@ -35,7 +35,7 @@ const CONSTRAINT_RE =
 
 export function normalizeContextLane(raw: unknown): ContextLaneName | null {
   if (typeof raw !== "string") return null;
-  const value = raw.trim().toLocaleLowerCase();
+  const value = raw.trim().toLowerCase();
   if (value === "directives" || value === "constraints" || value === "consider") return value;
   return null;
 }

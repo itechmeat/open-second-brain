@@ -40,5 +40,16 @@ test("buildEvidencePack marks terminal-state records", () => {
   const pack = buildEvidencePack("alpha", [result("done.md", "alpha superseded by another note")]);
 
   expect(pack.records[0]?.terminalState).toBe(true);
+  expect(pack.records[0]?.droppedCandidateReasons).toEqual([]);
+});
+
+test("buildEvidencePack reports terminal downrank only when applied", () => {
+  const pack = buildEvidencePack("alpha", [
+    result("done.md", "alpha superseded by another note", [
+      "fts5_bm25: 1.000",
+      "evidence_terminal_downrank: true",
+    ]),
+  ]);
+
   expect(pack.records[0]?.droppedCandidateReasons).toContain("terminal_state_downranked");
 });

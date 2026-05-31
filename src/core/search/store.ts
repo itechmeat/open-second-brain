@@ -189,6 +189,24 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function acquireWriterLockSync(path: string): () => void {
+  const maxAttempts = 10;
+  const sleepMs = 50;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return lockfile.lockSync(path, { stale: 60_000, realpath: false });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ELOCKED") throw err;
+      lastError = err;
+      if (attempt < maxAttempts - 1) Bun.sleepSync(sleepMs);
+    }
+  }
+  const msg = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new SearchError("INDEX_LOCKED", `another writer holds the search index lock: ${msg}`);
+}
+
 function vecToBuffer(values: ReadonlyArray<number> | Float32Array): Buffer {
   const arr = values instanceof Float32Array ? values : Float32Array.from(values);
   return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
@@ -888,6 +906,19 @@ export class Store {
 
   rebuildFtsIndex(): void {
     this.db.run("INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')");
+  }
+
+  rebuildFtsIndexWithWriterLock(): void {
+    if (this.release) {
+      this.rebuildFtsIndex();
+      return;
+    }
+    const release = acquireWriterLockSync(this.config.dbPath);
+    try {
+      this.rebuildFtsIndex();
+    } finally {
+      release();
+    }
   }
 
   /**

@@ -103,6 +103,9 @@ export function buildEvidencePack(
     for (const term of matched) matchedSet.add(term);
     const missing = significant.filter((term) => !matched.includes(term));
     const terminalState = evidenceTerminalState(result);
+    const terminalDownranked = result.reasons.some((reason) =>
+      reason.startsWith("evidence_terminal_downrank:"),
+    );
     return Object.freeze({
       path: result.path,
       documentId: result.documentId,
@@ -112,7 +115,9 @@ export function buildEvidencePack(
       supportCoverage: supportCoverage(matched, significant),
       terminalState,
       whyRetrieved: Object.freeze([...result.reasons]),
-      droppedCandidateReasons: Object.freeze(terminalState ? ["terminal_state_downranked"] : []),
+      droppedCandidateReasons: Object.freeze(
+        terminalDownranked ? ["terminal_state_downranked"] : [],
+      ),
     });
   });
   const matched = significant.filter((term) => matchedSet.has(term));

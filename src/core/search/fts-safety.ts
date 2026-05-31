@@ -35,7 +35,7 @@ export function keywordTopKWithFtsSafety(
       return Object.freeze({ hits, warnings: Object.freeze([]) });
     }
 
-    store.rebuildFtsIndex();
+    store.rebuildFtsIndexWithWriterLock();
     return Object.freeze({
       hits: store.keywordTopK(fts5Query, opts),
       warnings: Object.freeze([rebuildWarning("empty chunk_fts with indexed chunks")]),
@@ -43,7 +43,7 @@ export function keywordTopKWithFtsSafety(
   } catch (e) {
     if (!isRebuildableFtsError(e)) throw e;
     try {
-      store.rebuildFtsIndex();
+      store.rebuildFtsIndexWithWriterLock();
       return Object.freeze({
         hits: store.keywordTopK(fts5Query, opts),
         warnings: Object.freeze([rebuildWarning("rebuildable FTS error")]),
