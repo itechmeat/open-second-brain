@@ -218,7 +218,7 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
         ],
         gaps: activeText === null && items.length === 0 ? ["no_matching_context"] : [],
         metadata: {
-          ...(opts.telemetry.metadata ?? {}),
+          ...opts.telemetry.metadata,
           top_k: opts.topK,
           total_chars: budgeted.totalChars,
           active_head_included: activeText !== null,

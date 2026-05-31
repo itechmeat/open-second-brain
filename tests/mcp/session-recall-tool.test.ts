@@ -5,11 +5,7 @@ import { join } from "node:path";
 
 import { importSessionRecall } from "../../src/core/brain/session-recall.ts";
 import type { SessionTurn } from "../../src/core/brain/sessions/types.ts";
-import {
-  JSONRPC_VERSION,
-  MCPServer,
-  PROTOCOL_VERSION,
-} from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
 let vault: string;
@@ -76,17 +72,9 @@ async function callTool(
 
 describe("session recall MCP tool registration", () => {
   test("registered in the full tool table only", () => {
-    for (const name of [
-      "brain_session_grep",
-      "brain_session_describe",
-      "brain_session_expand",
-    ]) {
-      expect(
-        buildToolTable("full").find((tool) => tool.name === name),
-      ).toBeDefined();
-      expect(
-        buildToolTable("writer").find((tool) => tool.name === name),
-      ).toBeUndefined();
+    for (const name of ["brain_session_grep", "brain_session_describe", "brain_session_expand"]) {
+      expect(buildToolTable("full").find((tool) => tool.name === name)).toBeDefined();
+      expect(buildToolTable("writer").find((tool) => tool.name === name)).toBeUndefined();
     }
   });
 });
@@ -103,9 +91,7 @@ describe("session recall MCP tools", () => {
       session_id: "session-mcp",
     });
     expect(
-      (grep.hits as Array<{ kind: string }>).some(
-        (hit) => hit.kind === "session_summary_node",
-      ),
+      (grep.hits as Array<{ kind: string }>).some((hit) => hit.kind === "session_summary_node"),
     ).toBe(true);
 
     const summary = (grep.hits as Array<{ id: string; kind: string }>).find(
