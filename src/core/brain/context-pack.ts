@@ -27,6 +27,7 @@ import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget } from "./recall-budget.ts";
+import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import {
   buildContextLanes,
   normalizeContextLane,
@@ -65,6 +66,7 @@ export interface ContextPackReport {
   readonly tokensUsed: number;
   readonly items: ReadonlyArray<ContextPackItem>;
   readonly skipped: ReadonlyArray<ContextPackSkipped>;
+  readonly receiptId?: string;
   readonly lanes?: ContextLanesReport;
 }
 
@@ -87,6 +89,8 @@ export interface ContextPackOptions {
   readonly maxTotalChars?: number;
   /** Opt-in polarity-aware lanes. Omitted preserves the legacy flat output shape. */
   readonly includeLanes?: boolean;
+  /** Opt-in audit receipt for the final emitted context. */
+  readonly receipt?: ContextReceiptOptions;
 }
 
 interface Candidate {
@@ -183,7 +187,7 @@ function collectCandidates(vault: string): Candidate[] {
 
 export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport {
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
-    return Object.freeze({
+    return finalizeContextPackReport(vault, opts, {
       maxTokens: 0,
       tokensUsed: 0,
       items: Object.freeze([]),
@@ -264,7 +268,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
           });
         }
       }
-      return Object.freeze({
+      return finalizeContextPackReport(vault, opts, {
         maxTokens: opts.maxTokens,
         tokensUsed: recomputed,
         items: Object.freeze(keptItems),
@@ -274,11 +278,45 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     }
   }
 
-  return Object.freeze({
+  return finalizeContextPackReport(vault, opts, {
     maxTokens: opts.maxTokens,
     tokensUsed: used,
     items: Object.freeze(items),
     skipped: Object.freeze(skipped),
     ...withOptionalLanes(opts, items),
   });
+}
+
+function finalizeContextPackReport(
+  vault: string,
+  opts: ContextPackOptions,
+  report: ContextPackReport,
+): ContextPackReport {
+  if (!opts.receipt) return Object.freeze(report);
+  const receipt = emitContextReceipt(vault, {
+    options: opts.receipt,
+    items: report.items.map((item) => ({
+      id: item.id,
+      path: item.path,
+      text: item.body,
+      tokens: item.tokens,
+      tier: item.tier,
+      trimmed: item.trimmed,
+      safetyFiltered: item.safety?.filtered,
+    })),
+    finalText: report.items.map((item) => item.body).join("\n\n"),
+    budget: {
+      max_tokens: report.maxTokens,
+      tokens_used: report.tokensUsed,
+      ...(opts.maxCharsPerMemory !== undefined
+        ? { max_chars_per_memory: opts.maxCharsPerMemory }
+        : {}),
+      ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
+    },
+    extra: {
+      skipped_count: report.skipped.length,
+      lanes: opts.includeLanes === true,
+    },
+  });
+  return Object.freeze({ ...report, receiptId: receipt.id });
 }

@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { applyCharBudget } from "./recall-budget.ts";
+import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import {
   contextSafetyReport,
   guardBrainContextSnippet,
@@ -47,6 +48,7 @@ export interface PreCompressPack {
   readonly items: ReadonlyArray<PreCompressItem>;
   readonly activeHeadIncluded: boolean;
   readonly activeHeadSafety?: ContextSafetyReport;
+  readonly receiptId?: string;
   readonly totalChars: number;
 }
 
@@ -57,6 +59,8 @@ export interface PreCompressOptions {
   readonly maxCharsPerMemory?: number;
   /** Total character cap across the bundle; <= 0 / undefined disables. */
   readonly maxTotalChars?: number;
+  /** Opt-in audit receipt for the final emitted addendum. */
+  readonly receipt?: ContextReceiptOptions;
 }
 
 interface ConfirmedPref {
@@ -160,11 +164,39 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
     sections.push(["Preferences:", ...items.map((i) => `- ${i.principle}`)].join("\n"));
   }
 
+  const text = sections.join("\n\n");
+  const receipt = opts.receipt
+    ? emitContextReceipt(vault, {
+        options: opts.receipt,
+        items: [
+          ...(activeText !== null
+            ? [{ id: ACTIVE_ID, path: brainActivePath(vault), text: activeText }]
+            : []),
+          ...items.map((item) => ({
+            id: item.id,
+            text: item.principle,
+            trimmed: item.trimmed,
+            safetyFiltered: item.safety?.filtered,
+          })),
+        ],
+        finalText: text,
+        budget: {
+          top_k: opts.topK,
+          ...(opts.maxCharsPerMemory !== undefined
+            ? { max_chars_per_memory: opts.maxCharsPerMemory }
+            : {}),
+          ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
+        },
+        extra: { active_head_included: activeText !== null },
+      })
+    : null;
+
   return Object.freeze({
-    text: sections.join("\n\n"),
+    text,
     items: Object.freeze(items),
     activeHeadIncluded: activeText !== null,
     ...(safetyById.get(ACTIVE_ID) ? { activeHeadSafety: safetyById.get(ACTIVE_ID) } : {}),
+    ...(receipt ? { receiptId: receipt.id } : {}),
     totalChars: budgeted.totalChars,
   });
 }
