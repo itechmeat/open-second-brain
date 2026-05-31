@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-05-31
+
+Recall control and trust surfaces. Search can now expose the evidence behind a
+retrieval decision, agents get explicit gates before automatic recall, and
+context packs can separate directives from constraints and softer context.
+
+### Added
+
+- FTS5 safety hardening for malformed/operator-only lexical queries and external-content
+  drift. Search now repairs a desynchronised FTS table, retries safely, and returns warnings
+  instead of letting recall fail opaquely.
+- Structured recall query documents for CLI and MCP search. `--query-doc` and
+  `query_document` accept line-oriented `intent:`, `lex:`, `vec:`, and `hyde:` lanes,
+  including quoted lexical phrases and `-excluded` terms.
+- Session-scoped search focus through `o2b search focus set|status|clear` and explicit
+  MCP `focus_query` / `focus_path_prefix` inputs. Focus nudges ranking toward the active
+  task window without hiding unfocused matches.
+- MCP `brain_recall_gate`, a read-only classifier that tells an agent whether an
+  automatic recall attempt should run and why it was allowed or skipped.
+- Polarity-aware context lanes for `o2b brain context-pack --lanes` and
+  `brain_context_pack` with `lanes: true`. The legacy flat `items` list remains present
+  while `directives`, `constraints`, and `consider` lanes give host agents safer prompts.
+- Verified evidence packs for search via `--evidence-pack` and MCP `evidence_pack`.
+  Evidence packs report significant, matched, and missing terms; support coverage;
+  abstention text for unsupported terms; per-record `why_retrieved`; and terminal-state
+  downrank reasons for retired/superseded support.
+
+### Changed
+
+- Evidence-pack mode is opt-in and part of the search cache key, so legacy search output
+  and cache rows remain stable unless callers request the diagnostic payload.
+- `brain_search` and CLI JSON search results include per-result `why_retrieved` when an
+  evidence pack is requested.
+- MCP full-server tool count is now 58 after adding `brain_recall_gate`.
+
+### Notes
+
+- `bun run lint` remains warning-only on the existing repository baseline.
+- Files touched by this release were formatted with targeted `oxfmt --write` runs.
+
 ## [0.26.0] - 2026-05-30
 
 CJK search, schema administration, real-time lifecycle capture, and safe
@@ -3573,6 +3613,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.27.0]: https://github.com/itechmeat/open-second-brain/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/itechmeat/open-second-brain/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/itechmeat/open-second-brain/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/itechmeat/open-second-brain/compare/v0.23.0...v0.24.0

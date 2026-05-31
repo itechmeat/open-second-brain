@@ -87,7 +87,7 @@ o2b brain summary             Operator dashboard - trust verdict (clean | watch 
 o2b brain page-dedup          Page-level duplicate detector (by content hash + frontmatter similarity)
 o2b brain lint                Self-healing structural drift fixer; --consolidate folds multi-source duplicates
 o2b brain token-footprint     Token-budget monitor across instruction files and active.md
-o2b brain context-pack        Bounded-token vault slice for priming an agent's context window (--max-tokens N)
+o2b brain context-pack        Bounded-token vault slice for priming an agent's context window (--max-tokens N, --lanes for directives/constraints/consider)
 o2b brain synthesise          Concept-scoped JSON envelope: target node + linkers + optional unlinked mentions
 o2b brain moc-audit           Per-MOC coverage audit: classify cluster members into well-covered / fragile / candidate-missing
 o2b brain unlinked            Raw-text mentions outside `[[...]]` (Unicode-aware boundaries)
@@ -138,11 +138,28 @@ Full Pay Memory walkthrough: [`pay-memory.md`](pay-memory.md).
 o2b search "<query>"          Hybrid full-text + semantic search across the vault
                               --property type=decision --property status=open
                               filters on frontmatter scalars (post-FTS phase)
+                              --query-doc '<lanes>' separates intent/lex/vec/hyde recall lanes
+                              --evidence-pack adds matched/missing term diagnostics and abstention text
                               --verbose adds per-result why_retrieved reasons
                               --json for structured output (includes reasons[])
                               CJK text is expanded for FTS recall without polluting returned content
+o2b search focus set          Persist a 120-minute ranking focus (--query Q and/or --path P; --ttl-minutes N)
+o2b search focus status       Show the active focus; --json emits { active, focus }
+o2b search focus clear        Clear the persisted focus file next to the search index
 o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               (required after upgrading to v0.13.0 recall schema or v0.26.0 CJK FTS content)
+```
+
+Structured recall query documents are line-oriented. `intent:` accepts
+`neutral`, `exact`, `entity`, or `broad`; `lex:` accepts bare or quoted terms
+and `-excluded` tokens; `vec:` and `hyde:` provide semantic text lanes when the
+semantic layer is configured. Example:
+
+```text
+intent: entity
+lex: "project alpha" -archived
+vec: active implementation context
+hyde: a note that explains the current project alpha decision
 ```
 
 The fused ranking is sharpened by a recall-quality suite (v0.13.0), each
@@ -169,7 +186,9 @@ Recall and ranking quality (v0.20.0), each tunable and bounded:
 | `search_cache_ttl_seconds` | `OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL`         | `300`   | Cache row time-to-live in seconds                                |
 
 `brain_context_pack` also accepts `max_chars_per_memory` and
-`max_total_chars` (code-point caps), and the read-only
+`max_total_chars` (code-point caps). Pass `--lanes` to keep the legacy flat
+items while also returning `directives`, `constraints`, and `consider` lanes
+derived from polarity cues and page tier. The read-only
 `brain_pre_compress_pack` MCP tool returns a budgeted
 top-preferences-plus-`active.md` addendum for a host runtime to inject
 before a context-compression event.
