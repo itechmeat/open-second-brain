@@ -187,6 +187,27 @@ test("brain_recall_gate reports skip reasons without affecting explicit brain_se
   expect(results[0]?.path).toBe("notes/shell.md");
 });
 
+test("brain_search evidence_pack returns missing terms and why_retrieved", async () => {
+  writeMd("notes/foo.md", "# Foo\n\nalpha beta current support.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const resp = await call(server, "brain_search", {
+    query: "alpha gamma",
+    query_document: "lex: alpha",
+    evidence_pack: true,
+    limit: 5,
+  });
+  const body = extractToolResult(resp);
+  const evidencePack = body["evidence_pack"] as { missing_terms: string[] };
+  const results = body["results"] as Array<{ why_retrieved: string[] }>;
+
+  expect(evidencePack.missing_terms).toContain("gamma");
+  expect(Array.isArray(results[0]?.why_retrieved)).toBe(true);
+});
+
 test("brain_search rejects missing query with INVALID_PARAMS", async () => {
   const server = makeServer();
   await initialize(server);

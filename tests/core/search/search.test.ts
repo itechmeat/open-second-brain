@@ -187,6 +187,26 @@ test("search degrades semantic structured lanes when semantic search is disabled
   ).toBe(true);
 });
 
+test("search can return an evidence pack and downrank terminal-state support", async () => {
+  writeMd(vault, "Notes/terminal.md", "# Terminal\n\nalpha beta superseded by active note.");
+  writeMd(vault, "Notes/active.md", "# Active\n\nalpha beta current support.");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+
+  const structuredQuery = parseStructuredRecallQueryDocument('lex: "alpha beta"');
+  const out = await search(cfg, {
+    query: "alpha beta gamma",
+    structuredQuery,
+    limit: 5,
+    evidencePack: true,
+  });
+
+  expect(out.results[0]?.path).toBe("Notes/active.md");
+  expect(out.evidencePack?.missingTerms).toContain("gamma");
+  expect(
+    out.evidencePack?.records.find((record) => record.path === "Notes/terminal.md")?.terminalState,
+  ).toBe(true);
+});
 test("search returns empty (no error) when no results match", async () => {
   const cfg = await seedKeyword();
   await indexVault(cfg);

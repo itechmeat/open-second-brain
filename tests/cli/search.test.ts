@@ -109,6 +109,23 @@ test("search query --query-doc accepts structured recall documents", async () =>
   );
 });
 
+test("search query --evidence-pack returns missing terms and why_retrieved", async () => {
+  writeVaultFile("notes/foo.md", "# Foo\n\nalpha beta current support.");
+  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+
+  const out = await runCli(
+    ["search", "alpha gamma", "--query-doc", "lex: alpha", "--json", "--evidence-pack"],
+    {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    },
+  );
+
+  expect(out.returncode).toBe(0);
+  const obj = JSON.parse(out.stdout);
+  expect(obj.evidence_pack.missing_terms).toContain("gamma");
+  expect(Array.isArray(obj.results[0].why_retrieved)).toBe(true);
+});
+
 test("search focus set/status/clear steers only the focused query window", async () => {
   writeVaultFile("archive/other.md", "# Other\n\nshared recall topic.");
   writeVaultFile("sessions/focus.md", "# Focus\n\nshared recall topic.");

@@ -194,6 +194,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     property: { type: "string-array" },
     visibility: { type: "string-array" },
     "query-doc": { type: "string" },
+    "evidence-pack": { type: "boolean" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
   });
@@ -250,6 +251,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     ...(properties !== undefined ? { properties } : {}),
     ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
+    ...(flags["evidence-pack"] === true ? { evidencePack: true } : {}),
   });
 
   if (flags["json"]) {
@@ -305,12 +307,36 @@ function jsonForOutcome(o: SearchOutcome): unknown {
       end_line: r.endLine,
       search_type: r.searchType,
       reasons: r.reasons,
+      ...(o.evidencePack ? { why_retrieved: r.reasons } : {}),
       document_id: r.documentId,
       chunk_id: r.chunkId,
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
     })),
     warnings: o.warnings,
     total: o.total,
+    ...(o.evidencePack ? { evidence_pack: jsonForEvidencePack(o.evidencePack) } : {}),
+  };
+}
+
+function jsonForEvidencePack(pack: NonNullable<SearchOutcome["evidencePack"]>): unknown {
+  return {
+    significant_terms: pack.significantTerms,
+    matched_terms: pack.matchedTerms,
+    missing_terms: pack.missingTerms,
+    support_coverage: pack.supportCoverage,
+    records: pack.records.map((record) => ({
+      path: record.path,
+      document_id: record.documentId,
+      chunk_id: record.chunkId,
+      matched_terms: record.matchedTerms,
+      missing_terms: record.missingTerms,
+      support_coverage: record.supportCoverage,
+      terminal_state: record.terminalState,
+      why_retrieved: record.whyRetrieved,
+      dropped_candidate_reasons: record.droppedCandidateReasons,
+    })),
+    dropped_candidates: pack.droppedCandidates,
+    abstention: pack.abstention,
   };
 }
 

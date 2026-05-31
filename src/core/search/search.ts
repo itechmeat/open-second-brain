@@ -15,6 +15,7 @@ import { parseFrontmatter } from "../vault.ts";
 import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { extractEntities } from "./entities.ts";
+import { buildEvidencePack, downrankTerminalEvidenceResults } from "./evidence-pack.ts";
 import { runFtsQueryDetailed } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
 import { buildQueryPlan } from "./query-plan.ts";
@@ -268,11 +269,13 @@ export async function search(
     for (const h of semHits) allChunkIds.add(h.chunkId);
     const idsList = Array.from(allChunkIds);
     if (idsList.length === 0) {
+      const evidencePack = opts.evidencePack === true ? buildEvidencePack(query, []) : undefined;
       return finalize(
         Object.freeze({
           results: Object.freeze([] as ReadonlyArray<BrainSearchResult>),
           warnings: Object.freeze(warnings),
           total: 0,
+          ...(evidencePack !== undefined ? { evidencePack } : {}),
         }),
       );
     }
@@ -404,12 +407,19 @@ export async function search(
       return rels && rels.length > 0 ? { ...r, relations: Object.freeze(rels) } : r;
     });
     const withStructuredReasons = addStructuredReasons(withRelations, structured);
+    const finalResults =
+      opts.evidencePack === true
+        ? downrankTerminalEvidenceResults(withStructuredReasons)
+        : withStructuredReasons;
+    const evidencePack =
+      opts.evidencePack === true ? buildEvidencePack(query, finalResults) : undefined;
 
     return finalize(
       Object.freeze({
-        results: Object.freeze(withStructuredReasons),
+        results: Object.freeze(finalResults),
         warnings: Object.freeze(warnings),
-        total: withStructuredReasons.length,
+        total: finalResults.length,
+        ...(evidencePack !== undefined ? { evidencePack } : {}),
       }),
     );
   } finally {

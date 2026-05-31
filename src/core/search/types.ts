@@ -5,6 +5,7 @@
  */
 
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
+import type { EvidencePack } from "./evidence-pack.ts";
 import type { SearchSessionFocus } from "./session-focus.ts";
 import type { StructuredRecallQueryDocument } from "./structured-query.ts";
 
@@ -195,12 +196,15 @@ export interface SearchOptions {
   readonly structuredQuery?: StructuredRecallQueryDocument;
   /** Optional per-query or persisted session focus steering. Undefined means load persisted focus. */
   readonly sessionFocus?: SearchSessionFocus | null;
+  /** Opt-in verified evidence pack diagnostics. Omitted preserves the legacy search outcome shape. */
+  readonly evidencePack?: boolean;
 }
 
 export interface SearchOutcome {
   readonly results: ReadonlyArray<BrainSearchResult>;
   readonly warnings: ReadonlyArray<string>;
   readonly total: number;
+  readonly evidencePack?: EvidencePack;
 }
 
 export interface ResolvedEmbeddingConfig {

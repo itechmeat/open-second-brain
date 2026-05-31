@@ -78,6 +78,7 @@ export function buildCacheKey(
     semanticWeight: opts.semanticWeight ?? null,
     mmrLambda: opts.mmrLambda ?? null,
     maxHops: opts.maxHops ?? null,
+    evidencePack: opts.evidencePack === true,
     properties: canonicalProperties(opts.properties),
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
     structuredQuery: canonicalStructuredQuery(opts),
