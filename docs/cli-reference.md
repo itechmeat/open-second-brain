@@ -64,8 +64,15 @@ o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain semantics-backfill  Dry-run typed preference-edge backfill preview (since v0.24.0): --json returns missing inverse superseded_by proposals; no writes
 o2b brain mcp-landscape       List MCP servers configured across the vault (since v0.19.0): name, source file, packages, required env-var names (values never read)
 o2b brain scan-inline         Capture `@osb` markers from folders listed under `notes.read_paths` in _brain.yaml
-o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory)
+o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory); --recall also stores turns in the session recall DAG
 o2b brain session-hook        Internal hook bridge: read one lifecycle payload from stdin, capture prompt markers / brain_feedback, append lifecycle audit/log rows
+o2b brain context-receipts    List/show opt-in prompt context receipt continuity records (since v0.29.0)
+o2b brain recall-telemetry    List/summarise opt-in recall telemetry continuity records (since v0.29.0)
+o2b brain context-presets     Show/suggest/diff read-only context budget presets (since v0.29.0)
+o2b brain pre-compact-extract Extract decision/commitment/outcome/rule/open-question continuity records from bounded text (since v0.29.0)
+o2b brain session-grep        Search imported session recall raw turns and summary nodes (since v0.29.0)
+o2b brain session-describe    Count raw turns and deterministic summary depths for one session recall DAG (since v0.29.0)
+o2b brain session-expand      Expand a session recall node to immediate sources and paginated raw turn content (since v0.29.0)
 o2b brain import-claude-memory (CLI-only) Import metadata.type=feedback entries from a Claude Code memory directory into Brain/preferences/. --dry-run / --apply, sidecar manifest for idempotency, UPDATE preserves accumulated evidence
 ```
 
@@ -88,11 +95,27 @@ o2b brain summary             Operator dashboard - trust verdict (clean | watch 
 o2b brain page-dedup          Page-level duplicate detector (by content hash + frontmatter similarity)
 o2b brain lint                Self-healing structural drift fixer; --consolidate folds multi-source duplicates
 o2b brain token-footprint     Token-budget monitor across instruction files and active.md
-o2b brain context-pack        Bounded-token vault slice for priming an agent's context window (--max-tokens N, --lanes for directives/constraints/consider)
+o2b brain context-pack        Bounded-token vault slice for priming an agent's context window (--max-tokens N, --lanes for directives/constraints/consider; v0.29.0 adds opt-in --telemetry, --cache-stable, --dedup-repeated)
 o2b brain synthesise          Concept-scoped JSON envelope: target node + linkers + optional unlinked mentions
 o2b brain moc-audit           Per-MOC coverage audit: classify cluster members into well-covered / fragile / candidate-missing
 o2b brain unlinked            Raw-text mentions outside `[[...]]` (Unicode-aware boundaries)
 ```
+
+### Context continuity and receipts (since v0.29.0)
+
+```text
+o2b brain context-pack        Existing budgeted context pack; add --telemetry to emit redacted recall telemetry, --cache-stable for stable ordering diagnostics, and --dedup-repeated for repeated-context reference hints
+o2b brain context-receipts    list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--json]; show <receipt-id> [--json]
+o2b brain recall-telemetry    list|summary [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json]
+o2b brain context-presets     show [tight-context|long-context] --json; suggest --model <name> --context-window <tokens> --json; diff <preset-id> [current-value flags] [--override <path>...] --json
+o2b brain pre-compact-extract --session-id <id> --turn-start <id> --turn-end <id> --text <bounded-text> [--host <name>] [--max-chars <n>] [--json]
+o2b brain import-session      <path> --recall [--recall-session-id <id>] [--recall-summary-group-size <n>] [--json]
+o2b brain session-grep        --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--json]
+o2b brain session-describe    --session-id <id> [--json]
+o2b brain session-expand      <record-id> [--raw-limit <n>] [--cursor <offset>] [--json]
+```
+
+Receipts, telemetry, transforms, and session recall import are opt-in. The stored continuity records use redaction-safe payloads, source references, hashes, counters, and bounded snippets rather than raw private prompt context.
 
 ## Vault scope
 

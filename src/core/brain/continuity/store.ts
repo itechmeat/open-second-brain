@@ -110,7 +110,10 @@ function buildRecord(
 function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord {
   const path = continuityLogPath(vault, record.createdAt.slice(0, 7));
   mkdirSync(join(vault, CONTINUITY_REL), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(record)}\n`, { encoding: "utf8", flag: "a" });
+  writeFileSync(path, `${JSON.stringify(record)}\n`, {
+    encoding: "utf8",
+    flag: "a",
+  });
   return record;
 }
 

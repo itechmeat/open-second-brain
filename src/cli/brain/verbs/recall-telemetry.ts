@@ -100,7 +100,9 @@ function telemetryFilter(
       ? { until: trimOrUndefined(flags["until"]) }
       : {}),
     ...(parsePositiveInteger(trimOrUndefined(flags["limit"]), label, "--limit") !== undefined
-      ? { limit: parsePositiveInteger(trimOrUndefined(flags["limit"]), label, "--limit") }
+      ? {
+          limit: parsePositiveInteger(trimOrUndefined(flags["limit"]), label, "--limit"),
+        }
       : {}),
   };
 }

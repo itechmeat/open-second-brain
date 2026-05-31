@@ -15,7 +15,11 @@ export function safeContinuityPayload(
   let sawPrivate = false;
   let sawRedaction = false;
   const safe = sanitizeValue(payload) as Readonly<Record<string, unknown>>;
-  return Object.freeze({ payload: safe, private: sawPrivate, redacted: sawRedaction });
+  return Object.freeze({
+    payload: safe,
+    private: sawPrivate,
+    redacted: sawRedaction,
+  });
 
   function sanitizeValue(value: unknown): unknown {
     if (typeof value === "string") {

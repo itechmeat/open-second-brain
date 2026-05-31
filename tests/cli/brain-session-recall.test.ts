@@ -54,7 +54,10 @@ test("brain session-grep/describe/expand query imported recall DAG", async () =>
     "--json",
   ]);
   expect(describe.returncode).toBe(0);
-  expect(JSON.parse(describe.stdout)).toMatchObject({ raw_turns: 3, summary_nodes: 3 });
+  expect(JSON.parse(describe.stdout)).toMatchObject({
+    raw_turns: 3,
+    summary_nodes: 3,
+  });
 
   const grep = await runCli([
     "brain",
@@ -68,7 +71,10 @@ test("brain session-grep/describe/expand query imported recall DAG", async () =>
     "--json",
   ]);
   expect(grep.returncode).toBe(0);
-  const hits = JSON.parse(grep.stdout).hits as Array<{ id: string; kind: string }>;
+  const hits = JSON.parse(grep.stdout).hits as Array<{
+    id: string;
+    kind: string;
+  }>;
   expect(hits.some((hit) => hit.kind === "session_turn")).toBe(true);
   expect(hits.some((hit) => hit.kind === "session_summary_node")).toBe(true);
 

@@ -93,9 +93,9 @@ export function listContextReceipts(
   vault: string,
   filter: ContextReceiptFilter = {},
 ): ReadonlyArray<ContinuityRecord> {
-  let receipts = listContinuityRecords(vault, { kind: "context_receipt" }).filter((record) =>
-    matchesReceiptFilter(record, filter),
-  );
+  let receipts = listContinuityRecords(vault, {
+    kind: "context_receipt",
+  }).filter((record) => matchesReceiptFilter(record, filter));
   receipts = receipts.toReversed();
   if (filter.limit !== undefined)
     receipts = receipts.slice(0, Math.max(0, Math.floor(filter.limit)));

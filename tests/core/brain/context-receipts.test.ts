@@ -44,7 +44,10 @@ describe("context receipts", () => {
     expect(receipts).toHaveLength(1);
     expect(receipts[0]!.id).toBe(pack.receiptId!);
     expect(receipts[0]!.sourceRefs).toEqual([
-      expect.objectContaining({ id: "pref-alpha", path: expect.stringContaining("pref-alpha.md") }),
+      expect.objectContaining({
+        id: "pref-alpha",
+        path: expect.stringContaining("pref-alpha.md"),
+      }),
     ]);
     expect(receipts[0]!.payload).toEqual(
       expect.objectContaining({

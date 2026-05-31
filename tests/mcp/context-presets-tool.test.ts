@@ -14,7 +14,10 @@ async function initialize(server: MCPServer): Promise<void> {
       clientInfo: { name: "context-presets-test", version: "0" },
     },
   });
-  await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
+  await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    method: "notifications/initialized",
+  });
 }
 
 async function callPresets(args: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -59,7 +62,10 @@ describe("brain_context_presets tool", () => {
       callPresets({
         operation: "diff",
         preset_id: "tight-context",
-        current: { context_pack: { max_tokens: 9000 }, overrides: ["context_pack.max_tokens"] },
+        current: {
+          context_pack: { max_tokens: 9000 },
+          overrides: ["context_pack.max_tokens"],
+        },
       }),
     ).resolves.toMatchObject({
       preset_id: "tight-context",

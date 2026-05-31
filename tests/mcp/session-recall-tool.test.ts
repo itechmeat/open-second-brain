@@ -5,7 +5,11 @@ import { join } from "node:path";
 
 import { importSessionRecall } from "../../src/core/brain/session-recall.ts";
 import type { SessionTurn } from "../../src/core/brain/sessions/types.ts";
-import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import {
+  JSONRPC_VERSION,
+  MCPServer,
+  PROTOCOL_VERSION,
+} from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
 let vault: string;
@@ -49,7 +53,10 @@ async function initialize(server: MCPServer): Promise<void> {
       clientInfo: { name: "session-recall-test", version: "0" },
     },
   });
-  await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
+  await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    method: "notifications/initialized",
+  });
 }
 
 async function callTool(
@@ -69,30 +76,45 @@ async function callTool(
 
 describe("session recall MCP tool registration", () => {
   test("registered in the full tool table only", () => {
-    for (const name of ["brain_session_grep", "brain_session_describe", "brain_session_expand"]) {
-      expect(buildToolTable("full").find((tool) => tool.name === name)).toBeDefined();
-      expect(buildToolTable("writer").find((tool) => tool.name === name)).toBeUndefined();
+    for (const name of [
+      "brain_session_grep",
+      "brain_session_describe",
+      "brain_session_expand",
+    ]) {
+      expect(
+        buildToolTable("full").find((tool) => tool.name === name),
+      ).toBeDefined();
+      expect(
+        buildToolTable("writer").find((tool) => tool.name === name),
+      ).toBeUndefined();
     }
   });
 });
 
 describe("session recall MCP tools", () => {
   test("grep, describe, and expand imported session recall records", async () => {
-    const describe = await callTool("brain_session_describe", { session_id: "session-mcp" });
-    expect(describe).toMatchObject({ raw_turns: 2, summary_nodes: 1 });
+    const description = await callTool("brain_session_describe", {
+      session_id: "session-mcp",
+    });
+    expect(description).toMatchObject({ raw_turns: 2, summary_nodes: 1 });
 
     const grep = await callTool("brain_session_grep", {
       query: "receipt",
       session_id: "session-mcp",
     });
     expect(
-      (grep.hits as Array<{ kind: string }>).some((hit) => hit.kind === "session_summary_node"),
+      (grep.hits as Array<{ kind: string }>).some(
+        (hit) => hit.kind === "session_summary_node",
+      ),
     ).toBe(true);
 
     const summary = (grep.hits as Array<{ id: string; kind: string }>).find(
       (hit) => hit.kind === "session_summary_node",
     )!;
-    const expanded = await callTool("brain_session_expand", { id: summary.id, raw_limit: 1 });
+    const expanded = await callTool("brain_session_expand", {
+      id: summary.id,
+      raw_limit: 1,
+    });
     expect(expanded).toMatchObject({ next_cursor: "1" });
     expect(expanded.raw_content).toHaveLength(1);
   });

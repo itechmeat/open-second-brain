@@ -27,7 +27,10 @@ async function initialize(server: MCPServer): Promise<void> {
       clientInfo: { name: "pre-compact-extract-test", version: "0" },
     },
   });
-  await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
+  await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    method: "notifications/initialized",
+  });
 }
 
 async function callExtract(args: Record<string, unknown>): Promise<Record<string, unknown>> {

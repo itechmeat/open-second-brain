@@ -38,7 +38,11 @@ describe("recall telemetry", () => {
           path: join(vault, "Brain", "preferences", "pref-alpha.md"),
           score: 0.9,
         },
-        { id: "note-bravo", path: join(vault, "Daily", "2026-05-20.md"), score: 0.5 },
+        {
+          id: "note-bravo",
+          path: join(vault, "Daily", "2026-05-20.md"),
+          score: 0.5,
+        },
       ],
       gaps: ["missing_recent_decision"],
       metadata: {
@@ -136,7 +140,11 @@ describe("recall telemetry", () => {
       mode: "context_pack",
       status: "ok",
       result_count: 1,
-      metadata: { max_tokens: 1000, tokens_used: instrumented.tokensUsed, skipped_count: 0 },
+      metadata: {
+        max_tokens: 1000,
+        tokens_used: instrumented.tokensUsed,
+        skipped_count: 0,
+      },
     });
   });
 
@@ -171,7 +179,11 @@ describe("recall telemetry", () => {
       mode: "pre_compress",
       status: "ok",
       result_count: 1,
-      metadata: { top_k: 3, total_chars: pack.totalChars, active_head_included: false },
+      metadata: {
+        top_k: 3,
+        total_chars: pack.totalChars,
+        active_head_included: false,
+      },
     });
   });
 });

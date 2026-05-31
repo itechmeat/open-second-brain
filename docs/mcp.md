@@ -18,7 +18,7 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 58 tools. The table below highlights the
+The full server currently advertises 65 tools. The table below highlights the
 operator-facing core, schema, agent-source, health, recovery, and Pay Memory
 tools; the full surface also includes Brain writer, review, query, temporal,
 link-graph, and search tools. In Claude Code, that full schema can push MCP definitions beyond
@@ -26,41 +26,48 @@ link-graph, and search tools. In Claude Code, that full schema can push MCP defi
 writer split below for the always-loaded writer subset, or the runtime
 capability flags for a narrower per-process full server.
 
-| Tool                        | Purpose                                                                                                                                        | Required arguments               |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `second_brain_capabilities` | Report the tools available to this MCP process and the withheld-tool reasons after runtime capability filtering.                               | —                                |
-| `second_brain_status`       | Report config and vault status, with secrets redacted.                                                                                         | —                                |
-| `second_brain_query`        | List vault pages with an optional case-insensitive title substring.                                                                            | —                                |
-| `vault_health`              | Run vault, config, and plugin manifest health checks.                                                                                          | —                                |
-| `brain_health`              | Run semantic Brain Health checks and return the health verdict/domains.                                                                        | —                                |
-| `brain_mcp_landscape`       | List the MCP servers configured across the vault: name, source config file, packages, and required env-var names. Env values never read.       | —                                |
-| `brain_agent_query`         | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.               | —                                |
-| `brain_agent_diff`          | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                             | —                                |
-| `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                        |
-| `brain_morning_brief`       | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.                 | —                                |
-| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, and evidence-pack diagnostics.                              | `query`                          |
-| `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason.                              | `prompt`                         |
-| `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`.     | `max_tokens`                     |
-| `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                |
-| `get_active_schema_pack`    | Return the active runtime schema pack resolved from `Brain/_brain.yaml`.                                                                       | —                                |
-| `list_schema_packs`         | List schema packs available to the vault/runtime.                                                                                              | —                                |
-| `schema_stats`              | Summarise declared schema tokens and observed artifact usage.                                                                                  | —                                |
-| `schema_lint`               | Report unknown, unused, and invalid schema references without writing.                                                                         | —                                |
-| `schema_graph`              | Return a schema relationship graph for declared types, aliases, prefixes, and link types.                                                      | —                                |
-| `schema_explain_type`       | Explain one schema token, including aliases, references, and usage.                                                                            | `token`                          |
-| `schema_review_orphans`     | Review declared schema tokens that have no observed usage.                                                                                     | —                                |
-| `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                      |
-| `reload_schema_pack`        | Reload and validate the active schema pack after local edits.                                                                                  | —                                |
-| `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                |
-| `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                           |
-| `payment_memory_init`       | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template.      | —                                |
-| `payment_receipt_append`    | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting.                                                     | `service`, `status`, `reason`    |
-| `asset_capture`             | Save a Markdown note for an asset produced by a paid call, linked to its receipt.                                                              | `title`, `service`, `result_url` |
-| `payment_report_generate`   | Aggregate a date's receipts into a Markdown report under `Brain/payments/reports/`.                                                            | `date`                           |
-| `payment_policy_check`      | Evaluate a prospective paid call against `policies/spending.json` (allowed / approval_required / denied).                                      | `service`                        |
-| `payment_request_approval`  | Create a pending-payment-request the user must approve before the agent runs `pay`.                                                            | `service`, `reason`              |
-| `payment_request_status`    | Look up a pending request by id; agent uses this to poll for approval.                                                                         | `id`                             |
-| `payment_request_consume`   | Mark an `approved` request as `consumed` and link the resulting receipt.                                                                       | `id`, `receipt`                  |
+| Tool                        | Purpose                                                                                                                                        | Required arguments                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `second_brain_capabilities` | Report the tools available to this MCP process and the withheld-tool reasons after runtime capability filtering.                               | —                                              |
+| `second_brain_status`       | Report config and vault status, with secrets redacted.                                                                                         | —                                              |
+| `second_brain_query`        | List vault pages with an optional case-insensitive title substring.                                                                            | —                                              |
+| `vault_health`              | Run vault, config, and plugin manifest health checks.                                                                                          | —                                              |
+| `brain_health`              | Run semantic Brain Health checks and return the health verdict/domains.                                                                        | —                                              |
+| `brain_mcp_landscape`       | List the MCP servers configured across the vault: name, source config file, packages, and required env-var names. Env values never read.       | —                                              |
+| `brain_agent_query`         | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.               | —                                              |
+| `brain_agent_diff`          | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                             | —                                              |
+| `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
+| `brain_morning_brief`       | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.                 | —                                              |
+| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, and evidence-pack diagnostics.                              | `query`                                        |
+| `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason.                              | `prompt`                                       |
+| `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`.     | `max_tokens`                                   |
+| `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
+| `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls.                                            | `operation`                                    |
+| `brain_context_presets`     | Show, suggest, or diff read-only context budget presets (`tight-context`, `long-context`) without writing config.                              | `operation`                                    |
+| `brain_pre_compact_extract` | Extract decision/commitment/outcome/rule/open-question records from bounded text into continuity storage.                                      | `session_id`, `turn_start`, `turn_end`, `text` |
+| `brain_session_grep`        | Search imported session recall raw turns and deterministic summary nodes.                                                                      | `query`                                        |
+| `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
+| `brain_session_expand`      | Expand a raw or summary session recall node to immediate sources and paginated raw turn content.                                               | `id`                                           |
+| `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                              |
+| `get_active_schema_pack`    | Return the active runtime schema pack resolved from `Brain/_brain.yaml`.                                                                       | —                                              |
+| `list_schema_packs`         | List schema packs available to the vault/runtime.                                                                                              | —                                              |
+| `schema_stats`              | Summarise declared schema tokens and observed artifact usage.                                                                                  | —                                              |
+| `schema_lint`               | Report unknown, unused, and invalid schema references without writing.                                                                         | —                                              |
+| `schema_graph`              | Return a schema relationship graph for declared types, aliases, prefixes, and link types.                                                      | —                                              |
+| `schema_explain_type`       | Explain one schema token, including aliases, references, and usage.                                                                            | `token`                                        |
+| `schema_review_orphans`     | Review declared schema tokens that have no observed usage.                                                                                     | —                                              |
+| `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                                    |
+| `reload_schema_pack`        | Reload and validate the active schema pack after local edits.                                                                                  | —                                              |
+| `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                              |
+| `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                                         |
+| `payment_memory_init`       | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template.      | —                                              |
+| `payment_receipt_append`    | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting.                                                     | `service`, `status`, `reason`                  |
+| `asset_capture`             | Save a Markdown note for an asset produced by a paid call, linked to its receipt.                                                              | `title`, `service`, `result_url`               |
+| `payment_report_generate`   | Aggregate a date's receipts into a Markdown report under `Brain/payments/reports/`.                                                            | `date`                                         |
+| `payment_policy_check`      | Evaluate a prospective paid call against `policies/spending.json` (allowed / approval_required / denied).                                      | `service`                                      |
+| `payment_request_approval`  | Create a pending-payment-request the user must approve before the agent runs `pay`.                                                            | `service`, `reason`                            |
+| `payment_request_status`    | Look up a pending request by id; agent uses this to poll for approval.                                                                         | `id`                                           |
+| `payment_request_consume`   | Mark an `approved` request as `consumed` and link the resulting receipt.                                                                       | `id`, `receipt`                                |
 
 `second_brain_query` accepts `pattern` (string) and `limit` (1–500, default 50).
 `vault_health` accepts `repo` (string) for plugin manifest validation.
@@ -72,7 +79,17 @@ capability flags for a narrower per-process full server.
 `vec:`, and `hyde:` lanes; `focus_query` / `focus_path_prefix` to steer a
 single call; and `evidence_pack: true` to return significant/matched/missing
 terms, abstention text, terminal-state downrank reasons, and per-result
-`why_retrieved`. `brain_recall_gate` accepts optional `previous_prompt` and
+`why_retrieved`. It can also emit opt-in recall telemetry with `telemetry: true`.
+`brain_context_pack` accepts opt-in `receipt`, `telemetry`, `cache_stable`, and
+`dedup_repeated` diagnostics; `brain_pre_compress_pack` accepts opt-in `receipt`
+and `telemetry`. `brain_context_receipts` supports `operation: "list"|"show"`;
+`brain_recall_telemetry` supports `operation: "list"|"summary"`; and
+`brain_context_presets` supports `operation: "show"|"suggest"|"diff"`.
+`brain_pre_compact_extract` writes idempotent typed continuity records after
+deterministic media/base64 sanitization. `brain_session_grep`,
+`brain_session_describe`, and `brain_session_expand` inspect the opt-in session
+recall DAG populated by CLI `import-session --recall` or the core API.
+`brain_recall_gate` accepts optional `previous_prompt` and
 `explicit`; `explicit: true` always returns `retrieve: true`.
 
 `payment_memory_init` accepts `agent` (string) and `overwrite` (boolean — to

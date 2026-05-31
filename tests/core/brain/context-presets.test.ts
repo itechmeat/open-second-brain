@@ -20,13 +20,19 @@ describe("context budget presets", () => {
 
   test("suggests by model hint and context window", () => {
     expect(
-      suggestContextPreset({ model: "gpt-4.1-mini", contextWindowTokens: 8000 }),
+      suggestContextPreset({
+        model: "gpt-4.1-mini",
+        contextWindowTokens: 8000,
+      }),
     ).toMatchObject({
       preset_id: "tight-context",
       confidence: "high",
     });
     expect(
-      suggestContextPreset({ model: "claude-sonnet-4", contextWindowTokens: 200000 }),
+      suggestContextPreset({
+        model: "claude-sonnet-4",
+        contextWindowTokens: 200000,
+      }),
     ).toMatchObject({
       preset_id: "long-context",
       confidence: "high",
@@ -40,7 +46,11 @@ describe("context budget presets", () => {
         max_chars_per_memory: 1200,
         max_total_chars: 6000,
       },
-      pre_compress: { top_k: 5, max_chars_per_memory: 800, max_total_chars: 4000 },
+      pre_compress: {
+        top_k: 5,
+        max_chars_per_memory: 800,
+        max_total_chars: 4000,
+      },
       overrides: ["context_pack.max_tokens"],
     });
 

@@ -63,7 +63,10 @@ test("brain context-pack can opt in to recall telemetry", async () => {
   expect(out.returncode).toBe(0);
   const json = JSON.parse(out.stdout);
   expect(json.telemetry_id).toStartWith("ctn_");
-  const records = listRecallTelemetry(vault, { mode: "context_pack", host: "cli-test" });
+  const records = listRecallTelemetry(vault, {
+    mode: "context_pack",
+    host: "cli-test",
+  });
   expect(records).toHaveLength(1);
   expect(records[0]!.payload).toMatchObject({ status: "ok", result_count: 1 });
 });

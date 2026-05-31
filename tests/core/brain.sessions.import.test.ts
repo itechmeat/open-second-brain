@@ -87,7 +87,10 @@ describe("importSession", () => {
   });
 
   test("dry-run does not write signals", async () => {
-    const res = await importSession(tmp, CLAUDE, { agent: "test", dryRun: true });
+    const res = await importSession(tmp, CLAUDE, {
+      agent: "test",
+      dryRun: true,
+    });
     expect(res.signals_created).toBe(0);
     const inbox = readdirSync(brainDirs(tmp).inbox).filter((n) => n.startsWith("sig-"));
     expect(inbox.length).toBe(0);
@@ -152,7 +155,10 @@ describe("importSession", () => {
     writeFileSync(junk, '{"foo":"bar"}\n');
     // Should not throw — adapter chosen explicitly, iteration just
     // yields nothing.
-    const res = await importSession(tmp, junk, { agent: "test", format: "claude" });
+    const res = await importSession(tmp, junk, {
+      agent: "test",
+      format: "claude",
+    });
     expect(res.format).toBe("claude");
     expect(res.signals_created).toBe(0);
   });

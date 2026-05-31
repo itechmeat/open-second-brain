@@ -147,7 +147,10 @@ test("brain_search can opt in to recall telemetry", async () => {
   const body = extractToolResult(resp);
   expect(body["telemetry_id"]).toStartWith("ctn_");
 
-  const records = listRecallTelemetry(vault, { mode: "search", host: "mcp-search-test" });
+  const records = listRecallTelemetry(vault, {
+    mode: "search",
+    host: "mcp-search-test",
+  });
   expect(records).toHaveLength(1);
   expect(records[0]!.payload).toMatchObject({ status: "ok", result_count: 1 });
 });

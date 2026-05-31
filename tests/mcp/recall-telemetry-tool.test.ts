@@ -55,7 +55,10 @@ async function initialize(server: MCPServer): Promise<void> {
       clientInfo: { name: "recall-telemetry-test", version: "0" },
     },
   });
-  await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
+  await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    method: "notifications/initialized",
+  });
 }
 
 async function callTelemetry(
@@ -114,14 +117,20 @@ describe("brain_recall_telemetry tool", () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
 
-    const list = await callTelemetry(server, { operation: "list", mode: "context_pack" });
+    const list = await callTelemetry(server, {
+      operation: "list",
+      mode: "context_pack",
+    });
     expect(list["total"]).toBe(1);
     expect((list["records"] as Array<Record<string, unknown>>)[0]!["payload"]).toMatchObject({
       mode: "context_pack",
       result_count: 1,
     });
 
-    const summary = await callTelemetry(server, { operation: "summary", host: "mcp-test" });
+    const summary = await callTelemetry(server, {
+      operation: "summary",
+      host: "mcp-test",
+    });
     expect(summary).toMatchObject({
       total: 2,
       by_mode: { context_pack: 1, search: 1 },
@@ -164,7 +173,10 @@ describe("brain_recall_telemetry tool", () => {
     });
     expect(preCompress["telemetry_id"]).toStartWith("ctn_");
 
-    const summary = await callTelemetry(server, { operation: "summary", host: "mcp-test" });
+    const summary = await callTelemetry(server, {
+      operation: "summary",
+      host: "mcp-test",
+    });
     expect(summary).toMatchObject({
       total: 2,
       by_mode: { context_pack: 1, pre_compress: 1 },

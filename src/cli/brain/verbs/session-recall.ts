@@ -22,7 +22,9 @@ export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
       ? { sessionId: stringOptional(flags["session-id"]) }
       : {}),
     ...(positiveIntegerOptional(flags["limit"], "brain session-grep", "--limit") !== undefined
-      ? { limit: positiveIntegerOptional(flags["limit"], "brain session-grep", "--limit") }
+      ? {
+          limit: positiveIntegerOptional(flags["limit"], "brain session-grep", "--limit"),
+        }
       : {}),
     ...(positiveIntegerOptional(flags["snippet-chars"], "brain session-grep", "--snippet-chars") !==
     undefined

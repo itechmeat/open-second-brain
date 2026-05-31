@@ -26,7 +26,10 @@ export function applyContextTransforms<T extends ContextTransformItem>(
   if (!opts?.cacheStableOrdering && !opts?.deduplicateRepeatedContext)
     return Object.freeze([...items]);
 
-  const ranked = items.map((item, index) => ({ item, originalRank: index + 1 }));
+  const ranked = items.map((item, index) => ({
+    item,
+    originalRank: index + 1,
+  }));
   if (opts.cacheStableOrdering) {
     ranked.sort(
       (a, b) => a.item.id.localeCompare(b.item.id) || a.item.path.localeCompare(b.item.path),

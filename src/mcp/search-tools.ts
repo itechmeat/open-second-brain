@@ -308,7 +308,11 @@ async function toolBrainSearch(
             ? "search_timeout"
             : "search_error",
         ],
-        metadata: { limit, keyword_only: keywordOnly, semantic: semantic ?? null },
+        metadata: {
+          limit,
+          keyword_only: keywordOnly,
+          semantic: semantic ?? null,
+        },
       });
     }
     if (e instanceof SearchError) throw searchErrorToMcp(e);

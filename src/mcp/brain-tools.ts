@@ -1803,7 +1803,11 @@ async function toolBrainContextReceipts(
       ...(limit !== undefined ? { limit } : {}),
     });
     const summaries = receipts.map(summarizeContextReceipt);
-    return { vault_path: ctx.vault, total: summaries.length, receipts: summaries };
+    return {
+      vault_path: ctx.vault,
+      total: summaries.length,
+      receipts: summaries,
+    };
   }
 
   if (operation === "show") {
@@ -1944,7 +1948,9 @@ async function toolBrainContextPresets(
     if (presetId === undefined) {
       throw new MCPError(INVALID_PARAMS, "brain_context_presets: preset_id is required for diff");
     }
-    return { ...diffContextPreset(presetId, contextPresetCurrentConfig(args["current"])) };
+    return {
+      ...diffContextPreset(presetId, contextPresetCurrentConfig(args["current"])),
+    };
   }
   throw new MCPError(
     INVALID_PARAMS,
@@ -2004,7 +2010,9 @@ async function toolBrainSessionGrep(
     ...searchSessionRecall(ctx.vault, {
       query: requiredStringArg("brain_session_grep", args, "query"),
       ...(optionalStringArg("brain_session_grep", args, "session_id") !== undefined
-        ? { sessionId: optionalStringArg("brain_session_grep", args, "session_id") }
+        ? {
+            sessionId: optionalStringArg("brain_session_grep", args, "session_id"),
+          }
         : {}),
       ...(limit !== undefined ? { limit } : {}),
       ...(snippetChars !== undefined ? { snippetChars } : {}),
@@ -2873,7 +2881,10 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description: "First source turn id in the extracted segment.",
         },
-        turn_end: { type: "string", description: "Last source turn id in the extracted segment." },
+        turn_end: {
+          type: "string",
+          description: "Last source turn id in the extracted segment.",
+        },
         text: {
           type: "string",
           description: "Bounded text segment to scan for labeled extraction lines.",
@@ -2897,8 +2908,15 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       type: "object",
       properties: {
         query: { type: "string", description: "Search text." },
-        session_id: { type: "string", description: "Optional session id filter." },
-        limit: { type: "integer", minimum: 1, description: "Maximum hits to return." },
+        session_id: {
+          type: "string",
+          description: "Optional session id filter.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Maximum hits to return.",
+        },
         snippet_chars: {
           type: "integer",
           minimum: 1,

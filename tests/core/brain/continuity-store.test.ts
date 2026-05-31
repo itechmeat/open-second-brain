@@ -68,7 +68,10 @@ describe("continuity store", () => {
     expect(first.records.map((record) => record.sourceRefs[0]!.id)).toEqual(["query-0", "query-1"]);
     expect(first.nextCursor).not.toBeNull();
 
-    const second = paginateContinuityRecords(vault, { limit: 2, cursor: first.nextCursor! });
+    const second = paginateContinuityRecords(vault, {
+      limit: 2,
+      cursor: first.nextCursor!,
+    });
     expect(second.records.map((record) => record.sourceRefs[0]!.id)).toEqual(["query-2"]);
     expect(second.nextCursor).toBeNull();
   });
@@ -88,7 +91,9 @@ describe("continuity store", () => {
     });
 
     expect(invalidation.kind).toBe("source_invalidation");
-    const records = listContinuityRecords(vault, { sourceId: "session-a#turn-1" });
+    const records = listContinuityRecords(vault, {
+      sourceId: "session-a#turn-1",
+    });
     expect(records.map((record) => record.kind)).toEqual(["session_turn", "source_invalidation"]);
   });
 });

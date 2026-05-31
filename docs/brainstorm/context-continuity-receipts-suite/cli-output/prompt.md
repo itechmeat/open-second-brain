@@ -7,24 +7,31 @@ Implement a Context Continuity & Injection Receipts Suite for Open Second Brain 
 ## Selected tasks
 
 ### t_772706ee P3 - Session summary DAG with lossless drill-down recall
+
 Hermes-LCM persists raw conversation messages, compacts older context into a depth-aware summary DAG, and exposes bounded recovery tools (`lcm_grep`, `lcm_describe`, `lcm_expand`, `lcm_expand_query`, `lcm_load_session`). OSB already has session import adapters, deterministic session codec, conversation fact extraction, context packs, and pre-compress preference packs, but does not have a session-local hierarchy where compacted conversation ranges can be searched, described, and expanded back to exact source turns. Acceptance: ingest long imported Hermes/Claude/Codex session into raw turns and at least two DAG depths without losing source IDs; search returns raw-turn and summary-node hits with bounded snippets; expanding a summary node returns immediate sources with pagination and exact raw turn follow-up; opt-in and no default behavior change; tests cover lineage, pagination, oversized turns, rebuildability, and idempotency.
 
 ### t_192d9c8c P3 - Model-aware context budget presets with dry-run diagnostics
+
 Hermes-LCM has inspectable model-family context presets. OSB has many independent knobs (`brain_context_pack` limits, `brain_pre_compress_pack`, MCP preview budget, search limits), but no read-only diagnostic that maps runtime/model context characteristics to recommended OSB budget settings while preserving overrides. Acceptance: `context-preset suggest` returns recommendation with reason/confidence/no mutation; `context-preset diff` reports exact proposed changes while preserving explicit overrides; at least tight-context and long-context presets; token-footprint or doctor can reference diagnostics; tests cover selection, override preservation, invalid override reporting, JSON output.
 
 ### t_57eedc53 P3 - Pre-compaction decision and commitment capture
+
 Hermes-LCM optionally scans the soon-to-be-compacted conversation segment and writes durable decisions, commitments, outcomes, rules, and open questions. OSB has `brain_pre_compress_pack`, import-session, timeline, and fact extraction, but not a compression-boundary capture path. Acceptance: bounded compression-boundary payload can produce durable typed records with source turn refs; best-effort and never blocks compression on failure; idempotent by session+turn range+text hash; extracted records appear in timeline/search surfaces; tests cover empty/noisy segments, duplicate extraction, media/base64 sanitization, failure handling.
 
 ### t_6e50c711 P3 - Cache-stable Brain context pack ordering with ranking annotations
+
 ContextPilot reorders retrieved context blocks to improve prefix/KV-cache reuse while preserving original ranking metadata. OSB context packs optimize for one request at a time. Acceptance: optional cache-stable order without changing selected blocks; moved blocks retain original rank, score, why_retrieved; plain Markdown and JSON remain understandable; disabled by default; tests cover deterministic ordering, rank preservation, repeated-block grouping, backwards-compatible output.
 
 ### t_8c5f1093 P2 - Lossless repeated-context deduplication with reference hints
+
 ContextPilot detects byte-identical or chunk-identical repeated context within an explicit session and replaces later repeats with auditable reference hints only when the original remains accessible. OSB has compression, payload externalization, budgets, and artifacts, but no session-scoped repeated-context dedup pass. Acceptance: detect repeated context across explicit session IDs; replace with reference hints only when original remains accessible; content-defined chunking catches shifted repeated sections; visibility boundaries prevent cross-session/agent contamination; diagnostics report blocks saved; tests cover repeated tool results, shifted blocks, missing-original fallback, isolation, small-input no-op.
 
 ### t_92d938e9 P2 - Prompt context receipts for auditable Brain injection
+
 Hermes-agentmemory records which memories were summarized into context. OSB has `why_retrieved`, query cache, context packs, and logs, but no receipt log of the final Brain context that crossed the prompt boundary. Acceptance: context-pack, pre-compress, and future context paths can emit receipts; receipts include stable source identifiers, ranking/budget metadata, redaction/private flags, final injected-text hash; no raw private content by default; CLI/MCP can list/show by session/host/trigger/source/receipt id; forget/source purge can find/invalidate references; tests cover emission, redaction-safe serialization, filters, cache/forget integration.
 
 ### t_e3d045d6 P1 - Recall telemetry log with coverage and knowledge-gap summary
+
 ByteRover records recall queries and summarizes coverage/cache/timing/gaps. OSB has `why_retrieved`, query cache, ranking diagnostics, token-footprint, and benchmarks, but no retained recall telemetry log for live recall usage. Acceptance: search/context-pack calls can record bounded local telemetry without changing returned results; telemetry can be disabled/redacted; view supports time/status/detail filters and JSON; summary reports coverage, cache hits, latency, top artifacts, unanswered gaps; interrupted calls visible after timeout; tests cover log write, pruning, corrupt tolerance, aggregation, privacy redaction.
 
 # Project context
@@ -32,6 +39,7 @@ ByteRover records recall queries and summarizes coverage/cache/timing/gaps. OSB 
 Project: Open Second Brain, TypeScript/Bun CLI + MCP server, filesystem-first Obsidian-compatible Brain vault.
 
 Recent main commits:
+
 - 3b7b3a5 feat(brain): add safety governance foundations (#55) / v0.28.0
 - 794ee45 feat(search): ship recall control and trust surfaces (#54) / v0.27.0
 - 40d4e2b feat: cjk schema lifecycle recovery (#53) / v0.26.0
@@ -44,6 +52,7 @@ Recent main commits:
 - 5fa7eb0 feat: MCP context economy (#45) / v0.18.0
 
 Related files and existing surfaces:
+
 - `src/core/brain/context-pack.ts`: builds `brain_context_pack` items with token/char budgets, polarity lanes, and v0.28 safety reports.
 - `src/core/brain/pre-compress-pack.ts`: builds `brain_pre_compress_pack` addendum for host compression boundaries.
 - `src/mcp/brain-tools.ts`: MCP handlers for context pack, pre-compress pack, search, receipts/future tools should fit here.
@@ -54,6 +63,7 @@ Related files and existing surfaces:
 - `docs/cli-reference.md`, `docs/mcp.md`, `README.md`, `CHANGELOG.md`: user-facing docs to update.
 
 Project conventions and constraints:
+
 - Brain source of truth remains plain Markdown/vault files. Derived indexes/caches must be rebuildable or auditable.
 - Prefer deterministic, bounded, opt-in surfaces. Avoid silently mutating live config or injecting raw private content.
 - CLI/MCP outputs need stable JSON contracts and tests. Read-only/preview-first is preferred for governance and context workflows.

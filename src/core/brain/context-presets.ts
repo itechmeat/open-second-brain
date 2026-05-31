@@ -5,7 +5,10 @@ export interface ContextBudgetPreset {
   readonly id: ContextPresetId;
   readonly label: string;
   readonly model_hints: ReadonlyArray<string>;
-  readonly context_window_tokens: { readonly min: number; readonly max: number | null };
+  readonly context_window_tokens: {
+    readonly min: number;
+    readonly max: number | null;
+  };
   readonly context_pack: {
     readonly max_tokens: number;
     readonly max_chars_per_memory: number;

@@ -128,7 +128,10 @@ function extractLines(text: string): ExtractedLine[] {
 function extractSourceRefs(input: PreCompactExtractInput): ReadonlyArray<ContinuitySourceRef> {
   return Object.freeze([
     Object.freeze({ type: "session", id: input.sessionId }),
-    Object.freeze({ type: "turn_range", id: `${input.turnStart}..${input.turnEnd}` }),
+    Object.freeze({
+      type: "turn_range",
+      id: `${input.turnStart}..${input.turnEnd}`,
+    }),
   ]);
 }
 

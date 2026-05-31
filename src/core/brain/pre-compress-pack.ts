@@ -175,7 +175,13 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
         options: opts.receipt,
         items: [
           ...(activeText !== null
-            ? [{ id: ACTIVE_ID, path: brainActivePath(vault), text: activeText }]
+            ? [
+                {
+                  id: ACTIVE_ID,
+                  path: brainActivePath(vault),
+                  text: activeText,
+                },
+              ]
             : []),
           ...items.map((item) => ({
             id: item.id,

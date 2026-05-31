@@ -99,7 +99,10 @@ describe("brain_context_receipts tool", () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
 
-    const list = await callReceipts(server, { operation: "list", trigger: "pre_compress" });
+    const list = await callReceipts(server, {
+      operation: "list",
+      trigger: "pre_compress",
+    });
     expect(list["total"]).toBe(1);
     expect((list["receipts"] as Array<Record<string, unknown>>)[0]).toMatchObject({
       id: receipt.id,
@@ -108,7 +111,10 @@ describe("brain_context_receipts tool", () => {
       item_count: 1,
     });
 
-    const show = await callReceipts(server, { operation: "show", id: receipt.id });
+    const show = await callReceipts(server, {
+      operation: "show",
+      id: receipt.id,
+    });
     expect(show["id"]).toBe(receipt.id);
     expect((show["payload"] as Record<string, unknown>)["session_id"]).toBe("session-mcp");
   });

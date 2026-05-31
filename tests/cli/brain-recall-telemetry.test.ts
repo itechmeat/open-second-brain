@@ -50,7 +50,10 @@ test("brain recall-telemetry lists records and summarizes gaps", async () => {
   expect(list.returncode).toBe(0);
   const listJson = JSON.parse(list.stdout);
   expect(listJson.total).toBe(1);
-  expect(listJson.records[0].payload).toMatchObject({ mode: "context_pack", result_count: 2 });
+  expect(listJson.records[0].payload).toMatchObject({
+    mode: "context_pack",
+    result_count: 2,
+  });
 
   const summary = await runCli([
     "brain",

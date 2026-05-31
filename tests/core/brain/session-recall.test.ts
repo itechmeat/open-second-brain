@@ -22,7 +22,12 @@ afterEach(() => {
 });
 
 function turn(turnId: string, role: SessionTurn["role"], text: string): SessionTurn {
-  return { turnId, role, text, timestamp: `2026-05-20T17:00:0${turnId.slice(-1)}.000Z` };
+  return {
+    turnId,
+    role,
+    text,
+    timestamp: `2026-05-20T17:00:0${turnId.slice(-1)}.000Z`,
+  };
 }
 
 describe("session recall DAG", () => {
