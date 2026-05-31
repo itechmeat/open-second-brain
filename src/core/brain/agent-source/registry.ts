@@ -7,8 +7,9 @@ import type {
 } from "./types.ts";
 import { deepFreeze } from "./freeze.ts";
 
-export const AGENT_SOURCE_PROVIDERS: ReadonlyArray<AgentSourceProvider> =
-  Object.freeze([vaultAgentSourceProvider]);
+export const AGENT_SOURCE_PROVIDERS: ReadonlyArray<AgentSourceProvider> = Object.freeze([
+  vaultAgentSourceProvider,
+]);
 
 export function collectAgentSourceContributions(
   vault: string,
@@ -21,9 +22,7 @@ export function collectAgentSourceContributions(
   return deepFreeze(contributions);
 }
 
-export function listAgentSources(
-  vault: string,
-): ReadonlyArray<AgentSourceSummary> {
+export function listAgentSources(vault: string): ReadonlyArray<AgentSourceSummary> {
   const byAgent = new Map<
     string,
     {
@@ -44,8 +43,7 @@ export function listAgentSources(
       };
       current.providerIds.add(contribution.provider_id);
       current.kinds.add(contribution.kind);
-      if (contribution.topic !== undefined)
-        current.topics.add(contribution.topic);
+      if (contribution.topic !== undefined) current.topics.add(contribution.topic);
       current.contributionCount++;
       byAgent.set(agent, current);
     }
@@ -67,10 +65,7 @@ export function listAgentSources(
   return deepFreeze(summaries);
 }
 
-function compareContributions(
-  a: AgentSourceContribution,
-  b: AgentSourceContribution,
-): number {
+function compareContributions(a: AgentSourceContribution, b: AgentSourceContribution): number {
   const byTimestamp = a.timestamp.localeCompare(b.timestamp);
   if (byTimestamp !== 0) return byTimestamp;
   const byKind = a.kind.localeCompare(b.kind);

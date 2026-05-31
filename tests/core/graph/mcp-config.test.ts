@@ -111,7 +111,9 @@ describe("buildMcpLandscape (vault-relative discovery)", () => {
     mkdirSync(join(vault, "tools"), { recursive: true });
     writeFileSync(
       join(vault, "tools", "claude_desktop_config.json"),
-      JSON.stringify({ mcpServers: { b: { command: "uvx", args: ["pkg-b"], env: { B_KEY: "x" } } } }),
+      JSON.stringify({
+        mcpServers: { b: { command: "uvx", args: ["pkg-b"], env: { B_KEY: "x" } } },
+      }),
     );
     const land = buildMcpLandscape(vault);
     const names = land.servers.map((s) => s.name).toSorted();

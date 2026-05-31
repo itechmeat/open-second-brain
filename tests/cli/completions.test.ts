@@ -17,18 +17,14 @@ describe("CLI command manifest", () => {
     expect(rootNames).toContain("brain");
     expect(rootNames).toContain("completions");
 
-    const status = parsed.commands.find(
-      (command: any) => command.name === "status",
-    );
+    const status = parsed.commands.find((command: any) => command.name === "status");
     expect(status.flags).toContainEqual({
       name: "json",
       type: "boolean",
       inherited: true,
     });
 
-    const brain = parsed.commands.find(
-      (command: any) => command.name === "brain",
-    );
+    const brain = parsed.commands.find((command: any) => command.name === "brain");
     const brainVerbs = brain.commands.map((command: any) => command.name);
     expect(brainVerbs).toContain("doctor");
     expect(brainVerbs).toContain("mcp-landscape");
@@ -36,14 +32,7 @@ describe("CLI command manifest", () => {
 });
 
 describe("o2b completions", () => {
-  for (const shell of [
-    "bash",
-    "zsh",
-    "fish",
-    "elvish",
-    "nushell",
-    "powershell",
-  ]) {
+  for (const shell of ["bash", "zsh", "fish", "elvish", "nushell", "powershell"]) {
     test(`prints ${shell} completions from the manifest`, async () => {
       const result = await runCli(["completions", shell]);
 

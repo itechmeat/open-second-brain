@@ -82,12 +82,9 @@ describe("o2b brain agent-query", () => {
   test("--json prints the structured query result", async () => {
     seedQueryVault();
 
-    const r = await runCli(
-      ["brain", "agent-query", "--agent", "claude", "--json"],
-      {
-        env: env(),
-      },
-    );
+    const r = await runCli(["brain", "agent-query", "--agent", "claude", "--json"], {
+      env: env(),
+    });
 
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout) as {
@@ -106,16 +103,7 @@ describe("o2b brain agent-diff", () => {
     seedDiffVault();
 
     const r = await runCli(
-      [
-        "brain",
-        "agent-diff",
-        "--mode",
-        "diff",
-        "--agent",
-        "claude",
-        "--agent",
-        "codex",
-      ],
+      ["brain", "agent-diff", "--mode", "diff", "--agent", "claude", "--agent", "codex"],
       { env: env() },
     );
 

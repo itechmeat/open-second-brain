@@ -14,6 +14,7 @@ o2b install-cli               Symlink o2b and o2b-hook into ~/.local/bin
 o2b doctor                    Run vault + adapter checks
 o2b index                     Rebuild the Markdown page index
 o2b export-config             Write a redacted config snapshot
+o2b secrets list|status       Inspect $secret:NAME references without printing values
 o2b mcp                       Run the MCP tool server (stdio); --scope full|writer, --probe, --allow-tool, --disable-tool, --max-tools
 o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b help --json               Print the command/flag manifest as JSON
@@ -188,10 +189,12 @@ Recall and ranking quality (v0.20.0), each tunable and bounded:
 `brain_context_pack` also accepts `max_chars_per_memory` and
 `max_total_chars` (code-point caps). Pass `--lanes` to keep the legacy flat
 items while also returning `directives`, `constraints`, and `consider` lanes
-derived from polarity cues and page tier. The read-only
+derived from polarity cues and page tier. Surfaced item bodies are guarded by
+deterministic prompt-injection checks; filtered items return a placeholder and
+`safety.reasons` rather than hostile note text. The read-only
 `brain_pre_compress_pack` MCP tool returns a budgeted
 top-preferences-plus-`active.md` addendum for a host runtime to inject
-before a context-compression event.
+before a context-compression event, with the same safety report shape.
 
 Entity-boosted retrieval and header-anchored chunking populate on the
 next reindex and need no configuration. Every result carries a

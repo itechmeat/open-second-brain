@@ -57,14 +57,7 @@ describe("inherited CLI --json contract", () => {
 
   test("fallback JSON redacts secret-shaped output", async () => {
     const result = await runCli(
-      [
-        "init",
-        "--vault",
-        vault,
-        "--agent-name",
-        "api_key=super-secret-value",
-        "--json",
-      ],
+      ["init", "--vault", vault, "--agent-name", "api_key=super-secret-value", "--json"],
       { env: env() },
     );
 

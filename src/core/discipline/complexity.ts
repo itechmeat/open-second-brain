@@ -72,8 +72,7 @@ export function buildComplexityReport(
   );
   const thinkingActivity = Math.max(0, input.thinkingActivity);
   const ratio = structuralComplexity / Math.max(1, thinkingActivity);
-  const warning =
-    structuralComplexity >= WARNING_SCORE && ratio >= WARNING_RATIO;
+  const warning = structuralComplexity >= WARNING_SCORE && ratio >= WARNING_RATIO;
 
   return Object.freeze({
     schema_version: 1 as const,
@@ -123,9 +122,7 @@ function folderDepth(relativePath: string): number {
 }
 
 function isTemplatePath(relativePath: string): boolean {
-  return relativePath
-    .split("/")
-    .some((segment) => segment.toLowerCase().includes("template"));
+  return relativePath.split("/").some((segment) => segment.toLowerCase().includes("template"));
 }
 
 function isConfigPath(relativePath: string): boolean {
@@ -189,11 +186,7 @@ function collectFrontmatterTags(lines: string[], tags: Set<string>): void {
   }
 }
 
-function collectFrontmatterTagList(
-  lines: string[],
-  startIndex: number,
-  tags: Set<string>,
-): void {
+function collectFrontmatterTagList(lines: string[], startIndex: number, tags: Set<string>): void {
   for (let index = startIndex; index < lines.length; index += 1) {
     const line = lines[index]!;
     if (line === "---" || /^\S/.test(line)) return;

@@ -18,9 +18,7 @@ describe("MCP runtime capability window", () => {
       id: 1,
       method: "tools/list",
     })) as any;
-    const names = (listResponse.result.tools as Array<{ name: string }>).map(
-      (tool) => tool.name,
-    );
+    const names = (listResponse.result.tools as Array<{ name: string }>).map((tool) => tool.name);
 
     expect(names).toContain("second_brain_capabilities");
     expect(names).not.toContain("second_brain_query");
@@ -34,9 +32,7 @@ describe("MCP runtime capability window", () => {
     const report = reportResponse.result.structuredContent;
 
     expect(report.scope).toBe("full");
-    expect(
-      report.available.some((tool: any) => tool.name === "second_brain_status"),
-    ).toBe(true);
+    expect(report.available.some((tool: any) => tool.name === "second_brain_status")).toBe(true);
     expect(report.withheld).toContainEqual({
       name: "second_brain_query",
       reason: "disabled by runtime capability window",
@@ -59,9 +55,7 @@ describe("MCP runtime capability window", () => {
       id: 1,
       method: "tools/list",
     })) as any;
-    const names = (response.result.tools as Array<{ name: string }>).map(
-      (tool) => tool.name,
-    );
+    const names = (response.result.tools as Array<{ name: string }>).map((tool) => tool.name);
 
     expect(names).toContain("brain_feedback");
     expect(names).not.toContain("second_brain_status");
@@ -71,15 +65,7 @@ describe("MCP runtime capability window", () => {
     const vault = mkdtempSync(join(tmpdir(), "o2b-runtime-capability-vault-"));
     try {
       const result = await runCli(
-        [
-          "mcp",
-          "--vault",
-          vault,
-          "--probe",
-          "--json",
-          "--disable-tool",
-          "second_brain_query",
-        ],
+        ["mcp", "--vault", vault, "--probe", "--json", "--disable-tool", "second_brain_query"],
         { env: { OPEN_SECOND_BRAIN_CONFIG: "" } },
       );
 
@@ -93,9 +79,7 @@ describe("MCP runtime capability window", () => {
         reason: "disabled by runtime capability window",
       });
       expect(
-        parsed.capabilities.available.some(
-          (tool: any) => tool.name === "second_brain_status",
-        ),
+        parsed.capabilities.available.some((tool: any) => tool.name === "second_brain_status"),
       ).toBe(true);
     } finally {
       rmSync(vault, { recursive: true, force: true });

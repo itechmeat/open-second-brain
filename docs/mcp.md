@@ -40,7 +40,7 @@ capability flags for a narrower per-process full server.
 | `brain_morning_brief`       | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.                 | —                                |
 | `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, and evidence-pack diagnostics.                              | `query`                          |
 | `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason.                              | `prompt`                         |
-| `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes alongside legacy flat items.                  | `max_tokens`                     |
+| `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`.     | `max_tokens`                     |
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                |
 | `get_active_schema_pack`    | Return the active runtime schema pack resolved from `Brain/_brain.yaml`.                                                                       | —                                |
 | `list_schema_packs`         | List schema packs available to the vault/runtime.                                                                                              | —                                |

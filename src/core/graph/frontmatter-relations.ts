@@ -30,10 +30,7 @@ export function normalizeRelationTarget(raw: string): string | null {
     prev = s;
     if (s.startsWith("[[") && s.endsWith("]]")) s = s.slice(2, -2).trim();
     else if (s.startsWith("[") && s.endsWith("]")) s = s.slice(1, -1).trim();
-    else if (
-      (s.startsWith('"') && s.endsWith('"')) ||
-      (s.startsWith("'") && s.endsWith("'"))
-    ) {
+    else if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
       s = s.slice(1, -1).trim();
     }
   }

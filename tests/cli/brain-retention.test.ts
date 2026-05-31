@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -46,12 +40,9 @@ afterEach(() => {
 
 describe("o2b brain retention", () => {
   test("prints JSON retention recommendations", async () => {
-    const result = await runCli(
-      ["brain", "retention", "--json", "--now", "2026-05-28T00:00:00Z"],
-      {
-        env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
-      },
-    );
+    const result = await runCli(["brain", "retention", "--json", "--now", "2026-05-28T00:00:00Z"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
     expect(result.returncode).toBe(0);
     const payload = JSON.parse(result.stdout) as { summary: { prune: number } };
     expect(payload.summary.prune).toBe(1);

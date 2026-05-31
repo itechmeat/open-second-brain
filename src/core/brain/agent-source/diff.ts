@@ -1,8 +1,5 @@
 import { queryAgentSources, type AgentSourceQueryOptions } from "./query.ts";
-import type {
-  AgentSourceContribution,
-  AgentSourceContributionKind,
-} from "./types.ts";
+import type { AgentSourceContribution, AgentSourceContributionKind } from "./types.ts";
 
 export type AgentSourceDiffMode = "browse" | "search" | "diff" | "map";
 
@@ -70,9 +67,7 @@ function buildPerAgent(
   contributions: ReadonlyArray<AgentSourceContribution>,
 ): AgentSourceDiffPerAgent[] {
   return agents.map((agent) => {
-    const agentContributions = contributions.filter((c) =>
-      c.agents.includes(agent),
-    );
+    const agentContributions = contributions.filter((c) => c.agents.includes(agent));
     const topics = new Set<string>();
     const kinds = new Set<AgentSourceContributionKind>();
     for (const contribution of agentContributions) {
@@ -91,10 +86,7 @@ function buildPerAgent(
 function buildTopicMap(
   contributions: ReadonlyArray<AgentSourceContribution>,
 ): AgentSourceDiffTopicMapEntry[] {
-  const byTopic = new Map<
-    string,
-    { agents: Set<string>; contributionCount: number }
-  >();
+  const byTopic = new Map<string, { agents: Set<string>; contributionCount: number }>();
   for (const contribution of contributions) {
     if (contribution.topic === undefined) continue;
     const current = byTopic.get(contribution.topic) ?? {
@@ -125,9 +117,7 @@ function buildSharedTopics(
   perAgent: ReadonlyArray<AgentSourceDiffPerAgent>,
 ): string[] {
   if (agents.length === 0) return [];
-  const topicSets = new Map(
-    perAgent.map((entry) => [entry.agent, new Set(entry.topics)]),
-  );
+  const topicSets = new Map(perAgent.map((entry) => [entry.agent, new Set(entry.topics)]));
   const first = topicSets.get(agents[0]!) ?? new Set<string>();
   const shared: string[] = [];
   for (const topic of first) {
@@ -142,17 +132,14 @@ function buildUniqueTopics(
   agents: ReadonlyArray<string>,
   perAgent: ReadonlyArray<AgentSourceDiffPerAgent>,
 ): Record<string, ReadonlyArray<string>> {
-  const topicSets = new Map(
-    perAgent.map((entry) => [entry.agent, new Set(entry.topics)]),
-  );
+  const topicSets = new Map(perAgent.map((entry) => [entry.agent, new Set(entry.topics)]));
   const out: Record<string, ReadonlyArray<string>> = {};
   for (const agent of agents) {
     const own = topicSets.get(agent) ?? new Set<string>();
     const unique: string[] = [];
     for (const topic of own) {
       const appearsElsewhere = agents.some(
-        (other) =>
-          other !== agent && (topicSets.get(other)?.has(topic) ?? false),
+        (other) => other !== agent && (topicSets.get(other)?.has(topic) ?? false),
       );
       if (!appearsElsewhere) unique.push(topic);
     }
@@ -167,10 +154,7 @@ function summarizeDiff(
   uniqueTopics: Readonly<Record<string, ReadonlyArray<string>>>,
 ): string {
   const sharedLabel = `${sharedTopics.length} shared ${sharedTopics.length === 1 ? "topic" : "topics"}`;
-  const uniqueCount = Object.values(uniqueTopics).reduce(
-    (sum, topics) => sum + topics.length,
-    0,
-  );
+  const uniqueCount = Object.values(uniqueTopics).reduce((sum, topics) => sum + topics.length, 0);
   const uniqueLabel = `${uniqueCount} unique ${uniqueCount === 1 ? "topic" : "topics"}`;
   return `${mode}: ${sharedLabel}; ${uniqueLabel}.`;
 }

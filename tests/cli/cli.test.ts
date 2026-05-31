@@ -36,7 +36,9 @@ describe("help", () => {
 describe("status", () => {
   test("reports missing config", async () => {
     const config = join(tmp, "missing.yaml");
-    const r = await runCli(["status"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+    const r = await runCli(["status"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("config_exists: false");
     expect(r.stdout).toContain(config);
@@ -129,7 +131,9 @@ describe("init", () => {
 describe("doctor", () => {
   test("errors when no vault anywhere", async () => {
     const cfg = join(tmp, "config.yaml");
-    const r = await runCli(["doctor"], { env: { OPEN_SECOND_BRAIN_CONFIG: cfg } });
+    const r = await runCli(["doctor"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: cfg },
+    });
     expect(r.returncode).not.toBe(0);
     expect(r.stderr.toLowerCase()).toContain("no vault configured");
   });
@@ -172,7 +176,9 @@ describe("doctor", () => {
 describe("index", () => {
   test("errors when no vault anywhere", async () => {
     const cfg = join(tmp, "config.yaml");
-    const r = await runCli(["index"], { env: { OPEN_SECOND_BRAIN_CONFIG: cfg } });
+    const r = await runCli(["index"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: cfg },
+    });
     expect(r.returncode).not.toBe(0);
     expect(r.stderr.toLowerCase()).toContain("no vault configured");
   });
@@ -202,6 +208,63 @@ describe("export-config", () => {
     const data = JSON.parse(readFileSync(out, "utf8"));
     expect(data.config.api_key).toBe("[REDACTED]");
     expect(data.config.vault_path).toBe("/tmp/vault");
+  });
+});
+
+describe("secrets", () => {
+  test("list reports references without resolved values", async () => {
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, 'github_token: "$secret:GITHUB_TOKEN"\nplain: visible\n');
+
+    const r = await runCli(["secrets", "list", "--config", config, "--json"], {
+      env: {
+        OPEN_SECOND_BRAIN_CONFIG: config,
+        GITHUB_TOKEN: "ghp_secret_value",
+      },
+    });
+
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).not.toContain("ghp_secret_value");
+    const data = JSON.parse(r.stdout);
+    expect(data.secrets).toEqual([
+      {
+        config_key: "github_token",
+        name: "GITHUB_TOKEN",
+        available: true,
+      },
+    ]);
+  });
+
+  test("status never prints the resolved value", async () => {
+    const config = join(tmp, "config.yaml");
+
+    const r = await runCli(["secrets", "status", "GITHUB_TOKEN", "--config", config, "--json"], {
+      env: {
+        OPEN_SECOND_BRAIN_CONFIG: config,
+        GITHUB_TOKEN: "ghp_secret_value",
+      },
+    });
+
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).not.toContain("ghp_secret_value");
+    expect(JSON.parse(r.stdout)).toEqual({
+      name: "GITHUB_TOKEN",
+      available: true,
+    });
+  });
+
+  test("status exits non-zero for missing secrets", async () => {
+    const config = join(tmp, "config.yaml");
+
+    const r = await runCli(["secrets", "status", "MISSING_SECRET", "--config", config, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+
+    expect(r.returncode).toBe(1);
+    expect(JSON.parse(r.stdout)).toEqual({
+      name: "MISSING_SECRET",
+      available: false,
+    });
   });
 });
 

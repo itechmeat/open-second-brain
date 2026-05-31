@@ -68,15 +68,10 @@ export const SECRET_KEYS: ReadonlyArray<string> = [
   "session_token",
 ];
 
-const KEY_PATTERN = SECRET_KEYS.map((k) => k.replace(/[-_]/g, "[-_]?")).join(
-  "|",
-);
+const KEY_PATTERN = SECRET_KEYS.map((k) => k.replace(/[-_]/g, "[-_]?")).join("|");
 
 // `key=value` (env-style): value runs to whitespace or end of line.
-const ENV_RE = new RegExp(
-  `\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`,
-  "gi",
-);
+const ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
 
 // `key: value` outside of JSON quoting. Excludes the `"key": ...` JSON
 // shape and the `Authorization: Bearer X` header (handled below).
@@ -156,8 +151,7 @@ export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {})
   if (!text) return text;
 
   const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
-  let out =
-    text.length > maxInput ? text.slice(0, maxInput) + TRUNCATION_MARKER : text;
+  let out = text.length > maxInput ? text.slice(0, maxInput) + TRUNCATION_MARKER : text;
 
   out = stripPrivateRegions(out);
 
@@ -176,24 +170,18 @@ export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {})
   });
 
   // Bearer headers BEFORE the generic colon rule.
-  out = out.replace(
-    BEARER_RE,
-    (_match, prefix: string) => `${prefix}${PLACEHOLDER}`,
-  );
+  out = out.replace(BEARER_RE, (_match, prefix: string) => `${prefix}${PLACEHOLDER}`);
 
-  out = out.replace(
-    COLON_VALUE_RE,
-    (match, key: string, sep: string, value: string) => {
-      if (value.includes(PLACEHOLDER)) return match;
-      if (value.startsWith('"') && value.endsWith('"')) {
-        return `${key}${sep}"${PLACEHOLDER}"`;
-      }
-      if (value.startsWith("'") && value.endsWith("'")) {
-        return `${key}${sep}'${PLACEHOLDER}'`;
-      }
-      return `${key}${sep}${PLACEHOLDER}`;
-    },
-  );
+  out = out.replace(COLON_VALUE_RE, (match, key: string, sep: string, value: string) => {
+    if (value.includes(PLACEHOLDER)) return match;
+    if (value.startsWith('"') && value.endsWith('"')) {
+      return `${key}${sep}"${PLACEHOLDER}"`;
+    }
+    if (value.startsWith("'") && value.endsWith("'")) {
+      return `${key}${sep}'${PLACEHOLDER}'`;
+    }
+    return `${key}${sep}${PLACEHOLDER}`;
+  });
 
   return out;
 }
@@ -246,10 +234,7 @@ export interface NormaliseTextFieldOptions {
  * Trim is left to the caller — the writer for a given field decides
  * whether leading / trailing whitespace is significant.
  */
-export function normaliseTextField(
-  value: unknown,
-  opts: NormaliseTextFieldOptions,
-): string {
+export function normaliseTextField(value: unknown, opts: NormaliseTextFieldOptions): string {
   if (typeof value !== "string") return "";
   let s = value.replace(FORBIDDEN_C0_RE, "");
   s = s.replace(UNICODE_LINE_SEP_RE, "\n");
@@ -272,10 +257,7 @@ export function normaliseTextField(
  * writers (`writeSignal`, `appendApplyEvidence`) to keep field
  * sanitisation consistent across surfaces.
  */
-export function sanitiseTextField(
-  value: unknown,
-  opts: NormaliseTextFieldOptions,
-): string {
+export function sanitiseTextField(value: unknown, opts: NormaliseTextFieldOptions): string {
   if (typeof value !== "string") return "";
   return normaliseTextField(redactRawOutput(value), opts);
 }

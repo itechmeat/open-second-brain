@@ -53,23 +53,15 @@ export function validateSchemaDeclarations(
 ): BrainSchemaDeclarations {
   if (declarations == null) return Object.freeze({});
 
-  const normalized: Partial<
-    Record<SchemaVocabularyCategory, ReadonlyArray<string>>
-  > = {};
+  const normalized: Partial<Record<SchemaVocabularyCategory, ReadonlyArray<string>>> = {};
   for (const category of SCHEMA_VOCAB_CATEGORIES) {
     const values = declarations[category];
     if (values === undefined) continue;
     if (!Array.isArray(values)) {
-      throw new SchemaVocabularyError(
-        `schema.${category}`,
-        values,
-        "must be an array of tokens",
-      );
+      throw new SchemaVocabularyError(`schema.${category}`, values, "must be an array of tokens");
     }
     normalized[category] = Object.freeze(
-      values.map((value, index) =>
-        validateSchemaToken(value, `schema.${category}[${index}]`),
-      ),
+      values.map((value, index) => validateSchemaToken(value, `schema.${category}[${index}]`)),
     );
   }
 
@@ -86,14 +78,8 @@ export function resolveSchemaVocabulary(
       DEFAULT_SCHEMA_VOCAB.preference_types,
       normalized.preference_types,
     ),
-    signal_types: mergeCategory(
-      DEFAULT_SCHEMA_VOCAB.signal_types,
-      normalized.signal_types,
-    ),
-    page_types: mergeCategory(
-      DEFAULT_SCHEMA_VOCAB.page_types,
-      normalized.page_types,
-    ),
+    signal_types: mergeCategory(DEFAULT_SCHEMA_VOCAB.signal_types, normalized.signal_types),
+    page_types: mergeCategory(DEFAULT_SCHEMA_VOCAB.page_types, normalized.page_types),
     log_event_kinds: mergeCategory(
       DEFAULT_SCHEMA_VOCAB.log_event_kinds,
       normalized.log_event_kinds,

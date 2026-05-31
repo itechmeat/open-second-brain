@@ -114,27 +114,11 @@ function scanSignals(
   const dirs = brainDirs(vault);
   for (const path of listMarkdown(dirs.inbox, "sig-")) {
     const signal = parseSignal(path);
-    recordSchemaType(
-      vault,
-      path,
-      "signal_types",
-      signal.schema_type,
-      vocabulary,
-      counts,
-      findings,
-    );
+    recordSchemaType(vault, path, "signal_types", signal.schema_type, vocabulary, counts, findings);
   }
   for (const path of listMarkdown(dirs.processed, "sig-")) {
     const signal = parseSignal(path);
-    recordSchemaType(
-      vault,
-      path,
-      "signal_types",
-      signal.schema_type,
-      vocabulary,
-      counts,
-      findings,
-    );
+    recordSchemaType(vault, path, "signal_types", signal.schema_type, vocabulary, counts, findings);
   }
 }
 
@@ -149,20 +133,11 @@ function scanPageTypes(
     if (rel === "Brain" || rel.startsWith("Brain/")) continue;
     const raw = page.metadata["schema_type"];
     if (typeof raw !== "string") continue;
-    recordSchemaType(
-      vault,
-      page.path,
-      "page_types",
-      raw,
-      vocabulary,
-      counts,
-      findings,
-    );
+    recordSchemaType(vault, page.path, "page_types", raw, vocabulary, counts, findings);
   }
 }
 
-const LOG_EVENT_HEADER_RE =
-  /^##\s+\d{2}:\d{2}:\d{2}\s+([\p{L}][\p{L}\p{N}_-]*)\s*$/u;
+const LOG_EVENT_HEADER_RE = /^##\s+\d{2}:\d{2}:\d{2}\s+([\p{L}][\p{L}\p{N}_-]*)\s*$/u;
 
 function scanLogEventKinds(
   vault: string,
@@ -180,15 +155,7 @@ function scanLogEventKinds(
     for (const line of text.split(/\r?\n/)) {
       const match = LOG_EVENT_HEADER_RE.exec(line.trim());
       if (!match) continue;
-      recordSchemaType(
-        vault,
-        path,
-        "log_event_kinds",
-        match[1]!,
-        vocabulary,
-        counts,
-        findings,
-      );
+      recordSchemaType(vault, path, "log_event_kinds", match[1]!, vocabulary, counts, findings);
     }
   }
 }
@@ -216,9 +183,7 @@ function recordSchemaType(
 }
 
 function addUnusedDeclarationFindings(
-  declarations: Partial<
-    Record<SchemaVocabularyCategory, ReadonlyArray<string>>
-  >,
+  declarations: Partial<Record<SchemaVocabularyCategory, ReadonlyArray<string>>>,
   usageMaps: Record<SchemaVocabularyCategory, Map<string, number>>,
   findings: SchemaReportFinding[],
 ): void {
@@ -244,10 +209,7 @@ function listMarkdown(dir: string, prefix: string): string[] {
     .map((name) => join(dir, name));
 }
 
-function emptyUsageMaps(): Record<
-  SchemaVocabularyCategory,
-  Map<string, number>
-> {
+function emptyUsageMaps(): Record<SchemaVocabularyCategory, Map<string, number>> {
   return {
     preference_types: new Map<string, number>(),
     signal_types: new Map<string, number>(),
@@ -256,9 +218,7 @@ function emptyUsageMaps(): Record<
   };
 }
 
-function freezeUsage(
-  counts: Map<string, number>,
-): ReadonlyArray<SchemaTokenUsage> {
+function freezeUsage(counts: Map<string, number>): ReadonlyArray<SchemaTokenUsage> {
   return Object.freeze(
     [...counts.entries()]
       .toSorted(([a], [b]) => a.localeCompare(b))
@@ -266,10 +226,7 @@ function freezeUsage(
   );
 }
 
-function compareFindings(
-  a: SchemaReportFinding,
-  b: SchemaReportFinding,
-): number {
+function compareFindings(a: SchemaReportFinding, b: SchemaReportFinding): number {
   return (
     a.kind.localeCompare(b.kind) ||
     a.category.localeCompare(b.category) ||

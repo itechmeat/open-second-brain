@@ -50,9 +50,7 @@ test("frontmatter relation fields become typed edges in the links table", async 
     const got = rels.map((r) => `${r.relation}:${r.target}`).toSorted();
     // The lightweight frontmatter parser mangles `[[b]]` -> `[b]`; the
     // target normaliser must recover the bare id either way.
-    expect(got).toEqual(
-      ["contradicts:b", "related:d", "related:e", "superseded_by:c"].toSorted(),
-    );
+    expect(got).toEqual(["contradicts:b", "related:d", "related:e", "superseded_by:c"].toSorted());
   } finally {
     await store.close();
   }

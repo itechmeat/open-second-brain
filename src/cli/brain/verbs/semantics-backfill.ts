@@ -2,9 +2,7 @@ import { defaultConfigPath } from "../../../core/config.ts";
 import { planSemanticsBackfill } from "../../../core/brain/semantics-backfill.ts";
 import { info, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
-export async function cmdBrainSemanticsBackfill(
-  argv: string[],
-): Promise<number> {
+export async function cmdBrainSemanticsBackfill(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
     json: { type: "boolean" },

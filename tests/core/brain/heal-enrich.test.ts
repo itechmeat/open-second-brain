@@ -34,9 +34,7 @@ describe("linkExactMentions", () => {
   const known = ["Acme Corp", "Widget"];
 
   test("wraps an exact whole-phrase match in a wikilink", () => {
-    expect(linkExactMentions("We use Acme Corp daily", known)).toBe(
-      "We use [[Acme Corp]] daily",
-    );
+    expect(linkExactMentions("We use Acme Corp daily", known)).toBe("We use [[Acme Corp]] daily");
   });
 
   test("is idempotent - never re-links an existing wikilink", () => {
@@ -57,16 +55,12 @@ describe("linkExactMentions", () => {
   });
 
   test("does not link a partial token (Acme Corporation)", () => {
-    expect(linkExactMentions("Acme Corporation rocks", known)).toBe(
-      "Acme Corporation rocks",
-    );
+    expect(linkExactMentions("Acme Corporation rocks", known)).toBe("Acme Corporation rocks");
   });
 
   test("prefers the longest phrase at a position", () => {
     // "Acme Corp" should win over a hypothetical "Acme" entry.
-    expect(linkExactMentions("Acme Corp ships", ["Acme", "Acme Corp"])).toBe(
-      "[[Acme Corp]] ships",
-    );
+    expect(linkExactMentions("Acme Corp ships", ["Acme", "Acme Corp"])).toBe("[[Acme Corp]] ships");
   });
 
   test("returns body unchanged with no known titles", () => {
@@ -80,36 +74,28 @@ describe("linkExactMentions", () => {
 
 describe("planHealEnrichment", () => {
   test("plans a title completion when frontmatter has no title", () => {
-    const plan = planHealEnrichment(
-      { frontmatter: {}, body: "# Derived Title\n\ncontent" },
-      [],
-    );
+    const plan = planHealEnrichment({ frontmatter: {}, body: "# Derived Title\n\ncontent" }, []);
     expect(plan.changed).toBe(true);
     expect(plan.title).toBe("Derived Title");
   });
 
   test("does not overwrite an existing title", () => {
-    const plan = planHealEnrichment(
-      { frontmatter: { title: "Kept" }, body: "# Other\n\nx" },
-      [],
-    );
+    const plan = planHealEnrichment({ frontmatter: { title: "Kept" }, body: "# Other\n\nx" }, []);
     expect(plan.title).toBeUndefined();
   });
 
   test("plans a body rewrite when an exact mention can be linked", () => {
-    const plan = planHealEnrichment(
-      { frontmatter: { title: "Note" }, body: "see Widget here" },
-      ["Widget"],
-    );
+    const plan = planHealEnrichment({ frontmatter: { title: "Note" }, body: "see Widget here" }, [
+      "Widget",
+    ]);
     expect(plan.changed).toBe(true);
     expect(plan.body).toBe("see [[Widget]] here");
   });
 
   test("is a no-op (changed=false) when nothing to do", () => {
-    const plan = planHealEnrichment(
-      { frontmatter: { title: "Note" }, body: "nothing to link" },
-      ["Widget"],
-    );
+    const plan = planHealEnrichment({ frontmatter: { title: "Note" }, body: "nothing to link" }, [
+      "Widget",
+    ]);
     expect(plan.changed).toBe(false);
     expect(plan.title).toBeUndefined();
     expect(plan.body).toBeUndefined();

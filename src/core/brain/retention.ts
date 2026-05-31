@@ -56,10 +56,7 @@ export function buildRetentionReview(
   });
 }
 
-function collectRetiredPreferences(
-  vault: string,
-  now: Date,
-): RetentionRecommendation[] {
+function collectRetiredPreferences(vault: string, now: Date): RetentionRecommendation[] {
   const retiredDir = brainDirs(vault).retired;
   if (!existsSync(retiredDir)) return [];
   const recommendations: RetentionRecommendation[] = [];
@@ -76,10 +73,7 @@ function collectRetiredPreferences(
   return recommendations;
 }
 
-function collectProcessedSignals(
-  vault: string,
-  now: Date,
-): RetentionRecommendation[] {
+function collectProcessedSignals(vault: string, now: Date): RetentionRecommendation[] {
   const processedDir = brainDirs(vault).processed;
   if (!existsSync(processedDir)) return [];
   const recommendations: RetentionRecommendation[] = [];
@@ -110,19 +104,16 @@ function recommendRetired(
 
   if (violated > applied && violated > 0) {
     action = "improve";
-    reason =
-      "retired rule has more violations than applications; review wording before reuse";
+    reason = "retired rule has more violations than applications; review wording before reuse";
   } else if (applied > 0 || retired.last_evidence_at !== null) {
     action = "keep";
     reason = "retired rule has an evidence trail worth preserving for audit";
   } else if (ageDays >= PARK_RETIRED_AFTER_DAYS) {
     action = "park";
-    reason =
-      "old retired rule has no evidence trail; preserve inactive unless needed";
+    reason = "old retired rule has no evidence trail; preserve inactive unless needed";
   } else {
     action = "improve";
-    reason =
-      "recent retired rule has no evidence trail; review whether it needs clarification";
+    reason = "recent retired rule has no evidence trail; review whether it needs clarification";
   }
 
   return Object.freeze({
@@ -151,12 +142,10 @@ function recommendProcessedSignal(
       "old processed one-off signal has no source pointers; safe candidate for manual pruning";
   } else if (hasSource) {
     action = "keep";
-    reason =
-      "processed signal carries source pointers that preserve audit context";
+    reason = "processed signal carries source pointers that preserve audit context";
   } else {
     action = "park";
-    reason =
-      "processed signal is recent; leave it inactive until the next retention pass";
+    reason = "processed signal is recent; leave it inactive until the next retention pass";
   }
 
   return Object.freeze({
@@ -168,9 +157,7 @@ function recommendProcessedSignal(
   });
 }
 
-function summarize(
-  recommendations: ReadonlyArray<RetentionRecommendation>,
-): RetentionSummary {
+function summarize(recommendations: ReadonlyArray<RetentionRecommendation>): RetentionSummary {
   const summary = { keep: 0, improve: 0, park: 0, prune: 0 };
   for (const recommendation of recommendations) {
     summary[recommendation.action] += 1;
@@ -181,8 +168,5 @@ function summarize(
 function daysSince(iso: string, now: Date): number {
   const timestamp = Date.parse(iso);
   if (!Number.isFinite(timestamp)) return 0;
-  return Math.max(
-    0,
-    Math.floor((now.getTime() - timestamp) / (24 * 60 * 60 * 1000)),
-  );
+  return Math.max(0, Math.floor((now.getTime() - timestamp) / (24 * 60 * 60 * 1000)));
 }

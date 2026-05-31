@@ -34,9 +34,7 @@ afterEach(() => {
 
 describe("brain_intent_review MCP tool", () => {
   test("is registered and returns review entries", async () => {
-    const tool = BRAIN_TOOLS.find(
-      (entry) => entry.name === "brain_intent_review",
-    );
+    const tool = BRAIN_TOOLS.find((entry) => entry.name === "brain_intent_review");
     expect(tool).toBeDefined();
     const out = (await tool!.handler(ctx as any, {
       now: "2026-05-28T00:00:00Z",
@@ -51,12 +49,8 @@ describe("brain_intent_review MCP tool", () => {
   });
 
   test("rejects malformed now", async () => {
-    const tool = BRAIN_TOOLS.find(
-      (entry) => entry.name === "brain_intent_review",
-    );
-    await expect(
-      tool!.handler(ctx as any, { now: "not-a-date" }),
-    ).rejects.toMatchObject({
+    const tool = BRAIN_TOOLS.find((entry) => entry.name === "brain_intent_review");
+    await expect(tool!.handler(ctx as any, { now: "not-a-date" })).rejects.toMatchObject({
       code: -32602,
     });
   });

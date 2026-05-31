@@ -51,17 +51,13 @@ describe("defaultConfigPath", () => {
 
   test("uses XDG_CONFIG_HOME when set without override", () => {
     process.env["XDG_CONFIG_HOME"] = tmp;
-    expect(defaultConfigPath()).toBe(
-      join(tmp, "open-second-brain", "config.yaml"),
-    );
+    expect(defaultConfigPath()).toBe(join(tmp, "open-second-brain", "config.yaml"));
   });
 });
 
 describe("parseSimpleYaml", () => {
   test("parses key: value lines", () => {
-    const data = parseSimpleYaml(
-      "instance_name: Test Brain\nruntime: hermes\n",
-    );
+    const data = parseSimpleYaml("instance_name: Test Brain\nruntime: hermes\n");
     expect(data["instance_name"]).toBe("Test Brain");
     expect(data["runtime"]).toBe("hermes");
   });
@@ -134,12 +130,17 @@ describe("setConfigValue", () => {
 
   test("rejects values with disallowed characters", () => {
     const p = join(tmp, "config.yaml");
-    expect(() => setConfigValue("vault", 'evil"value', p)).toThrow(
-      /disallowed character/,
-    );
-    expect(() => setConfigValue("vault", "with\nnewline", p)).toThrow(
-      /disallowed character/,
-    );
+    expect(() => setConfigValue("vault", 'evil"value', p)).toThrow(/disallowed character/);
+    expect(() => setConfigValue("vault", "with\nnewline", p)).toThrow(/disallowed character/);
+  });
+
+  test("persists secret references without resolving them", () => {
+    const p = join(tmp, "config.yaml");
+    setConfigValue("github_token", "$secret:GITHUB_TOKEN", p);
+
+    const r = discoverConfig(p);
+
+    expect(r.data["github_token"]).toBe("$secret:GITHUB_TOKEN");
   });
 });
 

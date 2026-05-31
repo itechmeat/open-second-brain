@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -76,9 +70,7 @@ describe("Brain artifact schema metadata", () => {
     );
 
     expect(readFileSync(res.path, "utf8")).toContain("schema_type: research");
-    expect(
-      parsePreference(res.path, { schemaVocabulary: vocab }).schema_type,
-    ).toBe("research");
+    expect(parsePreference(res.path, { schemaVocabulary: vocab }).schema_type).toBe("research");
   });
 
   test("preference parser rejects schema_type unknown to a provided vocabulary", () => {
@@ -110,9 +102,7 @@ describe("Brain artifact schema metadata", () => {
     );
 
     const vocab = resolveSchemaVocabulary({ preference_types: ["research"] });
-    expect(() => parsePreference(path, { schemaVocabulary: vocab })).toThrow(
-      "schema_type",
-    );
+    expect(() => parsePreference(path, { schemaVocabulary: vocab })).toThrow("schema_type");
   });
 
   test("moveToRetired preserves schema_type metadata", () => {
@@ -124,20 +114,13 @@ describe("Brain artifact schema metadata", () => {
       } as Partial<WritePreferenceInput>),
     );
 
-    const retired = moveToRetired(
-      vault,
-      res.path,
-      BRAIN_RETIRED_REASON.userRejected,
-      {
-        now: new Date("2026-06-01T00:00:00Z"),
-        retired_by: "[[Brain/log/2026-06-01]]",
-        user_rejected_reason: "test",
-      },
-    );
+    const retired = moveToRetired(vault, res.path, BRAIN_RETIRED_REASON.userRejected, {
+      now: new Date("2026-06-01T00:00:00Z"),
+      retired_by: "[[Brain/log/2026-06-01]]",
+      user_rejected_reason: "test",
+    });
 
-    expect(
-      parseRetired(retired.path, { schemaVocabulary: vocab }).schema_type,
-    ).toBe("research");
+    expect(parseRetired(retired.path, { schemaVocabulary: vocab }).schema_type).toBe("research");
   });
 
   test("signal writer and parser round-trip schema_type", () => {
@@ -153,11 +136,7 @@ describe("Brain artifact schema metadata", () => {
       schema_type: "Observation",
     });
 
-    expect(readFileSync(res.path, "utf8")).toContain(
-      "schema_type: observation",
-    );
-    expect(parseSignal(res.path, { schemaVocabulary: vocab }).schema_type).toBe(
-      "observation",
-    );
+    expect(readFileSync(res.path, "utf8")).toContain("schema_type: observation");
+    expect(parseSignal(res.path, { schemaVocabulary: vocab }).schema_type).toBe("observation");
   });
 });

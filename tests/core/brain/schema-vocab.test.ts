@@ -39,25 +39,13 @@ describe("Brain schema vocabulary", () => {
       log_event_kinds: ["milestone", "note"],
     });
 
-    expect(vocab.preference_types).toEqual([
-      "preference",
-      "research",
-      "decision",
-    ]);
+    expect(vocab.preference_types).toEqual(["preference", "research", "decision"]);
     expect(vocab.signal_types).toEqual(["feedback", "observation"]);
     expect(vocab.page_types).toEqual(["note", "paper", "researcher"]);
     expect(vocab.log_event_kinds).toEqual(
-      expect.arrayContaining([
-        "dream",
-        "feedback",
-        "note",
-        "import-session",
-        "milestone",
-      ]),
+      expect.arrayContaining(["dream", "feedback", "note", "import-session", "milestone"]),
     );
-    expect(
-      vocab.log_event_kinds.filter((kind) => kind === "note"),
-    ).toHaveLength(1);
+    expect(vocab.log_event_kinds.filter((kind) => kind === "note")).toHaveLength(1);
     expect(Object.isFrozen(vocab)).toBe(true);
     expect(Object.isFrozen(vocab.preference_types)).toBe(true);
   });
@@ -65,15 +53,9 @@ describe("Brain schema vocabulary", () => {
   test("isKnownSchemaToken checks a resolved vocabulary category", () => {
     const vocab = resolveSchemaVocabulary({ preference_types: ["research"] });
 
-    expect(isKnownSchemaToken(vocab, "preference_types", "preference")).toBe(
-      true,
-    );
-    expect(isKnownSchemaToken(vocab, "preference_types", "Research")).toBe(
-      true,
-    );
-    expect(isKnownSchemaToken(vocab, "preference_types", "unknown")).toBe(
-      false,
-    );
+    expect(isKnownSchemaToken(vocab, "preference_types", "preference")).toBe(true);
+    expect(isKnownSchemaToken(vocab, "preference_types", "Research")).toBe(true);
+    expect(isKnownSchemaToken(vocab, "preference_types", "unknown")).toBe(false);
     expect(isKnownSchemaToken(vocab, "signal_types", "research")).toBe(false);
   });
 
@@ -91,14 +73,12 @@ describe("Brain schema vocabulary", () => {
       throw new Error("expected schema validation to fail");
     } catch (err) {
       expect(err).toBeInstanceOf(SchemaVocabularyError);
-      expect((err as SchemaVocabularyError).field).toBe(
-        "schema.preference_types[1]",
-      );
+      expect((err as SchemaVocabularyError).field).toBe("schema.preference_types[1]");
     }
 
-    expect(() =>
-      validateSchemaDeclarations({ signal_types: ["two words"] }),
-    ).toThrow(/schema.signal_types\[0\]/);
+    expect(() => validateSchemaDeclarations({ signal_types: ["two words"] })).toThrow(
+      /schema.signal_types\[0\]/,
+    );
     expect(() => validateSchemaDeclarations({ page_types: [""] })).toThrow(
       /schema.page_types\[0\]/,
     );

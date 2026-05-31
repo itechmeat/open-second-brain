@@ -21,6 +21,11 @@ import { join } from "node:path";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { applyCharBudget } from "./recall-budget.ts";
+import {
+  contextSafetyReport,
+  guardBrainContextSnippet,
+  type ContextSafetyReport,
+} from "./safety/context-guard.ts";
 import { BRAIN_PREFERENCE_STATUS } from "./types.ts";
 
 /** Sentinel item id for the active-head entry inside the budget pass. */
@@ -32,6 +37,8 @@ export interface PreCompressItem {
   readonly principle: string;
   /** True when `principle` was truncated by `maxCharsPerMemory`. */
   readonly trimmed: boolean;
+  /** Present when the surfaced principle was filtered or explicitly trusted. */
+  readonly safety?: ContextSafetyReport;
 }
 
 export interface PreCompressPack {
@@ -39,6 +46,7 @@ export interface PreCompressPack {
   readonly text: string;
   readonly items: ReadonlyArray<PreCompressItem>;
   readonly activeHeadIncluded: boolean;
+  readonly activeHeadSafety?: ContextSafetyReport;
   readonly totalChars: number;
 }
 
@@ -106,9 +114,24 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
   const top = ranked.slice(0, Math.max(0, opts.topK));
 
   const activeHead = readActiveHead(vault);
+  const safetyById = new Map<string, ContextSafetyReport>();
   const entries: Array<{ item: string; text: string }> = [];
-  if (activeHead !== null) entries.push({ item: ACTIVE_ID, text: activeHead });
-  for (const p of top) entries.push({ item: p.id, text: p.principle });
+  if (activeHead !== null) {
+    const guarded = guardBrainContextSnippet(activeHead, {
+      source: { id: ACTIVE_ID, path: brainActivePath(vault) },
+    });
+    const safety = contextSafetyReport(guarded);
+    if (safety) safetyById.set(ACTIVE_ID, safety);
+    entries.push({ item: ACTIVE_ID, text: guarded.safeText });
+  }
+  for (const p of top) {
+    const guarded = guardBrainContextSnippet(p.principle, {
+      source: { id: p.id },
+    });
+    const safety = contextSafetyReport(guarded);
+    if (safety) safetyById.set(p.id, safety);
+    entries.push({ item: p.id, text: guarded.safeText });
+  }
 
   const budgeted = applyCharBudget(entries, {
     maxCharsPerEntry: opts.maxCharsPerMemory,
@@ -122,7 +145,13 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
       activeText = kept.text;
       continue;
     }
-    items.push({ id: kept.item, principle: kept.text, trimmed: kept.trimmed });
+    const safety = safetyById.get(kept.item);
+    items.push({
+      id: kept.item,
+      principle: kept.text,
+      trimmed: kept.trimmed,
+      ...(safety ? { safety } : {}),
+    });
   }
 
   const sections: string[] = [];
@@ -135,6 +164,7 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
     text: sections.join("\n\n"),
     items: Object.freeze(items),
     activeHeadIncluded: activeText !== null,
+    ...(safetyById.get(ACTIVE_ID) ? { activeHeadSafety: safetyById.get(ACTIVE_ID) } : {}),
     totalChars: budgeted.totalChars,
   });
 }

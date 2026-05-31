@@ -54,13 +54,7 @@ export function evaluateToolCapabilities(
       });
       continue;
     }
-    const deniedReason = deniedByWindow(
-      tool.name,
-      allowed,
-      disabled,
-      maxTools,
-      countedAvailable,
-    );
+    const deniedReason = deniedByWindow(tool.name, allowed, disabled, maxTools, countedAvailable);
     if (deniedReason) {
       withheld.push({ name: tool.name, reason: deniedReason });
       continue;
@@ -83,9 +77,7 @@ export function evaluateToolCapabilities(
   };
 }
 
-function nonEmptySet(
-  values: ReadonlyArray<string> | undefined,
-): ReadonlySet<string> | null {
+function nonEmptySet(values: ReadonlyArray<string> | undefined): ReadonlySet<string> | null {
   if (!values || values.length === 0) return null;
   return new Set(values);
 }
@@ -98,8 +90,7 @@ function deniedByWindow(
   countedAvailable: number,
 ): string | null {
   if (disabled.has(name)) return "disabled by runtime capability window";
-  if (allowed !== null && !allowed.has(name))
-    return "not allowed by runtime capability window";
+  if (allowed !== null && !allowed.has(name)) return "not allowed by runtime capability window";
   if (maxTools !== undefined && countedAvailable >= maxTools) {
     return "outside runtime capability max tool window";
   }

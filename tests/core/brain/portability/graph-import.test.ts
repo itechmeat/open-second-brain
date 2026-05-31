@@ -91,7 +91,10 @@ describe("importVaultGraph", () => {
   });
 
   test("rejects a node path that escapes the vault", () => {
-    const evil = { version: "1", nodes: [{ id: "x", path: "../escape.md", title: "x", links: [], relations: {} }] };
+    const evil = {
+      version: "1",
+      nodes: [{ id: "x", path: "../escape.md", title: "x", links: [], relations: {} }],
+    };
     const res = importVaultGraph(vault, evil, { mode: "overwrite" });
     expect(res.created).toHaveLength(0);
     expect(res.rejected).toContain("../escape.md");

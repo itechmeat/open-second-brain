@@ -28,11 +28,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 
-import {
-  artifactPath,
-  artifactRunDir,
-  brainArtifactsDir,
-} from "../core/brain/paths.ts";
+import { artifactPath, artifactRunDir, brainArtifactsDir } from "../core/brain/paths.ts";
 import { atomicWriteFileSync } from "../core/fs-atomic.ts";
 import { redactRawOutput } from "../core/redactor.ts";
 

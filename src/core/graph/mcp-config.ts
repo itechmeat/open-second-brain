@@ -104,7 +104,9 @@ function parseServer(name: string, def: unknown, source: string): McpServerEntry
   if (typeof def === "object" && def !== null) {
     const d = def as Record<string, unknown>;
     const command = typeof d["command"] === "string" ? (d["command"] as string) : null;
-    const args = Array.isArray(d["args"]) ? d["args"].filter((a): a is string => typeof a === "string") : [];
+    const args = Array.isArray(d["args"])
+      ? d["args"].filter((a): a is string => typeof a === "string")
+      : [];
     if (command) packages.push(...packageFromArgs(command, args));
     const envObj = d["env"];
     if (typeof envObj === "object" && envObj !== null) {

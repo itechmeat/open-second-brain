@@ -21,14 +21,10 @@ export const vaultAgentSourceProvider: AgentSourceProvider = Object.freeze({
   },
 });
 
-function collectVaultContributions(
-  vault: string,
-): ReadonlyArray<AgentSourceContribution> {
+function collectVaultContributions(vault: string): ReadonlyArray<AgentSourceContribution> {
   const dirs = brainDirs(vault);
   const signals = collectSignals(dirs.inbox, dirs.processed);
-  const signalAgentById = new Map(
-    signals.map((signal) => [signal.id, signal.agent]),
-  );
+  const signalAgentById = new Map(signals.map((signal) => [signal.id, signal.agent]));
 
   const contributions: AgentSourceContribution[] = [];
   for (const signal of signals) {
@@ -59,11 +55,7 @@ function collectSignals(...dirs: string[]): BrainSignal[] {
       a.name.localeCompare(b.name),
     );
     for (const entry of entries) {
-      if (
-        !entry.isFile() ||
-        !entry.name.startsWith("sig-") ||
-        !entry.name.endsWith(".md")
-      ) {
+      if (!entry.isFile() || !entry.name.startsWith("sig-") || !entry.name.endsWith(".md")) {
         continue;
       }
       try {
@@ -96,11 +88,7 @@ function collectPreferenceDir(
     a.name.localeCompare(b.name),
   );
   for (const entry of entries) {
-    if (
-      !entry.isFile() ||
-      !entry.name.startsWith(prefix) ||
-      !entry.name.endsWith(".md")
-    ) {
+    if (!entry.isFile() || !entry.name.startsWith(prefix) || !entry.name.endsWith(".md")) {
       continue;
     }
     const path = join(dir, entry.name);
@@ -123,19 +111,13 @@ function signalContribution(signal: BrainSignal): AgentSourceContribution {
     topic: signal.topic,
     ...(signal.scope !== undefined ? { scope: signal.scope } : {}),
     title: signal.topic,
-    text: [signal.topic, signal.signal, signal.principle, signal.raw ?? ""]
-      .join("\n")
-      .trim(),
+    text: [signal.topic, signal.signal, signal.principle, signal.raw ?? ""].join("\n").trim(),
     data: {
       signal: signal.signal,
       principle: signal.principle,
       ...(signal.source !== undefined ? { source: [...signal.source] } : {}),
-      ...(signal.source_type !== undefined
-        ? { source_type: signal.source_type }
-        : {}),
-      ...(signal.session_ref !== undefined
-        ? { session_ref: signal.session_ref }
-        : {}),
+      ...(signal.source_type !== undefined ? { source_type: signal.source_type } : {}),
+      ...(signal.session_ref !== undefined ? { session_ref: signal.session_ref } : {}),
     },
   });
 }
@@ -156,16 +138,11 @@ function preferenceContribution(
     kind: "preference",
     id: preference.id,
     agents: Object.freeze([...agents].toSorted()),
-    timestamp:
-      preference.kind === "brain-retired"
-        ? preference.retired_at
-        : preference.created_at,
+    timestamp: preference.kind === "brain-retired" ? preference.retired_at : preference.created_at,
     topic: preference.topic,
     ...(preference.scope !== undefined ? { scope: preference.scope } : {}),
     title: preference.topic,
-    text: [preference.topic, preference.status, preference.principle].join(
-      "\n",
-    ),
+    text: [preference.topic, preference.status, preference.principle].join("\n"),
     data: {
       status: preference.status,
       principle: preference.principle,
@@ -199,9 +176,7 @@ function logContribution(entry: BrainLogEntry): AgentSourceContribution | null {
 
 function logTopic(entry: BrainLogEntry): string | undefined {
   const topic = entry.body["topic"];
-  return typeof topic === "string" && topic.trim().length > 0
-    ? topic
-    : undefined;
+  return typeof topic === "string" && topic.trim().length > 0 ? topic : undefined;
 }
 
 function logText(entry: BrainLogEntry): string {

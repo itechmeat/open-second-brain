@@ -18,13 +18,9 @@ export async function cmdBrainAgentQuery(argv: string[]): Promise<number> {
   });
   const config = defaultConfigPath();
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const { value: kind, error: kindError } = parseKind(
-    flags["kind"] as string | undefined,
-  );
+  const { value: kind, error: kindError } = parseKind(flags["kind"] as string | undefined);
   if (kindError) return fail(kindError);
-  const { value: limit, error: limitError } = parseLimit(
-    flags["limit"] as string | undefined,
-  );
+  const { value: limit, error: limitError } = parseLimit(flags["limit"] as string | undefined);
   if (limitError) return fail(limitError);
 
   const result = queryAgentSources(vault, {
@@ -48,13 +44,9 @@ function renderAgentQueryText(result: AgentSourceQueryResult): void {
   process.stdout.write(`summary: ${result.summary}\n`);
   process.stdout.write(`matched: ${result.total_matched}\n`);
   process.stdout.write(`returned: ${result.returned}\n`);
-  process.stdout.write(
-    `agents: ${result.filters.agents.join(", ") || "(none)"}\n`,
-  );
+  process.stdout.write(`agents: ${result.filters.agents.join(", ") || "(none)"}\n`);
   if (result.unknown_agents.length > 0) {
-    process.stdout.write(
-      `unknown agents: ${result.unknown_agents.join(", ")}\n`,
-    );
+    process.stdout.write(`unknown agents: ${result.unknown_agents.join(", ")}\n`);
   }
   for (const contribution of result.contributions) {
     const topic = contribution.topic ? ` ${contribution.topic}` : "";
@@ -69,8 +61,7 @@ function parseKind(raw: string | undefined): {
   readonly error?: string;
 } {
   if (raw === undefined) return {};
-  if (raw === "signal" || raw === "preference" || raw === "log")
-    return { value: raw };
+  if (raw === "signal" || raw === "preference" || raw === "log") return { value: raw };
   return { error: "--kind must be one of signal|preference|log" };
 }
 
