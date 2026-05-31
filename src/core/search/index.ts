@@ -39,6 +39,11 @@ export type {
   VaultIgnoreRule,
 } from "./types.ts";
 export { SearchError, SEARCH_ERROR_CODES } from "./types.ts";
+export {
+  parseStructuredRecallQueryDocument,
+  structuredRecallQueryText,
+  type StructuredRecallQueryDocument,
+} from "./structured-query.ts";
 
 export { resolveIndexPath } from "./paths.ts";
 export {

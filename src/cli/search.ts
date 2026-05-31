@@ -22,6 +22,8 @@ import {
   resolveSearchConfig,
   search,
   SearchError,
+  parseStructuredRecallQueryDocument,
+  structuredRecallQueryText,
 } from "../core/search/index.ts";
 import type {
   IndexCheckReport,
@@ -120,17 +122,29 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     "auto-refresh": { type: "boolean" },
     property: { type: "string-array" },
     visibility: { type: "string-array" },
+    "query-doc": { type: "string" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
   });
 
-  if (positional.length === 0) {
+  const rawQueryDocument =
+    typeof flags["query-doc"] === "string" ? (flags["query-doc"] as string) : undefined;
+  const structuredQuery =
+    rawQueryDocument !== undefined
+      ? parseStructuredRecallQueryDocument(rawQueryDocument)
+      : undefined;
+
+  if (positional.length === 0 && structuredQuery === undefined) {
     throw new CliError("query string is required");
   }
   if (flags["semantic"] === true && flags["keyword-only"] === true) {
     throw new CliError("--semantic and --keyword-only are mutually exclusive");
   }
-  const query = positional.join(" ");
+  const query =
+    positional.length > 0 ? positional.join(" ") : structuredRecallQueryText(structuredQuery!);
+  if (query.trim().length === 0) {
+    throw new CliError("query string is required when --query-doc has no searchable lanes");
+  }
   const limitNum = Number(flags["limit"] ?? "10");
   if (!Number.isInteger(limitNum) || limitNum < 1 || limitNum > 100) {
     throw new CliError("--limit must be an integer in 1..100");
@@ -164,6 +178,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     pathPrefix: typeof flags["path"] === "string" ? (flags["path"] as string) : undefined,
     ...(properties !== undefined ? { properties } : {}),
     ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
+    ...(structuredQuery !== undefined ? { structuredQuery } : {}),
   });
 
   if (flags["json"]) {

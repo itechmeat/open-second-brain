@@ -5,6 +5,7 @@
  */
 
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
+import type { StructuredRecallQueryDocument } from "./structured-query.ts";
 
 export type { VaultIgnoreRule };
 
@@ -189,6 +190,8 @@ export interface SearchOptions {
    * untagged pages only). See src/core/graph/visibility.ts.
    */
   readonly visibility?: ReadonlyArray<string>;
+  /** Optional parsed structured recall query document. Plain-string search ignores this. */
+  readonly structuredQuery?: StructuredRecallQueryDocument;
 }
 
 export interface SearchOutcome {

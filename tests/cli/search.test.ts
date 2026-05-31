@@ -90,6 +90,25 @@ test("search query --json returns structured results", async () => {
   expect(obj.results[0].path).toBe("notes/foo.md");
 });
 
+test("search query --query-doc accepts structured recall documents", async () => {
+  writeVaultFile("notes/final.md", "# Final\n\nrelease notes mention recall diagnostics.");
+  writeVaultFile("notes/draft.md", "# Draft\n\ndraft release notes mention recall diagnostics.");
+  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+
+  const out = await runCli(
+    ["search", "--query-doc", 'lex: "release notes" -draft', "--json", "--limit", "10"],
+    { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+  );
+
+  expect(out.returncode).toBe(0);
+  const obj = JSON.parse(out.stdout);
+  expect(obj.results.map((r: { path: string }) => r.path)).toContain("notes/final.md");
+  expect(obj.results.map((r: { path: string }) => r.path)).not.toContain("notes/draft.md");
+  expect(obj.results[0].reasons.some((reason: string) => reason.includes("lane:lex/fts5"))).toBe(
+    true,
+  );
+});
+
 test("search query on missing index fails with exit 1", async () => {
   const out = await runCli(["search", "nothing-here"], {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },

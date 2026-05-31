@@ -130,6 +130,27 @@ test("brain_search happy path returns paths and respects 600-char content cap", 
   expect((results[0] as Record<string, unknown>)["keywordScore"]).toBeUndefined();
 });
 
+test("brain_search accepts structured query_document", async () => {
+  writeMd("notes/final.md", "# Final\n\nrelease notes mention recall diagnostics.");
+  writeMd("notes/draft.md", "# Draft\n\ndraft release notes mention recall diagnostics.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const resp = await call(server, "brain_search", {
+    query: "release notes",
+    query_document: 'lex: "release notes" -draft',
+    limit: 10,
+  });
+  const body = extractToolResult(resp);
+  const results = body["results"] as Array<{ path: string; reasons: string[] }>;
+
+  expect(results.map((result) => result.path)).toContain("notes/final.md");
+  expect(results.map((result) => result.path)).not.toContain("notes/draft.md");
+  expect(results[0]?.reasons.some((reason) => reason.includes("lane:lex/fts5"))).toBe(true);
+});
+
 test("brain_search rejects missing query with INVALID_PARAMS", async () => {
   const server = makeServer();
   await initialize(server);

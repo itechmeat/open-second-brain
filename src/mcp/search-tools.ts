@@ -11,6 +11,7 @@
  */
 
 import { indexStatus, resolveSearchConfig, search, SearchError } from "../core/search/index.ts";
+import { parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
@@ -27,6 +28,7 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
     query: { type: "string", minLength: 1, maxLength: 2000 },
+    query_document: { type: "string", minLength: 1, maxLength: 4000 },
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
@@ -208,6 +210,11 @@ async function toolBrainSearch(
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
+  const rawQueryDocument = coerceStringOptional(args, "query_document", 4000);
+  const structuredQuery =
+    rawQueryDocument !== undefined
+      ? parseStructuredRecallQueryDocument(rawQueryDocument)
+      : undefined;
   const properties = parsePropertiesArgument(args["properties"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
 
@@ -227,6 +234,7 @@ async function toolBrainSearch(
         pathPrefix,
         ...(properties !== undefined ? { properties } : {}),
         ...(visibility !== undefined ? { visibility } : {}),
+        ...(structuredQuery !== undefined ? { structuredQuery } : {}),
       }),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,

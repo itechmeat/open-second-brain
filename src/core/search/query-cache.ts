@@ -38,6 +38,18 @@ function canonicalProperties(
     .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 }
 
+function canonicalStructuredQuery(opts: SearchOptions): unknown {
+  const structured = opts.structuredQuery;
+  if (!structured) return null;
+  return {
+    intent: structured.intent,
+    lexInclude: [...structured.lex.include],
+    lexExclude: [...structured.lex.exclude],
+    vec: [...structured.vec],
+    hyde: [...structured.hyde],
+  };
+}
+
 /**
  * Build a stable cache key from the result-affecting request. Every
  * option that can change the result set is folded in, in a canonical
@@ -61,6 +73,7 @@ export function buildCacheKey(
     maxHops: opts.maxHops ?? null,
     properties: canonicalProperties(opts.properties),
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
+    structuredQuery: canonicalStructuredQuery(opts),
     plan: planHash,
     cfg: configFingerprint,
   });

@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
+import { parseStructuredRecallQueryDocument } from "../../../src/core/search/structured-query.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
@@ -157,6 +158,33 @@ test("search warns when keyword retrieval rebuilds a desynced FTS table", async 
 
   expect(out.results.map((r) => r.path)).toContain("Notes/foo.md");
   expect(out.warnings.some((w) => w.includes("rebuilt FTS"))).toBe(true);
+});
+
+test("search accepts structured lexical lanes with safe exclusions", async () => {
+  writeMd(vault, "Notes/final.md", "# Final\n\nrelease notes mention recall diagnostics.");
+  writeMd(vault, "Notes/draft.md", "# Draft\n\ndraft release notes mention recall diagnostics.");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  const structuredQuery = parseStructuredRecallQueryDocument('lex: "release notes" -draft');
+
+  const out = await search(cfg, { query: "release notes", structuredQuery, limit: 10 });
+
+  expect(out.results.map((r) => r.path)).toContain("Notes/final.md");
+  expect(out.results.map((r) => r.path)).not.toContain("Notes/draft.md");
+  expect(out.results[0]?.reasons.some((reason) => reason.includes("lane:lex/fts5"))).toBe(true);
+});
+
+test("search degrades semantic structured lanes when semantic search is disabled", async () => {
+  const cfg = await seedKeyword();
+  await indexVault(cfg);
+  const structuredQuery = parseStructuredRecallQueryDocument("vec: fuzzy fox memory");
+
+  const out = await search(cfg, { query: "fox", structuredQuery, limit: 5 });
+
+  expect(out.results.map((r) => r.path)).toContain("Notes/foo.md");
+  expect(
+    out.warnings.some((warning) => warning.includes("semantic structured lanes skipped")),
+  ).toBe(true);
 });
 
 test("search returns empty (no error) when no results match", async () => {

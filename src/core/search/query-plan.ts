@@ -98,9 +98,10 @@ function classify(query: string, normalized: string): QueryIntent {
 export function buildQueryPlan(
   query: string,
   expandedTerms: ReadonlyArray<string> = [],
+  intentOverride?: QueryIntent | null,
 ): QueryPlan {
   const normalized = normalize(query);
-  const intent = classify(query, normalized);
+  const intent = intentOverride ?? classify(query, normalized);
   const terms = Object.freeze([...expandedTerms]);
   const planHash = fnv1a(`${normalized}|${intent}|${terms.join(",")}`);
   return Object.freeze({
