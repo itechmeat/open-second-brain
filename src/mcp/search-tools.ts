@@ -353,7 +353,6 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       "Classify whether an automatic recall/surfacing attempt should run. Diagnostics only; does not search.",
     inputSchema: RECALL_GATE_INPUT_SCHEMA,
     outputSchema: RECALL_GATE_OUTPUT_SCHEMA,
-    previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainRecallGate,
   },
   {
