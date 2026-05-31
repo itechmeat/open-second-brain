@@ -11,7 +11,7 @@
  */
 
 import { indexStatus, resolveSearchConfig, search, SearchError } from "../core/search/index.ts";
-import { parseStructuredRecallQueryDocument } from "../core/search/index.ts";
+import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
@@ -29,6 +29,8 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
   properties: {
     query: { type: "string", minLength: 1, maxLength: 2000 },
     query_document: { type: "string", minLength: 1, maxLength: 4000 },
+    focus_query: { type: "string", minLength: 1, maxLength: 1000 },
+    focus_path_prefix: { type: "string", minLength: 1, maxLength: 256 },
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
@@ -215,6 +217,12 @@ async function toolBrainSearch(
     rawQueryDocument !== undefined
       ? parseStructuredRecallQueryDocument(rawQueryDocument)
       : undefined;
+  const focusQuery = coerceStringOptional(args, "focus_query", 1000);
+  const focusPathPrefix = coerceStringOptional(args, "focus_path_prefix", 256);
+  const sessionFocus =
+    focusQuery !== undefined || focusPathPrefix !== undefined
+      ? normalizeSessionFocus({ query: focusQuery ?? null, pathPrefix: focusPathPrefix ?? null })
+      : undefined;
   const properties = parsePropertiesArgument(args["properties"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
 
@@ -235,6 +243,7 @@ async function toolBrainSearch(
         ...(properties !== undefined ? { properties } : {}),
         ...(visibility !== undefined ? { visibility } : {}),
         ...(structuredQuery !== undefined ? { structuredQuery } : {}),
+        ...(sessionFocus !== undefined ? { sessionFocus } : {}),
       }),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,

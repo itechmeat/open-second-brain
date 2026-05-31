@@ -5,6 +5,7 @@
  */
 
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
+import type { SearchSessionFocus } from "./session-focus.ts";
 import type { StructuredRecallQueryDocument } from "./structured-query.ts";
 
 export type { VaultIgnoreRule };
@@ -192,6 +193,8 @@ export interface SearchOptions {
   readonly visibility?: ReadonlyArray<string>;
   /** Optional parsed structured recall query document. Plain-string search ignores this. */
   readonly structuredQuery?: StructuredRecallQueryDocument;
+  /** Optional per-query or persisted session focus steering. Undefined means load persisted focus. */
+  readonly sessionFocus?: SearchSessionFocus | null;
 }
 
 export interface SearchOutcome {

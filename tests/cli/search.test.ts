@@ -109,6 +109,35 @@ test("search query --query-doc accepts structured recall documents", async () =>
   );
 });
 
+test("search focus set/status/clear steers only the focused query window", async () => {
+  writeVaultFile("archive/other.md", "# Other\n\nshared recall topic.");
+  writeVaultFile("sessions/focus.md", "# Focus\n\nshared recall topic.");
+  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+
+  const set = await runCli(
+    ["search", "focus", "set", "--path", "sessions/", "--ttl-minutes", "60", "--json"],
+    { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+  );
+  expect(set.returncode).toBe(0);
+  expect(JSON.parse(set.stdout).active).toBe(true);
+
+  const focused = await runCli(["search", "shared", "--json", "--limit", "2"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(focused.returncode).toBe(0);
+  const focusedJson = JSON.parse(focused.stdout);
+  expect(focusedJson.results[0].path).toBe("sessions/focus.md");
+  expect(
+    focusedJson.results[0].reasons.some((reason: string) => reason.startsWith("session_focus:")),
+  ).toBe(true);
+
+  const clear = await runCli(["search", "focus", "clear", "--json"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(clear.returncode).toBe(0);
+  expect(JSON.parse(clear.stdout).active).toBe(false);
+});
+
 test("search query on missing index fails with exit 1", async () => {
   const out = await runCli(["search", "nothing-here"], {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },

@@ -9,11 +9,16 @@ import { test, expect } from "bun:test";
 import { rankResults } from "../../../src/core/search/ranker.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "../../../src/core/search/store.ts";
 
-function hyd(chunkId: number, docId: number, mtime: number): HydratedChunk {
+function hyd(
+  chunkId: number,
+  docId: number,
+  mtime: number,
+  path = `doc${docId}.md`,
+): HydratedChunk {
   return Object.freeze({
     chunkId,
     documentId: docId,
-    path: `doc${docId}.md`,
+    path,
     title: `Doc ${docId}`,
     content: `chunk ${chunkId}`,
     startLine: 1,
@@ -127,4 +132,32 @@ test("reasons array is frozen", () => {
     { keywordWeight: 0.6, semanticWeight: 0.4, limit: 10, nowMs: NOW },
   );
   expect(Object.isFrozen(ranked[0]!.reasons)).toBe(true);
+});
+
+test("session focus can re-rank a focused path and explains the contribution", () => {
+  const ranked = rankResults(
+    {
+      keyword: [
+        { chunkId: 1, documentId: 10, bm25: -5 },
+        { chunkId: 2, documentId: 11, bm25: -5 },
+      ] as KeywordHit[],
+      semantic: [] as SemanticHit[],
+      hydrated: new Map([
+        [1, hyd(1, 10, OLD, "archive/other.md")],
+        [2, hyd(2, 11, OLD, "sessions/focus.md")],
+      ]),
+      inboundLinkSources: new Map(),
+      tagsByDoc: new Map(),
+    },
+    {
+      keywordWeight: 0.6,
+      semanticWeight: 0.4,
+      limit: 10,
+      nowMs: NOW,
+      sessionFocus: { query: null, pathPrefix: "sessions/", expiresAt: NOW + 60_000 },
+    },
+  );
+
+  expect(ranked[0]?.path).toBe("sessions/focus.md");
+  expect(ranked[0]?.reasons.some((reason) => reason.startsWith("session_focus:"))).toBe(true);
 });

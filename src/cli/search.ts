@@ -22,8 +22,12 @@ import {
   resolveSearchConfig,
   search,
   SearchError,
+  clearSessionFocus,
+  normalizeSessionFocus,
   parseStructuredRecallQueryDocument,
+  readSessionFocus,
   structuredRecallQueryText,
+  writeSessionFocus,
 } from "../core/search/index.ts";
 import type {
   IndexCheckReport,
@@ -31,12 +35,13 @@ import type {
   IndexStats,
   IndexStatusSnapshot,
   ResolvedSearchConfig,
+  SearchSessionFocus,
   SearchOutcome,
 } from "../core/search/index.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { CronTemplateError, renderCronTemplate } from "./search-cron-template.ts";
 
-const KNOWN_VERBS = new Set(["query", "index", "reindex", "status", "check"]);
+const KNOWN_VERBS = new Set(["query", "index", "reindex", "status", "check", "focus"]);
 
 export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   // First positional is verb iff it matches a known verb. Otherwise the
@@ -60,6 +65,8 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
         return await cmdSearchStatus(rest);
       case "check":
         return await cmdSearchCheck(rest);
+      case "focus":
+        return await cmdSearchFocus(rest);
       default:
         process.stderr.write(`error: unknown search verb: ${verb}\n`);
         return 2;
@@ -104,6 +111,70 @@ function resolveConfig(
     ...(concurrencyFlag !== undefined ? { semantic: { concurrency: concurrencyFlag } } : {}),
   };
   return resolveSearchConfig({ vault, configPath, overrides });
+}
+
+// ─── focus ───────────────────────────────────────────────────────────────────
+
+async function cmdSearchFocus(argv: ReadonlyArray<string>): Promise<number> {
+  const action = argv[0];
+  if (!action || !["set", "status", "clear"].includes(action)) {
+    throw new CliError("usage: o2b search focus <set|status|clear> [--query Q] [--path P]");
+  }
+  const { flags } = parseFlags(argv.slice(1), {
+    vault: { type: "string" },
+    config: { type: "string" },
+    db: { type: "string" },
+    query: { type: "string" },
+    path: { type: "string" },
+    "ttl-minutes": { type: "string", default: "120" },
+    json: { type: "boolean" },
+  });
+  const cfg = resolveConfig(flags);
+
+  if (action === "set") {
+    const ttlMinutes = Number(flags["ttl-minutes"] ?? "120");
+    const focus = normalizeSessionFocus(
+      {
+        query: typeof flags["query"] === "string" ? (flags["query"] as string) : null,
+        pathPrefix: typeof flags["path"] === "string" ? (flags["path"] as string) : null,
+        ttlMinutes,
+      },
+      Date.now(),
+    );
+    writeSessionFocus(cfg, focus);
+    writeFocusResponse(focus, flags["json"] === true);
+    return 0;
+  }
+
+  if (action === "clear") {
+    clearSessionFocus(cfg);
+    writeFocusResponse(null, flags["json"] === true);
+    return 0;
+  }
+
+  writeFocusResponse(readSessionFocus(cfg), flags["json"] === true);
+  return 0;
+}
+
+function focusJson(focus: SearchSessionFocus | null): Record<string, unknown> {
+  return { active: focus !== null, focus };
+}
+
+function writeFocusResponse(focus: SearchSessionFocus | null, json: boolean): void {
+  if (json) {
+    process.stdout.write(JSON.stringify(focusJson(focus)) + "\n");
+    return;
+  }
+  if (!focus) {
+    process.stdout.write("search focus: inactive\n");
+    return;
+  }
+  const parts = [
+    focus.query !== null ? `query=${JSON.stringify(focus.query)}` : null,
+    focus.pathPrefix !== null ? `path=${JSON.stringify(focus.pathPrefix)}` : null,
+    focus.expiresAt !== null ? `expires_at=${new Date(focus.expiresAt).toISOString()}` : null,
+  ].filter((part): part is string => part !== null);
+  process.stdout.write(`search focus: active ${parts.join(" ")}\n`);
 }
 
 // ─── query ────────────────────────────────────────────────────────────────────

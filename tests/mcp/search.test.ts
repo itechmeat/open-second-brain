@@ -151,6 +151,26 @@ test("brain_search accepts structured query_document", async () => {
   expect(results[0]?.reasons.some((reason) => reason.includes("lane:lex/fts5"))).toBe(true);
 });
 
+test("brain_search accepts explicit session focus input", async () => {
+  writeMd("archive/other.md", "# Other\n\nshared recall topic.");
+  writeMd("sessions/focus.md", "# Focus\n\nshared recall topic.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const resp = await call(server, "brain_search", {
+    query: "shared",
+    focus_path_prefix: "sessions/",
+    limit: 2,
+  });
+  const body = extractToolResult(resp);
+  const results = body["results"] as Array<{ path: string; reasons: string[] }>;
+
+  expect(results[0]?.path).toBe("sessions/focus.md");
+  expect(results[0]?.reasons.some((reason) => reason.startsWith("session_focus:"))).toBe(true);
+});
+
 test("brain_search rejects missing query with INVALID_PARAMS", async () => {
   const server = makeServer();
   await initialize(server);

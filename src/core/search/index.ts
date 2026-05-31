@@ -44,6 +44,14 @@ export {
   structuredRecallQueryText,
   type StructuredRecallQueryDocument,
 } from "./structured-query.ts";
+export {
+  clearSessionFocus,
+  normalizeSessionFocus,
+  readSessionFocus,
+  sessionFocusIsActive,
+  writeSessionFocus,
+  type SearchSessionFocus,
+} from "./session-focus.ts";
 
 export { resolveIndexPath } from "./paths.ts";
 export {

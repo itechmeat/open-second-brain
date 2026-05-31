@@ -50,6 +50,13 @@ function canonicalStructuredQuery(opts: SearchOptions): unknown {
   };
 }
 
+function canonicalSessionFocus(opts: SearchOptions): unknown {
+  const focus = opts.sessionFocus;
+  if (focus === undefined) return "persisted";
+  if (focus === null) return null;
+  return { query: focus.query, pathPrefix: focus.pathPrefix, expiresAt: focus.expiresAt };
+}
+
 /**
  * Build a stable cache key from the result-affecting request. Every
  * option that can change the result set is folded in, in a canonical
@@ -74,6 +81,7 @@ export function buildCacheKey(
     properties: canonicalProperties(opts.properties),
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
     structuredQuery: canonicalStructuredQuery(opts),
+    sessionFocus: canonicalSessionFocus(opts),
     plan: planHash,
     cfg: configFingerprint,
   });

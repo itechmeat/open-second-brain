@@ -22,6 +22,7 @@ import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "./query-cache
 import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from "./synonyms.ts";
 import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
+import { readSessionFocus } from "./session-focus.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -152,6 +153,8 @@ export async function search(
   const policy = resolveSemanticPolicy(config, opts);
   const warnings: string[] = [];
   const structured = opts.structuredQuery;
+  const sessionFocus =
+    opts.sessionFocus === undefined ? readSessionFocus(config, Date.now()) : opts.sessionFocus;
   const keywordQuery = structuredKeywordQuery(query, structured);
   const semanticLaneQuery = structuredSemanticQuery(structured);
 
@@ -181,7 +184,13 @@ export async function search(
       // semantic decision) so equivalent calls share a cache entry.
       try {
         generation = store.corpusGeneration();
-        const keyOpts = { ...opts, limit, semantic: policy.wantSemantic, keywordOnly: false };
+        const keyOpts = {
+          ...opts,
+          limit,
+          semantic: policy.wantSemantic,
+          keywordOnly: false,
+          sessionFocus,
+        };
         cacheKey = buildCacheKey(keyOpts, basePlan.planHash, configFingerprint(config));
         const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
         if (hit) return hit;
@@ -336,6 +345,7 @@ export async function search(
             amplitude: config.recall.recencyAmplitude,
           },
           ...(weightProfile !== undefined ? { weightProfile } : {}),
+          ...(sessionFocus !== undefined ? { sessionFocus } : {}),
         },
       );
       const capHit = ranked.length >= rankCap;
