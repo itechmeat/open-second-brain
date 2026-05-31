@@ -229,7 +229,8 @@ describe("tool listing", () => {
         "payment_request_approval",
         "payment_request_status",
         "payment_request_consume",
-        // Search (added in v0.10.0).
+        // Search (added in v0.10.0; recall gate added in v0.27.0).
+        "brain_recall_gate",
         "brain_search",
         // Schema admin + watchdog recovery probes.
         "get_active_schema_pack",
@@ -480,7 +481,8 @@ describe("stdio loop", () => {
     // + brain_sources + brain_switch_vault (v0.22.0) = 46.
     // + second_brain_capabilities (v0.23.0) = 47.
     // + 9 schema admin tools + brain_watchdog = 57.
-    expect(list.result.tools.length).toBe(57);
+    // + brain_recall_gate (v0.27.0) = 58.
+    expect(list.result.tools.length).toBe(58);
   });
 
   test("returns parse error for invalid JSON", async () => {

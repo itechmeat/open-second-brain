@@ -35,11 +35,26 @@ export const NEUTRAL_PROFILE: WeightProfile = Object.freeze({
 const PROFILES: Record<QueryIntent, WeightProfile> = Object.freeze({
   neutral: NEUTRAL_PROFILE,
   // Literal lookup: trust the keyword/FTS layer, discount fuzzy semantic.
-  exact: Object.freeze({ keywordMul: 1.3, semanticMul: 0.7, entityMul: 1, recencyMul: 1 }),
+  exact: Object.freeze({
+    keywordMul: 1.3,
+    semanticMul: 0.7,
+    entityMul: 1,
+    recencyMul: 1,
+  }),
   // Proper-noun lookup: amplify the entity layer, nudge keyword.
-  entity: Object.freeze({ keywordMul: 1.15, semanticMul: 0.9, entityMul: 1.4, recencyMul: 1 }),
+  entity: Object.freeze({
+    keywordMul: 1.15,
+    semanticMul: 0.9,
+    entityMul: 1.4,
+    recencyMul: 1,
+  }),
   // Open-ended exploration: lean on semantic similarity and recency.
-  broad: Object.freeze({ keywordMul: 0.9, semanticMul: 1.2, entityMul: 1, recencyMul: 1.1 }),
+  broad: Object.freeze({
+    keywordMul: 0.9,
+    semanticMul: 1.2,
+    entityMul: 1,
+    recencyMul: 1.1,
+  }),
 });
 
 const QUOTED_PHRASE_RE = /"[^"\n]{2,}"/u;
@@ -98,9 +113,10 @@ function classify(query: string, normalized: string): QueryIntent {
 export function buildQueryPlan(
   query: string,
   expandedTerms: ReadonlyArray<string> = [],
+  intentOverride?: QueryIntent | null,
 ): QueryPlan {
   const normalized = normalize(query);
-  const intent = classify(query, normalized);
+  const intent = intentOverride ?? classify(query, normalized);
   const terms = Object.freeze([...expandedTerms]);
   const planHash = fnv1a(`${normalized}|${intent}|${terms.join(",")}`);
   return Object.freeze({

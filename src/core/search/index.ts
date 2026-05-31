@@ -39,6 +39,21 @@ export type {
   VaultIgnoreRule,
 } from "./types.ts";
 export { SearchError, SEARCH_ERROR_CODES } from "./types.ts";
+export {
+  parseStructuredRecallQueryDocument,
+  structuredRecallQueryText,
+  type StructuredRecallQueryDocument,
+} from "./structured-query.ts";
+export {
+  clearSessionFocus,
+  normalizeSessionFocus,
+  readSessionFocus,
+  sessionFocusIsActive,
+  writeSessionFocus,
+  type SearchSessionFocus,
+} from "./session-focus.ts";
+export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-gate.ts";
+export { buildEvidencePack, type EvidencePack } from "./evidence-pack.ts";
 
 export { resolveIndexPath } from "./paths.ts";
 export {
@@ -145,11 +160,19 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
     );
   }
   if (config.semantic.dimension !== null) {
-    validateIntegerRange(config.semantic.dimension, "embedding_dimension", { min: 1 });
+    validateIntegerRange(config.semantic.dimension, "embedding_dimension", {
+      min: 1,
+    });
   }
-  validateIntegerRange(config.semantic.timeoutMs, "embedding_timeout_ms", { min: 1 });
-  validateIntegerRange(config.semantic.concurrency, "embedding_concurrency", { min: 1 });
-  validateIntegerRange(config.semantic.batchSize, "embedding_batch_size", { min: 1 });
+  validateIntegerRange(config.semantic.timeoutMs, "embedding_timeout_ms", {
+    min: 1,
+  });
+  validateIntegerRange(config.semantic.concurrency, "embedding_concurrency", {
+    min: 1,
+  });
+  validateIntegerRange(config.semantic.batchSize, "embedding_batch_size", {
+    min: 1,
+  });
 }
 
 function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {

@@ -2,26 +2,35 @@
  * FTS5 query construction and keyword retrieval.
  *
  * The user-typed query is treated as a bag of phrase tokens joined by
- * implicit AND. Each token is wrapped in double quotes so FTS5's
- * operator words (`AND`, `OR`, `NOT`, `NEAR`) and metacharacters
- * (`*`, `(`, `)`, `:`, `^`) lose their special meaning. Internal `"`
- * is escaped as `""` per the FTS5 grammar.
+ * implicit AND. Natural-language connector words that are also uppercase
+ * FTS5 operators (`AND`, `OR`, `NOT`, `NEAR`) are dropped when other
+ * meaningful tokens remain. Each remaining token is wrapped in double
+ * quotes so FTS5 metacharacters (`*`, `(`, `)`, `:`, `^`) lose their
+ * special meaning. Internal `"` is escaped as `""` per the FTS5 grammar.
  *
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §7.
  */
 
 import type { KeywordHit, Store } from "./store.ts";
 import { containsCjk, tokenizeCjkSearchText } from "./cjk-tokenizer.ts";
+import { keywordTopKWithFtsSafety, type SafeKeywordOutcome } from "./fts-safety.ts";
+
+const FTS5_OPERATOR_TOKENS = new Set(["AND", "OR", "NOT", "NEAR"]);
 
 function quoteToken(t: string): string {
   return `"${t.replace(/"/g, '""')}"`;
+}
+
+function dropStandaloneOperators(tokens: ReadonlyArray<string>): ReadonlyArray<string> {
+  const withoutOperators = tokens.filter((t) => !FTS5_OPERATOR_TOKENS.has(t));
+  return withoutOperators.length > 0 ? withoutOperators : tokens;
 }
 
 export function buildFtsMatch(rawQuery: string): string {
   const tokens = containsCjk(rawQuery) ? tokenizeCjkSearchText(rawQuery) : rawQuery.split(/\s+/);
   const cleaned = tokens.map((t) => t.trim()).filter((t) => t.length > 0);
   if (cleaned.length === 0) return "";
-  return cleaned.map(quoteToken).join(" ");
+  return dropStandaloneOperators(cleaned).map(quoteToken).join(" ");
 }
 
 /**
@@ -56,11 +65,19 @@ export interface RunFtsOptions {
   readonly expandedTerms?: ReadonlyArray<string>;
 }
 
-export function runFtsQuery(store: Store, rawQuery: string, opts: RunFtsOptions): KeywordHit[] {
+export function runFtsQueryDetailed(
+  store: Store,
+  rawQuery: string,
+  opts: RunFtsOptions,
+): SafeKeywordOutcome {
   const match =
     opts.expandedTerms && opts.expandedTerms.length > 0
       ? buildExpandedFtsMatch(rawQuery, opts.expandedTerms)
       : buildFtsMatch(rawQuery);
-  if (match === "") return [];
-  return store.keywordTopK(match, opts);
+  if (match === "") return Object.freeze({ hits: [], warnings: Object.freeze([]) });
+  return keywordTopKWithFtsSafety(store, match, opts);
+}
+
+export function runFtsQuery(store: Store, rawQuery: string, opts: RunFtsOptions): KeywordHit[] {
+  return runFtsQueryDetailed(store, rawQuery, opts).hits;
 }

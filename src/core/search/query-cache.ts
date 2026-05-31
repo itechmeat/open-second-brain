@@ -38,6 +38,29 @@ function canonicalProperties(
     .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 }
 
+function canonicalStructuredQuery(opts: SearchOptions): unknown {
+  const structured = opts.structuredQuery;
+  if (!structured) return null;
+  return {
+    intent: structured.intent,
+    lexInclude: [...structured.lex.include],
+    lexExclude: [...structured.lex.exclude],
+    vec: [...structured.vec],
+    hyde: [...structured.hyde],
+  };
+}
+
+function canonicalSessionFocus(opts: SearchOptions): unknown {
+  const focus = opts.sessionFocus;
+  if (focus === undefined) return "persisted";
+  if (focus === null) return null;
+  return {
+    query: focus.query,
+    pathPrefix: focus.pathPrefix,
+    expiresAt: focus.expiresAt,
+  };
+}
+
 /**
  * Build a stable cache key from the result-affecting request. Every
  * option that can change the result set is folded in, in a canonical
@@ -59,8 +82,11 @@ export function buildCacheKey(
     semanticWeight: opts.semanticWeight ?? null,
     mmrLambda: opts.mmrLambda ?? null,
     maxHops: opts.maxHops ?? null,
+    evidencePack: opts.evidencePack === true,
     properties: canonicalProperties(opts.properties),
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
+    structuredQuery: canonicalStructuredQuery(opts),
+    sessionFocus: canonicalSessionFocus(opts),
     plan: planHash,
     cfg: configFingerprint,
   });

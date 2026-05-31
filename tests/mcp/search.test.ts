@@ -130,6 +130,92 @@ test("brain_search happy path returns paths and respects 600-char content cap", 
   expect((results[0] as Record<string, unknown>)["keywordScore"]).toBeUndefined();
 });
 
+test("brain_search accepts structured query_document", async () => {
+  writeMd("notes/final.md", "# Final\n\nrelease notes mention recall diagnostics.");
+  writeMd("notes/draft.md", "# Draft\n\ndraft release notes mention recall diagnostics.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const resp = await call(server, "brain_search", {
+    query: "release notes",
+    query_document: 'lex: "release notes" -draft',
+    limit: 10,
+  });
+  const body = extractToolResult(resp);
+  const results = body["results"] as Array<{ path: string; reasons: string[] }>;
+
+  expect(results.map((result) => result.path)).toContain("notes/final.md");
+  expect(results.map((result) => result.path)).not.toContain("notes/draft.md");
+  expect(results[0]?.reasons.some((reason) => reason.includes("lane:lex/fts5"))).toBe(true);
+});
+
+test("brain_search accepts explicit session focus input", async () => {
+  writeMd("archive/other.md", "# Other\n\nshared recall topic.");
+  writeMd("sessions/focus.md", "# Focus\n\nshared recall topic.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const resp = await call(server, "brain_search", {
+    query: "shared",
+    focus_path_prefix: "sessions/",
+    limit: 2,
+  });
+  const body = extractToolResult(resp);
+  const results = body["results"] as Array<{ path: string; reasons: string[] }>;
+
+  expect(results[0]?.path).toBe("sessions/focus.md");
+  expect(results[0]?.reasons.some((reason) => reason.startsWith("session_focus:"))).toBe(true);
+});
+
+test("brain_recall_gate reports skip reasons without affecting explicit brain_search", async () => {
+  writeMd("notes/shell.md", "# Shell\n\ngit status troubleshooting note.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const gate = await call(server, "brain_recall_gate", {
+    prompt: "git status",
+  });
+  expect(extractToolResult(gate)).toEqual({
+    retrieve: false,
+    reason: "shell_command",
+  });
+
+  const explicit = await call(server, "brain_search", {
+    query: "git status",
+    limit: 1,
+  });
+  const body = extractToolResult(explicit);
+  const results = body["results"] as Array<{ path: string }>;
+  expect(results[0]?.path).toBe("notes/shell.md");
+});
+
+test("brain_search evidence_pack returns missing terms and why_retrieved", async () => {
+  writeMd("notes/foo.md", "# Foo\n\nalpha beta current support.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const resp = await call(server, "brain_search", {
+    query: "alpha gamma",
+    query_document: "lex: alpha",
+    evidence_pack: true,
+    limit: 5,
+  });
+  const body = extractToolResult(resp);
+  const evidencePack = body["evidence_pack"] as { missing_terms: string[] };
+  const results = body["results"] as Array<{ why_retrieved: string[] }>;
+
+  expect(evidencePack.missing_terms).toContain("gamma");
+  expect(Array.isArray(results[0]?.why_retrieved)).toBe(true);
+});
+
 test("brain_search rejects missing query with INVALID_PARAMS", async () => {
   const server = makeServer();
   await initialize(server);
@@ -145,7 +231,10 @@ test("brain_search rejects path_prefix that escapes vault", async () => {
 
   const server = makeServer();
   await initialize(server);
-  const resp = (await call(server, "brain_search", { query: "A", path_prefix: "../etc/" })) as any;
+  const resp = (await call(server, "brain_search", {
+    query: "A",
+    path_prefix: "../etc/",
+  })) as any;
   expect(resp?.error?.code).toBe(-32602);
   expect(resp.error.message).toContain("path_prefix");
 });
@@ -165,7 +254,10 @@ test("brain_search rejects limit > 50", async () => {
 
   const server = makeServer();
   await initialize(server);
-  const resp = (await call(server, "brain_search", { query: "A", limit: 100 })) as any;
+  const resp = (await call(server, "brain_search", {
+    query: "A",
+    limit: 100,
+  })) as any;
   expect(resp?.error?.code).toBe(-32602);
 });
 

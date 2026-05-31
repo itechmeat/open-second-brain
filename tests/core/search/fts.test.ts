@@ -1,4 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
 
 import { buildFtsMatch, runFtsQuery } from "../../../src/core/search/fts.ts";
 import { Store } from "../../../src/core/search/store.ts";
@@ -20,7 +21,10 @@ afterEach(() => {
 });
 
 async function fixture() {
-  const store = await Store.open(makeConfig({ vault, dbPath }), { mode: "write", loadVec: false });
+  const store = await Store.open(makeConfig({ vault, dbPath }), {
+    mode: "write",
+    loadVec: false,
+  });
   const d1 = store.upsertDocument({
     path: "Notes/alpha.md",
     title: "Alpha",
@@ -66,6 +70,15 @@ async function fixture() {
   return { store, d1, d2 };
 }
 
+function clearFtsRows(): void {
+  const db = new Database(dbPath);
+  try {
+    db.run("DELETE FROM chunk_fts");
+  } finally {
+    db.close();
+  }
+}
+
 test("buildFtsMatch quotes tokens for safety", () => {
   expect(buildFtsMatch("hello")).toBe('"hello"');
   expect(buildFtsMatch("two words")).toBe('"two" "words"');
@@ -82,7 +95,11 @@ test("buildFtsMatch ignores empty input", () => {
 
 test("buildFtsMatch defangs FTS5 operator words and metacharacters", () => {
   // Without quoting, "AND" would be a boolean operator and "*" a prefix glob.
-  expect(buildFtsMatch("AND foo*")).toBe('"AND" "foo*"');
+  // With other meaningful tokens present, standalone uppercase operators are
+  // dropped so natural-language connector words do not over-constrain recall.
+  expect(buildFtsMatch("AND foo*")).toBe('"foo*"');
+  expect(buildFtsMatch("fox AND OR")).toBe('"fox"');
+  expect(buildFtsMatch("AND OR")).toBe('"AND" "OR"');
 });
 
 test("runFtsQuery returns BM25-ordered hits across documents", async () => {
@@ -124,9 +141,25 @@ test("runFtsQuery survives FTS5-operator-like queries safely", async () => {
   // must not throw and must not return spurious matches.
   expect(() => runFtsQuery(store, "AND", { limit: 5 })).not.toThrow();
   expect(runFtsQuery(store, "AND", { limit: 5 })).toEqual([]);
-  // A query mixing operator-like tokens with a real token returns matches
-  // when all tokens are present in the document.
-  const hits = runFtsQuery(store, "fox", { limit: 5 });
+  // A query mixing operator-like tokens with a real token drops the operator
+  // token and still returns natural-language matches.
+  const hits = runFtsQuery(store, "fox AND", { limit: 5 });
   expect(hits.length).toBeGreaterThan(0);
   await store.close();
+});
+
+test("runFtsQuery rebuilds an empty desynced FTS table once", async () => {
+  const { store, d2 } = await fixture();
+  await store.close();
+  clearFtsRows();
+
+  const readStore = await Store.open(makeConfig({ vault, dbPath }), {
+    mode: "read",
+    loadVec: false,
+  });
+  const hits = runFtsQuery(readStore, "fox", { limit: 10 });
+
+  expect(hits.length).toBeGreaterThanOrEqual(2);
+  expect(hits[0]?.documentId).toBe(d2);
+  await readStore.close();
 });

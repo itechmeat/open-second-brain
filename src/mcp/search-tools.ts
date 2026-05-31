@@ -10,7 +10,14 @@
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §9.
  */
 
-import { indexStatus, resolveSearchConfig, search, SearchError } from "../core/search/index.ts";
+import {
+  evaluateSurfacingGate,
+  indexStatus,
+  resolveSearchConfig,
+  search,
+  SearchError,
+} from "../core/search/index.ts";
+import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
@@ -27,6 +34,10 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
     query: { type: "string", minLength: 1, maxLength: 2000 },
+    query_document: { type: "string", minLength: 1, maxLength: 4000 },
+    focus_query: { type: "string", minLength: 1, maxLength: 1000 },
+    focus_path_prefix: { type: "string", minLength: 1, maxLength: 256 },
+    evidence_pack: { type: "boolean" },
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
@@ -78,6 +89,7 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
           endLine: { type: "integer" },
           searchType: { type: "string" },
           reasons: { type: "array", items: { type: "string" } },
+          why_retrieved: { type: "array", items: { type: "string" } },
           relations: {
             type: "array",
             items: {
@@ -95,6 +107,27 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
     warnings: { type: "array", items: { type: "string" } },
     total: { type: "integer" },
     recall_hint: { type: "string" },
+    evidence_pack: { type: "object" },
+  },
+};
+
+const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    prompt: { type: "string", minLength: 1, maxLength: 4000 },
+    previous_prompt: { type: "string", maxLength: 4000 },
+    explicit: { type: "boolean" },
+  },
+  required: ["prompt"],
+  additionalProperties: false,
+};
+
+const RECALL_GATE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  required: ["retrieve", "reason"],
+  properties: {
+    retrieve: { type: "boolean" },
+    reason: { type: "string" },
   },
 };
 
@@ -208,6 +241,21 @@ async function toolBrainSearch(
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
+  const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
+  const rawQueryDocument = coerceStringOptional(args, "query_document", 4000);
+  const structuredQuery =
+    rawQueryDocument !== undefined
+      ? parseStructuredRecallQueryDocument(rawQueryDocument)
+      : undefined;
+  const focusQuery = coerceStringOptional(args, "focus_query", 1000);
+  const focusPathPrefix = coerceStringOptional(args, "focus_path_prefix", 256);
+  const sessionFocus =
+    focusQuery !== undefined || focusPathPrefix !== undefined
+      ? normalizeSessionFocus({
+          query: focusQuery ?? null,
+          pathPrefix: focusPathPrefix ?? null,
+        })
+      : undefined;
   const properties = parsePropertiesArgument(args["properties"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
 
@@ -227,6 +275,9 @@ async function toolBrainSearch(
         pathPrefix,
         ...(properties !== undefined ? { properties } : {}),
         ...(visibility !== undefined ? { visibility } : {}),
+        ...(structuredQuery !== undefined ? { structuredQuery } : {}),
+        ...(sessionFocus !== undefined ? { sessionFocus } : {}),
+        ...(evidencePack ? { evidencePack: true } : {}),
       }),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,
@@ -248,15 +299,71 @@ async function toolBrainSearch(
       endLine: r.endLine,
       searchType: r.searchType,
       reasons: r.reasons,
+      ...(outcome.evidencePack ? { why_retrieved: r.reasons } : {}),
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
     })),
     warnings: outcome.warnings,
     total: outcome.total,
+    ...(outcome.evidencePack ? { evidence_pack: mcpEvidencePack(outcome.evidencePack) } : {}),
     ...(recallHint !== null ? { recall_hint: recallHint } : {}),
   };
 }
 
+function mcpEvidencePack(
+  pack: NonNullable<SearchOutcome["evidencePack"]>,
+): Record<string, unknown> {
+  return {
+    significant_terms: pack.significantTerms,
+    matched_terms: pack.matchedTerms,
+    missing_terms: pack.missingTerms,
+    support_coverage: pack.supportCoverage,
+    records: pack.records.map((record) => ({
+      path: record.path,
+      document_id: record.documentId,
+      chunk_id: record.chunkId,
+      matched_terms: record.matchedTerms,
+      missing_terms: record.missingTerms,
+      support_coverage: record.supportCoverage,
+      terminal_state: record.terminalState,
+      why_retrieved: record.whyRetrieved,
+      dropped_candidate_reasons: record.droppedCandidateReasons,
+    })),
+    dropped_candidates: pack.droppedCandidates,
+    abstention: pack.abstention,
+  };
+}
+
+async function toolBrainRecallGate(
+  _ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const prompt = args["prompt"];
+  if (typeof prompt !== "string" || prompt.trim() === "") {
+    throw new MCPError(INVALID_PARAMS, "missing required argument: prompt");
+  }
+  if (prompt.length > 4000) {
+    throw new MCPError(INVALID_PARAMS, "argument 'prompt' exceeds 4000 characters");
+  }
+  const previousPrompt = coerceStringOptional(args, "previous_prompt", 4000);
+  const explicit = coerceBoolOptional(args, "explicit") ?? false;
+  return {
+    ...evaluateSurfacingGate({
+      prompt,
+      previousPrompt: previousPrompt ?? null,
+      explicit,
+    }),
+  };
+}
+
 export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: "brain_recall_gate",
+    description:
+      "Classify whether an automatic recall/surfacing attempt should run. Diagnostics only; does not search.",
+    inputSchema: RECALL_GATE_INPUT_SCHEMA,
+    outputSchema: RECALL_GATE_OUTPUT_SCHEMA,
+    handler: toolBrainRecallGate,
+  },
   {
     name: "brain_search",
     description:

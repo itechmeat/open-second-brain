@@ -326,12 +326,13 @@ export const VERB_HELP: Record<string, string> = {
     "threshold (default 200000; override via --warn-threshold or the\n" +
     "BRAIN_TOKEN_WARN_THRESHOLD env var).\n",
   "context-pack":
-    "usage: o2b brain context-pack --max-tokens <n> [--query <q>] [--vault <path>] [--json]\n" +
+    "usage: o2b brain context-pack --max-tokens <n> [--query <q>] [--lanes] [--vault <path>] [--json]\n" +
     "Return the highest-tier, most recent vault slice that fits under\n" +
     "<n> tokens. Items ordered core → supporting → peripheral, then\n" +
     "newest first. Stops adding pages when the next page would exceed\n" +
     "the budget. --query <q> filters by NFKC+casefold substring match\n" +
-    "on topic + principle.\n",
+    "on topic + principle. --lanes also returns directives, constraints,\n" +
+    "and consider lanes alongside the legacy flat items list.\n",
   lint:
     "usage: o2b brain lint --consolidate [--apply] [--yes] [--vault <path>] [--json]\n" +
     "Self-healing structural lint. Dry-run by default; --apply writes\n" +

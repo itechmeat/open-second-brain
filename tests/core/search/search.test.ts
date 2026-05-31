@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
+import { parseStructuredRecallQueryDocument } from "../../../src/core/search/structured-query.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
@@ -143,6 +144,96 @@ test("search returns keyword-only results when semantic is disabled", async () =
   expect(out.warnings).toEqual([]);
 });
 
+test("search warns when keyword retrieval rebuilds a desynced FTS table", async () => {
+  const cfg = await seedKeyword();
+  await indexVault(cfg);
+  const db = new Database(dbPath);
+  try {
+    db.run("DELETE FROM chunk_fts");
+  } finally {
+    db.close();
+  }
+
+  const out = await search(cfg, { query: "fox", limit: 5 });
+
+  expect(out.results.map((r) => r.path)).toContain("Notes/foo.md");
+  expect(out.warnings.some((w) => w.includes("rebuilt FTS"))).toBe(true);
+});
+
+test("search accepts structured lexical lanes with safe exclusions", async () => {
+  writeMd(vault, "Notes/final.md", "# Final\n\nrelease notes mention recall diagnostics.");
+  writeMd(vault, "Notes/draft.md", "# Draft\n\ndraft release notes mention recall diagnostics.");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  const structuredQuery = parseStructuredRecallQueryDocument('lex: "release notes" -draft');
+
+  const out = await search(cfg, {
+    query: "release notes",
+    structuredQuery,
+    limit: 10,
+  });
+
+  expect(out.results.map((r) => r.path)).toContain("Notes/final.md");
+  expect(out.results.map((r) => r.path)).not.toContain("Notes/draft.md");
+  expect(out.results[0]?.reasons.some((reason) => reason.includes("lane:lex/fts5"))).toBe(true);
+});
+
+test("search backfills structured lexical exclusions before applying limit", async () => {
+  writeMd(vault, "Notes/draft-a.md", "# Draft A\n\nalpha alpha alpha draft.");
+  writeMd(vault, "Notes/draft-b.md", "# Draft B\n\nalpha alpha draft.");
+  writeMd(vault, "Notes/final-a.md", "# Final A\n\nalpha current.");
+  writeMd(vault, "Notes/final-b.md", "# Final B\n\nalpha stable.");
+  const cfg = makeConfig({ vault, dbPath, mmrLambda: 1, maxHops: 0 });
+  await indexVault(cfg);
+  const structuredQuery = parseStructuredRecallQueryDocument("lex: alpha -draft");
+
+  const out = await search(cfg, {
+    query: "alpha",
+    structuredQuery,
+    limit: 2,
+    mmrLambda: 1,
+    maxHops: 0,
+  });
+
+  expect(out.results.map((r) => r.path).toSorted()).toEqual([
+    "Notes/final-a.md",
+    "Notes/final-b.md",
+  ]);
+});
+
+test("search degrades semantic structured lanes when semantic search is disabled", async () => {
+  const cfg = await seedKeyword();
+  await indexVault(cfg);
+  const structuredQuery = parseStructuredRecallQueryDocument("vec: fuzzy fox memory");
+
+  const out = await search(cfg, { query: "fox", structuredQuery, limit: 5 });
+
+  expect(out.results.map((r) => r.path)).toContain("Notes/foo.md");
+  expect(
+    out.warnings.some((warning) => warning.includes("semantic structured lanes skipped")),
+  ).toBe(true);
+});
+
+test("search can return an evidence pack and downrank terminal-state support", async () => {
+  writeMd(vault, "Notes/terminal.md", "# Terminal\n\nalpha beta superseded by active note.");
+  writeMd(vault, "Notes/active.md", "# Active\n\nalpha beta current support.");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+
+  const structuredQuery = parseStructuredRecallQueryDocument('lex: "alpha beta"');
+  const out = await search(cfg, {
+    query: "alpha beta gamma",
+    structuredQuery,
+    limit: 5,
+    evidencePack: true,
+  });
+
+  expect(out.results[0]?.path).toBe("Notes/active.md");
+  expect(out.evidencePack?.missingTerms).toContain("gamma");
+  expect(
+    out.evidencePack?.records.find((record) => record.path === "Notes/terminal.md")?.terminalState,
+  ).toBe(true);
+});
 test("search returns empty (no error) when no results match", async () => {
   const cfg = await seedKeyword();
   await indexVault(cfg);

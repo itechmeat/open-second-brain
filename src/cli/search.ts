@@ -22,6 +22,12 @@ import {
   resolveSearchConfig,
   search,
   SearchError,
+  clearSessionFocus,
+  normalizeSessionFocus,
+  parseStructuredRecallQueryDocument,
+  readSessionFocus,
+  structuredRecallQueryText,
+  writeSessionFocus,
 } from "../core/search/index.ts";
 import type {
   IndexCheckReport,
@@ -29,12 +35,13 @@ import type {
   IndexStats,
   IndexStatusSnapshot,
   ResolvedSearchConfig,
+  SearchSessionFocus,
   SearchOutcome,
 } from "../core/search/index.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { CronTemplateError, renderCronTemplate } from "./search-cron-template.ts";
 
-const KNOWN_VERBS = new Set(["query", "index", "reindex", "status", "check"]);
+const KNOWN_VERBS = new Set(["query", "index", "reindex", "status", "check", "focus"]);
 
 export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   // First positional is verb iff it matches a known verb. Otherwise the
@@ -58,6 +65,8 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
         return await cmdSearchStatus(rest);
       case "check":
         return await cmdSearchCheck(rest);
+      case "focus":
+        return await cmdSearchFocus(rest);
       default:
         process.stderr.write(`error: unknown search verb: ${verb}\n`);
         return 2;
@@ -104,6 +113,70 @@ function resolveConfig(
   return resolveSearchConfig({ vault, configPath, overrides });
 }
 
+// ─── focus ───────────────────────────────────────────────────────────────────
+
+async function cmdSearchFocus(argv: ReadonlyArray<string>): Promise<number> {
+  const action = argv[0];
+  if (!action || !["set", "status", "clear"].includes(action)) {
+    throw new CliError("usage: o2b search focus <set|status|clear> [--query Q] [--path P]");
+  }
+  const { flags } = parseFlags(argv.slice(1), {
+    vault: { type: "string" },
+    config: { type: "string" },
+    db: { type: "string" },
+    query: { type: "string" },
+    path: { type: "string" },
+    "ttl-minutes": { type: "string", default: "120" },
+    json: { type: "boolean" },
+  });
+  const cfg = resolveConfig(flags);
+
+  if (action === "set") {
+    const ttlMinutes = Number(flags["ttl-minutes"] ?? "120");
+    const focus = normalizeSessionFocus(
+      {
+        query: typeof flags["query"] === "string" ? (flags["query"] as string) : null,
+        pathPrefix: typeof flags["path"] === "string" ? (flags["path"] as string) : null,
+        ttlMinutes,
+      },
+      Date.now(),
+    );
+    writeSessionFocus(cfg, focus);
+    writeFocusResponse(focus, flags["json"] === true);
+    return 0;
+  }
+
+  if (action === "clear") {
+    clearSessionFocus(cfg);
+    writeFocusResponse(null, flags["json"] === true);
+    return 0;
+  }
+
+  writeFocusResponse(readSessionFocus(cfg), flags["json"] === true);
+  return 0;
+}
+
+function focusJson(focus: SearchSessionFocus | null): Record<string, unknown> {
+  return { active: focus !== null, focus };
+}
+
+function writeFocusResponse(focus: SearchSessionFocus | null, json: boolean): void {
+  if (json) {
+    process.stdout.write(JSON.stringify(focusJson(focus)) + "\n");
+    return;
+  }
+  if (!focus) {
+    process.stdout.write("search focus: inactive\n");
+    return;
+  }
+  const parts = [
+    focus.query !== null ? `query=${JSON.stringify(focus.query)}` : null,
+    focus.pathPrefix !== null ? `path=${JSON.stringify(focus.pathPrefix)}` : null,
+    focus.expiresAt !== null ? `expires_at=${new Date(focus.expiresAt).toISOString()}` : null,
+  ].filter((part): part is string => part !== null);
+  process.stdout.write(`search focus: active ${parts.join(" ")}\n`);
+}
+
 // ─── query ────────────────────────────────────────────────────────────────────
 
 async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
@@ -120,17 +193,30 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     "auto-refresh": { type: "boolean" },
     property: { type: "string-array" },
     visibility: { type: "string-array" },
+    "query-doc": { type: "string" },
+    "evidence-pack": { type: "boolean" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
   });
 
-  if (positional.length === 0) {
+  const rawQueryDocument =
+    typeof flags["query-doc"] === "string" ? (flags["query-doc"] as string) : undefined;
+  const structuredQuery =
+    rawQueryDocument !== undefined
+      ? parseStructuredRecallQueryDocument(rawQueryDocument)
+      : undefined;
+
+  if (positional.length === 0 && structuredQuery === undefined) {
     throw new CliError("query string is required");
   }
   if (flags["semantic"] === true && flags["keyword-only"] === true) {
     throw new CliError("--semantic and --keyword-only are mutually exclusive");
   }
-  const query = positional.join(" ");
+  const query =
+    positional.length > 0 ? positional.join(" ") : structuredRecallQueryText(structuredQuery!);
+  if (query.trim().length === 0) {
+    throw new CliError("query string is required when --query-doc has no searchable lanes");
+  }
   const limitNum = Number(flags["limit"] ?? "10");
   if (!Number.isInteger(limitNum) || limitNum < 1 || limitNum > 100) {
     throw new CliError("--limit must be an integer in 1..100");
@@ -164,6 +250,8 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     pathPrefix: typeof flags["path"] === "string" ? (flags["path"] as string) : undefined,
     ...(properties !== undefined ? { properties } : {}),
     ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
+    ...(structuredQuery !== undefined ? { structuredQuery } : {}),
+    ...(flags["evidence-pack"] === true ? { evidencePack: true } : {}),
   });
 
   if (flags["json"]) {
@@ -219,12 +307,36 @@ function jsonForOutcome(o: SearchOutcome): unknown {
       end_line: r.endLine,
       search_type: r.searchType,
       reasons: r.reasons,
+      ...(o.evidencePack ? { why_retrieved: r.reasons } : {}),
       document_id: r.documentId,
       chunk_id: r.chunkId,
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
     })),
     warnings: o.warnings,
     total: o.total,
+    ...(o.evidencePack ? { evidence_pack: jsonForEvidencePack(o.evidencePack) } : {}),
+  };
+}
+
+function jsonForEvidencePack(pack: NonNullable<SearchOutcome["evidencePack"]>): unknown {
+  return {
+    significant_terms: pack.significantTerms,
+    matched_terms: pack.matchedTerms,
+    missing_terms: pack.missingTerms,
+    support_coverage: pack.supportCoverage,
+    records: pack.records.map((record) => ({
+      path: record.path,
+      document_id: record.documentId,
+      chunk_id: record.chunkId,
+      matched_terms: record.matchedTerms,
+      missing_terms: record.missingTerms,
+      support_coverage: record.supportCoverage,
+      terminal_state: record.terminalState,
+      why_retrieved: record.whyRetrieved,
+      dropped_candidate_reasons: record.droppedCandidateReasons,
+    })),
+    dropped_candidates: pack.droppedCandidates,
+    abstention: pack.abstention,
   };
 }
 

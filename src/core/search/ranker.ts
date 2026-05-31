@@ -11,6 +11,7 @@
 
 import { PAGE_TIER_DEFAULT, tierWeight, type PageTier } from "../brain/page-meta/tier.ts";
 import { weibullDecay, DEFAULT_RECENCY, type WeibullRecencyOptions } from "./recency.ts";
+import { scoreSessionFocusTarget, type SearchSessionFocus } from "./session-focus.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "./store.ts";
 import type { BrainSearchResult, WeightProfile } from "./types.ts";
 
@@ -58,6 +59,7 @@ export interface RankerOptions {
    * weight, so ranking is bit-identical to pre-intent behaviour.
    */
   readonly weightProfile?: WeightProfile;
+  readonly sessionFocus?: SearchSessionFocus | null;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -128,6 +130,7 @@ function buildReasons(parts: {
   recency: number;
   tierMul: number;
   entityBoost?: number;
+  sessionFocus?: number;
 }): ReadonlyArray<string> {
   const reasons: string[] = [];
   if (parts.keywordScore > 0) reasons.push(`fts5_bm25: ${fmt(parts.keywordScore)}`);
@@ -138,6 +141,9 @@ function buildReasons(parts: {
   if (parts.linkBoost > 0) reasons.push(`link_boost: ${fmt(parts.linkBoost)}`);
   if (parts.recency > 0) reasons.push(`recency: ${fmt(parts.recency)}`);
   if (parts.tierMul !== 1) reasons.push(`tier: ${fmt(parts.tierMul)}`);
+  if (parts.sessionFocus && parts.sessionFocus !== 0) {
+    reasons.push(`session_focus: ${parts.sessionFocus >= 0 ? "+" : ""}${fmt(parts.sessionFocus)}`);
+  }
   return Object.freeze(reasons);
 }
 
@@ -255,7 +261,8 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // relevant set - never enough to float an irrelevant chunk.
     const entityMatches = inputs.entityMatchByChunk?.get(c.chunkId) ?? 0;
     const entityBoost = Math.min(0.04, entityMatches * 0.02 * entMul);
-    const score = clamp01(weighted * tierMul + linkBoost + recency + entityBoost);
+    const sessionFocus = scoreSessionFocusTarget(hyd, opts.sessionFocus, nowMs);
+    const score = clamp01(weighted * tierMul + linkBoost + recency + entityBoost + sessionFocus);
 
     ranked.push(
       Object.freeze({
@@ -279,6 +286,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           recency,
           tierMul,
           entityBoost,
+          sessionFocus,
         }),
       }),
     );

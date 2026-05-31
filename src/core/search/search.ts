@@ -15,13 +15,15 @@ import { parseFrontmatter } from "../vault.ts";
 import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { extractEntities } from "./entities.ts";
-import { runFtsQuery } from "./fts.ts";
+import { buildEvidencePack, downrankTerminalEvidenceResults } from "./evidence-pack.ts";
+import { runFtsQueryDetailed } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
 import { buildQueryPlan } from "./query-plan.ts";
 import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "./query-cache.ts";
 import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from "./synonyms.ts";
 import { filterByProperties } from "./property-filter.ts";
 import { rankResults } from "./ranker.ts";
+import { readSessionFocus } from "./session-focus.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -31,6 +33,7 @@ import type {
   SearchOptions,
   SearchOutcome,
 } from "./types.ts";
+import type { StructuredRecallQueryDocument } from "./structured-query.ts";
 
 interface SemanticPolicy {
   /** caller asked for semantic on or off (true), or accepted the default (false). */
@@ -82,6 +85,62 @@ function assertSafePathPrefix(prefix: string | undefined): string | undefined {
   return prefix;
 }
 
+function structuredKeywordQuery(
+  query: string,
+  structured: StructuredRecallQueryDocument | undefined,
+): string {
+  if (!structured || structured.lex.include.length === 0) return query;
+  return structured.lex.include.join(" ");
+}
+
+function structuredSemanticQuery(
+  structured: StructuredRecallQueryDocument | undefined,
+): string | null {
+  if (!structured) return null;
+  const text = [...structured.vec, ...structured.hyde].join("\n\n").trim();
+  return text.length > 0 ? text : null;
+}
+
+function includesFolded(haystack: string, needle: string): boolean {
+  return haystack.toLocaleLowerCase().includes(needle.toLocaleLowerCase());
+}
+
+function applyStructuredExclusions(
+  results: ReadonlyArray<BrainSearchResult>,
+  structured: StructuredRecallQueryDocument | undefined,
+): ReadonlyArray<BrainSearchResult> {
+  if (!structured || structured.lex.exclude.length === 0) return results;
+  return results.filter((result) => {
+    const haystack = `${result.path}\n${result.title ?? ""}\n${result.content}`;
+    return !structured.lex.exclude.some((term) => includesFolded(haystack, term));
+  });
+}
+
+function addStructuredReasons(
+  results: ReadonlyArray<BrainSearchResult>,
+  structured: StructuredRecallQueryDocument | undefined,
+): ReadonlyArray<BrainSearchResult> {
+  if (!structured) return results;
+  return results.map((result) => {
+    const additions: string[] = [];
+    if (structured.lex.include.length > 0 && result.keywordScore > 0) {
+      additions.push(`lane:lex/fts5 ${result.keywordScore.toFixed(3)}`);
+    }
+    if (structured.vec.length > 0 && result.semanticScore > 0) {
+      additions.push(`lane:vec/semantic ${result.semanticScore.toFixed(3)}`);
+    }
+    if (structured.hyde.length > 0 && result.semanticScore > 0) {
+      additions.push(`lane:hyde/semantic ${result.semanticScore.toFixed(3)}`);
+    }
+    if (structured.intent !== null) additions.push(`intent:${structured.intent}`);
+    if (additions.length === 0) return result;
+    return Object.freeze({
+      ...result,
+      reasons: Object.freeze([...result.reasons, ...additions]),
+    });
+  });
+}
+
 export async function search(
   config: ResolvedSearchConfig,
   opts: SearchOptions,
@@ -94,11 +153,16 @@ export async function search(
   const pathPrefix = assertSafePathPrefix(opts.pathPrefix);
   const policy = resolveSemanticPolicy(config, opts);
   const warnings: string[] = [];
+  const structured = opts.structuredQuery;
+  const sessionFocus =
+    opts.sessionFocus === undefined ? readSessionFocus(config, Date.now()) : opts.sessionFocus;
+  const keywordQuery = structuredKeywordQuery(query, structured);
+  const semanticLaneQuery = structuredSemanticQuery(structured);
 
   // Query plan (v0.20.0): one structural pass yields the intent weight
   // profile and the cache key. Pure; no I/O. Expanded terms (if any) are
   // folded in once they have been derived from the store below.
-  const basePlan = buildQueryPlan(query);
+  const basePlan = buildQueryPlan(keywordQuery, [], structured?.intent);
 
   const store = await Store.open(config, { mode: "read" });
   try {
@@ -121,7 +185,13 @@ export async function search(
       // semantic decision) so equivalent calls share a cache entry.
       try {
         generation = store.corpusGeneration();
-        const keyOpts = { ...opts, limit, semantic: policy.wantSemantic, keywordOnly: false };
+        const keyOpts = {
+          ...opts,
+          limit,
+          semantic: policy.wantSemantic,
+          keywordOnly: false,
+          sessionFocus,
+        };
         cacheKey = buildCacheKey(keyOpts, basePlan.planHash, configFingerprint(config));
         const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
         if (hit) return hit;
@@ -142,10 +212,12 @@ export async function search(
     };
 
     // Keyword candidates.
-    let kwHits = runFtsQuery(store, query, {
+    let kwOutcome = runFtsQueryDetailed(store, keywordQuery, {
       limit: limit * 3,
       pathPrefix,
     });
+    let kwHits = kwOutcome.hits;
+    for (const w of kwOutcome.warnings) warnings.push(w);
 
     // Synonym / query expansion (v0.20.0): opt-in and never for an
     // exact-intent (quoted/wildcard) query. Derive related terms from
@@ -156,16 +228,20 @@ export async function search(
     if (config.recall.synonymEnabled && basePlan.intent !== "exact" && kwHits.length > 0) {
       const topIds = kwHits.slice(0, 10).map((h) => h.chunkId);
       const ctx = store.hydrateChunks(topIds);
-      const texts = topIds
-        .map((id) => ctx.get(id)?.content ?? "")
-        .filter((t) => t.length > 0);
+      const texts = topIds.map((id) => ctx.get(id)?.content ?? "").filter((t) => t.length > 0);
       const expandedTerms = deriveExpansionTerms(tokenizeForExpansion(query), texts, {
         ...DEFAULT_EXPANSION,
         maxTerms: config.recall.synonymMaxTerms,
       });
       if (expandedTerms.length > 0) {
-        plan = buildQueryPlan(query, expandedTerms);
-        kwHits = runFtsQuery(store, query, { limit: limit * 3, pathPrefix, expandedTerms });
+        plan = buildQueryPlan(keywordQuery, expandedTerms, structured?.intent);
+        kwOutcome = runFtsQueryDetailed(store, keywordQuery, {
+          limit: limit * 3,
+          pathPrefix,
+          expandedTerms,
+        });
+        kwHits = kwOutcome.hits;
+        for (const w of kwOutcome.warnings) warnings.push(w);
       }
     }
     const weightProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;
@@ -173,8 +249,11 @@ export async function search(
     // Semantic candidates (may be skipped).
     let semHits: ReturnType<Store["semanticTopK"]> = [];
     let semanticAttempted = false;
+    if (semanticLaneQuery !== null && !policy.wantSemantic) {
+      warnings.push("semantic structured lanes skipped: semantic search is disabled");
+    }
     if (policy.wantSemantic) {
-      const semOutcome = await runSemanticPhase(store, config, query, {
+      const semOutcome = await runSemanticPhase(store, config, semanticLaneQuery ?? query, {
         limit: Math.max(limit * 5, 50),
         pathPrefix,
         explicit: policy.explicit,
@@ -190,11 +269,13 @@ export async function search(
     for (const h of semHits) allChunkIds.add(h.chunkId);
     const idsList = Array.from(allChunkIds);
     if (idsList.length === 0) {
+      const evidencePack = opts.evidencePack === true ? buildEvidencePack(query, []) : undefined;
       return finalize(
         Object.freeze({
           results: Object.freeze([] as ReadonlyArray<BrainSearchResult>),
           warnings: Object.freeze(warnings),
           total: 0,
+          ...(evidencePack !== undefined ? { evidencePack } : {}),
         }),
       );
     }
@@ -232,11 +313,13 @@ export async function search(
     // narrow pool lets a high-parent expansion crowd a genuine but
     // lower-ranked hit out of the final window). When both are disabled
     // the pool collapses back to the historical rankLimit.
+    const hasStructuredExclusions = (structured?.lex.exclude.length ?? 0) > 0;
     const mmrLambda = opts.mmrLambda ?? config.recall.mmrLambda;
     const mmrActive = mmrLambda < 1;
     const maxHops = opts.maxHops ?? config.recall.maxHops;
     const traversalActive = maxHops > 0;
-    const baseRankLimit = hasFrontmatterFilter ? Math.max(limit * 5, 50) : limit;
+    const baseRankLimit =
+      hasFrontmatterFilter || hasStructuredExclusions ? Math.max(limit * 5, 50) : limit;
     const rankLimit =
       mmrActive || traversalActive ? Math.max(baseRankLimit, limit * 3, 30) : baseRankLimit;
 
@@ -246,7 +329,11 @@ export async function search(
     // caller can tell "the pool ran out" from "the cap truncated more").
     const assemble = (
       rankCap: number,
-    ): { preVisibility: number; visible: ReadonlyArray<BrainSearchResult>; capHit: boolean } => {
+    ): {
+      preVisibility: number;
+      visible: ReadonlyArray<BrainSearchResult>;
+      capHit: boolean;
+    } => {
       let ranked = rankResults(
         {
           keyword: kwHits,
@@ -267,6 +354,7 @@ export async function search(
             amplitude: config.recall.recencyAmplitude,
           },
           ...(weightProfile !== undefined ? { weightProfile } : {}),
+          ...(sessionFocus !== undefined ? { sessionFocus } : {}),
         },
       );
       const capHit = ranked.length >= rankCap;
@@ -314,7 +402,7 @@ export async function search(
       const wideCap = Math.max(limit * 5, 50, limit * 3, 30);
       if (wideCap > rankLimit) assembled = assemble(wideCap);
     }
-    const filtered = assembled.visible.slice(0, limit);
+    const filtered = applyStructuredExclusions(assembled.visible, structured).slice(0, limit);
 
     // Typed graph semantics (v3): surface the typed relations each
     // result page declares in its frontmatter. Computed here from the
@@ -324,12 +412,20 @@ export async function search(
       const rels = relByDoc.get(r.documentId);
       return rels && rels.length > 0 ? { ...r, relations: Object.freeze(rels) } : r;
     });
+    const withStructuredReasons = addStructuredReasons(withRelations, structured);
+    const finalResults =
+      opts.evidencePack === true
+        ? downrankTerminalEvidenceResults(withStructuredReasons)
+        : withStructuredReasons;
+    const evidencePack =
+      opts.evidencePack === true ? buildEvidencePack(query, finalResults) : undefined;
 
     return finalize(
       Object.freeze({
-        results: Object.freeze(withRelations),
+        results: Object.freeze(finalResults),
         warnings: Object.freeze(warnings),
-        total: withRelations.length,
+        total: finalResults.length,
+        ...(evidencePack !== undefined ? { evidencePack } : {}),
       }),
     );
   } finally {
