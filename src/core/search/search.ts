@@ -327,7 +327,11 @@ export async function search(
     // caller can tell "the pool ran out" from "the cap truncated more").
     const assemble = (
       rankCap: number,
-    ): { preVisibility: number; visible: ReadonlyArray<BrainSearchResult>; capHit: boolean } => {
+    ): {
+      preVisibility: number;
+      visible: ReadonlyArray<BrainSearchResult>;
+      capHit: boolean;
+    } => {
       let ranked = rankResults(
         {
           keyword: kwHits,

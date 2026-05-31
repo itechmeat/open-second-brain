@@ -63,7 +63,11 @@ export function normalizeSessionFocus(
     throw new SearchError("INVALID_INPUT", "session focus requires a query or path prefix");
   }
   const ttlMinutes = normalizeTtlMinutes(input.ttlMinutes);
-  return Object.freeze({ query, pathPrefix, expiresAt: nowMs + ttlMinutes * 60 * 1000 });
+  return Object.freeze({
+    query,
+    pathPrefix,
+    expiresAt: nowMs + ttlMinutes * 60 * 1000,
+  });
 }
 
 export function sessionFocusIsActive(

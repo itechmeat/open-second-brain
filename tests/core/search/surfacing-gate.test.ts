@@ -7,18 +7,22 @@ test("evaluateSurfacingGate skips greetings, slash commands, shell-only prompts,
   expect(evaluateSurfacingGate({ prompt: "/help" }).reason).toBe("slash_command");
   expect(evaluateSurfacingGate({ prompt: "git status" }).reason).toBe("shell_command");
   expect(
-    evaluateSurfacingGate({ prompt: "find recall notes", previousPrompt: "Find recall notes" })
-      .reason,
+    evaluateSurfacingGate({
+      prompt: "find recall notes",
+      previousPrompt: "Find recall notes",
+    }).reason,
   ).toBe("duplicate");
 });
 
 test("evaluateSurfacingGate retrieves real memory questions and explicit requests", () => {
-  expect(evaluateSurfacingGate({ prompt: "what did we decide about recall diagnostics?" })).toEqual(
-    {
-      retrieve: true,
-      reason: "memory_question",
-    },
-  );
+  expect(
+    evaluateSurfacingGate({
+      prompt: "what did we decide about recall diagnostics?",
+    }),
+  ).toEqual({
+    retrieve: true,
+    reason: "memory_question",
+  });
   expect(evaluateSurfacingGate({ prompt: "hello", explicit: true })).toEqual({
     retrieve: true,
     reason: "explicit",

@@ -178,10 +178,18 @@ test("brain_recall_gate reports skip reasons without affecting explicit brain_se
 
   const server = makeServer();
   await initialize(server);
-  const gate = await call(server, "brain_recall_gate", { prompt: "git status" });
-  expect(extractToolResult(gate)).toEqual({ retrieve: false, reason: "shell_command" });
+  const gate = await call(server, "brain_recall_gate", {
+    prompt: "git status",
+  });
+  expect(extractToolResult(gate)).toEqual({
+    retrieve: false,
+    reason: "shell_command",
+  });
 
-  const explicit = await call(server, "brain_search", { query: "git status", limit: 1 });
+  const explicit = await call(server, "brain_search", {
+    query: "git status",
+    limit: 1,
+  });
   const body = extractToolResult(explicit);
   const results = body["results"] as Array<{ path: string }>;
   expect(results[0]?.path).toBe("notes/shell.md");
@@ -223,7 +231,10 @@ test("brain_search rejects path_prefix that escapes vault", async () => {
 
   const server = makeServer();
   await initialize(server);
-  const resp = (await call(server, "brain_search", { query: "A", path_prefix: "../etc/" })) as any;
+  const resp = (await call(server, "brain_search", {
+    query: "A",
+    path_prefix: "../etc/",
+  })) as any;
   expect(resp?.error?.code).toBe(-32602);
   expect(resp.error.message).toContain("path_prefix");
 });
@@ -243,7 +254,10 @@ test("brain_search rejects limit > 50", async () => {
 
   const server = makeServer();
   await initialize(server);
-  const resp = (await call(server, "brain_search", { query: "A", limit: 100 })) as any;
+  const resp = (await call(server, "brain_search", {
+    query: "A",
+    limit: 100,
+  })) as any;
   expect(resp?.error?.code).toBe(-32602);
 });
 

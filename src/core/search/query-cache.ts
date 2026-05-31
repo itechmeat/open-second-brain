@@ -54,7 +54,11 @@ function canonicalSessionFocus(opts: SearchOptions): unknown {
   const focus = opts.sessionFocus;
   if (focus === undefined) return "persisted";
   if (focus === null) return null;
-  return { query: focus.query, pathPrefix: focus.pathPrefix, expiresAt: focus.expiresAt };
+  return {
+    query: focus.query,
+    pathPrefix: focus.pathPrefix,
+    expiresAt: focus.expiresAt,
+  };
 }
 
 /**

@@ -58,7 +58,10 @@ describe("packContext", () => {
     expect(full.items[0]!.trimmed).toBe(false);
     expect([...full.items[0]!.body].length).toBeGreaterThanOrEqual(500);
 
-    const capped = packContext(vault, { maxTokens: 100_000, maxCharsPerMemory: 100 });
+    const capped = packContext(vault, {
+      maxTokens: 100_000,
+      maxCharsPerMemory: 100,
+    });
     expect([...capped.items[0]!.body].length).toBe(100);
     expect(capped.items[0]!.trimmed).toBe(true);
   });
@@ -82,14 +85,25 @@ describe("packContext", () => {
     writeBody("a", "core", "a".repeat(60));
     writeBody("z", "peripheral", "z".repeat(60));
 
-    const capped = packContext(vault, { maxTokens: 100_000, maxTotalChars: 60 });
+    const capped = packContext(vault, {
+      maxTokens: 100_000,
+      maxTotalChars: 60,
+    });
     expect(capped.items.map((i) => i.id)).toEqual(["pref-a"]);
     expect(capped.skipped.find((s) => s.id === "pref-z")?.reason).toBe("over-char-budget");
   });
 
   test("orders core → supporting → peripheral", () => {
-    writePref("p", { topic: "x", principle: "peripheral one", tier: "peripheral" });
-    writePref("s", { topic: "x", principle: "supporting one", tier: "supporting" });
+    writePref("p", {
+      topic: "x",
+      principle: "peripheral one",
+      tier: "peripheral",
+    });
+    writePref("s", {
+      topic: "x",
+      principle: "supporting one",
+      tier: "supporting",
+    });
     writePref("c", { topic: "x", principle: "core one", tier: "core" });
     const r = packContext(vault, { maxTokens: 10_000 });
     const ids = r.items.map((i) => i.id);
@@ -192,7 +206,10 @@ describe("packContext", () => {
       context_lane: "constraints",
     });
 
-    const lanes = packContext(vault, { maxTokens: 10_000, includeLanes: true }).lanes!;
+    const lanes = packContext(vault, {
+      maxTokens: 10_000,
+      includeLanes: true,
+    }).lanes!;
 
     expect(lanes.directives.map((item) => item.id)).toContain("pref-directive");
     expect(lanes.constraints.map((item) => item.id)).toContain("pref-manual");

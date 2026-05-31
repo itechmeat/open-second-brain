@@ -18,7 +18,10 @@ export interface EvidencePack {
   readonly missingTerms: ReadonlyArray<string>;
   readonly supportCoverage: number;
   readonly records: ReadonlyArray<EvidenceRecord>;
-  readonly droppedCandidates: ReadonlyArray<{ readonly path: string; readonly reason: string }>;
+  readonly droppedCandidates: ReadonlyArray<{
+    readonly path: string;
+    readonly reason: string;
+  }>;
   readonly abstention: string | null;
 }
 

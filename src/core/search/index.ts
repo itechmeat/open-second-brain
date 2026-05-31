@@ -160,11 +160,19 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
     );
   }
   if (config.semantic.dimension !== null) {
-    validateIntegerRange(config.semantic.dimension, "embedding_dimension", { min: 1 });
+    validateIntegerRange(config.semantic.dimension, "embedding_dimension", {
+      min: 1,
+    });
   }
-  validateIntegerRange(config.semantic.timeoutMs, "embedding_timeout_ms", { min: 1 });
-  validateIntegerRange(config.semantic.concurrency, "embedding_concurrency", { min: 1 });
-  validateIntegerRange(config.semantic.batchSize, "embedding_batch_size", { min: 1 });
+  validateIntegerRange(config.semantic.timeoutMs, "embedding_timeout_ms", {
+    min: 1,
+  });
+  validateIntegerRange(config.semantic.concurrency, "embedding_concurrency", {
+    min: 1,
+  });
+  validateIntegerRange(config.semantic.batchSize, "embedding_batch_size", {
+    min: 1,
+  });
 }
 
 function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {

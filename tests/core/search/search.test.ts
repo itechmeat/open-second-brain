@@ -167,7 +167,11 @@ test("search accepts structured lexical lanes with safe exclusions", async () =>
   await indexVault(cfg);
   const structuredQuery = parseStructuredRecallQueryDocument('lex: "release notes" -draft');
 
-  const out = await search(cfg, { query: "release notes", structuredQuery, limit: 10 });
+  const out = await search(cfg, {
+    query: "release notes",
+    structuredQuery,
+    limit: 10,
+  });
 
   expect(out.results.map((r) => r.path)).toContain("Notes/final.md");
   expect(out.results.map((r) => r.path)).not.toContain("Notes/draft.md");

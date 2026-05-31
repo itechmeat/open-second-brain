@@ -9,7 +9,11 @@ const NOW = 1_750_000_000_000;
 
 test("normalizeSessionFocus trims query and path with bounded ttl", () => {
   const focus = normalizeSessionFocus(
-    { query: "  release decision  ", pathPrefix: " Sessions/May/ ", ttlMinutes: 30 },
+    {
+      query: "  release decision  ",
+      pathPrefix: " Sessions/May/ ",
+      ttlMinutes: 30,
+    },
     NOW,
   );
 

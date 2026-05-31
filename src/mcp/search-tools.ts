@@ -251,7 +251,10 @@ async function toolBrainSearch(
   const focusPathPrefix = coerceStringOptional(args, "focus_path_prefix", 256);
   const sessionFocus =
     focusQuery !== undefined || focusPathPrefix !== undefined
-      ? normalizeSessionFocus({ query: focusQuery ?? null, pathPrefix: focusPathPrefix ?? null })
+      ? normalizeSessionFocus({
+          query: focusQuery ?? null,
+          pathPrefix: focusPathPrefix ?? null,
+        })
       : undefined;
   const properties = parsePropertiesArgument(args["properties"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
@@ -343,7 +346,13 @@ async function toolBrainRecallGate(
   }
   const previousPrompt = coerceStringOptional(args, "previous_prompt", 4000);
   const explicit = coerceBoolOptional(args, "explicit") ?? false;
-  return { ...evaluateSurfacingGate({ prompt, previousPrompt: previousPrompt ?? null, explicit }) };
+  return {
+    ...evaluateSurfacingGate({
+      prompt,
+      previousPrompt: previousPrompt ?? null,
+      explicit,
+    }),
+  };
 }
 
 export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([

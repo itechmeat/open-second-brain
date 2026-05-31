@@ -21,7 +21,10 @@ afterEach(() => {
 });
 
 async function fixture() {
-  const store = await Store.open(makeConfig({ vault, dbPath }), { mode: "write", loadVec: false });
+  const store = await Store.open(makeConfig({ vault, dbPath }), {
+    mode: "write",
+    loadVec: false,
+  });
   const d1 = store.upsertDocument({
     path: "Notes/alpha.md",
     title: "Alpha",

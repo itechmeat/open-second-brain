@@ -1779,7 +1779,11 @@ async function toolBrainPreCompressPack(
     text: pack.text,
     active_head_included: pack.activeHeadIncluded,
     total_chars: pack.totalChars,
-    items: pack.items.map((i) => ({ id: i.id, principle: i.principle, trimmed: i.trimmed })),
+    items: pack.items.map((i) => ({
+      id: i.id,
+      principle: i.principle,
+      trimmed: i.trimmed,
+    })),
   };
 }
 
@@ -2314,7 +2318,11 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_sources",
     description:
       "Read-only dashboard of the brain's signals grouped by (agent, source_type) with active/processed and distinct-topic counts plus totals.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
     handler: toolBrainSources,
   },
   {

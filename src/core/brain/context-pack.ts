@@ -240,7 +240,11 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       for (const i of keptItems) recomputed += i.tokens;
       for (const d of items) {
         if (droppedSet.has(d)) {
-          skipped.push({ id: d.id, tokens: d.tokens, reason: "over-char-budget" });
+          skipped.push({
+            id: d.id,
+            tokens: d.tokens,
+            reason: "over-char-budget",
+          });
         }
       }
       return Object.freeze({

@@ -56,7 +56,9 @@ test("search status without an index reports 'not initialised' and exits 0", asy
 test("search status --json after an index returns documents count", async () => {
   writeVaultFile("a.md", "# A\n\nbody");
   writeVaultFile("b.md", "# B\n\nbody");
-  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
   const out = await runCli(["search", "status", "--json"], {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },
   });
@@ -69,7 +71,9 @@ test("search status --json after an index returns documents count", async () => 
 
 test("search query returns a human-readable hit for indexed content", async () => {
   writeVaultFile("notes/foo.md", "# Foo\n\nthe quick brown fox jumps over the lazy dog");
-  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
   const out = await runCli(["search", "fox"], {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },
   });
@@ -79,7 +83,9 @@ test("search query returns a human-readable hit for indexed content", async () =
 
 test("search query --json returns structured results", async () => {
   writeVaultFile("notes/foo.md", "# Foo\n\nfox content");
-  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
   const out = await runCli(["search", "fox", "--json", "--limit", "5"], {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },
   });
@@ -93,7 +99,9 @@ test("search query --json returns structured results", async () => {
 test("search query --query-doc accepts structured recall documents", async () => {
   writeVaultFile("notes/final.md", "# Final\n\nrelease notes mention recall diagnostics.");
   writeVaultFile("notes/draft.md", "# Draft\n\ndraft release notes mention recall diagnostics.");
-  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
 
   const out = await runCli(
     ["search", "--query-doc", 'lex: "release notes" -draft', "--json", "--limit", "10"],
@@ -111,7 +119,9 @@ test("search query --query-doc accepts structured recall documents", async () =>
 
 test("search query --evidence-pack returns missing terms and why_retrieved", async () => {
   writeVaultFile("notes/foo.md", "# Foo\n\nalpha beta current support.");
-  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
 
   const out = await runCli(
     ["search", "alpha gamma", "--query-doc", "lex: alpha", "--json", "--evidence-pack"],
@@ -129,7 +139,9 @@ test("search query --evidence-pack returns missing terms and why_retrieved", asy
 test("search focus set/status/clear steers only the focused query window", async () => {
   writeVaultFile("archive/other.md", "# Other\n\nshared recall topic.");
   writeVaultFile("sessions/focus.md", "# Focus\n\nshared recall topic.");
-  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
 
   const set = await runCli(
     ["search", "focus", "set", "--path", "sessions/", "--ttl-minutes", "60", "--json"],
@@ -176,7 +188,9 @@ test("search check reports vault_readable and sqlite_ok on a fresh vault", async
 
 test("search reindex rebuilds the index atomically", async () => {
   writeVaultFile("a.md", "# A");
-  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
   writeVaultFile("b.md", "# B");
   const out = await runCli(["search", "reindex"], {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },
@@ -209,7 +223,9 @@ test("invalid numeric search flags exit with code 2 before touching the index", 
 
 test("path-prefix escaping returns exit 2 with INVALID_INPUT", async () => {
   writeVaultFile("a.md", "# A");
-  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
   const out = await runCli(["search", "A", "--path", "../etc/"], {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },
   });
@@ -219,7 +235,9 @@ test("path-prefix escaping returns exit 2 with INVALID_INPUT", async () => {
 
 test("the default verb is `query` when first positional is unknown", async () => {
   writeVaultFile("a.md", "# A\n\nalpha word");
-  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
   // No explicit verb, just a query token:
   const out = await runCli(["search", "alpha"], {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },

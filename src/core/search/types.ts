@@ -63,7 +63,10 @@ export interface BrainSearchResult {
    * Computed at query time from the links table, never stored on the
    * result row. Absent when the page declares no typed relations.
    */
-  readonly relations?: ReadonlyArray<{ readonly relation: string; readonly target: string }>;
+  readonly relations?: ReadonlyArray<{
+    readonly relation: string;
+    readonly target: string;
+  }>;
 }
 
 /**
@@ -108,7 +111,10 @@ export interface IndexStats {
   readonly chunksTotal: number;
   readonly embeddingsComputed: number;
   readonly embeddingsRetries: number;
-  readonly errors: ReadonlyArray<{ readonly path: string; readonly message: string }>;
+  readonly errors: ReadonlyArray<{
+    readonly path: string;
+    readonly message: string;
+  }>;
   readonly durationMs: number;
 }
 

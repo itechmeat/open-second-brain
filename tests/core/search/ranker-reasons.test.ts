@@ -154,7 +154,11 @@ test("session focus can re-rank a focused path and explains the contribution", (
       semanticWeight: 0.4,
       limit: 10,
       nowMs: NOW,
-      sessionFocus: { query: null, pathPrefix: "sessions/", expiresAt: NOW + 60_000 },
+      sessionFocus: {
+        query: null,
+        pathPrefix: "sessions/",
+        expiresAt: NOW + 60_000,
+      },
     },
   );
 

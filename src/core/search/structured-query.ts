@@ -73,7 +73,10 @@ function parseLexLane(value: string, lineNumber: number): StructuredLexLane {
   if (include.length === 0 && exclude.length === 0) {
     throw invalid(lineNumber, "lex lane must not be empty");
   }
-  return Object.freeze({ include: Object.freeze(include), exclude: Object.freeze(exclude) });
+  return Object.freeze({
+    include: Object.freeze(include),
+    exclude: Object.freeze(exclude),
+  });
 }
 
 export function parseStructuredRecallQueryDocument(
