@@ -14,9 +14,7 @@ export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
   if (sub === "list") return list(rest);
   if (sub === "accept") return accept(rest);
   if (sub === "reject") return reject(rest);
-  throw new CliError(
-    "brain skill-proposals: expected learn, list, accept, or reject",
-  );
+  throw new CliError("brain skill-proposals: expected learn, list, accept, or reject");
 }
 
 function learn(argv: string[]): number {
@@ -25,10 +23,7 @@ function learn(argv: string[]): number {
     json: { type: "boolean" },
     "min-support": { type: "string" },
   });
-  const vault = resolveBrainVault(
-    flags["vault"] as string | undefined,
-    defaultConfigPath(),
-  );
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
   const minSupportRaw = trim(flags["min-support"]);
   const minSupport = minSupportRaw
     ? parsePositiveInteger(minSupportRaw, "--min-support")
@@ -55,25 +50,19 @@ function list(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(
-    flags["vault"] as string | undefined,
-    defaultConfigPath(),
-  );
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
   const pending = listPendingSkillProposals(vault);
 
   if (flags["json"]) {
     process.stdout.write(
-      JSON.stringify({ total: pending.length, proposals: pending }, null, 2) +
-        "\n",
+      JSON.stringify({ total: pending.length, proposals: pending }, null, 2) + "\n",
     );
     return 0;
   }
 
   process.stdout.write(`${pending.length} pending skill proposal(s):\n`);
   for (const item of pending) {
-    process.stdout.write(
-      `  ${item.id}  ${item.patternKind}  status=${item.status}\n`,
-    );
+    process.stdout.write(`  ${item.id}  ${item.patternKind}  status=${item.status}\n`);
   }
   return 0;
 }
@@ -85,12 +74,8 @@ function accept(argv: string[]): number {
     note: { type: "string" },
   });
   const slug = trim(positional[0]);
-  if (!slug)
-    throw new CliError("brain skill-proposals accept: slug is required");
-  const vault = resolveBrainVault(
-    flags["vault"] as string | undefined,
-    defaultConfigPath(),
-  );
+  if (!slug) throw new CliError("brain skill-proposals accept: slug is required");
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
   const note = trim(flags["note"]);
   const result = note
     ? acceptSkillProposal(vault, slug, { note })
@@ -112,15 +97,10 @@ function reject(argv: string[]): number {
     note: { type: "string", required: true },
   });
   const slug = trim(positional[0]);
-  if (!slug)
-    throw new CliError("brain skill-proposals reject: slug is required");
+  if (!slug) throw new CliError("brain skill-proposals reject: slug is required");
   const note = trim(flags["note"]);
-  if (!note)
-    throw new CliError("brain skill-proposals reject: --note is required");
-  const vault = resolveBrainVault(
-    flags["vault"] as string | undefined,
-    defaultConfigPath(),
-  );
+  if (!note) throw new CliError("brain skill-proposals reject: --note is required");
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
   const result = rejectSkillProposal(vault, slug, { note });
 
   if (flags["json"]) {
@@ -132,17 +112,14 @@ function reject(argv: string[]): number {
   return 0;
 }
 
-function trim(
-  value: string | boolean | string[] | undefined,
-): string | undefined {
+function trim(value: string | boolean | string[] | undefined): string | undefined {
   if (typeof value !== "string") return undefined;
   const t = value.trim();
   return t.length > 0 ? t : undefined;
 }
 
 function parsePositiveInteger(value: string, label: string): number {
-  if (!/^[0-9]+$/.test(value))
-    throw new CliError(`${label} must be a positive integer`);
+  if (!/^[0-9]+$/.test(value)) throw new CliError(`${label} must be a positive integer`);
   const parsed = Number.parseInt(value, 10);
   if (parsed < 1) throw new CliError(`${label} must be a positive integer`);
   return parsed;
