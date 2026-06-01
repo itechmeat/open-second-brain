@@ -20,6 +20,7 @@ import {
 } from "../core/config.ts";
 import { listSecretReferences } from "../core/secret-ref.ts";
 import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
+import { ensureVaultCurrent } from "../core/maintenance/ensure-current.ts";
 import { doctor } from "../core/doctor.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
@@ -434,6 +435,17 @@ async function cmdMcp(argv: string[]): Promise<number> {
 
   const vault = requireVault(flags["vault"] as string | undefined, config);
   const repoRoot = (flags["repo"] as string | undefined) ?? null;
+
+  // Hands-off post-upgrade maintenance: if the vault's on-disk state lags the
+  // running version (stale Brain managed files, stale/missing search index),
+  // bring it current with no user action. Fire-and-forget, full scope only
+  // (the writer server skips it), never blocks or fails server start; a needed
+  // reindex runs detached in the background.
+  if (scope === "full") {
+    void ensureVaultCurrent(vault, { background: true, configPath: config }).catch(() => {
+      // best-effort; the server must come up regardless
+    });
+  }
 
   process.stderr.write(
     `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
