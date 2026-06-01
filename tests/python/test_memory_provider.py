@@ -202,6 +202,117 @@ class ProviderRequiredSurfaceTests(unittest.TestCase):
         self.assertIn('existing_key: "keep"', text)
 
 
+class _RaisingBridge(FakeBrainBridge):
+    """Bridge whose tool calls always fail, to prove hooks are exception-safe."""
+
+    def call_tool(self, name, args):
+        raise BridgeError("boom")
+
+
+class ProviderLifecycleTests(unittest.TestCase):
+    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+
+    def setUp(self):
+        self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
+
+    def tearDown(self):
+        for k in self._ENV_KEYS:
+            os.environ.pop(k, None)
+            if self._saved[k] is not None:
+                os.environ[k] = self._saved[k]
+
+    def _init(self, bridge, **kwargs):
+        provider = OpenSecondBrainMemoryProvider(bridge=bridge)
+        provider.initialize("sess-1", **kwargs)
+        return provider
+
+    def test_system_prompt_block_returns_active_content(self):
+        bridge = FakeBrainBridge(
+            results={"brain_context": {"structuredContent": {"content": "ACTIVE PREFS"}}}
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        self.assertEqual(provider.system_prompt_block(), "ACTIVE PREFS")
+
+    def test_prefetch_returns_recall_and_reminder_when_gate_retrieves(self):
+        os.environ["VAULT_AGENT_NAME"] = "pf-agent"
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True, "reason": "hit"}},
+                "brain_context_pack": {"content": [{"type": "text", "text": "RECALLED"}]},
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("what did we decide", session_id="sess-1")
+        self.assertIn("RECALLED", out)
+        self.assertIn("@pf-agent", out)
+
+    def test_prefetch_reminder_only_when_gate_declines(self):
+        os.environ["VAULT_AGENT_NAME"] = "pf-agent"
+        bridge = FakeBrainBridge(
+            results={"brain_recall_gate": {"structuredContent": {"retrieve": False}}}
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("hello", session_id="sess-1")
+        self.assertIn("@pf-agent", out)
+        self.assertNotIn("RECALLED", out)
+        called = [name for name, _ in bridge.calls]
+        self.assertNotIn("brain_context_pack", called)
+
+    def test_prefetch_empty_when_no_identity_and_no_recall(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(Path(tmp) / "missing.yaml")
+            bridge = FakeBrainBridge(
+                results={"brain_recall_gate": {"structuredContent": {"retrieve": False}}}
+            )
+            provider = self._init(bridge, hermes_home="/tmp/hh")
+            self.assertEqual(provider.prefetch("hi"), "")
+
+    def test_sync_turn_buffers_and_pre_compress_flushes_through_extract(self):
+        bridge = FakeBrainBridge(results={"brain_pre_compact_extract": {"structuredContent": {}}})
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.sync_turn("u1", "a1", session_id="sess-1")
+        provider.sync_turn("u2", "a2", session_id="sess-1")
+        provider._await_sync_for_tests()
+        provider.on_pre_compress([])
+        extract_calls = [a for n, a in bridge.calls if n == "brain_pre_compact_extract"]
+        self.assertEqual(len(extract_calls), 1)
+        self.assertIn("u1", extract_calls[0]["text"])
+        self.assertIn("a2", extract_calls[0]["text"])
+        # Buffer cleared: a second flush makes no further extract call.
+        provider.on_session_end([])
+        self.assertEqual(
+            len([1 for n, _ in bridge.calls if n == "brain_pre_compact_extract"]), 1
+        )
+
+    def test_on_memory_write_mirrors_to_brain_note(self):
+        bridge = FakeBrainBridge(results={"brain_note": {"structuredContent": {}}})
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.on_memory_write("update", "MEMORY.md", "remember the vault path")
+        note_calls = [a for n, a in bridge.calls if n == "brain_note"]
+        self.assertEqual(len(note_calls), 1)
+        self.assertIn("MEMORY.md", note_calls[0]["text"])
+        self.assertIn("remember the vault path", note_calls[0]["text"])
+
+    def test_shutdown_stops_bridge(self):
+        bridge = FakeBrainBridge()
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.shutdown()
+        self.assertTrue(bridge.stopped)
+
+    def test_hooks_are_exception_safe(self):
+        os.environ["VAULT_AGENT_NAME"] = "safe-agent"
+        provider = self._init(_RaisingBridge(), hermes_home="/tmp/hh")
+        # None of these may raise even though every bridge call fails.
+        self.assertEqual(provider.system_prompt_block(), "")
+        self.assertIn("@safe-agent", provider.prefetch("q"))
+        provider.sync_turn("u", "a")
+        provider._await_sync_for_tests()
+        provider.on_pre_compress([])
+        provider.on_session_end([])
+        provider.on_memory_write("update", "USER.md", "x")
+        provider.shutdown()
+
+
 class _ScriptedReader:
     """Readline source that yields pre-built JSON-RPC frames in order."""
 

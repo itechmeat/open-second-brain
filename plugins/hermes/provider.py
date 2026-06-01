@@ -12,7 +12,9 @@ are added alongside.
 
 from __future__ import annotations
 
+import json
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +45,11 @@ MEMORY_TOOLS: tuple[str, ...] = (
 # Config fields this provider owns, in the order the setup wizard shows them.
 _CONFIG_KEYS: tuple[str, ...] = ("vault", "agent_name", "timezone")
 
+# Token budget for the recall slice fetched on each prefetch.
+_PREFETCH_MAX_TOKENS = 1024
+# Upper bound on a single mirrored built-in-memory note.
+_MIRROR_CHAR_LIMIT = 2000
+
 
 class OpenSecondBrainMemoryProvider(MemoryProvider):
     """Open Second Brain as a first-class Hermes memory provider."""
@@ -54,6 +61,10 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._bridge: BrainBridge | None = None
         self._hermes_home: str | None = None
         self._session_id: str = ""
+        self._buffer: list[tuple[str, str]] = []
+        self._lock = threading.Lock()
+        self._sync_threads: list[threading.Thread] = []
+        self._queued_query: str = ""
 
     # -- required surface ----------------------------------------------------
 
@@ -132,3 +143,150 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             else:
                 lines.append(new_line)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # -- lifecycle hooks -----------------------------------------------------
+
+    def system_prompt_block(self) -> str:
+        """Static provider context: the current active-preferences body."""
+        result = self._safe_call("brain_context", {})
+        return str(self._structured(result).get("content", "") or "")
+
+    def prefetch(self, query: str, *, session_id: str = "", **_kwargs: Any) -> str:
+        """Recall context before an API call, plus the per-turn identity reminder.
+
+        The recall gate decides whether a retrieval runs; the identity reminder
+        (the behaviour the retired ``pre_llm_call`` hook used to provide) is
+        always appended when an agent identity is configured.
+        """
+        parts: list[str] = []
+        gate = self._structured(self._safe_call("brain_recall_gate", {"prompt": query}))
+        if gate.get("retrieve"):
+            pack = self._safe_call("brain_context_pack", {"max_tokens": _PREFETCH_MAX_TOKENS})
+            recalled = self._text(pack)
+            if recalled:
+                parts.append(recalled)
+        reminder = config.build_reminder()
+        if reminder:
+            parts.append(reminder)
+        return "\n\n".join(parts)
+
+    def queue_prefetch(self, query: str, **_kwargs: Any) -> None:
+        """Remember the next turn's query so a later prefetch can warm it."""
+        self._queued_query = query or ""
+
+    def sync_turn(
+        self,
+        user: str,
+        assistant: str,
+        *,
+        session_id: str = "",
+        messages: list | None = None,
+        **_kwargs: Any,
+    ) -> None:
+        """Buffer the completed turn off the hot path (non-blocking, daemon thread)."""
+        sid = session_id or self._session_id
+
+        def _work() -> None:
+            try:
+                self._append_turn(user, assistant, sid)
+            except Exception:  # noqa: BLE001 - a turn must never fail on capture
+                pass
+
+        thread = threading.Thread(target=_work, daemon=True)
+        self._sync_threads.append(thread)
+        thread.start()
+
+    def on_pre_compress(self, messages: list, **_kwargs: Any) -> None:
+        """Flush buffered turns into deterministic continuity storage before compaction."""
+        self._flush_buffer()
+
+    def on_session_end(self, messages: list, **_kwargs: Any) -> None:
+        """Flush any remaining buffered turns at session close."""
+        self._flush_buffer()
+
+    def on_memory_write(self, action: str, target: str, content: str, **_kwargs: Any) -> None:
+        """Mirror a Hermes built-in memory write (MEMORY.md / USER.md) into Brain."""
+        text = f"Hermes built-in memory {action} on {target}: {content}"[:_MIRROR_CHAR_LIMIT]
+        self._safe_call("brain_note", {"text": text})
+
+    def shutdown(self) -> None:
+        """Join capture threads and stop the bridge. Never raises."""
+        self._await_sync_for_tests()
+        if self._bridge is not None:
+            try:
+                self._bridge.stop()
+            except Exception:  # noqa: BLE001 - shutdown is best-effort
+                pass
+
+    # -- internals -----------------------------------------------------------
+
+    def _safe_call(self, name: str, args: dict[str, Any]) -> Any:
+        """Bridge call that degrades to ``None`` instead of breaking a turn."""
+        if self._bridge is None:
+            return None
+        try:
+            return self._bridge.call_tool(name, args)
+        except Exception:  # noqa: BLE001 - lifecycle hooks must not raise into Hermes
+            return None
+
+    @staticmethod
+    def _structured(result: Any) -> dict[str, Any]:
+        if isinstance(result, dict) and isinstance(result.get("structuredContent"), dict):
+            return result["structuredContent"]
+        return {}
+
+    @staticmethod
+    def _text(result: Any) -> str:
+        if not isinstance(result, dict):
+            return ""
+        content = result.get("content")
+        if isinstance(content, list) and content:
+            first = content[0]
+            if isinstance(first, dict) and isinstance(first.get("text"), str):
+                return first["text"]
+        return ""
+
+    def _append_turn(self, user: str, assistant: str, session_id: str) -> None:
+        with self._lock:
+            self._buffer.append((user, assistant))
+        self._persist_turn(user, assistant, session_id)
+
+    def _persist_turn(self, user: str, assistant: str, session_id: str) -> None:
+        """Append the raw turn to a transcript under hermes_home for durability."""
+        if not self._hermes_home:
+            return
+        path = Path(self._hermes_home) / "open-second-brain" / "session-transcript.jsonl"
+        record = json.dumps(
+            {"session_id": session_id, "user": user, "assistant": assistant},
+            ensure_ascii=False,
+        )
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(record + "\n")
+        except OSError:
+            pass
+
+    def _flush_buffer(self) -> None:
+        """Hand buffered turns to deterministic extraction, then clear the buffer."""
+        with self._lock:
+            turns = list(self._buffer)
+            self._buffer.clear()
+        if not turns:
+            return
+        text = "\n\n".join(f"User: {u}\nAssistant: {a}" for u, a in turns)
+        self._safe_call(
+            "brain_pre_compact_extract",
+            {
+                "session_id": self._session_id or "hermes",
+                "turn_start": 0,
+                "turn_end": len(turns),
+                "text": text,
+            },
+        )
+
+    def _await_sync_for_tests(self) -> None:
+        """Join outstanding capture threads (deterministic for tests; safe always)."""
+        for thread in list(self._sync_threads):
+            thread.join(timeout=5)
+        self._sync_threads.clear()
