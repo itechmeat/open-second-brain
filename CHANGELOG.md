@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] - 2026-06-01
+
+Procedural attention suite. The procedural-learning foundations gain an operator-visible attention layer and stronger ingestion controls: deterministic procedural graph and hint projections, declarative attention-flow recipes for open loops and recurrent learnings, and scoped session import with a filtered write mode. Behavior stays local-first and review-first, and the new surfaces are exposed consistently across CLI and MCP.
+
+### Added
+
+- Deterministic procedural graph projection and derived procedural hints projection over installed procedures and recurrence evidence, rebuilt through write-time hooks. CLI `o2b brain procedural-graph <rebuild|show|hints>` and MCP `brain_procedural_graph`.
+- Declarative attention-flow recipes for open loops and recurrent learnings, with an evaluator/renderer surface. CLI `o2b brain attention-flows <list|evaluate|render>` and MCP `brain_attention_flows`.
+- Context-pack attention-flow injection: `brain_context_pack` accepts `attention_flow_ids` to fold evaluated flows into the assembled context.
+- Scoped session import and filtered write mode: `o2b brain import-session` gains `--ingest-scope`, `--filter-role`, and `--filter-text` to reduce noisy carry-over while preserving default import behavior.
+
+### Changed
+
+- CLI help/verb registry and the MCP tool listing now expose the procedural-graph and attention-flow surfaces.
+
+### Notes
+
+- Procedural graph, hints, and attention-flow projections are deterministic and local-first by default; derived projections are kept in sync through write-time rebuild hooks rather than hidden background mutation.
+- Full suite green on merge: 3042 tests passing, typecheck clean, lint warning-only on the existing baseline; canonical version `0.31.0` synced across all manifests.
+
 ## [0.30.0] - 2026-06-01
 
 Self-learning procedural memory foundations. Open Second Brain can now detect repeatable workflows from continuity records, route them through a reviewable proposal queue, index procedural artifacts, and track recurrence/support evidence across scopes.
