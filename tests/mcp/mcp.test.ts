@@ -19,7 +19,12 @@ const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-test-"));
-  for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
+  for (const k of [
+    "VAULT_AGENT_NAME",
+    "VAULT_TIMEZONE",
+    "VAULT_DIR",
+    "OPEN_SECOND_BRAIN_CONFIG",
+  ]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -163,7 +168,9 @@ describe("tool listing", () => {
       id: 2,
       method: "tools/list",
     })) as any;
-    const names = r.result.tools.map((tool: { name: string }) => tool.name).toSorted();
+    const names = r.result.tools
+      .map((tool: { name: string }) => tool.name)
+      .toSorted();
     expect(names).toEqual(
       [
         // Runtime capability diagnostics (v0.23.0).
@@ -231,7 +238,9 @@ describe("tool listing", () => {
         // Procedural-learning surfaces (v0.30.0).
         "brain_skill_proposals",
         "brain_procedural_memory",
+        "brain_procedural_graph",
         "brain_recurrence",
+        "brain_attention_flows",
         // Pay Memory (unchanged).
         "payment_memory_init",
         "payment_receipt_append",
@@ -315,7 +324,9 @@ describe("tool calls", () => {
     expect(s.vault.ignore_source).toBeDefined();
     expect(["_brain.yaml", "defaults"]).toContain(s.vault.ignore_source);
     expect(Array.isArray(s.vault.rules)).toBe(true);
-    expect(s.vault.rules.some((r: { raw: string }) => r.raw === ".obsidian")).toBe(true);
+    expect(
+      s.vault.rules.some((r: { raw: string }) => r.raw === ".obsidian"),
+    ).toBe(true);
     expect(typeof s.vault.included.files).toBe("number");
     expect(typeof s.vault.included.dirs).toBe("number");
     expect(typeof s.vault.excluded.dirs).toBe("number");
@@ -376,7 +387,9 @@ describe("tool calls", () => {
     const s = r.result.structuredContent;
     expect(s.limit).toBe(5);
     expect(s.total_pages).toBeGreaterThanOrEqual(1);
-    expect(s.pages.some((p: { title: string }) => p.title.includes("Sandbox"))).toBe(true);
+    expect(
+      s.pages.some((p: { title: string }) => p.title.includes("Sandbox")),
+    ).toBe(true);
   });
 
   // `second_brain_capture` and `event_log_append` are no longer
@@ -443,7 +456,9 @@ describe("tool calls", () => {
     const r = (await callTool(server, "bad_contract")) as any;
     expect(r.result.isError).toBe(true);
     expect(r.result.structuredContent).toBeUndefined();
-    expect(r.result.content[0].text).toContain("bad_contract output contract failed");
+    expect(r.result.content[0].text).toContain(
+      "bad_contract output contract failed",
+    );
   });
 });
 
@@ -496,7 +511,9 @@ describe("stdio loop", () => {
     // + brain_recall_gate (v0.27.0) = 58.
     // + 7 context continuity/session recall tools (v0.29.0) = 65.
     // + 3 procedural-learning tools (v0.30.0) = 68.
-    expect(list.result.tools.length).toBe(68);
+    // + brain_procedural_graph (v0.31.0) = 69.
+    // + brain_attention_flows (v0.31.0) = 70.
+    expect(list.result.tools.length).toBe(70);
   });
 
   test("returns parse error for invalid JSON", async () => {

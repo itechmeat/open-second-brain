@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
-import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import {
+  JSONRPC_VERSION,
+  MCPServer,
+  PROTOCOL_VERSION,
+} from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
 let vault: string;
@@ -70,16 +74,22 @@ describe("procedural learning tool registration", () => {
     for (const name of [
       "brain_skill_proposals",
       "brain_procedural_memory",
+      "brain_procedural_graph",
       "brain_recurrence",
+      "brain_attention_flows",
     ] as const) {
-      expect(buildToolTable("full").find((tool) => tool.name === name)).toBeDefined();
-      expect(buildToolTable("writer").find((tool) => tool.name === name)).toBeUndefined();
+      expect(
+        buildToolTable("full").find((tool) => tool.name === name),
+      ).toBeDefined();
+      expect(
+        buildToolTable("writer").find((tool) => tool.name === name),
+      ).toBeUndefined();
     }
   });
 });
 
 describe("procedural learning MCP tools", () => {
-  test("skill proposals, procedural memory, and recurrence work end-to-end", async () => {
+  test("skill proposals, procedural memory, procedural graph, and recurrence work end-to-end", async () => {
     const server = new MCPServer({ vault });
     await initialize(server);
 
@@ -120,6 +130,38 @@ describe("procedural learning MCP tools", () => {
       id: entries[0]!["id"],
     });
     expect(marked.usedCount).toBeGreaterThanOrEqual(1);
+
+    const graphRebuild = await callTool(server, "brain_procedural_graph", {
+      operation: "rebuild",
+    });
+    expect(graphRebuild.operation).toBe("rebuild");
+    expect(
+      (graphRebuild.graph as Record<string, unknown>).nodes as number,
+    ).toBeGreaterThan(0);
+
+    const graphShow = await callTool(server, "brain_procedural_graph", {
+      operation: "show",
+    });
+    expect((graphShow.nodes as unknown[]).length).toBeGreaterThan(0);
+
+    const graphHints = await callTool(server, "brain_procedural_graph", {
+      operation: "hints",
+    });
+    expect((graphHints.entries as unknown[]).length).toBeGreaterThan(0);
+
+    const flowsList = await callTool(server, "brain_attention_flows", {
+      operation: "list",
+    });
+    expect(flowsList.total).toBeGreaterThan(0);
+    const flowId = (flowsList.flows as Array<Record<string, unknown>>)[0]![
+      "id"
+    ] as string;
+
+    const flowsEval = await callTool(server, "brain_attention_flows", {
+      operation: "evaluate",
+      flow_id: flowId,
+    });
+    expect((flowsEval.sections as unknown[]).length).toBeGreaterThan(0);
 
     const recLearn = await callTool(server, "brain_recurrence", {
       operation: "learn",

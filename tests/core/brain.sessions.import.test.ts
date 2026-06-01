@@ -7,14 +7,23 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import { importSession, importSessionPath } from "../../src/core/brain/sessions/import.ts";
+import {
+  importSession,
+  importSessionPath,
+} from "../../src/core/brain/sessions/import.ts";
 import { SessionImportError } from "../../src/core/brain/sessions/types.ts";
 import { describeSessionRecall } from "../../src/core/brain/session-recall.ts";
 
@@ -38,7 +47,10 @@ beforeEach(() => {
   ]) {
     mkdirSync(d, { recursive: true });
   }
-  atomicWriteFileSync(join(dirs.brain, "_brain.yaml"), DEFAULT_BRAIN_CONFIG_YAML);
+  atomicWriteFileSync(
+    join(dirs.brain, "_brain.yaml"),
+    DEFAULT_BRAIN_CONFIG_YAML,
+  );
 });
 
 afterEach(() => {
@@ -92,7 +104,9 @@ describe("importSession", () => {
       dryRun: true,
     });
     expect(res.signals_created).toBe(0);
-    const inbox = readdirSync(brainDirs(tmp).inbox).filter((n) => n.startsWith("sig-"));
+    const inbox = readdirSync(brainDirs(tmp).inbox).filter((n) =>
+      n.startsWith("sig-"),
+    );
     expect(inbox.length).toBe(0);
   });
 
@@ -106,9 +120,31 @@ describe("importSession", () => {
 
     expect(res.recall_turns_imported).toBeGreaterThan(0);
     expect(res.recall_summary_nodes).toBeGreaterThan(0);
-    expect(describeSessionRecall(tmp, { sessionId: "session-import-test" }).raw_turns).toBe(
-      res.recall_turns_imported,
-    );
+    expect(
+      describeSessionRecall(tmp, { sessionId: "session-import-test" })
+        .raw_turns,
+    ).toBe(res.recall_turns_imported);
+  });
+
+  test("supports filtered write mode by role", async () => {
+    const res = await importSession(tmp, CLAUDE, {
+      agent: "test",
+      filterRoles: ["user"],
+    });
+
+    expect(res.signals_created).toBe(1);
+    expect(res.tool_replays).toBe(0);
+    expect(res.filtered_turns).toBeGreaterThan(0);
+  });
+
+  test("supports filtered write mode by text substring", async () => {
+    const res = await importSession(tmp, CLAUDE, {
+      agent: "test",
+      filterTextIncludes: "no-match-substring",
+    });
+
+    expect(res.signals_created).toBe(0);
+    expect(res.filtered_turns).toBe(res.turns_scanned);
   });
 
   test("handles the codex fixture", async () => {

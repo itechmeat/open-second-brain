@@ -60,7 +60,9 @@ import {
   cmdBrainRecallTelemetry,
   cmdBrainSkillProposals,
   cmdBrainProceduralMemory,
+  cmdBrainProceduralGraph,
   cmdBrainRecurrence,
+  cmdBrainAttentionFlows,
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,
   cmdBrainSessionGrep,
@@ -77,7 +79,9 @@ import {
   cmdBrainWeekly,
 } from "./brain/verbs/index.ts";
 
-export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promise<number> {
+export async function handleBrainSubcommand(
+  argv: ReadonlyArray<string>,
+): Promise<number> {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(BRAIN_HELP);
     return argv.length === 0 ? 2 : 0;
@@ -199,8 +203,12 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainSkillProposals(rest);
       case "procedural-memory":
         return await cmdBrainProceduralMemory(rest);
+      case "procedural-graph":
+        return await cmdBrainProceduralGraph(rest);
       case "recurrence":
         return await cmdBrainRecurrence(rest);
+      case "attention-flows":
+        return await cmdBrainAttentionFlows(rest);
       case "session-grep":
         return await cmdBrainSessionGrep(rest);
       case "session-describe":

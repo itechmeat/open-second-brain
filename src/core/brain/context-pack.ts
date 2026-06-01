@@ -27,8 +27,14 @@ import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget } from "./recall-budget.ts";
-import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
-import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
+import {
+  emitContextReceipt,
+  type ContextReceiptOptions,
+} from "./context-receipts.ts";
+import {
+  emitRecallTelemetry,
+  type RecallTelemetryOptions,
+} from "./recall-telemetry.ts";
 import {
   applyContextTransforms,
   type ContextTransformOptions,
@@ -40,6 +46,7 @@ import {
   type ContextLaneName,
   type ContextLanesReport,
 } from "./context-lanes.ts";
+import { buildAttentionContextBlock } from "./attention-flows.ts";
 
 const TIER_ORDER: ReadonlyArray<PageTier> = [
   PAGE_TIER.core,
@@ -102,6 +109,8 @@ export interface ContextPackOptions {
   readonly telemetry?: RecallTelemetryOptions;
   /** Opt-in post-selection context transforms. Defaults preserve legacy order and bodies. */
   readonly transforms?: ContextTransformOptions;
+  /** Optional declarative attention-flow ids to include as a synthetic context item. */
+  readonly attentionFlowIds?: ReadonlyArray<string>;
 }
 
 interface Candidate {
@@ -153,9 +162,11 @@ function collectCandidates(vault: string): Candidate[] {
       } catch {
         continue;
       }
-      const id = typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
+      const id =
+        typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
       const tier = readTier(meta);
-      const created = typeof meta["created_at"] === "string" ? meta["created_at"] : "";
+      const created =
+        typeof meta["created_at"] === "string" ? meta["created_at"] : "";
       let fallbackMtimeMs = 0;
       if (!created) {
         try {
@@ -166,7 +177,8 @@ function collectCandidates(vault: string): Candidate[] {
       }
       const createdAtMs = created ? Date.parse(created) : fallbackMtimeMs;
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
-      const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
+      const principle =
+        typeof meta["principle"] === "string" ? meta["principle"] : "";
       const contextLane = normalizeContextLane(meta["context_lane"]);
       const guarded = guardBrainContextSnippet(body, {
         source: { id, path: full, metadata: meta },
@@ -189,14 +201,19 @@ function collectCandidates(vault: string): Candidate[] {
         contextLane,
         body: guarded.safeText,
         tokens: estimateTokens(guarded.safeText),
-        ...(contextSafetyReport(guarded) ? { safety: contextSafetyReport(guarded) } : {}),
+        ...(contextSafetyReport(guarded)
+          ? { safety: contextSafetyReport(guarded) }
+          : {}),
       });
     }
   }
   return out;
 }
 
-export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport {
+export function packContext(
+  vault: string,
+  opts: ContextPackOptions,
+): ContextPackReport {
   const startedAtMs = Date.now();
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
     return finalizeContextPackReport(
@@ -262,6 +279,35 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     used += tokens;
   }
 
+  if (opts.attentionFlowIds && opts.attentionFlowIds.length > 0) {
+    const attentionBody = buildAttentionContextBlock(
+      vault,
+      opts.attentionFlowIds,
+    );
+    if (attentionBody && attentionBody.trim()) {
+      const tokens = estimateTokens(attentionBody);
+      if (used + tokens <= opts.maxTokens) {
+        items.unshift({
+          id: "attention-flows",
+          path: join(vault, "Brain", "attention", "flows"),
+          tier: PAGE_TIER.core,
+          tokens,
+          body: attentionBody,
+          principle: "Declarative attention flow output",
+          contextLane: "directive",
+          trimmed: false,
+        });
+        used += tokens;
+      } else {
+        skipped.push({
+          id: "attention-flows",
+          tokens,
+          reason: "over-budget",
+        });
+      }
+    }
+  }
+
   // Total recall character cap (v0.20.0): a second ceiling over the
   // token-budgeted set. Applied via the shared primitive on the emitted
   // items only (so query-missed pages never count), dropping the
@@ -304,7 +350,10 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   }
 
   const finalItems = applyContextTransforms(items, opts.transforms);
-  const finalTokensUsed = finalItems.reduce((sum, item) => sum + item.tokens, 0);
+  const finalTokensUsed = finalItems.reduce(
+    (sum, item) => sum + item.tokens,
+    0,
+  );
   return finalizeContextPackReport(
     vault,
     opts,
@@ -357,7 +406,9 @@ function finalizeContextPackReport(
       status: report.items.length > 0 ? "ok" : "empty",
       durationMs: Date.now() - startedAtMs,
       resultCount: report.items.length,
-      topArtifacts: report.items.slice(0, 10).map((item) => ({ id: item.id, path: item.path })),
+      topArtifacts: report.items
+        .slice(0, 10)
+        .map((item) => ({ id: item.id, path: item.path })),
       gaps: contextPackGaps(report),
       metadata: {
         ...(opts.telemetry.metadata ?? {}),
@@ -382,13 +433,17 @@ function contextPackBudgetMetadata(
     ...(opts.maxCharsPerMemory !== undefined
       ? { max_chars_per_memory: opts.maxCharsPerMemory }
       : {}),
-    ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
+    ...(opts.maxTotalChars !== undefined
+      ? { max_total_chars: opts.maxTotalChars }
+      : {}),
   };
 }
 
 function contextPackGaps(report: ContextPackReport): ReadonlyArray<string> {
   const gaps = new Set<string>();
-  if (report.items.length === 0 && report.skipped.length === 0) gaps.add("no_matching_context");
-  for (const skipped of report.skipped) gaps.add(skipped.reason.replace(/-/g, "_"));
+  if (report.items.length === 0 && report.skipped.length === 0)
+    gaps.add("no_matching_context");
+  for (const skipped of report.skipped)
+    gaps.add(skipped.reason.replace(/-/g, "_"));
   return [...gaps];
 }
