@@ -45,6 +45,12 @@ export const BRAIN_INBOX_REL = posix.join(BRAIN_ROOT_REL, "inbox");
 export const BRAIN_PROCESSED_REL = posix.join(BRAIN_INBOX_REL, "processed");
 export const BRAIN_PREFERENCES_REL = posix.join(BRAIN_ROOT_REL, "preferences");
 export const BRAIN_RETIRED_REL = posix.join(BRAIN_ROOT_REL, "retired");
+export const BRAIN_SKILL_PROPOSALS_REL = posix.join(BRAIN_ROOT_REL, "skill-proposals");
+export const BRAIN_SKILL_PROPOSALS_PENDING_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "pending");
+export const BRAIN_SKILL_PROPOSALS_ACCEPTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "accepted");
+export const BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "rejected");
+export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
+export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
 /**
@@ -162,6 +168,45 @@ export function preferenceHistoryPath(vault: string, slug: string): string {
 export function retiredPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
   return ensureInsideVault(join(brainDirs(vault).retired, `ret-${s}.md`), vault);
+}
+
+/** Pending skill-proposal path: `Brain/skill-proposals/pending/prop-<slug>.md`. */
+export function skillProposalPendingPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_PENDING_REL, `prop-${s}.md`), vault);
+}
+
+/** Accepted skill-proposal archive path: `Brain/skill-proposals/accepted/prop-<slug>.md`. */
+export function skillProposalAcceptedPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_ACCEPTED_REL, `prop-${s}.md`), vault);
+}
+
+/** Rejected skill-proposal archive path: `Brain/skill-proposals/rejected/prop-<slug>.md`. */
+export function skillProposalRejectedPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REJECTED_REL, `prop-${s}.md`), vault);
+}
+
+/** Accepted procedure reference path: `Brain/procedures/proc-<slug>.md`. */
+export function procedurePath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURES_REL, `proc-${s}.md`), vault);
+}
+
+/** Procedural-memory index path: `Brain/procedural-memory/index.json`. */
+export function proceduralMemoryIndexPath(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "index.json"), vault);
+}
+
+/** Procedural-memory usage sidecar path: `Brain/procedural-memory/usage.jsonl`. */
+export function proceduralMemoryUsagePath(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "usage.jsonl"), vault);
+}
+
+/** Recurrence support ledger path: `Brain/log/recurrence-support.jsonl`. */
+export function proceduralRecurrencePath(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_LOG_REL, "recurrence-support.jsonl"), vault);
 }
 
 /** Log file for the given UTC date: `Brain/log/<YYYY-MM-DD>.md`. */
