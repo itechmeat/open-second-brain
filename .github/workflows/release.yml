@@ -36,7 +36,7 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Set up Python (Hermes shim test only)
+      - name: Set up Python (Hermes plugin tests)
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -53,7 +53,7 @@ jobs:
       - name: Run TypeScript test suite (bun:test)
         run: bun test
 
-      - name: Run Python shim tests
+      - name: Run Python plugin tests
         run: python -m unittest discover -s tests/python -v
 
       - name: Validate manifests and CLI scripts
@@ -64,7 +64,7 @@ jobs:
           python -m json.tool .codex-plugin/plugin.json >/dev/null
           python -m json.tool openclaw.plugin.json >/dev/null
           python -m json.tool package.json >/dev/null
-          python -m py_compile plugins/hermes/__init__.py
+          python -m compileall -q plugins/hermes
           bash -n scripts/o2b
           bash -n scripts/vault-log
           bash -n scripts/_bun-precheck.sh

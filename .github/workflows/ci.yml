@@ -32,7 +32,7 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Set up Python (Hermes shim test only)
+      - name: Set up Python (Hermes plugin tests)
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -55,5 +55,8 @@ jobs:
       - name: TypeScript test suite
         run: bun test
 
-      - name: Python shim tests
+      - name: Python plugin tests
         run: python -m unittest discover -s tests/python -v
+
+      - name: Python package compiles
+        run: python -m compileall -q plugins/hermes
