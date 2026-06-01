@@ -3,7 +3,10 @@ import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { proceduralHintsPath } from "./paths.ts";
-import { readProceduralGraph, type ProceduralGraphProjection } from "./procedural-graph.ts";
+import {
+  readProceduralGraph,
+  type ProceduralGraphProjection,
+} from "./procedural-graph.ts";
 
 export interface ProceduralHintEntry {
   readonly node_id: string;
@@ -27,7 +30,7 @@ export function rebuildProceduralHints(
     for (const node of graph.nodes) {
       if (node.kind === "entity") continue;
       const cues = new Set<string>();
-      cues.add(node.title.toLowerCase());
+      for (const token of tokenizeCue(node.title)) cues.add(token);
       if (node.sourcePath) {
         for (const token of tokenizeCue(node.sourcePath)) cues.add(token);
       }
@@ -44,7 +47,9 @@ export function rebuildProceduralHints(
       }
       entries.push({
         node_id: node.id,
-        cues: Object.freeze([...cues].filter((item) => item.length >= 3).toSorted()),
+        cues: Object.freeze(
+          [...cues].filter((item) => item.length >= 3).toSorted(),
+        ),
       });
     }
   }
@@ -52,7 +57,9 @@ export function rebuildProceduralHints(
   const projection: ProceduralHintsProjection = {
     schema_version: 1,
     generated_at: now.toISOString(),
-    entries: Object.freeze(entries.toSorted((l, r) => l.node_id.localeCompare(r.node_id))),
+    entries: Object.freeze(
+      entries.toSorted((l, r) => l.node_id.localeCompare(r.node_id)),
+    ),
   };
 
   const path = proceduralHintsPath(vault);
@@ -61,11 +68,15 @@ export function rebuildProceduralHints(
   return projection;
 }
 
-export function readProceduralHints(vault: string): ProceduralHintsProjection | null {
+export function readProceduralHints(
+  vault: string,
+): ProceduralHintsProjection | null {
   const path = proceduralHintsPath(vault);
   if (!existsSync(path)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as ProceduralHintsProjection;
+    const parsed = JSON.parse(
+      readFileSync(path, "utf8"),
+    ) as ProceduralHintsProjection;
     if (parsed.schema_version !== 1) return null;
     if (!Array.isArray(parsed.entries)) return null;
     return parsed;

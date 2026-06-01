@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
@@ -7,6 +13,7 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { rebuildProceduralHints } from "./procedural-hints.ts";
 import { rebuildProceduralGraph } from "./procedural-graph.ts";
+import { reconcileProceduralMemory } from "./procedural-memory.ts";
 import {
   BRAIN_SKILL_PROPOSALS_REL,
   procedurePath,
@@ -15,7 +22,10 @@ import {
   skillProposalPendingPath,
   skillProposalRejectedPath,
 } from "./paths.ts";
-import { listContinuityRecords, type ContinuityRecord } from "./continuity/store.ts";
+import {
+  listContinuityRecords,
+  type ContinuityRecord,
+} from "./continuity/store.ts";
 
 export type SkillProposalPatternKind =
   | "repeated_action"
@@ -58,6 +68,7 @@ interface WatermarkState {
 }
 
 const DEFAULT_MIN_SUPPORT = 3;
+const DEFAULT_PROCEDURAL_ROOTS = ["Brain/procedures", "skills"] as const;
 
 export function learnSkillProposals(
   vault: string,
@@ -77,7 +88,8 @@ export function learnSkillProposals(
     })
     .toSorted(
       (left, right) =>
-        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id),
     );
 
   if (records.length === 0) {
@@ -103,7 +115,11 @@ export function learnSkillProposals(
     const acceptedPath = skillProposalAcceptedPath(vault, slug);
     const rejectedPath = skillProposalRejectedPath(vault, slug);
 
-    if (existsSync(pendingPath) || existsSync(acceptedPath) || existsSync(rejectedPath)) {
+    if (
+      existsSync(pendingPath) ||
+      existsSync(acceptedPath) ||
+      existsSync(rejectedPath)
+    ) {
       suppressed.push(proposalId);
       continue;
     }
@@ -163,7 +179,10 @@ export function listPendingSkillProposals(vault: string): ReadonlyArray<{
   status: string;
   patternKind: string;
 }> {
-  const dir = ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL, "pending"), vault);
+  const dir = ensureInsideVault(
+    join(vault, BRAIN_SKILL_PROPOSALS_REL, "pending"),
+    vault,
+  );
   if (!existsSync(dir)) return Object.freeze([]);
 
   const out: Array<{
@@ -180,9 +199,13 @@ export function listPendingSkillProposals(vault: string): ReadonlyArray<{
     if (typeof fm["id"] !== "string") continue;
     out.push({
       id: fm["id"],
-      slug: typeof fm["slug"] === "string" ? fm["slug"] : fm["id"].replace(/^prop-/, ""),
+      slug:
+        typeof fm["slug"] === "string"
+          ? fm["slug"]
+          : fm["id"].replace(/^prop-/, ""),
       status: typeof fm["status"] === "string" ? fm["status"] : "pending",
-      patternKind: typeof fm["pattern_kind"] === "string" ? fm["pattern_kind"] : "unknown",
+      patternKind:
+        typeof fm["pattern_kind"] === "string" ? fm["pattern_kind"] : "unknown",
     });
   }
   return Object.freeze(out);
@@ -250,6 +273,9 @@ export function acceptSkillProposal(
   }
 
   unlinkSync(pendingPath);
+  reconcileProceduralMemory(vault, {
+    roots: DEFAULT_PROCEDURAL_ROOTS.map((root) => join(vault, root)),
+  });
   const graph = rebuildProceduralGraph(vault);
   rebuildProceduralHints(vault, { graph });
   return {
@@ -301,6 +327,9 @@ export function rejectSkillProposal(
   );
 
   unlinkSync(pendingPath);
+  reconcileProceduralMemory(vault, {
+    roots: DEFAULT_PROCEDURAL_ROOTS.map((root) => join(vault, root)),
+  });
   const graph = rebuildProceduralGraph(vault);
   rebuildProceduralHints(vault, { graph });
   return { id, slug, status: "rejected", proposalPath: rejectedPath };
@@ -310,9 +339,15 @@ function readWatermark(vault: string): WatermarkState {
   const path = watermarkPath(vault);
   if (!existsSync(path)) return { lastCreatedAt: null, lastId: null };
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
     return {
-      lastCreatedAt: typeof parsed["lastCreatedAt"] === "string" ? parsed["lastCreatedAt"] : null,
+      lastCreatedAt:
+        typeof parsed["lastCreatedAt"] === "string"
+          ? parsed["lastCreatedAt"]
+          : null,
       lastId: typeof parsed["lastId"] === "string" ? parsed["lastId"] : null,
     };
   } catch {
@@ -410,7 +445,9 @@ function detectCandidates(
     temporalMap.set(key, bucket);
   }
   for (const [key, bucket] of temporalMap) {
-    const daySet = new Set(bucket.map((record) => record.createdAt.slice(0, 10)));
+    const daySet = new Set(
+      bucket.map((record) => record.createdAt.slice(0, 10)),
+    );
     if (daySet.size < minSupport) continue;
     out.push({
       patternKind: "temporal_routine",
@@ -423,7 +460,8 @@ function detectCandidates(
 
   return out.toSorted(
     (left, right) =>
-      left.patternKind.localeCompare(right.patternKind) || left.key.localeCompare(right.key),
+      left.patternKind.localeCompare(right.patternKind) ||
+      left.key.localeCompare(right.key),
   );
 }
 
@@ -490,7 +528,10 @@ function evidenceSnippet(record: ContinuityRecord): string {
   return "";
 }
 
-function proposalSlug(candidate: ProposalCandidate, payloadHash: string): string {
+function proposalSlug(
+  candidate: ProposalCandidate,
+  payloadHash: string,
+): string {
   const keySlug = slugify(candidate.key).slice(0, 40);
   return `${candidate.patternKind}-${keySlug}-${payloadHash.slice(0, 8)}`;
 }
@@ -508,10 +549,16 @@ function candidateHash(candidate: ProposalCandidate): string {
     .digest("hex");
 }
 
-function renderAcceptedProcedureBody(proposalId: string, proposalBody: string): string {
+function renderAcceptedProcedureBody(
+  proposalId: string,
+  proposalBody: string,
+): string {
   const marker = "## Suggested skill body";
   const idx = proposalBody.indexOf(marker);
-  const suggested = idx >= 0 ? proposalBody.slice(idx + marker.length).trim() : proposalBody.trim();
+  const suggested =
+    idx >= 0
+      ? proposalBody.slice(idx + marker.length).trim()
+      : proposalBody.trim();
   return [
     "# Procedure",
     "",

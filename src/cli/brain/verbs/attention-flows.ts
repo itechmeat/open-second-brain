@@ -54,7 +54,12 @@ function evaluate(argv: string[]): number {
     flags["vault"] as string | undefined,
     defaultConfigPath(),
   );
-  const report = evaluateAttentionFlow(vault, flowId);
+  let report;
+  try {
+    report = evaluateAttentionFlow(vault, flowId);
+  } catch (error) {
+    throw mapAttentionFlowError(error, flowId);
+  }
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
     return 0;
@@ -78,7 +83,12 @@ function render(argv: string[]): number {
     flags["vault"] as string | undefined,
     defaultConfigPath(),
   );
-  const text = renderAttentionFlow(vault, flowId);
+  let text: string;
+  try {
+    text = renderAttentionFlow(vault, flowId);
+  } catch (error) {
+    throw mapAttentionFlowError(error, flowId);
+  }
   if (flags["json"]) {
     process.stdout.write(
       JSON.stringify({ flow_id: flowId, text }, null, 2) + "\n",
@@ -87,4 +97,14 @@ function render(argv: string[]): number {
   }
   process.stdout.write(text.endsWith("\n") ? text : text + "\n");
   return 0;
+}
+
+function mapAttentionFlowError(error: unknown, flowId: string): CliError {
+  if (error instanceof Error) {
+    if (error.message.startsWith("attention flow not found:")) {
+      return new CliError(`brain attention-flows: unknown flow id: ${flowId}`);
+    }
+    return new CliError(error.message);
+  }
+  return new CliError("brain attention-flows: failed to evaluate flow");
 }
