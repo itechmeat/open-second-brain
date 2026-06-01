@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.2] - 2026-06-01
+
+Hands-off post-upgrade migration. After an update, the plugin now brings an
+already-initialised vault current by itself - no manual `o2b search reindex` or
+`o2b brain upgrade`. Completes the "an update must never need manual steps" goal
+started in 0.31.1.
+
+### Fixed
+
+- Search self-heals a stale or missing index on read: instead of throwing
+  `SCHEMA_MISMATCH` / `INDEX_MISSING` (which told the user to run
+  `o2b search reindex` / `o2b search index`), the read path rebuilds the index
+  once and retries.
+
+### Added
+
+- `ensureVaultCurrent`: a state-driven, best-effort maintenance pass run at
+  `o2b mcp` startup (the path Hermes/Claude Code/Codex all spawn) and on the
+  Claude Code `SessionStart` hook. On an already-initialised vault it migrates a
+  stale `_brain.yaml`/`_BRAIN.md` (snapshot-backed, additive) and rebuilds a
+  stale or missing search index in the background. It never throws and never
+  blocks startup.
+
+### Notes
+
+- Migration is **state-driven, not version-stamped**: each step keys off actual
+  on-disk state (index `schema_version`, `_brain.yaml` pending plan, dir
+  existence), so a Syncthing-synced vault cannot let one device mark a migration
+  done and make another skip its own per-device reindex. The behavior is locked
+  by `tests/core/search/self-heal.test.ts` and
+  `tests/core/maintenance/ensure-current.test.ts`.
+- The manual `o2b search reindex` / `o2b brain upgrade` commands remain for
+  explicit use; auto-migration reuses their logic.
+
 ## [0.31.1] - 2026-06-01
 
 Update-resilience and repair. Plugin updates no longer strand the hooks or
@@ -3745,6 +3779,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.31.2]: https://github.com/itechmeat/open-second-brain/compare/v0.31.1...v0.31.2
 [0.31.1]: https://github.com/itechmeat/open-second-brain/compare/v0.31.0...v0.31.1
 [0.30.0]: https://github.com/itechmeat/open-second-brain/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/itechmeat/open-second-brain/compare/v0.28.0...v0.29.0

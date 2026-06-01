@@ -167,12 +167,14 @@ test("search focus set/status/clear steers only the focused query window", async
   expect(JSON.parse(clear.stdout).active).toBe(false);
 });
 
-test("search query on missing index fails with exit 1", async () => {
+test("search query on a missing index self-heals (builds it) and exits 0", async () => {
+  // A query used to fail with INDEX_MISSING; the read path now builds the index
+  // on first use so an upgrade never needs a manual `o2b search index`.
   const out = await runCli(["search", "nothing-here"], {
     env: { OPEN_SECOND_BRAIN_CONFIG: config },
   });
-  expect(out.returncode).toBe(1);
-  expect(out.stderr).toContain("INDEX_MISSING");
+  expect(out.returncode).toBe(0);
+  expect(existsSync(join(vault, ".open-second-brain", "brain.sqlite"))).toBe(true);
 });
 
 test("search check reports vault_readable and sqlite_ok on a fresh vault", async () => {
