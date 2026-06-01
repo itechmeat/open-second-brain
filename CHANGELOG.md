@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2026-05-31
+
+Context continuity and receipt surfaces. Agent-facing context can now leave redacted receipts and telemetry behind, operators can inspect budget presets before applying them, and session transcripts can be imported into a continuity-backed recall DAG.
+
+### Added
+
+- Append-only continuity records under `Brain/log/continuity/` with redaction-safe payloads, stable IDs, source references, pagination, and source invalidation markers.
+- Opt-in prompt context receipts for `brain_context_pack` and `brain_pre_compress_pack`, with CLI/MCP list/show surfaces that expose item IDs, budgets, source hashes, safety/redaction metadata, and final text hashes without storing raw private content.
+- Opt-in recall telemetry for search, context-pack, and pre-compress calls, including duration, status, result counts, top artifacts, budget/cache metadata, coverage gaps, and CLI/MCP summaries.
+- Opt-in context-pack transforms for cache-stable ordering and repeated-context deduplication. Transform annotations report original/stable ranks and reference hints while leaving default ordering unchanged.
+- Read-only context budget presets (`tight-context`, `long-context`) with CLI/MCP `show`, `suggest`, and `diff` diagnostics, confidence/reason reporting, explicit override preservation, and invalid override detection.
+- Pre-compaction extraction through CLI/MCP and core APIs. Bounded text segments emit typed decision, commitment, outcome, rule, and open-question continuity records with deterministic base64/media sanitization and idempotent deduplication.
+- Session recall DAG foundation. `import-session --recall` stores normalized turns as raw continuity records, deterministic two-depth summary nodes preserve source lineage, and CLI/MCP `session-grep`, `session-describe`, and `session-expand` inspect bounded hits and paginated raw turn content.
+
+### Changed
+
+- MCP full-server tool count is now 65 after adding context receipt, telemetry, preset, pre-compaction, and session recall tools.
+- `o2b brain import-session --json` includes recall import counters; they remain zero unless `--recall` is explicitly enabled.
+
+### Notes
+
+- All new context receipt, telemetry, transform, preset, pre-compaction, and session recall behavior is opt-in or read-only by default.
+
 ## [0.28.0] - 2026-05-31
 
 Brain safety and governance foundations. Automatically surfaced Brain context now has a deterministic guardrail against prompt-injection-like note content, config can point at local secrets without exposing values to agents, and larger governance workflows get preview-first core manifests.
@@ -2287,7 +2310,7 @@ with `source_type: inline`, the source-file wikilink in `source`,
 and a `dedup_hash`over the normalised payload. After capture
 the source line is annotated`@osb✓ [[sig-...]]`(inline form)
 or the info-string flips to`osb-checked`with a`<!-- @osb✓
-                        [[sig-...]] -->`comment line (block form), making re-runs
+                            [[sig-...]] -->`comment line (block form), making re-runs
 idempotent. Default ignore set covers`Brain/`, `.git`,
 `node_modules`, `.obsidian`, `.trash`, `.stversions`,
 `.open-second-brain`; additional excludes via `--exclude`,
@@ -3633,6 +3656,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.29.0]: https://github.com/itechmeat/open-second-brain/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/itechmeat/open-second-brain/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/itechmeat/open-second-brain/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/itechmeat/open-second-brain/compare/v0.25.0...v0.26.0

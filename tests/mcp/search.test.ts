@@ -17,6 +17,7 @@ import { indexVault } from "../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { LATEST_SCHEMA_VERSION } from "../../src/core/search/schema.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { listRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
 
 let tmp: string;
 let vault: string;
@@ -128,6 +129,30 @@ test("brain_search happy path returns paths and respects 600-char content cap", 
   expect(results[0]?.content.length).toBeLessThanOrEqual(600);
   // The MCP shape does NOT expose diagnostic score components.
   expect((results[0] as Record<string, unknown>)["keywordScore"]).toBeUndefined();
+});
+
+test("brain_search can opt in to recall telemetry", async () => {
+  writeMd("notes/telemetry.md", "# Telemetry\n\nrecall telemetry records search coverage.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const resp = await call(server, "brain_search", {
+    query: "telemetry",
+    limit: 5,
+    telemetry: true,
+    telemetry_host: "mcp-search-test",
+  });
+  const body = extractToolResult(resp);
+  expect(body["telemetry_id"]).toStartWith("ctn_");
+
+  const records = listRecallTelemetry(vault, {
+    mode: "search",
+    host: "mcp-search-test",
+  });
+  expect(records).toHaveLength(1);
+  expect(records[0]!.payload).toMatchObject({ status: "ok", result_count: 1 });
 });
 
 test("brain_search accepts structured query_document", async () => {

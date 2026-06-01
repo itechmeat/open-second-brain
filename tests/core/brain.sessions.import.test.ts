@@ -16,6 +16,7 @@ import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { importSession, importSessionPath } from "../../src/core/brain/sessions/import.ts";
 import { SessionImportError } from "../../src/core/brain/sessions/types.ts";
+import { describeSessionRecall } from "../../src/core/brain/session-recall.ts";
 
 const CLAUDE = resolve("tests/fixtures/sessions/claude-minimal.jsonl");
 const CODEX = resolve("tests/fixtures/sessions/codex-minimal.jsonl");
@@ -86,10 +87,28 @@ describe("importSession", () => {
   });
 
   test("dry-run does not write signals", async () => {
-    const res = await importSession(tmp, CLAUDE, { agent: "test", dryRun: true });
+    const res = await importSession(tmp, CLAUDE, {
+      agent: "test",
+      dryRun: true,
+    });
     expect(res.signals_created).toBe(0);
     const inbox = readdirSync(brainDirs(tmp).inbox).filter((n) => n.startsWith("sig-"));
     expect(inbox.length).toBe(0);
+  });
+
+  test("can also store imported turns in the session recall DAG", async () => {
+    const res = await importSession(tmp, CLAUDE, {
+      agent: "test",
+      recall: true,
+      recallSessionId: "session-import-test",
+      recallSummaryGroupSize: 2,
+    });
+
+    expect(res.recall_turns_imported).toBeGreaterThan(0);
+    expect(res.recall_summary_nodes).toBeGreaterThan(0);
+    expect(describeSessionRecall(tmp, { sessionId: "session-import-test" }).raw_turns).toBe(
+      res.recall_turns_imported,
+    );
   });
 
   test("handles the codex fixture", async () => {
@@ -136,7 +155,10 @@ describe("importSession", () => {
     writeFileSync(junk, '{"foo":"bar"}\n');
     // Should not throw — adapter chosen explicitly, iteration just
     // yields nothing.
-    const res = await importSession(tmp, junk, { agent: "test", format: "claude" });
+    const res = await importSession(tmp, junk, {
+      agent: "test",
+      format: "claude",
+    });
     expect(res.format).toBe("claude");
     expect(res.signals_created).toBe(0);
   });

@@ -25,6 +25,7 @@ import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceBoolOptional, coerceStringOptional } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
+import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -42,6 +43,10 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
     path_prefix: { type: "string", maxLength: 256 },
+    telemetry: { type: "boolean" },
+    telemetry_host: { type: "string", maxLength: 200 },
+    session_id: { type: "string", maxLength: 512 },
+    turn_id: { type: "string", maxLength: 512 },
     properties: {
       type: "object",
       description:
@@ -108,6 +113,7 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
     total: { type: "integer" },
     recall_hint: { type: "string" },
     evidence_pack: { type: "object" },
+    telemetry_id: { type: "string" },
   },
 };
 
@@ -242,6 +248,10 @@ async function toolBrainSearch(
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
+  const telemetry = coerceBoolOptional(args, "telemetry") ?? false;
+  const telemetryHost = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
+  const telemetrySessionId = coerceStringOptional(args, "session_id", 512);
+  const telemetryTurnId = coerceStringOptional(args, "turn_id", 512);
   const rawQueryDocument = coerceStringOptional(args, "query_document", 4000);
   const structuredQuery =
     rawQueryDocument !== undefined
@@ -265,6 +275,7 @@ async function toolBrainSearch(
   });
 
   let outcome: SearchOutcome;
+  const startedAtMs = Date.now();
   try {
     outcome = await withTimeout(
       search(config, {
@@ -283,12 +294,59 @@ async function toolBrainSearch(
       searchTimeoutError,
     );
   } catch (e) {
+    if (telemetry) {
+      emitRecallTelemetry(ctx.vault, {
+        host: telemetryHost,
+        ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
+        ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+        mode: "search",
+        status: e instanceof MCPError && e.message.includes("timeout") ? "timeout" : "error",
+        durationMs: Date.now() - startedAtMs,
+        resultCount: 0,
+        gaps: [
+          e instanceof MCPError && e.message.includes("timeout")
+            ? "search_timeout"
+            : "search_error",
+        ],
+        metadata: {
+          limit,
+          keyword_only: keywordOnly,
+          semantic: semantic ?? null,
+        },
+      });
+    }
     if (e instanceof SearchError) throw searchErrorToMcp(e);
     if (e instanceof MCPError) throw e;
     throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
   }
 
   const recallHint = deriveRecallHint(outcome.results, outcome.total);
+  const telemetryRecord = telemetry
+    ? emitRecallTelemetry(ctx.vault, {
+        host: telemetryHost,
+        ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
+        ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+        mode: "search",
+        status: outcome.results.length > 0 ? "ok" : "empty",
+        durationMs: Date.now() - startedAtMs,
+        resultCount: outcome.results.length,
+        topArtifacts: outcome.results.slice(0, 10).map((result) => ({
+          id: `${result.documentId}:${result.chunkId}`,
+          path: result.path,
+          score: result.score,
+        })),
+        gaps: searchTelemetryGaps(outcome),
+        metadata: {
+          limit,
+          total: outcome.total,
+          keyword_only: keywordOnly,
+          semantic: semantic ?? null,
+          evidence_pack: evidencePack,
+          warnings_count: outcome.warnings.length,
+          ...(pathPrefix !== undefined ? { path_prefix: pathPrefix } : {}),
+        },
+      })
+    : null;
   return {
     results: outcome.results.map((r: BrainSearchResult) => ({
       path: r.path,
@@ -306,7 +364,17 @@ async function toolBrainSearch(
     total: outcome.total,
     ...(outcome.evidencePack ? { evidence_pack: mcpEvidencePack(outcome.evidencePack) } : {}),
     ...(recallHint !== null ? { recall_hint: recallHint } : {}),
+    ...(telemetryRecord ? { telemetry_id: telemetryRecord.id } : {}),
   };
+}
+
+function searchTelemetryGaps(outcome: SearchOutcome): ReadonlyArray<string> {
+  const gaps = new Set<string>();
+  if (outcome.total === 0) gaps.add("no_matching_context");
+  for (const term of outcome.evidencePack?.missingTerms ?? []) {
+    gaps.add(`missing_term:${term}`);
+  }
+  return [...gaps];
 }
 
 function mcpEvidencePack(

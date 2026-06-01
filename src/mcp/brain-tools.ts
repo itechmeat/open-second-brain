@@ -69,6 +69,36 @@ import { loadTemporalConfigSafe } from "../core/brain/policy.ts";
 import { isBrainLogEventKind, type BrainLogEventKind } from "../core/brain/types.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { buildPreCompressPack } from "../core/brain/pre-compress-pack.ts";
+import {
+  getContextReceipt,
+  isContextReceiptTrigger,
+  listContextReceipts,
+  summarizeContextReceipt,
+  type ContextReceiptOptions,
+} from "../core/brain/context-receipts.ts";
+import {
+  isRecallTelemetryMode,
+  isRecallTelemetryStatus,
+  listRecallTelemetry,
+  summarizeRecallTelemetry,
+  type RecallTelemetryFilter,
+  type RecallTelemetryMode,
+  type RecallTelemetryOptions,
+  type RecallTelemetryStatus,
+} from "../core/brain/recall-telemetry.ts";
+import {
+  diffContextPreset,
+  getContextPreset,
+  listContextPresets,
+  suggestContextPreset,
+  type ContextPresetCurrentConfig,
+} from "../core/brain/context-presets.ts";
+import { extractPreCompactRecords } from "../core/brain/pre-compact-extract.ts";
+import {
+  describeSessionRecall,
+  expandSessionRecall,
+  searchSessionRecall,
+} from "../core/brain/session-recall.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
@@ -1701,14 +1731,28 @@ async function toolBrainContextPack(
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
   const includeLanes = coerceBool(args, "lanes");
+  const cacheStable = coerceBool(args, "cache_stable");
+  const dedupRepeated = coerceBool(args, "dedup_repeated");
   const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
+  const receipt = receiptOptionsFromArgs("brain_context_pack", args, "context_pack", "mcp");
+  const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
   const report = packContext(ctx.vault, {
     maxTokens,
     ...(query ? { query } : {}),
     ...(includeLanes ? { includeLanes: true } : {}),
+    ...(receipt !== undefined ? { receipt } : {}),
+    ...(cacheStable || dedupRepeated
+      ? {
+          transforms: {
+            ...(cacheStable ? { cacheStableOrdering: true } : {}),
+            ...(dedupRepeated ? { deduplicateRepeatedContext: true } : {}),
+          },
+        }
+      : {}),
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+    ...(telemetry !== undefined ? { telemetry } : {}),
   });
   return {
     vault_path: ctx.vault,
@@ -1721,6 +1765,10 @@ async function toolBrainContextPack(
       tokens: i.tokens,
       body: i.body,
       trimmed: i.trimmed,
+      ...(i.originalRank !== undefined ? { original_rank: i.originalRank } : {}),
+      ...(i.stableRank !== undefined ? { stable_rank: i.stableRank } : {}),
+      ...(i.dedupedFrom !== undefined ? { deduped_from: i.dedupedFrom } : {}),
+      ...(i.referenceHint !== undefined ? { reference_hint: i.referenceHint } : {}),
       ...(i.safety ? { safety: i.safety } : {}),
     })),
     skipped: report.skipped.map((s) => ({
@@ -1728,7 +1776,278 @@ async function toolBrainContextPack(
       tokens: s.tokens,
       reason: s.reason,
     })),
+    ...(report.receiptId ? { receipt_id: report.receiptId } : {}),
+    ...(report.telemetryId ? { telemetry_id: report.telemetryId } : {}),
     ...(report.lanes ? { lanes: report.lanes } : {}),
+  };
+}
+
+// ----- brain_context_receipts ---------------------------------------------
+
+async function toolBrainContextReceipts(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_context_receipts", args, "operation");
+  if (operation === "list") {
+    const trigger = optionalStringArg("brain_context_receipts", args, "trigger");
+    if (trigger !== undefined && !isContextReceiptTrigger(trigger)) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_receipts: trigger must be context_pack or pre_compress",
+      );
+    }
+    const host = optionalStringArg("brain_context_receipts", args, "host");
+    const sessionId = optionalStringArg("brain_context_receipts", args, "session_id");
+    const limit = coercePositiveInteger("brain_context_receipts", "limit", args["limit"]);
+    const receipts = listContextReceipts(ctx.vault, {
+      ...(trigger !== undefined ? { trigger } : {}),
+      ...(host !== undefined ? { host } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    });
+    const summaries = receipts.map(summarizeContextReceipt);
+    return {
+      vault_path: ctx.vault,
+      total: summaries.length,
+      receipts: summaries,
+    };
+  }
+
+  if (operation === "show") {
+    const id = optionalStringArg("brain_context_receipts", args, "id");
+    if (id === undefined) {
+      throw new MCPError(INVALID_PARAMS, "brain_context_receipts: id is required for show");
+    }
+    const receipt = getContextReceipt(ctx.vault, id);
+    if (receipt === null) {
+      throw new MCPError(INVALID_PARAMS, `brain_context_receipts: receipt not found: ${id}`);
+    }
+    return {
+      id: receipt.id,
+      kind: receipt.kind,
+      createdAt: receipt.createdAt,
+      sourceRefs: receipt.sourceRefs,
+      payload: receipt.payload,
+      private: receipt.private,
+      redacted: receipt.redacted,
+    };
+  }
+
+  throw new MCPError(INVALID_PARAMS, "brain_context_receipts: operation must be list or show");
+}
+
+function optionalStringArg(
+  tool: string,
+  args: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const raw = args[key];
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${key} must be a non-empty string`);
+  }
+  return raw.trim();
+}
+
+function requiredStringArg(tool: string, args: Record<string, unknown>, key: string): string {
+  const value = optionalStringArg(tool, args, key);
+  if (value === undefined) throw new MCPError(INVALID_PARAMS, `${tool}: ${key} is required`);
+  return value;
+}
+
+// ----- brain_recall_telemetry ---------------------------------------------
+
+async function toolBrainRecallTelemetry(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_recall_telemetry", args, "operation");
+  const filter = recallTelemetryFilter(args);
+
+  if (operation === "list") {
+    const records = listRecallTelemetry(ctx.vault, filter);
+    return { vault_path: ctx.vault, total: records.length, records };
+  }
+  if (operation === "summary") {
+    const summary = summarizeRecallTelemetry(ctx.vault, filter);
+    return { ...summary };
+  }
+  throw new MCPError(INVALID_PARAMS, "brain_recall_telemetry: operation must be list or summary");
+}
+
+function recallTelemetryFilter(args: Record<string, unknown>): RecallTelemetryFilter {
+  const mode = coerceRecallTelemetryMode(args["mode"]);
+  const status = coerceRecallTelemetryStatus(args["status"]);
+  const host = optionalStringArg("brain_recall_telemetry", args, "host");
+  const since = optionalStringArg("brain_recall_telemetry", args, "since");
+  const until = optionalStringArg("brain_recall_telemetry", args, "until");
+  const limit = coercePositiveInteger("brain_recall_telemetry", "limit", args["limit"]);
+  return {
+    ...(mode !== undefined ? { mode } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(host !== undefined ? { host } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  };
+}
+
+function coerceRecallTelemetryMode(raw: unknown): RecallTelemetryMode | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isRecallTelemetryMode(trimmed)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_recall_telemetry: mode must be search, context_pack, or pre_compress",
+    );
+  }
+  return trimmed;
+}
+
+function coerceRecallTelemetryStatus(raw: unknown): RecallTelemetryStatus | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isRecallTelemetryStatus(trimmed)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_recall_telemetry: status must be ok, empty, error, or timeout",
+    );
+  }
+  return trimmed;
+}
+
+// ----- brain_context_presets ----------------------------------------------
+
+async function toolBrainContextPresets(
+  _ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_context_presets", args, "operation");
+  if (operation === "show") {
+    const presetId = optionalStringArg("brain_context_presets", args, "preset_id");
+    const result =
+      presetId === undefined ? { presets: listContextPresets() } : getContextPreset(presetId);
+    if (result === null) {
+      throw new MCPError(INVALID_PARAMS, `brain_context_presets: unknown preset ${presetId}`);
+    }
+    return Array.isArray(result) ? { presets: result } : { ...result };
+  }
+  if (operation === "suggest") {
+    const model = optionalStringArg("brain_context_presets", args, "model");
+    const window = coercePositiveInteger(
+      "brain_context_presets",
+      "context_window_tokens",
+      args["context_window_tokens"],
+    );
+    return {
+      ...suggestContextPreset({
+        ...(model !== undefined ? { model } : {}),
+        ...(window !== undefined ? { contextWindowTokens: window } : {}),
+      }),
+    };
+  }
+  if (operation === "diff") {
+    const presetId = optionalStringArg("brain_context_presets", args, "preset_id");
+    if (presetId === undefined) {
+      throw new MCPError(INVALID_PARAMS, "brain_context_presets: preset_id is required for diff");
+    }
+    return {
+      ...diffContextPreset(presetId, contextPresetCurrentConfig(args["current"])),
+    };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_context_presets: operation must be show, suggest, or diff",
+  );
+}
+
+function contextPresetCurrentConfig(raw: unknown): ContextPresetCurrentConfig {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new MCPError(INVALID_PARAMS, "brain_context_presets: current must be an object");
+  }
+  return raw as ContextPresetCurrentConfig;
+}
+
+// ----- brain_pre_compact_extract ------------------------------------------
+
+async function toolBrainPreCompactExtract(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const sessionId = requiredStringArg("brain_pre_compact_extract", args, "session_id");
+  const turnStart = requiredStringArg("brain_pre_compact_extract", args, "turn_start");
+  const turnEnd = requiredStringArg("brain_pre_compact_extract", args, "turn_end");
+  const text = requiredStringArg("brain_pre_compact_extract", args, "text");
+  const maxChars = coercePositiveInteger(
+    "brain_pre_compact_extract",
+    "max_chars",
+    args["max_chars"],
+  );
+  const result = extractPreCompactRecords(ctx.vault, {
+    sessionId,
+    turnStart,
+    turnEnd,
+    text,
+    ...(optionalStringArg("brain_pre_compact_extract", args, "host") !== undefined
+      ? { host: optionalStringArg("brain_pre_compact_extract", args, "host") }
+      : {}),
+    ...(maxChars !== undefined ? { maxChars } : {}),
+  });
+  return { count: result.records.length, ...result };
+}
+
+// ----- session recall DAG --------------------------------------------------
+
+async function toolBrainSessionGrep(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const limit = coercePositiveInteger("brain_session_grep", "limit", args["limit"]);
+  const snippetChars = coercePositiveInteger(
+    "brain_session_grep",
+    "snippet_chars",
+    args["snippet_chars"],
+  );
+  return {
+    ...searchSessionRecall(ctx.vault, {
+      query: requiredStringArg("brain_session_grep", args, "query"),
+      ...(optionalStringArg("brain_session_grep", args, "session_id") !== undefined
+        ? {
+            sessionId: optionalStringArg("brain_session_grep", args, "session_id"),
+          }
+        : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      ...(snippetChars !== undefined ? { snippetChars } : {}),
+    }),
+  };
+}
+
+async function toolBrainSessionDescribe(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return {
+    ...describeSessionRecall(ctx.vault, {
+      sessionId: requiredStringArg("brain_session_describe", args, "session_id"),
+    }),
+  };
+}
+
+async function toolBrainSessionExpand(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const rawLimit = coercePositiveInteger("brain_session_expand", "raw_limit", args["raw_limit"]);
+  return {
+    ...expandSessionRecall(ctx.vault, {
+      id: requiredStringArg("brain_session_expand", args, "id"),
+      ...(rawLimit !== undefined ? { rawLimit } : {}),
+      ...(optionalStringArg("brain_session_expand", args, "cursor") !== undefined
+        ? { cursor: optionalStringArg("brain_session_expand", args, "cursor") }
+        : {}),
+    }),
   };
 }
 
@@ -1770,10 +2089,14 @@ async function toolBrainPreCompressPack(
     "brain_pre_compress_pack",
   );
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_pre_compress_pack");
+  const receipt = receiptOptionsFromArgs("brain_pre_compress_pack", args, "pre_compress", "mcp");
+  const telemetry = telemetryOptionsFromArgs("brain_pre_compress_pack", args, "mcp");
   const pack = buildPreCompressPack(ctx.vault, {
     topK,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+    ...(receipt !== undefined ? { receipt } : {}),
+    ...(telemetry !== undefined ? { telemetry } : {}),
   });
   return {
     vault_path: ctx.vault,
@@ -1781,12 +2104,50 @@ async function toolBrainPreCompressPack(
     active_head_included: pack.activeHeadIncluded,
     ...(pack.activeHeadSafety ? { active_head_safety: pack.activeHeadSafety } : {}),
     total_chars: pack.totalChars,
+    ...(pack.receiptId ? { receipt_id: pack.receiptId } : {}),
+    ...(pack.telemetryId ? { telemetry_id: pack.telemetryId } : {}),
     items: pack.items.map((i) => ({
       id: i.id,
       principle: i.principle,
       trimmed: i.trimmed,
       ...(i.safety ? { safety: i.safety } : {}),
     })),
+  };
+}
+
+function receiptOptionsFromArgs(
+  tool: string,
+  args: Record<string, unknown>,
+  trigger: "context_pack" | "pre_compress",
+  defaultHost: string,
+): ContextReceiptOptions | undefined {
+  if (!coerceBool(args, "receipt")) return undefined;
+  return {
+    host: optionalStringArg(tool, args, "receipt_host") ?? defaultHost,
+    trigger,
+    ...(optionalStringArg(tool, args, "session_id") !== undefined
+      ? { sessionId: optionalStringArg(tool, args, "session_id") }
+      : {}),
+    ...(optionalStringArg(tool, args, "turn_id") !== undefined
+      ? { turnId: optionalStringArg(tool, args, "turn_id") }
+      : {}),
+  };
+}
+
+function telemetryOptionsFromArgs(
+  tool: string,
+  args: Record<string, unknown>,
+  defaultHost: string,
+): RecallTelemetryOptions | undefined {
+  if (!coerceBool(args, "telemetry")) return undefined;
+  return {
+    host: optionalStringArg(tool, args, "telemetry_host") ?? defaultHost,
+    ...(optionalStringArg(tool, args, "session_id") !== undefined
+      ? { sessionId: optionalStringArg(tool, args, "session_id") }
+      : {}),
+    ...(optionalStringArg(tool, args, "turn_id") !== undefined
+      ? { turnId: optionalStringArg(tool, args, "turn_id") }
+      : {}),
   };
 }
 
@@ -2376,11 +2737,266 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "When true, also return polarity-aware directives, constraints, and consider lanes. Legacy flat `items` remains present.",
         },
+        cache_stable: {
+          type: "boolean",
+          description:
+            "When true, reorder the selected items by stable id and annotate their original rank.",
+        },
+        dedup_repeated: {
+          type: "boolean",
+          description:
+            "When true, replace repeated context bodies with reference hints to an earlier emitted item.",
+        },
+        receipt: {
+          type: "boolean",
+          description: "When true, emit an opt-in context receipt for this context-pack run.",
+        },
+        receipt_host: {
+          type: "string",
+          description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
+        },
+        telemetry: {
+          type: "boolean",
+          description:
+            "When true, emit an opt-in recall telemetry record for this context-pack run.",
+        },
+        telemetry_host: {
+          type: "string",
+          description: "Optional host/runtime name for emitted telemetry; defaults to `mcp`.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional session id recorded on emitted telemetry.",
+        },
+        turn_id: {
+          type: "string",
+          description: "Optional turn id recorded on emitted telemetry.",
+        },
       },
       required: ["max_tokens"],
       additionalProperties: false,
     },
     handler: toolBrainContextPack,
+  },
+  {
+    name: "brain_context_receipts",
+    description:
+      "List context receipt summaries or show one full receipt by id. Receipts are append-only continuity records emitted by opt-in context injection callers. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["list", "show"],
+          description: "Use list for summaries, show for one full receipt by id.",
+        },
+        id: {
+          type: "string",
+          description: "Receipt id required when operation is show.",
+        },
+        trigger: {
+          type: "string",
+          enum: ["context_pack", "pre_compress"],
+          description: "Optional list filter by injection trigger.",
+        },
+        host: {
+          type: "string",
+          description: "Optional list filter by host/runtime name.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional list filter by recorded session id.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum number of summaries to return.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainContextReceipts,
+  },
+  {
+    name: "brain_recall_telemetry",
+    description:
+      "List recall telemetry records or summarize recall coverage and knowledge gaps. Records are emitted only by opt-in callers. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["list", "summary"],
+          description: "Use list for raw records, summary for aggregate counts.",
+        },
+        mode: {
+          type: "string",
+          enum: ["search", "context_pack", "pre_compress"],
+          description: "Optional filter by recall mode.",
+        },
+        status: {
+          type: "string",
+          enum: ["ok", "empty", "error", "timeout"],
+          description: "Optional filter by telemetry status.",
+        },
+        host: {
+          type: "string",
+          description: "Optional filter by host/runtime name.",
+        },
+        since: {
+          type: "string",
+          description: "Optional inclusive lower timestamp bound.",
+        },
+        until: {
+          type: "string",
+          description: "Optional inclusive upper timestamp bound.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum record count for list.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainRecallTelemetry,
+  },
+  {
+    name: "brain_context_presets",
+    description:
+      "Show, suggest, or diff read-only context budget presets. Diagnostics only; never writes configuration.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["show", "suggest", "diff"],
+          description:
+            "show returns presets, suggest chooses by model/window, diff compares current values.",
+        },
+        preset_id: {
+          type: "string",
+          description: "Preset id for show/diff, e.g. tight-context or long-context.",
+        },
+        model: {
+          type: "string",
+          description: "Optional model name hint for suggest.",
+        },
+        context_window_tokens: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional context-window size hint for suggest.",
+        },
+        current: {
+          type: "object",
+          description:
+            "Optional current values for diff: { context_pack, pre_compress, overrides }. Overrides preserve caller-managed paths.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainContextPresets,
+  },
+  {
+    name: "brain_pre_compact_extract",
+    description:
+      "Extract typed Decision/Commitment/Outcome/Rule/Open question records from bounded text into continuity storage.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: {
+          type: "string",
+          description: "Session identifier used for idempotency and source refs.",
+        },
+        turn_start: {
+          type: "string",
+          description: "First source turn id in the extracted segment.",
+        },
+        turn_end: {
+          type: "string",
+          description: "Last source turn id in the extracted segment.",
+        },
+        text: {
+          type: "string",
+          description: "Bounded text segment to scan for labeled extraction lines.",
+        },
+        host: { type: "string", description: "Optional host/client label." },
+        max_chars: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum input characters to scan before extracting.",
+        },
+      },
+      required: ["session_id", "turn_start", "turn_end", "text"],
+      additionalProperties: false,
+    },
+    handler: toolBrainPreCompactExtract,
+  },
+  {
+    name: "brain_session_grep",
+    description: "Search imported session recall raw turns and summary nodes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search text." },
+        session_id: {
+          type: "string",
+          description: "Optional session id filter.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Maximum hits to return.",
+        },
+        snippet_chars: {
+          type: "integer",
+          minimum: 1,
+          description: "Maximum chars per hit snippet.",
+        },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSessionGrep,
+  },
+  {
+    name: "brain_session_describe",
+    description: "Describe counts and summary depths for an imported session recall DAG.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Session id to describe." },
+      },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSessionDescribe,
+  },
+  {
+    name: "brain_session_expand",
+    description:
+      "Expand a session recall raw or summary node to immediate sources and paginated exact raw turn content.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Session recall record id." },
+        raw_limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Maximum raw turn items to return.",
+        },
+        cursor: {
+          type: "string",
+          description: "Raw turn pagination cursor from a previous response.",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSessionExpand,
   },
   {
     // No preview budget: the addendum is meant to be injected whole and
@@ -2408,6 +3024,31 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           description:
             "Optional total character cap (code points) across the addendum; lowest-priority overflow is dropped.",
+        },
+        receipt: {
+          type: "boolean",
+          description: "When true, emit an opt-in context receipt for this pre-compress run.",
+        },
+        receipt_host: {
+          type: "string",
+          description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
+        },
+        telemetry: {
+          type: "boolean",
+          description:
+            "When true, emit an opt-in recall telemetry record for this pre-compress run.",
+        },
+        telemetry_host: {
+          type: "string",
+          description: "Optional host/runtime name for emitted telemetry; defaults to `mcp`.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional session id recorded on emitted telemetry.",
+        },
+        turn_id: {
+          type: "string",
+          description: "Optional turn id recorded on emitted telemetry.",
         },
       },
       additionalProperties: false,

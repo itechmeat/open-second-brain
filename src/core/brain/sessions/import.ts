@@ -26,11 +26,12 @@
  */
 
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
 import { discoverMarkersDetailed } from "../inline.ts";
 import { writeSignal } from "../signal.ts";
+import { importSessionRecall } from "../session-recall.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "../types.ts";
 import { detectAdapter, getAdapter } from "./registry.ts";
@@ -66,6 +67,10 @@ export interface ImportSessionOptions {
    * (`writeSignal({ rawCodec: true })`). Default off -> verbatim bodies.
    */
   readonly rawCodec?: boolean;
+  /** When true, also store normalized turns in the continuity-backed session recall DAG. */
+  readonly recall?: boolean;
+  readonly recallSessionId?: string;
+  readonly recallSummaryGroupSize?: number;
 }
 
 export interface ImportSessionResult {
@@ -76,6 +81,8 @@ export interface ImportSessionResult {
   readonly signals_deduped: number;
   readonly tool_replays: number;
   readonly malformed: number;
+  readonly recall_turns_imported: number;
+  readonly recall_summary_nodes: number;
   readonly errors: ReadonlyArray<{ path: string; message: string }>;
 }
 
@@ -133,6 +140,7 @@ export async function importSession(
   let signalsDeduped = 0;
   let toolReplays = 0;
   let malformed = 0;
+  const recallTurns: SessionTurn[] = [];
 
   // Inline helper that wraps the writeSignal call with the consistent
   // shape every session-imported signal shares.
@@ -190,6 +198,7 @@ export async function importSession(
       const t = Date.parse(turn.timestamp);
       if (Number.isFinite(t) && t < sinceMs) continue;
     }
+    if (opts.recall === true) recallTurns.push(turn);
 
     // Path A — markers in text.
     if (turn.text && (turn.role === "user" || turn.role === "assistant")) {
@@ -245,6 +254,28 @@ export async function importSession(
     }
   }
 
+  let recallTurnsImported = 0;
+  let recallSummaryNodes = 0;
+  if (opts.recall === true && opts.dryRun !== true && recallTurns.length > 0) {
+    try {
+      const recalled = importSessionRecall(vault, {
+        sessionId: opts.recallSessionId ?? basename(absPath),
+        turns: recallTurns,
+        createdAt: isoSecond(now),
+        ...(opts.recallSummaryGroupSize !== undefined
+          ? { summaryGroupSize: opts.recallSummaryGroupSize }
+          : {}),
+      });
+      recallTurnsImported = recalled.rawTurns.length;
+      recallSummaryNodes = recalled.summaryNodes.length;
+    } catch (err) {
+      errors.push({
+        path: absPath,
+        message: `importSessionRecall failed: ${(err as Error).message ?? String(err)}`,
+      });
+    }
+  }
+
   return Object.freeze({
     file: absPath,
     format: adapter.id,
@@ -253,6 +284,8 @@ export async function importSession(
     signals_deduped: signalsDeduped,
     tool_replays: toolReplays,
     malformed,
+    recall_turns_imported: recallTurnsImported,
+    recall_summary_nodes: recallSummaryNodes,
     errors: Object.freeze(errors),
   });
 }

@@ -220,6 +220,14 @@ describe("tool listing", () => {
         "brain_operator_summary",
         // Pre-compress injection pack (added in v0.20.0).
         "brain_pre_compress_pack",
+        // Context continuity and receipts (added in v0.29.0).
+        "brain_context_receipts",
+        "brain_recall_telemetry",
+        "brain_context_presets",
+        "brain_pre_compact_extract",
+        "brain_session_grep",
+        "brain_session_describe",
+        "brain_session_expand",
         // Pay Memory (unchanged).
         "payment_memory_init",
         "payment_receipt_append",
@@ -482,7 +490,8 @@ describe("stdio loop", () => {
     // + second_brain_capabilities (v0.23.0) = 47.
     // + 9 schema admin tools + brain_watchdog = 57.
     // + brain_recall_gate (v0.27.0) = 58.
-    expect(list.result.tools.length).toBe(58);
+    // + 7 context continuity/session recall tools (v0.29.0) = 65.
+    expect(list.result.tools.length).toBe(65);
   });
 
   test("returns parse error for invalid JSON", async () => {

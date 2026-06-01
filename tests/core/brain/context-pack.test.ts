@@ -26,6 +26,7 @@ function writePref(
     tier?: string;
     created_at?: string;
     context_lane?: string;
+    body?: string;
   },
 ) {
   const lines = [
@@ -37,7 +38,7 @@ function writePref(
   if (fields.tier) lines.push(`tier: ${fields.tier}`);
   if (fields.created_at) lines.push(`created_at: ${fields.created_at}`);
   if (fields.context_lane) lines.push(`context_lane: ${fields.context_lane}`);
-  lines.push("---", "");
+  lines.push("---", "", fields.body ?? "");
   writeFileSync(join(vault, "Brain", "preferences", `pref-${slug}.md`), lines.join("\n"));
 }
 
@@ -132,6 +133,63 @@ describe("packContext", () => {
     const r = packContext(vault, { maxTokens: 10_000 });
     expect(r.items[0]!.id).toBe("pref-new");
     expect(r.items[1]!.id).toBe("pref-old");
+  });
+
+  test("cache-stable ordering is opt-in and annotates original rank", () => {
+    writePref("zulu", {
+      topic: "x",
+      principle: "zulu body",
+      body: "zulu body",
+      tier: "core",
+      created_at: "2026-05-02T00:00:00Z",
+    });
+    writePref("alpha", {
+      topic: "x",
+      principle: "alpha body",
+      body: "alpha body",
+      tier: "core",
+      created_at: "2026-05-01T00:00:00Z",
+    });
+
+    const defaultPack = packContext(vault, { maxTokens: 10_000 });
+    expect(defaultPack.items.map((item) => item.id)).toEqual(["pref-zulu", "pref-alpha"]);
+
+    const stablePack = packContext(vault, {
+      maxTokens: 10_000,
+      transforms: { cacheStableOrdering: true },
+    });
+    expect(stablePack.items.map((item) => item.id)).toEqual(["pref-alpha", "pref-zulu"]);
+    expect(stablePack.items.map((item) => item.originalRank)).toEqual([2, 1]);
+    expect(stablePack.items.map((item) => item.stableRank)).toEqual([1, 2]);
+  });
+
+  test("repeated-context dedup is opt-in and keeps an accessible reference", () => {
+    writePref("first", {
+      topic: "x",
+      principle: "shared body",
+      body: "shared body",
+      tier: "core",
+      created_at: "2026-05-02T00:00:00Z",
+    });
+    writePref("second", {
+      topic: "x",
+      principle: "shared body",
+      body: "shared body",
+      tier: "core",
+      created_at: "2026-05-01T00:00:00Z",
+    });
+
+    const defaultPack = packContext(vault, { maxTokens: 10_000 });
+    expect(defaultPack.items.map((item) => item.body)).toEqual(["shared body", "shared body"]);
+
+    const dedupedPack = packContext(vault, {
+      maxTokens: 10_000,
+      transforms: { deduplicateRepeatedContext: true },
+    });
+    expect(dedupedPack.items[0]!.body).toBe("shared body");
+    expect(dedupedPack.items[1]!.body).toBe("Repeated context omitted; see pref-first.");
+    expect(dedupedPack.items[1]!.dedupedFrom).toBe("pref-first");
+    expect(dedupedPack.items[1]!.referenceHint).toBe("see pref-first");
   });
 
   test("stops when next page would exceed budget", () => {

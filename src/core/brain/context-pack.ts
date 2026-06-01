@@ -27,6 +27,13 @@ import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget } from "./recall-budget.ts";
+import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
+import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
+import {
+  applyContextTransforms,
+  type ContextTransformOptions,
+  type ContextTransformAnnotations,
+} from "./context-transforms.ts";
 import {
   buildContextLanes,
   normalizeContextLane,
@@ -40,7 +47,7 @@ const TIER_ORDER: ReadonlyArray<PageTier> = [
   PAGE_TIER.peripheral,
 ];
 
-export interface ContextPackItem {
+export interface ContextPackItem extends ContextTransformAnnotations {
   readonly id: string;
   readonly path: string;
   readonly tier: PageTier;
@@ -65,6 +72,8 @@ export interface ContextPackReport {
   readonly tokensUsed: number;
   readonly items: ReadonlyArray<ContextPackItem>;
   readonly skipped: ReadonlyArray<ContextPackSkipped>;
+  readonly receiptId?: string;
+  readonly telemetryId?: string;
   readonly lanes?: ContextLanesReport;
 }
 
@@ -87,6 +96,12 @@ export interface ContextPackOptions {
   readonly maxTotalChars?: number;
   /** Opt-in polarity-aware lanes. Omitted preserves the legacy flat output shape. */
   readonly includeLanes?: boolean;
+  /** Opt-in audit receipt for the final emitted context. */
+  readonly receipt?: ContextReceiptOptions;
+  /** Opt-in telemetry for recall coverage and gap diagnostics. */
+  readonly telemetry?: RecallTelemetryOptions;
+  /** Opt-in post-selection context transforms. Defaults preserve legacy order and bodies. */
+  readonly transforms?: ContextTransformOptions;
 }
 
 interface Candidate {
@@ -182,14 +197,20 @@ function collectCandidates(vault: string): Candidate[] {
 }
 
 export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport {
+  const startedAtMs = Date.now();
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
-    return Object.freeze({
-      maxTokens: 0,
-      tokensUsed: 0,
-      items: Object.freeze([]),
-      skipped: Object.freeze([]),
-      ...withOptionalLanes(opts, []),
-    });
+    return finalizeContextPackReport(
+      vault,
+      opts,
+      {
+        maxTokens: 0,
+        tokensUsed: 0,
+        items: Object.freeze([]),
+        skipped: Object.freeze([]),
+        ...withOptionalLanes(opts, []),
+      },
+      startedAtMs,
+    );
   }
   const query = opts.query ? normalizeForDedup(opts.query) : null;
   const candidates = collectCandidates(vault);
@@ -251,7 +272,10 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       { maxTotalChars: opts.maxTotalChars },
     );
     if (capped.dropped.length > 0) {
-      const keptItems = capped.kept.map((k) => k.item);
+      const keptItems = applyContextTransforms(
+        capped.kept.map((k) => k.item),
+        opts.transforms,
+      );
       const droppedSet = new Set(capped.dropped);
       let recomputed = 0;
       for (const i of keptItems) recomputed += i.tokens;
@@ -264,21 +288,107 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
           });
         }
       }
-      return Object.freeze({
-        maxTokens: opts.maxTokens,
-        tokensUsed: recomputed,
-        items: Object.freeze(keptItems),
-        skipped: Object.freeze(skipped),
-        ...withOptionalLanes(opts, keptItems),
-      });
+      return finalizeContextPackReport(
+        vault,
+        opts,
+        {
+          maxTokens: opts.maxTokens,
+          tokensUsed: recomputed,
+          items: Object.freeze(keptItems),
+          skipped: Object.freeze(skipped),
+          ...withOptionalLanes(opts, keptItems),
+        },
+        startedAtMs,
+      );
     }
   }
 
-  return Object.freeze({
-    maxTokens: opts.maxTokens,
-    tokensUsed: used,
-    items: Object.freeze(items),
-    skipped: Object.freeze(skipped),
-    ...withOptionalLanes(opts, items),
-  });
+  const finalItems = applyContextTransforms(items, opts.transforms);
+  const finalTokensUsed = finalItems.reduce((sum, item) => sum + item.tokens, 0);
+  return finalizeContextPackReport(
+    vault,
+    opts,
+    {
+      maxTokens: opts.maxTokens,
+      tokensUsed: finalTokensUsed,
+      items: Object.freeze(finalItems),
+      skipped: Object.freeze(skipped),
+      ...withOptionalLanes(opts, finalItems),
+    },
+    startedAtMs,
+  );
+}
+
+function finalizeContextPackReport(
+  vault: string,
+  opts: ContextPackOptions,
+  report: ContextPackReport,
+  startedAtMs: number,
+): ContextPackReport {
+  let enriched = report;
+  if (opts.receipt) {
+    const receipt = emitContextReceipt(vault, {
+      options: opts.receipt,
+      items: report.items.map((item) => ({
+        id: item.id,
+        path: item.path,
+        text: item.body,
+        tokens: item.tokens,
+        tier: item.tier,
+        trimmed: item.trimmed,
+        safetyFiltered: item.safety?.filtered,
+      })),
+      finalText: report.items.map((item) => item.body).join("\n\n"),
+      budget: contextPackBudgetMetadata(opts, report),
+      extra: {
+        skipped_count: report.skipped.length,
+        lanes: opts.includeLanes === true,
+      },
+    });
+    enriched = { ...enriched, receiptId: receipt.id };
+  }
+  if (opts.telemetry) {
+    const telemetry = emitRecallTelemetry(vault, {
+      createdAt: opts.telemetry.createdAt,
+      host: opts.telemetry.host,
+      sessionId: opts.telemetry.sessionId,
+      turnId: opts.telemetry.turnId,
+      mode: "context_pack",
+      status: report.items.length > 0 ? "ok" : "empty",
+      durationMs: Date.now() - startedAtMs,
+      resultCount: report.items.length,
+      topArtifacts: report.items.slice(0, 10).map((item) => ({ id: item.id, path: item.path })),
+      gaps: contextPackGaps(report),
+      metadata: {
+        ...(opts.telemetry.metadata ?? {}),
+        ...contextPackBudgetMetadata(opts, report),
+        skipped_count: report.skipped.length,
+        lanes: opts.includeLanes === true,
+        ...(enriched.receiptId ? { receipt_id: enriched.receiptId } : {}),
+      },
+    });
+    enriched = { ...enriched, telemetryId: telemetry.id };
+  }
+  return Object.freeze(enriched);
+}
+
+function contextPackBudgetMetadata(
+  opts: ContextPackOptions,
+  report: ContextPackReport,
+): Record<string, unknown> {
+  return {
+    max_tokens: report.maxTokens,
+    tokens_used: report.tokensUsed,
+    ...(opts.maxCharsPerMemory !== undefined
+      ? { max_chars_per_memory: opts.maxCharsPerMemory }
+      : {}),
+    ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
+  };
+}
+
+function contextPackGaps(report: ContextPackReport): ReadonlyArray<string> {
+  const gaps = new Set<string>();
+  if (report.items.length === 0 && report.skipped.length === 0) gaps.add("no_matching_context");
+  for (const skipped of report.skipped) gaps.add(skipped.reason.replace(/-/g, "_"));
+  return [...gaps];
 }
