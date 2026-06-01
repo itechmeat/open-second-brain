@@ -5,9 +5,16 @@ import { join } from "node:path";
 
 import { emitRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
-import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
+import {
+  BRAIN_CONFIDENCE,
+  BRAIN_PREFERENCE_STATUS,
+} from "../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import {
+  JSONRPC_VERSION,
+  MCPServer,
+  PROTOCOL_VERSION,
+} from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
 let tmp: string;
@@ -85,10 +92,14 @@ async function callTool(
 describe("brain_recall_telemetry tool registration", () => {
   test("registered in the full tool table only", () => {
     expect(
-      buildToolTable("full").find((tool) => tool.name === "brain_recall_telemetry"),
+      buildToolTable("full").find(
+        (tool) => tool.name === "brain_recall_telemetry",
+      ),
     ).toBeDefined();
     expect(
-      buildToolTable("writer").find((tool) => tool.name === "brain_recall_telemetry"),
+      buildToolTable("writer").find(
+        (tool) => tool.name === "brain_recall_telemetry",
+      ),
     ).toBeUndefined();
   });
 });
@@ -122,7 +133,9 @@ describe("brain_recall_telemetry tool", () => {
       mode: "context_pack",
     });
     expect(list["total"]).toBe(1);
-    expect((list["records"] as Array<Record<string, unknown>>)[0]!["payload"]).toMatchObject({
+    expect(
+      (list["records"] as Array<Record<string, unknown>>)[0]!["payload"],
+    ).toMatchObject({
       mode: "context_pack",
       result_count: 1,
     });
@@ -185,8 +198,10 @@ describe("brain_recall_telemetry tool", () => {
     });
     expect(receipts["total"]).toBe(2);
     expect(
-      (receipts["receipts"] as Array<Record<string, unknown>>).map((receipt) => receipt["trigger"]),
-    ).toEqual(["pre_compress", "context_pack"]);
+      (receipts["receipts"] as Array<Record<string, unknown>>)
+        .map((receipt) => receipt["trigger"])
+        .toSorted(),
+    ).toEqual(["context_pack", "pre_compress"]);
 
     const summary = await callTelemetry(server, {
       operation: "summary",

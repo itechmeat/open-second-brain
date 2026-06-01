@@ -5,10 +5,14 @@ import { join } from "node:path";
 
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import { packContext } from "../../../src/core/brain/context-pack.ts";
+import { emitContextReceipt } from "../../../src/core/brain/context-receipts.ts";
 import { brainActivePath } from "../../../src/core/brain/paths.ts";
 import { buildPreCompressPack } from "../../../src/core/brain/pre-compress-pack.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
-import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
+import {
+  BRAIN_CONFIDENCE,
+  BRAIN_PREFERENCE_STATUS,
+} from "../../../src/core/brain/types.ts";
 
 let vault: string;
 
@@ -25,7 +29,12 @@ afterEach(() => {
 
 describe("context receipts", () => {
   test("packContext can emit a redaction-safe receipt without changing selected items", () => {
-    writePref("alpha", "alpha topic", "Keep answers short", "Body with token=secret-value");
+    writePref(
+      "alpha",
+      "alpha topic",
+      "Keep answers short",
+      "Body with token=secret-value",
+    );
 
     const pack = packContext(vault, {
       maxTokens: 10_000,
@@ -62,7 +71,10 @@ describe("context receipts", () => {
   });
 
   test("buildPreCompressPack can emit a receipt for active head and preference items", () => {
-    writeFileSync(brainActivePath(vault), "# Active\n\nUse project conventions.\n");
+    writeFileSync(
+      brainActivePath(vault),
+      "# Active\n\nUse project conventions.\n",
+    );
     writePref("bravo", "bravo topic", "Prefer concrete release notes", "Body");
 
     const pack = buildPreCompressPack(vault, {
@@ -90,9 +102,29 @@ describe("context receipts", () => {
       "pref-bravo",
     ]);
   });
+
+  test("rejects extra receipt fields that collide with core payload fields", () => {
+    expect(() =>
+      emitContextReceipt(vault, {
+        options: {
+          host: "unit-test",
+          trigger: "context_pack",
+          createdAt: "2026-05-31T12:10:00Z",
+        },
+        items: [],
+        finalText: "",
+        extra: { host: "override" },
+      }),
+    ).toThrow("context receipt extra key collides with payload field: host");
+  });
 });
 
-function writePref(slug: string, topic: string, principle: string, body: string): void {
+function writePref(
+  slug: string,
+  topic: string,
+  principle: string,
+  body: string,
+): void {
   writePreference(vault, {
     slug,
     topic,

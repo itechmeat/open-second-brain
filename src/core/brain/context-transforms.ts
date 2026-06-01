@@ -19,6 +19,10 @@ export interface ContextTransformItem {
   readonly tokens: number;
 }
 
+function compareStable(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function applyContextTransforms<T extends ContextTransformItem>(
   items: ReadonlyArray<T>,
   opts: ContextTransformOptions | undefined,
@@ -32,7 +36,9 @@ export function applyContextTransforms<T extends ContextTransformItem>(
   }));
   if (opts.cacheStableOrdering) {
     ranked.sort(
-      (a, b) => a.item.id.localeCompare(b.item.id) || a.item.path.localeCompare(b.item.path),
+      (a, b) =>
+        compareStable(a.item.id, b.item.id) ||
+        compareStable(a.item.path, b.item.path),
     );
   }
 

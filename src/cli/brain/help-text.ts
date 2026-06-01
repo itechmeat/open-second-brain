@@ -262,7 +262,7 @@ export const VERB_HELP: Record<string, string> = {
   "import-session":
     "usage: o2b brain import-session <path> [--vault <vault>]\n" +
     "                                [--format auto|<registered-adapter>]\n" +
-    "                                [--since <ISO>] [--dry-run] [--recall]\n" +
+    "                                [--agent <name>] [--since <ISO>] [--dry-run] [--recall]\n" +
     "                                [--recall-session-id <id>] [--recall-summary-group-size <n>] [--json]\n" +
     "Extract signals from a registered agent session .jsonl file (or\n" +
     "directory of .jsonl files). Two extraction paths run in parallel:\n" +
@@ -336,7 +336,9 @@ export const VERB_HELP: Record<string, string> = {
     "threshold (default 200000; override via --warn-threshold or the\n" +
     "BRAIN_TOKEN_WARN_THRESHOLD env var).\n",
   "context-pack":
-    "usage: o2b brain context-pack --max-tokens <n> [--query <q>] [--lanes] [--cache-stable] [--dedup-repeated] [--telemetry] [--telemetry-host <name>] [--vault <path>] [--json]\n" +
+    "usage: o2b brain context-pack --max-tokens <n> [--query <q>] [--lanes] [--cache-stable] [--dedup-repeated]\n" +
+    "                              [--receipt] [--receipt-host <name>] [--telemetry] [--telemetry-host <name>]\n" +
+    "                              [--session-id <id>] [--turn-id <id>] [--vault <path>] [--json]\n" +
     "Return the highest-tier, most recent vault slice that fits under\n" +
     "<n> tokens. Items ordered core → supporting → peripheral, then\n" +
     "newest first. Stops adding pages when the next page would exceed\n" +
