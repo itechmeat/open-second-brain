@@ -1,14 +1,16 @@
-"""Hermes Python plugin for Open Second Brain.
+"""Hermes plugin package for Open Second Brain.
 
-Most of Open Second Brain runs as a Bun-based MCP server on stdio. The Hermes
-integration loads this package in-process: ``register`` wires the plugin into
-the gateway, and the per-turn ``pre_llm_call`` hook appends a short identity
-reminder to the user message of every turn (doing it server-side only fires
-once per session, not per turn - long sessions drift away from the reminder).
+Open Second Brain integrates with Hermes as a native memory provider. Hermes
+loads this package in-process and calls ``register``, which wires two things
+into the gateway:
 
-Shared config and reminder helpers live in ``config.py`` so the provider
-(``provider.py``) and this module never drift. The native ``MemoryProvider``
-implementation and its bridge live in ``provider.py`` / ``bridge.py``.
+- the ``OpenSecondBrainMemoryProvider`` (``provider.py``), a first-class Hermes
+  memory provider backed by an ``o2b mcp`` bridge (``bridge.py``); and
+- a small data-only health check.
+
+The provider's ``prefetch`` carries the per-turn identity reminder that the
+retired ``pre_llm_call`` hook used to inject, so there is one mechanism, not
+two. Shared config and reminder helpers live in ``config.py``.
 """
 
 from __future__ import annotations
@@ -18,30 +20,10 @@ from pathlib import Path
 from typing import Any
 
 from . import config
+from .bridge import BrainBridge, FakeBrainBridge, McpBrainBridge
+from .provider import OpenSecondBrainMemoryProvider
 
 PLUGIN_NAME = config.PLUGIN_NAME
-
-# Backwards-compatible aliases: callers and tests historically imported these
-# names from the package root. They now delegate to the shared helpers.
-_load_reminder_template = config.load_reminder_template
-_reset_template_cache_for_tests = config._reset_template_cache_for_tests
-_config_path = config.config_path
-_resolve_agent_name = config.resolve_agent_name
-
-
-def on_pre_llm_call(**_kwargs: Any) -> dict[str, str] | None:
-    """Inject identity context into the current turn's user message.
-
-    Hermes ``pre_llm_call`` contract: callbacks receive turn metadata and may
-    return ``{"context": "..."}`` - Hermes appends the value to the user
-    message of this turn (system prompt left untouched, so the cache prefix is
-    preserved). Returns ``None`` when no identity is configured, to avoid
-    leaking the literal ``@agent`` placeholder.
-    """
-    reminder = config.build_reminder()
-    if reminder is None:
-        return None
-    return {"context": reminder}
 
 
 def health(repo_root: str | Path | None = None) -> dict[str, Any]:
@@ -76,12 +58,7 @@ def _check_file(path: Path, *, executable: bool = False) -> dict[str, Any]:
     return {"ok": ok, "path": str(path), "message": message}
 
 
-def register(ctx: Any) -> None:
-    """Best-effort registration of the health check and the pre_llm_call hook.
-
-    Unsupported context shapes are ignored without raising so a minimal / test
-    ``ctx`` won't break plugin loading.
-    """
+def _register_health_check(ctx: Any) -> None:
     for method_name in ("register_health_check", "add_health_check", "register_check"):
         method = getattr(ctx, method_name, None)
         if callable(method):
@@ -89,26 +66,40 @@ def register(ctx: Any) -> None:
                 method(PLUGIN_NAME, check_health)
             except TypeError:
                 method(check_health)
-            break
-    else:
-        health_checks = getattr(ctx, "health_checks", None)
-        if isinstance(health_checks, dict):
-            health_checks[PLUGIN_NAME] = check_health
-        elif isinstance(health_checks, list):
-            health_checks.append((PLUGIN_NAME, check_health))
+            return
+    health_checks = getattr(ctx, "health_checks", None)
+    if isinstance(health_checks, dict):
+        health_checks[PLUGIN_NAME] = check_health
+    elif isinstance(health_checks, list):
+        health_checks.append((PLUGIN_NAME, check_health))
 
-    register_hook = getattr(ctx, "register_hook", None)
-    if callable(register_hook):
+
+def _register_memory_provider(ctx: Any) -> None:
+    method = getattr(ctx, "register_memory_provider", None)
+    if callable(method):
         try:
-            register_hook("pre_llm_call", on_pre_llm_call)
-        except Exception:
+            method(OpenSecondBrainMemoryProvider())
+        except Exception:  # noqa: BLE001 - never break plugin loading
             pass
+
+
+def register(ctx: Any) -> None:
+    """Register the memory provider and health check.
+
+    Unsupported context shapes are ignored without raising so a minimal / test
+    ``ctx`` won't break plugin loading.
+    """
+    _register_health_check(ctx)
+    _register_memory_provider(ctx)
 
 
 __all__ = [
     "PLUGIN_NAME",
-    "on_pre_llm_call",
     "health",
     "check_health",
     "register",
+    "OpenSecondBrainMemoryProvider",
+    "BrainBridge",
+    "McpBrainBridge",
+    "FakeBrainBridge",
 ]
