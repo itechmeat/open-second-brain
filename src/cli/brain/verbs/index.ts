@@ -47,7 +47,9 @@ export { cmdBrainPreCompactExtract } from "./pre-compact-extract.ts";
 export { cmdBrainRecallTelemetry } from "./recall-telemetry.ts";
 export { cmdBrainSkillProposals } from "./skill-proposals.ts";
 export { cmdBrainProceduralMemory } from "./procedural-memory.ts";
+export { cmdBrainProceduralGraph } from "./procedural-graph.ts";
 export { cmdBrainRecurrence } from "./recurrence.ts";
+export { cmdBrainAttentionFlows } from "./attention-flows.ts";
 export {
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,

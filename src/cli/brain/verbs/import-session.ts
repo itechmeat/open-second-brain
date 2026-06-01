@@ -31,6 +31,9 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     recall: { type: "boolean" },
     "recall-session-id": { type: "string" },
     "recall-summary-group-size": { type: "string" },
+    "ingest-scope": { type: "string" },
+    "filter-role": { type: "string-array" },
+    "filter-text": { type: "string" },
     json: { type: "boolean" },
   });
   if (positional.length < 1) return fail("brain import-session requires a <path> argument");
@@ -50,6 +53,9 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     flags["recall-summary-group-size"],
     "--recall-summary-group-size",
   );
+  const ingestScope = normalizeFlagString(flags["ingest-scope"] as string | undefined);
+  const filterRoles = normalizeRoleFilter(flags["filter-role"] as string[] | undefined);
+  const filterText = normalizeFlagString(flags["filter-text"] as string | undefined);
 
   const formatRaw = flags["format"] as string | undefined;
   let format: SessionAdapterId | undefined;
@@ -81,6 +87,9 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
           ...(recallSummaryGroupSize !== undefined
             ? { recallSummaryGroupSize: recallSummaryGroupSize }
             : {}),
+          ...(ingestScope !== null ? { ingestScope } : {}),
+          ...(filterRoles.length > 0 ? { filterRoles } : {}),
+          ...(filterText !== null ? { filterTextIncludes: filterText } : {}),
         })
       : {
           files: [
@@ -94,6 +103,9 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
               ...(recallSummaryGroupSize !== undefined
                 ? { recallSummaryGroupSize: recallSummaryGroupSize }
                 : {}),
+              ...(ingestScope !== null ? { ingestScope } : {}),
+              ...(filterRoles.length > 0 ? { filterRoles } : {}),
+              ...(filterText !== null ? { filterTextIncludes: filterText } : {}),
             }),
           ],
           warnings: [],
@@ -134,6 +146,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
           signals_deduped: f.signals_deduped,
           tool_replays: f.tool_replays,
           malformed: f.malformed,
+          filtered_turns: f.filtered_turns,
           recall_turns_imported: f.recall_turns_imported,
           recall_summary_nodes: f.recall_summary_nodes,
           errors: f.errors,
@@ -148,6 +161,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
         ok(`  signals_created: ${f.signals_created}`);
         ok(`  signals_deduped: ${f.signals_deduped}`);
         ok(`  tool_replays: ${f.tool_replays}`);
+        ok(`  filtered_turns: ${f.filtered_turns}`);
         if (flags["recall"]) {
           ok(`  recall_turns_imported: ${f.recall_turns_imported}`);
           ok(`  recall_summary_nodes: ${f.recall_summary_nodes}`);
@@ -166,6 +180,27 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     }
     return fail(`import-session failed: ${(exc as Error).message ?? exc}`);
   }
+}
+
+function normalizeRoleFilter(
+  raw: string[] | undefined,
+): Array<"user" | "assistant" | "system" | "tool" | "meta"> {
+  if (!raw || raw.length === 0) return [];
+  const allowed = new Set(["user", "assistant", "system", "tool", "meta"] as const);
+  const out: Array<"user" | "assistant" | "system" | "tool" | "meta"> = [];
+  for (const value of raw) {
+    const normalized = value.trim().toLowerCase() as
+      | "user"
+      | "assistant"
+      | "system"
+      | "tool"
+      | "meta";
+    if (!allowed.has(normalized)) {
+      throw new CliError(`--filter-role contains unsupported value: ${value}`);
+    }
+    out.push(normalized);
+  }
+  return [...new Set(out)];
 }
 
 function parsePositiveIntegerFlag(

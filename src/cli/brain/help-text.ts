@@ -62,7 +62,9 @@ Brain verbs (observing memory):
   recall-telemetry    List/summarize opt-in recall telemetry records
   skill-proposals     Learn/list/review deterministic skill proposals
   procedural-memory   Reconcile/list procedural memory index and usage
+  procedural-graph    Rebuild/show procedural graph and hint projections
   recurrence          Inspect and update recurrence/support diagnostics
+  attention-flows     Declarative attention recipes for open loops and learnings
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -266,6 +268,7 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain import-session <path> [--vault <vault>]\n" +
     "                                [--format auto|<registered-adapter>]\n" +
     "                                [--agent <name>] [--since <ISO>] [--dry-run] [--recall]\n" +
+    "                                [--ingest-scope <label>] [--filter-role <role> ...] [--filter-text <substring>]\n" +
     "                                [--recall-session-id <id>] [--recall-summary-group-size <n>] [--json]\n" +
     "Extract signals from a registered agent session .jsonl file (or\n" +
     "directory of .jsonl files). Two extraction paths run in parallel:\n" +
@@ -377,6 +380,12 @@ export const VERB_HELP: Record<string, string> = {
     "  reconcile [--root <path> ...] [--vault <path>] [--json]\n" +
     "  list [--vault <path>] [--json]\n" +
     "  mark-used <entry-id> [--vault <path>] [--json]\n",
+  "procedural-graph":
+    "usage: o2b brain procedural-graph <rebuild|show|hints> [args]\n" +
+    "Read/write procedural graph and prospective-hints projections.\n" +
+    "  rebuild [--vault <path>] [--json]\n" +
+    "  show [--vault <path>] [--json]\n" +
+    "  hints [--vault <path>] [--json]\n",
   recurrence:
     "usage: o2b brain recurrence <list|show|learn|forget|purge-source> [args]\n" +
     "Recurrence/support diagnostics and reference-counted updates.\n" +
@@ -385,6 +394,12 @@ export const VERB_HELP: Record<string, string> = {
     "  learn --hash <h> --scope <scope> --source <id> [--vault <path>] [--json]\n" +
     "  forget --hash <h> --scope <scope> --source <id> [--vault <path>] [--json]\n" +
     "  purge-source --source <id> [--vault <path>] [--json]\n",
+  "attention-flows":
+    "usage: o2b brain attention-flows <list|evaluate|render> [args]\n" +
+    "Declarative attention-flow recipes and evaluation surfaces.\n" +
+    "  list [--vault <path>] [--json]\n" +
+    "  evaluate <flow-id> [--vault <path>] [--json]\n" +
+    "  render <flow-id> [--vault <path>] [--json]\n",
   "session-grep":
     "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--vault <path>] [--json]\n" +
     "Search imported session recall raw turns and summary nodes.\n",

@@ -111,6 +111,27 @@ describe("importSession", () => {
     );
   });
 
+  test("supports filtered write mode by role", async () => {
+    const res = await importSession(tmp, CLAUDE, {
+      agent: "test",
+      filterRoles: ["user"],
+    });
+
+    expect(res.signals_created).toBe(1);
+    expect(res.tool_replays).toBe(0);
+    expect(res.filtered_turns).toBeGreaterThan(0);
+  });
+
+  test("supports filtered write mode by text substring", async () => {
+    const res = await importSession(tmp, CLAUDE, {
+      agent: "test",
+      filterTextIncludes: "no-match-substring",
+    });
+
+    expect(res.signals_created).toBe(0);
+    expect(res.filtered_turns).toBe(res.turns_scanned);
+  });
+
   test("handles the codex fixture", async () => {
     const res = await importSession(tmp, CODEX, { agent: "test" });
     expect(res.format).toBe("codex");

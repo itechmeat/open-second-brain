@@ -11,6 +11,9 @@ import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
+import { rebuildProceduralHints } from "./procedural-hints.ts";
+import { rebuildProceduralGraph } from "./procedural-graph.ts";
+import { reconcileProceduralMemory } from "./procedural-memory.ts";
 import {
   BRAIN_SKILL_PROPOSALS_REL,
   procedurePath,
@@ -65,6 +68,7 @@ interface WatermarkState {
 }
 
 const DEFAULT_MIN_SUPPORT = 3;
+const DEFAULT_PROCEDURAL_ROOTS = ["Brain/procedures", "skills"] as const;
 
 export function learnSkillProposals(
   vault: string,
@@ -157,6 +161,8 @@ export function learnSkillProposals(
     lastCreatedAt: watermarkTo,
     lastId: watermarkRecord.id,
   });
+  const graph = rebuildProceduralGraph(vault);
+  rebuildProceduralHints(vault, { graph });
 
   return {
     watermarkFrom: watermark.lastCreatedAt,
@@ -267,6 +273,11 @@ export function acceptSkillProposal(
   }
 
   unlinkSync(pendingPath);
+  reconcileProceduralMemory(vault, {
+    roots: DEFAULT_PROCEDURAL_ROOTS.map((root) => join(vault, root)),
+  });
+  const graph = rebuildProceduralGraph(vault);
+  rebuildProceduralHints(vault, { graph });
   return {
     id,
     slug,
@@ -316,6 +327,11 @@ export function rejectSkillProposal(
   );
 
   unlinkSync(pendingPath);
+  reconcileProceduralMemory(vault, {
+    roots: DEFAULT_PROCEDURAL_ROOTS.map((root) => join(vault, root)),
+  });
+  const graph = rebuildProceduralGraph(vault);
+  rebuildProceduralHints(vault, { graph });
   return { id, slug, status: "rejected", proposalPath: rejectedPath };
 }
 

@@ -110,12 +110,19 @@ import {
   markProceduralMemoryUsed,
   reconcileProceduralMemory,
 } from "../core/brain/procedural-memory.ts";
+import { readProceduralGraph, rebuildProceduralGraph } from "../core/brain/procedural-graph.ts";
+import { readProceduralHints, rebuildProceduralHints } from "../core/brain/procedural-hints.ts";
 import {
   applyRecurrenceEvidence,
   getRecurrenceEntry,
   listRecurrenceEntries,
   purgeRecurrenceSource,
 } from "../core/brain/recurrence.ts";
+import {
+  evaluateAttentionFlow,
+  listAttentionFlows,
+  renderAttentionFlow,
+} from "../core/brain/attention-flows.ts";
 import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
@@ -1750,6 +1757,7 @@ async function toolBrainContextPack(
   const includeLanes = coerceBool(args, "lanes");
   const cacheStable = coerceBool(args, "cache_stable");
   const dedupRepeated = coerceBool(args, "dedup_repeated");
+  const attentionFlowIds = coerceStrList(args, "attention_flow_ids");
   const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
   const receipt = receiptOptionsFromArgs("brain_context_pack", args, "context_pack", "mcp");
@@ -1770,6 +1778,7 @@ async function toolBrainContextPack(
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
+    ...(attentionFlowIds.length > 0 ? { attentionFlowIds } : {}),
   });
   return {
     vault_path: ctx.vault,
@@ -2279,6 +2288,74 @@ async function toolBrainRecurrence(
   throw new MCPError(
     INVALID_PARAMS,
     "brain_recurrence: operation must be one of list|show|learn|forget|purge_source",
+  );
+}
+
+async function toolBrainProceduralGraph(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = requiredStringArg("brain_procedural_graph", args, "operation");
+  if (operation === "rebuild") {
+    const graph = rebuildProceduralGraph(ctx.vault);
+    const hints = rebuildProceduralHints(ctx.vault, { graph });
+    return {
+      operation,
+      graph: {
+        nodes: graph.nodes.length,
+        edges: graph.edges.length,
+        generated_at: graph.generated_at,
+      },
+      hints: {
+        entries: hints.entries.length,
+        generated_at: hints.generated_at,
+      },
+    };
+  }
+  if (operation === "show") {
+    const graph = readProceduralGraph(ctx.vault);
+    if (!graph) {
+      throw new MCPError(INVALID_PARAMS, "brain_procedural_graph: graph projection not found");
+    }
+    return { ...graph };
+  }
+  if (operation === "hints") {
+    const hints = readProceduralHints(ctx.vault);
+    if (!hints) {
+      throw new MCPError(INVALID_PARAMS, "brain_procedural_graph: hints projection not found");
+    }
+    return { ...hints };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_procedural_graph: operation must be one of rebuild|show|hints",
+  );
+}
+
+async function toolBrainAttentionFlows(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = requiredStringArg("brain_attention_flows", args, "operation");
+  if (operation === "list") {
+    const flows = listAttentionFlows(ctx.vault);
+    return { total: flows.length, flows };
+  }
+  if (operation === "evaluate") {
+    const flowId = requiredStringArg("brain_attention_flows", args, "flow_id");
+    const report = evaluateAttentionFlow(ctx.vault, flowId);
+    return { ...report };
+  }
+  if (operation === "render") {
+    const flowId = requiredStringArg("brain_attention_flows", args, "flow_id");
+    return {
+      flow_id: flowId,
+      text: renderAttentionFlow(ctx.vault, flowId),
+    };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_attention_flows: operation must be one of list|evaluate|render",
   );
 }
 
@@ -2878,6 +2955,12 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "When true, replace repeated context bodies with reference hints to an earlier emitted item.",
         },
+        attention_flow_ids: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional declarative attention flow ids to inject as a synthetic context block.",
+        },
         receipt: {
           type: "boolean",
           description: "When true, emit an opt-in context receipt for this context-pack run.",
@@ -3118,6 +3201,46 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRecurrence,
+  },
+  {
+    name: "brain_procedural_graph",
+    description:
+      "Rebuild/show procedural graph projection and prospective hint projection (rebuild, show, hints).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["rebuild", "show", "hints"],
+          description: "Tool operation.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainProceduralGraph,
+  },
+  {
+    name: "brain_attention_flows",
+    description:
+      "List/evaluate/render declarative attention-flow recipes for open loops and learnings.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["list", "evaluate", "render"],
+          description: "Tool operation.",
+        },
+        flow_id: {
+          type: "string",
+          description: "Flow id for evaluate/render operations.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainAttentionFlows,
   },
   {
     name: "brain_pre_compact_extract",

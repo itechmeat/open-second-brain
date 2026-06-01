@@ -90,6 +90,67 @@ test("brain procedural learning verbs wire end-to-end", async () => {
   ]);
   expect(mark.returncode).toBe(0);
 
+  const graphRebuild = await runCli([
+    "brain",
+    "procedural-graph",
+    "rebuild",
+    "--vault",
+    vault,
+    "--json",
+  ]);
+  expect(graphRebuild.returncode).toBe(0);
+  const graphRebuildJson = JSON.parse(graphRebuild.stdout);
+  expect(graphRebuildJson.operation).toBe("rebuild");
+
+  const graphShow = await runCli(["brain", "procedural-graph", "show", "--vault", vault, "--json"]);
+  expect(graphShow.returncode).toBe(0);
+  const graphShowJson = JSON.parse(graphShow.stdout);
+  expect(graphShowJson.nodes.length).toBeGreaterThan(0);
+
+  const graphHints = await runCli([
+    "brain",
+    "procedural-graph",
+    "hints",
+    "--vault",
+    vault,
+    "--json",
+  ]);
+  expect(graphHints.returncode).toBe(0);
+  const graphHintsJson = JSON.parse(graphHints.stdout);
+  expect(graphHintsJson.entries.length).toBeGreaterThan(0);
+
+  const flowsList = await runCli(["brain", "attention-flows", "list", "--vault", vault, "--json"]);
+  expect(flowsList.returncode).toBe(0);
+  const flowsListJson = JSON.parse(flowsList.stdout);
+  expect(flowsListJson.total).toBeGreaterThan(0);
+
+  const flowId = flowsListJson.flows[0]?.id;
+  expect(typeof flowId).toBe("string");
+
+  const flowEval = await runCli([
+    "brain",
+    "attention-flows",
+    "evaluate",
+    flowId,
+    "--vault",
+    vault,
+    "--json",
+  ]);
+  expect(flowEval.returncode).toBe(0);
+
+  const flowRender = await runCli([
+    "brain",
+    "attention-flows",
+    "render",
+    flowId,
+    "--vault",
+    vault,
+    "--json",
+  ]);
+  expect(flowRender.returncode).toBe(0);
+  const flowRenderJson = JSON.parse(flowRender.stdout);
+  expect(flowRenderJson.text).toContain("#");
+
   const learnRecurrence = await runCli([
     "brain",
     "recurrence",

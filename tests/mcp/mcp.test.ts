@@ -231,7 +231,9 @@ describe("tool listing", () => {
         // Procedural-learning surfaces (v0.30.0).
         "brain_skill_proposals",
         "brain_procedural_memory",
+        "brain_procedural_graph",
         "brain_recurrence",
+        "brain_attention_flows",
         // Pay Memory (unchanged).
         "payment_memory_init",
         "payment_receipt_append",
@@ -496,7 +498,9 @@ describe("stdio loop", () => {
     // + brain_recall_gate (v0.27.0) = 58.
     // + 7 context continuity/session recall tools (v0.29.0) = 65.
     // + 3 procedural-learning tools (v0.30.0) = 68.
-    expect(list.result.tools.length).toBe(68);
+    // + brain_procedural_graph (v0.31.0) = 69.
+    // + brain_attention_flows (v0.31.0) = 70.
+    expect(list.result.tools.length).toBe(70);
   });
 
   test("returns parse error for invalid JSON", async () => {

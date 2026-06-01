@@ -51,6 +51,7 @@ export const BRAIN_SKILL_PROPOSALS_ACCEPTED_REL = posix.join(BRAIN_SKILL_PROPOSA
 export const BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "rejected");
 export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
 export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
+export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
 /**
@@ -202,6 +203,21 @@ export function proceduralMemoryIndexPath(vault: string): string {
 /** Procedural-memory usage sidecar path: `Brain/procedural-memory/usage.jsonl`. */
 export function proceduralMemoryUsagePath(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "usage.jsonl"), vault);
+}
+
+/** Procedural graph projection path: `Brain/procedural-memory/graph.json`. */
+export function proceduralGraphPath(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "graph.json"), vault);
+}
+
+/** Prospective recall hints path: `Brain/procedural-memory/hints.json`. */
+export function proceduralHintsPath(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "hints.json"), vault);
+}
+
+/** Declarative attention-flows directory: `Brain/attention/flows/`. */
+export function attentionFlowsDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_ATTENTION_REL, "flows"), vault);
 }
 
 /** Proposal scan watermark path: `Brain/procedural-memory/proposal-watermark.json`. */

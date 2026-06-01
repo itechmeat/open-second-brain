@@ -71,6 +71,12 @@ export interface ImportSessionOptions {
   readonly recall?: boolean;
   readonly recallSessionId?: string;
   readonly recallSummaryGroupSize?: number;
+  /** Optional ingest scope label stamped into imported signal notes. */
+  readonly ingestScope?: string;
+  /** Optional role filter for write-side extraction. */
+  readonly filterRoles?: ReadonlyArray<SessionTurn["role"]>;
+  /** Optional case-insensitive substring filter on turn text. */
+  readonly filterTextIncludes?: string;
 }
 
 export interface ImportSessionResult {
@@ -81,6 +87,7 @@ export interface ImportSessionResult {
   readonly signals_deduped: number;
   readonly tool_replays: number;
   readonly malformed: number;
+  readonly filtered_turns: number;
   readonly recall_turns_imported: number;
   readonly recall_summary_nodes: number;
   readonly errors: ReadonlyArray<{ path: string; message: string }>;
@@ -140,7 +147,11 @@ export async function importSession(
   let signalsDeduped = 0;
   let toolReplays = 0;
   let malformed = 0;
+  let filteredTurns = 0;
   const recallTurns: SessionTurn[] = [];
+  const filterRoles =
+    opts.filterRoles && opts.filterRoles.length > 0 ? new Set(opts.filterRoles) : null;
+  const filterNeedle = opts.filterTextIncludes?.trim().toLowerCase() ?? null;
 
   // Inline helper that wraps the writeSignal call with the consistent
   // shape every session-imported signal shares.
@@ -179,7 +190,13 @@ export async function importSession(
         source_type: BRAIN_SIGNAL_SOURCE_TYPE.session,
         dedup_hash: input.dedupHash,
         session_ref: sessionRef,
-        ...(input.note ? { raw: input.note } : {}),
+        ...(input.note || opts.ingestScope
+          ? {
+              raw: [opts.ingestScope ? `[ingest_scope:${opts.ingestScope}]` : "", input.note ?? ""]
+                .filter((chunk) => chunk.length > 0)
+                .join("\n"),
+            }
+          : {}),
         ...(opts.rawCodec === true ? { rawCodec: true } : {}),
       });
       dedup.set(input.dedupHash, { id: res.id, path: res.path });
@@ -197,6 +214,17 @@ export async function importSession(
     if (sinceMs !== undefined) {
       const t = Date.parse(turn.timestamp);
       if (Number.isFinite(t) && t < sinceMs) continue;
+    }
+    if (filterRoles !== null && !filterRoles.has(turn.role)) {
+      filteredTurns++;
+      continue;
+    }
+    if (filterNeedle !== null) {
+      const haystack = turn.text?.toLowerCase() ?? "";
+      if (!haystack.includes(filterNeedle)) {
+        filteredTurns++;
+        continue;
+      }
     }
     if (opts.recall === true) recallTurns.push(turn);
 
@@ -284,6 +312,7 @@ export async function importSession(
     signals_deduped: signalsDeduped,
     tool_replays: toolReplays,
     malformed,
+    filtered_turns: filteredTurns,
     recall_turns_imported: recallTurnsImported,
     recall_summary_nodes: recallSummaryNodes,
     errors: Object.freeze(errors),

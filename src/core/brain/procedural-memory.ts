@@ -1,20 +1,13 @@
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-} from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { parseFrontmatter } from "../vault.ts";
-import {
-  proceduralMemoryIndexPath,
-  proceduralMemoryUsagePath,
-} from "./paths.ts";
+import { rebuildProceduralHints } from "./procedural-hints.ts";
+import { rebuildProceduralGraph } from "./procedural-graph.ts";
+import { proceduralMemoryIndexPath, proceduralMemoryUsagePath } from "./paths.ts";
 
 export type ProceduralEntryKind = "skill" | "runbook" | "procedure";
 
@@ -47,9 +40,7 @@ export function reconcileProceduralMemory(
   vault: string,
   opts: ProceduralReconcileOptions,
 ): ProceduralReconcileResult {
-  const prev = new Map(
-    listProceduralMemory(vault).map((entry) => [entry.id, entry] as const),
-  );
+  const prev = new Map(listProceduralMemory(vault).map((entry) => [entry.id, entry] as const));
   const usage = readUsageMap(vault);
   const next = collectEntries(vault, opts.roots).map((entry) => {
     const old = prev.get(entry.id);
@@ -82,12 +73,12 @@ export function reconcileProceduralMemory(
   }
 
   writeIndex(vault, next);
+  const graph = rebuildProceduralGraph(vault);
+  rebuildProceduralHints(vault, { graph });
   return { total: next.length, added, updated, removed };
 }
 
-export function listProceduralMemory(
-  vault: string,
-): ReadonlyArray<ProceduralMemoryEntry> {
+export function listProceduralMemory(vault: string): ReadonlyArray<ProceduralMemoryEntry> {
   const path = proceduralMemoryIndexPath(vault);
   if (!existsSync(path)) return Object.freeze([]);
   try {
@@ -128,14 +119,13 @@ export function markProceduralMemoryUsed(
     lastUsedAt: now.toISOString(),
   });
   writeUsageMap(vault, usage);
+  const graph = rebuildProceduralGraph(vault);
+  rebuildProceduralHints(vault, { graph });
 
   return next.find((entry) => entry.id === id) ?? null;
 }
 
-function collectEntries(
-  vault: string,
-  roots: ReadonlyArray<string>,
-): ProceduralMemoryEntry[] {
+function collectEntries(vault: string, roots: ReadonlyArray<string>): ProceduralMemoryEntry[] {
   const out: ProceduralMemoryEntry[] = [];
 
   for (const root of roots) {
@@ -166,19 +156,13 @@ function collectEntries(
     }
   }
 
-  return out.toSorted((left, right) =>
-    left.sourcePath.localeCompare(right.sourcePath),
-  );
+  return out.toSorted((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 }
 
 function detectKind(vaultRelPath: string): ProceduralEntryKind | null {
   if (vaultRelPath.startsWith("Brain/procedures/")) return "procedure";
   if (vaultRelPath.endsWith("/SKILL.md")) return "skill";
-  if (
-    vaultRelPath.endsWith(".prompt.md") ||
-    vaultRelPath.endsWith("runbook.md")
-  )
-    return "runbook";
+  if (vaultRelPath.endsWith(".prompt.md") || vaultRelPath.endsWith("runbook.md")) return "runbook";
   return null;
 }
 
@@ -225,35 +209,25 @@ function toVaultRelative(vault: string, absPath: string): string {
 }
 
 function entryId(sourcePath: string): string {
-  const hash = createHash("sha256")
-    .update(sourcePath, "utf8")
-    .digest("hex")
-    .slice(0, 12);
+  const hash = createHash("sha256").update(sourcePath, "utf8").digest("hex").slice(0, 12);
   return `pmem-${hash}`;
 }
 
 function asStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.filter(
-      (item): item is string =>
-        typeof item === "string" && item.trim().length > 0,
+      (item): item is string => typeof item === "string" && item.trim().length > 0,
     );
   }
-  if (typeof value === "string" && value.trim().length > 0)
-    return [value.trim()];
+  if (typeof value === "string" && value.trim().length > 0) return [value.trim()];
   return [];
 }
 
 function asStringOrNull(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : null;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function writeIndex(
-  vault: string,
-  entries: ReadonlyArray<ProceduralMemoryEntry>,
-): void {
+function writeIndex(vault: string, entries: ReadonlyArray<ProceduralMemoryEntry>): void {
   const path = proceduralMemoryIndexPath(vault);
   mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
   const payload = JSON.stringify(
@@ -273,10 +247,7 @@ function readUsageMap(
   const path = proceduralMemoryUsagePath(vault);
   if (!existsSync(path)) return new Map();
 
-  const out = new Map<
-    string,
-    { usedCount: number; lastUsedAt: string | null }
-  >();
+  const out = new Map<string, { usedCount: number; lastUsedAt: string | null }>();
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (!line.trim()) continue;
     try {
@@ -284,12 +255,8 @@ function readUsageMap(
       const id = typeof parsed["id"] === "string" ? parsed["id"] : null;
       if (!id) continue;
       out.set(id, {
-        usedCount:
-          typeof parsed["usedCount"] === "number" ? parsed["usedCount"] : 0,
-        lastUsedAt:
-          typeof parsed["lastUsedAt"] === "string"
-            ? parsed["lastUsedAt"]
-            : null,
+        usedCount: typeof parsed["usedCount"] === "number" ? parsed["usedCount"] : 0,
+        lastUsedAt: typeof parsed["lastUsedAt"] === "string" ? parsed["lastUsedAt"] : null,
       });
     } catch {
       continue;
@@ -316,8 +283,5 @@ function writeUsageMap(
       }),
     );
   }
-  atomicWriteFileSync(
-    path,
-    `${lines.join("\n")}${lines.length > 0 ? "\n" : ""}`,
-  );
+  atomicWriteFileSync(path, `${lines.join("\n")}${lines.length > 0 ? "\n" : ""}`);
 }

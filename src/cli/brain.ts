@@ -60,7 +60,9 @@ import {
   cmdBrainRecallTelemetry,
   cmdBrainSkillProposals,
   cmdBrainProceduralMemory,
+  cmdBrainProceduralGraph,
   cmdBrainRecurrence,
+  cmdBrainAttentionFlows,
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,
   cmdBrainSessionGrep,
@@ -199,8 +201,12 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainSkillProposals(rest);
       case "procedural-memory":
         return await cmdBrainProceduralMemory(rest);
+      case "procedural-graph":
+        return await cmdBrainProceduralGraph(rest);
       case "recurrence":
         return await cmdBrainRecurrence(rest);
+      case "attention-flows":
+        return await cmdBrainAttentionFlows(rest);
       case "session-grep":
         return await cmdBrainSessionGrep(rest);
       case "session-describe":
