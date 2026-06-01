@@ -23,6 +23,7 @@ from plugins.hermes import config as cfg  # noqa: E402
 from plugins.hermes._base import MemoryProvider  # noqa: E402
 from plugins.hermes.bridge import (  # noqa: E402
     BridgeError,
+    BridgeTransportError,
     FakeBrainBridge,
     JsonRpcStdioClient,
     McpBrainBridge,
@@ -490,6 +491,43 @@ class McpBrainBridgeTests(unittest.TestCase):
         bridge.start()
         bridge.stop()
         self.assertTrue(proc.terminated)
+
+    def _counting_spawn(self, *procs):
+        it = iter(procs)
+        state = {"n": 0}
+
+        def spawn(argv):
+            state["n"] += 1
+            return next(it)
+
+        spawn.state = state
+        return spawn
+
+    def test_tool_error_response_propagates_without_restart(self):
+        # A JSON-RPC error (e.g. invalid arguments) is a server rejection, not
+        # a dead channel: it must propagate and must not respawn the process.
+        err = [{"jsonrpc": "2.0", "id": 3, "error": {"code": -32602, "message": "bad args"}}]
+        spawn = self._counting_spawn(_FakeProcess(self._handshake_frames(err)))
+        bridge = McpBrainBridge(vault="/v", spawn=spawn)
+        bridge.start()
+        with self.assertRaises(BridgeError) as ctx:
+            bridge.call_tool("brain_query", {})
+        self.assertNotIsInstance(ctx.exception, BridgeTransportError)
+        self.assertEqual(spawn.state["n"], 1)
+
+    def test_transport_error_restarts_once_and_retries(self):
+        # First process dies mid-call (EOF); the bridge restarts once and the
+        # second process answers.
+        dead = _FakeProcess(self._handshake_frames())  # no id-3 frame -> EOF
+        good = _FakeProcess(
+            self._handshake_frames([{"jsonrpc": "2.0", "id": 3, "result": {"ok": True}}])
+        )
+        spawn = self._counting_spawn(dead, good)
+        bridge = McpBrainBridge(vault="/v", spawn=spawn)
+        bridge.start()
+        result = bridge.call_tool("brain_query", {"topic": "x"})
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(spawn.state["n"], 2)
 
 
 class FakeBrainBridgeTests(unittest.TestCase):

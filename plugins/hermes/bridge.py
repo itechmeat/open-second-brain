@@ -22,7 +22,16 @@ CLIENT_NAME = "open-second-brain-hermes-provider"
 
 
 class BridgeError(RuntimeError):
-    """Raised on transport failure or a JSON-RPC error response."""
+    """Base error: a JSON-RPC error response or a transport failure."""
+
+
+class BridgeTransportError(BridgeError):
+    """The channel itself failed (EOF, broken pipe). Worth one restart.
+
+    Distinct from a plain ``BridgeError``, which signals a JSON-RPC error
+    response (e.g. invalid tool arguments) - a server-level rejection that a
+    restart would only repeat, so it must propagate unchanged.
+    """
 
 
 @runtime_checkable
@@ -73,13 +82,13 @@ class JsonRpcStdioClient:
             if callable(flush):
                 flush()
         except (BrokenPipeError, ValueError, OSError) as exc:
-            raise BridgeError(f"write failed: {exc}") from exc
+            raise BridgeTransportError(f"write failed: {exc}") from exc
 
     def _read_response(self, rid: int) -> Any:
         while True:
             line = self._reader.readline()
             if line == "":
-                raise BridgeError("unexpected EOF from MCP server")
+                raise BridgeTransportError("unexpected EOF from MCP server")
             line = line.strip()
             if not line:
                 continue
@@ -163,8 +172,10 @@ class McpBrainBridge:
         assert self._client is not None
         try:
             result = self._client.request("tools/call", {"name": name, "arguments": args})
-        except BridgeError:
-            # Restart the channel once, then retry; a second failure propagates.
+        except BridgeTransportError:
+            # The channel died: restart once and retry. A JSON-RPC error
+            # (plain BridgeError, e.g. invalid arguments) is a server-level
+            # rejection and propagates unchanged - restarting would only repeat it.
             self._restart()
             assert self._client is not None
             result = self._client.request("tools/call", {"name": name, "arguments": args})
@@ -227,6 +238,7 @@ class FakeBrainBridge:
 
 __all__ = [
     "BridgeError",
+    "BridgeTransportError",
     "BrainBridge",
     "JsonRpcStdioClient",
     "McpBrainBridge",
