@@ -175,7 +175,12 @@ o2b update                    # detect runtimes, skip unchanged, apply, verify
 o2b doctor                    # confirm the new manifest validates
 ```
 
-Per-runtime upgrade paths and the canonical version source live in [`install.md`](install.md).
+Updates need no manual symlink surgery: hooks resolve the active plugin version
+on their own and the `~/.local/bin` CLI symlinks self-heal on the next session
+start. Per-runtime upgrade paths and the canonical version source live in
+[`install.md`](install.md); the update-safety contract (and the invariants any
+change to hooks/launcher/install must keep) lives in
+[`docs/updating.md`](docs/updating.md).
 
 ## Documentation
 
@@ -184,6 +189,7 @@ Per-runtime upgrade paths and the canonical version source live in [`install.md`
 | Mental model, vault layout, dream mechanics        | [`docs/how-it-works.md`](docs/how-it-works.md)                   |
 | MCP protocol, tools, lifecycle, writer split       | [`docs/mcp.md`](docs/mcp.md)                                     |
 | Full CLI reference (every verb, every flag)        | [`docs/cli-reference.md`](docs/cli-reference.md)                 |
+| Update safety contract + hook/launcher invariants  | [`docs/updating.md`](docs/updating.md)                           |
 | Pay Memory - audit for paid agent actions          | [`docs/pay-memory.md`](docs/pay-memory.md)                       |
 | Hermes cron jobs (daily digest, discipline report) | [`docs/hermes-cron.md`](docs/hermes-cron.md)                     |
 | Cross-project pointer (multi-host vaults)          | [`docs/cross-project-pointer.md`](docs/cross-project-pointer.md) |

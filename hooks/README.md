@@ -95,24 +95,52 @@ payload:{type:"function_call"|"custom_tool_call", name}}`).
 
 ## How both runtimes find the hook commands
 
-`hooks.json` invokes the bare `o2b-hook <name>` command. That
-launcher is installed on PATH by `o2b install-cli` (one of
-`["o2b", "vault-log", "o2b-hook"]`) and lives at
-`scripts/o2b-hook` inside the plugin checkout. The launcher follows
-its own symlink, walks up one directory to find the plugin root,
-runs the Bun precheck, and execs the requested `hooks/<name>.ts`.
+Each `hooks.json` command resolves the launcher version-currently, with
+a fallback, and can never block:
 
-This path resolution is intentionally PATH-based rather than relying
-on `${CLAUDE_PLUGIN_ROOT}` (which Claude Code substitutes natively)
-or `${CODEX_PLUGIN_ROOT}` (which doesn't exist on the Codex side as
-of CLI 0.129). One PATH-discoverable shim works in both runtimes
-without per-runtime branching.
+```sh
+r="$CLAUDE_PLUGIN_ROOT"; if [ -n "$r" ] && [ -x "$r/scripts/o2b-hook" ]; then exec "$r/scripts/o2b-hook" <name>; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook <name>; exit 0
+```
 
-If `o2b install-cli` was skipped (or the install was wiped without
-running it), the hooks fail closed: the runtime sees a
-`command not found`, exits non-zero with a stderr trace, and
-proceeds with the turn. The Stop guardrail's `decision: "block"`
-only fires when the script runs successfully.
+- **Claude Code** sets `CLAUDE_PLUGIN_ROOT` to the *active* plugin
+  version directory, so the command runs `scripts/o2b-hook` from the
+  version Claude Code just loaded — never a stale copy.
+- **Codex** does not export a plugin-root env var, so it falls through
+  to the PATH `o2b-hook` shim (`o2b install-cli` puts it on PATH; on a
+  server it points at the stable checkout, which never rotates).
+- If neither resolves, the command `exit 0`s — a missing launcher is a
+  no-op, never a blocked turn.
+
+`scripts/o2b-hook` itself resolves the checkout root in the same order
+(`$CLAUDE_PLUGIN_ROOT` → its own realpath → `$OSB_PLUGIN_ROOT`) and is
+**fail-soft**: any unresolved hook, missing Bun, or other internal
+error prints a warning to stderr and exits `0`. It must never `exit 2`
+— that is the only hook exit code Claude Code treats as blocking.
+
+The global `~/.local/bin/{o2b,o2b-hook,vault-log}` symlinks are
+self-healing: the `SessionStart` `active-inject` hook calls
+`healCliSymlinks()` from the current checkout, re-pointing a dangling
+or plugin-cache-stale OSB symlink with no user action (it leaves
+stable-directory installs, foreign symlinks, and real files untouched).
+
+> **Invariant for anyone editing hooks, the launcher, or install-cli —
+> updates must never break existing installs.** A plugin update rotates
+> the versioned cache directory under `~/.claude/plugins/cache/...`, so
+> any resolution that pins to a specific version path (a PATH symlink
+> into a cache dir, a hard-coded version, a stored absolute path) WILL
+> dangle on the next update. Always:
+> 1. resolve the launcher via `$CLAUDE_PLUGIN_ROOT` first (Claude Code
+>    re-reads `hooks.json` from the active version each session, so a
+>    correct command shape here repairs an already-broken install on the
+>    next update);
+> 2. keep hooks fail-soft — `exit 0` on every internal error, never
+>    `exit 2`, never a hard `command not found` trace as the only path;
+> 3. keep symlink resolution self-healing and conservative (never hijack
+>    a stable-dir or foreign symlink).
+>
+> These three properties are locked by `tests/hooks/o2b-hook.test.ts`,
+> `tests/hooks/hooks-json-shape.test.ts`, and
+> `tests/cli/install-cli.test.ts`. See [`docs/updating.md`](../docs/updating.md).
 
 ## Local dev loop
 
