@@ -34,6 +34,33 @@ o2b install-cli      # idempotent: re-points dangling or stale OSB symlinks
 `o2b install-cli` only touches its own (Open Second Brain) symlinks or dangling
 links; it never overwrites a real file or a symlink owned by another tool.
 
+### Vault state migrates itself
+
+You also do **not** need to run `o2b search reindex` or `o2b brain upgrade`
+after an update. On the next start of any runtime (the `o2b mcp` server boot,
+which Hermes/Claude Code/Codex all spawn, and the Claude Code SessionStart
+hook), `ensureVaultCurrent` brings an already-initialised vault current,
+hands-off:
+
+- a stale `_brain.yaml` / `_BRAIN.md` is migrated (snapshot-backed, additive;
+  user content untouched);
+- a stale-schema or missing search index is rebuilt in the **background** (a
+  detached reindex), so startup never blocks; and as a safety net the search
+  read path self-heals a stale/missing index on first query.
+
+It is **state-driven, not version-stamped.** Each step keys off actual on-disk
+state - the search index `schema_version`, the `_brain.yaml` pending-changes
+plan, directory existence - rather than a "last version" marker. This is
+deliberate: a vault is often synced across devices (Syncthing), so a stamp
+written into the vault would let one device mark the work done and make another
+skip its own per-device step (the search index is per-device). State checks are
+cheap reads on every start; only a real migration does work, and the approach
+also handles interrupted migrations and downgrades. Any per-device version note
+lives outside the vault and is for logging only, never for gating.
+
+The manual `o2b search reindex` / `o2b brain upgrade` commands still exist for
+explicit use; auto-migration just reuses their logic.
+
 ## Why updates used to break (and no longer do)
 
 `hooks/hooks.json` previously invoked the bare `o2b-hook` launcher through a
@@ -70,9 +97,17 @@ version — never assume a clean prior state.**
    checkout under `/srv/...` shared by Hermes/Codex).
 4. **Codex has no plugin-root env var.** Keep the PATH `o2b-hook` fallback so
    Codex (and any runtime without `CLAUDE_PLUGIN_ROOT`) still works.
+5. **Post-upgrade migration is state-driven and best-effort.** `ensureVaultCurrent`
+   must key off actual on-disk state (index `schema_version`, `_brain.yaml`
+   pending plan, dir existence), never a stamp written into the (possibly synced)
+   vault. It must never throw and never block startup - slow work (reindex) runs
+   detached in the background. Any new manual-after-upgrade step a future change
+   introduces must be folded into `ensureVaultCurrent` so the user never runs it.
 
 These properties are locked by tests; do not weaken them:
 
 - `tests/hooks/o2b-hook.test.ts` — fail-soft + `$CLAUDE_PLUGIN_ROOT`-first resolution.
 - `tests/hooks/hooks-json-shape.test.ts` — every command is version-current, has a PATH fallback, and ends with `exit 0`.
 - `tests/cli/install-cli.test.ts` — idempotent reclaim and conservative self-heal.
+- `tests/core/search/self-heal.test.ts` — search rebuilds a stale/missing index on read.
+- `tests/core/maintenance/ensure-current.test.ts` — state-driven migration, idempotent, never throws.
