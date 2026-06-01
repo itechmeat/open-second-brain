@@ -96,6 +96,20 @@ describe("ensureVaultCurrent", () => {
     expect(indexSchema()).toBe(LATEST_SCHEMA_VERSION);
   });
 
+  test("honors an explicit configPath for the search index", async () => {
+    bootstrapBrain(vault, { configPath });
+    // A second config pointing the index at a custom path.
+    const altConfig = join(configHome, "alt.yaml");
+    const altDb = join(configHome, "alt-index.sqlite");
+    atomicWriteFileSync(altConfig, `vault: ${vault}\nsearch_db_path: ${altDb}\n`);
+
+    const r = await ensureVaultCurrent(vault, { background: false, configPath: altConfig });
+    expect(r.reindexTriggered).toBe(true);
+    // The index was built at the caller's configured path, not the default one.
+    expect(existsSync(altDb)).toBe(true);
+    expect(existsSync(dbPath())).toBe(false);
+  });
+
   test("never throws on a malformed _brain.yaml", async () => {
     bootstrapBrain(vault, { configPath });
     atomicWriteFileSync(brainConfigPath(vault), ":\n  not: [valid\n"); // malformed

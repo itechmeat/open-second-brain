@@ -442,7 +442,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // (the writer server skips it), never blocks or fails server start; a needed
   // reindex runs detached in the background.
   if (scope === "full") {
-    void ensureVaultCurrent(vault, { background: true }).catch(() => {
+    void ensureVaultCurrent(vault, { background: true, configPath: config }).catch(() => {
       // best-effort; the server must come up regardless
     });
   }

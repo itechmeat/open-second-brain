@@ -43,6 +43,11 @@ export interface EnsureCurrentOptions {
    * call returns immediately. When false, the reindex is awaited (used by
    * tests and explicit callers). */
   readonly background?: boolean;
+  /** Plugin config path to resolve search settings from. Defaults to
+   * `defaultConfigPath()`. Threading this ensures the index that is checked and
+   * (re)built matches the one the caller's server actually uses, e.g. under
+   * `o2b mcp --config <custom>`. */
+  readonly configPath?: string;
 }
 
 function message(e: unknown): string {
@@ -80,12 +85,15 @@ function o2bScriptPath(): string {
  * does not tie up a long-lived one (the MCP server). `reindexVault` is
  * lock-guarded, so a concurrent rebuild is serialised, not duplicated.
  */
-function spawnDetachedReindex(vault: string): void {
-  const proc = Bun.spawn([o2bScriptPath(), "search", "reindex", "--vault", vault], {
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
-  });
+function spawnDetachedReindex(vault: string, configPath: string): void {
+  const proc = Bun.spawn(
+    [o2bScriptPath(), "search", "reindex", "--vault", vault, "--config", configPath],
+    {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    },
+  );
   proc.unref();
 }
 
@@ -117,11 +125,12 @@ export async function ensureVaultCurrent(
 
   // 2. Search index - rebuild if absent or on a stale schema.
   try {
-    const config = resolveSearchConfig({ vault, configPath: defaultConfigPath() });
+    const configPath = opts.configPath ?? defaultConfigPath();
+    const config = resolveSearchConfig({ vault, configPath });
     if (indexNeedsRebuild(config)) {
       reindexTriggered = true;
       if (background) {
-        spawnDetachedReindex(vault);
+        spawnDetachedReindex(vault, configPath);
       } else {
         await reindexVault(config);
       }

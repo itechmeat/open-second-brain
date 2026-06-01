@@ -78,11 +78,11 @@ async function main(): Promise<void> {
   // never blocks injection. In background mode the synchronous part (brain
   // upgrade + spawning the reindex) completes before this awaits.
   if (hookEventName === "SessionStart") {
-    try {
-      await ensureVaultCurrent(vault, { background: true });
-    } catch {
-      // ignore — opportunistic; must never disrupt the session
-    }
+    // Fire-and-forget: never put maintenance on the hook's critical path.
+    // background:true spawns the reindex detached; we do not await the result.
+    void ensureVaultCurrent(vault, { background: true }).catch(() => {
+      // opportunistic; must never disrupt the session
+    });
   }
 
   const activePath = brainActivePath(vault);
