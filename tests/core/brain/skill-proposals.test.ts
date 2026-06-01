@@ -59,8 +59,10 @@ describe("skill proposal learning", () => {
     const wmPath = proposalWatermarkPath(vault);
     const wm = JSON.parse(readFileSync(wmPath, "utf8")) as {
       lastCreatedAt: string | null;
+      lastId: string | null;
     };
     expect(wm.lastCreatedAt).toBe(first.watermarkTo);
+    expect(typeof wm.lastId).toBe("string");
 
     const second = learnSkillProposals(vault, {
       now: new Date("2026-06-01T11:00:00Z"),
@@ -71,6 +73,48 @@ describe("skill proposal learning", () => {
     expect(listPendingSkillProposals(vault).length).toBe(first.created.length);
   });
 
+  test("replays same-timestamp records using watermark id cursor", () => {
+    seedCorePatterns(vault);
+
+    const first = learnSkillProposals(vault, {
+      now: new Date("2026-06-01T10:00:00Z"),
+      minSupport: 3,
+    });
+    expect(first.watermarkTo).not.toBeNull();
+
+    const wmPath = proposalWatermarkPath(vault);
+    const wm = JSON.parse(readFileSync(wmPath, "utf8")) as {
+      lastCreatedAt: string | null;
+      lastId: string | null;
+    };
+    expect(wm.lastCreatedAt).not.toBeNull();
+    expect(wm.lastId).not.toBeNull();
+
+    let appendedHigherId = false;
+    for (let i = 0; i < 256; i++) {
+      const rec = appendContinuityRecord(vault, {
+        kind: "session_turn",
+        createdAt: wm.lastCreatedAt!,
+        sourceRefs: [{ id: `late-src-${i}` }],
+        payload: {
+          action: `late_action_${i}`,
+          summary: `late summary ${i}`,
+        },
+      });
+      if (rec.id > wm.lastId!) {
+        appendedHigherId = true;
+        break;
+      }
+    }
+    expect(appendedHigherId).toBe(true);
+
+    const second = learnSkillProposals(vault, {
+      now: new Date("2026-06-01T11:00:00Z"),
+      minSupport: 3,
+    });
+    expect(second.scanned).toBeGreaterThan(0);
+  });
+
   test("accept moves proposal and creates procedure artifact", () => {
     seedCorePatterns(vault);
     learnSkillProposals(vault, {
@@ -79,7 +123,9 @@ describe("skill proposal learning", () => {
     });
 
     const pending = listPendingSkillProposals(vault);
-    const target = pending.find((item) => item.patternKind === "repeated_action");
+    const target = pending.find(
+      (item) => item.patternKind === "repeated_action",
+    );
     expect(target).toBeDefined();
 
     const accepted = acceptSkillProposal(vault, target!.slug, {
@@ -88,9 +134,15 @@ describe("skill proposal learning", () => {
     });
 
     expect(accepted.status).toBe("accepted");
-    expect(existsSync(skillProposalAcceptedPath(vault, target!.slug))).toBe(true);
+    expect(existsSync(skillProposalAcceptedPath(vault, target!.slug))).toBe(
+      true,
+    );
     expect(existsSync(procedurePath(vault, target!.slug))).toBe(true);
-    expect(listPendingSkillProposals(vault).some((item) => item.slug === target!.slug)).toBe(false);
+    expect(
+      listPendingSkillProposals(vault).some(
+        (item) => item.slug === target!.slug,
+      ),
+    ).toBe(false);
   });
 
   test("reject moves proposal and prevents unchanged reappearance", () => {
@@ -110,8 +162,14 @@ describe("skill proposal learning", () => {
     });
 
     expect(rejected.status).toBe("rejected");
-    expect(existsSync(skillProposalRejectedPath(vault, target!.slug))).toBe(true);
-    expect(listPendingSkillProposals(vault).some((item) => item.slug === target!.slug)).toBe(false);
+    expect(existsSync(skillProposalRejectedPath(vault, target!.slug))).toBe(
+      true,
+    );
+    expect(
+      listPendingSkillProposals(vault).some(
+        (item) => item.slug === target!.slug,
+      ),
+    ).toBe(false);
 
     const rerun = learnSkillProposals(vault, {
       now: new Date("2026-06-02T13:00:00Z"),

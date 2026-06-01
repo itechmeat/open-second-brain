@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
@@ -13,7 +19,10 @@ import {
   skillProposalPendingPath,
   skillProposalRejectedPath,
 } from "./paths.ts";
-import { listContinuityRecords, type ContinuityRecord } from "./continuity/store.ts";
+import {
+  listContinuityRecords,
+  type ContinuityRecord,
+} from "./continuity/store.ts";
 
 export type SkillProposalPatternKind =
   | "repeated_action"
@@ -52,6 +61,7 @@ interface ProposalCandidate {
 
 interface WatermarkState {
   readonly lastCreatedAt: string | null;
+  readonly lastId: string | null;
 }
 
 const DEFAULT_MIN_SUPPORT = 3;
@@ -65,12 +75,17 @@ export function learnSkillProposals(
 
   const watermark = readWatermark(vault);
   const records = listContinuityRecords(vault)
-    .filter(
-      (record) => watermark.lastCreatedAt === null || record.createdAt > watermark.lastCreatedAt,
-    )
+    .filter((record) => {
+      if (watermark.lastCreatedAt === null) return true;
+      if (record.createdAt > watermark.lastCreatedAt) return true;
+      if (record.createdAt < watermark.lastCreatedAt) return false;
+      if (watermark.lastId === null) return true;
+      return record.id > watermark.lastId;
+    })
     .toSorted(
       (left, right) =>
-        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id),
     );
 
   if (records.length === 0) {
@@ -96,7 +111,11 @@ export function learnSkillProposals(
     const acceptedPath = skillProposalAcceptedPath(vault, slug);
     const rejectedPath = skillProposalRejectedPath(vault, slug);
 
-    if (existsSync(pendingPath) || existsSync(acceptedPath) || existsSync(rejectedPath)) {
+    if (
+      existsSync(pendingPath) ||
+      existsSync(acceptedPath) ||
+      existsSync(rejectedPath)
+    ) {
       suppressed.push(proposalId);
       continue;
     }
@@ -132,8 +151,12 @@ export function learnSkillProposals(
     created.push(proposalId);
   }
 
-  const watermarkTo = records[records.length - 1]!.createdAt;
-  writeWatermark(vault, { lastCreatedAt: watermarkTo });
+  const watermarkRecord = records[records.length - 1]!;
+  const watermarkTo = watermarkRecord.createdAt;
+  writeWatermark(vault, {
+    lastCreatedAt: watermarkTo,
+    lastId: watermarkRecord.id,
+  });
 
   return {
     watermarkFrom: watermark.lastCreatedAt,
@@ -150,7 +173,10 @@ export function listPendingSkillProposals(vault: string): ReadonlyArray<{
   status: string;
   patternKind: string;
 }> {
-  const dir = ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL, "pending"), vault);
+  const dir = ensureInsideVault(
+    join(vault, BRAIN_SKILL_PROPOSALS_REL, "pending"),
+    vault,
+  );
   if (!existsSync(dir)) return Object.freeze([]);
 
   const out: Array<{
@@ -167,9 +193,13 @@ export function listPendingSkillProposals(vault: string): ReadonlyArray<{
     if (typeof fm["id"] !== "string") continue;
     out.push({
       id: fm["id"],
-      slug: typeof fm["slug"] === "string" ? fm["slug"] : fm["id"].replace(/^prop-/, ""),
+      slug:
+        typeof fm["slug"] === "string"
+          ? fm["slug"]
+          : fm["id"].replace(/^prop-/, ""),
       status: typeof fm["status"] === "string" ? fm["status"] : "pending",
-      patternKind: typeof fm["pattern_kind"] === "string" ? fm["pattern_kind"] : "unknown",
+      patternKind:
+        typeof fm["pattern_kind"] === "string" ? fm["pattern_kind"] : "unknown",
     });
   }
   return Object.freeze(out);
@@ -211,25 +241,30 @@ export function acceptSkillProposal(
     },
   );
 
-  writeFrontmatterAtomic(
-    procPath,
-    {
-      schema_version: 1,
-      kind: "brain-procedure",
-      id: `proc-${slug}`,
-      slug,
-      source_proposal: id,
-      created_at: now,
-      updated_at: now,
-      status: "active",
-    },
-    renderAcceptedProcedureBody(id, body),
-    {
-      overwrite: false,
-      existsErrorKind: "procedure",
-      vaultForRelativePath: vault,
-    },
-  );
+  try {
+    writeFrontmatterAtomic(
+      procPath,
+      {
+        schema_version: 1,
+        kind: "brain-procedure",
+        id: `proc-${slug}`,
+        slug,
+        source_proposal: id,
+        created_at: now,
+        updated_at: now,
+        status: "active",
+      },
+      renderAcceptedProcedureBody(id, body),
+      {
+        overwrite: false,
+        existsErrorKind: "procedure",
+        vaultForRelativePath: vault,
+      },
+    );
+  } catch (error) {
+    if (existsSync(acceptedPath)) unlinkSync(acceptedPath);
+    throw error;
+  }
 
   unlinkSync(pendingPath);
   return {
@@ -286,14 +321,21 @@ export function rejectSkillProposal(
 
 function readWatermark(vault: string): WatermarkState {
   const path = watermarkPath(vault);
-  if (!existsSync(path)) return { lastCreatedAt: null };
+  if (!existsSync(path)) return { lastCreatedAt: null, lastId: null };
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
     return {
-      lastCreatedAt: typeof parsed["lastCreatedAt"] === "string" ? parsed["lastCreatedAt"] : null,
+      lastCreatedAt:
+        typeof parsed["lastCreatedAt"] === "string"
+          ? parsed["lastCreatedAt"]
+          : null,
+      lastId: typeof parsed["lastId"] === "string" ? parsed["lastId"] : null,
     };
   } catch {
-    return { lastCreatedAt: null };
+    return { lastCreatedAt: null, lastId: null };
   }
 }
 
@@ -364,11 +406,12 @@ function detectCandidates(
     pairMap.set(pair, bucket);
   }
   for (const [pair, bucket] of pairMap) {
-    if (bucket.length / 2 < 2) continue;
+    const support = Math.floor(bucket.length / 2);
+    if (support < minSupport) continue;
     out.push({
       patternKind: "co_occurrence",
       key: pair,
-      confidence: confidence(bucket.length / 2 + 1, minSupport),
+      confidence: confidence(support, minSupport),
       records: Object.freeze(bucket.slice(0, 6)),
       suggestedTitle: `Co-occurrence flow: ${pair}`,
     });
@@ -386,7 +429,9 @@ function detectCandidates(
     temporalMap.set(key, bucket);
   }
   for (const [key, bucket] of temporalMap) {
-    const daySet = new Set(bucket.map((record) => record.createdAt.slice(0, 10)));
+    const daySet = new Set(
+      bucket.map((record) => record.createdAt.slice(0, 10)),
+    );
     if (daySet.size < minSupport) continue;
     out.push({
       patternKind: "temporal_routine",
@@ -399,7 +444,8 @@ function detectCandidates(
 
   return out.toSorted(
     (left, right) =>
-      left.patternKind.localeCompare(right.patternKind) || left.key.localeCompare(right.key),
+      left.patternKind.localeCompare(right.patternKind) ||
+      left.key.localeCompare(right.key),
   );
 }
 
@@ -466,7 +512,10 @@ function evidenceSnippet(record: ContinuityRecord): string {
   return "";
 }
 
-function proposalSlug(candidate: ProposalCandidate, payloadHash: string): string {
+function proposalSlug(
+  candidate: ProposalCandidate,
+  payloadHash: string,
+): string {
   const keySlug = slugify(candidate.key).slice(0, 40);
   return `${candidate.patternKind}-${keySlug}-${payloadHash.slice(0, 8)}`;
 }
@@ -484,10 +533,16 @@ function candidateHash(candidate: ProposalCandidate): string {
     .digest("hex");
 }
 
-function renderAcceptedProcedureBody(proposalId: string, proposalBody: string): string {
+function renderAcceptedProcedureBody(
+  proposalId: string,
+  proposalBody: string,
+): string {
   const marker = "## Suggested skill body";
   const idx = proposalBody.indexOf(marker);
-  const suggested = idx >= 0 ? proposalBody.slice(idx + marker.length).trim() : proposalBody.trim();
+  const suggested =
+    idx >= 0
+      ? proposalBody.slice(idx + marker.length).trim()
+      : proposalBody.trim();
   return [
     "# Procedure",
     "",
