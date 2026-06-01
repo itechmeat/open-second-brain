@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
@@ -7,6 +7,7 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import {
   BRAIN_SKILL_PROPOSALS_REL,
+  procedurePath,
   proposalWatermarkPath,
   skillProposalAcceptedPath,
   skillProposalPendingPath,
@@ -31,6 +32,14 @@ export interface SkillProposalLearnResult {
   readonly scanned: number;
   readonly created: ReadonlyArray<string>;
   readonly suppressed: ReadonlyArray<string>;
+}
+
+export interface SkillProposalReviewResult {
+  readonly id: string;
+  readonly slug: string;
+  readonly status: "accepted" | "rejected";
+  readonly proposalPath: string;
+  readonly procedurePath?: string;
 }
 
 interface ProposalCandidate {
@@ -135,13 +144,21 @@ export function learnSkillProposals(
   };
 }
 
-export function listPendingSkillProposals(
-  vault: string,
-): ReadonlyArray<{ id: string; patternKind: string }> {
+export function listPendingSkillProposals(vault: string): ReadonlyArray<{
+  id: string;
+  slug: string;
+  status: string;
+  patternKind: string;
+}> {
   const dir = ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL, "pending"), vault);
   if (!existsSync(dir)) return Object.freeze([]);
 
-  const out: Array<{ id: string; patternKind: string }> = [];
+  const out: Array<{
+    id: string;
+    slug: string;
+    status: string;
+    patternKind: string;
+  }> = [];
   for (const name of readdirSync(dir).toSorted()) {
     if (!name.endsWith(".md")) continue;
     const path = ensureInsideVault(join(dir, name), vault);
@@ -150,10 +167,121 @@ export function listPendingSkillProposals(
     if (typeof fm["id"] !== "string") continue;
     out.push({
       id: fm["id"],
+      slug: typeof fm["slug"] === "string" ? fm["slug"] : fm["id"].replace(/^prop-/, ""),
+      status: typeof fm["status"] === "string" ? fm["status"] : "pending",
       patternKind: typeof fm["pattern_kind"] === "string" ? fm["pattern_kind"] : "unknown",
     });
   }
   return Object.freeze(out);
+}
+
+export function acceptSkillProposal(
+  vault: string,
+  slug: string,
+  opts: { now?: Date; note?: string } = {},
+): SkillProposalReviewResult {
+  const now = (opts.now ?? new Date()).toISOString();
+  const pendingPath = skillProposalPendingPath(vault, slug);
+  if (!existsSync(pendingPath)) {
+    throw new Error(`pending skill proposal not found: ${slug}`);
+  }
+
+  const [fm, body] = parseFrontmatter(pendingPath);
+  if (fm["kind"] !== "brain-skill-proposal") {
+    throw new Error(`invalid skill proposal file: ${pendingPath}`);
+  }
+  const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
+  const acceptedPath = skillProposalAcceptedPath(vault, slug);
+  const procPath = procedurePath(vault, slug);
+
+  writeFrontmatterAtomic(
+    acceptedPath,
+    {
+      ...fm,
+      status: "accepted",
+      reviewed_at: now,
+      updated_at: now,
+      ...(opts.note ? { review_note: opts.note } : {}),
+    },
+    body,
+    {
+      overwrite: false,
+      existsErrorKind: "accepted skill proposal",
+      vaultForRelativePath: vault,
+    },
+  );
+
+  writeFrontmatterAtomic(
+    procPath,
+    {
+      schema_version: 1,
+      kind: "brain-procedure",
+      id: `proc-${slug}`,
+      slug,
+      source_proposal: id,
+      created_at: now,
+      updated_at: now,
+      status: "active",
+    },
+    renderAcceptedProcedureBody(id, body),
+    {
+      overwrite: false,
+      existsErrorKind: "procedure",
+      vaultForRelativePath: vault,
+    },
+  );
+
+  unlinkSync(pendingPath);
+  return {
+    id,
+    slug,
+    status: "accepted",
+    proposalPath: acceptedPath,
+    procedurePath: procPath,
+  };
+}
+
+export function rejectSkillProposal(
+  vault: string,
+  slug: string,
+  opts: { now?: Date; note: string },
+): SkillProposalReviewResult {
+  if (!opts.note.trim()) {
+    throw new Error("rejecting skill proposal requires a non-empty note");
+  }
+
+  const now = (opts.now ?? new Date()).toISOString();
+  const pendingPath = skillProposalPendingPath(vault, slug);
+  if (!existsSync(pendingPath)) {
+    throw new Error(`pending skill proposal not found: ${slug}`);
+  }
+
+  const [fm, body] = parseFrontmatter(pendingPath);
+  if (fm["kind"] !== "brain-skill-proposal") {
+    throw new Error(`invalid skill proposal file: ${pendingPath}`);
+  }
+  const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
+  const rejectedPath = skillProposalRejectedPath(vault, slug);
+
+  writeFrontmatterAtomic(
+    rejectedPath,
+    {
+      ...fm,
+      status: "rejected",
+      reviewed_at: now,
+      updated_at: now,
+      review_note: opts.note,
+    },
+    body,
+    {
+      overwrite: false,
+      existsErrorKind: "rejected skill proposal",
+      vaultForRelativePath: vault,
+    },
+  );
+
+  unlinkSync(pendingPath);
+  return { id, slug, status: "rejected", proposalPath: rejectedPath };
 }
 
 function readWatermark(vault: string): WatermarkState {
@@ -354,6 +482,19 @@ function candidateHash(candidate: ProposalCandidate): string {
       "utf8",
     )
     .digest("hex");
+}
+
+function renderAcceptedProcedureBody(proposalId: string, proposalBody: string): string {
+  const marker = "## Suggested skill body";
+  const idx = proposalBody.indexOf(marker);
+  const suggested = idx >= 0 ? proposalBody.slice(idx + marker.length).trim() : proposalBody.trim();
+  return [
+    "# Procedure",
+    "",
+    `Accepted from proposal: [[${proposalId}]]`,
+    "",
+    suggested || "No suggested body was captured.",
+  ].join("\n");
 }
 
 export function skillProposalSlugFromPath(path: string): string | null {

@@ -1,13 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
-import { proposalWatermarkPath } from "../../../src/core/brain/paths.ts";
 import {
+  procedurePath,
+  proposalWatermarkPath,
+  skillProposalAcceptedPath,
+  skillProposalRejectedPath,
+} from "../../../src/core/brain/paths.ts";
+import {
+  acceptSkillProposal,
   learnSkillProposals,
   listPendingSkillProposals,
+  rejectSkillProposal,
 } from "../../../src/core/brain/skill-proposals.ts";
 
 let vault: string;
@@ -62,6 +69,55 @@ describe("skill proposal learning", () => {
     expect(second.scanned).toBe(0);
     expect(second.created).toHaveLength(0);
     expect(listPendingSkillProposals(vault).length).toBe(first.created.length);
+  });
+
+  test("accept moves proposal and creates procedure artifact", () => {
+    seedCorePatterns(vault);
+    learnSkillProposals(vault, {
+      now: new Date("2026-06-01T12:00:00Z"),
+      minSupport: 3,
+    });
+
+    const pending = listPendingSkillProposals(vault);
+    const target = pending.find((item) => item.patternKind === "repeated_action");
+    expect(target).toBeDefined();
+
+    const accepted = acceptSkillProposal(vault, target!.slug, {
+      now: new Date("2026-06-01T12:10:00Z"),
+      note: "looks stable",
+    });
+
+    expect(accepted.status).toBe("accepted");
+    expect(existsSync(skillProposalAcceptedPath(vault, target!.slug))).toBe(true);
+    expect(existsSync(procedurePath(vault, target!.slug))).toBe(true);
+    expect(listPendingSkillProposals(vault).some((item) => item.slug === target!.slug)).toBe(false);
+  });
+
+  test("reject moves proposal and prevents unchanged reappearance", () => {
+    seedCorePatterns(vault);
+    learnSkillProposals(vault, {
+      now: new Date("2026-06-01T13:00:00Z"),
+      minSupport: 3,
+    });
+
+    const pending = listPendingSkillProposals(vault);
+    const target = pending.find((item) => item.patternKind === "co_occurrence");
+    expect(target).toBeDefined();
+
+    const rejected = rejectSkillProposal(vault, target!.slug, {
+      now: new Date("2026-06-01T13:10:00Z"),
+      note: "too noisy",
+    });
+
+    expect(rejected.status).toBe("rejected");
+    expect(existsSync(skillProposalRejectedPath(vault, target!.slug))).toBe(true);
+    expect(listPendingSkillProposals(vault).some((item) => item.slug === target!.slug)).toBe(false);
+
+    const rerun = learnSkillProposals(vault, {
+      now: new Date("2026-06-02T13:00:00Z"),
+      minSupport: 3,
+    });
+    expect(rerun.created.some((id) => id === rejected.id)).toBe(false);
   });
 });
 
