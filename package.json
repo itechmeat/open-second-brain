@@ -44,7 +44,9 @@
     "validate": "bun run typecheck && bun run lint && bun run test",
     "validate:fix": "bun run lint:fix && bun run fmt",
     "sync-version": "bun run scripts/sync-version.ts",
-    "sync-version:check": "bun run scripts/sync-version.ts --check"
+    "sync-version:check": "bun run scripts/sync-version.ts --check",
+    "hooks:install": "git config core.hooksPath .githooks && echo 'git hooks enabled (core.hooksPath=.githooks)'",
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2"

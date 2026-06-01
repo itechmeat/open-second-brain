@@ -39,6 +39,11 @@ request so regressions cannot merge to `main` again.
   and the full test suite on every pull request and push to `main`.
 - [`docs/updating.md`](docs/updating.md): the update-safety contract and the
   invariants any change to the hooks, launcher, or `install-cli` must preserve.
+- Optional local git hooks under `.githooks/` (enabled via `core.hooksPath` by
+  the `prepare` script or `bun run hooks:install`): `fmt:check` + lint on
+  pre-commit and typecheck on pre-push. The required `CI` check stays the
+  enforced gate; the hooks just catch issues earlier and are bypassable with
+  `--no-verify`.
 
 ### Notes
 
@@ -3740,6 +3745,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.31.1]: https://github.com/itechmeat/open-second-brain/compare/v0.31.0...v0.31.1
 [0.30.0]: https://github.com/itechmeat/open-second-brain/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/itechmeat/open-second-brain/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/itechmeat/open-second-brain/compare/v0.27.0...v0.28.0

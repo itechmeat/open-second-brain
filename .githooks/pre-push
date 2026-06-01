@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Pre-push gate: typecheck before code leaves the machine. The full test
+# suite is intentionally NOT run here (~minutes) - CI's required `validate`
+# check runs it on the PR. Bypass with `git push --no-verify`.
+set -euo pipefail
+
+SELF=$(realpath -- "${BASH_SOURCE[0]}")
+REPO=$(cd -- "$(dirname -- "$SELF")/.." && pwd)
+cd -- "$REPO"
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "pre-push: bun not on PATH; skipping typecheck" >&2
+  exit 0
+fi
+
+echo "pre-push: bun run typecheck" >&2
+bun run typecheck
