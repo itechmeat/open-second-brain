@@ -2,9 +2,7 @@ import { extractPreCompactRecords } from "../../../core/brain/pre-compact-extrac
 import { CliError, parse } from "../helpers.ts";
 import { inspect } from "node:util";
 
-export async function cmdBrainPreCompactExtract(
-  argv: string[],
-): Promise<number> {
+export async function cmdBrainPreCompactExtract(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     json: { type: "boolean" },
     vault: { type: "string" },
@@ -26,41 +24,27 @@ export async function cmdBrainPreCompactExtract(
     turnStart,
     turnEnd,
     text,
-    ...(stringOptional(flags["host"]) !== undefined
-      ? { host: stringOptional(flags["host"]) }
-      : {}),
-    ...(maxChars !== undefined
-      ? { maxChars: positiveInteger(maxChars, "--max-chars") }
-      : {}),
+    ...(stringOptional(flags["host"]) !== undefined ? { host: stringOptional(flags["host"]) } : {}),
+    ...(maxChars !== undefined ? { maxChars: positiveInteger(maxChars, "--max-chars") } : {}),
   });
-  writeOutput(
-    { count: result.records.length, ...result },
-    flags["json"] === true,
-  );
+  writeOutput({ count: result.records.length, ...result }, flags["json"] === true);
   return 0;
 }
 
-function stringRequired(
-  value: string | boolean | string[] | undefined,
-  label: string,
-): string {
+function stringRequired(value: string | boolean | string[] | undefined, label: string): string {
   const parsed = stringOptional(value);
-  if (parsed === undefined)
-    throw new CliError(`brain pre-compact-extract: ${label} is required`);
+  if (parsed === undefined) throw new CliError(`brain pre-compact-extract: ${label} is required`);
   return parsed;
 }
 
-function stringOptional(
-  value: string | boolean | string[] | undefined,
-): string | undefined {
+function stringOptional(value: string | boolean | string[] | undefined): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function positiveInteger(value: string, label: string): number {
-  if (!/^[0-9]+$/.test(value))
-    throw new CliError(`${label} must be a positive integer`);
+  if (!/^[0-9]+$/.test(value)) throw new CliError(`${label} must be a positive integer`);
   const parsed = Number.parseInt(value, 10);
   if (parsed < 1) throw new CliError(`${label} must be a positive integer`);
   return parsed;

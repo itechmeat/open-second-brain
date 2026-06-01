@@ -36,9 +36,7 @@ export function applyContextTransforms<T extends ContextTransformItem>(
   }));
   if (opts.cacheStableOrdering) {
     ranked.sort(
-      (a, b) =>
-        compareStable(a.item.id, b.item.id) ||
-        compareStable(a.item.path, b.item.path),
+      (a, b) => compareStable(a.item.id, b.item.id) || compareStable(a.item.path, b.item.path),
     );
   }
 

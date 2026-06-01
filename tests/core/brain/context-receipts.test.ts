@@ -9,10 +9,7 @@ import { emitContextReceipt } from "../../../src/core/brain/context-receipts.ts"
 import { brainActivePath } from "../../../src/core/brain/paths.ts";
 import { buildPreCompressPack } from "../../../src/core/brain/pre-compress-pack.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
-import {
-  BRAIN_CONFIDENCE,
-  BRAIN_PREFERENCE_STATUS,
-} from "../../../src/core/brain/types.ts";
+import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 
 let vault: string;
 
@@ -29,12 +26,7 @@ afterEach(() => {
 
 describe("context receipts", () => {
   test("packContext can emit a redaction-safe receipt without changing selected items", () => {
-    writePref(
-      "alpha",
-      "alpha topic",
-      "Keep answers short",
-      "Body with token=secret-value",
-    );
+    writePref("alpha", "alpha topic", "Keep answers short", "Body with token=secret-value");
 
     const pack = packContext(vault, {
       maxTokens: 10_000,
@@ -71,10 +63,7 @@ describe("context receipts", () => {
   });
 
   test("buildPreCompressPack can emit a receipt for active head and preference items", () => {
-    writeFileSync(
-      brainActivePath(vault),
-      "# Active\n\nUse project conventions.\n",
-    );
+    writeFileSync(brainActivePath(vault), "# Active\n\nUse project conventions.\n");
     writePref("bravo", "bravo topic", "Prefer concrete release notes", "Body");
 
     const pack = buildPreCompressPack(vault, {
@@ -119,12 +108,7 @@ describe("context receipts", () => {
   });
 });
 
-function writePref(
-  slug: string,
-  topic: string,
-  principle: string,
-  body: string,
-): void {
+function writePref(slug: string, topic: string, principle: string, body: string): void {
   writePreference(vault, {
     slug,
     topic,

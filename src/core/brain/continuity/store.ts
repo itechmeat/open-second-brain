@@ -1,12 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { BRAIN_LOG_REL, ensureInsideVault } from "../paths.ts";
@@ -46,12 +39,8 @@ const CONTINUITY_REL = `${BRAIN_LOG_REL}/continuity`;
 const CURSOR_PREFIX = "offset:";
 
 export function continuityLogPath(vault: string, month: string): string {
-  if (!/^\d{4}-\d{2}$/.test(month))
-    throw new Error(`invalid continuity month: ${month}`);
-  return ensureInsideVault(
-    join(vault, CONTINUITY_REL, `${month}.jsonl`),
-    vault,
-  );
+  if (!/^\d{4}-\d{2}$/.test(month)) throw new Error(`invalid continuity month: ${month}`);
+  return ensureInsideVault(join(vault, CONTINUITY_REL, `${month}.jsonl`), vault);
 }
 
 export function appendContinuityRecord(
@@ -80,9 +69,7 @@ export function listContinuityRecords(
   vault: string,
   filter: ContinuityRecordFilter = {},
 ): ReadonlyArray<ContinuityRecord> {
-  return Object.freeze(
-    readAllRecords(vault).filter((record) => matches(record, filter)),
-  );
+  return Object.freeze(readAllRecords(vault).filter((record) => matches(record, filter)));
 }
 
 export function paginateContinuityRecords(
@@ -93,8 +80,7 @@ export function paginateContinuityRecords(
   const start = parseCursor(opts.cursor);
   const filtered = listContinuityRecords(vault, opts);
   const records = filtered.slice(start, start + limit);
-  const next =
-    start + limit < filtered.length ? `${CURSOR_PREFIX}${start + limit}` : null;
+  const next = start + limit < filtered.length ? `${CURSOR_PREFIX}${start + limit}` : null;
   return Object.freeze({ records: Object.freeze(records), nextCursor: next });
 }
 
@@ -110,12 +96,7 @@ function buildRecord(
 ): ContinuityRecord {
   const payloadResult = safeContinuityPayload(input.payload ?? {});
   const sourceRefs = Object.freeze([...(input.sourceRefs ?? [])]);
-  const id = recordId(
-    input.kind,
-    input.createdAt,
-    sourceRefs,
-    payloadResult.payload,
-  );
+  const id = recordId(input.kind, input.createdAt, sourceRefs, payloadResult.payload);
   return Object.freeze({
     id,
     kind: input.kind,
@@ -127,10 +108,7 @@ function buildRecord(
   });
 }
 
-function appendRecord(
-  vault: string,
-  record: ContinuityRecord,
-): ContinuityRecord {
+function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord {
   const path = continuityLogPath(vault, record.createdAt.slice(0, 7));
   mkdirSync(join(vault, CONTINUITY_REL), { recursive: true });
   const handle = acquireLockSync(path);
@@ -168,22 +146,13 @@ function readAllRecords(vault: string): ContinuityRecord[] {
       }
     }
   }
-  records.sort(
-    (a, b) =>
-      a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-  );
+  records.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   return records;
 }
 
-function matches(
-  record: ContinuityRecord,
-  filter: ContinuityRecordFilter,
-): boolean {
+function matches(record: ContinuityRecord, filter: ContinuityRecordFilter): boolean {
   if (filter.kind && record.kind !== filter.kind) return false;
-  if (
-    filter.sourceId &&
-    !record.sourceRefs.some((source) => source.id === filter.sourceId)
-  ) {
+  if (filter.sourceId && !record.sourceRefs.some((source) => source.id === filter.sourceId)) {
     return false;
   }
   if (filter.since && record.createdAt < filter.since) return false;

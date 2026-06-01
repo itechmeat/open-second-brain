@@ -204,6 +204,14 @@ export function proceduralMemoryUsagePath(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "usage.jsonl"), vault);
 }
 
+/** Proposal scan watermark path: `Brain/procedural-memory/proposal-watermark.json`. */
+export function proposalWatermarkPath(vault: string): string {
+  return ensureInsideVault(
+    join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "proposal-watermark.json"),
+    vault,
+  );
+}
+
 /** Recurrence support ledger path: `Brain/log/recurrence-support.jsonl`. */
 export function proceduralRecurrencePath(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_LOG_REL, "recurrence-support.jsonl"), vault);
