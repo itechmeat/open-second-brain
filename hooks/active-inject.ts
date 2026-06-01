@@ -32,6 +32,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolveVault } from "../src/core/config.ts";
 import { brainActivePath } from "../src/core/brain/paths.ts";
 import { healCliSymlinks } from "../src/cli/install-cli.ts";
+import { ensureVaultCurrent } from "../src/core/maintenance/ensure-current.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 
 async function main(): Promise<void> {
@@ -70,6 +71,19 @@ async function main(): Promise<void> {
 
   const vault = resolveVault();
   if (vault === null) return;
+
+  // Hands-off post-upgrade maintenance on SessionStart: migrate a stale
+  // _brain.yaml/_BRAIN.md and rebuild a stale/missing search index (the
+  // reindex runs detached so it survives this short-lived hook). Best-effort,
+  // never blocks injection. In background mode the synchronous part (brain
+  // upgrade + spawning the reindex) completes before this awaits.
+  if (hookEventName === "SessionStart") {
+    try {
+      await ensureVaultCurrent(vault, { background: true });
+    } catch {
+      // ignore — opportunistic; must never disrupt the session
+    }
+  }
 
   const activePath = brainActivePath(vault);
   if (!existsSync(activePath)) return;

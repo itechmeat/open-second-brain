@@ -264,12 +264,16 @@ test("brain_search rejects path_prefix that escapes vault", async () => {
   expect(resp.error.message).toContain("path_prefix");
 });
 
-test("brain_search on missing index surfaces INTERNAL_ERROR with hint", async () => {
+test("brain_search self-heals a missing index instead of erroring", async () => {
+  // A missing index used to surface INTERNAL_ERROR ("not initialised"); the
+  // read path now builds it on first use, so brain_search just works after an
+  // upgrade with no manual `o2b search index`.
+  writeMd("foo.md", "# Foo\n\nThe quick brown fox jumps over the lazy dog.");
   const server = makeServer();
   await initialize(server);
   const resp = (await call(server, "brain_search", { query: "fox" })) as any;
-  expect(resp?.error?.code).toBe(-32603); // INTERNAL_ERROR
-  expect(resp.error.message).toMatch(/not initialised|index/i);
+  expect(resp.error).toBeUndefined();
+  expect(resp.result).toBeDefined();
 });
 
 test("brain_search rejects limit > 50", async () => {
