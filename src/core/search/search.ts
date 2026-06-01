@@ -141,6 +141,32 @@ function addStructuredReasons(
   });
 }
 
+/**
+ * Open the index for reading, self-healing a stale or absent index. After a
+ * plugin upgrade the on-disk index can be a different schema version
+ * (`SCHEMA_MISMATCH`) or not yet built (`INDEX_MISSING`); rather than forcing
+ * the user to run `o2b search reindex` / `o2b search index`, rebuild once and
+ * retry. `reindexVault` is imported lazily so the hot path never pulls in the
+ * indexer and there is no module cycle.
+ */
+async function openReadOrSelfHeal(config: ResolvedSearchConfig): Promise<Store> {
+  try {
+    return await Store.open(config, { mode: "read" });
+  } catch (e) {
+    if (e instanceof SearchError && (e.code === "INDEX_MISSING" || e.code === "SCHEMA_MISMATCH")) {
+      try {
+        const { reindexVault } = await import("./indexer.ts");
+        await reindexVault(config);
+      } catch {
+        // A concurrent writer may already be rebuilding (INDEX_LOCKED), or the
+        // rebuild failed - fall through and let the retry surface real state.
+      }
+      return await Store.open(config, { mode: "read" });
+    }
+    throw e;
+  }
+}
+
 export async function search(
   config: ResolvedSearchConfig,
   opts: SearchOptions,
@@ -164,7 +190,7 @@ export async function search(
   // folded in once they have been derived from the store below.
   const basePlan = buildQueryPlan(keywordQuery, [], structured?.intent);
 
-  const store = await Store.open(config, { mode: "read" });
+  const store = await openReadOrSelfHeal(config);
   try {
     // Persistent query cache (v0.20.0): opt-in. Keyed by the request +
     // base plan hash + a config fingerprint, gated by the corpus

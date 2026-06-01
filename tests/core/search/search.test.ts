@@ -300,16 +300,14 @@ test("empty query throws INVALID_INPUT", async () => {
   expect(err?.code).toBe("INVALID_INPUT");
 });
 
-test("missing index throws INDEX_MISSING", async () => {
+test("missing index self-heals: search builds it on first use", async () => {
+  // A missing index used to throw INDEX_MISSING; the read path now rebuilds
+  // once and returns results so an upgrade never needs a manual `o2b search
+  // index`. (Dedicated coverage in self-heal.test.ts.)
   const cfg = await seedKeyword();
-  // skip indexVault
-  let err: SearchError | null = null;
-  try {
-    await search(cfg, { query: "fox" });
-  } catch (e) {
-    err = e as SearchError;
-  }
-  expect(err?.code).toBe("INDEX_MISSING");
+  // skip indexVault — the search must build the index itself
+  const out = await search(cfg, { query: "fox" });
+  expect(out.results.length).toBeGreaterThan(0);
 });
 
 test("hybrid search combines keyword and semantic when both contribute", async () => {
