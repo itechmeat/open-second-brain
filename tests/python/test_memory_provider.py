@@ -27,6 +27,10 @@ from plugins.hermes.bridge import (  # noqa: E402
     JsonRpcStdioClient,
     McpBrainBridge,
 )
+from plugins.hermes.provider import (  # noqa: E402
+    MEMORY_TOOLS,
+    OpenSecondBrainMemoryProvider,
+)
 
 
 class ConfigHelperTests(unittest.TestCase):
@@ -118,6 +122,84 @@ class FallbackBaseTests(unittest.TestCase):
         self.assertIsNone(demo.queue_prefetch("q"))
         self.assertIsNone(demo.on_session_end([]))
         self.assertIsNone(demo.shutdown())
+
+
+class ProviderRequiredSurfaceTests(unittest.TestCase):
+    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+
+    def setUp(self):
+        self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
+
+    def tearDown(self):
+        for k in self._ENV_KEYS:
+            os.environ.pop(k, None)
+            if self._saved[k] is not None:
+                os.environ[k] = self._saved[k]
+
+    def _provider(self, bridge):
+        return OpenSecondBrainMemoryProvider(bridge=bridge)
+
+    def test_name(self):
+        self.assertEqual(self._provider(FakeBrainBridge()).name, "open-second-brain")
+
+    def test_is_available_true_when_vault_configured(self):
+        os.environ["VAULT_DIR"] = "/tmp/vault"
+        self.assertTrue(self._provider(FakeBrainBridge()).is_available())
+
+    def test_is_available_false_when_no_vault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(Path(tmp) / "missing.yaml")
+            self.assertFalse(self._provider(FakeBrainBridge()).is_available())
+
+    def test_initialize_starts_bridge(self):
+        bridge = FakeBrainBridge()
+        provider = self._provider(bridge)
+        provider.initialize("sess-1", hermes_home="/tmp/hh")
+        self.assertTrue(bridge.started)
+
+    def test_get_tool_schemas_filters_to_allowlist(self):
+        bridge = FakeBrainBridge(
+            tools=[
+                {"name": "brain_query"},
+                {"name": "brain_note"},
+                {"name": "vault_health"},
+                {"name": "second_brain_status"},
+            ]
+        )
+        provider = self._provider(bridge)
+        provider.initialize("s", hermes_home="/tmp/hh")
+        names = {t["name"] for t in provider.get_tool_schemas()}
+        self.assertEqual(names, {"brain_query", "brain_note"})
+        self.assertTrue(names.issubset(set(MEMORY_TOOLS)))
+
+    def test_handle_tool_call_forwards_to_bridge(self):
+        bridge = FakeBrainBridge(results={"brain_note": {"ok": True}})
+        provider = self._provider(bridge)
+        provider.initialize("s", hermes_home="/tmp/hh")
+        result = provider.handle_tool_call("brain_note", {"text": "hi"})
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(bridge.calls, [("brain_note", {"text": "hi"})])
+
+    def test_get_config_schema_shape(self):
+        schema = self._provider(FakeBrainBridge()).get_config_schema()
+        by_key = {f["key"]: f for f in schema}
+        self.assertEqual(set(by_key), {"vault", "agent_name", "timezone"})
+        self.assertTrue(by_key["vault"].get("required"))
+
+    def test_save_config_writes_to_osb_config_and_preserves_others(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            cfg_path.write_text('existing_key: "keep"\n', encoding="utf-8")
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_path)
+            provider = self._provider(FakeBrainBridge())
+            provider.save_config(
+                {"vault": "/v", "agent_name": "a", "timezone": "UTC"}, tmp
+            )
+            text = cfg_path.read_text(encoding="utf-8")
+        self.assertIn('vault: "/v"', text)
+        self.assertIn('agent_name: "a"', text)
+        self.assertIn('timezone: "UTC"', text)
+        self.assertIn('existing_key: "keep"', text)
 
 
 class _ScriptedReader:
