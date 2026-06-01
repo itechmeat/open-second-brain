@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] - 2026-06-01
+
+Self-learning procedural memory foundations. Open Second Brain can now detect repeatable workflows from continuity records, route them through a reviewable proposal queue, index procedural artifacts, and track recurrence/support evidence across scopes.
+
+### Added
+
+- Deterministic skill-proposal learning core (`repeated_action`, `structural_similarity`, `co_occurrence`, `temporal_routine`) with watermark tracking and duplicate suppression.
+- Proposal review lifecycle in core: accept/reject transitions, review notes, and accepted procedure artifact emission under `Brain/procedures/`.
+- Procedural memory reconciler with stable entry IDs, frontmatter metadata parsing, stale-entry pruning, and usage sidecar updates without rewriting source files.
+- Recurrence/support ledger with same-scope support increments, cross-scope recurrence evidence, threshold-based commitment diagnostics, and reference-counted forget/source purge behavior.
+- New Brain CLI verbs for the procedural-learning workflow:
+  - `o2b brain skill-proposals <learn|list|accept|reject>`
+  - `o2b brain procedural-memory <reconcile|list|mark-used>`
+  - `o2b brain recurrence <list|show|learn|forget|purge-source>`
+
+### Changed
+
+- Brain path contracts now include dedicated procedural-learning artifacts (`Brain/skill-proposals/*`, `Brain/procedures/`, `Brain/procedural-memory/*`, and recurrence ledger path helpers).
+- CLI help/verb registry now exposes procedural-learning surfaces in `o2b brain --help` and per-verb help.
+
+### Notes
+
+- Existing formatter-only baseline warnings remain warning-only (`oxlint`: 110 warnings, 0 errors).
+- Proposal learning and recurrence flows are deterministic and local-first by default; no network calls are required.
+
 ## [0.29.0] - 2026-05-31
 
 Context continuity and receipt surfaces. Agent-facing context can now leave redacted receipts and telemetry behind, operators can inspect budget presets before applying them, and session transcripts can be imported into a continuity-backed recall DAG.
@@ -2310,7 +2335,7 @@ with `source_type: inline`, the source-file wikilink in `source`,
 and a `dedup_hash`over the normalised payload. After capture
 the source line is annotated`@osb✓ [[sig-...]]`(inline form)
 or the info-string flips to`osb-checked`with a`<!-- @osb✓
-                            [[sig-...]] -->`comment line (block form), making re-runs
+                              [[sig-...]] -->`comment line (block form), making re-runs
 idempotent. Default ignore set covers`Brain/`, `.git`,
 `node_modules`, `.obsidian`, `.trash`, `.stversions`,
 `.open-second-brain`; additional excludes via `--exclude`,
@@ -3656,6 +3681,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.30.0]: https://github.com/itechmeat/open-second-brain/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/itechmeat/open-second-brain/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/itechmeat/open-second-brain/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/itechmeat/open-second-brain/compare/v0.26.0...v0.27.0

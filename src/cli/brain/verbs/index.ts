@@ -45,6 +45,9 @@ export { cmdBrainContextReceipts } from "./context-receipts.ts";
 export { cmdBrainContextPresets } from "./context-presets.ts";
 export { cmdBrainPreCompactExtract } from "./pre-compact-extract.ts";
 export { cmdBrainRecallTelemetry } from "./recall-telemetry.ts";
+export { cmdBrainSkillProposals } from "./skill-proposals.ts";
+export { cmdBrainProceduralMemory } from "./procedural-memory.ts";
+export { cmdBrainRecurrence } from "./recurrence.ts";
 export {
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,

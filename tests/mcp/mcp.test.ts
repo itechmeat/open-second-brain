@@ -228,6 +228,10 @@ describe("tool listing", () => {
         "brain_session_grep",
         "brain_session_describe",
         "brain_session_expand",
+        // Procedural-learning surfaces (v0.30.0).
+        "brain_skill_proposals",
+        "brain_procedural_memory",
+        "brain_recurrence",
         // Pay Memory (unchanged).
         "payment_memory_init",
         "payment_receipt_append",
@@ -491,7 +495,8 @@ describe("stdio loop", () => {
     // + 9 schema admin tools + brain_watchdog = 57.
     // + brain_recall_gate (v0.27.0) = 58.
     // + 7 context continuity/session recall tools (v0.29.0) = 65.
-    expect(list.result.tools.length).toBe(65);
+    // + 3 procedural-learning tools (v0.30.0) = 68.
+    expect(list.result.tools.length).toBe(68);
   });
 
   test("returns parse error for invalid JSON", async () => {

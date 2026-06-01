@@ -60,6 +60,9 @@ Brain verbs (observing memory):
   context-presets     Show/suggest/diff read-only context budget presets
   pre-compact-extract Extract typed continuity records from bounded text
   recall-telemetry    List/summarize opt-in recall telemetry records
+  skill-proposals     Learn/list/review deterministic skill proposals
+  procedural-memory   Reconcile/list procedural memory index and usage
+  recurrence          Inspect and update recurrence/support diagnostics
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -361,6 +364,27 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain recall-telemetry list [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +
     "Read opt-in recall telemetry continuity records and aggregate coverage gaps.\n",
+  "skill-proposals":
+    "usage: o2b brain skill-proposals <learn|list|accept|reject> [args]\n" +
+    "Deterministic proposal queue lifecycle.\n" +
+    "  learn [--min-support <n>] [--vault <path>] [--json]\n" +
+    "  list [--vault <path>] [--json]\n" +
+    "  accept <slug> [--note <text>] [--vault <path>] [--json]\n" +
+    "  reject <slug> --note <text> [--vault <path>] [--json]\n",
+  "procedural-memory":
+    "usage: o2b brain procedural-memory <reconcile|list|mark-used> [args]\n" +
+    "Procedural index reconciliation and usage tracking sidecar.\n" +
+    "  reconcile [--root <path> ...] [--vault <path>] [--json]\n" +
+    "  list [--vault <path>] [--json]\n" +
+    "  mark-used <entry-id> [--vault <path>] [--json]\n",
+  recurrence:
+    "usage: o2b brain recurrence <list|show|learn|forget|purge-source> [args]\n" +
+    "Recurrence/support diagnostics and reference-counted updates.\n" +
+    "  list [--vault <path>] [--json]\n" +
+    "  show <content-hash> [--vault <path>] [--json]\n" +
+    "  learn --hash <h> --scope <scope> --source <id> [--vault <path>] [--json]\n" +
+    "  forget --hash <h> --scope <scope> --source <id> [--vault <path>] [--json]\n" +
+    "  purge-source --source <id> [--vault <path>] [--json]\n",
   "session-grep":
     "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--vault <path>] [--json]\n" +
     "Search imported session recall raw turns and summary nodes.\n",

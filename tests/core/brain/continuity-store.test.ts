@@ -27,9 +27,7 @@ describe("continuity store", () => {
     const record = appendContinuityRecord(vault, {
       kind: "context_receipt",
       createdAt: "2026-05-31T12:00:00Z",
-      sourceRefs: [
-        { id: "pref-alpha", path: "Brain/preferences/pref-alpha.md" },
-      ],
+      sourceRefs: [{ id: "pref-alpha", path: "Brain/preferences/pref-alpha.md" }],
       payload: {
         query: "project setup",
         text: "Keep this <private>do not persist</private> and token=secret-value",
@@ -68,19 +66,14 @@ describe("continuity store", () => {
     }
 
     const first = paginateContinuityRecords(vault, { limit: 2 });
-    expect(first.records.map((record) => record.sourceRefs[0]!.id)).toEqual([
-      "query-0",
-      "query-1",
-    ]);
+    expect(first.records.map((record) => record.sourceRefs[0]!.id)).toEqual(["query-0", "query-1"]);
     expect(first.nextCursor).not.toBeNull();
 
     const second = paginateContinuityRecords(vault, {
       limit: 2,
       cursor: first.nextCursor!,
     });
-    expect(second.records.map((record) => record.sourceRefs[0]!.id)).toEqual([
-      "query-2",
-    ]);
+    expect(second.records.map((record) => record.sourceRefs[0]!.id)).toEqual(["query-2"]);
     expect(second.nextCursor).toBeNull();
   });
 
@@ -127,9 +120,6 @@ describe("continuity store", () => {
     const records = listContinuityRecords(vault, {
       sourceId: "session-a#turn-1",
     });
-    expect(records.map((record) => record.kind)).toEqual([
-      "session_turn",
-      "source_invalidation",
-    ]);
+    expect(records.map((record) => record.kind)).toEqual(["session_turn", "source_invalidation"]);
   });
 });
