@@ -123,9 +123,7 @@ describe("skill proposal learning", () => {
     });
 
     const pending = listPendingSkillProposals(vault);
-    const target = pending.find(
-      (item) => item.patternKind === "repeated_action",
-    );
+    const target = pending.find((item) => item.patternKind === "repeated_action");
     expect(target).toBeDefined();
 
     const accepted = acceptSkillProposal(vault, target!.slug, {
@@ -134,15 +132,9 @@ describe("skill proposal learning", () => {
     });
 
     expect(accepted.status).toBe("accepted");
-    expect(existsSync(skillProposalAcceptedPath(vault, target!.slug))).toBe(
-      true,
-    );
+    expect(existsSync(skillProposalAcceptedPath(vault, target!.slug))).toBe(true);
     expect(existsSync(procedurePath(vault, target!.slug))).toBe(true);
-    expect(
-      listPendingSkillProposals(vault).some(
-        (item) => item.slug === target!.slug,
-      ),
-    ).toBe(false);
+    expect(listPendingSkillProposals(vault).some((item) => item.slug === target!.slug)).toBe(false);
   });
 
   test("reject moves proposal and prevents unchanged reappearance", () => {
@@ -162,14 +154,8 @@ describe("skill proposal learning", () => {
     });
 
     expect(rejected.status).toBe("rejected");
-    expect(existsSync(skillProposalRejectedPath(vault, target!.slug))).toBe(
-      true,
-    );
-    expect(
-      listPendingSkillProposals(vault).some(
-        (item) => item.slug === target!.slug,
-      ),
-    ).toBe(false);
+    expect(existsSync(skillProposalRejectedPath(vault, target!.slug))).toBe(true);
+    expect(listPendingSkillProposals(vault).some((item) => item.slug === target!.slug)).toBe(false);
 
     const rerun = learnSkillProposals(vault, {
       now: new Date("2026-06-02T13:00:00Z"),

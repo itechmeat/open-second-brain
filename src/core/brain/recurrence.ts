@@ -4,11 +4,7 @@ import { dirname } from "node:path";
 import { ensureInsideVault } from "../path-safety.ts";
 import { proceduralRecurrencePath } from "./paths.ts";
 
-export type RecurrenceCommitment =
-  | "exploring"
-  | "leaning"
-  | "decided"
-  | "locked";
+export type RecurrenceCommitment = "exploring" | "leaning" | "decided" | "locked";
 export type RecurrenceAction = "learn" | "forget";
 
 export interface RecurrenceThresholds {
@@ -64,11 +60,7 @@ export function applyRecurrenceEvidence(
   return getRecurrenceEntry(vault, input.contentHash);
 }
 
-export function purgeRecurrenceSource(
-  vault: string,
-  sourceId: string,
-  at?: string,
-): void {
+export function purgeRecurrenceSource(vault: string, sourceId: string, at?: string): void {
   appendEvent(vault, {
     kind: "purge-source",
     sourceId,
@@ -82,9 +74,8 @@ export function getRecurrenceEntry(
   thresholds: RecurrenceThresholds = DEFAULT_THRESHOLDS,
 ): RecurrenceEntry | null {
   return (
-    listRecurrenceEntries(vault, thresholds).find(
-      (entry) => entry.contentHash === contentHash,
-    ) ?? null
+    listRecurrenceEntries(vault, thresholds).find((entry) => entry.contentHash === contentHash) ??
+    null
   );
 }
 
@@ -93,10 +84,7 @@ export function listRecurrenceEntries(
   thresholds: RecurrenceThresholds = DEFAULT_THRESHOLDS,
 ): ReadonlyArray<RecurrenceEntry> {
   const events = readEvents(vault);
-  const state = new Map<
-    string,
-    { supportBySourceScope: Map<string, number> }
-  >();
+  const state = new Map<string, { supportBySourceScope: Map<string, number> }>();
 
   for (const event of events) {
     if (event.kind === "purge-source") {
@@ -120,8 +108,7 @@ export function listRecurrenceEntries(
     if (event.action === "learn") {
       bucket.supportBySourceScope.set(sourceScopeKey, current + 1);
     } else {
-      if (current > 1)
-        bucket.supportBySourceScope.set(sourceScopeKey, current - 1);
+      if (current > 1) bucket.supportBySourceScope.set(sourceScopeKey, current - 1);
       else bucket.supportBySourceScope.delete(sourceScopeKey);
     }
 
@@ -137,10 +124,7 @@ export function listRecurrenceEntries(
       const [scope, sourceId] = splitSourceScopeKey(sourceScopeKey);
       if (!scope || !sourceId) continue;
       supportByScope.set(scope, (supportByScope.get(scope) ?? 0) + support);
-      supportBySource.set(
-        sourceId,
-        (supportBySource.get(sourceId) ?? 0) + support,
-      );
+      supportBySource.set(sourceId, (supportBySource.get(sourceId) ?? 0) + support);
     }
 
     const scopes = [...supportByScope.entries()]
@@ -165,9 +149,7 @@ export function listRecurrenceEntries(
   }
 
   return Object.freeze(
-    out.toSorted((left, right) =>
-      left.contentHash.localeCompare(right.contentHash),
-    ),
+    out.toSorted((left, right) => left.contentHash.localeCompare(right.contentHash)),
   );
 }
 
