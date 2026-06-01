@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -11,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { installCli, uninstallCli } from "../../src/cli/install-cli.ts";
+import { healCliSymlinks, installCli, uninstallCli } from "../../src/cli/install-cli.ts";
 
 let tmp: string;
 
@@ -80,5 +82,91 @@ describe("uninstallCli", () => {
     const result = uninstallCli(tmp);
     expect(result.errors).toEqual([]);
     expect(result.outcomes.every(([_, msg]) => msg.startsWith("skipped:"))).toBe(true);
+  });
+});
+
+function fakeOsbScript(root: string, name: string): string {
+  const dir = join(root, "scripts");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, name);
+  writeFileSync(file, "#!/bin/sh\n");
+  return file;
+}
+
+describe("installCli (idempotent reclaim, no manual rm)", () => {
+  test("reclaims a dangling symlink", () => {
+    symlinkSync(join(tmp, "gone", "scripts", "o2b"), join(tmp, "o2b"));
+    const result = installCli(tmp);
+    expect(result.errors).toEqual([]);
+    expect(result.outcomes.some(([n, m]) => n === "o2b" && m.startsWith("repointed:"))).toBe(true);
+    expect(existsSync(realpathSync(join(tmp, "o2b")))).toBe(true);
+    expect(readlinkSync(join(tmp, "o2b"))).toContain(`scripts${"/"}o2b`);
+  });
+
+  test("reclaims a stale symlink pointing at another OSB checkout", () => {
+    const stale = fakeOsbScript(join(tmp, "old-version"), "o2b");
+    symlinkSync(stale, join(tmp, "o2b"));
+    const result = installCli(tmp);
+    expect(result.errors).toEqual([]);
+    expect(result.outcomes.some(([n, m]) => n === "o2b" && m.startsWith("repointed:"))).toBe(true);
+    expect(readlinkSync(join(tmp, "o2b"))).not.toBe(stale);
+  });
+});
+
+describe("healCliSymlinks", () => {
+  test("heals a dangling symlink", () => {
+    symlinkSync(join(tmp, "gone", "scripts", "o2b"), join(tmp, "o2b"));
+    const r = healCliSymlinks(tmp);
+    expect(r.outcomes.some(([n, m]) => n === "o2b" && m.startsWith("healed:"))).toBe(true);
+    expect(existsSync(realpathSync(join(tmp, "o2b")))).toBe(true);
+  });
+
+  test("heals an OSB symlink that lives inside a plugin cache", () => {
+    const cacheRoot = join(
+      tmp,
+      "home",
+      ".claude",
+      "plugins",
+      "cache",
+      "open-second-brain",
+      "open-second-brain",
+      "0.1.0",
+    );
+    const stale = fakeOsbScript(cacheRoot, "o2b");
+    symlinkSync(stale, join(tmp, "o2b"));
+    const r = healCliSymlinks(tmp);
+    expect(r.outcomes.some(([n, m]) => n === "o2b" && m.startsWith("healed:"))).toBe(true);
+    expect(readlinkSync(join(tmp, "o2b"))).not.toBe(stale);
+  });
+
+  test("leaves a stable-directory install alone (not under a plugin cache)", () => {
+    const stableTarget = fakeOsbScript(join(tmp, "srv", "open-second-brain"), "o2b");
+    symlinkSync(stableTarget, join(tmp, "o2b"));
+    const r = healCliSymlinks(tmp);
+    expect(r.outcomes.length).toBe(0);
+    expect(readlinkSync(join(tmp, "o2b"))).toBe(stableTarget);
+  });
+
+  test("leaves a foreign symlink alone", () => {
+    const foreign = join(tmp, "foreign.sh");
+    writeFileSync(foreign, "#!/bin/sh\n");
+    symlinkSync(foreign, join(tmp, "o2b"));
+    const r = healCliSymlinks(tmp);
+    expect(r.outcomes.length).toBe(0);
+    expect(readlinkSync(join(tmp, "o2b"))).toBe(foreign);
+  });
+
+  test("never touches a real (non-symlink) file", () => {
+    const real = join(tmp, "o2b");
+    writeFileSync(real, "i am not a symlink\n");
+    const r = healCliSymlinks(tmp);
+    expect(r.outcomes.length).toBe(0);
+    expect(lstatSync(real).isSymbolicLink()).toBe(false);
+  });
+
+  test("is a no-op when links are already current", () => {
+    installCli(tmp);
+    const r = healCliSymlinks(tmp);
+    expect(r.outcomes.length).toBe(0);
   });
 });

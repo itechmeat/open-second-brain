@@ -31,9 +31,21 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { resolveVault } from "../src/core/config.ts";
 import { brainActivePath } from "../src/core/brain/paths.ts";
+import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 
 async function main(): Promise<void> {
+  // Self-heal on session start: a plugin update rotates the versioned install
+  // dir, which can leave ~/.local/bin/o2b* symlinks dangling or pointing at an
+  // old version. This hook runs from the CURRENT checkout (resolved via
+  // $CLAUDE_PLUGIN_ROOT), so it can repoint them with no user action. Strictly
+  // best-effort: it never affects preference injection below.
+  try {
+    healCliSymlinks();
+  } catch {
+    // ignore — healing is opportunistic and must never disrupt the session
+  }
+
   let payload;
   try {
     payload = asHookPayload(await readHookInput());
