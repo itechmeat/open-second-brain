@@ -71,16 +71,35 @@ the vault, agent name, and timezone from the Open Second Brain config
 written in step 3 (`~/.config/open-second-brain/config.yaml`), so no
 vault path is duplicated in the Hermes config.
 
+### Activation lifecycle
+
+Hermes activates memory providers through the `memory.provider` config
+key, not at install time — `hermes plugins install` only makes the
+provider *available*. This is by design (exactly one provider is active
+at a time), so activation is one explicit command:
+
+| Action | What happens | What you run |
+|---|---|---|
+| First install | Not auto — install only makes it available | `hermes memory setup open-second-brain` |
+| Plugin update | **Automatic** — `memory.provider` persists in `config.yaml` | nothing |
+| Deactivate / uninstall | Not auto | `hermes memory off` (reverts to built-in) |
+
 ## 5. Verify
 
 ```bash
 o2b doctor --vault /path/to/vault --repo .
-hermes open-second-brain status
+hermes memory status
 ```
 
-`status` reports the provider name, whether a vault is configured, and
-the resolved vault path. Run the daily-identity check described in
+`hermes memory status` shows `Provider: open-second-brain` with
+`available ✓` once active. Run the daily-identity check described in
 `install/prerequisites.md`.
+
+> The dedicated `hermes open-second-brain status/config` subcommand is
+> not yet available: Hermes' loader cannot import an external provider's
+> `cli.py` (the same parent-namespace limitation noted in the root
+> `__init__.py`). It lights up automatically once that upstream fix
+> ships. Until then, use `hermes memory status` and `o2b doctor`.
 
 ## Update
 
@@ -90,14 +109,20 @@ hermes gateway restart
 o2b doctor --vault /path/to/vault --repo .
 ```
 
+`memory.provider` persists across updates, so the provider stays active
+with no re-activation step.
+
 ## Uninstall
 
+Deactivate first (reverts to built-in memory), then remove:
+
 ```bash
-o2b uninstall --apply-local --remove-cli
+hermes memory off
 hermes plugins remove open-second-brain
+o2b uninstall --apply-local --remove-cli
 hermes gateway restart
 ```
 
-Unset `memory.provider` in `~/.hermes/config.yaml` (or pick a different
-provider via `hermes memory setup`) before removing the plugin. The
-vault and its Markdown files are never deleted.
+`hermes memory off` is the native way to switch back to built-in memory
+(or use `hermes memory setup` to pick a different provider). The vault
+and its Markdown files are never deleted.

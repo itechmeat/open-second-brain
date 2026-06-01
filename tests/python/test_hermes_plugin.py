@@ -92,6 +92,39 @@ class RegisterTests(unittest.TestCase):
         self.assertIsInstance(registered[0], OpenSecondBrainMemoryProvider)
         self.assertEqual(registered[0].name, PLUGIN_NAME)
 
+
+class LoaderFallbackTests(unittest.TestCase):
+    """Guards the TEMPORARY file-path fallback in the root ``__init__.py``.
+
+    Hermes' external memory-provider loader imports a plugin under a synthetic
+    package name without registering its parent namespace, breaking the
+    relative/absolute imports the root entrypoint tries first. The fallback
+    loads ``plugins/hermes`` directly by file path with
+    ``submodule_search_locations`` so its own relative imports still resolve.
+    This locks that mechanism: if it ever stops yielding the provider (e.g. the
+    fallback is removed before the upstream Hermes fix lands), this fails.
+    """
+
+    def test_filepath_load_of_impl_yields_provider(self):
+        impl_dir = ROOT / "plugins" / "hermes"
+        spec = importlib.util.spec_from_file_location(
+            "_osb_hermes_impl_test",
+            impl_dir / "__init__.py",
+            submodule_search_locations=[str(impl_dir)],
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+            provider = module.OpenSecondBrainMemoryProvider()
+            self.assertEqual(provider.name, PLUGIN_NAME)
+            self.assertTrue(callable(module.register))
+        finally:
+            for name in list(sys.modules):
+                if name == spec.name or name.startswith(spec.name + "."):
+                    sys.modules.pop(name, None)
+
     def test_register_does_not_raise_on_minimal_context(self):
         class Context:
             pass

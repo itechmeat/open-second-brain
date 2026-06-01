@@ -23,7 +23,8 @@ and Codex are unchanged - their canonical path is still MCP plus hooks.
   `on_pre_compress`/`on_session_end` flush via `brain_pre_compact_extract`,
   `on_memory_write` mirroring of Hermes `MEMORY.md`/`USER.md` into `Brain/`, and
   `shutdown`.
-- `hermes open-second-brain status` / `config` diagnostics CLI.
+- `hermes open-second-brain status` / `config` diagnostics CLI (`cli.py`).
+  Surfacing is gated on an upstream Hermes loader fix - see Notes.
 
 ### Changed
 
@@ -31,9 +32,12 @@ and Codex are unchanged - their canonical path is still MCP plus hooks.
   alongside the health check.
 - Both Hermes manifests declare the memory provider and the lifecycle hooks it
   implements instead of `provides_hooks: [pre_llm_call]` and an `mcp_server`
-  block.
-- `install/hermes.md` documents enabling `memory.provider: open-second-brain`
-  (via `hermes memory setup`) instead of a manual `mcp_servers` edit.
+  block. They no longer set `kind: standalone`, so Hermes auto-routes the plugin
+  to its memory-provider path; the repo-root `__init__.py` re-exports the
+  provider so Hermes' provider discovery detects it.
+- `install/hermes.md` documents the activation lifecycle: activate with
+  `hermes memory setup open-second-brain`, deactivate with `hermes memory off`;
+  `memory.provider` persists across `hermes plugins update` (no re-activation).
 
 ### Removed
 
@@ -46,6 +50,16 @@ and Codex are unchanged - their canonical path is still MCP plus hooks.
   (EOF / broken pipe); a JSON-RPC error response (e.g. invalid tool arguments)
   propagates unchanged. Behaviour is locked by `tests/python/test_memory_provider.py`
   and `tests/python/test_hermes_plugin.py`.
+- **Temporary loader workaround.** Hermes' external memory-provider loader
+  imports a plugin under a synthetic package (`_hermes_user_memory.<name>`)
+  without registering that parent namespace, so an external provider's relative
+  imports raise `ModuleNotFoundError: No module named '_hermes_user_memory'`
+  (a flat single-directory layout hits this too). The repo-root `__init__.py`
+  carries a file-path fallback to load the implementation, marked for removal
+  once the upstream loader registers the parent namespace
+  (`NousResearch/hermes-agent`). The same limitation gates the
+  `hermes open-second-brain` CLI subcommand; it needs no further changes here
+  and surfaces automatically when the upstream fix ships.
 
 ## [0.31.2] - 2026-06-01
 
