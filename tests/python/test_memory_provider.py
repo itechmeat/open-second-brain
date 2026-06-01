@@ -31,6 +31,7 @@ from plugins.hermes.provider import (  # noqa: E402
     MEMORY_TOOLS,
     OpenSecondBrainMemoryProvider,
 )
+from plugins.hermes.cli import register_cli  # noqa: E402
 
 
 class ConfigHelperTests(unittest.TestCase):
@@ -200,6 +201,56 @@ class ProviderRequiredSurfaceTests(unittest.TestCase):
         self.assertIn('agent_name: "a"', text)
         self.assertIn('timezone: "UTC"', text)
         self.assertIn('existing_key: "keep"', text)
+
+
+class CliTests(unittest.TestCase):
+    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+
+    def setUp(self):
+        self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
+
+    def tearDown(self):
+        for k in self._ENV_KEYS:
+            os.environ.pop(k, None)
+            if self._saved[k] is not None:
+                os.environ[k] = self._saved[k]
+
+    def _run(self, argv):
+        import argparse
+        import contextlib
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="cmd")
+        osb = subparsers.add_parser("open-second-brain")
+        register_cli(osb)
+        args = parser.parse_args(["open-second-brain", *argv])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = args.func(args)
+        return rc, buf.getvalue()
+
+    def test_status_reports_provider_and_availability(self):
+        os.environ["VAULT_DIR"] = "/tmp/cli-vault"
+        rc, out = self._run(["status"])
+        self.assertEqual(rc, 0)
+        self.assertIn("open-second-brain", out)
+        self.assertIn("/tmp/cli-vault", out)
+
+    def test_status_nonzero_when_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(Path(tmp) / "missing.yaml")
+            rc, _ = self._run(["status"])
+        self.assertEqual(rc, 1)
+
+    def test_config_reports_effective_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            cfg_path.write_text('vault: "/v"\nagent_name: "cli-agent"\n', encoding="utf-8")
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_path)
+            rc, out = self._run(["config"])
+        self.assertEqual(rc, 0)
+        self.assertIn("/v", out)
+        self.assertIn("cli-agent", out)
 
 
 class _RaisingBridge(FakeBrainBridge):
