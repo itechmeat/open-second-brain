@@ -45,27 +45,12 @@ export const BRAIN_INBOX_REL = posix.join(BRAIN_ROOT_REL, "inbox");
 export const BRAIN_PROCESSED_REL = posix.join(BRAIN_INBOX_REL, "processed");
 export const BRAIN_PREFERENCES_REL = posix.join(BRAIN_ROOT_REL, "preferences");
 export const BRAIN_RETIRED_REL = posix.join(BRAIN_ROOT_REL, "retired");
-export const BRAIN_SKILL_PROPOSALS_REL = posix.join(
-  BRAIN_ROOT_REL,
-  "skill-proposals",
-);
-export const BRAIN_SKILL_PROPOSALS_PENDING_REL = posix.join(
-  BRAIN_SKILL_PROPOSALS_REL,
-  "pending",
-);
-export const BRAIN_SKILL_PROPOSALS_ACCEPTED_REL = posix.join(
-  BRAIN_SKILL_PROPOSALS_REL,
-  "accepted",
-);
-export const BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(
-  BRAIN_SKILL_PROPOSALS_REL,
-  "rejected",
-);
+export const BRAIN_SKILL_PROPOSALS_REL = posix.join(BRAIN_ROOT_REL, "skill-proposals");
+export const BRAIN_SKILL_PROPOSALS_PENDING_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "pending");
+export const BRAIN_SKILL_PROPOSALS_ACCEPTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "accepted");
+export const BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "rejected");
 export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
-export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(
-  BRAIN_ROOT_REL,
-  "procedural-memory",
-);
+export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
 export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
@@ -93,8 +78,7 @@ const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 // shape check for the date-time stem.
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-const WINDOWS_RESERVED_BASENAME_RE =
-  /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+const WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
 export interface BrainDirs {
   readonly brain: string;
@@ -128,18 +112,12 @@ export function brainDirs(vault: string): BrainDirs {
 
 /** Path of `Brain/_brain.yaml`. */
 export function brainConfigPath(vault: string): string {
-  return ensureInsideVault(
-    join(brainDirs(vault).brain, BRAIN_CONFIG_FILE),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_CONFIG_FILE), vault);
 }
 
 /** Path of the Brain operating manual rendered into the vault. */
 export function brainManualPath(vault: string): string {
-  return ensureInsideVault(
-    join(brainDirs(vault).brain, BRAIN_MANUAL_FILE),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_MANUAL_FILE), vault);
 }
 
 /**
@@ -149,51 +127,32 @@ export function brainManualPath(vault: string): string {
  * `osb://preferences/active`.
  */
 export function brainActivePath(vault: string): string {
-  return ensureInsideVault(
-    join(brainDirs(vault).brain, BRAIN_ACTIVE_FILE),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_ACTIVE_FILE), vault);
 }
 
 /** Path of the transient current-task scratchpad read by `brain_context`. */
 export function brainPinnedPath(vault: string): string {
-  return ensureInsideVault(
-    join(brainDirs(vault).brain, BRAIN_PINNED_FILE),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_PINNED_FILE), vault);
 }
 
 /** Active-signal path: `Brain/inbox/sig-<date>-<slug>.md`. */
 export function signalPath(vault: string, date: string, slug: string): string {
   const d = validateIsoDate(date);
   const s = validateSlug(slug);
-  return ensureInsideVault(
-    join(brainDirs(vault).inbox, `sig-${d}-${s}.md`),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).inbox, `sig-${d}-${s}.md`), vault);
 }
 
 /** Processed-signal path: `Brain/inbox/processed/sig-<date>-<slug>.md`. */
-export function processedSignalPath(
-  vault: string,
-  date: string,
-  slug: string,
-): string {
+export function processedSignalPath(vault: string, date: string, slug: string): string {
   const d = validateIsoDate(date);
   const s = validateSlug(slug);
-  return ensureInsideVault(
-    join(brainDirs(vault).processed, `sig-${d}-${s}.md`),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).processed, `sig-${d}-${s}.md`), vault);
 }
 
 /** Preference path: `Brain/preferences/pref-<slug>.md`. */
 export function preferencePath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(
-    join(brainDirs(vault).preferences, `pref-${s}.md`),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).preferences, `pref-${s}.md`), vault);
 }
 
 /**
@@ -203,87 +162,57 @@ export function preferencePath(vault: string, slug: string): string {
  */
 export function preferenceHistoryPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(
-    join(brainDirs(vault).preferences, `pref-${s}.history.jsonl`),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).preferences, `pref-${s}.history.jsonl`), vault);
 }
 
 /** Retired-preference path: `Brain/retired/ret-<slug>.md`. */
 export function retiredPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(
-    join(brainDirs(vault).retired, `ret-${s}.md`),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).retired, `ret-${s}.md`), vault);
 }
 
 /** Pending skill-proposal path: `Brain/skill-proposals/pending/prop-<slug>.md`. */
 export function skillProposalPendingPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(
-    join(vault, BRAIN_SKILL_PROPOSALS_PENDING_REL, `prop-${s}.md`),
-    vault,
-  );
+  return ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_PENDING_REL, `prop-${s}.md`), vault);
 }
 
 /** Accepted skill-proposal archive path: `Brain/skill-proposals/accepted/prop-<slug>.md`. */
 export function skillProposalAcceptedPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(
-    join(vault, BRAIN_SKILL_PROPOSALS_ACCEPTED_REL, `prop-${s}.md`),
-    vault,
-  );
+  return ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_ACCEPTED_REL, `prop-${s}.md`), vault);
 }
 
 /** Rejected skill-proposal archive path: `Brain/skill-proposals/rejected/prop-<slug>.md`. */
 export function skillProposalRejectedPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(
-    join(vault, BRAIN_SKILL_PROPOSALS_REJECTED_REL, `prop-${s}.md`),
-    vault,
-  );
+  return ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REJECTED_REL, `prop-${s}.md`), vault);
 }
 
 /** Accepted procedure reference path: `Brain/procedures/proc-<slug>.md`. */
 export function procedurePath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(
-    join(vault, BRAIN_PROCEDURES_REL, `proc-${s}.md`),
-    vault,
-  );
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURES_REL, `proc-${s}.md`), vault);
 }
 
 /** Procedural-memory index path: `Brain/procedural-memory/index.json`. */
 export function proceduralMemoryIndexPath(vault: string): string {
-  return ensureInsideVault(
-    join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "index.json"),
-    vault,
-  );
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "index.json"), vault);
 }
 
 /** Procedural-memory usage sidecar path: `Brain/procedural-memory/usage.jsonl`. */
 export function proceduralMemoryUsagePath(vault: string): string {
-  return ensureInsideVault(
-    join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "usage.jsonl"),
-    vault,
-  );
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "usage.jsonl"), vault);
 }
 
 /** Procedural graph projection path: `Brain/procedural-memory/graph.json`. */
 export function proceduralGraphPath(vault: string): string {
-  return ensureInsideVault(
-    join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "graph.json"),
-    vault,
-  );
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "graph.json"), vault);
 }
 
 /** Prospective recall hints path: `Brain/procedural-memory/hints.json`. */
 export function proceduralHintsPath(vault: string): string {
-  return ensureInsideVault(
-    join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "hints.json"),
-    vault,
-  );
+  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "hints.json"), vault);
 }
 
 /** Declarative attention-flows directory: `Brain/attention/flows/`. */
@@ -301,10 +230,7 @@ export function proposalWatermarkPath(vault: string): string {
 
 /** Recurrence support ledger path: `Brain/log/recurrence-support.jsonl`. */
 export function proceduralRecurrencePath(vault: string): string {
-  return ensureInsideVault(
-    join(vault, BRAIN_LOG_REL, "recurrence-support.jsonl"),
-    vault,
-  );
+  return ensureInsideVault(join(vault, BRAIN_LOG_REL, "recurrence-support.jsonl"), vault);
 }
 
 /** Log file for the given UTC date: `Brain/log/<YYYY-MM-DD>.md`. */
@@ -373,10 +299,7 @@ export function snapshotsDir(vault: string): string {
 /** Snapshot archive path: `Brain/.snapshots/<run_id>.tar.zst`. */
 export function snapshotPath(vault: string, runId: string): string {
   const id = validateRunId(runId);
-  return ensureInsideVault(
-    join(brainDirs(vault).snapshots, `${id}.tar.zst`),
-    vault,
-  );
+  return ensureInsideVault(join(brainDirs(vault).snapshots, `${id}.tar.zst`), vault);
 }
 
 /** Artifacts root: `Brain/.artifacts/`. */
@@ -396,16 +319,9 @@ export function artifactRunDir(vault: string, runId: string): string {
  * contract: no separators, no traversal, no Windows reservation), so a
  * malicious `artifact_id` from an MCP argument cannot escape the run dir.
  */
-export function artifactPath(
-  vault: string,
-  runId: string,
-  artifactId: string,
-): string {
+export function artifactPath(vault: string, runId: string, artifactId: string): string {
   const aid = validateRunId(artifactId);
-  return ensureInsideVault(
-    join(artifactRunDir(vault, runId), `${aid}.json`),
-    vault,
-  );
+  return ensureInsideVault(join(artifactRunDir(vault, runId), `${aid}.json`), vault);
 }
 
 // ----- Validators -----------------------------------------------------------
@@ -429,17 +345,11 @@ export function validateSlug(slug: string): string {
   if (/[:*?"<>|\x00-\x1F]/.test(trimmed)) {
     throw new Error(`slug contains invalid character: ${JSON.stringify(slug)}`);
   }
-  if (
-    trimmed === ".." ||
-    trimmed === "." ||
-    /(?:^|[^\w])\.\.(?:$|[^\w])/.test(trimmed)
-  ) {
+  if (trimmed === ".." || trimmed === "." || /(?:^|[^\w])\.\.(?:$|[^\w])/.test(trimmed)) {
     throw new Error(`slug must not contain '..' traversal: ${slug}`);
   }
   if (/[. ]$/.test(trimmed)) {
-    throw new Error(
-      `slug must not end with '.' or whitespace (Windows-incompatible): ${slug}`,
-    );
+    throw new Error(`slug must not end with '.' or whitespace (Windows-incompatible): ${slug}`);
   }
   if (WINDOWS_RESERVED_BASENAME_RE.test(trimmed)) {
     throw new Error(`slug uses a Windows-reserved filename: ${slug}`);
@@ -478,18 +388,10 @@ export function validateRunId(runId: string): string {
   const trimmed = runId.trim();
   if (!trimmed) throw new Error("run_id must not be empty");
   if (!RUN_ID_RE.test(trimmed)) {
-    throw new Error(
-      `run_id must match /^[A-Za-z0-9][A-Za-z0-9._-]*$/: ${runId}`,
-    );
+    throw new Error(`run_id must match /^[A-Za-z0-9][A-Za-z0-9._-]*$/: ${runId}`);
   }
-  if (
-    trimmed.includes("..") ||
-    trimmed.includes("/") ||
-    trimmed.includes("\\")
-  ) {
-    throw new Error(
-      `run_id must not contain '..' or path separators: ${runId}`,
-    );
+  if (trimmed.includes("..") || trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error(`run_id must not contain '..' or path separators: ${runId}`);
   }
   if (WINDOWS_RESERVED_BASENAME_RE.test(trimmed)) {
     throw new Error(`run_id uses a Windows-reserved filename: ${runId}`);
@@ -543,9 +445,7 @@ export function allocateSlug(opts: AllocateSlugOptions): AllocateSlugResult {
   const maxAttempts = opts.maxAttempts ?? 10_000;
 
   if (!prefix || /[\\/]/.test(prefix)) {
-    throw new Error(
-      `allocateSlug: prefix must be non-empty and path-clean: ${prefix}`,
-    );
+    throw new Error(`allocateSlug: prefix must be non-empty and path-clean: ${prefix}`);
   }
 
   // The first candidate is the bare slug. Subsequent attempts append
@@ -555,10 +455,7 @@ export function allocateSlug(opts: AllocateSlugOptions): AllocateSlugResult {
   // test); the realistic worst case is a handful.
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const slug = attempt === 1 ? baseSlug : `${baseSlug}-${attempt}`;
-    const candidate = ensureInsideVault(
-      join(targetDir, `${prefix}-${slug}.md`),
-      vault,
-    );
+    const candidate = ensureInsideVault(join(targetDir, `${prefix}-${slug}.md`), vault);
     if (!existsSync(candidate)) {
       return { slug, path: candidate, suffix: attempt === 1 ? null : attempt };
     }

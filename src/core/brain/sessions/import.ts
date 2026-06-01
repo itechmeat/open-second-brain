@@ -25,20 +25,10 @@
  * second run on the same file finds every hash already present.
  */
 
-import {
-  existsSync,
-  lstatSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-} from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
-import {
-  buildDedupIndex,
-  computeDedupHash,
-  type DedupIndexEntry,
-} from "../dedup-hash.ts";
+import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
 import { discoverMarkersDetailed } from "../inline.ts";
 import { writeSignal } from "../signal.ts";
 import { importSessionRecall } from "../session-recall.ts";
@@ -119,10 +109,7 @@ function firstLineOfFile(path: string): string {
 }
 
 /** Pick an adapter — by explicit format, or autodetect. */
-function chooseAdapter(
-  path: string,
-  format?: SessionAdapterId,
-): SessionAdapter {
+function chooseAdapter(path: string, format?: SessionAdapterId): SessionAdapter {
   if (format !== undefined) {
     return getAdapter(format);
   }
@@ -163,9 +150,7 @@ export async function importSession(
   let filteredTurns = 0;
   const recallTurns: SessionTurn[] = [];
   const filterRoles =
-    opts.filterRoles && opts.filterRoles.length > 0
-      ? new Set(opts.filterRoles)
-      : null;
+    opts.filterRoles && opts.filterRoles.length > 0 ? new Set(opts.filterRoles) : null;
   const filterNeedle = opts.filterTextIncludes?.trim().toLowerCase() ?? null;
 
   // Inline helper that wraps the writeSignal call with the consistent
@@ -207,10 +192,7 @@ export async function importSession(
         session_ref: sessionRef,
         ...(input.note || opts.ingestScope
           ? {
-              raw: [
-                opts.ingestScope ? `[ingest_scope:${opts.ingestScope}]` : "",
-                input.note ?? "",
-              ]
+              raw: [opts.ingestScope ? `[ingest_scope:${opts.ingestScope}]` : "", input.note ?? ""]
                 .filter((chunk) => chunk.length > 0)
                 .join("\n"),
             }
@@ -343,11 +325,7 @@ export async function importSession(
  * the caller, not here), then a per-adapter default, finally
  * `opts.agent`.
  */
-function agentLabelForTurn(
-  turn: SessionTurn,
-  adapter: SessionAdapterId,
-  fallback: string,
-): string {
+function agentLabelForTurn(turn: SessionTurn, adapter: SessionAdapterId, fallback: string): string {
   void turn; // reserved for future per-turn role-aware fallback
   return getAdapter(adapter).defaultAgent.trim() || fallback;
 }

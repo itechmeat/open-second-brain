@@ -85,6 +85,6 @@ function render(argv: string[]): number {
     );
     return 0;
   }
-  process.stdout.write(text);
+  process.stdout.write(text.endsWith("\n") ? text : text + "\n");
   return 0;
 }

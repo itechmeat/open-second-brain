@@ -7,10 +7,7 @@ import {
   rebuildProceduralGraph,
   readProceduralGraph,
 } from "../../../src/core/brain/procedural-graph.ts";
-import {
-  proceduralGraphPath,
-  skillProposalAcceptedPath,
-} from "../../../src/core/brain/paths.ts";
+import { proceduralGraphPath, skillProposalAcceptedPath } from "../../../src/core/brain/paths.ts";
 import { reconcileProceduralMemory } from "../../../src/core/brain/procedural-memory.ts";
 
 let vault: string;
@@ -41,9 +38,7 @@ describe("procedural graph projection", () => {
     expect(projection.nodes.length).toBeGreaterThanOrEqual(3);
     expect(projection.edges.length).toBeGreaterThan(0);
 
-    const proposalNode = projection.nodes.find(
-      (node) => node.kind === "proposal",
-    );
+    const proposalNode = projection.nodes.find((node) => node.kind === "proposal");
     expect(proposalNode).toBeDefined();
 
     const entityNode = projection.nodes.find((node) => node.kind === "entity");
@@ -56,9 +51,7 @@ describe("procedural graph projection", () => {
 
   test("returns null when projection file does not exist", () => {
     expect(readProceduralGraph(vault)).toBeNull();
-    expect(
-      proceduralGraphPath(vault).endsWith("Brain/procedural-memory/graph.json"),
-    ).toBe(true);
+    expect(proceduralGraphPath(vault).endsWith("Brain/procedural-memory/graph.json")).toBe(true);
   });
 });
 

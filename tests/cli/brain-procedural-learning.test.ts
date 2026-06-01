@@ -49,14 +49,7 @@ test("brain procedural learning verbs wire end-to-end", async () => {
   const learnedJson = JSON.parse(learned.stdout);
   expect(learnedJson.created.length).toBeGreaterThanOrEqual(1);
 
-  const listed = await runCli([
-    "brain",
-    "skill-proposals",
-    "list",
-    "--vault",
-    vault,
-    "--json",
-  ]);
+  const listed = await runCli(["brain", "skill-proposals", "list", "--vault", vault, "--json"]);
   expect(listed.returncode).toBe(0);
   const listJson = JSON.parse(listed.stdout);
   expect(listJson.total).toBeGreaterThanOrEqual(1);
@@ -74,26 +67,12 @@ test("brain procedural learning verbs wire end-to-end", async () => {
   ]);
   expect(accepted.returncode).toBe(0);
 
-  const rec = await runCli([
-    "brain",
-    "procedural-memory",
-    "reconcile",
-    "--vault",
-    vault,
-    "--json",
-  ]);
+  const rec = await runCli(["brain", "procedural-memory", "reconcile", "--vault", vault, "--json"]);
   expect(rec.returncode).toBe(0);
   const recJson = JSON.parse(rec.stdout);
   expect(recJson.total).toBeGreaterThanOrEqual(1);
 
-  const mem = await runCli([
-    "brain",
-    "procedural-memory",
-    "list",
-    "--vault",
-    vault,
-    "--json",
-  ]);
+  const mem = await runCli(["brain", "procedural-memory", "list", "--vault", vault, "--json"]);
   expect(mem.returncode).toBe(0);
   const memJson = JSON.parse(mem.stdout);
   expect(memJson.total).toBeGreaterThanOrEqual(1);
@@ -123,14 +102,7 @@ test("brain procedural learning verbs wire end-to-end", async () => {
   const graphRebuildJson = JSON.parse(graphRebuild.stdout);
   expect(graphRebuildJson.operation).toBe("rebuild");
 
-  const graphShow = await runCli([
-    "brain",
-    "procedural-graph",
-    "show",
-    "--vault",
-    vault,
-    "--json",
-  ]);
+  const graphShow = await runCli(["brain", "procedural-graph", "show", "--vault", vault, "--json"]);
   expect(graphShow.returncode).toBe(0);
   const graphShowJson = JSON.parse(graphShow.stdout);
   expect(graphShowJson.nodes.length).toBeGreaterThan(0);
@@ -147,14 +119,7 @@ test("brain procedural learning verbs wire end-to-end", async () => {
   const graphHintsJson = JSON.parse(graphHints.stdout);
   expect(graphHintsJson.entries.length).toBeGreaterThan(0);
 
-  const flowsList = await runCli([
-    "brain",
-    "attention-flows",
-    "list",
-    "--vault",
-    vault,
-    "--json",
-  ]);
+  const flowsList = await runCli(["brain", "attention-flows", "list", "--vault", vault, "--json"]);
   expect(flowsList.returncode).toBe(0);
   const flowsListJson = JSON.parse(flowsList.stdout);
   expect(flowsListJson.total).toBeGreaterThan(0);

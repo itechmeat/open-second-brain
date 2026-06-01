@@ -42,10 +42,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { resolveAgentName, resolveLinkOutputFormat } from "../core/config.ts";
 import { brainActivePath, brainDirs } from "../core/brain/paths.ts";
-import {
-  regenerateActive,
-  type RegenerateActiveResult,
-} from "../core/brain/active.ts";
+import { regenerateActive, type RegenerateActiveResult } from "../core/brain/active.ts";
 import { parseFrontmatter } from "../core/vault.ts";
 import {
   appendApplyEvidence,
@@ -56,10 +53,7 @@ import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import { readPrefAudit } from "../core/brain/pref-audit.ts";
 import { buildMorningBrief } from "../core/brain/morning-brief.ts";
 import { aggregateSources } from "../core/brain/portability/sources.ts";
-import {
-  switchProfile,
-  listProfiles,
-} from "../core/brain/portability/profiles.ts";
+import { switchProfile, listProfiles } from "../core/brain/portability/profiles.ts";
 import { defaultConfigPath } from "../core/config.ts";
 import { findUnlinkedMentions } from "../core/brain/link-graph/unlinked-mentions.ts";
 import { buildConceptCluster } from "../core/brain/link-graph/concept-cluster.ts";
@@ -72,10 +66,7 @@ import { findStaleEntries } from "../core/brain/temporal/stale-watch.ts";
 import { buildDailyBrief } from "../core/brain/temporal/daily-brief.ts";
 import { buildWeeklySynthesis } from "../core/brain/temporal/weekly-brief.ts";
 import { loadTemporalConfigSafe } from "../core/brain/policy.ts";
-import {
-  isBrainLogEventKind,
-  type BrainLogEventKind,
-} from "../core/brain/types.ts";
+import { isBrainLogEventKind, type BrainLogEventKind } from "../core/brain/types.ts";
 import { packContext } from "../core/brain/context-pack.ts";
 import { buildPreCompressPack } from "../core/brain/pre-compress-pack.ts";
 import {
@@ -119,14 +110,8 @@ import {
   markProceduralMemoryUsed,
   reconcileProceduralMemory,
 } from "../core/brain/procedural-memory.ts";
-import {
-  readProceduralGraph,
-  rebuildProceduralGraph,
-} from "../core/brain/procedural-graph.ts";
-import {
-  readProceduralHints,
-  rebuildProceduralHints,
-} from "../core/brain/procedural-hints.ts";
+import { readProceduralGraph, rebuildProceduralGraph } from "../core/brain/procedural-graph.ts";
+import { readProceduralHints, rebuildProceduralHints } from "../core/brain/procedural-hints.ts";
 import {
   applyRecurrenceEvidence,
   getRecurrenceEntry,
@@ -144,10 +129,7 @@ import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
 import { buildIntentReview } from "../core/brain/intent-review.ts";
 import { buildRetentionReview } from "../core/brain/retention.ts";
-import {
-  buildMonthlyReview,
-  normalizeMonthlyReviewMonth,
-} from "../core/brain/monthly-review.ts";
+import { buildMonthlyReview, normalizeMonthlyReviewMonth } from "../core/brain/monthly-review.ts";
 import { buildReviewCandidates } from "../core/brain/review-candidates.ts";
 import { runDoctor } from "../core/brain/doctor.ts";
 import { buildOperatorSummary } from "../core/brain/trust/operator-summary.ts";
@@ -158,10 +140,7 @@ import {
   queryByPreference,
   queryByTopic,
 } from "../core/brain/query.ts";
-import {
-  diffAgentSources,
-  type AgentSourceDiffMode,
-} from "../core/brain/agent-source/diff.ts";
+import { diffAgentSources, type AgentSourceDiffMode } from "../core/brain/agent-source/diff.ts";
 import { queryAgentSources } from "../core/brain/agent-source/query.ts";
 import type { AgentSourceContributionKind } from "../core/brain/agent-source/types.ts";
 import { writeSignal } from "../core/brain/signal.ts";
@@ -280,9 +259,7 @@ async function toolBrainFeedback(
       },
     });
   } catch (err) {
-    process.stderr.write(
-      `warning: append feedback log failed: ${(err as Error).message}\n`,
-    );
+    process.stderr.write(`warning: append feedback log failed: ${(err as Error).message}\n`);
   }
 
   let prefResult: { path: string; id: string } | null = null;
@@ -356,9 +333,7 @@ async function toolBrainDream(
   const dryRun = coerceBool(args, "dry_run");
   const nowDate = coerceIsoDate(args, "now");
   const agentArg = coerceStr(args, "agent", false);
-  const agent =
-    normalizeAgentArgument(agentArg) ??
-    resolveAgentName(ctx.configPath ?? undefined);
+  const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
 
   const summary = dream(ctx.vault, {
     dryRun,
@@ -398,9 +373,7 @@ async function toolBrainDream(
     snapshot_path: summary.snapshot_path
       ? vaultRelativeSafe(ctx.vault, summary.snapshot_path)
       : null,
-    log_path: summary.log_path
-      ? vaultRelativeSafe(ctx.vault, summary.log_path)
-      : null,
+    log_path: summary.log_path ? vaultRelativeSafe(ctx.vault, summary.log_path) : null,
   };
 }
 
@@ -431,10 +404,7 @@ async function toolBrainRetention(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const nowDate = coerceIsoDate(args, "now");
-  const report = buildRetentionReview(
-    ctx.vault,
-    nowDate ? { now: nowDate } : {},
-  );
+  const report = buildRetentionReview(ctx.vault, nowDate ? { now: nowDate } : {});
   return {
     schema_version: report.schema_version,
     generated_at: report.generated_at,
@@ -457,18 +427,12 @@ async function toolBrainMonthlyReview(
   let month: string | undefined;
   if (monthRaw !== undefined && monthRaw !== null) {
     if (typeof monthRaw !== "string") {
-      throw new MCPError(
-        INVALID_PARAMS,
-        "brain_monthly_review: month must be YYYY-MM",
-      );
+      throw new MCPError(INVALID_PARAMS, "brain_monthly_review: month must be YYYY-MM");
     }
     try {
       month = normalizeMonthlyReviewMonth(monthRaw);
     } catch {
-      throw new MCPError(
-        INVALID_PARAMS,
-        "brain_monthly_review: month must be YYYY-MM",
-      );
+      throw new MCPError(INVALID_PARAMS, "brain_monthly_review: month must be YYYY-MM");
     }
   }
   const report = buildMonthlyReview(ctx.vault, month ? { month } : {});
@@ -486,10 +450,7 @@ async function toolBrainReviewCandidates(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const nowDate = coerceIsoDate(args, "now");
-  const report = buildReviewCandidates(
-    ctx.vault,
-    nowDate ? { now: nowDate } : {},
-  );
+  const report = buildReviewCandidates(ctx.vault, nowDate ? { now: nowDate } : {});
   return {
     would_create: [...report.would_create],
     would_promote: [...report.would_promote],
@@ -549,9 +510,7 @@ async function toolBrainApplyEvidence(
   const agentArg = coerceStr(args, "agent", false);
   const note = coerceStr(args, "note", false);
 
-  const agent =
-    normalizeAgentArgument(agentArg) ??
-    resolveAgentName(ctx.configPath ?? undefined);
+  const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
 
   const input: AppendApplyEvidenceInput = {
     pref_id: prefId,
@@ -620,9 +579,7 @@ async function toolBrainNote(
     // any other failure is an I/O / filesystem fault from `appendLogEvent`
     // and must not be reported as a client-side INVALID_PARAMS.
     const message = (err as Error).message ?? String(err);
-    const code = message.startsWith("brain_note:")
-      ? INVALID_PARAMS
-      : INTERNAL_ERROR;
+    const code = message.startsWith("brain_note:") ? INVALID_PARAMS : INTERNAL_ERROR;
     throw new MCPError(code, message);
   }
   return {
@@ -637,9 +594,7 @@ async function toolBrainNote(
 
 type PinnedContextOperation = "read" | "write" | "append" | "clear";
 
-function coercePinnedContextOperation(
-  args: Record<string, unknown>,
-): PinnedContextOperation {
+function coercePinnedContextOperation(args: Record<string, unknown>): PinnedContextOperation {
   const operation = coerceStr(args, "operation", false) ?? "read";
   if (
     operation !== "read" &&
@@ -687,10 +642,7 @@ async function toolBrainPinnedContext(
   return serializePinnedContext(ctx, pinned, operation);
 }
 
-function appendPinnedToContextContent(
-  activeContent: string,
-  pinnedContent: string,
-): string {
+function appendPinnedToContextContent(activeContent: string, pinnedContent: string): string {
   if (pinnedContent.length === 0) return activeContent;
   const pinnedBlock = `## Pinned context\n\n${pinnedContent}`;
   const trimmedActive = activeContent.trimEnd();
@@ -722,9 +674,7 @@ const EMPTY_CONTEXT_COUNTS: BrainContextCounts = {
  *                                        rewrite; the on-disk body is
  *                                        returned verbatim.
  */
-async function toolBrainContext(
-  ctx: ServerContext,
-): Promise<Record<string, unknown>> {
+async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unknown>> {
   const dirs = brainDirs(ctx.vault);
   const activePath = brainActivePath(ctx.vault);
   const pinned = readPinnedContext(ctx.vault);
@@ -997,9 +947,7 @@ async function toolBrainAudit(
     .replace(/^(?:pref-|ret-)/, "")
     .trim();
   if (slug.length === 0) {
-    throw new Error(
-      `brain_audit: empty preference slug after normalising '${raw}'`,
-    );
+    throw new Error(`brain_audit: empty preference slug after normalising '${raw}'`);
   }
   const prefId = `pref-${slug}`;
   const { records, warnings } = readPrefAudit(ctx.vault, prefId);
@@ -1016,18 +964,13 @@ async function toolBrainMorningBrief(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const topK = optionalPositiveInt(args, "top_k", "brain_morning_brief") ?? 10;
-  const lookbackDays =
-    optionalPositiveInt(args, "lookback_days", "brain_morning_brief") ?? 7;
+  const lookbackDays = optionalPositiveInt(args, "lookback_days", "brain_morning_brief") ?? 7;
   const maxCharsPerMemory = optionalPositiveInt(
     args,
     "max_chars_per_memory",
     "brain_morning_brief",
   );
-  const maxTotalChars = optionalPositiveInt(
-    args,
-    "max_total_chars",
-    "brain_morning_brief",
-  );
+  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_morning_brief");
   const brief = buildMorningBrief(ctx.vault, {
     now: new Date(),
     topK,
@@ -1066,12 +1009,9 @@ async function toolBrainSwitchVault(
   try {
     switchProfile(configPath, name);
   } catch (err) {
-    throw new Error(
-      `brain_switch_vault: ${(err as Error).message ?? String(err)}`,
-      {
-        cause: err,
-      },
-    );
+    throw new Error(`brain_switch_vault: ${(err as Error).message ?? String(err)}`, {
+      cause: err,
+    });
   }
   // The running server keeps its already-resolved vault; the switch
   // takes effect for the next server launch / CLI invocation.
@@ -1096,8 +1036,7 @@ async function toolBrainDoctor(
   // Decide a single ok flag — `strict` only changes the CLI exit code,
   // so we mirror that semantic here: with `strict`, warnings demote ok
   // to false. Errors always do.
-  const ok =
-    result.errors.length === 0 && (!strict || result.warnings.length === 0);
+  const ok = result.errors.length === 0 && (!strict || result.warnings.length === 0);
 
   return {
     format,
@@ -1107,17 +1046,13 @@ async function toolBrainDoctor(
       severity: i.severity,
       code: i.code,
       message: i.message,
-      ...(i.path !== undefined
-        ? { path: vaultRelativeSafe(ctx.vault, i.path) }
-        : {}),
+      ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
     })),
     warnings: result.warnings.map((i) => ({
       severity: i.severity,
       code: i.code,
       message: i.message,
-      ...(i.path !== undefined
-        ? { path: vaultRelativeSafe(ctx.vault, i.path) }
-        : {}),
+      ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
     })),
     // v0.10.15: ranked maintenance actions surfaced as a parallel
     // signal to errors/warnings. The list is independent of `strict`
@@ -1136,16 +1071,12 @@ async function toolBrainDoctor(
     // surface, so it stays absent here). `instruction_file_warnings`
     // surfaces vault-root instruction files exceeding the configured
     // ceiling.
-    ...(result.trust_verdict !== undefined
-      ? { trust_verdict: result.trust_verdict }
-      : {}),
-    instruction_file_warnings: (result.instruction_file_warnings ?? []).map(
-      (w) => ({
-        path: w.path,
-        lines: w.lines,
-        ceiling: w.ceiling,
-      }),
-    ),
+    ...(result.trust_verdict !== undefined ? { trust_verdict: result.trust_verdict } : {}),
+    instruction_file_warnings: (result.instruction_file_warnings ?? []).map((w) => ({
+      path: w.path,
+      lines: w.lines,
+      ceiling: w.ceiling,
+    })),
   };
 }
 
@@ -1199,9 +1130,7 @@ function serializeSignal(s: BrainSignal): Record<string, unknown> {
   };
 }
 
-function serializePreference(
-  p: BrainPreference | BrainRetired,
-): Record<string, unknown> {
+function serializePreference(p: BrainPreference | BrainRetired): Record<string, unknown> {
   if (p.kind === "brain-retired") {
     return {
       kind: p.kind,
@@ -1210,9 +1139,7 @@ function serializePreference(
       retired_at: p.retired_at,
       retired_reason: p.retired_reason,
       retired_by: p.retired_by,
-      ...(p.superseded_by !== undefined
-        ? { superseded_by: p.superseded_by }
-        : {}),
+      ...(p.superseded_by !== undefined ? { superseded_by: p.superseded_by } : {}),
       created_at: p.created_at,
       topic: p.topic,
       ...(p.scope !== undefined ? { scope: p.scope } : {}),
@@ -1298,9 +1225,7 @@ export function vaultRelativeSafe(vault: string, target: string): string {
 
 // ----- Tool registration ---------------------------------------------------
 
-const PINNED_CONTEXT_OUTPUT_SCHEMA: NonNullable<
-  ToolDefinition["outputSchema"]
-> = {
+const PINNED_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
   type: "object",
   required: ["present", "path", "absolute_path", "content"],
   properties: {
@@ -1313,43 +1238,29 @@ const PINNED_CONTEXT_OUTPUT_SCHEMA: NonNullable<
   additionalProperties: false,
 };
 
-const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
-  {
-    type: "object",
-    required: [
-      "vault_path",
-      "present",
-      "active_path",
-      "content",
-      "counts",
-      "generated_at",
-      "pinned",
-    ],
-    properties: {
-      vault_path: { type: "string" },
-      present: { type: "boolean" },
-      active_path: { type: "string" },
-      content: { type: "string" },
-      counts: {
-        type: "object",
-        required: [
-          "confirmed",
-          "quarantine",
-          "retired_recent",
-          "most_applied_30d",
-        ],
-        properties: {
-          confirmed: { type: "integer" },
-          quarantine: { type: "integer" },
-          retired_recent: { type: "integer" },
-          most_applied_30d: { type: "integer" },
-        },
-        additionalProperties: false,
+const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  required: ["vault_path", "present", "active_path", "content", "counts", "generated_at", "pinned"],
+  properties: {
+    vault_path: { type: "string" },
+    present: { type: "boolean" },
+    active_path: { type: "string" },
+    content: { type: "string" },
+    counts: {
+      type: "object",
+      required: ["confirmed", "quarantine", "retired_recent", "most_applied_30d"],
+      properties: {
+        confirmed: { type: "integer" },
+        quarantine: { type: "integer" },
+        retired_recent: { type: "integer" },
+        most_applied_30d: { type: "integer" },
       },
-      generated_at: {},
-      pinned: PINNED_CONTEXT_OUTPUT_SCHEMA,
+      additionalProperties: false,
     },
-  };
+    generated_at: {},
+    pinned: PINNED_CONTEXT_OUTPUT_SCHEMA,
+  },
+};
 
 const BRAIN_QUERY_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
   type: "object",
@@ -1409,10 +1320,7 @@ async function toolBrainOperatorSummary(
   } else if (typeof includeDreamRaw === "boolean") {
     includeDream = includeDreamRaw;
   } else {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_operator_summary: include_dream must be a boolean",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_operator_summary: include_dream must be a boolean");
   }
 
   let dreamSummary;
@@ -1464,10 +1372,7 @@ async function toolBrainUnlinkedMentions(
 ): Promise<Record<string, unknown>> {
   const idRaw = args["id"];
   if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_unlinked_mentions: id must be a non-empty string",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_unlinked_mentions: id must be a non-empty string");
   }
   const targetId = normaliseWikilinkTarget(idRaw);
   // Limit coercion mirrors the v0.10.16 `brain_operator_summary`
@@ -1508,11 +1413,7 @@ async function toolBrainUnlinkedMentions(
       );
     }
   }
-  const mentions = findUnlinkedMentions(
-    ctx.vault,
-    targetId,
-    limit !== undefined ? { limit } : {},
-  );
+  const mentions = findUnlinkedMentions(ctx.vault, targetId, limit !== undefined ? { limit } : {});
   return {
     vault_path: ctx.vault,
     target_id: targetId,
@@ -1537,10 +1438,7 @@ async function toolBrainConceptSynthesis(
 ): Promise<Record<string, unknown>> {
   const idRaw = args["id"];
   if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_concept_synthesis: id must be a non-empty string",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_concept_synthesis: id must be a non-empty string");
   }
   const includeUnlinkedRaw = args["include_unlinked"];
   let includeUnlinked = false;
@@ -1581,10 +1479,7 @@ async function toolBrainMocAudit(
 ): Promise<Record<string, unknown>> {
   const idRaw = args["id"];
   if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_moc_audit: id must be a non-empty string",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_moc_audit: id must be a non-empty string");
   }
   const targetId = normaliseWikilinkTarget(idRaw);
   try {
@@ -1608,42 +1503,26 @@ async function toolBrainMocAudit(
 
 // ----- Temporal subsystem MCP wrappers (v0.10.18) --------------------------
 
-function coercePositiveInteger(
-  tool: string,
-  field: string,
-  raw: unknown,
-): number | undefined {
+function coercePositiveInteger(tool: string, field: string, raw: unknown): number | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw === "number") {
     if (!Number.isInteger(raw) || raw < 1) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `${tool}: ${field} must be a positive integer`,
-      );
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a positive integer`);
     }
     return raw;
   }
   if (typeof raw === "string") {
     const trimmed = raw.trim();
     if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `${tool}: ${field} must be a positive integer`,
-      );
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a positive integer`);
     }
     const parsed = Number.parseInt(trimmed, 10);
     if (parsed < 1) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `${tool}: ${field} must be a positive integer`,
-      );
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a positive integer`);
     }
     return parsed;
   }
-  throw new MCPError(
-    INVALID_PARAMS,
-    `${tool}: ${field} must be a positive integer`,
-  );
+  throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a positive integer`);
 }
 
 const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1679,19 +1558,13 @@ function coerceIsoTimestampOrDate(
   return v;
 }
 
-function coerceEventKind(
-  tool: string,
-  raw: unknown,
-): BrainLogEventKind | undefined {
+function coerceEventKind(tool: string, raw: unknown): BrainLogEventKind | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "string") {
     throw new MCPError(INVALID_PARAMS, `${tool}: kind must be a string`);
   }
   if (!isBrainLogEventKind(raw)) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `${tool}: kind must be a known BrainLogEventKind`,
-    );
+    throw new MCPError(INVALID_PARAMS, `${tool}: kind must be a known BrainLogEventKind`);
   }
   return raw;
 }
@@ -1705,20 +1578,11 @@ async function toolBrainTimeline(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const prefId =
-    typeof args["pref_id"] === "string" ? args["pref_id"] : undefined;
+  const prefId = typeof args["pref_id"] === "string" ? args["pref_id"] : undefined;
   const topic = typeof args["topic"] === "string" ? args["topic"] : undefined;
   const kind = coerceEventKind("brain_timeline", args["kind"]);
-  const since = coerceIsoTimestampOrDate(
-    "brain_timeline",
-    "since",
-    args["since"],
-  );
-  const until = coerceIsoTimestampOrDate(
-    "brain_timeline",
-    "until",
-    args["until"],
-  );
+  const since = coerceIsoTimestampOrDate("brain_timeline", "since", args["since"]);
+  const until = coerceIsoTimestampOrDate("brain_timeline", "until", args["until"]);
   const limit = coercePositiveInteger("brain_timeline", "limit", args["limit"]);
 
   const index = buildTimelineIndex(ctx.vault, {
@@ -1817,12 +1681,7 @@ async function toolBrainDailyBrief(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const dateRaw = args["date"];
-  const dateCoerced = coerceIsoTimestampOrDate(
-    "brain_daily_brief",
-    "date",
-    dateRaw,
-    "date-only",
-  );
+  const dateCoerced = coerceIsoTimestampOrDate("brain_daily_brief", "date", dateRaw, "date-only");
   const date = dateCoerced ?? new Date().toISOString().slice(0, 10);
   const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
@@ -1892,33 +1751,16 @@ async function toolBrainContextPack(
         ? Number.parseInt(maxRaw.trim(), 10)
         : Number.NaN;
   if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_context_pack: max_tokens must be a positive integer",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
-  const query =
-    typeof args["query"] === "string" ? (args["query"] as string) : undefined;
+  const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
   const includeLanes = coerceBool(args, "lanes");
   const cacheStable = coerceBool(args, "cache_stable");
   const dedupRepeated = coerceBool(args, "dedup_repeated");
   const attentionFlowIds = coerceStrList(args, "attention_flow_ids");
-  const maxCharsPerMemory = optionalPositiveInt(
-    args,
-    "max_chars_per_memory",
-    "brain_context_pack",
-  );
-  const maxTotalChars = optionalPositiveInt(
-    args,
-    "max_total_chars",
-    "brain_context_pack",
-  );
-  const receipt = receiptOptionsFromArgs(
-    "brain_context_pack",
-    args,
-    "context_pack",
-    "mcp",
-  );
+  const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
+  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
+  const receipt = receiptOptionsFromArgs("brain_context_pack", args, "context_pack", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
   const report = packContext(ctx.vault, {
     maxTokens,
@@ -1949,14 +1791,10 @@ async function toolBrainContextPack(
       tokens: i.tokens,
       body: i.body,
       trimmed: i.trimmed,
-      ...(i.originalRank !== undefined
-        ? { original_rank: i.originalRank }
-        : {}),
+      ...(i.originalRank !== undefined ? { original_rank: i.originalRank } : {}),
       ...(i.stableRank !== undefined ? { stable_rank: i.stableRank } : {}),
       ...(i.dedupedFrom !== undefined ? { deduped_from: i.dedupedFrom } : {}),
-      ...(i.referenceHint !== undefined
-        ? { reference_hint: i.referenceHint }
-        : {}),
+      ...(i.referenceHint !== undefined ? { reference_hint: i.referenceHint } : {}),
       ...(i.safety ? { safety: i.safety } : {}),
     })),
     skipped: report.skipped.map((s) => ({
@@ -1976,17 +1814,9 @@ async function toolBrainContextReceipts(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const operation = optionalStringArg(
-    "brain_context_receipts",
-    args,
-    "operation",
-  );
+  const operation = optionalStringArg("brain_context_receipts", args, "operation");
   if (operation === "list") {
-    const trigger = optionalStringArg(
-      "brain_context_receipts",
-      args,
-      "trigger",
-    );
+    const trigger = optionalStringArg("brain_context_receipts", args, "trigger");
     if (trigger !== undefined && !isContextReceiptTrigger(trigger)) {
       throw new MCPError(
         INVALID_PARAMS,
@@ -1994,16 +1824,8 @@ async function toolBrainContextReceipts(
       );
     }
     const host = optionalStringArg("brain_context_receipts", args, "host");
-    const sessionId = optionalStringArg(
-      "brain_context_receipts",
-      args,
-      "session_id",
-    );
-    const limit = coercePositiveInteger(
-      "brain_context_receipts",
-      "limit",
-      args["limit"],
-    );
+    const sessionId = optionalStringArg("brain_context_receipts", args, "session_id");
+    const limit = coercePositiveInteger("brain_context_receipts", "limit", args["limit"]);
     const receipts = listContextReceipts(ctx.vault, {
       ...(trigger !== undefined ? { trigger } : {}),
       ...(host !== undefined ? { host } : {}),
@@ -2021,17 +1843,11 @@ async function toolBrainContextReceipts(
   if (operation === "show") {
     const id = optionalStringArg("brain_context_receipts", args, "id");
     if (id === undefined) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        "brain_context_receipts: id is required for show",
-      );
+      throw new MCPError(INVALID_PARAMS, "brain_context_receipts: id is required for show");
     }
     const receipt = getContextReceipt(ctx.vault, id);
     if (receipt === null) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `brain_context_receipts: receipt not found: ${id}`,
-      );
+      throw new MCPError(INVALID_PARAMS, `brain_context_receipts: receipt not found: ${id}`);
     }
     return {
       id: receipt.id,
@@ -2044,10 +1860,7 @@ async function toolBrainContextReceipts(
     };
   }
 
-  throw new MCPError(
-    INVALID_PARAMS,
-    "brain_context_receipts: operation must be list or show",
-  );
+  throw new MCPError(INVALID_PARAMS, "brain_context_receipts: operation must be list or show");
 }
 
 function optionalStringArg(
@@ -2058,22 +1871,14 @@ function optionalStringArg(
   const raw = args[key];
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "string" || raw.trim().length === 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `${tool}: ${key} must be a non-empty string`,
-    );
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${key} must be a non-empty string`);
   }
   return raw.trim();
 }
 
-function requiredStringArg(
-  tool: string,
-  args: Record<string, unknown>,
-  key: string,
-): string {
+function requiredStringArg(tool: string, args: Record<string, unknown>, key: string): string {
   const value = optionalStringArg(tool, args, key);
-  if (value === undefined)
-    throw new MCPError(INVALID_PARAMS, `${tool}: ${key} is required`);
+  if (value === undefined) throw new MCPError(INVALID_PARAMS, `${tool}: ${key} is required`);
   return value;
 }
 
@@ -2083,11 +1888,7 @@ async function toolBrainRecallTelemetry(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const operation = optionalStringArg(
-    "brain_recall_telemetry",
-    args,
-    "operation",
-  );
+  const operation = optionalStringArg("brain_recall_telemetry", args, "operation");
   const filter = recallTelemetryFilter(args);
 
   if (operation === "list") {
@@ -2098,25 +1899,16 @@ async function toolBrainRecallTelemetry(
     const summary = summarizeRecallTelemetry(ctx.vault, filter);
     return { ...summary };
   }
-  throw new MCPError(
-    INVALID_PARAMS,
-    "brain_recall_telemetry: operation must be list or summary",
-  );
+  throw new MCPError(INVALID_PARAMS, "brain_recall_telemetry: operation must be list or summary");
 }
 
-function recallTelemetryFilter(
-  args: Record<string, unknown>,
-): RecallTelemetryFilter {
+function recallTelemetryFilter(args: Record<string, unknown>): RecallTelemetryFilter {
   const mode = coerceRecallTelemetryMode(args["mode"]);
   const status = coerceRecallTelemetryStatus(args["status"]);
   const host = optionalStringArg("brain_recall_telemetry", args, "host");
   const since = optionalStringArg("brain_recall_telemetry", args, "since");
   const until = optionalStringArg("brain_recall_telemetry", args, "until");
-  const limit = coercePositiveInteger(
-    "brain_recall_telemetry",
-    "limit",
-    args["limit"],
-  );
+  const limit = coercePositiveInteger("brain_recall_telemetry", "limit", args["limit"]);
   return {
     ...(mode !== undefined ? { mode } : {}),
     ...(status !== undefined ? { status } : {}),
@@ -2127,9 +1919,7 @@ function recallTelemetryFilter(
   };
 }
 
-function coerceRecallTelemetryMode(
-  raw: unknown,
-): RecallTelemetryMode | undefined {
+function coerceRecallTelemetryMode(raw: unknown): RecallTelemetryMode | undefined {
   if (raw === undefined || raw === null) return undefined;
   const trimmed = typeof raw === "string" ? raw.trim() : raw;
   if (!isRecallTelemetryMode(trimmed)) {
@@ -2141,9 +1931,7 @@ function coerceRecallTelemetryMode(
   return trimmed;
 }
 
-function coerceRecallTelemetryStatus(
-  raw: unknown,
-): RecallTelemetryStatus | undefined {
+function coerceRecallTelemetryStatus(raw: unknown): RecallTelemetryStatus | undefined {
   if (raw === undefined || raw === null) return undefined;
   const trimmed = typeof raw === "string" ? raw.trim() : raw;
   if (!isRecallTelemetryStatus(trimmed)) {
@@ -2161,26 +1949,13 @@ async function toolBrainContextPresets(
   _ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const operation = optionalStringArg(
-    "brain_context_presets",
-    args,
-    "operation",
-  );
+  const operation = optionalStringArg("brain_context_presets", args, "operation");
   if (operation === "show") {
-    const presetId = optionalStringArg(
-      "brain_context_presets",
-      args,
-      "preset_id",
-    );
+    const presetId = optionalStringArg("brain_context_presets", args, "preset_id");
     const result =
-      presetId === undefined
-        ? { presets: listContextPresets() }
-        : getContextPreset(presetId);
+      presetId === undefined ? { presets: listContextPresets() } : getContextPreset(presetId);
     if (result === null) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `brain_context_presets: unknown preset ${presetId}`,
-      );
+      throw new MCPError(INVALID_PARAMS, `brain_context_presets: unknown preset ${presetId}`);
     }
     return Array.isArray(result) ? { presets: result } : { ...result };
   }
@@ -2199,22 +1974,12 @@ async function toolBrainContextPresets(
     };
   }
   if (operation === "diff") {
-    const presetId = optionalStringArg(
-      "brain_context_presets",
-      args,
-      "preset_id",
-    );
+    const presetId = optionalStringArg("brain_context_presets", args, "preset_id");
     if (presetId === undefined) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        "brain_context_presets: preset_id is required for diff",
-      );
+      throw new MCPError(INVALID_PARAMS, "brain_context_presets: preset_id is required for diff");
     }
     return {
-      ...diffContextPreset(
-        presetId,
-        contextPresetCurrentConfig(args["current"]),
-      ),
+      ...diffContextPreset(presetId, contextPresetCurrentConfig(args["current"])),
     };
   }
   throw new MCPError(
@@ -2226,10 +1991,7 @@ async function toolBrainContextPresets(
 function contextPresetCurrentConfig(raw: unknown): ContextPresetCurrentConfig {
   if (raw === undefined || raw === null) return {};
   if (typeof raw !== "object" || Array.isArray(raw)) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_context_presets: current must be an object",
-    );
+    throw new MCPError(INVALID_PARAMS, "brain_context_presets: current must be an object");
   }
   return raw as ContextPresetCurrentConfig;
 }
@@ -2240,21 +2002,9 @@ async function toolBrainPreCompactExtract(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const sessionId = requiredStringArg(
-    "brain_pre_compact_extract",
-    args,
-    "session_id",
-  );
-  const turnStart = requiredStringArg(
-    "brain_pre_compact_extract",
-    args,
-    "turn_start",
-  );
-  const turnEnd = requiredStringArg(
-    "brain_pre_compact_extract",
-    args,
-    "turn_end",
-  );
+  const sessionId = requiredStringArg("brain_pre_compact_extract", args, "session_id");
+  const turnStart = requiredStringArg("brain_pre_compact_extract", args, "turn_start");
+  const turnEnd = requiredStringArg("brain_pre_compact_extract", args, "turn_end");
   const text = requiredStringArg("brain_pre_compact_extract", args, "text");
   const maxChars = coercePositiveInteger(
     "brain_pre_compact_extract",
@@ -2266,8 +2016,7 @@ async function toolBrainPreCompactExtract(
     turnStart,
     turnEnd,
     text,
-    ...(optionalStringArg("brain_pre_compact_extract", args, "host") !==
-    undefined
+    ...(optionalStringArg("brain_pre_compact_extract", args, "host") !== undefined
       ? { host: optionalStringArg("brain_pre_compact_extract", args, "host") }
       : {}),
     ...(maxChars !== undefined ? { maxChars } : {}),
@@ -2281,11 +2030,7 @@ async function toolBrainSessionGrep(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const limit = coercePositiveInteger(
-    "brain_session_grep",
-    "limit",
-    args["limit"],
-  );
+  const limit = coercePositiveInteger("brain_session_grep", "limit", args["limit"]);
   const snippetChars = coercePositiveInteger(
     "brain_session_grep",
     "snippet_chars",
@@ -2294,14 +2039,9 @@ async function toolBrainSessionGrep(
   return {
     ...searchSessionRecall(ctx.vault, {
       query: requiredStringArg("brain_session_grep", args, "query"),
-      ...(optionalStringArg("brain_session_grep", args, "session_id") !==
-      undefined
+      ...(optionalStringArg("brain_session_grep", args, "session_id") !== undefined
         ? {
-            sessionId: optionalStringArg(
-              "brain_session_grep",
-              args,
-              "session_id",
-            ),
+            sessionId: optionalStringArg("brain_session_grep", args, "session_id"),
           }
         : {}),
       ...(limit !== undefined ? { limit } : {}),
@@ -2316,11 +2056,7 @@ async function toolBrainSessionDescribe(
 ): Promise<Record<string, unknown>> {
   return {
     ...describeSessionRecall(ctx.vault, {
-      sessionId: requiredStringArg(
-        "brain_session_describe",
-        args,
-        "session_id",
-      ),
+      sessionId: requiredStringArg("brain_session_describe", args, "session_id"),
     }),
   };
 }
@@ -2329,17 +2065,12 @@ async function toolBrainSessionExpand(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const rawLimit = coercePositiveInteger(
-    "brain_session_expand",
-    "raw_limit",
-    args["raw_limit"],
-  );
+  const rawLimit = coercePositiveInteger("brain_session_expand", "raw_limit", args["raw_limit"]);
   return {
     ...expandSessionRecall(ctx.vault, {
       id: requiredStringArg("brain_session_expand", args, "id"),
       ...(rawLimit !== undefined ? { rawLimit } : {}),
-      ...(optionalStringArg("brain_session_expand", args, "cursor") !==
-      undefined
+      ...(optionalStringArg("brain_session_expand", args, "cursor") !== undefined
         ? { cursor: optionalStringArg("brain_session_expand", args, "cursor") }
         : {}),
     }),
@@ -2363,10 +2094,7 @@ function optionalPositiveInt(
         ? Number.parseInt(raw.trim(), 10)
         : Number.NaN;
   if (!Number.isInteger(n) || n <= 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `${tool}: ${key} must be a positive integer`,
-    );
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${key} must be a positive integer`);
   }
   return n;
 }
@@ -2380,29 +2108,15 @@ async function toolBrainPreCompressPack(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const topK =
-    optionalPositiveInt(args, "top_k", "brain_pre_compress_pack") ?? 10;
+  const topK = optionalPositiveInt(args, "top_k", "brain_pre_compress_pack") ?? 10;
   const maxCharsPerMemory = optionalPositiveInt(
     args,
     "max_chars_per_memory",
     "brain_pre_compress_pack",
   );
-  const maxTotalChars = optionalPositiveInt(
-    args,
-    "max_total_chars",
-    "brain_pre_compress_pack",
-  );
-  const receipt = receiptOptionsFromArgs(
-    "brain_pre_compress_pack",
-    args,
-    "pre_compress",
-    "mcp",
-  );
-  const telemetry = telemetryOptionsFromArgs(
-    "brain_pre_compress_pack",
-    args,
-    "mcp",
-  );
+  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_pre_compress_pack");
+  const receipt = receiptOptionsFromArgs("brain_pre_compress_pack", args, "pre_compress", "mcp");
+  const telemetry = telemetryOptionsFromArgs("brain_pre_compress_pack", args, "mcp");
   const pack = buildPreCompressPack(ctx.vault, {
     topK,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
@@ -2414,9 +2128,7 @@ async function toolBrainPreCompressPack(
     vault_path: ctx.vault,
     text: pack.text,
     active_head_included: pack.activeHeadIncluded,
-    ...(pack.activeHeadSafety
-      ? { active_head_safety: pack.activeHeadSafety }
-      : {}),
+    ...(pack.activeHeadSafety ? { active_head_safety: pack.activeHeadSafety } : {}),
     total_chars: pack.totalChars,
     ...(pack.receiptId ? { receipt_id: pack.receiptId } : {}),
     ...(pack.telemetryId ? { telemetry_id: pack.telemetryId } : {}),
@@ -2469,17 +2181,9 @@ async function toolBrainSkillProposals(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const operation = requiredStringArg(
-    "brain_skill_proposals",
-    args,
-    "operation",
-  );
+  const operation = requiredStringArg("brain_skill_proposals", args, "operation");
   if (operation === "learn") {
-    const minSupport = optionalPositiveInt(
-      args,
-      "min_support",
-      "brain_skill_proposals",
-    );
+    const minSupport = optionalPositiveInt(args, "min_support", "brain_skill_proposals");
     const result =
       minSupport !== undefined
         ? learnSkillProposals(ctx.vault, { minSupport })
@@ -2514,11 +2218,7 @@ async function toolBrainProceduralMemory(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const operation = requiredStringArg(
-    "brain_procedural_memory",
-    args,
-    "operation",
-  );
+  const operation = requiredStringArg("brain_procedural_memory", args, "operation");
   if (operation === "reconcile") {
     const roots = coerceStrList(args, "roots");
     const effectiveRoots =
@@ -2541,10 +2241,7 @@ async function toolBrainProceduralMemory(
     const id = requiredStringArg("brain_procedural_memory", args, "id");
     const updated = markProceduralMemoryUsed(ctx.vault, id);
     if (!updated) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `brain_procedural_memory: unknown entry id: ${id}`,
-      );
+      throw new MCPError(INVALID_PARAMS, `brain_procedural_memory: unknown entry id: ${id}`);
     }
     return { ...updated };
   }
@@ -2564,26 +2261,15 @@ async function toolBrainRecurrence(
     return { total: entries.length, entries };
   }
   if (operation === "show") {
-    const contentHash = requiredStringArg(
-      "brain_recurrence",
-      args,
-      "content_hash",
-    );
+    const contentHash = requiredStringArg("brain_recurrence", args, "content_hash");
     const entry = getRecurrenceEntry(ctx.vault, contentHash);
     if (!entry) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        `brain_recurrence: unknown content hash: ${contentHash}`,
-      );
+      throw new MCPError(INVALID_PARAMS, `brain_recurrence: unknown content hash: ${contentHash}`);
     }
     return { ...entry };
   }
   if (operation === "learn" || operation === "forget") {
-    const contentHash = requiredStringArg(
-      "brain_recurrence",
-      args,
-      "content_hash",
-    );
+    const contentHash = requiredStringArg("brain_recurrence", args, "content_hash");
     const scope = requiredStringArg("brain_recurrence", args, "scope");
     const sourceId = requiredStringArg("brain_recurrence", args, "source_id");
     const entry = applyRecurrenceEvidence(ctx.vault, {
@@ -2609,11 +2295,7 @@ async function toolBrainProceduralGraph(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const operation = requiredStringArg(
-    "brain_procedural_graph",
-    args,
-    "operation",
-  );
+  const operation = requiredStringArg("brain_procedural_graph", args, "operation");
   if (operation === "rebuild") {
     const graph = rebuildProceduralGraph(ctx.vault);
     const hints = rebuildProceduralHints(ctx.vault, { graph });
@@ -2633,20 +2315,14 @@ async function toolBrainProceduralGraph(
   if (operation === "show") {
     const graph = readProceduralGraph(ctx.vault);
     if (!graph) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        "brain_procedural_graph: graph projection not found",
-      );
+      throw new MCPError(INVALID_PARAMS, "brain_procedural_graph: graph projection not found");
     }
     return { ...graph };
   }
   if (operation === "hints") {
     const hints = readProceduralHints(ctx.vault);
     if (!hints) {
-      throw new MCPError(
-        INVALID_PARAMS,
-        "brain_procedural_graph: hints projection not found",
-      );
+      throw new MCPError(INVALID_PARAMS, "brain_procedural_graph: hints projection not found");
     }
     return { ...hints };
   }
@@ -2660,11 +2336,7 @@ async function toolBrainAttentionFlows(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const operation = requiredStringArg(
-    "brain_attention_flows",
-    args,
-    "operation",
-  );
+  const operation = requiredStringArg("brain_attention_flows", args, "operation");
   if (operation === "list") {
     const flows = listAttentionFlows(ctx.vault);
     return { total: flows.length, flows };
@@ -2687,9 +2359,7 @@ async function toolBrainAttentionFlows(
   );
 }
 
-async function toolMcpLandscape(
-  ctx: ServerContext,
-): Promise<Record<string, unknown>> {
+async function toolMcpLandscape(ctx: ServerContext): Promise<Record<string, unknown>> {
   const landscape = buildMcpLandscape(ctx.vault);
   return {
     vault_path: ctx.vault,
@@ -2712,8 +2382,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         topic: {
           type: "string",
-          description:
-            "Stable kebab-slug for the rule, e.g. `no-internal-abbrev`.",
+          description: "Stable kebab-slug for the rule, e.g. `no-internal-abbrev`.",
         },
         signal: {
           type: "string",
@@ -2723,8 +2392,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         principle: {
           type: "string",
-          description:
-            "One-line, agent-readable formulation of the rule (imperative voice).",
+          description: "One-line, agent-readable formulation of the rule (imperative voice).",
         },
         scope: {
           type: "string",
@@ -2734,18 +2402,15 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         source: {
           type: "array",
           items: { type: "string" },
-          description:
-            "Optional wikilinks to the artifacts or notes that triggered the signal.",
+          description: "Optional wikilinks to the artifacts or notes that triggered the signal.",
         },
         agent: {
           type: "string",
-          description:
-            "Optional agent identity override; defaults to the server-resolved name.",
+          description: "Optional agent identity override; defaults to the server-resolved name.",
         },
         raw: {
           type: "string",
-          description:
-            "Optional free-form raw quote (rendered under `## Raw` in the signal file).",
+          description: "Optional free-form raw quote (rendered under `## Raw` in the signal file).",
         },
         force_confirmed: {
           type: "boolean",
@@ -2828,8 +2493,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         month: {
           type: "string",
-          description:
-            "Optional target month in YYYY-MM form. Defaults to the current UTC month.",
+          description: "Optional target month in YYYY-MM form. Defaults to the current UTC month.",
         },
       },
       additionalProperties: false,
@@ -2877,8 +2541,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         agent: {
           type: "string",
-          description:
-            "Optional agent identity override; defaults to the server-resolved name.",
+          description: "Optional agent identity override; defaults to the server-resolved name.",
         },
         note: {
           type: "string",
@@ -2904,8 +2567,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         agent: {
           type: "string",
-          description:
-            "Optional agent identity override; defaults to the server-resolved name.",
+          description: "Optional agent identity override; defaults to the server-resolved name.",
         },
       },
       required: ["text"],
@@ -2957,8 +2619,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         since: {
           type: "string",
-          description:
-            "Inclusive lower bound (ISO-8601). Defaults to `until - 24h`.",
+          description: "Inclusive lower bound (ISO-8601). Defaults to `until - 24h`.",
         },
         until: {
           type: "string",
@@ -2988,13 +2649,11 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         topic: {
           type: "string",
-          description:
-            "Topic slug to aggregate signals + active/retired preference + log events.",
+          description: "Topic slug to aggregate signals + active/retired preference + log events.",
         },
         since: {
           type: "string",
-          description:
-            "ISO-8601 timestamp; returns every Brain log event with timestamp >= since.",
+          description: "ISO-8601 timestamp; returns every Brain log event with timestamp >= since.",
         },
         format: {
           type: "string",
@@ -3018,8 +2677,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agents: {
           type: "array",
           items: { type: "string" },
-          description:
-            "Agent ids to query. Omit or pass [] to query all known agents.",
+          description: "Agent ids to query. Omit or pass [] to query all known agents.",
         },
         topic: {
           type: "string",
@@ -3062,8 +2720,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agents: {
           type: "array",
           items: { type: "string" },
-          description:
-            "Agent ids to compare. Omit or pass [] to compare all known agents.",
+          description: "Agent ids to compare. Omit or pass [] to compare all known agents.",
         },
         topic: {
           type: "string",
@@ -3083,8 +2740,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           maximum: 500,
-          description:
-            "Maximum contributions returned before comparison. Defaults to 50.",
+          description: "Maximum contributions returned before comparison. Defaults to 50.",
         },
       },
       additionalProperties: false,
@@ -3100,8 +2756,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         strict: {
           type: "boolean",
-          description:
-            "When true, warnings demote `ok` to false (CLI exit-code parity).",
+          description: "When true, warnings demote `ok` to false (CLI exit-code parity).",
         },
         format: {
           type: "string",
@@ -3214,8 +2869,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         lookback_days: {
           type: "integer",
           minimum: 1,
-          description:
-            "Days of log history scanned for open questions + notes (default 7).",
+          description: "Days of log history scanned for open questions + notes (default 7).",
         },
         max_chars_per_memory: {
           type: "integer",
@@ -3268,13 +2922,11 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         max_tokens: {
           type: "integer",
           minimum: 1,
-          description:
-            "Strict upper bound on the returned slice's token count.",
+          description: "Strict upper bound on the returned slice's token count.",
         },
         query: {
           type: "string",
-          description:
-            "Optional case/Unicode-insensitive substring filter on topic + principle.",
+          description: "Optional case/Unicode-insensitive substring filter on topic + principle.",
         },
         max_chars_per_memory: {
           type: "integer",
@@ -3311,13 +2963,11 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         receipt: {
           type: "boolean",
-          description:
-            "When true, emit an opt-in context receipt for this context-pack run.",
+          description: "When true, emit an opt-in context receipt for this context-pack run.",
         },
         receipt_host: {
           type: "string",
-          description:
-            "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
+          description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
         },
         telemetry: {
           type: "boolean",
@@ -3326,8 +2976,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         telemetry_host: {
           type: "string",
-          description:
-            "Optional host/runtime name for emitted telemetry; defaults to `mcp`.",
+          description: "Optional host/runtime name for emitted telemetry; defaults to `mcp`.",
         },
         session_id: {
           type: "string",
@@ -3353,8 +3002,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         operation: {
           type: "string",
           enum: ["list", "show"],
-          description:
-            "Use list for summaries, show for one full receipt by id.",
+          description: "Use list for summaries, show for one full receipt by id.",
         },
         id: {
           type: "string",
@@ -3394,8 +3042,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         operation: {
           type: "string",
           enum: ["list", "summary"],
-          description:
-            "Use list for raw records, summary for aggregate counts.",
+          description: "Use list for raw records, summary for aggregate counts.",
         },
         mode: {
           type: "string",
@@ -3445,8 +3092,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         preset_id: {
           type: "string",
-          description:
-            "Preset id for show/diff, e.g. tight-context or long-context.",
+          description: "Preset id for show/diff, e.g. tight-context or long-context.",
         },
         model: {
           type: "string",
@@ -3605,8 +3251,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         session_id: {
           type: "string",
-          description:
-            "Session identifier used for idempotency and source refs.",
+          description: "Session identifier used for idempotency and source refs.",
         },
         turn_start: {
           type: "string",
@@ -3618,15 +3263,13 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         text: {
           type: "string",
-          description:
-            "Bounded text segment to scan for labeled extraction lines.",
+          description: "Bounded text segment to scan for labeled extraction lines.",
         },
         host: { type: "string", description: "Optional host/client label." },
         max_chars: {
           type: "integer",
           minimum: 1,
-          description:
-            "Optional maximum input characters to scan before extracting.",
+          description: "Optional maximum input characters to scan before extracting.",
         },
       },
       required: ["session_id", "turn_start", "turn_end", "text"],
@@ -3663,8 +3306,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_session_describe",
-    description:
-      "Describe counts and summary depths for an imported session recall DAG.",
+    description: "Describe counts and summary depths for an imported session recall DAG.",
     inputSchema: {
       type: "object",
       properties: {
@@ -3727,13 +3369,11 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         receipt: {
           type: "boolean",
-          description:
-            "When true, emit an opt-in context receipt for this pre-compress run.",
+          description: "When true, emit an opt-in context receipt for this pre-compress run.",
         },
         receipt_host: {
           type: "string",
-          description:
-            "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
+          description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
         },
         telemetry: {
           type: "boolean",
@@ -3742,8 +3382,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         telemetry_host: {
           type: "string",
-          description:
-            "Optional host/runtime name for emitted telemetry; defaults to `mcp`.",
+          description: "Optional host/runtime name for emitted telemetry; defaults to `mcp`.",
         },
         session_id: {
           type: "string",
@@ -3792,8 +3431,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         id: {
           type: "string",
-          description:
-            "Target id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
+          description: "Target id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
         },
         include_unlinked: {
           type: "boolean",
@@ -3815,8 +3453,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         id: {
           type: "string",
-          description:
-            "Hub note id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
+          description: "Hub note id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
         },
       },
       required: ["id"],
@@ -3834,8 +3471,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         pref_id: {
           type: "string",
-          description:
-            "Restrict to events for this preference / retired / signal id.",
+          description: "Restrict to events for this preference / retired / signal id.",
         },
         topic: {
           type: "string",
@@ -3843,24 +3479,20 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         kind: {
           type: "string",
-          description:
-            "Restrict to events of this BrainLogEventKind (e.g. `apply-evidence`).",
+          description: "Restrict to events of this BrainLogEventKind (e.g. `apply-evidence`).",
         },
         since: {
           type: "string",
-          description:
-            "Inclusive lower bound (ISO date or ISO timestamp). Defaults to epoch.",
+          description: "Inclusive lower bound (ISO date or ISO timestamp). Defaults to epoch.",
         },
         until: {
           type: "string",
-          description:
-            "Exclusive upper bound (ISO date or ISO timestamp). Defaults to now.",
+          description: "Exclusive upper bound (ISO date or ISO timestamp). Defaults to now.",
         },
         limit: {
           type: "integer",
           minimum: 1,
-          description:
-            "Maximum number of events to return after filtering. Omit for no cap.",
+          description: "Maximum number of events to return after filtering. Omit for no cap.",
         },
       },
       additionalProperties: false,
@@ -3876,8 +3508,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         pref_id: {
           type: "string",
-          description:
-            "Target preference id (e.g. `pref-foo`). Mutually exclusive with `topic`.",
+          description: "Target preference id (e.g. `pref-foo`). Mutually exclusive with `topic`.",
         },
         topic: {
           type: "string",
@@ -3910,8 +3541,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         date: {
           type: "string",
-          description:
-            "ISO date (`YYYY-MM-DD`) the brief targets. Defaults to today UTC.",
+          description: "ISO date (`YYYY-MM-DD`) the brief targets. Defaults to today UTC.",
         },
       },
       additionalProperties: false,
@@ -3952,8 +3582,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         top_actions: {
           type: "integer",
           minimum: 0,
-          description:
-            "Cap on the ranked maintenance action list. Defaults to 5.",
+          description: "Cap on the ranked maintenance action list. Defaults to 5.",
         },
       },
       additionalProperties: false,

@@ -7,10 +7,7 @@ import { listProceduralMemory } from "./procedural-memory.ts";
 import { listPendingSkillProposals } from "./skill-proposals.ts";
 import { listRecurrenceEntries } from "./recurrence.ts";
 
-export type AttentionFlowAction =
-  | "open_proposals"
-  | "high_recurrence"
-  | "active_procedures";
+export type AttentionFlowAction = "open_proposals" | "high_recurrence" | "active_procedures";
 
 export interface AttentionFlowRecipe {
   readonly id: string;
@@ -60,9 +57,7 @@ export function ensureDefaultAttentionFlows(vault: string): void {
   );
 }
 
-export function listAttentionFlows(
-  vault: string,
-): ReadonlyArray<AttentionFlowRecipe> {
+export function listAttentionFlows(vault: string): ReadonlyArray<AttentionFlowRecipe> {
   ensureDefaultAttentionFlows(vault);
   const dir = attentionFlowsDir(vault);
   if (!existsSync(dir)) return Object.freeze([]);
@@ -76,10 +71,7 @@ export function listAttentionFlows(
       const actions = normalizeActions(fm["actions"]);
       out.push({
         id: typeof fm["id"] === "string" ? fm["id"] : name.replace(/\.md$/, ""),
-        title:
-          typeof fm["title"] === "string"
-            ? fm["title"]
-            : name.replace(/\.md$/, ""),
+        title: typeof fm["title"] === "string" ? fm["title"] : name.replace(/\.md$/, ""),
         actions,
         sourcePath: path,
       });
@@ -90,10 +82,7 @@ export function listAttentionFlows(
   return Object.freeze(out);
 }
 
-export function evaluateAttentionFlow(
-  vault: string,
-  flowId: string,
-): AttentionFlowEvaluation {
+export function evaluateAttentionFlow(vault: string, flowId: string): AttentionFlowEvaluation {
   const flow = listAttentionFlows(vault).find((item) => item.id === flowId);
   if (!flow) throw new Error(`attention flow not found: ${flowId}`);
 
@@ -157,8 +146,7 @@ function normalizeActions(value: unknown): ReadonlyArray<AttentionFlowAction> {
       if (allowed.has(action)) out.push(action);
     }
   }
-  if (out.length === 0)
-    return Object.freeze(["open_proposals", "high_recurrence"]);
+  if (out.length === 0) return Object.freeze(["open_proposals", "high_recurrence"]);
   return Object.freeze([...new Set(out)]);
 }
 

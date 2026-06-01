@@ -12,12 +12,7 @@ import {
 } from "./paths.ts";
 import type { ProceduralMemoryEntry } from "./procedural-memory.ts";
 
-export type ProceduralGraphNodeKind =
-  | "procedure"
-  | "skill"
-  | "runbook"
-  | "proposal"
-  | "entity";
+export type ProceduralGraphNodeKind = "procedure" | "skill" | "runbook" | "proposal" | "entity";
 export type ProceduralGraphEdgeKind =
   | "derived_from_proposal"
   | "trigger_matches"
@@ -146,18 +141,13 @@ export function rebuildProceduralGraph(
   return projection;
 }
 
-export function readProceduralGraph(
-  vault: string,
-): ProceduralGraphProjection | null {
+export function readProceduralGraph(vault: string): ProceduralGraphProjection | null {
   const path = proceduralGraphPath(vault);
   if (!existsSync(path)) return null;
   try {
-    const parsed = JSON.parse(
-      readFileSync(path, "utf8"),
-    ) as ProceduralGraphProjection;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as ProceduralGraphProjection;
     if (parsed.schema_version !== 1) return null;
-    if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges))
-      return null;
+    if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return null;
     return parsed;
   } catch {
     return null;
@@ -180,21 +170,13 @@ function readProceduralIndex(vault: string): ProceduralMemoryEntry[] {
   }
 }
 
-function detectProcedureSourceProposal(
-  vault: string,
-  sourcePath: string,
-): string | null {
+function detectProcedureSourceProposal(vault: string, sourcePath: string): string | null {
   if (!sourcePath.startsWith("Brain/procedures/")) return null;
-  const absPath = sourcePath.startsWith("/")
-    ? sourcePath
-    : `${vault}/${sourcePath}`;
+  const absPath = sourcePath.startsWith("/") ? sourcePath : `${vault}/${sourcePath}`;
   if (!existsSync(absPath)) return null;
   try {
     const [fm] = parseFrontmatter(absPath);
-    if (
-      typeof fm["source_proposal"] === "string" &&
-      fm["source_proposal"].trim()
-    ) {
+    if (typeof fm["source_proposal"] === "string" && fm["source_proposal"].trim()) {
       return fm["source_proposal"].trim();
     }
     return null;
@@ -219,10 +201,7 @@ function listProposals(vault: string): ProceduralGraphNode[] {
       try {
         const [fm] = parseFrontmatter(absPath);
         if (fm["kind"] !== "brain-skill-proposal") continue;
-        const id =
-          typeof fm["id"] === "string"
-            ? fm["id"]
-            : `proposal-${basename(name, ".md")}`;
+        const id = typeof fm["id"] === "string" ? fm["id"] : `proposal-${basename(name, ".md")}`;
         out.push({
           id,
           kind: "proposal",
@@ -284,9 +263,7 @@ function entityNodeId(raw: string): string {
     .replace(/^-+|-+$/g, "")}`;
 }
 
-function dedupeEdges(
-  edges: ReadonlyArray<ProceduralGraphEdge>,
-): ProceduralGraphEdge[] {
+function dedupeEdges(edges: ReadonlyArray<ProceduralGraphEdge>): ProceduralGraphEdge[] {
   const out: ProceduralGraphEdge[] = [];
   const seen = new Set<string>();
   for (const edge of edges) {

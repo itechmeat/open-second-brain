@@ -33,10 +33,7 @@ export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";
 export { cmdBrainExport } from "./export.ts";
 export { cmdBrainUpgrade } from "./upgrade.ts";
-export {
-  cmdBrainSnapshotDiff,
-  handleBrainSnapshotSubcommand,
-} from "./snapshot.ts";
+export { cmdBrainSnapshotDiff, handleBrainSnapshotSubcommand } from "./snapshot.ts";
 export { cmdBrainScanInline } from "./scan-inline.ts";
 export { cmdBrainImportSession } from "./import-session.ts";
 export { cmdBrainSessionHook } from "./session-hook.ts";

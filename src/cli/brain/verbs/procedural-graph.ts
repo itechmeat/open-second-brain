@@ -15,9 +15,7 @@ export async function cmdBrainProceduralGraph(argv: string[]): Promise<number> {
   if (sub === "rebuild") return rebuild(rest);
   if (sub === "show") return show(rest);
   if (sub === "hints") return hints(rest);
-  throw new CliError(
-    "brain procedural-graph: expected rebuild, show, or hints",
-  );
+  throw new CliError("brain procedural-graph: expected rebuild, show, or hints");
 }
 
 function rebuild(argv: string[]): number {
@@ -25,10 +23,7 @@ function rebuild(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(
-    flags["vault"] as string | undefined,
-    defaultConfigPath(),
-  );
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
   const graph = rebuildProceduralGraph(vault);
   const hintProjection = rebuildProceduralHints(vault, { graph });
 
@@ -65,15 +60,9 @@ function show(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(
-    flags["vault"] as string | undefined,
-    defaultConfigPath(),
-  );
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
   const graph = readProceduralGraph(vault);
-  if (!graph)
-    throw new CliError(
-      "brain procedural-graph show: graph projection not found",
-    );
+  if (!graph) throw new CliError("brain procedural-graph show: graph projection not found");
 
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(graph, null, 2) + "\n");
@@ -91,15 +80,9 @@ function hints(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(
-    flags["vault"] as string | undefined,
-    defaultConfigPath(),
-  );
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
   const projection = readProceduralHints(vault);
-  if (!projection)
-    throw new CliError(
-      "brain procedural-graph hints: hints projection not found",
-    );
+  if (!projection) throw new CliError("brain procedural-graph hints: hints projection not found");
 
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(projection, null, 2) + "\n");
