@@ -1,40 +1,70 @@
 #!/usr/bin/env bash
-# Entry point Claude Code and Codex call from `hooks/hooks.json`. The
-# only reason this exists separately from `o2b` is path resolution:
-# both runtimes spawn the hook command through /bin/sh with the user's
-# session cwd, and neither one substitutes a `${PLUGIN_ROOT}`-style
-# env var that we could rely on cross-runtime. Putting a thin wrapper
-# on PATH (via `o2b install-cli`) lets `hooks/hooks.json` invoke
-# `o2b-hook <name>` and have it always find the right plugin checkout.
+# Entry point Claude Code and Codex call from `hooks/hooks.json`.
 #
-# The wrapper follows its own symlink back to whichever runtime's
-# checkout `install-cli` pointed it at, then execs the requested hook
-# under Bun. Bun precheck mirrors `scripts/o2b` so the failure modes
-# stay consistent.
+# Resilience contract (see docs/updating.md):
+#   1. FAIL-SOFT. This wrapper must NEVER exit 2 (the only hook exit code
+#      that blocks the agent in Claude Code) and never abort the runtime.
+#      Any internal problem -> warn on stderr and exit 0 (no-op).
+#   2. VERSION-CURRENT RESOLUTION. The plugin checkout root is resolved in
+#      priority order, so a stale ~/.local/bin symlink can never strand the
+#      hook on an old plugin version:
+#        a. $CLAUDE_PLUGIN_ROOT   (Claude Code; always the active version)
+#        b. this wrapper's own realpath dir/.. (Codex / stable dir install)
+#        c. $OSB_PLUGIN_ROOT      (explicit override)
+#      First candidate that actually contains hooks/<name>.ts wins.
+#
+# Because Claude Code reads hooks.json fresh from the active version and
+# substitutes $CLAUDE_PLUGIN_ROOT, shipping (1)+(2) means the NEXT update
+# repairs an already-broken install with no user action.
 #
 # Usage: o2b-hook <hook-basename> [args...]
-#   e.g. o2b-hook stop-log-guardrail
 
-set -euo pipefail
+# NOTE: deliberately no `-e`. We handle every failure explicitly so we can
+# always exit 0; `set -e` could abort before our soft-exit runs.
+set -uo pipefail
 
-SELF=$(realpath -- "${BASH_SOURCE[0]}")
-SCRIPT_DIR=$(cd -- "$(dirname -- "$SELF")" && pwd)
-REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
-
-# shellcheck source=./_bun-precheck.sh
-. "$SCRIPT_DIR/_bun-precheck.sh"
+warn() { printf 'o2b-hook: %s\n' "$1" >&2; }
 
 HOOK_NAME=${1:-}
 if [[ -z $HOOK_NAME ]]; then
-  echo "usage: o2b-hook <hook-name> [args...]" >&2
-  exit 2
+  warn "missing hook name; skipping"
+  exit 0
 fi
 shift
 
-HOOK_FILE="$REPO_ROOT/hooks/$HOOK_NAME.ts"
-if [[ ! -f "$HOOK_FILE" ]]; then
-  echo "o2b-hook: $HOOK_FILE not found" >&2
-  exit 2
+# Resolve the checkout root that actually contains this hook.
+resolve_root() {
+  local cand
+  # a. Claude Code's active plugin dir.
+  if [[ -n ${CLAUDE_PLUGIN_ROOT:-} && -f "${CLAUDE_PLUGIN_ROOT}/hooks/${HOOK_NAME}.ts" ]]; then
+    printf '%s\n' "$CLAUDE_PLUGIN_ROOT"
+    return 0
+  fi
+  # b. This wrapper's own location (follows the symlink to the real checkout).
+  local self
+  if self=$(realpath -- "${BASH_SOURCE[0]}" 2>/dev/null); then
+    cand=$(cd -- "$(dirname -- "$self")/.." 2>/dev/null && pwd || true)
+    if [[ -n $cand && -f "${cand}/hooks/${HOOK_NAME}.ts" ]]; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  fi
+  # c. Explicit override.
+  if [[ -n ${OSB_PLUGIN_ROOT:-} && -f "${OSB_PLUGIN_ROOT}/hooks/${HOOK_NAME}.ts" ]]; then
+    printf '%s\n' "$OSB_PLUGIN_ROOT"
+    return 0
+  fi
+  return 1
+}
+
+ROOT=$(resolve_root) || {
+  warn "could not locate hooks/${HOOK_NAME}.ts (plugin root unresolved); skipping"
+  exit 0
+}
+
+if ! command -v bun >/dev/null 2>&1; then
+  warn "bun not on PATH; skipping ${HOOK_NAME}"
+  exit 0
 fi
 
-exec bun run "$HOOK_FILE" "$@"
+exec bun run "${ROOT}/hooks/${HOOK_NAME}.ts" "$@"
