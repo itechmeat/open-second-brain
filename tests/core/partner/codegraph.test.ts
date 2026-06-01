@@ -157,16 +157,16 @@ describe("checkCodegraph", () => {
     expect(r).toBeNull();
   });
 
-  test("code project + no CLI -> missing", () => {
+  test("code project + no CLI -> skipped (codegraph is optional)", () => {
+    // OSB never installs codegraph; its absence is normal, not a doctor
+    // failure. When the CLI is not on PATH the check is skipped entirely so
+    // `o2b doctor` stays green for the many users without codegraph.
     const repo = makeRepo(join(tmp, "repo"));
     const r = checkCodegraph(
       { cwd: repo, vault: join(tmp, "vault") },
       { whichCodegraph: () => null },
     );
-    expect(r).not.toBeNull();
-    expect(r!.name).toBe("code_graph");
-    expect(r!.ok).toBe(false);
-    expect(r!.message.toLowerCase()).toContain("not installed");
+    expect(r).toBeNull();
   });
 
   test("code project + CLI + no .codegraph/ -> not_indexed", () => {
@@ -228,8 +228,11 @@ describe("checkCodegraph", () => {
 
   test("falls back to real PATH lookup when no whichCodegraph dep provided", () => {
     const repo = makeRepo(join(tmp, "repo"));
+    // No injected dep -> real PATH lookup. The result is environment-dependent
+    // (null when codegraph is not installed, a code_graph result when it is),
+    // so assert only that the fallback wiring runs without throwing and yields
+    // a well-formed value either way.
     const r = checkCodegraph({ cwd: repo, vault: join(tmp, "vault") });
-    expect(r).not.toBeNull();
-    expect(r!.name).toBe("code_graph");
+    expect(r === null || r.name === "code_graph").toBe(true);
   });
 });

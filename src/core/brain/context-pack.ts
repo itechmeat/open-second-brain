@@ -274,7 +274,11 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       const safeAttentionBody = guarded.safeText;
       const tokens = estimateTokens(safeAttentionBody);
       const safetyReport = contextSafetyReport(guarded);
-      if (used + tokens <= opts.maxTokens) {
+      if (!safeAttentionBody.trim()) {
+        // The guard reduced the whole block to nothing - surface nothing
+        // rather than an empty attention-flows item.
+        skipped.push({ id: "attention-flows", tokens: 0, reason: "filter-miss" });
+      } else if (used + tokens <= opts.maxTokens) {
         items.unshift({
           id: "attention-flows",
           path: join(vault, "Brain", "attention", "flows"),

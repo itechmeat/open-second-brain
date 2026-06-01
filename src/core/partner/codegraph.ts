@@ -30,7 +30,6 @@ const CODE_MANIFESTS: ReadonlyArray<string> = [
 ];
 
 const DEFAULT_LIMIT = 50;
-const CODEGRAPH_REPO = "https://github.com/colbymchenry/codegraph";
 
 function isDir(path: string): boolean {
   try {
@@ -171,12 +170,14 @@ function defaultRunStatusJson(projectPath: string): CodegraphStatusResult {
 }
 
 /**
- * Doctor-grade check for codegraph partnership. Returns `null` when
- * the current scope is not a code project (so the doctor printer can
- * stay quiet) or when the user has explicitly disabled the check.
+ * Doctor-grade check for codegraph partnership. Returns `null` (skip,
+ * no doctor output) when the current scope is not a code project, when the
+ * user has explicitly disabled the check, or when the codegraph CLI is not
+ * installed — codegraph is an optional partner OSB never installs, so its
+ * absence must not fail doctor.
  *
  * Non-null results carry a single `code_graph` `CheckResult` describing
- * one of four states: `missing`, `not_indexed`, `ok`, or `error`.
+ * one of three states: `not_indexed`, `ok`, or `error`.
  */
 export function checkCodegraph(
   opts: CodegraphCheckOptions,
@@ -192,11 +193,10 @@ export function checkCodegraph(
   const cliPath = whichFn();
 
   if (!cliPath) {
-    return {
-      name: "code_graph",
-      ok: false,
-      message: `code project at ${project}: codegraph not installed (install: ${CODEGRAPH_REPO})`,
-    };
+    // codegraph is an optional partner OSB never installs. If the CLI is not
+    // on PATH there is nothing to check — skip silently rather than failing
+    // doctor, so `o2b doctor` stays green for users (and CI) without codegraph.
+    return null;
   }
 
   const indexDir = join(project, ".codegraph");

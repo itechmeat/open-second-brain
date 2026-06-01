@@ -32,10 +32,10 @@
 - **Depends on**: none
 
 ### Task 5: hard update-safety instruction
-- **Files**: `CLAUDE.md`, `AGENTS.md` (mirror), `docs/updating.md` (new), `README.md` pointer
+- **Files**: `docs/updating.md` (new, canonical), `hooks/README.md` (resolution + invariants), `README.md` pointer. (This repo has no `CLAUDE.md`/`AGENTS.md`; agent-facing instructions live in `docs/` + `hooks/README.md`, linked from README.)
 - **Acceptance**:
   - A documented invariant set: updates must not require manual symlink surgery; hooks must fail-soft (never exit 2); CLI/hook resolution self-heals after update.
-  - `diff CLAUDE.md AGENTS.md` differs only on the title/audience lines.
+  - The invariants are referenced from the code's docs path so future edits see them.
 - **Depends on**: Tasks 1-4 (document the shipped behavior)
 
 ### Task 6: QA + release

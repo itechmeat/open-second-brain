@@ -67,4 +67,13 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 0
 fi
 
-exec bun run "${ROOT}/hooks/${HOOK_NAME}.ts" "$@"
+# Do NOT exec: capture the hook's exit so a hook that itself exits non-zero
+# (e.g. 2) can never bubble out and block the agent. Stdout still passes
+# through (hooks that emit JSON decisions on stdout keep working). The
+# wrapper always exits 0 - the fail-soft contract.
+bun run "${ROOT}/hooks/${HOOK_NAME}.ts" "$@"
+status=$?
+if [[ $status -ne 0 ]]; then
+  warn "hook ${HOOK_NAME} exited ${status}; suppressed to keep the runtime unblocked"
+fi
+exit 0

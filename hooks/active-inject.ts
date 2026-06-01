@@ -35,17 +35,6 @@ import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 
 async function main(): Promise<void> {
-  // Self-heal on session start: a plugin update rotates the versioned install
-  // dir, which can leave ~/.local/bin/o2b* symlinks dangling or pointing at an
-  // old version. This hook runs from the CURRENT checkout (resolved via
-  // $CLAUDE_PLUGIN_ROOT), so it can repoint them with no user action. Strictly
-  // best-effort: it never affects preference injection below.
-  try {
-    healCliSymlinks();
-  } catch {
-    // ignore — healing is opportunistic and must never disrupt the session
-  }
-
   let payload;
   try {
     payload = asHookPayload(await readHookInput());
@@ -65,6 +54,19 @@ async function main(): Promise<void> {
     typeof payload.hook_event_name === "string" && payload.hook_event_name.length > 0
       ? payload.hook_event_name
       : "SessionStart";
+
+  // Self-heal the ~/.local/bin CLI symlinks on SessionStart only: a plugin
+  // update can leave them dangling or pointing at an old version. Runs from
+  // the current checkout (resolved via $CLAUDE_PLUGIN_ROOT); strictly
+  // best-effort, and gated to SessionStart so PostCompact does not trigger
+  // avoidable filesystem side effects. Never affects the injection below.
+  if (hookEventName === "SessionStart") {
+    try {
+      healCliSymlinks();
+    } catch {
+      // ignore — opportunistic; must never disrupt the session
+    }
+  }
 
   const vault = resolveVault();
   if (vault === null) return;

@@ -68,6 +68,14 @@ describe("o2b-hook resilience", () => {
     expect(r.stderr).toContain("could not locate");
   });
 
+  test("a hook that exits 2 is suppressed to exit 0 (never blocks)", () => {
+    const root = freshRoot(null);
+    writeFileSync(join(root, "hooks", "boom.ts"), `process.exit(2);\n`);
+    const r = runHook(WRAPPER, ["boom"], { CLAUDE_PLUGIN_ROOT: root });
+    expect(r.status).toBe(0);
+    expect(r.status).not.toBe(2);
+  });
+
   test("CLAUDE_PLUGIN_ROOT wins over a stale wrapper location (heals broken install)", () => {
     // Simulate the broken Mac: a ~/.local/bin symlink that points into an OLD
     // checkout which lacks the hook, while Claude Code passes the current root.

@@ -114,11 +114,31 @@ describe("installCli (idempotent reclaim, no manual rm)", () => {
 });
 
 describe("healCliSymlinks", () => {
-  test("heals a dangling symlink", () => {
-    symlinkSync(join(tmp, "gone", "scripts", "o2b"), join(tmp, "o2b"));
+  test("heals a dangling symlink that points into a plugin cache", () => {
+    const cacheTarget = join(
+      tmp,
+      "home",
+      ".claude",
+      "plugins",
+      "cache",
+      "open-second-brain",
+      "open-second-brain",
+      "0.0.9",
+      "scripts",
+      "o2b",
+    );
+    symlinkSync(cacheTarget, join(tmp, "o2b")); // target does not exist (dangling)
     const r = healCliSymlinks(tmp);
     expect(r.outcomes.some(([n, m]) => n === "o2b" && m.startsWith("healed:"))).toBe(true);
     expect(existsSync(realpathSync(join(tmp, "o2b")))).toBe(true);
+  });
+
+  test("leaves a dangling symlink that is not under a plugin cache alone", () => {
+    // Could be a broken stable-dir install; automatic repair must not hijack it.
+    symlinkSync(join(tmp, "gone", "scripts", "o2b"), join(tmp, "o2b"));
+    const r = healCliSymlinks(tmp);
+    expect(r.outcomes.length).toBe(0);
+    expect(lstatSync(join(tmp, "o2b")).isSymbolicLink()).toBe(true);
   });
 
   test("heals an OSB symlink that lives inside a plugin cache", () => {

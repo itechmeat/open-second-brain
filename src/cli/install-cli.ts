@@ -209,11 +209,14 @@ export function healCliSymlinks(bindir?: string): InstallResult {
     if (!isLink(link)) continue; // absent, or a real file we must not touch
     if (isValidSymlink(link, source)) continue; // already current
 
-    const dangling = !linkResolves(link);
+    // Only auto-heal a link whose stored target is clearly OURS and lives in a
+    // version-rotating plugin cache (works for dangling links too, since the
+    // stored target is read via readlink). A dangling link that points at a
+    // stable-dir or foreign install is left alone - automatic repair must not
+    // hijack installs it does not own.
     const abs = absoluteTarget(link);
-    const reclaimable =
-      dangling || (abs !== null && looksLikeOsbScript(abs, name) && underPluginCache(abs));
-    if (!reclaimable) continue; // foreign or stable-dir install: leave it
+    const reclaimable = abs !== null && looksLikeOsbScript(abs, name) && underPluginCache(abs);
+    if (!reclaimable) continue;
 
     try {
       unlinkSync(link);
