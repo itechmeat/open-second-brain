@@ -21,6 +21,7 @@ from typing import Any
 
 from . import config
 from .bridge import BrainBridge, FakeBrainBridge, McpBrainBridge
+from .cli import register_cli
 from .provider import OpenSecondBrainMemoryProvider
 
 PLUGIN_NAME = config.PLUGIN_NAME
@@ -98,6 +99,7 @@ __all__ = [
     "health",
     "check_health",
     "register",
+    "register_cli",
     "OpenSecondBrainMemoryProvider",
     "BrainBridge",
     "McpBrainBridge",

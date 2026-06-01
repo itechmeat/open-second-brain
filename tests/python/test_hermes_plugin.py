@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from plugins.hermes import check_health, health, register  # noqa: E402
+from plugins.hermes import check_health, health, register, register_cli  # noqa: E402
 from plugins.hermes import config as cfg  # noqa: E402
 from plugins.hermes.provider import OpenSecondBrainMemoryProvider  # noqa: E402
 
@@ -98,6 +98,10 @@ class RegisterTests(unittest.TestCase):
 
         # A ctx exposing neither hook must be ignored, not fatal.
         register(Context())
+
+    def test_register_cli_is_reexported(self):
+        # Hermes may discover CLI registration at package level; keep it exported.
+        self.assertTrue(callable(register_cli))
 
     def test_no_pre_llm_call_hook_registered(self):
         registered: list[str] = []

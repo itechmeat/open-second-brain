@@ -192,6 +192,9 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             except Exception:  # noqa: BLE001 - a turn must never fail on capture
                 pass
 
+        # Drop references to finished capture threads so the list cannot grow
+        # unbounded across a long-lived session.
+        self._sync_threads = [t for t in self._sync_threads if t.is_alive()]
         thread = threading.Thread(target=_work, daemon=True)
         self._sync_threads.append(thread)
         thread.start()
