@@ -31,6 +31,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { resolveVault } from "../src/core/config.ts";
 import { brainActivePath } from "../src/core/brain/paths.ts";
+import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 
 async function main(): Promise<void> {
@@ -53,6 +54,19 @@ async function main(): Promise<void> {
     typeof payload.hook_event_name === "string" && payload.hook_event_name.length > 0
       ? payload.hook_event_name
       : "SessionStart";
+
+  // Self-heal the ~/.local/bin CLI symlinks on SessionStart only: a plugin
+  // update can leave them dangling or pointing at an old version. Runs from
+  // the current checkout (resolved via $CLAUDE_PLUGIN_ROOT); strictly
+  // best-effort, and gated to SessionStart so PostCompact does not trigger
+  // avoidable filesystem side effects. Never affects the injection below.
+  if (hookEventName === "SessionStart") {
+    try {
+      healCliSymlinks();
+    } catch {
+      // ignore — opportunistic; must never disrupt the session
+    }
+  }
 
   const vault = resolveVault();
   if (vault === null) return;

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "o2b-hook session-capture",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing brain_feedback lifecycle event"
           }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "o2b-hook post-write-reminder",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" post-write-reminder; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook post-write-reminder; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: reminding to log signals/evidence"
           }
@@ -30,13 +30,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "o2b-hook active-inject",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" active-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook active-inject; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: injecting active preferences"
           },
           {
             "type": "command",
-            "command": "o2b-hook session-capture",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing session start"
           }
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "o2b-hook session-capture",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing prompt markers"
           }
@@ -62,13 +62,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "o2b-hook session-capture",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing session stop"
           },
           {
             "type": "command",
-            "command": "o2b-hook stop-log-guardrail",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" stop-log-guardrail; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook stop-log-guardrail; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: checking stop log guardrail"
           }
@@ -81,7 +81,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "o2b-hook session-capture",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing session end"
           }
@@ -94,13 +94,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "o2b-hook active-inject",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" active-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook active-inject; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: re-injecting active preferences after compact"
           },
           {
             "type": "command",
-            "command": "o2b-hook session-capture",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing post-compact lifecycle event"
           }

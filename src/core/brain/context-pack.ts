@@ -27,14 +27,8 @@ import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget } from "./recall-budget.ts";
-import {
-  emitContextReceipt,
-  type ContextReceiptOptions,
-} from "./context-receipts.ts";
-import {
-  emitRecallTelemetry,
-  type RecallTelemetryOptions,
-} from "./recall-telemetry.ts";
+import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
+import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
 import {
   applyContextTransforms,
   type ContextTransformOptions,
@@ -71,11 +65,7 @@ export interface ContextPackItem extends ContextTransformAnnotations {
 export interface ContextPackSkipped {
   readonly id: string;
   readonly tokens: number;
-  readonly reason:
-    | "over-budget"
-    | "filter-miss"
-    | "guard-blocked"
-    | "over-char-budget";
+  readonly reason: "over-budget" | "filter-miss" | "guard-blocked" | "over-char-budget";
 }
 
 export interface ContextPackReport {
@@ -166,11 +156,9 @@ function collectCandidates(vault: string): Candidate[] {
       } catch {
         continue;
       }
-      const id =
-        typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
+      const id = typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
       const tier = readTier(meta);
-      const created =
-        typeof meta["created_at"] === "string" ? meta["created_at"] : "";
+      const created = typeof meta["created_at"] === "string" ? meta["created_at"] : "";
       let fallbackMtimeMs = 0;
       if (!created) {
         try {
@@ -181,8 +169,7 @@ function collectCandidates(vault: string): Candidate[] {
       }
       const createdAtMs = created ? Date.parse(created) : fallbackMtimeMs;
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
-      const principle =
-        typeof meta["principle"] === "string" ? meta["principle"] : "";
+      const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
       const contextLane = normalizeContextLane(meta["context_lane"]);
       const guarded = guardBrainContextSnippet(body, {
         source: { id, path: full, metadata: meta },
@@ -205,19 +192,14 @@ function collectCandidates(vault: string): Candidate[] {
         contextLane,
         body: guarded.safeText,
         tokens: estimateTokens(guarded.safeText),
-        ...(contextSafetyReport(guarded)
-          ? { safety: contextSafetyReport(guarded) }
-          : {}),
+        ...(contextSafetyReport(guarded) ? { safety: contextSafetyReport(guarded) } : {}),
       });
     }
   }
   return out;
 }
 
-export function packContext(
-  vault: string,
-  opts: ContextPackOptions,
-): ContextPackReport {
+export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport {
   const startedAtMs = Date.now();
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
     return finalizeContextPackReport(
@@ -284,44 +266,37 @@ export function packContext(
   }
 
   if (opts.attentionFlowIds && opts.attentionFlowIds.length > 0) {
-    const attentionBody = buildAttentionContextBlock(
-      vault,
-      opts.attentionFlowIds,
-    );
+    const attentionBody = buildAttentionContextBlock(vault, opts.attentionFlowIds);
     if (attentionBody && attentionBody.trim()) {
       const guarded = guardBrainContextSnippet(attentionBody, {
-        path: join(vault, "Brain", "attention", "flows"),
-        contextLane: "directive",
+        source: { id: "attention-flows", path: join(vault, "Brain", "attention", "flows") },
       });
-      if (!guarded.allowed) {
+      const safeAttentionBody = guarded.safeText;
+      const tokens = estimateTokens(safeAttentionBody);
+      const safetyReport = contextSafetyReport(guarded);
+      if (!safeAttentionBody.trim()) {
+        // The guard reduced the whole block to nothing - surface nothing
+        // rather than an empty attention-flows item.
+        skipped.push({ id: "attention-flows", tokens: 0, reason: "filter-miss" });
+      } else if (used + tokens <= opts.maxTokens) {
+        items.unshift({
+          id: "attention-flows",
+          path: join(vault, "Brain", "attention", "flows"),
+          tier: PAGE_TIER.core,
+          tokens,
+          body: safeAttentionBody,
+          principle: "Declarative attention flow output",
+          contextLane: "directives",
+          trimmed: false,
+          ...(safetyReport ? { safety: safetyReport } : {}),
+        });
+        used += tokens;
+      } else {
         skipped.push({
           id: "attention-flows",
-          tokens: estimateTokens(attentionBody),
-          reason: "guard-blocked",
+          tokens,
+          reason: "over-budget",
         });
-      } else {
-        const safeAttentionBody = guarded.sanitized;
-        const tokens = estimateTokens(safeAttentionBody);
-        if (used + tokens <= opts.maxTokens) {
-          items.unshift({
-            id: "attention-flows",
-            path: join(vault, "Brain", "attention", "flows"),
-            tier: PAGE_TIER.core,
-            tokens,
-            body: safeAttentionBody,
-            principle: "Declarative attention flow output",
-            contextLane: "directive",
-            trimmed: false,
-            ...(guarded.report ? { safety: guarded.report } : {}),
-          });
-          used += tokens;
-        } else {
-          skipped.push({
-            id: "attention-flows",
-            tokens,
-            reason: "over-budget",
-          });
-        }
       }
     }
   }
@@ -368,10 +343,7 @@ export function packContext(
   }
 
   const finalItems = applyContextTransforms(items, opts.transforms);
-  const finalTokensUsed = finalItems.reduce(
-    (sum, item) => sum + item.tokens,
-    0,
-  );
+  const finalTokensUsed = finalItems.reduce((sum, item) => sum + item.tokens, 0);
   return finalizeContextPackReport(
     vault,
     opts,
@@ -424,9 +396,7 @@ function finalizeContextPackReport(
       status: report.items.length > 0 ? "ok" : "empty",
       durationMs: Date.now() - startedAtMs,
       resultCount: report.items.length,
-      topArtifacts: report.items
-        .slice(0, 10)
-        .map((item) => ({ id: item.id, path: item.path })),
+      topArtifacts: report.items.slice(0, 10).map((item) => ({ id: item.id, path: item.path })),
       gaps: contextPackGaps(report),
       metadata: {
         ...(opts.telemetry.metadata ?? {}),
@@ -451,17 +421,13 @@ function contextPackBudgetMetadata(
     ...(opts.maxCharsPerMemory !== undefined
       ? { max_chars_per_memory: opts.maxCharsPerMemory }
       : {}),
-    ...(opts.maxTotalChars !== undefined
-      ? { max_total_chars: opts.maxTotalChars }
-      : {}),
+    ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
   };
 }
 
 function contextPackGaps(report: ContextPackReport): ReadonlyArray<string> {
   const gaps = new Set<string>();
-  if (report.items.length === 0 && report.skipped.length === 0)
-    gaps.add("no_matching_context");
-  for (const skipped of report.skipped)
-    gaps.add(skipped.reason.replace(/-/g, "_"));
+  if (report.items.length === 0 && report.skipped.length === 0) gaps.add("no_matching_context");
+  for (const skipped of report.skipped) gaps.add(skipped.reason.replace(/-/g, "_"));
   return [...gaps];
 }

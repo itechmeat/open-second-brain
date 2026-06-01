@@ -148,13 +148,18 @@ describe("doctor aggregator", () => {
     expect(results.some((r) => r.name === "code_graph")).toBe(false);
   });
 
-  test("includes code_graph when cwd is a code project", () => {
+  test("includes code_graph for a code project only when codegraph is installed", () => {
     const repo = join(tmp, "myrepo");
     mkdirSync(join(repo, ".git"), { recursive: true });
     writeFileSync(join(repo, "package.json"), "{}\n");
     const vaultDir = join(tmp, "vault");
     mkdirSync(vaultDir);
     const results = doctor({ vault: vaultDir, cwd: repo });
-    expect(results.some((r) => r.name === "code_graph")).toBe(true);
+    // codegraph is an optional partner: the check appears for a code project
+    // only when the CLI is actually installed (it is skipped otherwise), so
+    // this stays hermetic whether or not the runner has codegraph.
+    const codegraphInstalled =
+      (Bun as unknown as { which: (c: string) => string | null }).which("codegraph") !== null;
+    expect(results.some((r) => r.name === "code_graph")).toBe(codegraphInstalled);
   });
 });

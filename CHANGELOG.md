@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.1] - 2026-06-01
+
+Update-resilience and repair. Plugin updates no longer strand the hooks or
+require manual symlink surgery, a broken attention-flow guard integration is
+fixed, and CI now gates formatting, lint, types, and tests on every pull
+request so regressions cannot merge to `main` again.
+
+### Fixed
+
+- Hooks are now fail-soft and version-current. `scripts/o2b-hook` never exits 2
+  (the only hook exit code Claude Code treats as blocking) and resolves the
+  plugin checkout from `$CLAUDE_PLUGIN_ROOT` first, then its own location, then
+  `$OSB_PLUGIN_ROOT`. `hooks/hooks.json` commands resolve the launcher via
+  `$CLAUDE_PLUGIN_ROOT` with a PATH fallback for Codex and always `exit 0`, so a
+  stale `~/.local/bin` symlink left by a previous version can no longer block
+  the agent - and the next update repairs an already-broken install with no
+  user action.
+- `o2b install-cli` re-points a dangling or stale Open Second Brain symlink to
+  the current checkout instead of erroring (no manual `rm`), while still
+  refusing to touch a real file or a symlink owned by another tool.
+- Repaired the `attention_flow_ids` context-pack path, which called the context
+  safety guard with a stale API shape and failed to typecheck (and would have
+  thrown at runtime).
+
+### Added
+
+- Automatic CLI symlink self-heal: the `SessionStart` hook repairs dangling or
+  plugin-cache-stale `~/.local/bin/{o2b,o2b-hook,vault-log}` symlinks from the
+  current checkout, leaving stable-directory installs and foreign symlinks
+  untouched.
+- A `CI` workflow that runs `sync-version:check`, `fmt:check`, lint, typecheck,
+  and the full test suite on every pull request and push to `main`.
+- [`docs/updating.md`](docs/updating.md): the update-safety contract and the
+  invariants any change to the hooks, launcher, or `install-cli` must preserve.
+- Optional local git hooks under `.githooks/` (enabled via `core.hooksPath` by
+  the `prepare` script or `bun run hooks:install`): `fmt:check` + lint on
+  pre-commit and typecheck on pre-push. The required `CI` check stays the
+  enforced gate; the hooks just catch issues earlier and are bypassable with
+  `--no-verify`.
+
+### Notes
+
+- Applied the `oxfmt` baseline to files that had merged unformatted in 0.29.0-0.31.0.
+
 ## [0.31.0] - 2026-06-01
 
 Procedural attention suite. The procedural-learning foundations gain an operator-visible attention layer and stronger ingestion controls: deterministic procedural graph and hint projections, declarative attention-flow recipes for open loops and recurrent learnings, and scoped session import with a filtered write mode. Behavior stays local-first and review-first, and the new surfaces are exposed consistently across CLI and MCP.
@@ -3701,6 +3745,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.31.1]: https://github.com/itechmeat/open-second-brain/compare/v0.31.0...v0.31.1
 [0.30.0]: https://github.com/itechmeat/open-second-brain/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/itechmeat/open-second-brain/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/itechmeat/open-second-brain/compare/v0.27.0...v0.28.0

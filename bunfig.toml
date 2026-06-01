@@ -1,0 +1,3 @@
+[test]
+# Hermetic default config/vault for the whole suite. See tests/setup.ts.
+preload = ["./tests/setup.ts"]

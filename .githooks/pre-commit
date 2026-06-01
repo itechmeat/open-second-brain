@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pre-commit gate: never commit unformatted or lint-erroring code.
+# Enabled via `git config core.hooksPath .githooks` (wired by the package
+# `prepare` script on `bun install`, or `bun run hooks:install`).
+#
+# This is a fast local guard, not the source of truth - CI's required
+# `validate` check enforces the same on every PR. Bypass in a pinch with
+# `git commit --no-verify`.
+set -euo pipefail
+
+SELF=$(realpath -- "${BASH_SOURCE[0]}")
+REPO=$(cd -- "$(dirname -- "$SELF")/.." && pwd)
+cd -- "$REPO"
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "pre-commit: bun not on PATH; skipping fmt/lint checks" >&2
+  exit 0
+fi
+
+echo "pre-commit: bun run fmt:check" >&2
+if ! bun run fmt:check; then
+  echo "pre-commit: formatting check failed - run 'bun run fmt' and re-stage." >&2
+  exit 1
+fi
+
+echo "pre-commit: bun run lint" >&2
+bun run lint
