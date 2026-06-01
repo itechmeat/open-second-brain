@@ -60,7 +60,7 @@ o2b brain init --vault /path/to/your-vault --primary-agent <agent-name>
 o2b doctor --vault /path/to/your-vault
 ```
 
-Register the MCP server in `~/.hermes/config.yaml` and restart the gateway one more time - the agent now reads `Brain/active.md` on every session start and writes signals through `brain_feedback`. Full step-by-step including MCP wiring: [`install/hermes.md`](install/hermes.md).
+Enable Open Second Brain as the memory provider in `~/.hermes/config.yaml` (`memory.provider: open-second-brain`) and restart the gateway one more time - the agent now injects `Brain/active.md` into its system prompt, recalls context before each turn, and writes signals through `brain_feedback`, all through the one native provider. Full step-by-step: [`install/hermes.md`](install/hermes.md).
 
 ## Other runtimes
 

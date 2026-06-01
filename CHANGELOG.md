@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-06-01
+
+Open Second Brain is now a native Hermes memory provider. The Hermes
+integration is consolidated into one mechanism: a Python `MemoryProvider` that
+bridges to the existing `o2b mcp` server over JSON-RPC, replacing the separate
+`pre_llm_call` shim and the standalone `mcp_servers` registration. Claude Code
+and Codex are unchanged - their canonical path is still MCP plus hooks.
+
+### Added
+
+- `plugins/hermes` memory provider (`provider.py`, `bridge.py`, `config.py`,
+  `_base.py`, `cli.py`): implements the Hermes `MemoryProvider` contract -
+  `get_tool_schemas`/`handle_tool_call` over a curated `brain_*` subset,
+  `system_prompt_block` from `Brain/active.md`, `prefetch` (recall gate plus the
+  per-turn identity reminder), non-blocking `sync_turn` buffering, deterministic
+  `on_pre_compress`/`on_session_end` flush via `brain_pre_compact_extract`,
+  `on_memory_write` mirroring of Hermes `MEMORY.md`/`USER.md` into `Brain/`, and
+  `shutdown`.
+- `hermes open-second-brain status` / `config` diagnostics CLI.
+
+### Changed
+
+- `register(ctx)` now wires the memory provider via `register_memory_provider`
+  alongside the health check.
+- Both Hermes manifests declare the memory provider and the lifecycle hooks it
+  implements instead of `provides_hooks: [pre_llm_call]` and an `mcp_server`
+  block.
+- `install/hermes.md` documents enabling `memory.provider: open-second-brain`
+  (via `hermes memory setup`) instead of a manual `mcp_servers` edit.
+
+### Removed
+
+- The Hermes-only `pre_llm_call` hook: its per-turn identity reminder is now
+  carried by the provider's `prefetch`.
+
+### Notes
+
+- The bridge restarts the `o2b mcp` subprocess only on a transport failure
+  (EOF / broken pipe); a JSON-RPC error response (e.g. invalid tool arguments)
+  propagates unchanged. Behaviour is locked by `tests/python/test_memory_provider.py`
+  and `tests/python/test_hermes_plugin.py`.
+
 ## [0.31.2] - 2026-06-01
 
 Hands-off post-upgrade migration. After an update, the plugin now brings an
