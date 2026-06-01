@@ -15,6 +15,7 @@ Resolution order mirrors ``src/core/config.ts`` exactly:
 from __future__ import annotations
 
 import os
+import json
 import re
 from pathlib import Path
 
@@ -65,16 +66,22 @@ def _config_value(*keys: str) -> str | None:
     if text is None:
         return None
     alternation = "|".join(re.escape(k) for k in keys)
-    pattern = re.compile(
-        rf"^\s*(?:{alternation})\s*:\s*['\"]?([^'\"\n]+?)['\"]?\s*$",
-        re.MULTILINE,
-    )
+    pattern = re.compile(rf"^\s*(?:{alternation})\s*:\s*(.+?)\s*$", re.MULTILINE)
     match = pattern.search(text)
-    if match:
-        value = match.group(1).strip()
-        if value:
-            return value
-    return None
+    if not match:
+        return None
+    raw = match.group(1).strip()
+    if not raw:
+        return None
+    # `save_config` writes a JSON-encoded double-quoted scalar (valid YAML), so
+    # decode that form to recover embedded quotes / backslashes; fall back to a
+    # bare or single-quoted scalar for hand-written or TypeScript-written config.
+    if raw.startswith('"'):
+        try:
+            return json.loads(raw) or None
+        except json.JSONDecodeError:
+            return raw.strip('"') or None
+    return raw.strip("'") or None
 
 
 def resolve_agent_name() -> str:

@@ -150,16 +150,21 @@ class McpBrainBridge:
             return
         self._proc = self._spawn(self._argv())
         self._client = JsonRpcStdioClient(self._proc.stdin, self._proc.stdout)
-        self._client.request(
-            "initialize",
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": CLIENT_NAME, "version": "1"},
-            },
-        )
-        self._client.notify("notifications/initialized")
-        result = self._client.request("tools/list", {})
+        try:
+            self._client.request(
+                "initialize",
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": CLIENT_NAME, "version": "1"},
+                },
+            )
+            self._client.notify("notifications/initialized")
+            result = self._client.request("tools/list", {})
+        except BaseException:
+            # A failed handshake must not leak the spawned process.
+            self.stop()
+            raise
         self._tools = list((result or {}).get("tools", []))
         self._started = True
 
@@ -195,6 +200,11 @@ class McpBrainBridge:
             kill = getattr(proc, "kill", None)
             if callable(kill):
                 kill()
+            # Reap the killed child so it cannot linger as a zombie.
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _ensure_started(self) -> None:
         if not self._started:

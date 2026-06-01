@@ -80,6 +80,13 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         """Start the bridge to the TS core. Fail-soft: never break gateway boot."""
         self._session_id = session_id or ""
         self._hermes_home = kwargs.get("hermes_home")
+        if self._bridge is not None:
+            # Re-initialization (a new session on a reused instance) must not
+            # leak the previous bridge's subprocess.
+            try:
+                self._bridge.stop()
+            except Exception:  # noqa: BLE001
+                pass
         self._bridge = self._bridge_override or McpBrainBridge(vault=config.resolve_vault())
         try:
             self._bridge.start()
@@ -100,6 +107,9 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         """Forward an agent tool invocation to the TS core over the bridge."""
         if self._bridge is None:
             raise BridgeError("memory provider not initialized")
+        if tool_name not in MEMORY_TOOLS:
+            # Enforce the curated surface at execution time, not just discovery.
+            raise BridgeError(f"unsupported memory tool: {tool_name}")
         return self._bridge.call_tool(tool_name, args or {})
 
     def get_config_schema(self) -> list[dict[str, Any]]:
@@ -134,7 +144,9 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             value = values.get(key)
             if not value:
                 continue
-            new_line = f'{key}: "{value}"'
+            # Serialize as a JSON scalar (valid YAML) so quotes, backslashes
+            # (Windows paths), and newlines cannot corrupt the shared config.
+            new_line = f"{key}: {json.dumps(str(value), ensure_ascii=False)}"
             key_re = re.compile(rf"^\s*{re.escape(key)}\s*:")
             for i, line in enumerate(lines):
                 if key_re.match(line):
@@ -201,10 +213,12 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
 
     def on_pre_compress(self, messages: list, **_kwargs: Any) -> None:
         """Flush buffered turns into deterministic continuity storage before compaction."""
+        self._drain_captures()
         self._flush_buffer()
 
     def on_session_end(self, messages: list, **_kwargs: Any) -> None:
         """Flush any remaining buffered turns at session close."""
+        self._drain_captures()
         self._flush_buffer()
 
     def on_memory_write(self, action: str, target: str, content: str, **_kwargs: Any) -> None:
@@ -213,8 +227,9 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._safe_call("brain_note", {"text": text})
 
     def shutdown(self) -> None:
-        """Join capture threads and stop the bridge. Never raises."""
-        self._await_sync_for_tests()
+        """Drain captures, flush, and stop the bridge. Never raises."""
+        self._drain_captures()
+        self._flush_buffer()
         if self._bridge is not None:
             try:
                 self._bridge.stop()
@@ -288,8 +303,10 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             },
         )
 
-    def _await_sync_for_tests(self) -> None:
-        """Join outstanding capture threads (deterministic for tests; safe always)."""
+    def _drain_captures(self) -> None:
+        """Join outstanding capture threads so a turn buffered just before a
+        flush still reaches storage. Safe to call any time; used by the
+        lifecycle hooks and by tests for determinism."""
         for thread in list(self._sync_threads):
             thread.join(timeout=5)
         self._sync_threads.clear()

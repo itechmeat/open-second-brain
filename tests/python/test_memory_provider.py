@@ -203,6 +203,26 @@ class ProviderRequiredSurfaceTests(unittest.TestCase):
         self.assertIn('timezone: "UTC"', text)
         self.assertIn('existing_key: "keep"', text)
 
+    def test_handle_tool_call_rejects_non_allowlisted_tool(self):
+        bridge = FakeBrainBridge(results={"brain_dream": {"ok": True}})
+        provider = self._provider(bridge)
+        provider.initialize("s", hermes_home="/tmp/hh")
+        with self.assertRaises(BridgeError):
+            provider.handle_tool_call("brain_dream", {})
+        self.assertEqual(bridge.calls, [])  # never reached the bridge
+
+    def test_save_config_encodes_windows_path_safely(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_path)
+            provider = self._provider(FakeBrainBridge())
+            win = 'C:\\Users\\me\\My "Special" Vault'
+            provider.save_config({"vault": win}, tmp)
+            # Round-trips through the writer (JSON scalar) and the reader, even
+            # with backslashes and embedded quotes that would corrupt a raw
+            # interpolation. Asserted inside the tempdir so the file still exists.
+            self.assertEqual(cfg.resolve_vault(), win)
+
 
 class CliTests(unittest.TestCase):
     _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
@@ -324,7 +344,7 @@ class ProviderLifecycleTests(unittest.TestCase):
         provider = self._init(bridge, hermes_home="/tmp/hh")
         provider.sync_turn("u1", "a1", session_id="sess-1")
         provider.sync_turn("u2", "a2", session_id="sess-1")
-        provider._await_sync_for_tests()
+        provider._drain_captures()
         provider.on_pre_compress([])
         extract_calls = [a for n, a in bridge.calls if n == "brain_pre_compact_extract"]
         self.assertEqual(len(extract_calls), 1)
@@ -358,7 +378,7 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertEqual(provider.system_prompt_block(), "")
         self.assertIn("@safe-agent", provider.prefetch("q"))
         provider.sync_turn("u", "a")
-        provider._await_sync_for_tests()
+        provider._drain_captures()
         provider.on_pre_compress([])
         provider.on_session_end([])
         provider.on_memory_write("update", "USER.md", "x")

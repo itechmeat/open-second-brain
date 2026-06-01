@@ -1,7 +1,7 @@
 # Native Hermes memory provider - consolidate Hermes integration
 
 **Status:** draft
-**Author:** claude-dev-agent (via feature-release-playbook)
+**Author:** feature-release-playbook
 **Audience:** implementation
 
 ## Problem statement
