@@ -33,20 +33,20 @@ function entityFile(name: string, lines: string[]): void {
 
 describe("doctor entity lints", () => {
   test("clean registry produces no entity issues", () => {
-    upsertEntity(vault, { category: "people", name: "Sergey", agent: "a", now: NOW });
+    upsertEntity(vault, { category: "people", name: "Ada", agent: "a", now: NOW });
     const out = runDoctor(vault);
     const all = [...out.warnings, ...out.errors];
     expect(all.filter((i) => i.code.includes("entity"))).toEqual([]);
   });
 
   test("duplicate identity claims surface as duplicate-entity warnings", () => {
-    upsertEntity(vault, { category: "people", name: "Sergey", agent: "a", now: NOW });
-    entityFile("ent-people-sergey-dup.md", [
+    upsertEntity(vault, { category: "people", name: "Ada", agent: "a", now: NOW });
+    entityFile("ent-people-ada-dup.md", [
       "---",
       "kind: brain-entity",
-      "entity_id: ent-people-sergey-dup",
+      "entity_id: ent-people-ada-dup",
       "category: people",
-      "name: SERGEY",
+      "name: ADA",
       "status: active",
       "created_at: 2026-06-02T12:30:00Z",
       "updated_at: 2026-06-02T12:30:00Z",
@@ -58,14 +58,14 @@ describe("doctor entity lints", () => {
     const dup = out.warnings.filter((i) => i.code === "duplicate-entity");
     expect(dup).toHaveLength(1);
     expect(dup[0]!.severity).toBe("warning");
-    expect(dup[0]!.message).toContain("people:sergey");
+    expect(dup[0]!.message).toContain("people:ada");
   });
 
   test("a relation pointing at a missing entity surfaces as broken-entity-relation", () => {
-    upsertEntity(vault, { category: "people", name: "Sergey", agent: "a", now: NOW });
+    upsertEntity(vault, { category: "people", name: "Ada", agent: "a", now: NOW });
     upsertEntity(vault, { category: "projects", name: "Open Second Brain", agent: "a", now: NOW });
     relateEntities(vault, {
-      from: { category: "people", query: "Sergey" },
+      from: { category: "people", query: "Ada" },
       relation: "related",
       to: { category: "projects", query: "Open Second Brain" },
       now: NOW,

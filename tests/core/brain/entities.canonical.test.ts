@@ -22,13 +22,13 @@ describe("normalizeEntityName", () => {
   });
 
   test("keeps non-latin scripts intact", () => {
-    expect(normalizeEntityName("Сергей")).toBe("сергей");
+    expect(normalizeEntityName("Ада")).toBe("ада");
   });
 });
 
 describe("entityIdentityKey", () => {
   test("composes category and normalized name", () => {
-    expect(entityIdentityKey("people", "  Sergey ")).toBe("people:sergey");
+    expect(entityIdentityKey("people", "  Ada ")).toBe("people:ada");
   });
 
   test("same key for case and whitespace variants", () => {

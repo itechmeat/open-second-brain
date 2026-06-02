@@ -18,10 +18,8 @@ function families(text: string): string[] {
 
 describe("extractFacts - positive fixtures", () => {
   test("identity: my name is ...", () => {
-    const out = extractFacts("Hi, my name is Sergey Eroshenkov and I work on the vault.");
-    expect(out.some((f) => f.family === "identity" && f.text.includes("Sergey Eroshenkov"))).toBe(
-      true,
-    );
+    const out = extractFacts("Hi, my name is Ada Lovelace and I work on the vault.");
+    expect(out.some((f) => f.family === "identity" && f.text.includes("Ada Lovelace"))).toBe(true);
   });
 
   test("preference: I prefer / I always use", () => {
@@ -49,10 +47,8 @@ describe("extractFacts - positive fixtures", () => {
   });
 
   test("email: my email is ...", () => {
-    const out = extractFacts("my email is sergey@example.com for anything urgent");
-    expect(out.some((f) => f.family === "email" && f.text.includes("sergey@example.com"))).toBe(
-      true,
-    );
+    const out = extractFacts("my email is ada@example.com for anything urgent");
+    expect(out.some((f) => f.family === "email" && f.text.includes("ada@example.com"))).toBe(true);
   });
 
   test("confirmation: yes, the X is Y", () => {
@@ -102,8 +98,8 @@ describe("extractFacts - precision (negative fixtures)", () => {
 
 describe("fact dedup hashing", () => {
   test("same fact hashes identically across whitespace and case variants", () => {
-    const a = extractFacts("my name is Sergey")[0]!;
-    const b = extractFacts("My name is   sergey")[0]!;
+    const a = extractFacts("my name is Ada")[0]!;
+    const b = extractFacts("My name is   ada")[0]!;
     expect(factDedupHash(a)).toBe(factDedupHash(b));
   });
 
@@ -114,7 +110,7 @@ describe("fact dedup hashing", () => {
   });
 
   test("extraction is deterministic", () => {
-    const text = "my name is Sergey. I prefer dark themes. my email is s@e.dev";
+    const text = "my name is Ada. I prefer dark themes. my email is s@e.dev";
     expect(extractFacts(text)).toEqual(extractFacts(text));
   });
 });

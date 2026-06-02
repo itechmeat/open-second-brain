@@ -116,7 +116,7 @@ describe("fact extraction at the live seam", () => {
     const payload = {
       hook_event_name: "UserPromptSubmit",
       session_id: "s1",
-      prompt: "By the way, my name is Sergey and I prefer dark themes.",
+      prompt: "By the way, my name is Ada and I prefer dark themes.",
     };
     const first = await captureSessionLifecycleEvent(vault, payload, {
       agent: "tester",
@@ -139,13 +139,13 @@ describe("fact extraction at the live seam", () => {
   test("extracted signals carry source_type extracted", async () => {
     await captureSessionLifecycleEvent(
       vault,
-      { hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: "my name is Sergey" },
+      { hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: "my name is Ada" },
       { agent: "tester", now: NOW },
     );
     const name = inboxSignals().find((n) => n.includes("fact-identity"))!;
     const sig = parseSignal(join(brainDirs(vault).inbox, name));
     expect(sig.source_type).toBe("extracted");
-    expect(sig.principle).toContain("Sergey");
+    expect(sig.principle).toContain("Ada");
   });
 
   test("a fact naming a registered entity gets the canonical anchor", async () => {

@@ -31,7 +31,7 @@ async function seed(): Promise<void> {
       "entity",
       "set",
       "people",
-      "Sergey",
+      "Ada",
       "--alias",
       "the operator",
       "--body",
@@ -44,12 +44,12 @@ async function seed(): Promise<void> {
 
 describe("o2b brain entity", () => {
   test("set creates and reports the entity id", async () => {
-    const out = await runCli(["brain", "entity", "set", "people", "Sergey", "--json"], {
+    const out = await runCli(["brain", "entity", "set", "people", "Ada", "--json"], {
       env: env(),
     });
     expect(out.returncode).toBe(0);
     const payload = JSON.parse(out.stdout) as Record<string, unknown>;
-    expect(payload["id"]).toBe("ent-people-sergey");
+    expect(payload["id"]).toBe("ent-people-ada");
     expect(payload["created"]).toBe(true);
   });
 
@@ -60,8 +60,8 @@ describe("o2b brain entity", () => {
     });
     expect(out.returncode).toBe(0);
     const payload = JSON.parse(out.stdout) as Record<string, unknown>;
-    expect(payload["id"]).toBe("ent-people-sergey");
-    expect(payload["name"]).toBe("Sergey");
+    expect(payload["id"]).toBe("ent-people-ada");
+    expect(payload["name"]).toBe("Ada");
   });
 
   test("get returns exit 2 for an unknown entity", async () => {
@@ -78,14 +78,14 @@ describe("o2b brain entity", () => {
     });
     expect(out.returncode).toBe(0);
     const payload = JSON.parse(out.stdout) as { entities: Array<{ id: string }> };
-    expect(payload.entities.map((e) => e.id)).toEqual(["ent-people-sergey"]);
+    expect(payload.entities.map((e) => e.id)).toEqual(["ent-people-ada"]);
   });
 
   test("relate writes a typed relation", async () => {
     await seed();
     await runCli(["brain", "entity", "set", "projects", "Open Second Brain"], { env: env() });
     const out = await runCli(
-      ["brain", "entity", "relate", "Sergey", "related", "Open Second Brain", "--json"],
+      ["brain", "entity", "relate", "Ada", "related", "Open Second Brain", "--json"],
       { env: env() },
     );
     expect(out.returncode).toBe(0);
@@ -95,16 +95,16 @@ describe("o2b brain entity", () => {
 
   test("archive and restore round-trip", async () => {
     await seed();
-    const archived = await runCli(["brain", "entity", "archive", "Sergey", "--json"], {
+    const archived = await runCli(["brain", "entity", "archive", "Ada", "--json"], {
       env: env(),
     });
     expect(archived.returncode).toBe(0);
     expect((JSON.parse(archived.stdout) as Record<string, unknown>)["status"]).toBe("archived");
 
-    const gone = await runCli(["brain", "entity", "get", "Sergey"], { env: env() });
+    const gone = await runCli(["brain", "entity", "get", "Ada"], { env: env() });
     expect(gone.returncode).toBe(2);
 
-    const restored = await runCli(["brain", "entity", "archive", "Sergey", "--restore", "--json"], {
+    const restored = await runCli(["brain", "entity", "archive", "Ada", "--restore", "--json"], {
       env: env(),
     });
     expect(restored.returncode).toBe(0);

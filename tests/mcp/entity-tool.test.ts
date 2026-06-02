@@ -37,7 +37,7 @@ beforeEach(() => {
   bootstrapBrain(vault, { configPath });
   upsertEntity(vault, {
     category: "people",
-    name: "Sergey",
+    name: "Ada",
     aliases: ["the operator"],
     agent: "claude",
     now: NOW,
@@ -108,8 +108,8 @@ describe("brain_entity view: get", () => {
     await initialize(server);
     const out = await callEntity(server, { view: "get", query: "the operator" });
     expect(out.ok).toBe(true);
-    expect(out.payload["id"]).toBe("ent-people-sergey");
-    expect(out.payload["name"]).toBe("Sergey");
+    expect(out.payload["id"]).toBe("ent-people-ada");
+    expect(out.payload["name"]).toBe("Ada");
   });
 
   test("reports found:false for an unknown name", async () => {
@@ -135,12 +135,12 @@ describe("brain_entity view: list", () => {
     const all = await callEntity(server, { view: "list" });
     expect(all.ok).toBe(true);
     expect((all.payload["entities"] as Array<{ id: string }>).map((e) => e.id)).toEqual([
-      "ent-people-sergey",
+      "ent-people-ada",
       "ent-projects-open-second-brain",
     ]);
     const people = await callEntity(server, { view: "list", category: "people" });
     expect((people.payload["entities"] as Array<{ id: string }>).map((e) => e.id)).toEqual([
-      "ent-people-sergey",
+      "ent-people-ada",
     ]);
   });
 

@@ -33,11 +33,11 @@ afterEach(() => {
   rmSync(configHome, { recursive: true, force: true });
 });
 
-function seedSergey() {
+function seedAda() {
   return upsertEntity(vault, {
     category: "people",
-    name: "Sergey",
-    aliases: ["Серёжа", "S.E."],
+    name: "Ada",
+    aliases: ["Ада", "S.E."],
     agent: "claude-dev-agent",
     now: NOW,
   });
@@ -45,65 +45,65 @@ function seedSergey() {
 
 describe("upsertEntity", () => {
   test("creates a Markdown entity file under Brain/entities/<category>/", () => {
-    const { entity, created } = seedSergey();
+    const { entity, created } = seedAda();
     expect(created).toBe(true);
-    expect(entity.id).toBe("ent-people-sergey");
-    expect(entity.path).toContain(join("Brain", "entities", "people", "ent-people-sergey.md"));
+    expect(entity.id).toBe("ent-people-ada");
+    expect(entity.path).toContain(join("Brain", "entities", "people", "ent-people-ada.md"));
     expect(existsSync(entity.path)).toBe(true);
     const raw = readFileSync(entity.path, "utf8");
     expect(raw).toContain("kind: brain-entity");
-    expect(raw).toContain("name: Sergey");
+    expect(raw).toContain("name: Ada");
     expect(raw.startsWith("---\n")).toBe(true);
   });
 
   test("is idempotent: same input updates in place, never duplicates", () => {
-    seedSergey();
+    seedAda();
     const second = upsertEntity(vault, {
       category: "people",
-      name: "sergey", // case variant resolves to the same identity
+      name: "ada", // case variant resolves to the same identity
       agent: "claude-dev-agent",
       now: LATER,
     });
     expect(second.created).toBe(false);
-    expect(second.entity.id).toBe("ent-people-sergey");
+    expect(second.entity.id).toBe("ent-people-ada");
     expect(listEntities(vault)).toHaveLength(1);
   });
 
   test("upsert via an alias updates the canonical entity", () => {
-    seedSergey();
+    seedAda();
     const viaAlias = upsertEntity(vault, {
       category: "people",
-      name: "Серёжа",
+      name: "Ада",
       agent: "claude-dev-agent",
       now: LATER,
       body: "## Current state\nOperator of the vault.",
     });
     expect(viaAlias.created).toBe(false);
-    expect(viaAlias.entity.id).toBe("ent-people-sergey");
-    expect(viaAlias.entity.name).toBe("Sergey");
+    expect(viaAlias.entity.id).toBe("ent-people-ada");
+    expect(viaAlias.entity.name).toBe("Ada");
     expect(readFileSync(viaAlias.entity.path, "utf8")).toContain("Operator of the vault.");
   });
 
   test("merges new aliases into the existing set", () => {
-    seedSergey();
+    seedAda();
     const updated = upsertEntity(vault, {
       category: "people",
-      name: "Sergey",
+      name: "Ada",
       aliases: ["the operator"],
       agent: "claude-dev-agent",
       now: LATER,
     });
-    expect(updated.entity.aliases).toContain("Серёжа");
+    expect(updated.entity.aliases).toContain("Ада");
     expect(updated.entity.aliases).toContain("the operator");
   });
 
   test("refuses an alias already claimed by another active entity in the category", () => {
-    seedSergey();
+    seedAda();
     expect(() =>
       upsertEntity(vault, {
         category: "people",
-        name: "Sergei Petrov",
-        aliases: ["Серёжа"],
+        name: "Adam Petrov",
+        aliases: ["Ада"],
         agent: "claude-dev-agent",
         now: LATER,
       }),
@@ -111,15 +111,15 @@ describe("upsertEntity", () => {
   });
 
   test("same name in a different category is a distinct entity", () => {
-    seedSergey();
+    seedAda();
     const sys = upsertEntity(vault, {
       category: "systems",
-      name: "Sergey",
+      name: "Ada",
       agent: "claude-dev-agent",
       now: NOW,
     });
     expect(sys.created).toBe(true);
-    expect(sys.entity.id).toBe("ent-systems-sergey");
+    expect(sys.entity.id).toBe("ent-systems-ada");
     expect(listEntities(vault)).toHaveLength(2);
   });
 
@@ -156,32 +156,32 @@ describe("upsertEntity", () => {
 
 describe("getEntity", () => {
   test("resolves by canonical name, case-insensitively", () => {
-    seedSergey();
-    const hit = getEntity(vault, { category: "people", query: "SERGEY" });
-    expect(hit?.id).toBe("ent-people-sergey");
+    seedAda();
+    const hit = getEntity(vault, { category: "people", query: "ADA" });
+    expect(hit?.id).toBe("ent-people-ada");
   });
 
   test("resolves by alias", () => {
-    seedSergey();
+    seedAda();
     const hit = getEntity(vault, { category: "people", query: "s.e." });
-    expect(hit?.id).toBe("ent-people-sergey");
+    expect(hit?.id).toBe("ent-people-ada");
   });
 
   test("resolves without category when unambiguous", () => {
-    seedSergey();
-    const hit = getEntity(vault, { query: "Серёжа" });
-    expect(hit?.id).toBe("ent-people-sergey");
+    seedAda();
+    const hit = getEntity(vault, { query: "Ада" });
+    expect(hit?.id).toBe("ent-people-ada");
   });
 
   test("returns null for unknown names", () => {
-    seedSergey();
+    seedAda();
     expect(getEntity(vault, { category: "people", query: "nobody" })).toBeNull();
   });
 });
 
 describe("listEntities", () => {
   test("filters by category and sorts by id", () => {
-    seedSergey();
+    seedAda();
     upsertEntity(vault, {
       category: "projects",
       name: "Open Second Brain",
@@ -189,7 +189,7 @@ describe("listEntities", () => {
       now: NOW,
     });
     const all = listEntities(vault);
-    expect(all.map((e) => e.id)).toEqual(["ent-people-sergey", "ent-projects-open-second-brain"]);
+    expect(all.map((e) => e.id)).toEqual(["ent-people-ada", "ent-projects-open-second-brain"]);
     const people = listEntities(vault, { category: "people" });
     expect(people).toHaveLength(1);
   });
@@ -197,7 +197,7 @@ describe("listEntities", () => {
 
 describe("relateEntities", () => {
   test("writes a typed relation edge readable from frontmatter", () => {
-    seedSergey();
+    seedAda();
     upsertEntity(vault, {
       category: "projects",
       name: "Open Second Brain",
@@ -205,7 +205,7 @@ describe("relateEntities", () => {
       now: NOW,
     });
     const updated = relateEntities(vault, {
-      from: { category: "people", query: "Sergey" },
+      from: { category: "people", query: "Ada" },
       relation: "related",
       to: { category: "projects", query: "Open Second Brain" },
       now: LATER,
@@ -218,7 +218,7 @@ describe("relateEntities", () => {
   });
 
   test("rejects relations outside the known vocabulary", () => {
-    seedSergey();
+    seedAda();
     upsertEntity(vault, {
       category: "projects",
       name: "Open Second Brain",
@@ -227,7 +227,7 @@ describe("relateEntities", () => {
     });
     expect(() =>
       relateEntities(vault, {
-        from: { category: "people", query: "Sergey" },
+        from: { category: "people", query: "Ada" },
         relation: "loves",
         to: { category: "projects", query: "Open Second Brain" },
         now: LATER,
@@ -236,7 +236,7 @@ describe("relateEntities", () => {
   });
 
   test("relating twice is idempotent", () => {
-    seedSergey();
+    seedAda();
     upsertEntity(vault, {
       category: "projects",
       name: "Open Second Brain",
@@ -244,7 +244,7 @@ describe("relateEntities", () => {
       now: NOW,
     });
     const args = {
-      from: { category: "people", query: "Sergey" },
+      from: { category: "people", query: "Ada" },
       relation: "related",
       to: { category: "projects", query: "Open Second Brain" },
       now: LATER,
@@ -257,38 +257,38 @@ describe("relateEntities", () => {
 
 describe("archiveEntity", () => {
   test("removes the entity from active lookup but keeps the file", () => {
-    const { entity } = seedSergey();
-    const archived = archiveEntity(vault, { category: "people", query: "Sergey" }, { now: LATER });
+    const { entity } = seedAda();
+    const archived = archiveEntity(vault, { category: "people", query: "Ada" }, { now: LATER });
     expect(archived.status).toBe("archived");
     expect(archived.archived_at).toBe("2026-06-02T13:00:00Z");
     expect(existsSync(entity.path)).toBe(true);
-    expect(getEntity(vault, { category: "people", query: "Sergey" })).toBeNull();
+    expect(getEntity(vault, { category: "people", query: "Ada" })).toBeNull();
     expect(listEntities(vault, { status: "archived" })).toHaveLength(1);
   });
 
   test("restore returns the entity to active lookup", () => {
-    seedSergey();
-    archiveEntity(vault, { category: "people", query: "Sergey" }, { now: LATER });
+    seedAda();
+    archiveEntity(vault, { category: "people", query: "Ada" }, { now: LATER });
     const restored = archiveEntity(
       vault,
-      { category: "people", query: "Sergey" },
+      { category: "people", query: "Ada" },
       { now: LATER, restore: true },
     );
     expect(restored.status).toBe("active");
     expect(restored.archived_at).toBeUndefined();
-    expect(getEntity(vault, { category: "people", query: "Sergey" })?.id).toBe("ent-people-sergey");
+    expect(getEntity(vault, { category: "people", query: "Ada" })?.id).toBe("ent-people-ada");
   });
 
   test("upsert refuses a name held by an archived entity and names the remedy", () => {
-    seedSergey();
-    archiveEntity(vault, { category: "people", query: "Sergey" }, { now: LATER });
-    expect(() => seedSergey()).toThrow(/archived/i);
+    seedAda();
+    archiveEntity(vault, { category: "people", query: "Ada" }, { now: LATER });
+    expect(() => seedAda()).toThrow(/archived/i);
   });
 });
 
 describe("buildEntityIndex", () => {
   test("rebuilds identically from the Markdown files alone", () => {
-    seedSergey();
+    seedAda();
     upsertEntity(vault, {
       category: "projects",
       name: "Open Second Brain",
@@ -300,28 +300,28 @@ describe("buildEntityIndex", () => {
     const second = buildEntityIndex(vault);
     expect(second.entities.map((e) => e.id)).toEqual(first.entities.map((e) => e.id));
     expect([...second.byAlias.keys()].toSorted()).toEqual([...first.byAlias.keys()].toSorted());
-    expect(first.byKey.get("people:sergey")?.id).toBe("ent-people-sergey");
+    expect(first.byKey.get("people:ada")?.id).toBe("ent-people-ada");
     expect(first.byAlias.get("o2b vault")?.id).toBe("ent-projects-open-second-brain");
   });
 
   test("reports duplicate identity claims from hand-authored files as conflicts", () => {
-    const { entity } = seedSergey();
+    const { entity } = seedAda();
     // Simulate a sync/hand-edit duplicate claiming the same (category, name).
-    const dupPath = join(entity.path, "..", "ent-people-sergey-dup.md");
+    const dupPath = join(entity.path, "..", "ent-people-ada-dup.md");
     atomicWriteFileSync(
       dupPath,
       [
         "---",
         "kind: brain-entity",
-        "entity_id: ent-people-sergey-dup",
+        "entity_id: ent-people-ada-dup",
         "category: people",
-        "name: sergey",
+        "name: ada",
         "status: active",
         "created_at: 2026-06-02T12:30:00Z",
         "updated_at: 2026-06-02T12:30:00Z",
         "---",
         "",
-        "# sergey",
+        "# ada",
         "",
       ].join("\n"),
     );
@@ -332,7 +332,7 @@ describe("buildEntityIndex", () => {
   });
 
   test("skips malformed entity files without aborting the walk", () => {
-    const { entity } = seedSergey();
+    const { entity } = seedAda();
     atomicWriteFileSync(join(entity.path, "..", "broken.md"), "not frontmatter at all");
     const index = buildEntityIndex(vault);
     expect(index.entities).toHaveLength(1);

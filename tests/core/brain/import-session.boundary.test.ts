@@ -65,7 +65,7 @@ function writeClaudeSession(name: string, userTexts: string[]): string {
 describe("session-level boundary at import", () => {
   test("a file matching an ignore glob imports nothing", async () => {
     setSessionsPolicy(["sessions:", "  ignore_patterns:", '    - "*cron-export*"']);
-    const path = writeClaudeSession("cron-export-1.jsonl", ["my name is Sergey"]);
+    const path = writeClaudeSession("cron-export-1.jsonl", ["my name is Ada"]);
     const result = await importSession(vault, path, {
       agent: "tester",
       now: NOW,
@@ -80,7 +80,7 @@ describe("session-level boundary at import", () => {
 
   test("a stateless file scans but writes nothing", async () => {
     setSessionsPolicy(["sessions:", "  stateless_patterns:", '    - "*probe*"']);
-    const path = writeClaudeSession("probe-2.jsonl", ["my name is Sergey"]);
+    const path = writeClaudeSession("probe-2.jsonl", ["my name is Ada"]);
     const result = await importSession(vault, path, {
       agent: "tester",
       now: NOW,
@@ -97,7 +97,7 @@ describe("message-level boundary at import", () => {
   test("suppressed turns never reach marker or fact extraction", async () => {
     setSessionsPolicy(["sessions:", "  ignore_message_patterns:", '    - "^\\[heartbeat\\]"']);
     const path = writeClaudeSession("normal.jsonl", [
-      "[heartbeat] my name is Sergey",
+      "[heartbeat] my name is Ada",
       "I prefer dark themes",
     ]);
     const result = await importSession(vault, path, {
