@@ -211,6 +211,16 @@ export interface SearchOptions {
    * false: stale predecessors are demoted below their successor.
    */
   readonly includeSuperseded?: boolean;
+  /**
+   * Time-aware recall (recall-trust-suite). Accepts ISO dates and
+   * datetimes, `today` / `yesterday` / `last week` / `last month`, and
+   * `<n>h` / `<n>d` / `<n>w` shorthand — see `time-range.ts`. Filters
+   * candidates by document mtime before ranking. Time-filtered queries
+   * bypass the query cache (a relative range resolves to a different
+   * absolute window every call).
+   */
+  readonly since?: string;
+  readonly until?: string;
 }
 
 export interface SearchOutcome {

@@ -32,6 +32,7 @@ import { filterByProperties } from "./property-filter.ts";
 import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
 import { readSessionFocus } from "./session-focus.ts";
+import { mtimeInRange, resolveTimeRange } from "./time-range.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -194,6 +195,12 @@ export async function search(
     opts.sessionFocus === undefined ? readSessionFocus(config, Date.now()) : opts.sessionFocus;
   const keywordQuery = structuredKeywordQuery(query, structured);
   const semanticLaneQuery = structuredSemanticQuery(structured);
+  // Time-aware recall (recall-trust-suite): resolve since/until up front
+  // so invalid input fails fast, before any store I/O.
+  const timeRange =
+    opts.since !== undefined || opts.until !== undefined
+      ? resolveTimeRange({ since: opts.since, until: opts.until }, Date.now())
+      : null;
 
   // Query plan (v0.20.0): one structural pass yields the intent weight
   // profile and the cache key. Pure; no I/O. Expanded terms (if any) are
@@ -209,7 +216,10 @@ export async function search(
     // and TTL expiry invalidate it. Expansion terms are not in the key:
     // they are determined by (query, index content) and any content
     // change bumps the generation. The cache write is best-effort.
-    const cacheEnabled = config.recall.cacheEnabled;
+    // A time-filtered query bypasses the cache: a relative range
+    // ("24h") resolves to a different absolute window on every call, so
+    // a cached row would serve a stale window within the TTL.
+    const cacheEnabled = config.recall.cacheEnabled && timeRange === null;
     const ttlMs = config.recall.cacheTtlSeconds * 1000;
     let cacheKey: string | null = null;
     let generation = "";
@@ -335,6 +345,19 @@ export async function search(
     }
 
     const hydrated = store.hydrateChunks(idsList);
+
+    // Time-aware recall (recall-trust-suite): drop out-of-range
+    // candidates BEFORE ranking so every later phase (traversal seeds,
+    // MMR, relation polarity) sees only in-range candidates.
+    if (timeRange !== null) {
+      const inRange = (chunkId: number): boolean => {
+        const h = hydrated.get(chunkId);
+        return h !== undefined && mtimeInRange(h.mtime, timeRange);
+      };
+      kwHits = kwHits.filter((h) => inRange(h.chunkId));
+      semHits = semHits.filter((h) => inRange(h.chunkId));
+    }
+
     const inboundLinkSources = store.inboundLinkSources(idsList);
     const tagsByDoc = store.tagsByChunkDocument(idsList);
 

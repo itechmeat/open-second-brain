@@ -312,6 +312,8 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     "query-doc": { type: "string" },
     "evidence-pack": { type: "boolean" },
     "include-superseded": { type: "boolean" },
+    since: { type: "string" },
+    until: { type: "string" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
   });
@@ -370,6 +372,8 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
     ...(flags["evidence-pack"] === true ? { evidencePack: true } : {}),
     ...(flags["include-superseded"] === true ? { includeSuperseded: true } : {}),
+    ...(typeof flags["since"] === "string" ? { since: flags["since"] as string } : {}),
+    ...(typeof flags["until"] === "string" ? { until: flags["until"] as string } : {}),
   });
 
   if (flags["json"]) {

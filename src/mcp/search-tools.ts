@@ -45,6 +45,18 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
       description:
         "History mode for relation polarity: keep matched superseded predecessors undemoted and skip successor pull-in. Default false.",
     },
+    since: {
+      type: "string",
+      maxLength: 64,
+      description:
+        "Time-aware recall: only documents modified at/after this point. ISO date/datetime, 'today', 'yesterday', 'last week', 'last month', or <n>h/<n>d/<n>w.",
+    },
+    until: {
+      type: "string",
+      maxLength: 64,
+      description:
+        "Time-aware recall: only documents modified at/before this point. Same forms as 'since'.",
+    },
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
@@ -255,6 +267,8 @@ async function toolBrainSearch(
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
   const includeSuperseded = coerceBoolOptional(args, "include_superseded") ?? false;
+  const since = coerceStringOptional(args, "since", 64);
+  const until = coerceStringOptional(args, "until", 64);
   const telemetry = coerceBoolOptional(args, "telemetry") ?? false;
   const telemetryHost = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
   const telemetrySessionId = coerceStringOptional(args, "session_id", 512);
@@ -297,6 +311,8 @@ async function toolBrainSearch(
         ...(sessionFocus !== undefined ? { sessionFocus } : {}),
         ...(evidencePack ? { evidencePack: true } : {}),
         ...(includeSuperseded ? { includeSuperseded: true } : {}),
+        ...(since !== undefined ? { since } : {}),
+        ...(until !== undefined ? { until } : {}),
       }),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,
