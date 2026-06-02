@@ -50,7 +50,8 @@ import {
   type AppendApplyEvidenceInput,
 } from "../core/brain/apply-evidence.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
-import { getEntity, listEntities } from "../core/brain/entities/registry.ts";
+import { EntityAmbiguityError, getEntity, listEntities } from "../core/brain/entities/registry.ts";
+import { validateEntityCategory } from "../core/brain/entities/canonical.ts";
 import { readPrefAudit } from "../core/brain/pref-audit.ts";
 import { buildMorningBrief } from "../core/brain/morning-brief.ts";
 import { aggregateSources } from "../core/brain/portability/sources.ts";
@@ -935,33 +936,49 @@ async function toolBrainEntity(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Argument validation happens at the boundary so INVALID_PARAMS is
+  // reserved for genuine client-input errors; unexpected registry
+  // failures (malformed entity file, I/O) surface as INTERNAL_ERROR.
   const view = coerceStr(args, "view", true)!;
+  if (view !== "get" && view !== "list") {
+    throw new MCPError(INVALID_PARAMS, `brain_entity: unknown view '${view}' (get | list)`);
+  }
   const category = coerceStr(args, "category", false);
+  if (category !== null) {
+    try {
+      validateEntityCategory(category);
+    } catch (err) {
+      throw new MCPError(INVALID_PARAMS, `brain_entity: ${(err as Error).message}`);
+    }
+  }
+  const status = coerceStr(args, "status", false);
+  if (status !== null && status !== "active" && status !== "archived") {
+    throw new MCPError(INVALID_PARAMS, "brain_entity: status must be 'active' or 'archived'");
+  }
+  const query = view === "get" ? coerceStr(args, "query", true)! : null;
+
   try {
     if (view === "get") {
-      const query = coerceStr(args, "query", true)!;
       const entity = getEntity(ctx.vault, {
-        query,
+        query: query!,
         ...(category !== null ? { category } : {}),
       });
-      if (entity === null) return { found: false, query };
+      if (entity === null) return { found: false, query: query! };
       return { found: true, ...entityToPayload(entity) };
     }
-    if (view === "list") {
-      const status = coerceStr(args, "status", false);
-      if (status !== null && status !== "active" && status !== "archived") {
-        throw new MCPError(INVALID_PARAMS, "brain_entity: status must be 'active' or 'archived'");
-      }
-      const entities = listEntities(ctx.vault, {
-        ...(category !== null ? { category } : {}),
-        ...(status !== null ? { status } : {}),
-      });
-      return { entities: entities.map(entityToPayload), total: entities.length };
-    }
-    throw new MCPError(INVALID_PARAMS, `brain_entity: unknown view '${view}' (get | list)`);
+    const entities = listEntities(ctx.vault, {
+      ...(category !== null ? { category } : {}),
+      ...(status !== null ? { status } : {}),
+    });
+    return { entities: entities.map(entityToPayload), total: entities.length };
   } catch (err) {
     if (err instanceof MCPError) throw err;
-    throw new MCPError(INVALID_PARAMS, `brain_entity: ${(err as Error).message}`);
+    if (err instanceof EntityAmbiguityError) {
+      // A category-less query hitting several categories is a
+      // client-resolvable input problem, not a server fault.
+      throw new MCPError(INVALID_PARAMS, `brain_entity: ${err.message}`);
+    }
+    throw new MCPError(INTERNAL_ERROR, `brain_entity: ${(err as Error).message}`);
   }
 }
 

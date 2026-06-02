@@ -70,6 +70,16 @@ export interface ArchiveEntityOptions {
 
 // ----- Lookup ----------------------------------------------------------------
 
+/** A category-less reference matched entities in several categories. */
+export class EntityAmbiguityError extends Error {
+  constructor(query: string, ids: ReadonlyArray<string>) {
+    super(
+      `entity reference '${query}' is ambiguous across categories: ${ids.join(", ")} - pass a category`,
+    );
+    this.name = "EntityAmbiguityError";
+  }
+}
+
 /** Resolve a ref against ACTIVE entities: canonical name first, then alias. */
 function resolveActive(index: EntityIndex, ref: EntityRef): BrainEntity | null {
   const query = normalizeEntityName(ref.query);
@@ -88,10 +98,9 @@ function resolveActive(index: EntityIndex, ref: EntityRef): BrainEntity | null {
         e.aliases.some((a) => normalizeEntityName(a) === query)),
   );
   if (matches.length > 1) {
-    throw new Error(
-      `entity reference '${ref.query}' is ambiguous across categories: ` +
-        matches.map((m) => m.id).join(", ") +
-        " - pass a category",
+    throw new EntityAmbiguityError(
+      ref.query,
+      matches.map((m) => m.id),
     );
   }
   return matches[0] ?? null;

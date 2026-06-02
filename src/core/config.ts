@@ -7,10 +7,12 @@
  * via parallel suites in tests/core/config.test.ts.
  */
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+
+import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync } from "./fs-atomic.ts";
 import { isFile } from "./fs-utils.ts";
@@ -205,12 +207,43 @@ export function resolveDeviceId(configPath?: string): string {
   const env = process.env["O2B_DEVICE_ID"];
   if (env !== undefined && (env === "" || isValidDeviceId(env))) return env;
   const resolved = configPath ?? defaultConfigPath();
-  const data = discoverConfig(resolved).data;
-  const existing = data["device_id"];
-  if (existing && isValidDeviceId(existing)) return existing;
-  const generated = randomBytes(4).toString("hex");
-  setConfigValue("device_id", generated, resolved);
-  return generated;
+
+  const read = (): string | null => {
+    const value = discoverConfig(resolved).data["device_id"];
+    return value && isValidDeviceId(value) ? value : null;
+  };
+
+  const existing = read();
+  if (existing !== null) return existing;
+
+  // First-use generation. Two processes racing here could each persist
+  // a different id and split one device's logs across two shards, so
+  // the read-generate-write sequence holds a directory lock (same
+  // bounded-retry shape as the log writer's `acquireLogLock`). A
+  // lock failure (read-only config home, exotic fs) falls through to
+  // the unlocked path - identity resolution must never fail.
+  const dir = dirname(resolved);
+  mkdirSync(dir, { recursive: true });
+  let release: (() => void) | undefined;
+  try {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        release = lockfile.lockSync(dir, { stale: 10_000, realpath: false });
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ELOCKED") break;
+        Bun.sleepSync(50);
+      }
+    }
+    // Re-check under the lock: the racing process may have just won.
+    const won = read();
+    if (won !== null) return won;
+    const generated = randomBytes(4).toString("hex");
+    setConfigValue("device_id", generated, resolved);
+    return generated;
+  } finally {
+    release?.();
+  }
 }
 
 export function resolveLinkOutputFormat(configPath?: string): LinkOutputFormat {
