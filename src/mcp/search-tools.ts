@@ -439,6 +439,17 @@ function mcpEvidencePack(
           })),
         }
       : {}),
+    ...(pack.completeness !== undefined
+      ? {
+          completeness: {
+            verdict: pack.completeness.verdict,
+            idf_weighted_coverage: pack.completeness.idfWeightedCoverage,
+            covered_terms: pack.completeness.coveredTerms,
+            uncovered_terms: pack.completeness.uncoveredTerms,
+            uncovered_but_present_in_corpus: pack.completeness.uncoveredButPresentInCorpus,
+          },
+        }
+      : {}),
   };
 }
 

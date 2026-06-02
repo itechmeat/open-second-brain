@@ -1,5 +1,10 @@
-import { buildCoverageReport, significantTerms, termIncludedIn } from "./coverage.ts";
-import type { CoverageReport } from "./coverage.ts";
+import {
+  buildCompletenessReport,
+  buildCoverageReport,
+  significantTerms,
+  termIncludedIn,
+} from "./coverage.ts";
+import type { CompletenessReport, CoverageReport } from "./coverage.ts";
 import type { BrainSearchResult } from "./types.ts";
 
 export interface EvidenceRecord {
@@ -59,6 +64,12 @@ export interface EvidencePack {
   readonly uncoveredRareTerms?: ReadonlyArray<string>;
   /** Per-token recall union for uncovered significant terms. */
   readonly unionRecords?: ReadonlyArray<EvidenceUnionRecord>;
+  /**
+   * Search-completeness guard (Feature E): verdict + false-absence
+   * report from the same coverage engine. Present only when the search
+   * ran with coverage verification.
+   */
+  readonly completeness?: CompletenessReport;
 }
 
 const TERMINAL_STATE_RE =
@@ -161,6 +172,7 @@ export function buildEvidencePack(
           rareTerms: verification.coverage.rareTerms,
           uncoveredRareTerms: verification.coverage.uncoveredRareTerms,
           unionRecords: verification.unionRecords,
+          completeness: buildCompletenessReport(verification.coverage),
         }
       : {}),
   });

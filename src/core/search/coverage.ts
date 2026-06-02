@@ -100,6 +100,48 @@ export interface CoverageReport {
   readonly uncoveredRareTerms: ReadonlyArray<string>;
 }
 
+/** IDF-weighted coverage at/above this is a complete retrieval. */
+export const COMPLETENESS_COMPLETE_THRESHOLD = 0.8;
+/** IDF-weighted coverage at/above this (below complete) is partial. */
+export const COMPLETENESS_PARTIAL_THRESHOLD = 0.4;
+
+export type CompletenessVerdict = "complete" | "partial" | "sparse";
+
+/**
+ * Search-completeness guard (Feature E): a deterministic verdict over
+ * how well the returned results cover the query, plus the
+ * false-absence guard — uncovered terms the corpus DOES contain. A
+ * summarizer seeing a term in `uncoveredButPresentInCorpus` cannot
+ * honestly claim the vault has nothing on it.
+ */
+export interface CompletenessReport {
+  readonly verdict: CompletenessVerdict;
+  readonly idfWeightedCoverage: number;
+  readonly coveredTerms: ReadonlyArray<string>;
+  readonly uncoveredTerms: ReadonlyArray<string>;
+  readonly uncoveredButPresentInCorpus: ReadonlyArray<string>;
+}
+
+export function buildCompletenessReport(coverage: CoverageReport): CompletenessReport {
+  const covered = coverage.terms.filter((t) => t.covered).map((t) => t.term);
+  const uncovered = coverage.terms.filter((t) => !t.covered);
+  const verdict: CompletenessVerdict =
+    coverage.idfWeightedCoverage >= COMPLETENESS_COMPLETE_THRESHOLD
+      ? "complete"
+      : coverage.idfWeightedCoverage >= COMPLETENESS_PARTIAL_THRESHOLD
+        ? "partial"
+        : "sparse";
+  return Object.freeze({
+    verdict,
+    idfWeightedCoverage: coverage.idfWeightedCoverage,
+    coveredTerms: Object.freeze(covered),
+    uncoveredTerms: Object.freeze(uncovered.map((t) => t.term)),
+    uncoveredButPresentInCorpus: Object.freeze(
+      uncovered.filter((t) => t.df > 0).map((t) => t.term),
+    ),
+  });
+}
+
 export function buildCoverageReport(inputs: CoverageInputs): CoverageReport {
   const terms: TermCoverage[] = inputs.significantTerms.map((term) => {
     const df = inputs.dfByTerm.get(term) ?? 0;
