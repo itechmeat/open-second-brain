@@ -247,3 +247,28 @@ test("the default verb is `query` when first positional is unknown", async () =>
   expect(out.returncode).toBe(0);
   expect(out.stdout).toContain("a.md");
 });
+
+test("search --evidence-pack --json exposes verification fields (union, completeness)", async () => {
+  writeVaultFile("alpha-note.md", "# Alpha\n\nthe alpha subsystem owns the export pipeline");
+  writeVaultFile("zephyr-note.md", "# Zephyr\n\nthe zephyr daemon owns the import pipeline");
+  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+
+  const out = await runCli(["search", "alpha zephyr", "--evidence-pack", "--json"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout) as {
+    evidence_pack: {
+      idf_weighted_coverage: number;
+      rare_terms: string[];
+      uncovered_rare_terms: string[];
+      union_records: Array<{ term: string; path: string }>;
+      completeness: { verdict: string; uncovered_but_present_in_corpus: string[] };
+    };
+  };
+  const pack = json.evidence_pack;
+  expect(typeof pack.idf_weighted_coverage).toBe("number");
+  expect(pack.union_records.map((r) => r.term).toSorted()).toEqual(["alpha", "zephyr"]);
+  expect(pack.completeness.verdict).toBe("sparse");
+  expect(pack.completeness.uncovered_but_present_in_corpus.toSorted()).toEqual(["alpha", "zephyr"]);
+});
