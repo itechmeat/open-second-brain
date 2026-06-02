@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.1] - 2026-06-02
+
+### Changed
+
+- The repo-root `__init__.py` now loads the `plugins/hermes` implementation
+  through a single, intentional self-bootstrap (file-path import under a private
+  package name) instead of a three-branch import cascade with a file-path
+  fallback. Loading no longer depends on the host runtime registering a parent
+  namespace for the plugin, so the entrypoint is host-agnostic and the
+  implementation keeps its small single-responsibility modules. Behaviour is
+  unchanged - the provider still discovers and loads on a stock Hermes install;
+  `tests/python/test_hermes_plugin.py` locks that it loads even when the parent
+  namespace is absent.
+
+### Notes
+
+- This supersedes the 0.32.0 "Temporary loader workaround" note: the file-path
+  load is now treated as the plugin's permanent load path, not a stopgap. An
+  upstream Hermes loader change (registering the `_hermes_user_memory` parent)
+  remains the route to fully-native relative imports as bundled providers use,
+  but it is a future enhancement, not a dependency for this plugin to work.
+
 ## [0.32.0] - 2026-06-01
 
 Open Second Brain is now a native Hermes memory provider. The Hermes
@@ -3835,6 +3857,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.32.1]: https://github.com/itechmeat/open-second-brain/compare/v0.32.0...v0.32.1
 [0.32.0]: https://github.com/itechmeat/open-second-brain/compare/v0.31.2...v0.32.0
 [0.31.2]: https://github.com/itechmeat/open-second-brain/compare/v0.31.1...v0.31.2
 [0.31.1]: https://github.com/itechmeat/open-second-brain/compare/v0.31.0...v0.31.1
