@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] - 2026-06-02
+
+Recall Trust Suite: five features that make recall something an agent can
+trust — typed relations carry ranking polarity, ranking weights learn from
+explicit feedback within audited bounds, recall scopes by time, evidence packs
+verify multi-record coverage with IDF weighting, and a completeness verdict
+guards against false-absence claims. All deterministic; no LLM in the core
+path.
+
+### Added
+
+- **Relation-aware recall polarity.** Typed relation edges
+  (`superseded_by` / `contradicts` / `related` / `extends` / `depends_on` /
+  `refines`) now participate in ranking: a matched `superseded_by`
+  predecessor is demoted and its successor boosted or pulled into the result
+  window; `contradicts` adds warning-style `why_retrieved` reasons on both
+  endpoints without a score change; positive relations grant a small bounded
+  boost between co-retrieved pages. History mode (`--include-superseded`,
+  MCP `include_superseded`) keeps predecessors undemoted. Kill switch:
+  `search_relation_polarity_enabled` /
+  `OPEN_SECOND_BRAIN_SEARCH_RELATION_POLARITY` (default on; vaults without
+  typed relations rank identically either way).
+- **Retrieval feedback loop with learned recall weights.** `o2b search
+  feedback --query <q> --result <path> --verdict up|down` and the new MCP
+  tool `brain_recall_feedback` record one JSON event per feedback under
+  `Brain/search/feedback/` (the conflict-free one-file-per-signal pattern).
+  A deterministic, order-insensitive fold derives per-layer multipliers
+  bounded to [0.8, 1.2] into `Brain/search/learned-weights.json`; ranking
+  applies them only behind the `search_learned_weights_enabled` opt-in, and
+  affected results carry a `learned_weights:` reason. `o2b search weights`
+  shows base + learned + bounds; `--reset` drops the derived file while
+  keeping events. The weights state is part of the query-cache key.
+- **Time-aware recall.** `--since` / `--until` on `o2b search` and
+  `since` / `until` on MCP `brain_search` accept ISO dates and datetimes,
+  `today` / `yesterday` / `last week` / `last month`, and `24h` / `7d` /
+  `2w` shorthand, resolved deterministically in UTC and filtered on document
+  mtime before ranking. Invalid input fails with `INVALID_INPUT`;
+  time-filtered queries bypass the query cache.
+- **Verified multi-record recall.** Evidence packs gain a coverage engine:
+  IDF-weighted support coverage, rare-term classification (document
+  frequency within 2% of the corpus), a rare-term abstention gate, and a
+  bounded per-token recall union (`union_records`, up to 2 records per
+  uncovered term / 8 total) so evidence spanning multiple records is visible
+  even when the AND-joined primary ranking returns nothing. Completes the
+  verified-recall scope started by the v0.27.0 evidence-pack foundation.
+- **Search-completeness guard.** Evidence packs carry a deterministic
+  `completeness` verdict (`complete` at 0.8+ IDF-weighted coverage,
+  `partial` at 0.4+, else `sparse`) and a false-absence guard:
+  `uncovered_but_present_in_corpus` lists every uncovered term the corpus
+  does contain, including the zero-results case, so a downstream summarizer
+  cannot honestly claim the vault has nothing on a term that sits in an
+  unreturned page.
+
 ## [0.32.1] - 2026-06-02
 
 ### Changed

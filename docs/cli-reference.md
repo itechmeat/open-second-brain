@@ -163,16 +163,37 @@ o2b search "<query>"          Hybrid full-text + semantic search across the vaul
                               --property type=decision --property status=open
                               filters on frontmatter scalars (post-FTS phase)
                               --query-doc '<lanes>' separates intent/lex/vec/hyde recall lanes
-                              --evidence-pack adds matched/missing term diagnostics and abstention text
+                              --evidence-pack adds matched/missing term diagnostics, abstention text,
+                              IDF-weighted coverage, per-token union records, and a completeness verdict
+                              --since/--until scope recall by document mtime (ISO date/datetime,
+                              today / yesterday / last week / last month, or 24h / 7d / 2w shorthand)
+                              --include-superseded keeps superseded predecessors undemoted (history mode)
                               --verbose adds per-result why_retrieved reasons
                               --json for structured output (includes reasons[])
                               CJK text is expanded for FTS recall without polluting returned content
+o2b search feedback           Record explicit recall feedback for one result
+                              (--query Q --result <path> --verdict up|down; one JSON event file
+                              under Brain/search/feedback/, learned weights refresh deterministically)
+o2b search weights            Show base weights, learned multipliers, event count, and bounds
+                              --reset removes the derived learned-weights file (events kept)
 o2b search focus set          Persist a 120-minute ranking focus (--query Q and/or --path P; --ttl-minutes N)
 o2b search focus status       Show the active focus; --json emits { active, focus }
 o2b search focus clear        Clear the persisted focus file next to the search index
 o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               (required after upgrading to v0.13.0 recall schema or v0.26.0 CJK FTS content)
 ```
+
+Typed relations participate in ranking (relation polarity): a page whose
+frontmatter declares `superseded_by:` is demoted when it matches and its
+successor is boosted or pulled in, `contradicts:` surfaces warning-style
+`why_retrieved` reasons on both endpoints without endorsement, and
+`related` / `extends` / `depends_on` / `refines` grant a small bounded boost
+between co-retrieved pages. Vaults without typed relations rank identically;
+`search_relation_polarity_enabled: false` (or
+`OPEN_SECOND_BRAIN_SEARCH_RELATION_POLARITY=false`) is the kill switch. Learned
+recall weights are opt-in via `search_learned_weights_enabled: true` (or
+`OPEN_SECOND_BRAIN_SEARCH_LEARNED_WEIGHTS=true`); multipliers stay within
+[0.8, 1.2] and affected results carry a `learned_weights:` reason.
 
 Structured recall query documents are line-oriented. `intent:` accepts
 `neutral`, `exact`, `entity`, or `broad`; `lex:` accepts bare or quoted terms

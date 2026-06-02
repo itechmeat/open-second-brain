@@ -38,7 +38,8 @@ capability flags for a narrower per-process full server.
 | `brain_agent_diff`          | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                             | —                                              |
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
 | `brain_morning_brief`       | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.                 | —                                              |
-| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, and evidence-pack diagnostics.                              | `query`                                        |
+| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, and evidence-pack diagnostics.                  | `query`                                        |
+| `brain_recall_feedback`     | Record explicit up/down recall feedback for one search result; feeds the deterministic learned-weight fold.                                     | `query`, `result_path`, `verdict`              |
 | `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason.                              | `prompt`                                       |
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`.     | `max_tokens`                                   |
 | `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
@@ -77,9 +78,18 @@ capability flags for a narrower per-process full server.
 `diff`, `map`). Omitting `agents` means all known source agents.
 `brain_search` accepts `query_document` with line-oriented `intent:`, `lex:`,
 `vec:`, and `hyde:` lanes; `focus_query` / `focus_path_prefix` to steer a
-single call; and `evidence_pack: true` to return significant/matched/missing
-terms, abstention text, terminal-state downrank reasons, and per-result
-`why_retrieved`. It can also emit opt-in recall telemetry with `telemetry: true`.
+single call; `since` / `until` time ranges (ISO date/datetime, `today`,
+`yesterday`, `last week`, `last month`, or `<n>h`/`<n>d`/`<n>w` shorthand,
+filtered on document mtime); `include_superseded: true` to keep superseded
+predecessors undemoted (history mode); and `evidence_pack: true` to return
+significant/matched/missing terms, abstention text, terminal-state downrank
+reasons, per-result `why_retrieved`, IDF-weighted coverage with rare-term
+classification, per-token `union_records` for uncovered terms, and a
+`completeness` verdict whose `uncovered_but_present_in_corpus` list is the
+false-absence guard. It can also emit opt-in recall telemetry with
+`telemetry: true`. `brain_recall_feedback` records one feedback event as a
+JSON file under `Brain/search/feedback/` and returns the refreshed learned
+weights (applied to ranking only when `search_learned_weights_enabled` is on).
 `brain_context_pack` accepts opt-in `receipt`, `telemetry`, `cache_stable`, and
 `dedup_repeated` diagnostics; `brain_pre_compress_pack` accepts opt-in `receipt`
 and `telemetry`. `brain_context_receipts` supports `operation: "list"|"show"`;
