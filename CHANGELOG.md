@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-06-01
+
+Open Second Brain is now a native Hermes memory provider. The Hermes
+integration is consolidated into one mechanism: a Python `MemoryProvider` that
+bridges to the existing `o2b mcp` server over JSON-RPC, replacing the separate
+`pre_llm_call` shim and the standalone `mcp_servers` registration. Claude Code
+and Codex are unchanged - their canonical path is still MCP plus hooks.
+
+### Added
+
+- `plugins/hermes` memory provider (`provider.py`, `bridge.py`, `config.py`,
+  `_base.py`, `cli.py`): implements the Hermes `MemoryProvider` contract -
+  `get_tool_schemas`/`handle_tool_call` over a curated `brain_*` subset,
+  `system_prompt_block` from `Brain/active.md`, `prefetch` (recall gate plus the
+  per-turn identity reminder), non-blocking `sync_turn` buffering, deterministic
+  `on_pre_compress`/`on_session_end` flush via `brain_pre_compact_extract`,
+  `on_memory_write` mirroring of Hermes `MEMORY.md`/`USER.md` into `Brain/`, and
+  `shutdown`.
+- `hermes open-second-brain status` / `config` diagnostics CLI (`cli.py`).
+  Surfacing is gated on an upstream Hermes loader fix - see Notes.
+
+### Changed
+
+- `register(ctx)` now wires the memory provider via `register_memory_provider`
+  alongside the health check.
+- Both Hermes manifests declare the memory provider and the lifecycle hooks it
+  implements instead of `provides_hooks: [pre_llm_call]` and an `mcp_server`
+  block. They no longer set `kind: standalone`, so Hermes auto-routes the plugin
+  to its memory-provider path; the repo-root `__init__.py` re-exports the
+  provider so Hermes' provider discovery detects it.
+- `install/hermes.md` documents the activation lifecycle: activate with
+  `hermes memory setup open-second-brain`, deactivate with `hermes memory off`;
+  `memory.provider` persists across `hermes plugins update` (no re-activation).
+
+### Removed
+
+- The Hermes-only `pre_llm_call` hook: its per-turn identity reminder is now
+  carried by the provider's `prefetch`.
+
+### Notes
+
+- The bridge restarts the `o2b mcp` subprocess only on a transport failure
+  (EOF / broken pipe); a JSON-RPC error response (e.g. invalid tool arguments)
+  propagates unchanged. Behaviour is locked by `tests/python/test_memory_provider.py`
+  and `tests/python/test_hermes_plugin.py`.
+- **Temporary loader workaround.** Hermes' external memory-provider loader
+  imports a plugin under a synthetic package (`_hermes_user_memory.<name>`)
+  without registering that parent namespace, so an external provider's relative
+  imports raise `ModuleNotFoundError: No module named '_hermes_user_memory'`
+  (a flat single-directory layout hits this too). The repo-root `__init__.py`
+  carries a file-path fallback to load the implementation, marked for removal
+  once the upstream loader registers the parent namespace
+  (`NousResearch/hermes-agent`). The same limitation gates the
+  `hermes open-second-brain` CLI subcommand; it needs no further changes here
+  and surfaces automatically when the upstream fix ships.
+
 ## [0.31.2] - 2026-06-01
 
 Hands-off post-upgrade migration. After an update, the plugin now brings an
@@ -3779,6 +3835,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.32.0]: https://github.com/itechmeat/open-second-brain/compare/v0.31.2...v0.32.0
 [0.31.2]: https://github.com/itechmeat/open-second-brain/compare/v0.31.1...v0.31.2
 [0.31.1]: https://github.com/itechmeat/open-second-brain/compare/v0.31.0...v0.31.1
 [0.30.0]: https://github.com/itechmeat/open-second-brain/compare/v0.29.0...v0.30.0

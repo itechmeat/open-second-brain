@@ -1,36 +1,24 @@
-"""Tests for the slim Hermes Python shim.
+"""Tests for the Hermes plugin package surface.
 
-The shim only handles the per-turn ``pre_llm_call`` injection and a small
-data-only health report; everything else lives in the TypeScript core
-exposed through the MCP server. These tests pin the contract Hermes
-relies on.
+The package now registers a native memory provider and a data-only health
+check; the legacy per-turn ``pre_llm_call`` hook is retired (its identity
+reminder moved into the provider's ``prefetch``). These tests pin the package
+contract Hermes relies on: ``register`` wiring, the health report, the root
+entrypoint re-export, and the identity-reminder template source of truth.
 """
 
 import importlib.util
-import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
-# Ensure ``plugins.hermes`` is importable regardless of which directory the
-# test runner is invoked from. Pytest with rootdir at the repo root works
-# out of the box; running ``python -m unittest tests.python.test_hermes_plugin``
-# from the repo root also works because ``plugins/hermes/__init__.py`` is on
-# the path. The legacy invocation ``python -m unittest discover -s tests``
-# would not find ``plugins`` without the explicit insert; the shim's
-# import is small enough that we keep it self-contained.
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from plugins.hermes import (  # noqa: E402
-    _load_reminder_template,
-    check_health,
-    health,
-    on_pre_llm_call,
-    register,
-)
+from plugins.hermes import check_health, health, register, register_cli  # noqa: E402
+from plugins.hermes import config as cfg  # noqa: E402
+from plugins.hermes.provider import OpenSecondBrainMemoryProvider  # noqa: E402
 
 PLUGIN_NAME = "open-second-brain"
 
@@ -50,8 +38,8 @@ class HealthReportTests(unittest.TestCase):
 class RootPluginEntrypointTests(unittest.TestCase):
     """Hermes installs Git plugins by cloning the repo and loading the
     repository root as the plugin directory. The root ``__init__.py`` is
-    therefore the entry the gateway sees first; it must re-export the
-    same callable names this shim exposes.
+    therefore the entry the gateway sees first; it must re-export the same
+    callable names this package exposes.
     """
 
     def test_root_init_exposes_check_health(self):
@@ -92,92 +80,88 @@ class RegisterTests(unittest.TestCase):
         register(ctx)
         self.assertIn(PLUGIN_NAME, ctx.health_checks)
 
-    def test_register_hook_called_for_pre_llm_call(self):
-        registered: list[tuple[str, object]] = []
+    def test_registers_memory_provider(self):
+        registered: list[object] = []
 
         class Context:
-            def register_hook(self, name, callback):
-                registered.append((name, callback))
+            def register_memory_provider(self, provider):
+                registered.append(provider)
 
         register(Context())
         self.assertEqual(len(registered), 1)
-        name, callback = registered[0]
-        self.assertEqual(name, "pre_llm_call")
-        self.assertIs(callback, on_pre_llm_call)
+        self.assertIsInstance(registered[0], OpenSecondBrainMemoryProvider)
+        self.assertEqual(registered[0].name, PLUGIN_NAME)
 
 
-class PreLlmCallTests(unittest.TestCase):
-    """The hook fires every turn and must:
+class LoaderFallbackTests(unittest.TestCase):
+    """Guards the TEMPORARY file-path fallback in the root ``__init__.py``.
 
-      - return ``{"context": "..."}`` when identity is configured
-      - return ``None`` (no injection) when identity is unresolved
-      - never raise
+    Hermes' external memory-provider loader imports a plugin under a synthetic
+    package name without registering its parent namespace, breaking the
+    relative/absolute imports the root entrypoint tries first. The fallback
+    loads ``plugins/hermes`` directly by file path with
+    ``submodule_search_locations`` so its own relative imports still resolve.
+    This locks that mechanism: if it ever stops yielding the provider (e.g. the
+    fallback is removed before the upstream Hermes fix lands), this fails.
     """
 
-    def setUp(self):
-        self._prev_env = os.environ.pop("VAULT_AGENT_NAME", None)
-        self._prev_cfg = os.environ.pop("OPEN_SECOND_BRAIN_CONFIG", None)
-
-    def tearDown(self):
-        os.environ.pop("VAULT_AGENT_NAME", None)
-        os.environ.pop("OPEN_SECOND_BRAIN_CONFIG", None)
-        if self._prev_env is not None:
-            os.environ["VAULT_AGENT_NAME"] = self._prev_env
-        if self._prev_cfg is not None:
-            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = self._prev_cfg
-
-    def test_returns_context_when_env_identity_set(self):
-        os.environ["VAULT_AGENT_NAME"] = "hermes-vps-agent"
-        result = on_pre_llm_call(
-            session_id="test",
-            user_message="hello",
-            conversation_history=[],
-            is_first_turn=True,
-            model="combo",
-            platform="cli",
-            sender_id="",
+    def test_filepath_load_of_impl_yields_provider(self):
+        impl_dir = ROOT / "plugins" / "hermes"
+        spec = importlib.util.spec_from_file_location(
+            "_osb_hermes_impl_test",
+            impl_dir / "__init__.py",
+            submodule_search_locations=[str(impl_dir)],
         )
-        self.assertIsInstance(result, dict)
-        self.assertIn("context", result)
-        ctx = result["context"]
-        self.assertIn("@hermes-vps-agent", ctx)
-        # §32 (v0.10.8): the Hermes reminder now points at the three
-        # Brain writer tools; event_log_append is retired.
-        self.assertIn("brain_feedback", ctx)
-        self.assertIn("brain_apply_evidence", ctx)
-        self.assertIn("brain_note", ctx)
-        self.assertNotIn("event_log_append", ctx)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+            provider = module.OpenSecondBrainMemoryProvider()
+            self.assertEqual(provider.name, PLUGIN_NAME)
+            self.assertTrue(callable(module.register))
+        finally:
+            for name in list(sys.modules):
+                if name == spec.name or name.startswith(spec.name + "."):
+                    sys.modules.pop(name, None)
 
-    def test_returns_context_from_persisted_config(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = Path(tmp) / "config.yaml"
-            cfg.write_text('agent_name: "openclaw-main"\n', encoding="utf-8")
-            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg)
-            result = on_pre_llm_call()
-        self.assertIsInstance(result, dict)
-        self.assertIn("@openclaw-main", result["context"])
+    def test_register_does_not_raise_on_minimal_context(self):
+        class Context:
+            pass
 
-    def test_returns_context_with_camelcase_config_key(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = Path(tmp) / "config.yaml"
-            cfg.write_text('agentName: "codex-vps-agent"\n', encoding="utf-8")
-            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg)
-            result = on_pre_llm_call()
-        self.assertIsInstance(result, dict)
-        self.assertIn("@codex-vps-agent", result["context"])
+        # A ctx exposing neither hook must be ignored, not fatal.
+        register(Context())
 
-    def test_returns_none_when_identity_unresolved(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(Path(tmp) / "missing.yaml")
-            result = on_pre_llm_call()
-        self.assertIsNone(result)
+    def test_register_cli_is_reexported(self):
+        # Hermes may discover CLI registration at package level; keep it exported.
+        self.assertTrue(callable(register_cli))
+
+    def test_no_pre_llm_call_hook_registered(self):
+        registered: list[str] = []
+
+        class Context:
+            def register_hook(self, name, callback):
+                registered.append(name)
+
+            def register_memory_provider(self, provider):
+                pass
+
+        register(Context())
+        self.assertNotIn("pre_llm_call", registered)
 
 
 class TemplateSourceOfTruthTests(unittest.TestCase):
-    """The reminder text lives in `templates/identity-reminder.txt` so the
-    Python shim and the TypeScript core do not drift apart. These tests
-    pin the file's location and shape; both runtimes must keep loading it.
+    """The reminder text lives in ``templates/identity-reminder*.txt`` so the
+    Python provider and the TypeScript core do not drift apart. These tests
+    pin the file's location, shape, and per-target parity with the shared
+    fixture asserted on the TypeScript side.
     """
+
+    def setUp(self):
+        cfg._reset_template_cache_for_tests()
+
+    def tearDown(self):
+        cfg._reset_template_cache_for_tests()
 
     def test_template_file_exists_at_canonical_path(self):
         path = ROOT / "templates" / "identity-reminder.txt"
@@ -188,35 +172,22 @@ class TemplateSourceOfTruthTests(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertGreaterEqual(text.count("{agent}"), 2)
 
-    def test_pre_llm_call_substitutes_every_placeholder(self):
-        os.environ["VAULT_AGENT_NAME"] = "parity-agent"
-        try:
-            result = on_pre_llm_call()
-        finally:
-            os.environ.pop("VAULT_AGENT_NAME", None)
-        self.assertIsNotNone(result)
-        self.assertIn("@parity-agent", result["context"])
-        self.assertNotIn("{agent}", result["context"])
-
-
-class PerTargetParityTests(unittest.TestCase):
-    """Python and TypeScript must produce the same bytes for the Hermes
-    target. The shared fixture at
-    ``tests/fixtures/identity-reminder/hermes.txt`` is asserted by the
-    TS resolver test; this test asserts the Python shim against the same
-    bytes. If the two drift, both languages' CI fails.
-    """
+    def test_render_reminder_substitutes_every_placeholder(self):
+        rendered = cfg.render_reminder("parity-agent")
+        self.assertIn("@parity-agent", rendered)
+        self.assertNotIn("{agent}", rendered)
 
     def test_hermes_template_matches_shared_fixture(self):
         fixture = (
-            ROOT / "tests" / "fixtures" / "identity-reminder" / "hermes.txt"
-        ).read_text(encoding="utf-8").rstrip()
-        rendered = _load_reminder_template().replace("{agent}", "test-agent")
+            (ROOT / "tests" / "fixtures" / "identity-reminder" / "hermes.txt")
+            .read_text(encoding="utf-8")
+            .rstrip()
+        )
+        rendered = cfg.load_reminder_template().replace("{agent}", "test-agent")
         self.assertEqual(rendered, fixture)
 
     def test_hermes_template_prefers_per_target_over_common(self):
-        body = _load_reminder_template()
-        self.assertIn("Hermes turns are short", body)
+        self.assertIn("Hermes turns are short", cfg.load_reminder_template())
 
 
 if __name__ == "__main__":

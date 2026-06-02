@@ -1,12 +1,13 @@
 name: open-second-brain
-version: "0.31.2"
-description: "Hermes adapter for OpenSecondBrain vault health checks and optional MCP tool server."
-author: "OpenSecondBrain contributors"
-kind: standalone
-provides_hooks:
-  - pre_llm_call
-mcp_server:
-  command: scripts/o2b
-  args: ["mcp"]
-  description: "Optional stdio MCP server. Add to ~/.hermes/config.yaml mcp_servers if MCP tool routing is desired."
-  protocol_version: "2025-06-18"
+version: "0.32.0"
+description: "Open Second Brain - native Hermes memory provider backed by an Obsidian-compatible Markdown vault."
+author: "Open Second Brain contributors"
+memory_provider: true
+hooks:
+  - system_prompt_block
+  - prefetch
+  - sync_turn
+  - on_pre_compress
+  - on_session_end
+  - on_memory_write
+  - shutdown
