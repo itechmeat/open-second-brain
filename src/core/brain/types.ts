@@ -856,6 +856,12 @@ export interface BrainMostAppliedConfig {
 /** Container for the `active:` block of `_brain.yaml`. */
 export interface BrainActiveConfig {
   readonly most_applied?: BrainMostAppliedConfig;
+  /**
+   * Character budget for the active.md body injected at SessionStart
+   * (token-diet). Absent means the INJECT_BUDGET_CHARS_DEFAULT from
+   * policy.ts applies.
+   */
+  readonly inject_budget_chars?: number;
 }
 
 /**

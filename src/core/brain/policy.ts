@@ -65,6 +65,17 @@ export const MOST_APPLIED_LIMIT_MIN = 1;
 export const MOST_APPLIED_LIMIT_MAX = 50;
 /** Default window when `_brain.yaml` lacks `active.most_applied.window_days`. */
 export const MOST_APPLIED_WINDOW_DAYS_DEFAULT = 30;
+
+/**
+ * Character budget for the active.md body injected at SessionStart
+ * (token-diet, t_40eb1de7). ~2K tokens - enough for every confirmed
+ * rule on a typical vault, small enough that a runaway preference set
+ * cannot flood the session preamble. Override via
+ * `active.inject_budget_chars`.
+ */
+export const INJECT_BUDGET_CHARS_DEFAULT = 8000;
+export const INJECT_BUDGET_CHARS_MIN = 500;
+export const INJECT_BUDGET_CHARS_MAX = 200_000;
 /** Default top-N limit when `_brain.yaml` lacks `active.most_applied.limit`. */
 export const MOST_APPLIED_LIMIT_DEFAULT = 10;
 
@@ -790,16 +801,41 @@ export function validateBrainConfigDetailed(
       }
       mostApplied = { window_days: windowDays, limit };
     }
+    let injectBudgetChars: number | undefined;
+    if ("inject_budget_chars" in activeMap) {
+      const raw = activeMap["inject_budget_chars"];
+      if (
+        typeof raw !== "number" ||
+        !Number.isInteger(raw) ||
+        raw < INJECT_BUDGET_CHARS_MIN ||
+        raw > INJECT_BUDGET_CHARS_MAX
+      ) {
+        throw new BrainConfigError(
+          `must be an integer between ${INJECT_BUDGET_CHARS_MIN} and ` +
+            `${INJECT_BUDGET_CHARS_MAX}; got ${describe(raw)}`,
+          "active.inject_budget_chars",
+          source,
+        );
+      }
+      injectBudgetChars = raw;
+    }
     // Forward-compat: unknown sub-keys under `active:` → warning.
     for (const k of Object.keys(activeMap)) {
-      if (k !== "most_applied_window_days" && k !== "most_applied_limit") {
+      if (
+        k !== "most_applied_window_days" &&
+        k !== "most_applied_limit" &&
+        k !== "inject_budget_chars"
+      ) {
         warnings.push({
           path: source ?? "<config>",
           message: `active.${k}: unknown field ignored (forward-compat)`,
         });
       }
     }
-    active = mostApplied !== undefined ? { most_applied: mostApplied } : {};
+    active = {
+      ...(mostApplied !== undefined ? { most_applied: mostApplied } : {}),
+      ...(injectBudgetChars !== undefined ? { inject_budget_chars: injectBudgetChars } : {}),
+    };
   }
 
   // Optional `discipline_report` section. On any type mismatch, emit a

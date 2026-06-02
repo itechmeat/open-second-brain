@@ -30,7 +30,10 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import { resolveVault } from "../src/core/config.ts";
+import { parseFrontmatterText } from "../src/core/vault.ts";
 import { brainActivePath } from "../src/core/brain/paths.ts";
+import { budgetActiveBody } from "../src/core/brain/active-budget.ts";
+import { INJECT_BUDGET_CHARS_DEFAULT, loadBrainConfig } from "../src/core/brain/policy.ts";
 import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { ensureVaultCurrent } from "../src/core/maintenance/ensure-current.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
@@ -99,13 +102,29 @@ async function main(): Promise<void> {
     return;
   }
 
-  const trimmed = body.trim();
+  // Drop the `kind: brain-active / generated_at` frontmatter - it
+  // carries no signal for the agent, only provenance for tooling.
+  const [, fmBody] = parseFrontmatterText(body);
+  const trimmed = fmBody.trim();
   if (trimmed.length === 0) return;
+
+  // Injection budget (token-diet): a large preference set must not
+  // flood the session preamble. Config errors fall back to the
+  // default budget - the hook is fail-soft by contract.
+  let budget = INJECT_BUDGET_CHARS_DEFAULT;
+  try {
+    const cfg = loadBrainConfig(vault);
+    if (cfg.active?.inject_budget_chars !== undefined) {
+      budget = cfg.active.inject_budget_chars;
+    }
+  } catch {
+    // intentional fallback - a corrupted _brain.yaml is doctor's job
+  }
 
   const out = {
     hookSpecificOutput: {
       hookEventName,
-      additionalContext: trimmed,
+      additionalContext: budgetActiveBody(trimmed, budget),
     },
   };
   process.stdout.write(JSON.stringify(out) + "\n");
