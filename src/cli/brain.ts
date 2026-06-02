@@ -48,6 +48,7 @@ import {
   cmdBrainUpgrade,
   handleBrainSnapshotSubcommand,
   cmdBrainScanInline,
+  cmdBrainEntity,
   cmdBrainImportSession,
   cmdBrainSessionHook,
   cmdBrainImportClaudeMemory,
@@ -171,6 +172,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainScanInline(rest);
       case "import-session":
         return await cmdBrainImportSession(rest);
+      case "entity":
+        return await cmdBrainEntity(rest);
       case "session-hook":
         return await cmdBrainSessionHook(rest);
       case "import-claude-memory":

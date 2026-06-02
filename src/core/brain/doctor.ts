@@ -42,6 +42,7 @@ import { join } from "node:path";
 import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
+import { buildEntityIndex } from "./entities/index-builder.ts";
 import { verifyContentHash } from "./content-hash.ts";
 import { scanDanglingWorkruns } from "./dream-workrun.ts";
 import { parseLogDay } from "./log.ts";
@@ -325,6 +326,14 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
   }
   try {
     checkOrphanEvidence(vault, logRecords, issues);
+  } catch {
+    /* doctor never throws */
+  }
+  // Memory Integrity Suite: canonical entity registry hygiene. Write
+  // seams refuse duplicates, so anything reported here arrived through
+  // hand edits or sync merges - observable, never auto-deleted.
+  try {
+    checkEntities(vault, issues);
   } catch {
     /* doctor never throws */
   }
@@ -1155,6 +1164,43 @@ function checkOrphanEvidence(
         message:
           `apply-evidence at ${e.timestamp} references artifact [[${target}]]` +
           " but no file with that basename exists in the vault.",
+      });
+    }
+  }
+}
+
+/**
+ * `duplicate-entity` / `broken-entity-relation`: canonical entity
+ * registry hygiene (Memory Integrity Suite). Duplicates come straight
+ * from the index builder's conflict report; broken relations are edges
+ * whose target resolves to no entity id in the registry.
+ */
+function checkEntities(vault: string, issues: DoctorIssue[]): void {
+  const index = buildEntityIndex(vault);
+  if (index.entities.length === 0 && index.conflicts.length === 0) return;
+
+  for (const conflict of index.conflicts) {
+    issues.push({
+      severity: "warning",
+      code: "duplicate-entity",
+      message:
+        `${conflict.kind === "duplicate-name" ? "identity" : "alias"} '${conflict.key}' is ` +
+        `claimed by ${conflict.paths.length} entity files: ${conflict.paths.join(", ")}. ` +
+        "Merge them or archive the duplicates - lookups resolve to the first claimant only.",
+    });
+  }
+
+  const knownIds = new Set(index.entities.map((e) => e.id));
+  for (const entity of index.entities) {
+    for (const edge of entity.relations) {
+      if (knownIds.has(edge.target)) continue;
+      issues.push({
+        severity: "warning",
+        code: "broken-entity-relation",
+        path: entity.path,
+        message:
+          `${entity.id} declares '${edge.relation}: [[${edge.target}]]' but no entity ` +
+          "with that id exists in the registry.",
       });
     }
   }

@@ -51,6 +51,7 @@ Brain verbs (observing memory):
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a registered agent session .jsonl (or directory)
+  entity              Canonical entity registry: set, get, list, relate, archive
   session-hook        Capture one runtime hook payload from stdin (internal hook bridge)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
@@ -264,6 +265,14 @@ export const VERB_HELP: Record<string, string> = {
     "accumulated evidence fields. CONFLICT (preference exists without a manifest\n" +
     "entry) exits 2 — never silent overwrites.\n" +
     "Default is --dry-run; --apply requires --yes in non-interactive mode.\n",
+  entity:
+    "usage: o2b brain entity <set|get|list|relate|archive> [args]\n" +
+    "  set <category> <name> [--alias <a>]... [--body <md>] [--confidence <c>] [--json]\n" +
+    "  get <name-or-alias> [--category <c>] [--json]      exit 2 when not found\n" +
+    "  list [--category <c>] [--status active|archived] [--json]\n" +
+    "  relate <from> <relation> <to> [--from-category <c>] [--to-category <c>] [--json]\n" +
+    "  archive <name-or-alias> [--restore] [--category <c>] [--json]\n" +
+    "One canonical entity per (category, name); aliases resolve to the canonical record.",
   "import-session":
     "usage: o2b brain import-session <path> [--vault <vault>]\n" +
     "                                [--format auto|<registered-adapter>]\n" +
