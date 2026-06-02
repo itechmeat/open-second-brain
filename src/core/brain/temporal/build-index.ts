@@ -19,7 +19,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import type { BrainLogEntry } from "./../log.ts";
-import { readLogDay } from "./../log-jsonl.ts";
+import { listLogDates, readLogDay } from "./../log-jsonl.ts";
 import { brainDirs } from "./../paths.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { parseWikilink } from "./../wikilink.ts";
@@ -171,13 +171,9 @@ function collectLogEvents(vault: string, window: TimelineWindow, out: TemporalEv
   // same convention `digest.ts:readLogsInWindow` uses).
   const lowerBound = addDays(sinceDay, -1);
   const upperBound = addDays(untilDay, 1);
-  const dates = new Set<string>();
-  for (const entry of readdirSync(logDir, { withFileTypes: true })) {
-    if (!entry.isFile()) continue;
-    const base = stripKnownLogExtension(entry.name);
-    if (base !== null && ISO_DATE_ONLY_RE.test(base)) dates.add(base);
-  }
-  const sortedDates = [...dates].toSorted();
+  // Shard-aware (Memory Integrity Suite): listLogDates recognises the
+  // legacy pair AND `<date>.<deviceId>.jsonl` / `.md` shard names.
+  const sortedDates = listLogDates(vault);
   for (const date of sortedDates) {
     if (date < lowerBound) continue;
     if (date > upperBound) continue;
@@ -199,12 +195,6 @@ function collectLogEvents(vault: string, window: TimelineWindow, out: TemporalEv
       );
     }
   }
-}
-
-function stripKnownLogExtension(name: string): string | null {
-  if (name.endsWith(".jsonl")) return name.slice(0, -".jsonl".length);
-  if (name.endsWith(".md")) return name.slice(0, -".md".length);
-  return null;
 }
 
 /**

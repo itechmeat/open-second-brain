@@ -6,11 +6,12 @@
  * apply-evidence / note), and attribution to confirmed/retired rules.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { brainDirs } from "./paths.ts";
-import { parseLogDay, type BrainLogEntry } from "./log.ts";
+import type { BrainLogEntry } from "./log.ts";
+import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 
 export interface AgentSummaryEntry {
@@ -121,22 +122,16 @@ export function computeAgentSummary(
 }
 
 function readLogsInWindow(vault: string, since: Date, until: Date): BrainLogEntry[] {
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.log)) return [];
   const sinceIso = since.toISOString();
   const untilIso = until.toISOString();
   const sinceDay = sinceIso.slice(0, 10);
   const untilDay = untilIso.slice(0, 10);
   const out: BrainLogEntry[] = [];
-  const dates = readdirSync(dirs.log, { withFileTypes: true })
-    .filter((d) => d.isFile() && d.name.endsWith(".md"))
-    .map((d) => d.name.slice(0, -3))
-    .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n))
-    .toSorted();
-  for (const date of dates) {
+  // Shard-aware (Memory Integrity Suite): one discovery helper, merged reads.
+  for (const date of listLogDates(vault)) {
     if (date < addDays(sinceDay, -1)) continue;
     if (date > addDays(untilDay, 1)) continue;
-    const { entries } = parseLogDay(vault, date);
+    const { entries } = readLogDay(vault, date);
     for (const e of entries) {
       if (e.timestamp >= sinceIso && e.timestamp < untilIso) {
         out.push(e);

@@ -98,7 +98,17 @@ const SUB_BULLET_RE = /^(?:\s{2,}|\t+)-\s+(.+)$/;
  */
 export function parseLogDay(vault: string, date: string): ParseLogDayResult {
   const validDate = validateIsoDate(date);
-  const path = logPath(vault, validDate);
+  return parseLogDayFile(vault, validDate, logPath(vault, validDate));
+}
+
+/**
+ * Parse one specific log markdown file for `date`. The per-device
+ * shard layout (Memory Integrity Suite) means a day can have several
+ * markdown files (`<date>.md`, `<date>.<deviceId>.md`); the shard
+ * readers in log-jsonl.ts call this once per file and merge.
+ */
+export function parseLogDayFile(vault: string, date: string, path: string): ParseLogDayResult {
+  const validDate = validateIsoDate(date);
   if (!existsSync(path)) {
     return { entries: [], warnings: [] };
   }
