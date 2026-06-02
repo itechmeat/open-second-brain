@@ -997,6 +997,12 @@ export interface BrainConfig {
    */
   readonly notes?: BrainNotesConfig;
   /**
+   * Optional `sessions:` block (Memory Integrity Suite). Capture
+   * boundaries for session/message ingestion. Absent: every session
+   * is captured - bit-identical to pre-boundary behaviour.
+   */
+  readonly sessions?: BrainSessionsConfig;
+  /**
    * Optional `health:` block (v0.14.0). Tunes the semantic-health
    * detectors and the remediation step cap. Absent: callers fall back
    * to `BRAIN_HEALTH_DEFAULTS` via `resolveHealth`.
@@ -1026,6 +1032,25 @@ export interface BrainNotesConfig {
 
 export interface ResolvedBrainNotesConfig {
   readonly read_paths: ReadonlyArray<string>;
+}
+
+/**
+ * Optional `sessions:` block (Memory Integrity Suite). Capture
+ * boundaries for runtime session ingestion: ignored sessions produce
+ * nothing, stateless sessions read but never write, and suppressed
+ * messages never become Brain evidence. Session patterns are anchored
+ * globs (`*`, `?`); message patterns are regexes.
+ */
+export interface BrainSessionsConfig {
+  readonly ignore_patterns?: ReadonlyArray<string>;
+  readonly stateless_patterns?: ReadonlyArray<string>;
+  readonly ignore_message_patterns?: ReadonlyArray<string>;
+}
+
+export interface ResolvedBrainSessionsConfig {
+  readonly ignore_patterns: ReadonlyArray<string>;
+  readonly stateless_patterns: ReadonlyArray<string>;
+  readonly ignore_message_patterns: ReadonlyArray<string>;
 }
 
 /**
