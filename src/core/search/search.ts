@@ -14,6 +14,13 @@ import { join } from "node:path";
 import { parseFrontmatter } from "../vault.ts";
 import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
 import { makeProvider } from "./embeddings/provider.ts";
+import {
+  composeWeightProfiles,
+  isNeutralLearnedWeights,
+  learnedWeightsFingerprint,
+  learnedWeightsReason,
+  readLearnedWeights,
+} from "./feedback.ts";
 import { extractEntities } from "./entities.ts";
 import { buildEvidencePack, downrankTerminalEvidenceResults } from "./evidence-pack.ts";
 import { runFtsQueryDetailed } from "./fts.ts";
@@ -76,6 +83,7 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     syn: r.synonymEnabled,
     synMax: r.synonymMaxTerms,
     relPol: r.relationPolarityEnabled,
+    lw: r.learnedWeightsEnabled,
   });
 }
 
@@ -220,7 +228,16 @@ export async function search(
           keywordOnly: false,
           sessionFocus,
         };
-        cacheKey = buildCacheKey(keyOpts, basePlan.planHash, configFingerprint(config));
+        // The learned-weights state changes results outside the static
+        // config, so its fingerprint joins the key (recall-trust-suite).
+        const lwFp = config.recall.learnedWeightsEnabled
+          ? learnedWeightsFingerprint(config.vault)
+          : "off";
+        cacheKey = buildCacheKey(
+          keyOpts,
+          basePlan.planHash,
+          `${configFingerprint(config)}|lw:${lwFp}`,
+        );
         const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
         if (hit) return hit;
       } catch {
@@ -272,7 +289,16 @@ export async function search(
         for (const w of kwOutcome.warnings) warnings.push(w);
       }
     }
-    const weightProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;
+    const intentProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;
+    // Learned recall weights (recall-trust-suite): opt-in multipliers
+    // derived from explicit feedback compose with the intent profile.
+    // Both factors are bounded, so the product is too; neutral learned
+    // weights leave ranking bit-identical.
+    const learned = config.recall.learnedWeightsEnabled ? readLearnedWeights(config.vault) : null;
+    const learnedActive = learned !== null && !isNeutralLearnedWeights(learned);
+    const weightProfile = learnedActive
+      ? composeWeightProfiles(intentProfile, learned)
+      : intentProfile;
 
     // Semantic candidates (may be skipped).
     let semHits: ReturnType<Store["semanticTopK"]> = [];
@@ -438,7 +464,18 @@ export async function search(
     const polarized = config.recall.relationPolarityEnabled
       ? applyRelationPolarityPhase(store, excluded, opts.includeSuperseded === true)
       : excluded;
-    const filtered = polarized.slice(0, limit);
+    const sliced = polarized.slice(0, limit);
+    // Explainability: when learned weights affected this ranking, every
+    // surfaced result says so (acceptance: "search explanations show
+    // when learned weights affected a result").
+    const filtered = learnedActive
+      ? sliced.map((r) =>
+          Object.freeze({
+            ...r,
+            reasons: Object.freeze([...r.reasons, learnedWeightsReason(learned)]),
+          }),
+        )
+      : sliced;
 
     // Typed graph semantics (v3): surface the typed relations each
     // result page declares in its frontmatter. Computed here from the

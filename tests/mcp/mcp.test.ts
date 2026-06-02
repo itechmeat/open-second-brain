@@ -244,6 +244,7 @@ describe("tool listing", () => {
         "payment_request_status",
         "payment_request_consume",
         // Search (added in v0.10.0; recall gate added in v0.27.0).
+        "brain_recall_feedback",
         "brain_recall_gate",
         "brain_search",
         // Schema admin + watchdog recovery probes.
@@ -500,7 +501,8 @@ describe("stdio loop", () => {
     // + 3 procedural-learning tools (v0.30.0) = 68.
     // + brain_procedural_graph (v0.31.0) = 69.
     // + brain_attention_flows (v0.31.0) = 70.
-    expect(list.result.tools.length).toBe(70);
+    // + brain_recall_feedback (recall-trust-suite) = 71.
+    expect(list.result.tools.length).toBe(71);
   });
 
   test("returns parse error for invalid JSON", async () => {

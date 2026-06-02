@@ -291,6 +291,14 @@ export interface ResolvedRecallConfig {
    * either way; this switch exists as the explicit kill switch.
    */
   readonly relationPolarityEnabled: boolean;
+  /**
+   * Retrieval feedback loop (recall-trust-suite). Off by default: when
+   * true, learned per-layer multipliers derived from explicit recall
+   * feedback (`Brain/search/learned-weights.json`) compose with the
+   * intent weight profile during ranking. Bounded, deterministic,
+   * resettable — see `feedback.ts`.
+   */
+  readonly learnedWeightsEnabled: boolean;
 }
 
 export interface ResolvedSearchConfig {

@@ -63,6 +63,8 @@ export function makeConfig(opts: {
   cacheEnabled?: boolean;
   /** Relation-aware recall polarity; defaults to true. */
   relationPolarityEnabled?: boolean;
+  /** Learned recall weights from feedback; defaults to false (opt-in). */
+  learnedWeightsEnabled?: boolean;
 }): ResolvedSearchConfig {
   const baseSemantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: false,
@@ -106,6 +108,7 @@ export function makeConfig(opts: {
       cacheEnabled: opts.cacheEnabled ?? false,
       cacheTtlSeconds: 300,
       relationPolarityEnabled: opts.relationPolarityEnabled ?? true,
+      learnedWeightsEnabled: opts.learnedWeightsEnabled ?? false,
     }),
   });
 }

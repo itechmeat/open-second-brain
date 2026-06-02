@@ -49,6 +49,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
       cacheEnabled: false,
       cacheTtlSeconds: 300,
       relationPolarityEnabled: true,
+      learnedWeightsEnabled: false,
     }),
     ...overrides,
   });
