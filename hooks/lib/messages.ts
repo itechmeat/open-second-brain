@@ -121,3 +121,17 @@ export function stopGuardrailReason(runtime: HookRuntime = "unknown"): string {
   );
   return parts.join("\n");
 }
+
+/**
+ * Steady-state nudge (token-diet, t_9cc4f400): emitted after the full
+ * reminder has already been shown once in the current Claude Code
+ * session. Hard ceiling 200 characters - the whole point is that the
+ * per-edit cost stays negligible over a long coding session.
+ */
+export function postWriteNudge(): string {
+  return (
+    "Open Second Brain: artifact written. If a taste signal or scoped " +
+    "preference applies, call brain_feedback / brain_apply_evidence / " +
+    "brain_note (full contract earlier in this session)."
+  );
+}

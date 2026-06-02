@@ -24,9 +24,58 @@
  * exit 0 so the turn proceeds; the Stop guardrail is the gating hook.
  */
 
+import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { detectHookRuntime, isArtifactToolName } from "./lib/detect.ts";
-import { postWriteReminder } from "./lib/messages.ts";
+import { postWriteNudge, postWriteReminder } from "./lib/messages.ts";
+
+/** Markers older than this are pruned opportunistically. */
+const MARKER_TTL_MS = 48 * 3600 * 1000;
+
+function markerStateDir(): string {
+  const override = process.env["O2B_REMINDER_STATE_DIR"];
+  return override && override.length > 0 ? override : join(tmpdir(), "o2b-reminder-markers");
+}
+
+/**
+ * Record that the full reminder was shown for `sessionId`; returns
+ * true when a marker already existed (steady state). Best-effort and
+ * fail-soft: any IO problem reports "not seen yet", so the caller
+ * falls back to the full reminder - over-reminding is safer than
+ * never teaching the contract.
+ */
+function sessionAlreadyReminded(sessionId: string): boolean {
+  try {
+    const dir = markerStateDir();
+    const marker = join(dir, sessionId.replace(/[^A-Za-z0-9._-]/g, "_"));
+    if (existsSync(marker)) return true;
+    mkdirSync(dir, { recursive: true });
+    pruneStaleMarkers(dir);
+    writeFileSync(marker, "", "utf8");
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function pruneStaleMarkers(dir: string): void {
+  try {
+    const cutoff = Date.now() - MARKER_TTL_MS;
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      try {
+        if (statSync(full).mtimeMs < cutoff) unlinkSync(full);
+      } catch {
+        // a vanished marker is fine
+      }
+    }
+  } catch {
+    // pruning is opportunistic
+  }
+}
 
 async function main(): Promise<void> {
   let payload;
@@ -48,7 +97,17 @@ async function main(): Promise<void> {
 
   const filePath = extractFilePath(payload.tool_input);
   const runtime = detectHookRuntime(payload);
-  const text = postWriteReminder({ toolName, filePath, runtime });
+
+  // Session cadence (token-diet, t_9cc4f400): the full reminder
+  // teaches the contract once per Claude Code session; afterwards a
+  // <= 200-char nudge keeps the per-edit cost negligible. Codex
+  // `codex exec` is one-shot, so steady state never applies there;
+  // unknown runtimes and absent session ids stay on the full text.
+  const sessionId = typeof payload.session_id === "string" ? payload.session_id : "";
+  const steadyState =
+    runtime === "claudecode" && sessionId.length > 0 && sessionAlreadyReminded(sessionId);
+
+  const text = steadyState ? postWriteNudge() : postWriteReminder({ toolName, filePath, runtime });
 
   const out = {
     hookSpecificOutput: {
