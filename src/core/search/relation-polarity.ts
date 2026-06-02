@@ -149,6 +149,13 @@ export function applyRelationPolarity(
     return [m];
   };
 
+  // Edges apply in stable `ORDER BY l.id` order (insertion order from
+  // the indexer). For a node that is both a demoted predecessor and a
+  // positive-relation target the effects compose deterministically:
+  // demotion multiplies the ORIGINAL score exactly once (it reads
+  // src.result.score, not the mutated value), and positive boosts are
+  // additive and capped, so relative edge order cannot change the
+  // final score.
   for (const edge of inputs.edges) {
     if (edge.targetDocumentId !== null && edge.targetDocumentId === edge.sourceDocumentId) {
       continue; // self-edge: inert

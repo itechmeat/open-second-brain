@@ -205,7 +205,11 @@ export function writeLearnedWeights(vault: string, weights: LearnedWeights): voi
 export function readLearnedWeights(vault: string): LearnedWeights | null {
   try {
     const parsed = JSON.parse(readFileSync(learnedWeightsPath(vault), "utf8")) as LearnedWeights;
-    if (typeof parsed.keywordMul !== "number" || typeof parsed.events !== "number") return null;
+    // All four multipliers must be finite numbers — a partially-corrupt
+    // file must not feed NaN into the weight composition.
+    const muls = [parsed.keywordMul, parsed.semanticMul, parsed.entityMul, parsed.recencyMul];
+    if (!muls.every((m) => typeof m === "number" && Number.isFinite(m))) return null;
+    if (typeof parsed.events !== "number") return null;
     return parsed;
   } catch {
     return null;
