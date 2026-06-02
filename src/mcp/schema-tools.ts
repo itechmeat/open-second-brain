@@ -12,61 +12,101 @@ import {
 import type { SchemaMutation } from "../core/brain/schema-mutate.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import { coerceStr } from "./coerce.ts";
-import type { ToolDefinition } from "./tools.ts";
+import { deprecatedAlias, type ServerContext, type ToolDefinition } from "./tools.ts";
+
+// Read-side handlers shared by the consolidated `schema_inspect` and
+// its deprecated per-view aliases (token-diet, t_3920db77).
+const SCHEMA_INSPECT_VIEWS: Readonly<
+  Record<string, (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown>
+> = Object.freeze({
+  graph: (ctx: ServerContext) => buildSchemaGraph(ctx.vault),
+  lint: (ctx: ServerContext) => buildSchemaLint(ctx.vault),
+  stats: (ctx: ServerContext) => buildSchemaStats(ctx.vault),
+  orphans: (ctx: ServerContext) => reviewSchemaOrphans(ctx.vault),
+  explain_type: (ctx: ServerContext, args: Record<string, unknown>) =>
+    explainSchemaToken(ctx.vault, coerceStr(args, "token")!),
+  active_pack: (ctx: ServerContext) => getActiveSchemaPack(ctx.vault),
+  packs: (ctx: ServerContext) => listSchemaPacks(ctx.vault),
+});
+
+function toolSchemaInspect(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<unknown> | unknown {
+  const view = typeof args["view"] === "string" ? args["view"] : "";
+  const handler = SCHEMA_INSPECT_VIEWS[view];
+  if (handler === undefined) {
+    throw new Error(
+      `view must be one of ${Object.keys(SCHEMA_INSPECT_VIEWS).join(", ")}; got ${JSON.stringify(
+        args["view"],
+      )}`,
+    );
+  }
+  return handler(ctx, args);
+}
 
 export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
-    name: "get_active_schema_pack",
-    description: "Return the active Brain schema pack from Brain/_brain.yaml. Read-only.",
-    inputSchema: emptySchema(),
-    handler: (ctx) => getActiveSchemaPack(ctx.vault),
-  },
-  {
-    name: "list_schema_packs",
-    description: "List available Brain schema packs. Read-only.",
-    inputSchema: emptySchema(),
-    handler: (ctx) => listSchemaPacks(ctx.vault),
-  },
-  {
-    name: "schema_stats",
-    description: "Return Brain schema declaration, usage, metadata, and finding counts. Read-only.",
-    inputSchema: emptySchema(),
-    handler: (ctx) => buildSchemaStats(ctx.vault),
-  },
-  {
-    name: "schema_lint",
+    name: "schema_inspect",
     description:
-      "Return schema lint findings for unknown tokens and unused declarations. Read-only.",
-    inputSchema: emptySchema(),
-    handler: (ctx) => buildSchemaLint(ctx.vault),
-  },
-  {
-    name: "schema_graph",
-    description:
-      "Return schema graph nodes and edges for types, aliases, prefixes, and routing. Read-only.",
-    inputSchema: emptySchema(),
-    handler: (ctx) => buildSchemaGraph(ctx.vault),
-  },
-  {
-    name: "schema_explain_type",
-    description:
-      "Explain one schema token across declarations, usage, aliases, prefixes, and routing. Read-only.",
+      "Read-only Brain schema inspection, one tool for every view: graph, lint, stats, orphans, explain_type (needs token), active_pack, or packs. Replaces the per-view schema read tools.",
     inputSchema: {
       type: "object",
       properties: {
-        token: { type: "string", description: "Schema token to explain." },
+        view: {
+          type: "string",
+          enum: ["graph", "lint", "stats", "orphans", "explain_type", "active_pack", "packs"],
+          description: "Which schema view to produce.",
+        },
+        token: { type: "string", description: "view=explain_type: schema token to explain." },
       },
-      required: ["token"],
+      required: ["view"],
       additionalProperties: false,
     },
-    handler: (ctx, args) => explainSchemaToken(ctx.vault, coerceStr(args, "token")!),
+    handler: toolSchemaInspect,
   },
-  {
+  deprecatedAlias({
+    name: "get_active_schema_pack",
+    target: "schema_inspect",
+    view: "active_pack",
+    handler: SCHEMA_INSPECT_VIEWS["active_pack"]!,
+  }),
+  deprecatedAlias({
+    name: "list_schema_packs",
+    target: "schema_inspect",
+    view: "packs",
+    handler: SCHEMA_INSPECT_VIEWS["packs"]!,
+  }),
+  deprecatedAlias({
+    name: "schema_stats",
+    target: "schema_inspect",
+    view: "stats",
+    handler: SCHEMA_INSPECT_VIEWS["stats"]!,
+  }),
+  deprecatedAlias({
+    name: "schema_lint",
+    target: "schema_inspect",
+    view: "lint",
+    handler: SCHEMA_INSPECT_VIEWS["lint"]!,
+  }),
+  deprecatedAlias({
+    name: "schema_graph",
+    target: "schema_inspect",
+    view: "graph",
+    handler: SCHEMA_INSPECT_VIEWS["graph"]!,
+  }),
+  deprecatedAlias({
+    name: "schema_explain_type",
+    target: "schema_inspect",
+    view: "explain_type",
+    handler: SCHEMA_INSPECT_VIEWS["explain_type"]!,
+  }),
+  deprecatedAlias({
     name: "schema_review_orphans",
-    description: "Return declared schema tokens that are currently unused. Read-only.",
-    inputSchema: emptySchema(),
-    handler: (ctx) => reviewSchemaOrphans(ctx.vault),
-  },
+    target: "schema_inspect",
+    view: "orphans",
+    handler: SCHEMA_INSPECT_VIEWS["orphans"]!,
+  }),
   {
     name: "schema_apply_mutations",
     description:
@@ -108,14 +148,10 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
       });
     },
   },
-  {
+  deprecatedAlias({
     name: "reload_schema_pack",
-    description: "Reload and return the active Brain schema pack from disk. Read-only.",
-    inputSchema: emptySchema(),
-    handler: (ctx) => getActiveSchemaPack(ctx.vault),
-  },
+    target: "schema_inspect",
+    view: "active_pack",
+    handler: SCHEMA_INSPECT_VIEWS["active_pack"]!,
+  }),
 ];
-
-function emptySchema(): Record<string, unknown> {
-  return { type: "object", properties: {}, additionalProperties: false };
-}

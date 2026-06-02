@@ -172,7 +172,7 @@ import {
 } from "../core/brain/pinned.ts";
 
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
-import type { ServerContext, ToolDefinition } from "./tools.ts";
+import { deprecatedAlias, type ServerContext, type ToolDefinition } from "./tools.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import {
   coerceStr,
@@ -2372,7 +2372,179 @@ async function toolMcpLandscape(ctx: ServerContext): Promise<Record<string, unkn
   };
 }
 
+// ----- Consolidated view tools (token-diet, t_3920db77) ---------------------
+
+const BRIEF_VIEW_HANDLERS: Readonly<
+  Record<string, (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown>
+> = Object.freeze({
+  morning: toolBrainMorningBrief,
+  daily: toolBrainDailyBrief,
+  weekly: toolBrainWeeklySynthesis,
+  monthly: toolBrainMonthlyReview,
+  operator: toolBrainOperatorSummary,
+  digest: toolBrainDigest,
+});
+
+const ANALYTICS_VIEW_HANDLERS: Readonly<
+  Record<string, (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown>
+> = Object.freeze({
+  timeline: toolBrainTimeline,
+  attention_flows: toolBrainAttentionFlows,
+  belief_evolution: toolBrainBeliefEvolution,
+  concept_synthesis: toolBrainConceptSynthesis,
+});
+
+function dispatchByView(
+  table: Readonly<
+    Record<
+      string,
+      (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown
+    >
+  >,
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<unknown> | unknown {
+  const view = typeof args["view"] === "string" ? args["view"] : "";
+  const handler = table[view];
+  if (handler === undefined) {
+    throw new Error(
+      `view must be one of ${Object.keys(table).join(", ")}; got ${JSON.stringify(args["view"])}`,
+    );
+  }
+  return handler(ctx, args);
+}
+
+async function toolBrainBrief(ctx: ServerContext, args: Record<string, unknown>): Promise<unknown> {
+  return await dispatchByView(BRIEF_VIEW_HANDLERS, ctx, args);
+}
+
+async function toolBrainAnalytics(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  // attention_flows requires an `operation`; the consolidated surface
+  // defaults it to the read-only `list` so `{view}` alone is valid.
+  const withDefaults = args["view"] === "attention_flows" ? { operation: "list", ...args } : args;
+  return await dispatchByView(ANALYTICS_VIEW_HANDLERS, ctx, withDefaults);
+}
+
 export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: "brain_brief",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Read-only Brain summary, one tool for every window: view=morning (session-start brief), daily, weekly, monthly, operator (maintenance dashboard), or digest (activity window). Replaces the per-window brief tools.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        view: {
+          type: "string",
+          enum: ["morning", "daily", "weekly", "monthly", "operator", "digest"],
+          description: "Which summary to produce.",
+        },
+        date: {
+          type: "string",
+          description: "view=daily: ISO date (YYYY-MM-DD), default today UTC.",
+        },
+        week_end: {
+          type: "string",
+          description: "view=weekly: ISO end date (exclusive), default today UTC.",
+        },
+        month: {
+          type: "string",
+          description: "view=monthly: target month (YYYY-MM), default current UTC month.",
+        },
+        since: {
+          type: "string",
+          description: "view=digest: inclusive ISO lower bound, default until - 24h.",
+        },
+        until: {
+          type: "string",
+          description: "view=digest: exclusive ISO upper bound, default now.",
+        },
+        format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "view=digest: output format, default markdown.",
+        },
+        top_k: {
+          type: "integer",
+          minimum: 1,
+          description: "view=morning: max confirmed preferences (default 10).",
+        },
+        lookback_days: {
+          type: "integer",
+          minimum: 1,
+          description: "view=morning: days of log history (default 7).",
+        },
+        max_chars_per_memory: {
+          type: "integer",
+          minimum: 1,
+          description: "view=morning: per-entry character cap.",
+        },
+        max_total_chars: {
+          type: "integer",
+          minimum: 1,
+          description: "view=morning: total character cap.",
+        },
+        include_dream: {
+          type: "boolean",
+          description: "view=operator: fold a dry-run dream delta in (default true).",
+        },
+        top_actions: {
+          type: "integer",
+          minimum: 0,
+          description: "view=operator: cap on ranked actions (default 5).",
+        },
+      },
+      required: ["view"],
+      additionalProperties: false,
+    },
+    handler: toolBrainBrief,
+  },
+  {
+    name: "brain_analytics",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Read-only Brain analytics, one tool for every lens: view=timeline (event history), attention_flows, belief_evolution, or concept_synthesis. Replaces the per-lens analytics tools.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        view: {
+          type: "string",
+          enum: ["timeline", "attention_flows", "belief_evolution", "concept_synthesis"],
+          description: "Which analytics lens to run.",
+        },
+        pref_id: {
+          type: "string",
+          description: "timeline / belief_evolution: target preference id.",
+        },
+        topic: { type: "string", description: "timeline / belief_evolution: target topic slug." },
+        kind: { type: "string", description: "view=timeline: restrict to one event kind." },
+        since: { type: "string", description: "view=timeline: inclusive ISO lower bound." },
+        until: { type: "string", description: "view=timeline: exclusive ISO upper bound." },
+        limit: { type: "integer", minimum: 1, description: "view=timeline: max events returned." },
+        id: { type: "string", description: "view=concept_synthesis: target id (e.g. pref-foo)." },
+        include_unlinked: {
+          type: "boolean",
+          description: "view=concept_synthesis: include raw-text mentions (default false).",
+        },
+        operation: {
+          type: "string",
+          enum: ["list", "evaluate", "render"],
+          description: "view=attention_flows: operation, default list.",
+        },
+        flow_id: {
+          type: "string",
+          description: "view=attention_flows: flow id for evaluate/render.",
+        },
+      },
+      required: ["view"],
+      additionalProperties: false,
+    },
+    handler: toolBrainAnalytics,
+  },
+
   {
     name: "brain_feedback",
     description:
@@ -2484,21 +2656,13 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainRetention,
   },
   {
-    name: "brain_monthly_review",
+    ...deprecatedAlias({
+      name: "brain_monthly_review",
+      target: "brain_brief",
+      view: "monthly",
+      handler: toolBrainMonthlyReview,
+    }),
     previewBudget: MCP_PREVIEW_BUDGET,
-    description:
-      "Read-only monthly synthesis over Brain timeline activity: event count, status transitions, retirements, contradictions, and neglected areas.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        month: {
-          type: "string",
-          description: "Optional target month in YYYY-MM form. Defaults to the current UTC month.",
-        },
-      },
-      additionalProperties: false,
-    },
-    handler: toolBrainMonthlyReview,
   },
   {
     name: "brain_review_candidates",
@@ -2610,30 +2774,13 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainContext,
   },
   {
-    name: "brain_digest",
+    ...deprecatedAlias({
+      name: "brain_digest",
+      target: "brain_brief",
+      view: "digest",
+      handler: toolBrainDigest,
+    }),
     previewBudget: MCP_PREVIEW_BUDGET,
-    description:
-      "Render a human-readable summary of Brain activity in the last 24h (default) or a custom window. Read-only.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        since: {
-          type: "string",
-          description: "Inclusive lower bound (ISO-8601). Defaults to `until - 24h`.",
-        },
-        until: {
-          type: "string",
-          description: "Exclusive upper bound (ISO-8601). Defaults to `now`.",
-        },
-        format: {
-          type: "string",
-          enum: ["markdown", "json"],
-          description: "Output format. Defaults to `markdown`.",
-        },
-      },
-      additionalProperties: false,
-    },
-    handler: toolBrainDigest,
   },
   {
     name: "brain_query",
@@ -2855,36 +3002,12 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainAudit,
   },
   {
-    name: "brain_morning_brief",
-    description:
-      "Return a read-only session-start summary: top confirmed preferences (confidence then recency), open questions raised by the recent reconcile phase, and recent narrative notes. Bounded by per-entry and total character caps. Read-only.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        top_k: {
-          type: "integer",
-          minimum: 1,
-          description: "Max confirmed preferences to consider (default 10).",
-        },
-        lookback_days: {
-          type: "integer",
-          minimum: 1,
-          description: "Days of log history scanned for open questions + notes (default 7).",
-        },
-        max_chars_per_memory: {
-          type: "integer",
-          minimum: 1,
-          description: "Per-entry character cap (code points).",
-        },
-        max_total_chars: {
-          type: "integer",
-          minimum: 1,
-          description: "Total character cap across the brief.",
-        },
-      },
-      additionalProperties: false,
-    },
-    handler: toolBrainMorningBrief,
+    ...deprecatedAlias({
+      name: "brain_morning_brief",
+      target: "brain_brief",
+      view: "morning",
+      handler: toolBrainMorningBrief,
+    }),
   },
   {
     name: "brain_sources",
@@ -3221,26 +3344,12 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainProceduralGraph,
   },
   {
-    name: "brain_attention_flows",
-    description:
-      "List/evaluate/render declarative attention-flow recipes for open loops and learnings.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        operation: {
-          type: "string",
-          enum: ["list", "evaluate", "render"],
-          description: "Tool operation.",
-        },
-        flow_id: {
-          type: "string",
-          description: "Flow id for evaluate/render operations.",
-        },
-      },
-      required: ["operation"],
-      additionalProperties: false,
-    },
-    handler: toolBrainAttentionFlows,
+    ...deprecatedAlias({
+      name: "brain_attention_flows",
+      target: "brain_analytics",
+      view: "attention_flows",
+      handler: toolBrainAttentionFlows,
+    }),
   },
   {
     name: "brain_pre_compact_extract",
@@ -3422,27 +3531,13 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainUnlinkedMentions,
   },
   {
-    name: "brain_concept_synthesis",
+    ...deprecatedAlias({
+      name: "brain_concept_synthesis",
+      target: "brain_analytics",
+      view: "concept_synthesis",
+      handler: toolBrainConceptSynthesis,
+    }),
     previewBudget: MCP_PREVIEW_BUDGET,
-    description:
-      "Concept-scoped cluster: target note + every artifact that wikilinks to it (depth-1), optionally including unlinked-mention rows. Deterministic JSON envelope, no LLM call inside. Read-only.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: {
-          type: "string",
-          description: "Target id (e.g. `pref-foo`). Wikilink decoration is stripped if present.",
-        },
-        include_unlinked: {
-          type: "boolean",
-          description:
-            "When true, also populate `unlinked_mentions` (raw-text mentions outside `[[...]]`). Defaults to false.",
-        },
-      },
-      required: ["id"],
-      additionalProperties: false,
-    },
-    handler: toolBrainConceptSynthesis,
   },
   {
     name: "brain_moc_audit",
@@ -3462,63 +3557,21 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainMocAudit,
   },
   {
-    name: "brain_timeline",
+    ...deprecatedAlias({
+      name: "brain_timeline",
+      target: "brain_analytics",
+      view: "timeline",
+      handler: toolBrainTimeline,
+    }),
     previewBudget: MCP_PREVIEW_BUDGET,
-    description:
-      "Chronological list of Brain events filtered by any combination of pref_id, topic, kind, since, until, limit. Returns the canonical TimelineIndex projection. Read-only.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        pref_id: {
-          type: "string",
-          description: "Restrict to events for this preference / retired / signal id.",
-        },
-        topic: {
-          type: "string",
-          description: "Restrict to events for this topic slug.",
-        },
-        kind: {
-          type: "string",
-          description: "Restrict to events of this BrainLogEventKind (e.g. `apply-evidence`).",
-        },
-        since: {
-          type: "string",
-          description: "Inclusive lower bound (ISO date or ISO timestamp). Defaults to epoch.",
-        },
-        until: {
-          type: "string",
-          description: "Exclusive upper bound (ISO date or ISO timestamp). Defaults to now.",
-        },
-        limit: {
-          type: "integer",
-          minimum: 1,
-          description: "Maximum number of events to return after filtering. Omit for no cap.",
-        },
-      },
-      additionalProperties: false,
-    },
-    handler: toolBrainTimeline,
   },
   {
-    name: "brain_belief_evolution",
-    description:
-      "Per-preference or per-topic chronological story: status transitions (creation/promotion/retirement) derived from dream summaries, evidence rollup with running counts, and retirement chain. Read-only.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        pref_id: {
-          type: "string",
-          description: "Target preference id (e.g. `pref-foo`). Mutually exclusive with `topic`.",
-        },
-        topic: {
-          type: "string",
-          description:
-            "Target topic slug. Aggregates every pref-* / ret-* sharing the topic. Mutually exclusive with `pref_id`.",
-        },
-      },
-      additionalProperties: false,
-    },
-    handler: toolBrainBeliefEvolution,
+    ...deprecatedAlias({
+      name: "brain_belief_evolution",
+      target: "brain_analytics",
+      view: "belief_evolution",
+      handler: toolBrainBeliefEvolution,
+    }),
   },
   {
     name: "brain_stale_scan",
@@ -3532,61 +3585,30 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainStaleScan,
   },
   {
-    name: "brain_daily_brief",
+    ...deprecatedAlias({
+      name: "brain_daily_brief",
+      target: "brain_brief",
+      view: "daily",
+      handler: toolBrainDailyBrief,
+    }),
     previewBudget: MCP_PREVIEW_BUDGET,
-    description:
-      "Deterministic daily brief: events grouped by kind, status transitions, vault delta (newPromotions / newRetired / newFeedback / evidenceApplied / evidenceViolated), and deduplicated artifact wikilinks. Read-only.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        date: {
-          type: "string",
-          description: "ISO date (`YYYY-MM-DD`) the brief targets. Defaults to today UTC.",
-        },
-      },
-      additionalProperties: false,
-    },
-    handler: toolBrainDailyBrief,
   },
   {
-    name: "brain_weekly_synthesis",
+    ...deprecatedAlias({
+      name: "brain_weekly_synthesis",
+      target: "brain_brief",
+      view: "weekly",
+      handler: toolBrainWeeklySynthesis,
+    }),
     previewBudget: MCP_PREVIEW_BUDGET,
-    description:
-      "Deterministic 7-day synthesis: events grouped by kind, status transitions, retired-in-window list, contradictions (signal-suppressed + apply-evidence violated), vault delta, and source pointers. Read-only.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        week_end: {
-          type: "string",
-          description:
-            "ISO date (`YYYY-MM-DD`) the 7-day window ends at (exclusive). Defaults to today UTC.",
-        },
-      },
-      additionalProperties: false,
-    },
-    handler: toolBrainWeeklySynthesis,
   },
   {
-    name: "brain_operator_summary",
+    ...deprecatedAlias({
+      name: "brain_operator_summary",
+      target: "brain_brief",
+      view: "operator",
+      handler: toolBrainOperatorSummary,
+    }),
     previewBudget: MCP_PREVIEW_BUDGET,
-    description:
-      "Aggregate operator dashboard: trust verdict, doctor + dream counts, verification delta, ranked maintenance actions, and instruction-file ceiling warnings. Read-only.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        include_dream: {
-          type: "boolean",
-          description:
-            "When true (default), run a dry-run dream pass and fold its verification delta into the summary.",
-        },
-        top_actions: {
-          type: "integer",
-          minimum: 0,
-          description: "Cap on the ranked maintenance action list. Defaults to 5.",
-        },
-      },
-      additionalProperties: false,
-    },
-    handler: toolBrainOperatorSummary,
   },
 ]);

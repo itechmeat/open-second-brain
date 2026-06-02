@@ -234,6 +234,10 @@ describe("tool listing", () => {
         "brain_procedural_graph",
         "brain_recurrence",
         "brain_attention_flows",
+        // Consolidated view tools (token-diet, v0.34.0); the per-view
+        // names above stay registered as deprecated aliases.
+        "brain_brief",
+        "brain_analytics",
         // Pay Memory (unchanged).
         "payment_memory_init",
         "payment_receipt_append",
@@ -257,6 +261,7 @@ describe("tool listing", () => {
         "schema_review_orphans",
         "schema_apply_mutations",
         "reload_schema_pack",
+        "schema_inspect",
         "brain_watchdog",
       ].toSorted(),
     );
@@ -501,8 +506,10 @@ describe("stdio loop", () => {
     // + 3 procedural-learning tools (v0.30.0) = 68.
     // + brain_procedural_graph (v0.31.0) = 69.
     // + brain_attention_flows (v0.31.0) = 70.
-    // + brain_recall_feedback (recall-trust-suite) = 71.
-    expect(list.result.tools.length).toBe(71);
+    // + brain_recall_feedback (recall-trust-suite) = 71,
+    // + brain_brief / brain_analytics / schema_inspect (token-diet,
+    //   17 predecessors stay as deprecated aliases) = 74.
+    expect(list.result.tools.length).toBe(74);
   });
 
   test("returns parse error for invalid JSON", async () => {

@@ -9,6 +9,8 @@ import { MCP_PREVIEW_BUDGET } from "../../src/mcp/preview-budget.ts";
  * than an accident of a default.
  */
 const BUDGETED = new Set<string>([
+  "brain_brief",
+  "brain_analytics",
   "brain_search",
   "brain_context_pack",
   "brain_digest",
