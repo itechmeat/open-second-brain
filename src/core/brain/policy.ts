@@ -1483,6 +1483,7 @@ export function validateBrainConfigDetailed(
     "link_graph",
     "temporal",
     "notes",
+    "sessions",
     "schema",
   ]);
   for (const key of Object.keys(obj)) {
