@@ -11,6 +11,7 @@
  */
 
 import {
+  captureRecallFeedback,
   evaluateSurfacingGate,
   indexStatus,
   resolveSearchConfig,
@@ -22,7 +23,7 @@ import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
-import { coerceBoolOptional, coerceStringOptional } from "./coerce.ts";
+import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
@@ -39,6 +40,23 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     focus_query: { type: "string", minLength: 1, maxLength: 1000 },
     focus_path_prefix: { type: "string", minLength: 1, maxLength: 256 },
     evidence_pack: { type: "boolean" },
+    include_superseded: {
+      type: "boolean",
+      description:
+        "History mode for relation polarity: keep matched superseded predecessors undemoted and skip successor pull-in. Default false.",
+    },
+    since: {
+      type: "string",
+      maxLength: 64,
+      description:
+        "Time-aware recall: only documents modified at/after this point. ISO date/datetime, 'today', 'yesterday', 'last week', 'last month', or <n>h/<n>d/<n>w.",
+    },
+    until: {
+      type: "string",
+      maxLength: 64,
+      description:
+        "Time-aware recall: only documents modified at/before this point. Same forms as 'since'.",
+    },
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
@@ -248,6 +266,9 @@ async function toolBrainSearch(
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
+  const includeSuperseded = coerceBoolOptional(args, "include_superseded") ?? false;
+  const since = coerceStringOptional(args, "since", 64);
+  const until = coerceStringOptional(args, "until", 64);
   const telemetry = coerceBoolOptional(args, "telemetry") ?? false;
   const telemetryHost = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
   const telemetrySessionId = coerceStringOptional(args, "session_id", 512);
@@ -289,6 +310,9 @@ async function toolBrainSearch(
         ...(structuredQuery !== undefined ? { structuredQuery } : {}),
         ...(sessionFocus !== undefined ? { sessionFocus } : {}),
         ...(evidencePack ? { evidencePack: true } : {}),
+        ...(includeSuperseded ? { includeSuperseded: true } : {}),
+        ...(since !== undefined ? { since } : {}),
+        ...(until !== undefined ? { until } : {}),
       }),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,
@@ -398,6 +422,34 @@ function mcpEvidencePack(
     })),
     dropped_candidates: pack.droppedCandidates,
     abstention: pack.abstention,
+    ...(pack.idfWeightedCoverage !== undefined
+      ? { idf_weighted_coverage: pack.idfWeightedCoverage }
+      : {}),
+    ...(pack.rareTerms !== undefined ? { rare_terms: pack.rareTerms } : {}),
+    ...(pack.uncoveredRareTerms !== undefined
+      ? { uncovered_rare_terms: pack.uncoveredRareTerms }
+      : {}),
+    ...(pack.unionRecords !== undefined
+      ? {
+          union_records: pack.unionRecords.map((r) => ({
+            term: r.term,
+            path: r.path,
+            document_id: r.documentId,
+            chunk_id: r.chunkId,
+          })),
+        }
+      : {}),
+    ...(pack.completeness !== undefined
+      ? {
+          completeness: {
+            verdict: pack.completeness.verdict,
+            idf_weighted_coverage: pack.completeness.idfWeightedCoverage,
+            covered_terms: pack.completeness.coveredTerms,
+            uncovered_terms: pack.completeness.uncoveredTerms,
+            uncovered_but_present_in_corpus: pack.completeness.uncoveredButPresentInCorpus,
+          },
+        }
+      : {}),
   };
 }
 
@@ -423,7 +475,64 @@ async function toolBrainRecallGate(
   };
 }
 
+const RECALL_FEEDBACK_INPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    query: { type: "string", minLength: 1, maxLength: 2000 },
+    result_path: { type: "string", minLength: 1, maxLength: 512 },
+    verdict: { type: "string", enum: ["up", "down"] },
+  },
+  required: ["query", "result_path", "verdict"],
+  additionalProperties: false,
+};
+
+const RECALL_FEEDBACK_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  properties: {
+    recorded: { type: "boolean" },
+    result_found: { type: "boolean" },
+    learned: { type: "object" },
+  },
+  required: ["recorded", "result_found", "learned"],
+};
+
+/**
+ * `brain_recall_feedback` (recall-trust-suite): record one explicit
+ * per-result recall feedback event. The judged result's per-layer
+ * contributions are captured by re-running the query; the learned
+ * weights refresh deterministically from the full event set.
+ */
+async function toolBrainRecallFeedback(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const query = coerceStr(args, "query")!;
+  const resultPath = coerceStr(args, "result_path")!;
+  const verdict = coerceStr(args, "verdict")!;
+  if (verdict !== "up" && verdict !== "down") {
+    throw new MCPError(INVALID_PARAMS, "argument 'verdict' must be 'up' or 'down'");
+  }
+  const config = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+  const outcome = await captureRecallFeedback(config, { query, resultPath, verdict });
+  return {
+    recorded: true,
+    result_found: outcome.resultFound,
+    learned: outcome.learned,
+  };
+}
+
 export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: "brain_recall_feedback",
+    description:
+      "Record explicit recall feedback (up/down) for one search result. Feeds the deterministic learned-weight fold; events land under Brain/search/feedback/.",
+    inputSchema: RECALL_FEEDBACK_INPUT_SCHEMA,
+    outputSchema: RECALL_FEEDBACK_OUTPUT_SCHEMA,
+    handler: toolBrainRecallFeedback,
+  },
   {
     name: "brain_recall_gate",
     description:

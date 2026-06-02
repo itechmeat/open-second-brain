@@ -51,6 +51,8 @@ function semanticConfig(
       synonymMaxTerms: 3,
       cacheEnabled: false,
       cacheTtlSeconds: 300,
+      relationPolarityEnabled: true,
+      learnedWeightsEnabled: false,
     }),
     ...overrides,
   });

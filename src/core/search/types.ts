@@ -204,6 +204,23 @@ export interface SearchOptions {
   readonly sessionFocus?: SearchSessionFocus | null;
   /** Opt-in verified evidence pack diagnostics. Omitted preserves the legacy search outcome shape. */
   readonly evidencePack?: boolean;
+  /**
+   * History mode for relation polarity (recall-trust-suite). When true a
+   * matched predecessor (`superseded_by` declarer) keeps its rank and no
+   * successor is pulled in; informational reasons still land. Default
+   * false: stale predecessors are demoted below their successor.
+   */
+  readonly includeSuperseded?: boolean;
+  /**
+   * Time-aware recall (recall-trust-suite). Accepts ISO dates and
+   * datetimes, `today` / `yesterday` / `last week` / `last month`, and
+   * `<n>h` / `<n>d` / `<n>w` shorthand — see `time-range.ts`. Filters
+   * candidates by document mtime before ranking. Time-filtered queries
+   * bypass the query cache (a relative range resolves to a different
+   * absolute window every call).
+   */
+  readonly since?: string;
+  readonly until?: string;
 }
 
 export interface SearchOutcome {
@@ -275,6 +292,23 @@ export interface ResolvedRecallConfig {
    */
   readonly cacheEnabled: boolean;
   readonly cacheTtlSeconds: number;
+  /**
+   * Relation-aware recall polarity (recall-trust-suite). When true
+   * (default) typed relation edges affect ranking: `superseded_by`
+   * demotes the matched predecessor and boosts/pulls in the successor,
+   * `contradicts` adds warning reasons, positive relations grant a small
+   * bounded boost. Vaults without typed relations rank bit-identically
+   * either way; this switch exists as the explicit kill switch.
+   */
+  readonly relationPolarityEnabled: boolean;
+  /**
+   * Retrieval feedback loop (recall-trust-suite). Off by default: when
+   * true, learned per-layer multipliers derived from explicit recall
+   * feedback (`Brain/search/learned-weights.json`) compose with the
+   * intent weight profile during ranking. Bounded, deterministic,
+   * resettable — see `feedback.ts`.
+   */
+  readonly learnedWeightsEnabled: boolean;
 }
 
 export interface ResolvedSearchConfig {

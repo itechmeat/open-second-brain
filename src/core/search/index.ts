@@ -65,6 +65,19 @@ export {
   type IndexProgressEvent,
 } from "./indexer.ts";
 export { search } from "./search.ts";
+export {
+  captureRecallFeedback,
+  computeLearnedWeights,
+  feedbackDir,
+  learnedWeightsPath,
+  loadFeedbackEvents,
+  readLearnedWeights,
+  resetLearnedWeights,
+  LEARNED_WEIGHT_MIN,
+  LEARNED_WEIGHT_MAX,
+  type LearnedWeights,
+  type RecallFeedbackEvent,
+} from "./feedback.ts";
 
 const DEFAULTS = {
   chunkSize: 800,
@@ -357,6 +370,26 @@ export function resolveSearchConfig(opts: {
     "search_cache_ttl_seconds",
     { min: 1 },
   );
+  const relationPolarityEnabled = parseBool(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_RELATION_POLARITY",
+      "search_relation_polarity_enabled",
+    ),
+    true,
+    "search_relation_polarity_enabled",
+  );
+  const learnedWeightsEnabled = parseBool(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_LEARNED_WEIGHTS",
+      "search_learned_weights_enabled",
+    ),
+    false,
+    "search_learned_weights_enabled",
+  );
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
@@ -370,6 +403,8 @@ export function resolveSearchConfig(opts: {
     synonymMaxTerms,
     cacheEnabled,
     cacheTtlSeconds,
+    relationPolarityEnabled,
+    learnedWeightsEnabled,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({

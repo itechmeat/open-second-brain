@@ -15,10 +15,14 @@
 
 import { defaultConfigPath, resolveVault } from "../core/config.ts";
 import {
+  captureRecallFeedback,
   indexCheck,
   indexStatus,
   indexVault,
+  loadFeedbackEvents,
+  readLearnedWeights,
   reindexVault,
+  resetLearnedWeights,
   resolveSearchConfig,
   search,
   SearchError,
@@ -28,6 +32,9 @@ import {
   readSessionFocus,
   structuredRecallQueryText,
   writeSessionFocus,
+  LEARNED_WEIGHT_MIN,
+  LEARNED_WEIGHT_MAX,
+  type LearnedWeights,
 } from "../core/search/index.ts";
 import type {
   IndexCheckReport,
@@ -41,7 +48,16 @@ import type {
 import { CliError, parseFlags } from "./argparse.ts";
 import { CronTemplateError, renderCronTemplate } from "./search-cron-template.ts";
 
-const KNOWN_VERBS = new Set(["query", "index", "reindex", "status", "check", "focus"]);
+const KNOWN_VERBS = new Set([
+  "query",
+  "index",
+  "reindex",
+  "status",
+  "check",
+  "focus",
+  "feedback",
+  "weights",
+]);
 
 export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   // First positional is verb iff it matches a known verb. Otherwise the
@@ -67,6 +83,10 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
         return await cmdSearchCheck(rest);
       case "focus":
         return await cmdSearchFocus(rest);
+      case "feedback":
+        return await cmdSearchFeedback(rest);
+      case "weights":
+        return await cmdSearchWeights(rest);
       default:
         process.stderr.write(`error: unknown search verb: ${verb}\n`);
         return 2;
@@ -177,6 +197,102 @@ function writeFocusResponse(focus: SearchSessionFocus | null, json: boolean): vo
   process.stdout.write(`search focus: active ${parts.join(" ")}\n`);
 }
 
+// ─── feedback / weights (recall-trust-suite) ─────────────────────────────────
+
+async function cmdSearchFeedback(argv: ReadonlyArray<string>): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    db: { type: "string" },
+    query: { type: "string" },
+    result: { type: "string" },
+    verdict: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const query = typeof flags["query"] === "string" ? (flags["query"] as string) : "";
+  const resultPath = typeof flags["result"] === "string" ? (flags["result"] as string) : "";
+  const verdict = typeof flags["verdict"] === "string" ? (flags["verdict"] as string) : "";
+  if (!query || !resultPath) {
+    throw new CliError("usage: o2b search feedback --query <q> --result <path> --verdict up|down");
+  }
+  if (verdict !== "up" && verdict !== "down") {
+    throw new CliError("--verdict must be 'up' or 'down'");
+  }
+  const cfg = resolveConfig(flags);
+  const outcome = await captureRecallFeedback(cfg, { query, resultPath, verdict });
+  if (flags["json"] === true) {
+    process.stdout.write(
+      JSON.stringify({
+        recorded: true,
+        result_found: outcome.resultFound,
+        file: outcome.file,
+        learned: outcome.learned,
+      }) + "\n",
+    );
+    return 0;
+  }
+  const found = outcome.resultFound
+    ? ""
+    : " (result not in current top-50; recorded with zero contributions)";
+  process.stdout.write(
+    `recorded ${verdict} for ${resultPath}${found}\n` +
+      `learned weights now: ${formatLearnedWeights(outcome.learned)}\n`,
+  );
+  return 0;
+}
+
+async function cmdSearchWeights(argv: ReadonlyArray<string>): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    db: { type: "string" },
+    reset: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const cfg = resolveConfig(flags);
+  if (flags["reset"] === true) {
+    resetLearnedWeights(cfg.vault);
+    if (flags["json"] === true) {
+      process.stdout.write(JSON.stringify({ reset: true }) + "\n");
+    } else {
+      process.stdout.write("learned weights reset (feedback events kept)\n");
+    }
+    return 0;
+  }
+  const learned = readLearnedWeights(cfg.vault);
+  const payload = {
+    enabled: cfg.recall.learnedWeightsEnabled,
+    base: {
+      keywordWeight: cfg.keywordWeight,
+      semanticWeight: cfg.semanticWeight,
+    },
+    learned,
+    events: loadFeedbackEvents(cfg.vault).length,
+    bounds: { min: LEARNED_WEIGHT_MIN, max: LEARNED_WEIGHT_MAX },
+  };
+  if (flags["json"] === true) {
+    process.stdout.write(JSON.stringify(payload) + "\n");
+    return 0;
+  }
+  const lines = [
+    `learned weights: ${payload.enabled ? "enabled" : "disabled (search_learned_weights_enabled)"}`,
+    `base: kw=${cfg.keywordWeight} sem=${cfg.semanticWeight}`,
+    learned === null
+      ? "learned: none (no feedback recorded)"
+      : `learned: ${formatLearnedWeights(learned)} from ${learned.events} event(s)`,
+    `bounds: [${LEARNED_WEIGHT_MIN}, ${LEARNED_WEIGHT_MAX}]`,
+  ];
+  process.stdout.write(lines.join("\n") + "\n");
+  return 0;
+}
+
+function formatLearnedWeights(w: LearnedWeights): string {
+  return (
+    `kw=${w.keywordMul.toFixed(3)} sem=${w.semanticMul.toFixed(3)} ` +
+    `ent=${w.entityMul.toFixed(3)} rec=${w.recencyMul.toFixed(3)}`
+  );
+}
+
 // ─── query ────────────────────────────────────────────────────────────────────
 
 async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
@@ -195,6 +311,9 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     visibility: { type: "string-array" },
     "query-doc": { type: "string" },
     "evidence-pack": { type: "boolean" },
+    "include-superseded": { type: "boolean" },
+    since: { type: "string" },
+    until: { type: "string" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
   });
@@ -252,6 +371,9 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
     ...(flags["evidence-pack"] === true ? { evidencePack: true } : {}),
+    ...(flags["include-superseded"] === true ? { includeSuperseded: true } : {}),
+    ...(typeof flags["since"] === "string" ? { since: flags["since"] as string } : {}),
+    ...(typeof flags["until"] === "string" ? { until: flags["until"] as string } : {}),
   });
 
   if (flags["json"]) {
@@ -337,6 +459,34 @@ function jsonForEvidencePack(pack: NonNullable<SearchOutcome["evidencePack"]>): 
     })),
     dropped_candidates: pack.droppedCandidates,
     abstention: pack.abstention,
+    ...(pack.idfWeightedCoverage !== undefined
+      ? { idf_weighted_coverage: pack.idfWeightedCoverage }
+      : {}),
+    ...(pack.rareTerms !== undefined ? { rare_terms: pack.rareTerms } : {}),
+    ...(pack.uncoveredRareTerms !== undefined
+      ? { uncovered_rare_terms: pack.uncoveredRareTerms }
+      : {}),
+    ...(pack.unionRecords !== undefined
+      ? {
+          union_records: pack.unionRecords.map((r) => ({
+            term: r.term,
+            path: r.path,
+            document_id: r.documentId,
+            chunk_id: r.chunkId,
+          })),
+        }
+      : {}),
+    ...(pack.completeness !== undefined
+      ? {
+          completeness: {
+            verdict: pack.completeness.verdict,
+            idf_weighted_coverage: pack.completeness.idfWeightedCoverage,
+            covered_terms: pack.completeness.coveredTerms,
+            uncovered_terms: pack.completeness.uncoveredTerms,
+            uncovered_but_present_in_corpus: pack.completeness.uncoveredButPresentInCorpus,
+          },
+        }
+      : {}),
   };
 }
 
