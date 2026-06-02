@@ -270,11 +270,12 @@ describe("planUpgrade / applyUpgrade — preference principle repair", () => {
 
   function writeCorruptedPref(slug: string): string {
     const path = join(vault, PREF_DIR, `pref-${slug}.md`);
-    // Faithful copy of the live-vault corruption shape: multi-level
-    // backslash-quote chains plus a leaked tool-call XML fragment,
-    // inside a double-quoted YAML scalar.
+    // Faithful copy of the live-vault corruption shape: six on-disk
+    // backslashes per quote (three in memory after the parser's single
+    // unescape - the \\{2,} amplification signature) plus a leaked
+    // tool-call XML fragment, inside a double-quoted YAML scalar.
     const principle =
-      'When the user describes a rule like \\\\\\"давай так:\\\\\\" wait for approval.</principle>\\\\n<parameter name=\\\\\\"scope\\\\\\">collaboration';
+      'When the user describes a rule like \\\\\\\\\\\\"давай так:\\\\\\\\\\\\" wait for approval.</principle>\\\\n<parameter name=\\\\\\\\\\\\"scope\\\\\\\\\\\\">collaboration';
     const content = [
       "---",
       "kind: brain-preference",

@@ -33,9 +33,24 @@ describe("sanitisePrinciple", () => {
     expect(sanitisePrinciple(corrupted)).toBe("everything else needs explicit per-edit approval.");
   });
 
-  test("cuts at a leaked parameter-open fragment even without a closing principle tag", () => {
-    const corrupted = 'real rule text<parameter name="scope">writing';
+  test("cuts at a leaked parameter-open fragment whose attributes carry escaped quotes", () => {
+    const corrupted = 'real rule text<parameter name=\\"scope\\">writing';
     expect(sanitisePrinciple(corrupted)).toBe("real rule text");
+  });
+
+  test("legitimate prose mentioning <parameter> with plain quotes passes through", () => {
+    const legit = 'Document tool calls as <parameter name="scope"> blocks in examples.';
+    expect(sanitisePrinciple(legit)).toBe(legit);
+  });
+
+  test("a single escaped quote is legitimate prose and survives", () => {
+    const legit = 'Inside JSON strings write \\" instead of a bare quote.';
+    expect(sanitisePrinciple(legit)).toBe(legit);
+  });
+
+  test("a trailing literal newline escape outside a leak cut survives", () => {
+    const legit = "End streamed lines with \\n";
+    expect(sanitisePrinciple(legit)).toBe(legit);
   });
 
   test("idempotent: sanitizing twice equals sanitizing once", () => {

@@ -185,6 +185,7 @@ describe("deprecated aliases", () => {
     "schema_explain_type",
     "get_active_schema_pack",
     "list_schema_packs",
+    "reload_schema_pack",
   ];
 
   test("every alias stays registered with a one-line deprecation description", () => {
