@@ -93,16 +93,15 @@ class RegisterTests(unittest.TestCase):
         self.assertEqual(registered[0].name, PLUGIN_NAME)
 
 
-class LoaderFallbackTests(unittest.TestCase):
-    """Guards the TEMPORARY file-path fallback in the root ``__init__.py``.
+class SelfBootstrapTests(unittest.TestCase):
+    """Locks the root entrypoint's single self-bootstrap load path.
 
-    Hermes' external memory-provider loader imports a plugin under a synthetic
-    package name without registering its parent namespace, breaking the
-    relative/absolute imports the root entrypoint tries first. The fallback
-    loads ``plugins/hermes`` directly by file path with
-    ``submodule_search_locations`` so its own relative imports still resolve.
-    This locks that mechanism: if it ever stops yielding the provider (e.g. the
-    fallback is removed before the upstream Hermes fix lands), this fails.
+    The root ``__init__.py`` loads ``plugins/hermes`` by file path under a
+    private package name with ``submodule_search_locations`` so the
+    implementation's own relative imports resolve against it. This is the
+    plugin's one intentional, host-agnostic load path -- it does not depend on
+    the host runtime registering a parent namespace package for the plugin.
+    These tests pin that behaviour.
     """
 
     def test_filepath_load_of_impl_yields_provider(self):
@@ -124,6 +123,39 @@ class LoaderFallbackTests(unittest.TestCase):
             for name in list(sys.modules):
                 if name == spec.name or name.startswith(spec.name + "."):
                     sys.modules.pop(name, None)
+
+    def test_entrypoint_loads_without_parent_namespace_registered(self):
+        """Regression for the stock-Hermes load path.
+
+        Hermes' external memory-provider loader imports a user-installed plugin
+        as ``_hermes_user_memory.<name>`` but does NOT register the
+        ``_hermes_user_memory`` parent in ``sys.modules``. A provider written
+        with ordinary relative/absolute imports fails there with
+        ``ModuleNotFoundError: No module named '_hermes_user_memory'``. The
+        self-bootstrap must load regardless, so this mimics that exact loader
+        condition (synthetic child name, parent intentionally absent) and
+        asserts the entrypoint still yields a working provider and ``register``.
+        """
+        synthetic = "_hermes_user_memory.open-second-brain"
+        self.assertNotIn(
+            "_hermes_user_memory",
+            sys.modules,
+            "parent namespace must be absent to reproduce the stock loader",
+        )
+        spec = importlib.util.spec_from_file_location(
+            synthetic,
+            ROOT / "__init__.py",
+            submodule_search_locations=[str(ROOT)],
+        )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[synthetic] = module
+        try:
+            spec.loader.exec_module(module)  # must not raise ModuleNotFoundError
+            provider = module.OpenSecondBrainMemoryProvider()
+            self.assertEqual(provider.name, PLUGIN_NAME)
+            self.assertTrue(callable(module.register))
+        finally:
+            sys.modules.pop(synthetic, None)
 
     def test_register_does_not_raise_on_minimal_context(self):
         class Context:
