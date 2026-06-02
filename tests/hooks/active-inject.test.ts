@@ -81,7 +81,12 @@ describe("active-inject hook", () => {
     expect(out.hookSpecificOutput.additionalContext).toContain("pref-foo");
   });
 
-  test("echoes PostCompact as the hookEventName when fired post-compact", async () => {
+  test("stays silent under PostCompact - the event cannot carry additionalContext", async () => {
+    // Current Claude Code has no PostCompact hook event; runtimes that
+    // still fire one reject `hookSpecificOutput.additionalContext` for
+    // it, echoing the whole payload back as a validation error. The
+    // post-compact re-injection path is the SessionStart `compact`
+    // matcher instead.
     writeActive(
       "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (0)\n\n_No confirmed preferences yet._\n",
     );
@@ -93,9 +98,32 @@ describe("active-inject hook", () => {
       { VAULT_DIR: vault },
     );
     expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("injects under UserPromptSubmit - an allowlisted context-bearing event", async () => {
+    writeActive(
+      "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n",
+    );
+
+    const r = await runHook(
+      {
+        hook_event_name: "UserPromptSubmit",
+      },
+      { VAULT_DIR: vault },
+    );
+    expect(r.exit).toBe(0);
     const out = JSON.parse(r.stdout);
-    expect(out.hookSpecificOutput.hookEventName).toBe("PostCompact");
-    expect(out.hookSpecificOutput.additionalContext).toContain("# Active Brain Preferences");
+    expect(out.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+    expect(out.hookSpecificOutput.additionalContext).toContain("pref-foo");
+  });
+
+  test("stays silent under an unknown future event name (default-closed)", async () => {
+    writeActive("---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\nbody\n");
+
+    const r = await runHook({ hook_event_name: "SomeFutureEvent" }, { VAULT_DIR: vault });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
   });
 
   test("stays silent when Brain/active.md does not exist", async () => {

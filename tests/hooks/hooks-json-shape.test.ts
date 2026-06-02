@@ -53,6 +53,17 @@ describe("hooks.json command shape", () => {
     }
   });
 
+  test("SessionStart matcher covers compact - the supported post-compaction re-injection path", () => {
+    const parsed = JSON.parse(readFileSync(HOOKS_JSON, "utf8")) as {
+      hooks: Record<string, Array<{ matcher?: string }>>;
+    };
+    const sessionStart = parsed.hooks["SessionStart"] ?? [];
+    expect(sessionStart.length).toBeGreaterThan(0);
+    for (const group of sessionStart) {
+      expect(group.matcher).toBe("startup|resume|clear|compact");
+    }
+  });
+
   test("a command never blocks when nothing resolves (exit 0)", () => {
     const cmd = cmds[0]!;
     const env = { ...process.env } as Record<string, string | undefined>;
