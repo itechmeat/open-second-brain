@@ -5,6 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0] - 2026-06-02
+
+Token Diet: six changes that cut what an agent pays in context before it does
+any work - a broken post-compaction injection fixed, the session preamble
+budgeted and deduplicated, the per-edit reminder compressed to a nudge, three
+consolidated read tools replacing seventeen, hard description caps with a
+contract guard, and preview budgets on by default. All deterministic; the
+behavior of every consolidated view is byte-identical to its predecessor.
+
+### Fixed
+
+- **Post-compaction preference injection.** Current Claude Code has no
+  `PostCompact` hook event; emitting `additionalContext` under that name was
+  rejected by the hook output schema, silently dropping the re-injection and
+  echoing the full payload into a validation error. `active-inject` now emits
+  only under a default-closed allowlist of context-bearing event names
+  (`SessionStart`, `UserPromptSubmit`), and the post-compaction path is the
+  SessionStart `compact` matcher. A contract test pins the allowlist.
+- **Frontmatter escape amplification.** The YAML-like parser now unescapes
+  double-quoted scalars symmetrically with the formatter, so
+  parse -> format cycles are byte-stable instead of doubling backslashes on
+  every rewrite - the root cause of the `\\\"` chains observed in live
+  preference frontmatter. Principle text is additionally sanitised at every
+  write seam (leaked tool-call XML fragments cut, escape chains collapsed),
+  `brain_doctor` warns about files corrupted before the fix
+  (`principle-corrupted`), and `o2b brain upgrade --apply` repairs them once,
+  idempotently, behind the usual pre-apply snapshot.
+
+### Added
+
+- **Budgeted active.md injection.** The SessionStart hook drops the
+  provenance frontmatter and fits the injected body into a character budget
+  (default 8,000 chars; `active.inject_budget_chars` in `_brain.yaml`).
+  Sections drop deterministically - recently retired first, then quarantine,
+  then most-applied - and a one-line notice points the agent at
+  `brain_context` for the full set. The `Most-applied (Nd)` section now
+  renders id + scope + count one-liners; the principle bodies already appear
+  verbatim under `Confirmed`, and the duplication was 31% of the injected
+  bytes on a real vault. Backed by a shared pure section-aware text-budget
+  core.
+- **Once-per-session reminder cadence.** The ~1.3KB post-write reminder -
+  the single largest recurring token cost of a long coding session - now
+  shows its full text once per Claude Code session and a 181-char nudge on
+  later writes (marker keyed by `session_id`, 48h opportunistic pruning,
+  fail-soft to the full text on any IO problem; Codex one-shot runs always
+  get the full text).
+- **Consolidated read tools.** `brain_brief`
+  (`view: morning | daily | weekly | monthly | operator | digest`),
+  `brain_analytics`
+  (`view: timeline | attention_flows | belief_evolution | concept_synthesis`),
+  and `schema_inspect`
+  (`view: graph | lint | stats | orphans | explain_type | active_pack | packs`)
+  replace three overlapping families; dispatch goes to the exact predecessor
+  handlers, locked by per-view equality tests. The 18 predecessor names stay
+  callable through `tools/call` as deprecated aliases for at least one minor
+  release but are hidden from `tools/list`, so clients stop paying for
+  schemas slated for removal. `brain_recurrence` stays standalone - its
+  learn/forget operations are writes, not analytics.
+- **Registry guard.** Tool descriptions cap at 300 chars and per-property
+  schema descriptions at 160, enforced by a contract test; long-form guidance
+  moved to `docs/mcp.md` and a rewritten terse `initialize.instructions`
+  (5.4KB to 1.6KB). Preview budgets flip from opt-in to default: nine more
+  verbose read tools park oversized results in the artifact store, and every
+  remaining budget-less tool must hold an explicit exempt-list entry with a
+  reason. `scripts/measure-token-surface.ts` reports the advertised surface,
+  hidden-alias overhead, instructions size, and the budgeted active.md
+  injection so regressions stay visible.
+
+### Notes
+
+- Measured on the live vault: SessionStart injection 16,550 -> 8,012 chars
+  (-52%); advertised tool count 71 -> 56 with 18 aliases hidden;
+  `initialize.instructions` 5,434 -> 1,630 chars. The serialized schema
+  surface of the advertised tools is 43,790 chars including output schemas.
+- MCP clients calling the old per-view tool names keep working unchanged;
+  migrate to the consolidated tools before the aliases are removed in a
+  future minor release.
+
 ## [0.33.0] - 2026-06-02
 
 Recall Trust Suite: five features that make recall something an agent can
@@ -3910,6 +3988,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.34.0]: https://github.com/itechmeat/open-second-brain/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/itechmeat/open-second-brain/compare/v0.32.1...v0.33.0
 [0.32.1]: https://github.com/itechmeat/open-second-brain/compare/v0.32.0...v0.32.1
 [0.32.0]: https://github.com/itechmeat/open-second-brain/compare/v0.31.2...v0.32.0

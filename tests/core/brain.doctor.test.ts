@@ -754,3 +754,55 @@ vault:
     expect(res.warnings.find((w) => w.code === "vault-ignore-missing-path")).toBeUndefined();
   });
 });
+
+describe("corrupted principle frontmatter", () => {
+  test("a preference whose principle carries leaked tool-call fragments raises principle-corrupted", () => {
+    const path = preferencePath(tmp, "leaky");
+    writeFileSync(
+      path,
+      [
+        "---",
+        "kind: brain-preference",
+        "id: pref-leaky",
+        "created_at: 2026-05-14T10:42:00Z",
+        "_confirmed_at: null",
+        "unconfirmed_until: 2026-05-28T10:42:00Z",
+        "tags: [brain, brain/preference]",
+        "topic: leaky",
+        'principle: "real rule.</principle>\\\\n<parameter name=\\\\\\"scope\\\\\\">writing"',
+        "_status: unconfirmed",
+        "_evidenced_by: []",
+        "_applied_count: 0",
+        "_violated_count: 0",
+        "_last_evidence_at: null",
+        "_confidence: low",
+        "pinned: false",
+        "---",
+        "",
+        "## Principle",
+        "rule",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const res = runDoctor(tmp);
+    expect(res.errors).toEqual([]);
+    expect(res.warnings.some((w) => w.code === "principle-corrupted" && w.path === path)).toBe(
+      true,
+    );
+  });
+
+  test("clean principles raise no principle-corrupted warning", () => {
+    writePreference(tmp, {
+      slug: "clean",
+      topic: "clean",
+      principle: 'Quote "plain text" freely.',
+      created_at: "2026-05-14T10:00:00Z",
+      unconfirmed_until: "2026-05-28T10:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: [],
+    });
+    const res = runDoctor(tmp);
+    expect(res.warnings.filter((w) => w.code === "principle-corrupted")).toEqual([]);
+  });
+});

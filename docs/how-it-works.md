@@ -397,8 +397,7 @@ from the same source of truth (`Brain/preferences/`):
 flowchart LR
     Dream[dream pass] -- regenerate --> Active[Brain/active.md]
     Pin[o2b brain pin / unpin] -- regenerate --> Active
-    Active -- SessionStart hook --> ClaudeStart["Claude Code / Codex<br/>session start"]
-    Active -- PostCompact hook --> ClaudeCompact["Claude Code / Codex<br/>after /compact"]
+    Active -- "SessionStart hook<br/>(startup | resume | clear | compact)" --> ClaudeStart["Claude Code / Codex<br/>session start + after /compact"]
     Active -- "osb://preferences/active" --> MCPHost["MCP host (Hermes, others)"]
     Active -- "brain_context tool" --> PullRT["Cursor / Aider / raw API<br/>(no SessionStart hook)"]
     Pinned[Brain/pinned.md] -- "brain_context tool" --> PullRT
@@ -409,19 +408,23 @@ flowchart LR
   `Most-applied (Nd)` section ranking confirmed/quarantine rules
   by `apply-evidence (result: applied)` events in the trailing
   window (defaults to 30 days / top-10; configurable via
-  `active.most_applied_window_days` and `active.most_applied_limit`
+  `active.most_applied_window_days`, `active.most_applied_limit`, and the
+  SessionStart injection budget `active.inject_budget_chars`
   in `_brain.yaml`), quarantined preferences with their applied /
   violated counters, and the three most recently retired entries.
   The writer is idempotent — if the rendered body matches the file
   on disk, no I/O happens. The same window / limit drive a mirrored
   `Most-applied (Nd)` section in `brain_digest` output.
-- **SessionStart hook** (`startup | resume | clear`) and
-  **PostCompact hook** (`manual | auto`) inject the body as
-  `additionalContext` so the agent sees current rules at the start of
-  every session and again after `/compact` (otherwise the
-  hook-injected context is dropped from long sessions). Both fail
-  closed — any error path exits 0 with no output so the runtime
-  proceeds unaffected.
+- **SessionStart hook** (`startup | resume | clear | compact`) injects
+  the body as `additionalContext` so the agent sees current rules at
+  the start of every session and again after `/compact` - the
+  `compact` matcher replaced the former PostCompact injection, whose
+  event no longer exists in current Claude Code. The injected body is
+  budgeted (`active.inject_budget_chars`, default 8,000 chars):
+  sections drop deterministically (recently retired first, then
+  quarantine, then most-applied) and a one-line notice points the
+  agent at `brain_context` for the full set. Fails closed - any error
+  path exits 0 with no output so the runtime proceeds unaffected.
 - **MCP Resources** expose the same content for hosts that prefer
   pull access (`osb://preferences/active` and friends in the table
   above). The MCP `initialize` reply advertises the `resources`

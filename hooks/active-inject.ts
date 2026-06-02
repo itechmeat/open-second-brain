@@ -30,10 +30,14 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import { resolveVault } from "../src/core/config.ts";
+import { parseFrontmatterText } from "../src/core/vault.ts";
 import { brainActivePath } from "../src/core/brain/paths.ts";
+import { budgetActiveBody } from "../src/core/brain/active-budget.ts";
+import { INJECT_BUDGET_CHARS_DEFAULT, loadBrainConfig } from "../src/core/brain/policy.ts";
 import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { ensureVaultCurrent } from "../src/core/maintenance/ensure-current.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
+import { isContextEventName } from "./lib/context-events.ts";
 
 async function main(): Promise<void> {
   let payload;
@@ -44,17 +48,20 @@ async function main(): Promise<void> {
   }
 
   // The hook is registered separately for each event; the payload's
-  // `hook_event_name` tells us which one fired. Echo the same name
-  // back unchanged so the runtime correlates request and response
-  // — including any future event we have not yet enumerated here.
-  // Default to `SessionStart` only when the field is missing entirely
-  // (e.g. an empty stdin payload, or a runtime that doesn't populate
-  // the name); a coerced unknown value would silently misreport
-  // which event fired.
+  // `hook_event_name` tells us which one fired. Default to
+  // `SessionStart` only when the field is missing entirely (e.g. an
+  // empty stdin payload, or a runtime that doesn't populate the name).
   const hookEventName =
     typeof payload.hook_event_name === "string" && payload.hook_event_name.length > 0
       ? payload.hook_event_name
       : "SessionStart";
+
+  // Default-closed allowlist: only event names whose output schema
+  // accepts `additionalContext` may produce stdout. Emitting under
+  // any other name (PostCompact included) is rejected by the runtime
+  // and echoes the full payload back as a validation error - the
+  // post-compaction path is the SessionStart `compact` matcher.
+  if (!isContextEventName(hookEventName)) return;
 
   // Self-heal the ~/.local/bin CLI symlinks on SessionStart only: a plugin
   // update can leave them dangling or pointing at an old version. Runs from
@@ -95,13 +102,29 @@ async function main(): Promise<void> {
     return;
   }
 
-  const trimmed = body.trim();
+  // Drop the `kind: brain-active / generated_at` frontmatter - it
+  // carries no signal for the agent, only provenance for tooling.
+  const [, fmBody] = parseFrontmatterText(body);
+  const trimmed = fmBody.trim();
   if (trimmed.length === 0) return;
+
+  // Injection budget (token-diet): a large preference set must not
+  // flood the session preamble. Config errors fall back to the
+  // default budget - the hook is fail-soft by contract.
+  let budget = INJECT_BUDGET_CHARS_DEFAULT;
+  try {
+    const cfg = loadBrainConfig(vault);
+    if (cfg.active?.inject_budget_chars !== undefined) {
+      budget = cfg.active.inject_budget_chars;
+    }
+  } catch {
+    // intentional fallback - a corrupted _brain.yaml is doctor's job
+  }
 
   const out = {
     hookSpecificOutput: {
       hookEventName,
-      additionalContext: trimmed,
+      additionalContext: budgetActiveBody(trimmed, budget),
     },
   };
   process.stdout.write(JSON.stringify(out) + "\n");

@@ -1,8 +1,11 @@
 /**
- * Brain managed-file upgrade for the three release-owned files in
- * `Brain/` (`_brain.yaml`, `_BRAIN.md`).
- * User-owned content (`preferences/`, `retired/`, `inbox/`, `log/`)
- * is never touched.
+ * Brain managed-file upgrade for the release-owned files in
+ * `Brain/` (`_brain.yaml`, `_BRAIN.md`), plus one narrow repair pass
+ * over `preferences/`: principle frontmatter corrupted by leaked
+ * tool-call fragments or escape-amplified quote chains is rewritten
+ * once through `sanitisePrinciple` (token-diet, t_40eb1de7). Beyond
+ * that repair, user-owned content (`preferences/`, `retired/`,
+ * `inbox/`, `log/`) is never touched.
  *
  * Key design choice: `_brain.yaml` is text-walked rather than
  * re-serialised through the strict parser, because the live file
@@ -12,10 +15,12 @@
  * `status: "error"` so `--apply` refuses to half-merge.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { formatFrontmatter, parseFrontmatterText } from "../vault.ts";
+import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import { defaultConfigPath, resolveAgentName } from "../config.ts";
 import { appendLogEvent } from "./log.ts";
 import { brainConfigPath, brainManualPath, vaultRelative } from "./paths.ts";
@@ -93,6 +98,7 @@ export function planUpgrade(vault: string): UpgradePlan {
       vaultRelative(brainManualPath(vault), vault),
       () => renderBrainManual(vault),
     ),
+    ...planCorruptedPreferences(vault),
   ];
   const pending = files.filter((f) => f.status === "update").length;
   const errors = files.filter((f) => f.status === "error").length;
@@ -528,4 +534,53 @@ function insertLinesAtSectionEnd(
   const before = lines.slice(0, insertAt);
   const after = lines.slice(insertAt);
   return [...before, ...newLines, ...after].join("\n");
+}
+
+// ----- Corrupted preference repair (token-diet, t_40eb1de7) ----------------
+
+/**
+ * One narrow, idempotent repair over `Brain/preferences/`: rewrite
+ * files whose `principle` frontmatter still carries leaked tool-call
+ * fragments or escape-amplified quote chains (written before the
+ * write-seam sanitizer and the frontmatter unescape fix shipped).
+ *
+ * The rewrite goes through the raw frontmatter map - not the typed
+ * preference parser - so every other field round-trips through the
+ * same `formatFrontmatter` the writers use and unknown keys survive
+ * verbatim. Files that fail to parse, or whose principle is already
+ * clean, are left untouched; on the pass after the repair the plan is
+ * empty again.
+ */
+function planCorruptedPreferences(vault: string): UpgradeFilePlan[] {
+  const dir = join(vault, "Brain", "preferences");
+  if (!existsSync(dir)) return [];
+  const plans: UpgradeFilePlan[] = [];
+  for (const name of readdirSync(dir).toSorted()) {
+    if (!name.endsWith(".md")) continue;
+    const abs = join(dir, name);
+    const rel = `Brain/preferences/${name}`;
+    let before: string;
+    try {
+      before = readFileSync(abs, "utf8");
+    } catch {
+      continue; // unreadable file is doctor's domain, not upgrade's
+    }
+    const [meta, body] = parseFrontmatterText(before);
+    const principle = meta["principle"];
+    if (typeof principle !== "string") continue;
+    const repaired = sanitisePrinciple(principle);
+    if (repaired === principle || repaired.length === 0) continue;
+    const after = formatFrontmatter({ ...meta, principle: repaired }, body);
+    if (after === before) continue;
+    plans.push(
+      Object.freeze({
+        path: rel,
+        status: "update" as const,
+        before,
+        after,
+        error: "",
+      }),
+    );
+  }
+  return plans;
 }

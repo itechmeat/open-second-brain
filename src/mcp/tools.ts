@@ -71,6 +71,12 @@ export interface ToolDefinition {
    * - opt-in only. The CLI bridge ignores the budget entirely.
    */
   readonly previewBudget?: number;
+  /**
+   * When true the tool stays callable via `tools/call` but is omitted
+   * from `tools/list` (token-diet): deprecated aliases keep working
+   * for old clients without re-paying their schema in every list.
+   */
+  readonly hidden?: boolean;
   readonly handler: (
     ctx: ServerContext,
     args: Record<string, unknown>,
@@ -281,6 +287,31 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
 };
 
 export type ToolScope = "full" | "writer";
+
+/**
+ * Deprecated delegating alias (token-diet, t_3920db77): the tool name
+ * stays callable for at least one minor release after its capability
+ * moved into a consolidated view tool, but its registry footprint
+ * shrinks to a one-line description and a permissive input schema.
+ * The handler is the exact function the consolidated tool dispatches
+ * to, so behavior is byte-identical under either name.
+ */
+export function deprecatedAlias(opts: {
+  readonly name: string;
+  readonly target: string;
+  readonly view: string;
+  readonly handler: ToolDefinition["handler"];
+  readonly previewBudget?: number;
+}): ToolDefinition {
+  return {
+    name: opts.name,
+    description: `Deprecated alias for ${opts.target} with view="${opts.view}". Will be removed in a future minor release.`,
+    inputSchema: { type: "object" },
+    hidden: true,
+    ...(opts.previewBudget !== undefined ? { previewBudget: opts.previewBudget } : {}),
+    handler: opts.handler,
+  };
+}
 
 // The set is named after the original payload (mutating writers). As
 // of v0.10.10 it also hosts `brain_context`, a *reader* tool that has

@@ -399,7 +399,7 @@ export const PAY_MEMORY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: ["allowed", "approval_required", "denied", "not_checked"],
           description:
-            "Real outcome of the spending-policy check. Defaults to `not_checked` when omitted — the receipt body will explicitly say so rather than claiming the policy approved the call.",
+            "Real outcome of the spending-policy check; defaults to `not_checked` and the receipt says so explicitly.",
         },
         policy_rule: {
           type: "string",

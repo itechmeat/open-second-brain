@@ -81,7 +81,12 @@ describe("active-inject hook", () => {
     expect(out.hookSpecificOutput.additionalContext).toContain("pref-foo");
   });
 
-  test("echoes PostCompact as the hookEventName when fired post-compact", async () => {
+  test("stays silent under PostCompact - the event cannot carry additionalContext", async () => {
+    // Current Claude Code has no PostCompact hook event; runtimes that
+    // still fire one reject `hookSpecificOutput.additionalContext` for
+    // it, echoing the whole payload back as a validation error. The
+    // post-compact re-injection path is the SessionStart `compact`
+    // matcher instead.
     writeActive(
       "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (0)\n\n_No confirmed preferences yet._\n",
     );
@@ -93,9 +98,32 @@ describe("active-inject hook", () => {
       { VAULT_DIR: vault },
     );
     expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("injects under UserPromptSubmit - an allowlisted context-bearing event", async () => {
+    writeActive(
+      "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n",
+    );
+
+    const r = await runHook(
+      {
+        hook_event_name: "UserPromptSubmit",
+      },
+      { VAULT_DIR: vault },
+    );
+    expect(r.exit).toBe(0);
     const out = JSON.parse(r.stdout);
-    expect(out.hookSpecificOutput.hookEventName).toBe("PostCompact");
-    expect(out.hookSpecificOutput.additionalContext).toContain("# Active Brain Preferences");
+    expect(out.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+    expect(out.hookSpecificOutput.additionalContext).toContain("pref-foo");
+  });
+
+  test("stays silent under an unknown future event name (default-closed)", async () => {
+    writeActive("---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\nbody\n");
+
+    const r = await runHook({ hook_event_name: "SomeFutureEvent" }, { VAULT_DIR: vault });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
   });
 
   test("stays silent when Brain/active.md does not exist", async () => {
@@ -134,6 +162,48 @@ describe("active-inject hook", () => {
     expect(stdout).not.toBe("");
     const out = JSON.parse(stdout);
     expect(out.hookSpecificOutput.hookEventName).toBe("SessionStart");
+  });
+
+  test("budgets an oversized active.md body and points at brain_context", async () => {
+    const hugeRules = Array.from(
+      { length: 400 },
+      (_, i) => `- \`pref-rule-${i}\` (confidence: low (0.10)) — Rule number ${i} body text`,
+    ).join("\n");
+    writeActive(
+      `---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (400)\n\n${hugeRules}\n\n## Recently retired (last 1)\n\n- \`pref-r\` — low_confidence on 2026-05-01\n`,
+    );
+
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault });
+    expect(r.exit).toBe(0);
+    const out = JSON.parse(r.stdout);
+    const injected: string = out.hookSpecificOutput.additionalContext;
+    // Default budget is 8,000 chars (+ the one-line truncation notice).
+    expect(injected.length).toBeLessThanOrEqual(8300);
+    expect(injected).toContain("# Active Brain Preferences");
+    expect(injected).toContain("brain_context");
+    expect(injected).not.toContain("## Recently retired");
+  });
+
+  test("honors active.inject_budget_chars from _brain.yaml", async () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  inject_budget_chars: 500\n",
+      "utf8",
+    );
+    const rules = Array.from(
+      { length: 40 },
+      (_, i) => `- \`pref-rule-${i}\` — Rule number ${i} body text`,
+    ).join("\n");
+    writeActive(
+      `---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (40)\n\n${rules}\n`,
+    );
+
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault });
+    expect(r.exit).toBe(0);
+    const out = JSON.parse(r.stdout);
+    const injected: string = out.hookSpecificOutput.additionalContext;
+    expect(injected.length).toBeLessThanOrEqual(800);
+    expect(injected).toContain("brain_context");
   });
 
   test("stays silent when active.md is empty whitespace only", async () => {

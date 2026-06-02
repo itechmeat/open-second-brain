@@ -158,3 +158,94 @@ describe("post-write-reminder hook", () => {
     expect(text).toContain("brain_apply_evidence");
   });
 });
+
+// ── Session cadence (token-diet, t_9cc4f400) ────────────────────────────────
+
+async function runHookEnv(payload: unknown, env: Record<string, string>): Promise<RunResult> {
+  const proc = Bun.spawn(["bun", "run", HOOK], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, ...env },
+  });
+  proc.stdin.write(JSON.stringify(payload));
+  await proc.stdin.end();
+  const stdout = await new Response(proc.stdout).text();
+  const exit = await proc.exited;
+  return { stdout, exit };
+}
+
+const claudePayload = (file: string) => ({
+  hook_event_name: "PostToolUse",
+  tool_name: "Write",
+  tool_input: { file_path: file, content: "hi" },
+  transcript_path: "/Users/x/.claude/projects/-srv/foo.jsonl",
+  session_id: "sess-cadence-1",
+});
+
+describe("post-write-reminder session cadence", () => {
+  test("first Claude Code write gets the full reminder, later writes a short nudge", async () => {
+    const stateDir = join(tmp, "markers");
+    const env = { O2B_REMINDER_STATE_DIR: stateDir };
+
+    const first = await runHookEnv(claudePayload("/tmp/a.md"), env);
+    const firstText = JSON.parse(first.stdout).hookSpecificOutput.additionalContext as string;
+    expect(firstText).toContain("Trivial edits");
+
+    const second = await runHookEnv(claudePayload("/tmp/b.md"), env);
+    const secondText = JSON.parse(second.stdout).hookSpecificOutput.additionalContext as string;
+    expect(secondText).not.toContain("Trivial edits");
+    expect(secondText.length).toBeLessThanOrEqual(200);
+    expect(secondText).toContain("brain_");
+  });
+
+  test("a different session id gets the full reminder again", async () => {
+    const stateDir = join(tmp, "markers");
+    const env = { O2B_REMINDER_STATE_DIR: stateDir };
+    await runHookEnv(claudePayload("/tmp/a.md"), env);
+
+    const other = await runHookEnv({ ...claudePayload("/tmp/b.md"), session_id: "sess-2" }, env);
+    const text = JSON.parse(other.stdout).hookSpecificOutput.additionalContext as string;
+    expect(text).toContain("Trivial edits");
+  });
+
+  test("missing session id falls back to the full reminder every time", async () => {
+    const stateDir = join(tmp, "markers");
+    const env = { O2B_REMINDER_STATE_DIR: stateDir };
+    const payload = {
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: "/tmp/a.md", content: "hi" },
+      transcript_path: "/Users/x/.claude/projects/-srv/foo.jsonl",
+    };
+    await runHookEnv(payload, env);
+    const again = await runHookEnv(payload, env);
+    const text = JSON.parse(again.stdout).hookSpecificOutput.additionalContext as string;
+    expect(text).toContain("Trivial edits");
+  });
+
+  test("Codex one-shot runs keep the full reminder on every write", async () => {
+    const stateDir = join(tmp, "markers");
+    const env = { O2B_REMINDER_STATE_DIR: stateDir };
+    const patch = "*** Begin Patch\n*** Update File: /tmp/x\n*** End Patch\n";
+    const payload = {
+      hook_event_name: "PostToolUse",
+      tool_name: "apply_patch",
+      tool_input: { input: patch },
+      session_id: "sess-codex",
+    };
+    await runHookEnv(payload, env);
+    const again = await runHookEnv(payload, env);
+    const text = JSON.parse(again.stdout).hookSpecificOutput.additionalContext as string;
+    expect(text).toContain("codex exec");
+    expect(text).toContain("Trivial edits");
+  });
+
+  test("unwritable state dir fails soft to the full reminder", async () => {
+    const env = { O2B_REMINDER_STATE_DIR: "/proc/definitely-not-writable/x" };
+    const r = await runHookEnv(claudePayload("/tmp/a.md"), env);
+    expect(r.exit).toBe(0);
+    const text = JSON.parse(r.stdout).hookSpecificOutput.additionalContext as string;
+    expect(text).toContain("Trivial edits");
+  });
+});

@@ -87,15 +87,11 @@ describe("schema MCP tools", () => {
       (tool) => tool.name,
     );
 
-    expect(names).toContain("get_active_schema_pack");
-    expect(names).toContain("list_schema_packs");
-    expect(names).toContain("schema_stats");
-    expect(names).toContain("schema_lint");
-    expect(names).toContain("schema_graph");
-    expect(names).toContain("schema_explain_type");
-    expect(names).toContain("schema_review_orphans");
+    // token-diet: the consolidated schema_inspect is advertised; the
+    // per-view predecessors stay callable as hidden deprecated aliases.
+    expect(names).toContain("schema_inspect");
     expect(names).toContain("schema_apply_mutations");
-    expect(names).toContain("reload_schema_pack");
+    expect(names).not.toContain("schema_stats");
   });
 
   test("applies schema mutations through the MCP handler", async () => {

@@ -95,3 +95,27 @@ describe("active.most_applied_* config block", () => {
     expect(() => validate(HEAD + `active: not-a-map\n`)).toThrow(BrainConfigError);
   });
 });
+
+describe("active.inject_budget_chars (token-diet, t_40eb1de7)", () => {
+  test("absent → undefined; consumers fall back to the default budget", () => {
+    const { config } = validate(HEAD + `active:\n  most_applied_limit: 5\n`);
+    expect(config.active?.inject_budget_chars).toBeUndefined();
+  });
+
+  test("present → loaded", () => {
+    const { config } = validate(HEAD + `active:\n  inject_budget_chars: 4000\n`);
+    expect(config.active?.inject_budget_chars).toBe(4000);
+  });
+
+  test("below minimum rejected", () => {
+    expect(() => validate(HEAD + `active:\n  inject_budget_chars: 100\n`)).toThrow(
+      BrainConfigError,
+    );
+  });
+
+  test("non-integer rejected", () => {
+    expect(() => validate(HEAD + `active:\n  inject_budget_chars: many\n`)).toThrow(
+      BrainConfigError,
+    );
+  });
+});

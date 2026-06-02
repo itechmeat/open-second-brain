@@ -18,13 +18,15 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 65 tools. The table below highlights the
-operator-facing core, schema, agent-source, health, recovery, and Pay Memory
-tools; the full surface also includes Brain writer, review, query, temporal,
-link-graph, and search tools. In Claude Code, that full schema can push MCP definitions beyond
-10% of the context window, causing `MCPSearch` tool-search deferral; use the
-writer split below for the always-loaded writer subset, or the runtime
-capability flags for a narrower per-process full server.
+The full server currently advertises 56 tools; 18 further names stay callable
+through `tools/call` as hidden deprecated aliases (see "Consolidated views and
+deprecated aliases" below). The table highlights the operator-facing core,
+schema, agent-source, health, recovery, and Pay Memory tools; the full surface
+also includes Brain writer, review, query, temporal, link-graph, and search
+tools. In Claude Code, the full schema can push MCP definitions beyond 10% of
+the context window, causing `MCPSearch` tool-search deferral; use the writer
+split below for the always-loaded writer subset, or the runtime capability
+flags for a narrower per-process full server.
 
 | Tool                        | Purpose                                                                                                                                        | Required arguments                             |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
@@ -37,7 +39,8 @@ capability flags for a narrower per-process full server.
 | `brain_agent_query`         | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.               | —                                              |
 | `brain_agent_diff`          | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                             | —                                              |
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
-| `brain_morning_brief`       | Read-only session-start summary: top confirmed preferences, recent reconcile open questions, recent notes; character-budgeted.                 | —                                              |
+| `brain_brief`               | Read-only Brain summary for any window: `view: morning \| daily \| weekly \| monthly \| operator \| digest`.                                   | `view`                                         |
+| `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis`.                          | `view`                                         |
 | `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, and evidence-pack diagnostics.                  | `query`                                        |
 | `brain_recall_feedback`     | Record explicit up/down recall feedback for one search result; feeds the deterministic learned-weight fold.                                     | `query`, `result_path`, `verdict`              |
 | `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason.                              | `prompt`                                       |
@@ -50,15 +53,8 @@ capability flags for a narrower per-process full server.
 | `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
 | `brain_session_expand`      | Expand a raw or summary session recall node to immediate sources and paginated raw turn content.                                               | `id`                                           |
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                              |
-| `get_active_schema_pack`    | Return the active runtime schema pack resolved from `Brain/_brain.yaml`.                                                                       | —                                              |
-| `list_schema_packs`         | List schema packs available to the vault/runtime.                                                                                              | —                                              |
-| `schema_stats`              | Summarise declared schema tokens and observed artifact usage.                                                                                  | —                                              |
-| `schema_lint`               | Report unknown, unused, and invalid schema references without writing.                                                                         | —                                              |
-| `schema_graph`              | Return a schema relationship graph for declared types, aliases, prefixes, and link types.                                                      | —                                              |
-| `schema_explain_type`       | Explain one schema token, including aliases, references, and usage.                                                                            | `token`                                        |
-| `schema_review_orphans`     | Review declared schema tokens that have no observed usage.                                                                                     | —                                              |
+| `schema_inspect`            | Read-only schema inspection for any view: `view: graph \| lint \| stats \| orphans \| explain_type \| active_pack \| packs`.                   | `view` (`token` for `explain_type`)            |
 | `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                                    |
-| `reload_schema_pack`        | Reload and validate the active schema pack after local edits.                                                                                  | —                                              |
 | `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                              |
 | `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                                         |
 | `payment_memory_init`       | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template.      | —                                              |
@@ -69,6 +65,25 @@ capability flags for a narrower per-process full server.
 | `payment_request_approval`  | Create a pending-payment-request the user must approve before the agent runs `pay`.                                                            | `service`, `reason`                            |
 | `payment_request_status`    | Look up a pending request by id; agent uses this to poll for approval.                                                                         | `id`                                           |
 | `payment_request_consume`   | Mark an `approved` request as `consumed` and link the resulting receipt.                                                                       | `id`, `receipt`                                |
+
+### Consolidated views and deprecated aliases
+
+`brain_brief`, `brain_analytics`, and `schema_inspect` replaced three
+overlapping tool families in v0.34.0; per-view output is identical to the
+predecessor tools because dispatch goes to the same handlers. The 18
+predecessor names (`brain_morning_brief`, `brain_daily_brief`,
+`brain_weekly_synthesis`, `brain_monthly_review`, `brain_operator_summary`,
+`brain_digest`, `brain_timeline`, `brain_attention_flows`,
+`brain_belief_evolution`, `brain_concept_synthesis`, `get_active_schema_pack`,
+`list_schema_packs`, `schema_stats`, `schema_lint`, `schema_graph`,
+`schema_explain_type`, `schema_review_orphans`, `reload_schema_pack`) remain
+callable through `tools/call` as deprecated aliases for at least one minor
+release, but are hidden from `tools/list` so clients stop paying for their
+schemas. Migrate by switching to the consolidated tool with the matching
+`view` value; per-view parameters keep their old names (for example
+`brain_brief` with `view: "daily"` accepts the same `date` argument
+`brain_daily_brief` did, and `brain_analytics` with
+`view: "attention_flows"` defaults `operation` to `list`).
 
 `second_brain_query` accepts `pattern` (string) and `limit` (1–500, default 50).
 `vault_health` accepts `repo` (string) for plugin manifest validation.
@@ -339,7 +354,7 @@ server to your Codex MCP config the same way as Hermes.
 
 The plugin's `.mcp.json` ships **two** MCP-server entries:
 
-- `open-second-brain` - the full surface (58 tools, including `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_recall_gate`, `brain_pinned_context`, `brain_pre_compress_pack`, `brain_audit`, `brain_morning_brief`, `brain_sources`, and `brain_switch_vault`); subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
+- `open-second-brain` - the full surface: 56 advertised tools (including the consolidated `brain_brief`, `brain_analytics`, and `schema_inspect`, plus `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_recall_gate`, `brain_pinned_context`, `brain_pre_compress_pack`, `brain_audit`, `brain_sources`, and `brain_switch_vault`) and 18 hidden deprecated aliases listed under "Consolidated views and deprecated aliases" above; subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
 - `open-second-brain-writer` - a minimal always-loaded surface of five tools: `brain_feedback`, `brain_apply_evidence`, `brain_note`, `brain_pinned_context` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md` plus pinned context, v0.16.0). The agent records taste signals, evidence events, milestone notes, and current-task pinned facts - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).

@@ -338,13 +338,36 @@ function walk(
 }
 
 function stripQuotes(s: string): string {
-  if (
-    s.length >= 2 &&
-    ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))
-  ) {
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    // Symmetric inverse of `formatYamlScalar`: the formatter escapes
+    // \ " \n \r \t inside double-quoted scalars, so the parser must
+    // unescape the same set. Without this inverse every
+    // parse -> format cycle doubled the backslashes (escape
+    // amplification - the source of the \\\\\\" chains observed in
+    // live preference frontmatter).
+    return unescapeDoubleQuoted(s.slice(1, -1));
+  }
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) {
+    // The formatter never emits single quotes; treat them as plain
+    // delimiters (hand-written YAML) without escape processing.
     return s.slice(1, -1);
   }
   return s;
+}
+
+const DOUBLE_QUOTED_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
+  "\\": "\\",
+  '"': '"',
+  n: "\n",
+  r: "\r",
+  t: "\t",
+});
+
+function unescapeDoubleQuoted(inner: string): string {
+  // Single pass so `\\n` decodes to `\n` (backslash + n), not a
+  // newline - sequential .replace calls would re-scan their own
+  // output and corrupt exactly the chains we are trying to preserve.
+  return inner.replace(/\\([\\"nrt])/g, (_, ch: string) => DOUBLE_QUOTED_ESCAPES[ch] ?? `\\${ch}`);
 }
 
 /**

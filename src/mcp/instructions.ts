@@ -56,99 +56,37 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
 
   if (scope === "writer") return WRITER_INSTRUCTIONS;
 
+  // Deliberately terse (token-diet): per-tool detail lives in the tool
+  // descriptions and docs/mcp.md; this text carries only the contract
+  // that cannot be read off the schemas.
   return (
     `You are @${agent} on this Open Second Brain vault. ` +
     "Always log under this identity; do not invent or change the name.\n\n" +
-    "Brain tools are the agent-facing writable surface (design doc §9).\n" +
-    "  - brain_feedback — call once per taste signal the user (or a " +
-    'teammate agent) expresses: corrections ("don\'t do X"), stated ' +
-    'preferences ("use A instead of B"), or process rules that ' +
-    "should outlast the current turn. With `force_confirmed: true` " +
-    "the preference is created directly (skipping the dream trial " +
-    "window).\n" +
-    "  - brain_apply_evidence — call right after you produce a " +
-    "durable artifact (code shipped, config / instruction edited, " +
-    "content drafted) and at least one preference in " +
-    "`Brain/preferences/` scopes to that artifact. Record " +
-    "`result: applied | violated | outdated` per (preference, " +
-    "artifact) pair.\n" +
-    "  - brain_note — call when this turn produced a durable " +
-    "narrative milestone (release shipped, PR merged, fact " +
-    "discovered) that fits neither `brain_feedback` nor " +
-    "`brain_apply_evidence`. Lands one line under event kind " +
-    "`note` in `Brain/log/<today>.md` (and the JSONL sidecar). " +
-    "This is the Brain-native replacement for the retired " +
-    "`event_log_append` tool.\n" +
-    "  - brain_pinned_context — read/write/append/clear " +
-    "`Brain/pinned.md` for current-task facts that should survive " +
-    "context rotation without becoming permanent preferences.\n" +
-    "  - brain_context — read-only session bootstrap that returns " +
-    "`Brain/active.md`, pinned current-task context, and active " +
-    "preference counts. Use it at session start when the host runtime " +
-    "does not inject active.md via a hook.\n" +
-    "  - brain_dream — runs the deterministic learning pass " +
-    "(clusters signals, promotes preferences, retires stale rules). " +
-    "Usually scheduled via cron, not invoked interactively.\n" +
-    "  - brain_review_candidates — read-only preview of what the " +
-    "next `brain_dream` invocation would do. Returns `would_create`, " +
-    "`would_promote`, `would_retire`, `would_supersede`, " +
-    "`clusters_below_threshold`, and `gated_retires` without mutating " +
-    "any files. Use it when you want to be deliberate before " +
-    "triggering the learning pass.\n" +
-    "  - brain_digest — read-only summary of the last activity " +
-    'window. Default format is Markdown; pass `format: "json"` for ' +
-    "programmatic use.\n" +
-    "  - brain_query — read-only lookup by `preference`, `topic`, " +
-    "or `since` (exactly one). Use this to discover applicable rules " +
-    "before calling `brain_apply_evidence`.\n" +
-    "  - brain_doctor — invariant / schema health check. With " +
-    "`strict: true`, warnings demote the `ok` flag.\n" +
-    "  - brain_audit — read-only mutation trail for one preference " +
-    "(create / promote / update / retire / merge), with agent, reason, " +
-    "and revision + content-hash before/after.\n" +
-    "  - brain_morning_brief — read-only session-start summary: top " +
-    "confirmed preferences, recent reconcile open questions, and recent " +
-    "notes, bounded by a character budget.\n" +
-    "  - brain_sources — read-only dashboard of signals grouped by " +
-    "(agent, source_type) with active/processed and distinct-topic counts.\n" +
-    "  - brain_switch_vault — activate a named vault profile; the change " +
-    "takes effect on the next server launch.\n\n" +
-    "Skip Brain calls for casual chat, exploration without a stated " +
-    "rule, read-only inspection, and trivial edits. A misrecorded " +
-    "signal is worse than a missed one — the dream pass surfaces " +
-    "real patterns from repeat events, so prefer precision over " +
-    "coverage.\n\n" +
-    "Other tools: second_brain_status (config status), " +
-    "vault_health (verify vault), second_brain_query (list vault pages " +
-    "by title - read-only). brain_pre_compress_pack returns a compact " +
-    "system-prompt addendum (top confirmed preferences + the head of " +
-    "active.md) for a host runtime to inject just before a " +
-    "context-compression event - read-only.\n\n" +
-    "Preview budget: large tool results may come back as a preview " +
-    "envelope - a JSON object with `preview_truncated: true`, " +
-    "`bytes_preview` (a head slice), `full_chars`, and an `artifact_id`. " +
-    "The full payload is not lost: call brain_artifact_get with that " +
-    "`artifact_id` to retrieve the complete result. Only fetch the full " +
-    "payload when the preview is insufficient - that is the point of the " +
-    "budget, to keep your context lean by default.\n\n" +
-    "Pay Memory tools record paid agent actions as inspectable Markdown:\n" +
-    "  - payment_memory_init bootstraps the layout and writes the " +
-    "spending policy template (run once per vault).\n" +
-    "  - payment_policy_check evaluates a prospective paid call against " +
-    `\`${PAY_MEMORY_SPENDING_JSON_REL}\` (allowed / approval_required / denied).\n` +
-    "  - payment_request_approval creates a pending-payment-request the " +
-    "user must approve before you run `pay`; payment_request_status polls " +
-    "for approval; payment_request_consume links the eventual receipt.\n" +
-    "  - payment_receipt_append saves a Markdown receipt for one paid " +
-    "API call (`raw_output` is redacted before persisting).\n" +
-    "  - asset_capture saves a generated asset note linked back to its " +
-    "source receipt.\n" +
-    "  - payment_report_generate aggregates a date's receipts into a " +
-    "Markdown report.\n" +
-    "These tools never execute payments — they only persist memory. " +
-    "When an approval workflow is in use, the recommended sequence " +
-    "is: payment_policy_check → payment_request_approval → poll " +
-    "payment_request_status → run `pay` → payment_receipt_append → " +
-    "asset_capture → payment_request_consume."
+    "Memory contract: call brain_feedback once per taste signal the " +
+    "user expresses; brain_apply_evidence right after producing a " +
+    "durable artifact a preference in `Brain/preferences/` scopes to " +
+    "(result: applied | violated | outdated); brain_note for narrative " +
+    "milestones that fit neither; brain_pinned_context for current-task " +
+    "facts that must survive context rotation. brain_context " +
+    "bootstraps a session when the host injects no active.md hook. " +
+    "Skip Brain calls for casual chat, exploration, and trivial edits - " +
+    "a misrecorded signal is worse than a missed one.\n\n" +
+    "Consolidated read views: brain_brief (view: morning | daily | " +
+    "weekly | monthly | operator | digest), brain_analytics (view: " +
+    "timeline | attention_flows | belief_evolution | concept_synthesis), " +
+    "schema_inspect (view: graph | lint | stats | orphans | " +
+    "explain_type | active_pack | packs). The per-view predecessor " +
+    "names still resolve via tools/call as deprecated aliases.\n\n" +
+    "Preview budget: a large result may arrive as a JSON envelope with " +
+    "`preview_truncated: true` and an `artifact_id`; fetch the full " +
+    "payload with brain_artifact_get only when the preview is not " +
+    "enough.\n\n" +
+    "Pay Memory tools persist payment memory, never execute payments. " +
+    "payment_memory_init bootstraps once per vault; approval sequence: " +
+    "payment_policy_check (against " +
+    `\`${PAY_MEMORY_SPENDING_JSON_REL}\`) → payment_request_approval → ` +
+    "poll payment_request_status → run `pay` → payment_receipt_append → " +
+    "asset_capture → payment_request_consume; payment_report_generate " +
+    "aggregates a date's receipts."
   );
 }

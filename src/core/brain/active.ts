@@ -294,7 +294,11 @@ function renderMostAppliedLine(m: MostAppliedEntry): string {
   // (`MostAppliedEntry.applied_30d`) keeps its v0.10.10 name so internal
   // consumers (MCP counts, e2e tests) don't break.
   tags.push(`applied_in_window: ${m.applied_30d}`);
-  return `- \`${p.id}\` (${tags.join(", ")}) — ${p.principle}`;
+  // One-liner by design (token-diet): every most-applied preference is
+  // confirmed or quarantined, so its principle text is already rendered
+  // verbatim in the section above - repeating it here duplicated ~31%
+  // of the injected bytes on a real vault.
+  return `- \`${p.id}\` (${tags.join(", ")})`;
 }
 
 function renderQuarantineLine(p: BrainPreference): string {
