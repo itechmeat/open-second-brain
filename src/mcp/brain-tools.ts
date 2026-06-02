@@ -2587,7 +2587,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         force_confirmed: {
           type: "boolean",
           description:
-            "When true, additionally creates a `pref-*` resource with `status: confirmed` alongside the inbox signal. The signal is always written to `Brain/inbox/`; this flag only adds an immediately-active preference (skipping the usual dream-pass promotion step).",
+            "When true, also creates an immediately-active confirmed `pref-*` alongside the inbox signal, skipping the dream-pass promotion step.",
         },
       },
       required: ["topic", "signal", "principle"],
@@ -2614,7 +2614,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agent: {
           type: "string",
           description:
-            "Optional caller identity. Compared against `Brain/_brain.yaml.primary_agent`; a mismatch emits a `non-primary-dream-run` warning in the response. Defaults to the server-resolved agent name.",
+            "Optional caller identity; a mismatch with the configured primary agent emits a warning. Defaults to the server-resolved name.",
         },
       },
       additionalProperties: false,
@@ -2667,7 +2667,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_review_candidates",
     description:
-      "Read-only preview of what the next `brain_dream` invocation would do. Returns `would_create`, `would_promote`, `would_retire`, `would_supersede`, `clusters_below_threshold`, `gated_retires`, and `intent_reviews` without mutating any files. Useful for agents that want to be deliberate before triggering the learning pass, or for operators inspecting the dream pass intent.",
+      "Read-only preview of the next `brain_dream` pass: would_create / would_promote / would_retire / would_supersede, clusters below threshold, gated retires, and intent reviews. Mutates nothing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2695,13 +2695,13 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         artifact: {
           type: "string",
           description:
-            "Wikilink identifying the artifact. Accepts an optional inclusive line-range suffix for claim-level provenance, e.g. `[[src/cli/main.ts:120-145]]` or `[[src/cli/main.ts:42]]`.",
+            "Wikilink identifying the artifact; optional inclusive line-range suffix, e.g. `[[src/cli/main.ts:120-145]]`.",
         },
         result: {
           type: "string",
           enum: ["applied", "violated", "outdated"],
           description:
-            "`applied` if the rule held in this artifact, `violated` if it was broken, `outdated` if the rule's scope still matches but the artifact shows the rule itself is obsolete (e.g. framework migration).",
+            "`applied` if the rule held, `violated` if broken, `outdated` if the artifact shows the rule itself is obsolete.",
         },
         agent: {
           type: "string",
@@ -2720,7 +2720,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_note",
     description:
-      "Append one narrative-milestone line to today's Brain log (`Brain/log/<today>.md` plus its JSONL sidecar) under the `note` event kind. Use for events that are neither a new preference nor evidence against an existing one — release shipped, PR merged, fact discovered. Multi-line text is collapsed to one space-joined line; secret-shaped tokens are redacted.",
+      "Append one narrative-milestone line (release shipped, PR merged, fact discovered) to today's Brain log under the `note` event kind. Use when neither brain_feedback nor brain_apply_evidence fits.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2784,6 +2784,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_query",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Read-only lookup: one preference + its evidence trail, all artifacts under a topic, or every log event after a timestamp. Exactly one of `preference`, `topic`, `since` must be supplied.",
     inputSchema: {
@@ -2816,6 +2817,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_agent_query",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit; returns deterministic matched contributions plus a summary.",
     inputSchema: {
@@ -2967,6 +2969,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_backlinks",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "List inbound references to a Brain artifact id (preference, retired, or signal). Returns every source that points at the id via wikilink, in any preference/retired frontmatter field, body prose, signal source, or log payload. Read-only.",
     inputSchema: {
@@ -2985,8 +2988,9 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_audit",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Return a preference's full mutation audit trail (create / promote / update / retire / merge), oldest first, with agent, reason, and revision + content-hash before/after. The trail is keyed by the original `pref-<slug>` id; a `ret-<slug>`, bare `<slug>`, or wikilink-decorated argument resolves to the same trail. Read-only.",
+      "Return a preference's full mutation audit trail (create / promote / update / retire / merge), oldest first, with agent, reason, and revisions. Accepts pref-/ret-/bare/wikilink ids. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -3055,7 +3059,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description:
-            "Optional per-page character cap (code points): trim any single oversized page's body before it consumes the token budget, so one huge page cannot crowd out the rest. Trimmed pages carry `trimmed: true`.",
+            "Optional per-page character cap so one huge page cannot crowd out the rest; trimmed pages carry `trimmed: true`.",
         },
         max_total_chars: {
           type: "integer",
@@ -3157,6 +3161,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_recall_telemetry",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "List recall telemetry records or summarize recall coverage and knowledge gaps. Records are emitted only by opt-in callers. Read-only.",
     inputSchema: {
@@ -3388,6 +3393,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_session_grep",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description: "Search imported session recall raw turns and summary nodes.",
     inputSchema: {
       type: "object",
@@ -3428,6 +3434,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_session_expand",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Expand a session recall raw or summary node to immediate sources and paginated exact raw turn content.",
     inputSchema: {
@@ -3454,7 +3461,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     // is already bounded by its own per-entry / total character caps.
     name: "brain_pre_compress_pack",
     description:
-      "Return a compact system-prompt addendum of the top-K highest-confidence confirmed preferences plus the head of active.md, so a host runtime can inject it just before a context-compression event and keep high-salience constraints from rotating out. Bounded by optional per-memory and total character caps. Read-only.",
+      "Return a compact system-prompt addendum (top-K confirmed preferences plus the head of active.md) for a host to inject right before context compression. Char-budgeted. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -3508,6 +3515,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_unlinked_mentions",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Raw-text mentions of a target's title / aliases that are NOT already inside `[[...]]`. Walks Brain/preferences and Brain/retired; match boundary is Unicode-aware (codepoint class), language-agnostic. Read-only.",
     inputSchema: {

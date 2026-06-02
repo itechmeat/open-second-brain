@@ -201,3 +201,39 @@ describe("deprecated aliases", () => {
     }
   });
 });
+
+describe("alias listing", () => {
+  test("aliases are callable but hidden from the advertised tool list", async () => {
+    const { MCPServer } = await import("../../src/mcp/server.ts");
+    const server = new MCPServer({ vault, configPath });
+    await server.handleRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "t", version: "0" },
+      },
+    });
+    await server.handleRequest({ jsonrpc: "2.0", method: "notifications/initialized" });
+    const list = (await server.handleRequest({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+    })) as { result: { tools: Array<{ name: string }> } };
+    const listed = new Set(list.result.tools.map((t) => t.name));
+    expect(listed.has("brain_brief")).toBe(true);
+    expect(listed.has("brain_daily_brief")).toBe(false);
+    expect(listed.has("schema_stats")).toBe(false);
+
+    // Still callable: the alias resolves through tools/call.
+    const call = (await server.handleRequest({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "brain_daily_brief", arguments: { date: "2026-05-02" } },
+    })) as { result: { isError?: boolean } };
+    expect(call.result.isError).not.toBe(true);
+  });
+});

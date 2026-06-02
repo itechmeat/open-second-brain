@@ -77,7 +77,7 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     visibility: {
       type: "array",
       description:
-        "Optional content-visibility scope (v3). Pages with no `visibility:` frontmatter are always returned; a page that declares visibility values is returned only when this scope includes one of them. Absent = default scope (untagged pages only).",
+        "Optional content-visibility scope; untagged pages always match, tagged pages only when this scope includes one of their values.",
       items: { type: "string" },
     },
   },

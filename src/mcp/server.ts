@@ -205,13 +205,17 @@ export class MCPServer {
   }
 
   private handleToolsList(): Record<string, unknown> {
+    // Hidden tools (deprecated aliases) stay callable but are not
+    // advertised - the list is what every client pays tokens for.
     return {
-      tools: this.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema,
-        ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
-      })),
+      tools: this.tools
+        .filter((t) => t.hidden !== true)
+        .map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+          ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
+        })),
     };
   }
 

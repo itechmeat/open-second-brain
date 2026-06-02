@@ -12,6 +12,7 @@ import {
 import type { SchemaMutation } from "../core/brain/schema-mutate.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import { coerceStr } from "./coerce.ts";
+import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deprecatedAlias, type ServerContext, type ToolDefinition } from "./tools.ts";
 
 // Read-side handlers shared by the consolidated `schema_inspect` and
@@ -48,6 +49,7 @@ function toolSchemaInspect(
 export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "schema_inspect",
+    previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Read-only Brain schema inspection, one tool for every view: graph, lint, stats, orphans, explain_type (needs token), active_pack, or packs. Replaces the per-view schema read tools.",
     inputSchema: {

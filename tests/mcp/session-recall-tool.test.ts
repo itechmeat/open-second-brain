@@ -55,19 +55,41 @@ async function initialize(server: MCPServer): Promise<void> {
   });
 }
 
-async function callTool(
+async function callOn(
+  server: MCPServer,
   name: string,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const server = new MCPServer({ vault, configPath: null });
-  await initialize(server);
   const response = (await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 9,
     method: "tools/call",
     params: { name, arguments: args },
   })) as { result: { content: ReadonlyArray<{ type: string; text: string }> } };
-  return JSON.parse(response.result.content[0]!.text);
+  const parsed = JSON.parse(response.result.content[0]!.text) as Record<string, unknown>;
+  // Session tools carry a preview budget (token-diet); when the result
+  // came back as a preview envelope, fetch the full payload through
+  // the same server's artifact store - exactly what a client does.
+  if (parsed["preview_truncated"] === true) {
+    const full = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 10,
+      method: "tools/call",
+      params: { name: "brain_artifact_get", arguments: { artifact_id: parsed["artifact_id"] } },
+    })) as { result: { content: ReadonlyArray<{ type: string; text: string }> } };
+    const envelope = JSON.parse(full.result.content[0]!.text) as { content: string };
+    return JSON.parse(envelope.content) as Record<string, unknown>;
+  }
+  return parsed;
+}
+
+async function callTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const server = new MCPServer({ vault, configPath: null });
+  await initialize(server);
+  return await callOn(server, name, args);
 }
 
 describe("session recall MCP tool registration", () => {

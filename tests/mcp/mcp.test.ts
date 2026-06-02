@@ -188,13 +188,11 @@ describe("tool listing", () => {
         "brain_dream",
         "brain_intent_review",
         "brain_retention",
-        "brain_monthly_review",
         "brain_review_candidates",
         "brain_apply_evidence",
         "brain_note",
         "brain_pinned_context",
         "brain_context",
-        "brain_digest",
         "brain_query",
         "brain_agent_query",
         "brain_agent_diff",
@@ -204,20 +202,13 @@ describe("tool listing", () => {
         "brain_backlinks",
         // Per-preference mutation audit + morning brief (added in v0.21.0).
         "brain_audit",
-        "brain_morning_brief",
         // Vault portability suite (added in v0.22.0).
         "brain_sources",
         "brain_switch_vault",
         "brain_context_pack",
         "brain_unlinked_mentions",
-        "brain_concept_synthesis",
         "brain_moc_audit",
-        "brain_timeline",
-        "brain_belief_evolution",
         "brain_stale_scan",
-        "brain_daily_brief",
-        "brain_weekly_synthesis",
-        "brain_operator_summary",
         // Pre-compress injection pack (added in v0.20.0).
         "brain_pre_compress_pack",
         // Context continuity and receipts (added in v0.29.0).
@@ -233,7 +224,6 @@ describe("tool listing", () => {
         "brain_procedural_memory",
         "brain_procedural_graph",
         "brain_recurrence",
-        "brain_attention_flows",
         // Consolidated view tools (token-diet, v0.34.0); the per-view
         // names above stay registered as deprecated aliases.
         "brain_brief",
@@ -252,15 +242,7 @@ describe("tool listing", () => {
         "brain_recall_gate",
         "brain_search",
         // Schema admin + watchdog recovery probes.
-        "get_active_schema_pack",
-        "list_schema_packs",
-        "schema_stats",
-        "schema_lint",
-        "schema_graph",
-        "schema_explain_type",
-        "schema_review_orphans",
         "schema_apply_mutations",
-        "reload_schema_pack",
         "schema_inspect",
         "brain_watchdog",
       ].toSorted(),
@@ -507,9 +489,10 @@ describe("stdio loop", () => {
     // + brain_procedural_graph (v0.31.0) = 69.
     // + brain_attention_flows (v0.31.0) = 70.
     // + brain_recall_feedback (recall-trust-suite) = 71,
-    // + brain_brief / brain_analytics / schema_inspect (token-diet,
-    //   17 predecessors stay as deprecated aliases) = 74.
-    expect(list.result.tools.length).toBe(74);
+    // + brain_brief / brain_analytics / schema_inspect (token-diet) = 74
+    // - 18 predecessors hidden as deprecated aliases (callable via
+    //   tools/call, not advertised) = 56.
+    expect(list.result.tools.length).toBe(56);
   });
 
   test("returns parse error for invalid JSON", async () => {

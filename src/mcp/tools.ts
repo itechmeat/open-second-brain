@@ -71,6 +71,12 @@ export interface ToolDefinition {
    * - opt-in only. The CLI bridge ignores the budget entirely.
    */
   readonly previewBudget?: number;
+  /**
+   * When true the tool stays callable via `tools/call` but is omitted
+   * from `tools/list` (token-diet): deprecated aliases keep working
+   * for old clients without re-paying their schema in every list.
+   */
+  readonly hidden?: boolean;
   readonly handler: (
     ctx: ServerContext,
     args: Record<string, unknown>,
@@ -301,6 +307,7 @@ export function deprecatedAlias(opts: {
     name: opts.name,
     description: `Deprecated alias for ${opts.target} with view="${opts.view}". Will be removed in a future minor release.`,
     inputSchema: { type: "object" },
+    hidden: true,
     ...(opts.previewBudget !== undefined ? { previewBudget: opts.previewBudget } : {}),
     handler: opts.handler,
   };
