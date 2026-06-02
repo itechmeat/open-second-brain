@@ -29,7 +29,7 @@
  *      ISO-8601 timestamps (`null` / missing acceptable for the
  *      optional ones). Bad → error.
  *   7. **Log header parsing.** Every malformed `## <HH:MM:SS>Z — kind`
- *      block surfaced by `parseLogDay` as a warning is forwarded here.
+ *      block surfaced by `parseLogDayFile` (per shard) is forwarded here.
  *
  * The function never mutates state. It will gracefully tolerate a
  * vault that has no Brain layer yet (returns clean) — same shape as
@@ -42,9 +42,17 @@ import { join } from "node:path";
 import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
+import { buildEntityIndex } from "./entities/index-builder.ts";
+import { buildCaptureBoundary } from "./capture-boundary.ts";
 import { verifyContentHash } from "./content-hash.ts";
 import { scanDanglingWorkruns } from "./dream-workrun.ts";
-import { parseLogDay } from "./log.ts";
+import { parseLogDayFile } from "./log.ts";
+import {
+  listLogDates,
+  listLogMarkdownFiles,
+  listLogSyncConflicts,
+  readLogDay,
+} from "./log-jsonl.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
   BRAIN_GUARDRAIL_DEFAULTS,
@@ -254,7 +262,7 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
     }
   }
 
-  // 7. Log header parsing — surface warnings from `parseLogDay`.
+  // 7. Log header parsing — surface warnings from every markdown shard.
   checkLogs(vault, issues);
 
   // 8. Broken-backlinks lint — any preference / retired / log entry
@@ -325,6 +333,46 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
   }
   try {
     checkOrphanEvidence(vault, logRecords, issues);
+  } catch {
+    /* doctor never throws */
+  }
+  // Memory Integrity Suite: canonical entity registry hygiene. Write
+  // seams refuse duplicates, so anything reported here arrived through
+  // hand edits or sync merges - observable, never auto-deleted.
+  try {
+    checkEntities(vault, issues);
+  } catch {
+    /* doctor never throws */
+  }
+  // Memory Integrity Suite: capture-boundary patterns that failed to
+  // compile (invalid regex in sessions.ignore_message_patterns or the
+  // machine-local additions). Capture itself degrades gracefully; the
+  // doctor makes the skipped pattern visible.
+  try {
+    for (const warning of buildCaptureBoundary(vault).warnings) {
+      issues.push({
+        severity: "warning",
+        code: "invalid-capture-pattern",
+        message: warning,
+      });
+    }
+  } catch {
+    /* doctor never throws */
+  }
+  // Memory Integrity Suite: leftover Syncthing conflict copies under
+  // Brain/log/. The per-device shard layout prevents new ones; old
+  // copies need a manual union+dedup merge into the day's log.
+  try {
+    for (const path of listLogSyncConflicts(vault)) {
+      issues.push({
+        severity: "warning",
+        code: "sync-conflict-log",
+        path,
+        message:
+          `Syncthing sync-conflict copy under Brain/log/: ${path}. ` +
+          "Merge its rows into the day's log (union + dedup by ts and content), then delete it.",
+      });
+    }
   } catch {
     /* doctor never throws */
   }
@@ -742,14 +790,11 @@ function checkRetired(
 // ----- Log check ------------------------------------------------------------
 
 function checkLogs(vault: string, issues: DoctorIssue[]): void {
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.log)) return;
-  const dates = readdirSync(dirs.log, { withFileTypes: true })
-    .filter((d) => d.isFile() && d.name.endsWith(".md"))
-    .map((d) => d.name.slice(0, -".md".length))
-    .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n));
-  for (const date of dates) {
-    const { warnings } = parseLogDay(vault, date);
+  // Per-device shards (Memory Integrity Suite): lint every markdown
+  // log file - legacy `<date>.md` and sharded `<date>.<deviceId>.md` -
+  // so warnings keep their exact file paths and line numbers.
+  for (const { date, path } of listLogMarkdownFiles(vault)) {
+    const { warnings } = parseLogDayFile(vault, date, path);
     for (const w of warnings) {
       issues.push({
         severity: "warning",
@@ -903,15 +948,12 @@ function readAllPreferenceRecords(vault: string): ReadonlyArray<PreferenceRecord
  * log-walking lints don't each re-parse the directory.
  */
 function readAllLogRecords(vault: string): ReadonlyArray<LogRecord> {
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.log)) return [];
+  // Shard-aware (Memory Integrity Suite): dates come from the single
+  // discovery helper and entries arrive merged across device shards.
   const out: LogRecord[] = [];
-  for (const name of readdirSync(dirs.log)) {
-    if (!name.endsWith(".md")) continue;
-    const date = name.slice(0, -".md".length);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+  for (const date of listLogDates(vault)) {
     try {
-      out.push({ date, entries: parseLogDay(vault, date).entries });
+      out.push({ date, entries: readLogDay(vault, date).entries });
     } catch {
       // parse error — surfaced separately by checkLogs
     }
@@ -1155,6 +1197,43 @@ function checkOrphanEvidence(
         message:
           `apply-evidence at ${e.timestamp} references artifact [[${target}]]` +
           " but no file with that basename exists in the vault.",
+      });
+    }
+  }
+}
+
+/**
+ * `duplicate-entity` / `broken-entity-relation`: canonical entity
+ * registry hygiene (Memory Integrity Suite). Duplicates come straight
+ * from the index builder's conflict report; broken relations are edges
+ * whose target resolves to no entity id in the registry.
+ */
+function checkEntities(vault: string, issues: DoctorIssue[]): void {
+  const index = buildEntityIndex(vault);
+  if (index.entities.length === 0 && index.conflicts.length === 0) return;
+
+  for (const conflict of index.conflicts) {
+    issues.push({
+      severity: "warning",
+      code: "duplicate-entity",
+      message:
+        `${conflict.kind === "duplicate-name" ? "identity" : "alias"} '${conflict.key}' is ` +
+        `claimed by ${conflict.paths.length} entity files: ${conflict.paths.join(", ")}. ` +
+        "Merge them or archive the duplicates - lookups resolve to the first claimant only.",
+    });
+  }
+
+  const knownIds = new Set(index.entities.map((e) => e.id));
+  for (const entity of index.entities) {
+    for (const edge of entity.relations) {
+      if (knownIds.has(edge.target)) continue;
+      issues.push({
+        severity: "warning",
+        code: "broken-entity-relation",
+        path: entity.path,
+        message:
+          `${entity.id} declares '${edge.relation}: [[${edge.target}]]' but no entity ` +
+          "with that id exists in the registry.",
       });
     }
   }

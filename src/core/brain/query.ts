@@ -30,7 +30,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { brainDirs } from "./paths.ts";
-import { parseLogDay, type BrainLogEntry } from "./log.ts";
+import type { BrainLogEntry } from "./log.ts";
+import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
@@ -263,16 +264,11 @@ export function queryByLogSince(vault: string, since: Date): ReadonlyArray<Brain
  * → empty array.
  */
 export function readAllLogEntries(vault: string): BrainLogEntry[] {
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.log)) return [];
-  const names = readdirSync(dirs.log, { withFileTypes: true })
-    .filter((d) => d.isFile() && d.name.endsWith(".md"))
-    .map((d) => d.name.slice(0, -".md".length))
-    .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n))
-    .toSorted();
+  // Shard-aware (Memory Integrity Suite): dates from the single
+  // discovery helper, entries merged across device shards.
   const out: BrainLogEntry[] = [];
-  for (const date of names) {
-    const { entries } = parseLogDay(vault, date);
+  for (const date of listLogDates(vault)) {
+    const { entries } = readLogDay(vault, date);
     for (const e of entries) out.push(e);
   }
   return out;

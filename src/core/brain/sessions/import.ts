@@ -42,6 +42,8 @@ import {
   type SessionTurn,
 } from "./types.ts";
 import { validateBrainFeedbackInput } from "./validate-feedback.ts";
+import { buildCaptureBoundary, type SessionCaptureDecision } from "../capture-boundary.ts";
+import { extractFacts, routeExtractedFacts } from "../fact-extract.ts";
 
 export interface ImportSessionOptions {
   /** Agent identity stamped on signals when the turn has no own agent. */
@@ -88,6 +90,12 @@ export interface ImportSessionResult {
   readonly tool_replays: number;
   readonly malformed: number;
   readonly filtered_turns: number;
+  /** Capture-boundary verdict for this file (Memory Integrity Suite). */
+  readonly boundary_decision: SessionCaptureDecision;
+  /** Turns whose text was suppressed before any extraction. */
+  readonly suppressed_turns: number;
+  readonly facts_extracted: number;
+  readonly facts_deduped: number;
   readonly recall_turns_imported: number;
   readonly recall_summary_nodes: number;
   readonly errors: ReadonlyArray<{ path: string; message: string }>;
@@ -148,6 +156,9 @@ export async function importSession(
   let toolReplays = 0;
   let malformed = 0;
   let filteredTurns = 0;
+  let suppressedTurns = 0;
+  let factsExtracted = 0;
+  let factsDeduped = 0;
   const recallTurns: SessionTurn[] = [];
   const filterRoles =
     opts.filterRoles && opts.filterRoles.length > 0 ? new Set(opts.filterRoles) : null;
@@ -209,6 +220,32 @@ export async function importSession(
     }
   };
 
+  // Capture boundary (Memory Integrity Suite): classify the session
+  // FIRST. An ignored file imports nothing; a stateless file is
+  // scanned read-only (no signals, no recall records, no facts).
+  const boundary = buildCaptureBoundary(vault);
+  const boundaryDecision = boundary.sessionDecision(opts.recallSessionId, absPath);
+  const mayWrite = boundaryDecision === "capture";
+  const emptyResult = (): ImportSessionResult =>
+    Object.freeze({
+      file: absPath,
+      format: adapter.id,
+      turns_scanned: 0,
+      signals_created: 0,
+      signals_deduped: 0,
+      tool_replays: 0,
+      malformed: 0,
+      filtered_turns: 0,
+      boundary_decision: boundaryDecision,
+      suppressed_turns: 0,
+      facts_extracted: 0,
+      facts_deduped: 0,
+      recall_turns_imported: 0,
+      recall_summary_nodes: 0,
+      errors: Object.freeze([]),
+    });
+  if (boundaryDecision === "ignore") return emptyResult();
+
   for await (const turn of adapter.iterate(path)) {
     turnsScanned++;
     if (sinceMs !== undefined) {
@@ -226,10 +263,31 @@ export async function importSession(
         continue;
       }
     }
-    if (opts.recall === true) recallTurns.push(turn);
+    // Message-level boundary: suppressed text never reaches marker or
+    // fact extraction (and is not stored for recall).
+    if (turn.text && boundary.suppressMessage(turn.text)) {
+      suppressedTurns++;
+      continue;
+    }
+    if (opts.recall === true && mayWrite) recallTurns.push(turn);
+
+    // Facts from USER turns only (the HANDOFF carve-out's conservative
+    // core: bare assistant output is never auto-extracted).
+    if (mayWrite && turn.text && turn.role === "user") {
+      const routed = routeExtractedFacts(vault, {
+        facts: extractFacts(turn.text),
+        agent: agentLabelForTurn(turn, adapter.id, opts.agent),
+        now,
+        sessionRef: `${absPath}#${turn.turnId}`,
+        dedup,
+        ...(opts.dryRun === true ? { dryRun: true } : {}),
+      });
+      factsExtracted += routed.created;
+      factsDeduped += routed.deduped;
+    }
 
     // Path A — markers in text.
-    if (turn.text && (turn.role === "user" || turn.role === "assistant")) {
+    if (mayWrite && turn.text && (turn.role === "user" || turn.role === "assistant")) {
       const discovery = discoverMarkersDetailed(turn.text);
       malformed += discovery.malformed;
       const markers = discovery.markers;
@@ -254,6 +312,7 @@ export async function importSession(
     }
 
     // Path B — brain_feedback tool_use replay.
+    if (!mayWrite) continue;
     for (const call of turn.toolCalls ?? []) {
       if (call.name !== "brain_feedback") continue;
       const validated = validateBrainFeedbackInput(call.input);
@@ -312,6 +371,10 @@ export async function importSession(
     signals_deduped: signalsDeduped,
     tool_replays: toolReplays,
     malformed,
+    boundary_decision: boundaryDecision,
+    suppressed_turns: suppressedTurns,
+    facts_extracted: factsExtracted,
+    facts_deduped: factsDeduped,
     filtered_turns: filteredTurns,
     recall_turns_imported: recallTurnsImported,
     recall_summary_nodes: recallSummaryNodes,

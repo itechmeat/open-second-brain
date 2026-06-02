@@ -53,6 +53,7 @@ export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
 export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
 export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
+export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
 export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
 /**
  * Ephemeral MCP tool-result artifacts (v0.18.0). Dot-directory so the
@@ -88,6 +89,8 @@ export interface BrainDirs {
   readonly preferences: string;
   readonly retired: string;
   readonly log: string;
+  /** Canonical entity registry root: `Brain/entities/<category>/`. */
+  readonly entities: string;
   /** Pre-`dream` archive directory. Never recursed into by `dream`. */
   readonly snapshots: string;
 }
@@ -106,6 +109,7 @@ export function brainDirs(vault: string): BrainDirs {
     preferences: ensureInsideVault(join(vault, BRAIN_PREFERENCES_REL), vault),
     retired: ensureInsideVault(join(vault, BRAIN_RETIRED_REL), vault),
     log: ensureInsideVault(join(vault, BRAIN_LOG_REL), vault),
+    entities: ensureInsideVault(join(vault, BRAIN_ENTITIES_REL), vault),
     snapshots: ensureInsideVault(join(vault, BRAIN_SNAPSHOTS_REL), vault),
   };
 }
@@ -240,6 +244,17 @@ export function logPath(vault: string, date: string): string {
 }
 
 /**
+ * Canonical entity file path: `Brain/entities/<category>/<id>.md`
+ * (Memory Integrity Suite). Both segments are slug-validated; the id
+ * is the entity's stable identifier and the file basename.
+ */
+export function entityPath(vault: string, category: string, id: string): string {
+  const c = validateSlug(category);
+  const i = validateSlug(id);
+  return ensureInsideVault(join(brainDirs(vault).entities, c, `${i}.md`), vault);
+}
+
+/**
  * Structured JSONL sidecar that accompanies each `<date>.md` log
  * file (§23, v0.10.8). Every machine consumer reads through this
  * helper instead of doing the `.md → .jsonl` string conversion
@@ -249,6 +264,27 @@ export function logPath(vault: string, date: string): string {
 export function logJsonlPath(vault: string, date: string): string {
   const d = validateIsoDate(date);
   return ensureInsideVault(join(brainDirs(vault).log, `${d}.jsonl`), vault);
+}
+
+/**
+ * Per-device markdown log shard: `Brain/log/<date>.<deviceId>.md`
+ * (Memory Integrity Suite). The empty device id resolves to the
+ * legacy un-sharded path so pre-shard call sites keep working.
+ */
+export function logShardPath(vault: string, date: string, deviceId: string): string {
+  if (deviceId === "") return logPath(vault, date);
+  const d = validateIsoDate(date);
+  return ensureInsideVault(join(brainDirs(vault).log, `${d}.${validateSlug(deviceId)}.md`), vault);
+}
+
+/** Per-device JSONL log shard: `Brain/log/<date>.<deviceId>.jsonl`. */
+export function logShardJsonlPath(vault: string, date: string, deviceId: string): string {
+  if (deviceId === "") return logJsonlPath(vault, date);
+  const d = validateIsoDate(date);
+  return ensureInsideVault(
+    join(brainDirs(vault).log, `${d}.${validateSlug(deviceId)}.jsonl`),
+    vault,
+  );
 }
 
 /**

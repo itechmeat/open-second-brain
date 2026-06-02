@@ -7,10 +7,10 @@
  * module never re-walks the preferences directory.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 
 import { brainDirs } from "./paths.ts";
-import { readLogDay } from "./log-jsonl.ts";
+import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { MOST_APPLIED_LIMIT_DEFAULT, MOST_APPLIED_WINDOW_DAYS_DEFAULT } from "./policy.ts";
 import { isoDate } from "./time.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
@@ -22,8 +22,6 @@ import {
 } from "./types.ts";
 
 const DAY_MS = 24 * 3600 * 1000;
-const LOG_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
-
 export interface MostAppliedEntry {
   readonly preference: BrainPreference;
   readonly applied_30d: number;
@@ -81,10 +79,9 @@ export function computeMostApplied(
   const earliestDayPrefix = isoDate(new Date(windowStartMs - DAY_MS));
 
   const counts = new Map<string, number>();
-  for (const name of readdirSync(dirs.log)) {
-    const m = LOG_FILENAME_RE.exec(name);
-    if (!m) continue;
-    const datePrefix = m[1]!;
+  // Shard-aware (Memory Integrity Suite): one discovery pass over every
+  // log filename shape; readLogDay merges the day's shards.
+  for (const datePrefix of listLogDates(vault)) {
     if (datePrefix < earliestDayPrefix) continue;
 
     let parsed;

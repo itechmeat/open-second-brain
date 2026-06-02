@@ -51,7 +51,8 @@ import { runHealEnrichment } from "./heal-run.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
 import { buildIntentReview, type BrainIntentReviewEntry } from "./intent-review.ts";
 import { writePreferenceTxn } from "./preference-txn.ts";
-import { appendLogEvent, parseLogDay, type BrainLogEntry } from "./log.ts";
+import { appendLogEvent, type BrainLogEntry } from "./log.ts";
+import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { moveToRetired, parsePreference, wouldRewritePreference } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
 import { isPinned } from "./pin.ts";
@@ -1607,15 +1608,11 @@ interface ApplyEvidenceEntry {
 }
 
 function scanApplyEvidence(vault: string): ApplyEvidenceEntry[] {
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.log)) return [];
   const out: ApplyEvidenceEntry[] = [];
   const mergeAliases = new Map<string, string>();
-  for (const name of readdirSync(dirs.log)) {
-    if (!name.endsWith(".md")) continue;
-    const date = name.slice(0, -3);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-    const { entries } = parseLogDay(vault, date);
+  // Shard-aware (Memory Integrity Suite): merged per-day reads.
+  for (const date of listLogDates(vault)) {
+    const { entries } = readLogDay(vault, date);
     for (const e of entries) {
       if (e.eventType === BRAIN_LOG_EVENT_KIND.merge) {
         const keep = parseWikilinkFromBodyValue(e.body["keep"]);

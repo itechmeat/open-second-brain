@@ -28,6 +28,7 @@ import type {
   BrainHealthConfig,
   BrainLinkGraphConfig,
   BrainNotesConfig,
+  BrainSessionsConfig,
   BrainSchemaConfig,
   BrainMostAppliedConfig,
   BrainTemporalConfig,
@@ -37,6 +38,7 @@ import type {
   ResolvedBrainHealthConfig,
   ResolvedBrainLinkGraphConfig,
   ResolvedBrainNotesConfig,
+  ResolvedBrainSessionsConfig,
   ResolvedBrainTemporalConfig,
 } from "./types.ts";
 import {
@@ -274,6 +276,32 @@ export function resolveNotes(cfg: BrainConfig): ResolvedBrainNotesConfig {
   return Object.freeze({
     read_paths: Object.freeze([...block.read_paths]) as ReadonlyArray<string>,
   }) as ResolvedBrainNotesConfig;
+}
+
+/**
+ * Default `sessions:` block (Memory Integrity Suite). Empty lists
+ * mean every session and message is captured - the pre-boundary
+ * behaviour, bit-identical.
+ */
+export const BRAIN_SESSIONS_DEFAULTS: ResolvedBrainSessionsConfig = Object.freeze({
+  ignore_patterns: Object.freeze([]) as ReadonlyArray<string>,
+  stateless_patterns: Object.freeze([]) as ReadonlyArray<string>,
+  ignore_message_patterns: Object.freeze([]) as ReadonlyArray<string>,
+}) as ResolvedBrainSessionsConfig;
+
+/** Merge a parsed `sessions` block (or `undefined`) with the defaults. */
+export function resolveSessions(cfg: BrainConfig): ResolvedBrainSessionsConfig {
+  const block = cfg.sessions;
+  if (block === undefined) return BRAIN_SESSIONS_DEFAULTS;
+  return Object.freeze({
+    ignore_patterns: Object.freeze([...(block.ignore_patterns ?? [])]) as ReadonlyArray<string>,
+    stateless_patterns: Object.freeze([
+      ...(block.stateless_patterns ?? []),
+    ]) as ReadonlyArray<string>,
+    ignore_message_patterns: Object.freeze([
+      ...(block.ignore_message_patterns ?? []),
+    ]) as ReadonlyArray<string>,
+  }) as ResolvedBrainSessionsConfig;
 }
 
 /**
@@ -1287,6 +1315,58 @@ export function validateBrainConfigDetailed(
     notes = Object.keys(partialNotes).length > 0 ? (partialNotes as BrainNotesConfig) : {};
   }
 
+  // Optional `sessions:` block (Memory Integrity Suite). Shape:
+  //   sessions:
+  //     ignore_patterns:        ["cron-*"]
+  //     stateless_patterns:     ["probe-*"]
+  //     ignore_message_patterns: ["^\\[heartbeat\\]"]
+  // Session patterns are anchored globs; message patterns are regexes
+  // (validated lazily at compile time - an invalid regex degrades to a
+  // capture-boundary warning, never a config error, so a typo cannot
+  // take the whole Brain config down).
+  let sessions: BrainSessionsConfig | undefined;
+  if ("sessions" in obj) {
+    const rawSessions = obj["sessions"];
+    if (typeof rawSessions !== "object" || rawSessions === null || Array.isArray(rawSessions)) {
+      throw new BrainConfigError("sessions must be a mapping", "sessions", source);
+    }
+    const sessionsObj = rawSessions as Record<string, unknown>;
+    const partial: Record<string, unknown> = {};
+    const LIST_KEYS = ["ignore_patterns", "stateless_patterns", "ignore_message_patterns"];
+    for (const key of LIST_KEYS) {
+      if (!(key in sessionsObj)) continue;
+      const v = sessionsObj[key];
+      if (!Array.isArray(v)) {
+        throw new BrainConfigError(
+          "must be an array of pattern strings",
+          `sessions.${key}`,
+          source,
+        );
+      }
+      const cleaned: string[] = [];
+      v.forEach((entry, idx) => {
+        if (typeof entry !== "string" || entry.trim().length === 0) {
+          throw new BrainConfigError(
+            `must be a non-empty string; got ${describe(entry)}`,
+            `sessions.${key}[${idx}]`,
+            source,
+          );
+        }
+        cleaned.push(entry.trim());
+      });
+      partial[key] = cleaned;
+    }
+    for (const key of Object.keys(sessionsObj)) {
+      if (!LIST_KEYS.includes(key)) {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `sessions.${key}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
+    sessions = partial as BrainSessionsConfig;
+  }
+
   // Optional `schema:` block (runtime schema-pack foundation). Shape:
   //   schema:
   //     preference_types: [research, decision]
@@ -1403,6 +1483,7 @@ export function validateBrainConfigDetailed(
     "link_graph",
     "temporal",
     "notes",
+    "sessions",
     "schema",
   ]);
   for (const key of Object.keys(obj)) {
@@ -1444,6 +1525,7 @@ export function validateBrainConfigDetailed(
     ...(linkGraph !== undefined ? { link_graph: linkGraph } : {}),
     ...(temporal !== undefined ? { temporal } : {}),
     ...(notes !== undefined ? { notes } : {}),
+    ...(sessions !== undefined ? { sessions } : {}),
     ...(health !== undefined ? { health } : {}),
     ...(schema !== undefined ? { schema } : {}),
   };

@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-06-02
+
+Memory Integrity Suite: four changes that make the memory itself
+trustworthy - named things get one canonical home, the daily log stops
+sync-conflicting across devices, runtime noise stops entering memory, and
+structured facts from user turns are captured in real time with canonical
+anchors.
+
+### Added
+
+- **Canonical entity registry.** One canonical entity per
+  `(category, normalized name)` lives at `Brain/entities/<category>/<id>.md`
+  as plain Obsidian Markdown with frontmatter identity (`entity_id`,
+  `category`, `name`, `aliases`, `status`, lifecycle stamps). The identity
+  index rebuilds from the Markdown files on every read - nothing to persist,
+  nothing to sync-conflict. `o2b brain entity set | get | list | relate |
+  archive` drives the registry from the CLI (upsert resolves names AND
+  aliases before creating anything and refuses duplicate claims; archive
+  removes from active lookup, `--restore` returns); the read-only
+  `brain_entity` MCP tool (`view: get | list`) serves lookups to agents.
+  Relations reuse the typed relation vocabulary, so graph export and
+  relation polarity pick entities up without new plumbing. Search expands
+  query entities through the registry: a query naming an alias boosts
+  documents naming the canonical entity and explains the hop with an
+  `entity_canonical` reason - vaults without a registry rank
+  bit-identically. Doctor lints duplicate identity claims
+  (`duplicate-entity`) and dangling relations (`broken-entity-relation`).
+- **Per-device Brain log shards.** `appendLogEvent` writes
+  `Brain/log/<date>.<deviceId>.jsonl` + `.md`, so two Syncthing devices
+  never touch the same file on the same day - the write-conflict class
+  observed live on 2026-06-01 is gone. The device id is a stable
+  per-install value in the DEVICE-LOCAL config, generated once on first
+  use (`O2B_DEVICE_ID` overrides; identity-resolution failure falls back
+  to the legacy pair - an append never fails on identity). `readLogDay`
+  merges every shard of a day sorted by (timestamp, shardId, line) with
+  per-shard JSONL-over-markdown preference, and `listLogDates` becomes the
+  single date-discovery helper behind every reader (doctor, digest,
+  query, dream, evidence, status, backlinks, most-applied, temporal index,
+  MCP log resource). Legacy single-file days keep reading forever - no
+  migration. Doctor flags leftover Syncthing conflict copies
+  (`sync-conflict-log`).
+- **Capture boundaries.** A `sessions:` block in `_brain.yaml` declares
+  what may become memory: `ignore_patterns` (sessions that produce
+  nothing), `stateless_patterns` (sessions that read but never write),
+  and `ignore_message_patterns` (message text that never reaches
+  extraction). Session patterns are anchored globs, message patterns are
+  regexes; an invalid regex degrades to a doctor warning
+  (`invalid-capture-pattern`), never an error. Machine-local config can
+  ADD patterns (comma-separated `sessions_*` keys) but never remove vault
+  policy. Both ingestion seams consult the boundary FIRST - live hooks
+  (`captureSessionLifecycleEvent`) and batch import (`importSession`) -
+  and suppression is counted in results and audit rows, never stored raw.
+  An unconfigured vault captures bit-identically to before.
+- **Regex fact extraction.** Seven precision-first pattern families
+  (identity, preference, possession, location, url, email, confirmation)
+  capture structured facts from USER turns in real time, without an LLM
+  call. Every family requires an explicit first-person or confirmation
+  frame; code blocks and quoted lines are stripped; bare assistant output
+  is never auto-extracted (the HANDOFF carve-out's conservative core).
+  Facts land as `source_type: extracted` signals with family-scoped dedup
+  hashes - repeats and re-imports dedup identically - and a fact naming a
+  registered canonical entity (or alias) carries the canonical id, the
+  shared canonicalization kernel at work. Extraction runs strictly BEHIND
+  the capture boundary; the pipeline order is pinned by tests at both
+  seams.
+
+### Process wins
+
+- The capture pipeline order (classify/suppress -> extract -> route) is a
+  tested contract, not a convention - suppressed input can never become
+  evidence.
+- The entity identity index is a pure projection of the Markdown files;
+  "rebuildable" is satisfied by never persisting it.
+- Every reader refactor shipped behind golden tests: legacy-only vaults
+  read byte-identically through the new shard-merging path.
+
 ## [0.34.0] - 2026-06-02
 
 Token Diet: six changes that cut what an agent pays in context before it does
@@ -3988,6 +4064,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.35.0]: https://github.com/itechmeat/open-second-brain/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/itechmeat/open-second-brain/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/itechmeat/open-second-brain/compare/v0.32.1...v0.33.0
 [0.32.1]: https://github.com/itechmeat/open-second-brain/compare/v0.32.0...v0.32.1

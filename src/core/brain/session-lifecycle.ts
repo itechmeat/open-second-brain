@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { appendAuditRecord } from "../reliability/audit.ts";
 import { appendLogEvent } from "./log.ts";
 import { brainDirs } from "./paths.ts";
+import { buildCaptureBoundary, type SessionCaptureDecision } from "./capture-boundary.ts";
+import { extractFacts, routeExtractedFacts } from "./fact-extract.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { discoverMarkersDetailed } from "./inline.ts";
 import { writeSignal } from "./signal.ts";
@@ -23,6 +25,12 @@ export interface CaptureSessionLifecycleResult {
   readonly signals_deduped: number;
   readonly tool_replays: number;
   readonly malformed: number;
+  /** Capture-boundary verdict for this event (Memory Integrity Suite). */
+  readonly boundary_decision: SessionCaptureDecision;
+  /** Messages whose text was suppressed before any extraction. */
+  readonly suppressed_messages: number;
+  readonly facts_extracted: number;
+  readonly facts_deduped: number;
   readonly audit_path: string;
   readonly log_path?: string;
 }
@@ -30,6 +38,7 @@ export interface CaptureSessionLifecycleResult {
 interface NormalizedPayload {
   readonly event: string;
   readonly sessionId?: string;
+  readonly transcriptPath?: string;
   readonly promptText?: string;
   readonly toolName?: string;
   readonly toolInput?: unknown;
@@ -53,18 +62,47 @@ export async function captureSessionLifecycleEvent(
     signals_deduped: 0,
     tool_replays: 0,
     malformed: normalized.malformed,
+    suppressed_messages: 0,
+    facts_extracted: 0,
+    facts_deduped: 0,
   };
 
-  if (normalized.promptText !== undefined) {
-    captureMarkers(vault, normalized, normalized.promptText, opts, now, ensureDedup(), counters);
+  // Capture boundary (Memory Integrity Suite): classify FIRST, before
+  // any extraction. Ignored sessions produce nothing but the audit
+  // row; stateless sessions read but never write; suppressed message
+  // text never reaches marker or fact extraction.
+  const boundary = buildCaptureBoundary(vault);
+  const decision = boundary.sessionDecision(normalized.sessionId, normalized.transcriptPath);
+  const mayWrite = decision === "capture";
+
+  let promptText = normalized.promptText;
+  if (mayWrite && promptText !== undefined && boundary.suppressMessage(promptText)) {
+    counters.suppressed_messages++;
+    promptText = undefined;
   }
 
-  if (normalized.toolName === "brain_feedback") {
+  if (mayWrite && promptText !== undefined) {
+    captureMarkers(vault, normalized, promptText, opts, now, ensureDedup(), counters);
+    // Fact extraction runs strictly AFTER the boundary: only captured,
+    // unsuppressed user text reaches the pattern table.
+    const routed = routeExtractedFacts(vault, {
+      facts: extractFacts(promptText),
+      agent: opts.agent,
+      now,
+      sessionRef: sessionReference(normalized),
+      dedup: ensureDedup(),
+      ...(opts.dryRun ? { dryRun: true } : {}),
+    });
+    counters.facts_extracted += routed.created;
+    counters.facts_deduped += routed.deduped;
+  }
+
+  if (mayWrite && normalized.toolName === "brain_feedback") {
     captureToolFeedback(vault, normalized, opts, now, ensureDedup(), counters);
   }
 
   let logPath: string | undefined;
-  if (!opts.dryRun) {
+  if (mayWrite && !opts.dryRun) {
     logPath = appendLifecycleLog(vault, normalized, opts.agent, now, counters);
   }
 
@@ -78,6 +116,7 @@ export async function captureSessionLifecycleEvent(
       event: normalized.event,
       ...(normalized.sessionId ? { session_id: normalized.sessionId } : {}),
       dry_run: opts.dryRun === true,
+      boundary_decision: decision,
       ...counters,
     },
   });
@@ -89,6 +128,10 @@ export async function captureSessionLifecycleEvent(
     signals_deduped: counters.signals_deduped,
     tool_replays: counters.tool_replays,
     malformed: counters.malformed,
+    boundary_decision: decision,
+    suppressed_messages: counters.suppressed_messages,
+    facts_extracted: counters.facts_extracted,
+    facts_deduped: counters.facts_deduped,
     audit_path: auditPath,
     ...(logPath ? { log_path: logPath } : {}),
   };
@@ -104,9 +147,11 @@ function normalizePayload(payload: unknown): NormalizedPayload {
     readNonEmptyString(record["event"]) ??
     "unknown";
   const sessionId = readNonEmptyString(record["session_id"]);
+  const transcriptPath = readNonEmptyString(record["transcript_path"]);
   return {
     event,
     ...(sessionId ? { sessionId } : {}),
+    ...(transcriptPath ? { transcriptPath } : {}),
     ...(extractPromptText(record) ? { promptText: extractPromptText(record)! } : {}),
     ...(readNonEmptyString(record["tool_name"])
       ? { toolName: readNonEmptyString(record["tool_name"])! }
@@ -205,6 +250,9 @@ interface MutableCounters {
   signals_deduped: number;
   tool_replays: number;
   malformed: number;
+  suppressed_messages: number;
+  facts_extracted: number;
+  facts_deduped: number;
 }
 
 function emitSignal(
@@ -259,6 +307,9 @@ function appendLifecycleLog(
       signals_deduped: String(counters.signals_deduped),
       tool_replays: String(counters.tool_replays),
       malformed: String(counters.malformed),
+      suppressed_messages: String(counters.suppressed_messages),
+      facts_extracted: String(counters.facts_extracted),
+      facts_deduped: String(counters.facts_deduped),
     },
   }).logPath;
 }

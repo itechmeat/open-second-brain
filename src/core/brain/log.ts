@@ -30,7 +30,8 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { brainDirs, logJsonlPath, logPath, validateIsoDate } from "./paths.ts";
+import { brainDirs, logPath, logShardJsonlPath, logShardPath, validateIsoDate } from "./paths.ts";
+import { isValidDeviceId, resolveDeviceId } from "../config.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
 // ----- Public types ---------------------------------------------------------
@@ -98,7 +99,17 @@ const SUB_BULLET_RE = /^(?:\s{2,}|\t+)-\s+(.+)$/;
  */
 export function parseLogDay(vault: string, date: string): ParseLogDayResult {
   const validDate = validateIsoDate(date);
-  const path = logPath(vault, validDate);
+  return parseLogDayFile(vault, validDate, logPath(vault, validDate));
+}
+
+/**
+ * Parse one specific log markdown file for `date`. The per-device
+ * shard layout (Memory Integrity Suite) means a day can have several
+ * markdown files (`<date>.md`, `<date>.<deviceId>.md`); the shard
+ * readers in log-jsonl.ts call this once per file and merge.
+ */
+export function parseLogDayFile(vault: string, date: string, path: string): ParseLogDayResult {
+  const validDate = validateIsoDate(date);
   if (!existsSync(path)) {
     return { entries: [], warnings: [] };
   }
@@ -234,7 +245,22 @@ function acquireLogLock(logDir: string): () => void {
   throw lastErr;
 }
 
-export function appendLogEvent(vault: string, event: BrainLogEntry): AppendLogEventResult {
+export interface AppendLogEventOptions {
+  /**
+   * Per-device shard id (Memory Integrity Suite). Defaults to
+   * `resolveDeviceId()` from the device-local config; the empty string
+   * forces the legacy un-sharded `<date>.jsonl` / `<date>.md` pair.
+   * Resolution failure (read-only config home, missing HOME) falls back
+   * to the legacy pair too - an append must never fail on identity.
+   */
+  readonly deviceId?: string;
+}
+
+export function appendLogEvent(
+  vault: string,
+  event: BrainLogEntry,
+  opts: AppendLogEventOptions = {},
+): AppendLogEventResult {
   if (!BRAIN_LOG_EVENT_KIND_SET.has(event.eventType)) {
     throw new Error(
       `appendLogEvent: unknown event kind '${event.eventType}' — must be one of ${Object.values(
@@ -242,13 +268,29 @@ export function appendLogEvent(vault: string, event: BrainLogEntry): AppendLogEv
       ).join(", ")}`,
     );
   }
+  let deviceId: string;
+  if (opts.deviceId !== undefined) {
+    if (opts.deviceId !== "" && !isValidDeviceId(opts.deviceId)) {
+      throw new Error(
+        `appendLogEvent: invalid deviceId ${JSON.stringify(opts.deviceId)} - ` +
+          "expected a lowercase slug matching the device_id config shape",
+      );
+    }
+    deviceId = opts.deviceId;
+  } else {
+    try {
+      deviceId = resolveDeviceId();
+    } catch {
+      deviceId = ""; // fail-soft: legacy un-sharded pair
+    }
+  }
   // Parse the timestamp once to extract date + HHMMSS deterministically.
   // We deliberately do not accept Date objects: the caller controls the
   // canonical representation so two calls with identical input produce
   // byte-identical output (idempotency requirement).
   const ts = parseIsoUtc(event.timestamp);
-  const path = logPath(vault, ts.date);
-  const jsonlPath = logJsonlPath(vault, ts.date);
+  const path = logShardPath(vault, ts.date, deviceId);
+  const jsonlPath = logShardJsonlPath(vault, ts.date, deviceId);
   const logDir = brainDirs(vault).log;
   const topLevelAgent = (event as { agent?: unknown }).agent;
   const eventBody =

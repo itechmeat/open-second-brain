@@ -33,7 +33,7 @@ import { relationFromFrontmatterField } from "../graph/relation-vocab.ts";
 import { normalizeRelationTarget } from "../graph/frontmatter-relations.ts";
 import { buildAliasIndex } from "./link-graph/alias-index.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
-import { parseLogDay } from "./log.ts";
+import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { brainDirs } from "./paths.ts";
 import { normalizeDerivedKeys } from "./preference.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
@@ -264,14 +264,12 @@ function collectLog(
   push: (target: string, ref: BacklinkRef) => void,
 ): void {
   if (!existsSync(dir)) return;
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md")) continue;
-    const date = name.slice(0, -".md".length);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+  // Shard-aware (Memory Integrity Suite): merged per-day reads.
+  for (const date of listLogDates(vault)) {
     const source = `log-${date}`;
     let entries;
     try {
-      entries = parseLogDay(vault, date).entries;
+      entries = readLogDay(vault, date).entries;
     } catch {
       continue;
     }

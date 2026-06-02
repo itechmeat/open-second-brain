@@ -199,6 +199,8 @@ describe("tool listing", () => {
         "brain_doctor",
         "brain_health",
         "brain_mcp_landscape",
+        // Canonical entity registry read surface (Memory Integrity Suite).
+        "brain_entity",
         "brain_backlinks",
         // Per-preference mutation audit + morning brief (added in v0.21.0).
         "brain_audit",
@@ -492,7 +494,7 @@ describe("stdio loop", () => {
     // + brain_brief / brain_analytics / schema_inspect (token-diet) = 74
     // - 18 predecessors hidden as deprecated aliases (callable via
     //   tools/call, not advertised) = 56.
-    expect(list.result.tools.length).toBe(56);
+    expect(list.result.tools.length).toBe(57);
   });
 
   test("returns parse error for invalid JSON", async () => {

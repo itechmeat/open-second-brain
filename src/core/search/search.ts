@@ -22,6 +22,7 @@ import {
   readLearnedWeights,
 } from "./feedback.ts";
 import { extractEntities } from "./entities.ts";
+import { expandQueryEntities } from "./entity-alias.ts";
 import { buildCoverageReport, significantTerms, termIncludedIn } from "./coverage.ts";
 import { buildEvidencePack, downrankTerminalEvidenceResults } from "./evidence-pack.ts";
 import type { EvidenceUnionRecord, EvidenceVerification } from "./evidence-pack.ts";
@@ -369,9 +370,22 @@ export async function search(
     // Entity-boosted retrieval (v0.13.0): extract entities from the
     // query and count overlaps with each candidate chunk. Empty when the
     // query names no entities or the index predates the entity store.
+    // The canonical entity registry (Memory Integrity Suite) expands the
+    // set so a query naming an alias also matches chunks naming the
+    // canonical entity; identity expansion (no registry) keeps ranking
+    // bit-identical to pre-registry behaviour.
     const queryEntities = extractEntities(query);
+    const entityExpansion = expandQueryEntities(config.vault, queryEntities);
     const entityMatchByChunk =
-      queryEntities.length > 0 ? store.chunkEntityMatches(idsList, queryEntities) : undefined;
+      entityExpansion.expanded.length > 0
+        ? store.chunkEntityMatches(idsList, entityExpansion.expanded)
+        : undefined;
+    // Canonical-hop attribution: chunks matching a registry-ADDED form
+    // carry an explicit reason naming the canonical entity ids below.
+    const canonicalMatchByChunk =
+      entityExpansion.added.length > 0
+        ? store.chunkEntityMatches(idsList, entityExpansion.added)
+        : undefined;
 
     // When a property filter is active, overfetch the ranked
     // candidates so the post-filter result set still has a chance
@@ -514,10 +528,27 @@ export async function search(
       return rels && rels.length > 0 ? { ...r, relations: Object.freeze(rels) } : r;
     });
     const withStructuredReasons = addStructuredReasons(withRelations, structured);
+    // Canonical-entity attribution (Memory Integrity Suite): a hit whose
+    // chunk matched a registry-added form explains the alias hop. Vaults
+    // without a registry never reach this branch.
+    const withCanonicalReasons =
+      canonicalMatchByChunk !== undefined
+        ? withStructuredReasons.map((r) =>
+            (canonicalMatchByChunk.get(r.chunkId) ?? 0) > 0
+              ? Object.freeze({
+                  ...r,
+                  reasons: Object.freeze([
+                    ...r.reasons,
+                    `entity_canonical: ${entityExpansion.sourceIds.join(", ")}`,
+                  ]),
+                })
+              : r,
+          )
+        : withStructuredReasons;
     const finalResults =
       opts.evidencePack === true
-        ? downrankTerminalEvidenceResults(withStructuredReasons)
-        : withStructuredReasons;
+        ? downrankTerminalEvidenceResults(withCanonicalReasons)
+        : withCanonicalReasons;
     const evidencePack =
       opts.evidencePack === true
         ? buildEvidencePack(
