@@ -78,10 +78,15 @@ export function parseTimePoint(raw: string, nowMs: number, edge: RangeEdge): num
     return edge === "since" ? ms : ms + DAY_MS - 1;
   }
 
-  // Full ISO datetime (with time component). Date.parse handles the
-  // offset forms; require a "T" so bare words never sneak through.
+  // Full ISO datetime (with time component). Require a "T" so bare
+  // words never sneak through. Date.parse treats an offset-less
+  // datetime as LOCAL time, which would make the resolved bounds
+  // machine-dependent — normalise to UTC by appending "Z" when no
+  // explicit designator is present, preserving the all-UTC contract.
   if (text.includes("t")) {
-    const parsed = Date.parse(raw.trim());
+    const trimmed = raw.trim();
+    const hasOffset = /(?:z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+    const parsed = Date.parse(hasOffset ? trimmed : `${trimmed}Z`);
     if (Number.isFinite(parsed)) return parsed;
   }
   throw invalid(raw);

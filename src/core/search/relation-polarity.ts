@@ -70,10 +70,21 @@ export interface RelationPolarityOptions {
   readonly includeSuperseded?: boolean;
 }
 
+/**
+ * Per-result effect accumulators. Each is order-insensitive on its own
+ * (min, max, capped sum), and the final score composes them exactly
+ * once — so edge application order cannot change the outcome even for
+ * a node that is simultaneously a demoted predecessor, a carried
+ * successor, and a positive-relation target.
+ */
 interface Mutable {
   result: BrainSearchResult;
-  score: number;
   reasons: string[];
+  /** Multiplier on the original score; min over demotion edges. */
+  demotionFactor: number;
+  /** Successor carry floor; max over carried predecessor scores. */
+  carriedScore: number;
+  /** Additive positive-relation boost; capped sum. */
   positiveBoost: number;
 }
 
@@ -104,8 +115,9 @@ export function applyRelationPolarity(
   const pool: Mutable[] = inputs.ranked.map((result) => {
     const m: Mutable = {
       result,
-      score: result.score,
       reasons: [...result.reasons],
+      demotionFactor: 1,
+      carriedScore: 0,
       positiveBoost: 0,
     };
     const list = byDoc.get(result.documentId);
@@ -141,21 +153,21 @@ export function applyRelationPolarity(
         searchType: "link" as const,
         reasons: Object.freeze([] as string[]),
       }),
-      score: 0,
       reasons: [],
+      demotionFactor: 1,
+      carriedScore: 0,
       positiveBoost: 0,
     };
     pulledIn.set(doc.documentId, m);
     return [m];
   };
 
-  // Edges apply in stable `ORDER BY l.id` order (insertion order from
-  // the indexer). For a node that is both a demoted predecessor and a
-  // positive-relation target the effects compose deterministically:
-  // demotion multiplies the ORIGINAL score exactly once (it reads
-  // src.result.score, not the mutated value), and positive boosts are
-  // additive and capped, so relative edge order cannot change the
-  // final score.
+  // Each branch only ACCUMULATES (min demotion factor, max carry, capped
+  // additive boost); the score composes from the accumulators exactly
+  // once below. Every accumulator is order-insensitive on its own, so
+  // edge application order cannot change the final score — even for a
+  // node that is simultaneously a demoted predecessor, a carried
+  // successor, and a positive-relation target.
   for (const edge of inputs.edges) {
     if (edge.targetDocumentId !== null && edge.targetDocumentId === edge.sourceDocumentId) {
       continue; // self-edge: inert
@@ -172,10 +184,10 @@ export function applyRelationPolarity(
       if (successors.length === 0) continue; // unresolved successor: inert
       for (const src of sources) {
         const original = src.result.score;
-        src.score = clamp01(original * SUPERSEDED_DEMOTION);
+        src.demotionFactor = Math.min(src.demotionFactor, SUPERSEDED_DEMOTION);
         const carried = clamp01(original * SUCCESSOR_CARRY);
         for (const succ of successors) {
-          if (carried > succ.score) succ.score = carried;
+          succ.carriedScore = Math.max(succ.carriedScore, carried);
           pushUnique(succ.reasons, `supersedes_matched: ${src.result.path}`);
         }
       }
@@ -203,7 +215,6 @@ export function applyRelationPolarity(
         const head = Math.min(RELATION_BOOST_PER_EDGE, RELATION_BOOST_CAP - tgt.positiveBoost);
         if (head <= 0) continue;
         tgt.positiveBoost += head;
-        tgt.score = clamp01(tgt.score + head);
         for (const src of sources) {
           pushUnique(tgt.reasons, `relation_boost: ${edge.relation} ${src.result.path}`);
           break; // one reason per edge, not per source chunk
@@ -214,8 +225,13 @@ export function applyRelationPolarity(
   }
 
   const out = [...pool, ...pulledIn.values()].map((m) => {
+    // Single composition point: demote the original score, let a
+    // successor carry floor it, then add the capped positive boost.
+    const score = clamp01(
+      Math.max(m.result.score * m.demotionFactor, m.carriedScore) + m.positiveBoost,
+    );
     if (
-      m.score === m.result.score &&
+      score === m.result.score &&
       m.reasons.length === m.result.reasons.length &&
       m.positiveBoost === 0
     ) {
@@ -225,7 +241,7 @@ export function applyRelationPolarity(
     if (m.positiveBoost > 0) extras.push(`relation_polarity: +${fmt(m.positiveBoost)}`);
     return Object.freeze({
       ...m.result,
-      score: m.score,
+      score,
       reasons: Object.freeze([...m.reasons, ...extras]),
     });
   });

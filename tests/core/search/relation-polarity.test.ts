@@ -15,6 +15,7 @@ import { test, expect, beforeEach, afterEach, describe } from "bun:test";
 import {
   applyRelationPolarity,
   RELATION_BOOST_CAP,
+  RELATION_BOOST_PER_EDGE,
   SUPERSEDED_DEMOTION,
   SUCCESSOR_CARRY,
   type RelationEdge,
@@ -335,4 +336,48 @@ test("disabling relation polarity in config skips demotion entirely", async () =
   const out = await search(cfg, { query: "blue-green rollout strategy", limit: 5 });
   const oldHit = out.results.find((r) => r.path === "old.md")!;
   expect(oldHit.reasons.some((r) => r.startsWith("superseded_by:"))).toBe(false);
+});
+
+function overlapSuccessor(docId: number) {
+  return docId === 9
+    ? {
+        documentId: 9,
+        chunkId: 90,
+        path: "next.md",
+        title: "Next",
+        content: "successor",
+        startLine: 1,
+        endLine: 1,
+      }
+    : null;
+}
+
+test("a node that is both demoted predecessor and positive target composes order-independently", () => {
+  // doc 1 matches, declares superseded_by -> doc 9 (pulled in), and is
+  // ALSO the target of a positive relation from doc 2. The demotion,
+  // carry, and boost must compose to the same score regardless of the
+  // order the edges arrive in.
+  const pool = [
+    result({ documentId: 1, score: 0.9, path: "both.md" }),
+    result({ documentId: 2, score: 0.5, path: "extender.md" }),
+  ];
+  const edges = [
+    edge({ sourceDocumentId: 1, relation: "superseded_by", target: "next", targetDocumentId: 9 }),
+    edge({ sourceDocumentId: 2, relation: "extends", target: "both", targetDocumentId: 1 }),
+  ];
+  const forward = applyRelationPolarity(
+    { ranked: pool, edges, successorDoc: overlapSuccessor },
+    {},
+  );
+  const reversed = applyRelationPolarity(
+    { ranked: pool, edges: edges.toReversed(), successorDoc: overlapSuccessor },
+    {},
+  );
+  expect(forward.map((r) => ({ path: r.path, score: r.score }))).toEqual(
+    reversed.map((r) => ({ path: r.path, score: r.score })),
+  );
+  // Composition contract: demotion applies to the original score, the
+  // positive boost adds on top of the demoted base.
+  const both = forward.find((r) => r.path === "both.md")!;
+  expect(both.score).toBeCloseTo(0.9 * SUPERSEDED_DEMOTION + RELATION_BOOST_PER_EDGE, 5);
 });

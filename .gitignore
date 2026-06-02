@@ -24,3 +24,4 @@ node_modules/
 sandbox-vault/
 .codegraph/
 .orphaned_at
+.claude/scheduled_tasks.lock

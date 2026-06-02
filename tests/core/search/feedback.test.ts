@@ -220,3 +220,25 @@ describe("search integration", () => {
     expect(out.results[0]!.reasons.some((r) => r.startsWith("learned_weights:"))).toBe(false);
   });
 });
+
+describe("malformed event hardening", () => {
+  test("an event with non-numeric contributions is skipped by the fold", () => {
+    recordRecallFeedback(vault, event({ ts: 1 }));
+    // Hand-write a malformed event file alongside the valid one.
+    const dir = feedbackDir(vault);
+    const malformed = JSON.stringify({
+      ts: 2,
+      queryHash: "ffff0000",
+      resultPath: "x.md",
+      verdict: "down",
+      contributions: { keyword: "high", semantic: null },
+    });
+    require("node:fs").writeFileSync(`${dir}/2-malformed.json`, malformed);
+    const events = loadFeedbackEvents(vault);
+    expect(events).toHaveLength(1); // the malformed file never enters the fold
+    const w = computeLearnedWeights(events);
+    for (const mul of [w.keywordMul, w.semanticMul, w.entityMul, w.recencyMul]) {
+      expect(Number.isFinite(mul)).toBe(true);
+    }
+  });
+});

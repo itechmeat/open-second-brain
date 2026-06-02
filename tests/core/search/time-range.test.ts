@@ -137,3 +137,16 @@ test("time-filtered queries bypass the query cache", async () => {
     await store.close();
   }
 });
+
+test("an offset-less ISO datetime resolves as UTC, identical to its Z-suffixed form", () => {
+  expect(parseTimePoint("2026-05-01T10:30:00", NOW, "since")).toBe(
+    parseTimePoint("2026-05-01T10:30:00Z", NOW, "since"),
+  );
+  expect(parseTimePoint("2026-05-01T10:30:00", NOW, "since")).toBe(
+    Date.UTC(2026, 4, 1, 10, 30, 0, 0),
+  );
+  // An explicit offset is honoured.
+  expect(parseTimePoint("2026-05-01T12:30:00+02:00", NOW, "since")).toBe(
+    Date.UTC(2026, 4, 1, 10, 30, 0, 0),
+  );
+});

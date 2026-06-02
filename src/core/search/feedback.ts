@@ -139,11 +139,20 @@ export function loadFeedbackEvents(vault: string): RecallFeedbackEvent[] {
   for (const f of files.toSorted()) {
     try {
       const parsed = JSON.parse(readFileSync(join(dir, f), "utf8")) as RecallFeedbackEvent;
+      const c = parsed.contributions;
+      // Every layer must be a finite number: a malformed contributions
+      // object would otherwise feed NaN into the fold's totals.
+      const contributionsValid =
+        c !== undefined &&
+        c !== null &&
+        [c.keyword, c.semantic, c.entity, c.recency].every(
+          (v) => typeof v === "number" && Number.isFinite(v),
+        );
       if (
         typeof parsed.ts === "number" &&
         (parsed.verdict === "up" || parsed.verdict === "down") &&
         typeof parsed.resultPath === "string" &&
-        parsed.contributions !== undefined
+        contributionsValid
       ) {
         out.push(parsed);
       }
@@ -235,7 +244,7 @@ export function learnedWeightsFingerprint(vault: string): string {
   }
 }
 
-/** True when at least one multiplier deviates from neutral. */
+/** True when every multiplier is exactly neutral (1.0). */
 export function isNeutralLearnedWeights(w: WeightProfile): boolean {
   return w.keywordMul === 1 && w.semanticMul === 1 && w.entityMul === 1 && w.recencyMul === 1;
 }
