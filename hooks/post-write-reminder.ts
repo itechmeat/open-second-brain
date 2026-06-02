@@ -50,7 +50,11 @@ function markerStateDir(): string {
 function sessionAlreadyReminded(sessionId: string): boolean {
   try {
     const dir = markerStateDir();
-    const marker = join(dir, sessionId.replace(/[^A-Za-z0-9._-]/g, "_"));
+    const name = sessionId.replace(/[^A-Za-z0-9._-]/g, "_");
+    // "." and ".." survive the character filter but resolve to the
+    // state dir / its parent - treat them as "no usable session id".
+    if (/^\.{1,2}$/.test(name)) return false;
+    const marker = join(dir, name);
     if (existsSync(marker)) return true;
     mkdirSync(dir, { recursive: true });
     pruneStaleMarkers(dir);

@@ -98,7 +98,8 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
 
   // Bounded-by-construction reads.
   second_brain_capabilities: "fixed-size capability report",
-  brain_context: "session bootstrap; active.md is budgeted at the dream renderer",
+  brain_context:
+    "session bootstrap; deliberately returns the full preference set - it is the full-view target the budgeted SessionStart injection points at",
   brain_pre_compress_pack: "self-budgeting; enforces its own char budget internally",
   brain_morning_brief: "self-budgeting via max_chars_per_memory / max_total_chars",
   brain_artifact_get: "the preview-budget escape hatch; truncating it would defeat itself",
@@ -128,8 +129,6 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   // Deprecated aliases (token-diet): the consolidated tool carries the
   // budget; the alias keeps its predecessor's budget status until
   // removal.
-  brain_attention_flows: "deprecated alias for brain_analytics; slated for removal",
-  brain_belief_evolution: "deprecated alias for brain_analytics; slated for removal",
   get_active_schema_pack: "deprecated alias for schema_inspect; slated for removal",
   list_schema_packs: "deprecated alias for schema_inspect; slated for removal",
   schema_stats: "deprecated alias for schema_inspect; slated for removal",

@@ -2407,7 +2407,8 @@ function dispatchByView(
   const view = typeof args["view"] === "string" ? args["view"] : "";
   const handler = table[view];
   if (handler === undefined) {
-    throw new Error(
+    throw new MCPError(
+      INVALID_PARAMS,
       `view must be one of ${Object.keys(table).join(", ")}; got ${JSON.stringify(args["view"])}`,
     );
   }
@@ -3355,6 +3356,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       view: "attention_flows",
       handler: toolBrainAttentionFlows,
     }),
+    previewBudget: MCP_PREVIEW_BUDGET,
   },
   {
     name: "brain_pre_compact_extract",
@@ -3580,6 +3582,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       view: "belief_evolution",
       handler: toolBrainBeliefEvolution,
     }),
+    previewBudget: MCP_PREVIEW_BUDGET,
   },
   {
     name: "brain_stale_scan",

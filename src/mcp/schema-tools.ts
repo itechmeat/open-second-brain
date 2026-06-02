@@ -37,7 +37,8 @@ function toolSchemaInspect(
   const view = typeof args["view"] === "string" ? args["view"] : "";
   const handler = SCHEMA_INSPECT_VIEWS[view];
   if (handler === undefined) {
-    throw new Error(
+    throw new MCPError(
+      INVALID_PARAMS,
       `view must be one of ${Object.keys(SCHEMA_INSPECT_VIEWS).join(", ")}; got ${JSON.stringify(
         args["view"],
       )}`,
