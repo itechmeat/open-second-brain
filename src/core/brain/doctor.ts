@@ -29,7 +29,7 @@
  *      ISO-8601 timestamps (`null` / missing acceptable for the
  *      optional ones). Bad → error.
  *   7. **Log header parsing.** Every malformed `## <HH:MM:SS>Z — kind`
- *      block surfaced by `parseLogDay` as a warning is forwarded here.
+ *      block surfaced by `parseLogDayFile` (per shard) is forwarded here.
  *
  * The function never mutates state. It will gracefully tolerate a
  * vault that has no Brain layer yet (returns clean) — same shape as
@@ -261,7 +261,7 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
     }
   }
 
-  // 7. Log header parsing — surface warnings from `parseLogDay`.
+  // 7. Log header parsing — surface warnings from every markdown shard.
   checkLogs(vault, issues);
 
   // 8. Broken-backlinks lint — any preference / retired / log entry

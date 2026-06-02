@@ -8,10 +8,7 @@
  * Pure read: no I/O outside reading log files.
  */
 
-import { existsSync, readdirSync } from "node:fs";
-
-import { brainDirs } from "./paths.ts";
-import { parseLogDay } from "./log.ts";
+import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import {
   BRAIN_APPLY_RESULT,
   BRAIN_LOG_EVENT_KIND,
@@ -32,22 +29,14 @@ function eqId(eventPrefRef: string, slug: string): boolean {
 
 /** Sorted list of `YYYY-MM-DD` log days actually on disk. Newest first. */
 export function listLogDays(vault: string): string[] {
-  const dir = brainDirs(vault).log;
-  if (!existsSync(dir)) return [];
-  let entries: string[];
+  // Shard-aware (Memory Integrity Suite): one discovery helper for
+  // every log filename shape, legacy and sharded.
+  let days: string[];
   try {
-    entries = readdirSync(dir);
+    days = [...listLogDates(vault)];
   } catch {
     return [];
   }
-  const days: string[] = [];
-  for (const name of entries) {
-    if (!name.endsWith(".md")) continue;
-    const day = name.slice(0, -3);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
-    days.push(day);
-  }
-  days.sort();
   days.reverse();
   return days;
 }
@@ -96,8 +85,8 @@ export function collectEvidenceForSlug(
 
   for (const day of listLogDays(vault)) {
     if (cutoff && day < cutoff.slice(0, 10)) break;
-    const { entries } = parseLogDay(vault, day);
-    // parseLogDay returns entries in file order (oldest first). We want
+    const { entries } = readLogDay(vault, day);
+    // readLogDay returns entries in merged order (oldest first). We want
     // newest first across the whole vault, so iterate in reverse.
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]!;

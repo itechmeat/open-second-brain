@@ -267,6 +267,27 @@ export function logJsonlPath(vault: string, date: string): string {
 }
 
 /**
+ * Per-device markdown log shard: `Brain/log/<date>.<deviceId>.md`
+ * (Memory Integrity Suite). The empty device id resolves to the
+ * legacy un-sharded path so pre-shard call sites keep working.
+ */
+export function logShardPath(vault: string, date: string, deviceId: string): string {
+  if (deviceId === "") return logPath(vault, date);
+  const d = validateIsoDate(date);
+  return ensureInsideVault(join(brainDirs(vault).log, `${d}.${validateSlug(deviceId)}.md`), vault);
+}
+
+/** Per-device JSONL log shard: `Brain/log/<date>.<deviceId>.jsonl`. */
+export function logShardJsonlPath(vault: string, date: string, deviceId: string): string {
+  if (deviceId === "") return logJsonlPath(vault, date);
+  const d = validateIsoDate(date);
+  return ensureInsideVault(
+    join(brainDirs(vault).log, `${d}.${validateSlug(deviceId)}.jsonl`),
+    vault,
+  );
+}
+
+/**
  * Brain Integrity Suite (v0.12.0). Workrun directory used by the
  * durable dream-pass checkpoint surface: `Brain/log/dream-runs/`.
  * Lives under the log dir so backups already include it.

@@ -8,6 +8,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -177,6 +178,39 @@ export function resolveAgentName(configPath?: string): string {
   const value = data["agent_name"] ?? data["agentName"];
   if (value) return value;
   return "agent";
+}
+
+/**
+ * Stable per-install device identity (Memory Integrity Suite). Keys the
+ * per-device Brain log shards (`Brain/log/<date>.<deviceId>.jsonl`), so
+ * it MUST live in the device-local config and never in the synced
+ * vault - all devices sharing one id would defeat the sharding.
+ *
+ * Generated once (8 hex chars) on first use and persisted. An invalid
+ * hand-edited value self-heals to a fresh generated id; the
+ * `sync-conflict` prefix is reserved so a renamed Syncthing conflict
+ * copy can never masquerade as a shard.
+ */
+export const DEVICE_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+export function isValidDeviceId(value: string): boolean {
+  return DEVICE_ID_RE.test(value) && !value.startsWith("sync-conflict");
+}
+
+export function resolveDeviceId(configPath?: string): string {
+  // Env override: a valid id wins outright; the empty string opts out
+  // of sharding (legacy single-file log pair). The test preload pins
+  // this to "" so the suite stays deterministic; an invalid value
+  // falls through to config resolution.
+  const env = process.env["O2B_DEVICE_ID"];
+  if (env !== undefined && (env === "" || isValidDeviceId(env))) return env;
+  const resolved = configPath ?? defaultConfigPath();
+  const data = discoverConfig(resolved).data;
+  const existing = data["device_id"];
+  if (existing && isValidDeviceId(existing)) return existing;
+  const generated = randomBytes(4).toString("hex");
+  setConfigValue("device_id", generated, resolved);
+  return generated;
 }
 
 export function resolveLinkOutputFormat(configPath?: string): LinkOutputFormat {

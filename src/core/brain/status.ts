@@ -21,7 +21,7 @@ import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { brainDirs } from "./paths.ts";
-import { parseLogDay } from "./log.ts";
+import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { parseSignal } from "./signal.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "./types.ts";
@@ -105,7 +105,8 @@ function countArtifacts(vault: string): BrainStatusCounts {
   const inbox = countMd(dirs.inbox);
   const inbox_processed = countMd(dirs.processed);
   const retired = countMd(dirs.retired);
-  const log_days = countMd(dirs.log);
+  // Shard-aware: count distinct DAYS, not files (several shards share a day).
+  const log_days = listLogDates(vault).length;
   const snapshots = countZst(dirs.snapshots);
 
   // Per-status preference counts: read frontmatter line `status:` only
@@ -179,11 +180,7 @@ function scanLogTimestamps(vault: string): {
 } {
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.log)) return { lastDreamAt: null, lastApplyEvidenceAt: null };
-  const days = readdirSync(dirs.log)
-    .filter((n) => n.endsWith(".md") && /^\d{4}-\d{2}-\d{2}\.md$/.test(n))
-    .map((n) => n.slice(0, -".md".length))
-    .toSorted()
-    .toReversed(); // newest day first
+  const days = listLogDates(vault).toReversed(); // newest day first
 
   let lastDreamAt: string | null = null;
   let lastApplyEvidenceAt: string | null = null;
@@ -192,7 +189,7 @@ function scanLogTimestamps(vault: string): {
     // both are set we can stop scanning older files.
     let entries;
     try {
-      entries = parseLogDay(vault, date).entries;
+      entries = readLogDay(vault, date).entries;
     } catch {
       continue;
     }

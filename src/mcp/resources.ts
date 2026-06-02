@@ -34,6 +34,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { listLogMarkdownFiles } from "../core/brain/log-jsonl.ts";
 
 import { regenerateActive } from "../core/brain/active.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
@@ -42,7 +43,6 @@ import { renderDigest } from "../core/brain/digest.ts";
 import { computeBrainStatus, type BrainStatusSnapshot } from "../core/brain/status.ts";
 import {
   brainActivePath,
-  logPath,
   preferencePath,
   retiredPath,
   validateIsoDate,
@@ -313,11 +313,17 @@ function readTopic(ctx: ResourceContext, uri: string, rawSlug: string): Resource
 
 function readLog(ctx: ResourceContext, uri: string, rawDate: string): ResourceContent {
   validateIsoDate(rawDate);
-  const path = logPath(ctx.vault, rawDate);
-  if (!existsSync(path)) {
+  // Per-device shards (Memory Integrity Suite): a day's human view can
+  // span several markdown files. The legacy single file is returned
+  // verbatim (byte-identical to pre-shard behaviour); multiple shards
+  // are concatenated in shard order.
+  const files = listLogMarkdownFiles(ctx.vault).filter((f) => f.date === rawDate);
+  if (files.length === 0) {
     throw new MCPError(INTERNAL_ERROR, `no log file for date '${rawDate}'`);
   }
-  return readMarkdown(uri, path);
+  if (files.length === 1) return readMarkdown(uri, files[0]!.path);
+  const text = files.map((f) => readFileSync(f.path, "utf8").trimEnd()).join("\n\n");
+  return { uri, mimeType: MIME_MARKDOWN, text };
 }
 
 function readBacklinks(ctx: ResourceContext, uri: string, rawId: string): ResourceContent {
