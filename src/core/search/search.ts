@@ -22,6 +22,7 @@ import { buildQueryPlan } from "./query-plan.ts";
 import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "./query-cache.ts";
 import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from "./synonyms.ts";
 import { filterByProperties } from "./property-filter.ts";
+import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
 import { readSessionFocus } from "./session-focus.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
@@ -74,6 +75,7 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     intent: r.intentEnabled,
     syn: r.synonymEnabled,
     synMax: r.synonymMaxTerms,
+    relPol: r.relationPolarityEnabled,
   });
 }
 
@@ -428,7 +430,15 @@ export async function search(
       const wideCap = Math.max(limit * 5, 50, limit * 3, 30);
       if (wideCap > rankLimit) assembled = assemble(wideCap);
     }
-    const filtered = applyStructuredExclusions(assembled.visible, structured).slice(0, limit);
+    const excluded = applyStructuredExclusions(assembled.visible, structured);
+    // Relation polarity (recall-trust-suite): typed relation edges adjust
+    // the pool BEFORE the final slice so a demoted predecessor can fall
+    // out of the window and a pulled-in successor can enter it. A pool
+    // whose documents declare no typed edges passes through untouched.
+    const polarized = config.recall.relationPolarityEnabled
+      ? applyRelationPolarityPhase(store, excluded, opts.includeSuperseded === true)
+      : excluded;
+    const filtered = polarized.slice(0, limit);
 
     // Typed graph semantics (v3): surface the typed relations each
     // result page declares in its frontmatter. Computed here from the
@@ -516,6 +526,54 @@ function applyTraversal(
       },
     },
     opts,
+  );
+}
+
+/**
+ * Fetch the typed relation edges declared by the pool's documents and
+ * delegate the polarity adjustment to the pure `applyRelationPolarity`.
+ * Successor pull-in reuses the traversal layer's representative-chunk
+ * mechanism (document head as the surfaced chunk).
+ */
+function applyRelationPolarityPhase(
+  store: Store,
+  ranked: ReadonlyArray<BrainSearchResult>,
+  includeSuperseded: boolean,
+): ReadonlyArray<BrainSearchResult> {
+  if (ranked.length === 0) return ranked;
+  const docIds = Array.from(new Set(ranked.map((r) => r.documentId)));
+  const edges = store.typedRelationEdgesForDocuments(docIds);
+  if (edges.length === 0) return ranked;
+
+  const present = new Set(docIds);
+  const successorIds = Array.from(
+    new Set(
+      edges
+        .map((e) => e.targetDocumentId)
+        .filter((id): id is number => id !== null && !present.has(id)),
+    ),
+  );
+  const reps = store.representativeChunks(successorIds);
+
+  return applyRelationPolarity(
+    {
+      ranked,
+      edges,
+      successorDoc: (docId) => {
+        const h = reps.get(docId);
+        if (!h) return null;
+        return {
+          documentId: h.documentId,
+          chunkId: h.chunkId,
+          path: h.path,
+          title: h.title,
+          content: h.content,
+          startLine: h.startLine,
+          endLine: h.endLine,
+        };
+      },
+    },
+    { includeSuperseded },
   );
 }
 

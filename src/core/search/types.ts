@@ -204,6 +204,13 @@ export interface SearchOptions {
   readonly sessionFocus?: SearchSessionFocus | null;
   /** Opt-in verified evidence pack diagnostics. Omitted preserves the legacy search outcome shape. */
   readonly evidencePack?: boolean;
+  /**
+   * History mode for relation polarity (recall-trust-suite). When true a
+   * matched predecessor (`superseded_by` declarer) keeps its rank and no
+   * successor is pulled in; informational reasons still land. Default
+   * false: stale predecessors are demoted below their successor.
+   */
+  readonly includeSuperseded?: boolean;
 }
 
 export interface SearchOutcome {
@@ -275,6 +282,15 @@ export interface ResolvedRecallConfig {
    */
   readonly cacheEnabled: boolean;
   readonly cacheTtlSeconds: number;
+  /**
+   * Relation-aware recall polarity (recall-trust-suite). When true
+   * (default) typed relation edges affect ranking: `superseded_by`
+   * demotes the matched predecessor and boosts/pulls in the successor,
+   * `contradicts` adds warning reasons, positive relations grant a small
+   * bounded boost. Vaults without typed relations rank bit-identically
+   * either way; this switch exists as the explicit kill switch.
+   */
+  readonly relationPolarityEnabled: boolean;
 }
 
 export interface ResolvedSearchConfig {

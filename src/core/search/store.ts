@@ -894,6 +894,66 @@ export class Store {
     return out;
   }
 
+  /**
+   * Typed relation edges declared by the given documents, with the
+   * target resolved to a document id when possible (recall-trust-suite,
+   * relation polarity). Wikilink-style relation targets are usually bare
+   * ids (`[[note]]` → `note`) that the generic `resolveLinkTargets`
+   * exact-path pass cannot match against `note.md`, so this query also
+   * tries `<target>.md` and — when unambiguous — a basename match.
+   * Ambiguous basenames stay unresolved (deterministic inertness beats
+   * guessing the wrong page).
+   */
+  typedRelationEdgesForDocuments(documentIds: ReadonlyArray<number>): Array<{
+    readonly sourceDocumentId: number;
+    readonly relation: string;
+    readonly target: string;
+    readonly targetDocumentId: number | null;
+  }> {
+    if (documentIds.length === 0) return [];
+    const placeholders = documentIds.map(() => "?").join(",");
+    const rows = this.db
+      .query<
+        {
+          source_document_id: number;
+          relation: string;
+          target_path: string | null;
+          resolved_target_id: number | null;
+        },
+        number[]
+      >(
+        "SELECT l.source_document_id, l.relation, l.target_path, " +
+          "  COALESCE(" +
+          "    l.target_document_id, " +
+          "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
+          "    (SELECT d.id FROM documents d WHERE d.path LIKE '%/' || l.target_path || '.md' " +
+          "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
+          "                WHERE d2.path LIKE '%/' || l.target_path || '.md'))" +
+          "  ) AS resolved_target_id " +
+          "FROM links l " +
+          `WHERE l.source_document_id IN (${placeholders}) AND l.relation IS NOT NULL ` +
+          "ORDER BY l.id",
+      )
+      .all(...(documentIds as number[]));
+    const out: Array<{
+      sourceDocumentId: number;
+      relation: string;
+      target: string;
+      targetDocumentId: number | null;
+    }> = [];
+    for (const r of rows) {
+      const target = r.target_path ?? "";
+      if (target === "") continue;
+      out.push({
+        sourceDocumentId: r.source_document_id,
+        relation: r.relation,
+        target,
+        targetDocumentId: r.resolved_target_id,
+      });
+    }
+    return out;
+  }
+
   // ── search ─────────────────────────────────────────────────────────────────
 
   ftsIntegrityCounts(): { readonly chunks: number; readonly ftsRows: number } {

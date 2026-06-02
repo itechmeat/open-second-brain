@@ -39,6 +39,11 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     focus_query: { type: "string", minLength: 1, maxLength: 1000 },
     focus_path_prefix: { type: "string", minLength: 1, maxLength: 256 },
     evidence_pack: { type: "boolean" },
+    include_superseded: {
+      type: "boolean",
+      description:
+        "History mode for relation polarity: keep matched superseded predecessors undemoted and skip successor pull-in. Default false.",
+    },
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
@@ -248,6 +253,7 @@ async function toolBrainSearch(
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
+  const includeSuperseded = coerceBoolOptional(args, "include_superseded") ?? false;
   const telemetry = coerceBoolOptional(args, "telemetry") ?? false;
   const telemetryHost = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
   const telemetrySessionId = coerceStringOptional(args, "session_id", 512);
@@ -289,6 +295,7 @@ async function toolBrainSearch(
         ...(structuredQuery !== undefined ? { structuredQuery } : {}),
         ...(sessionFocus !== undefined ? { sessionFocus } : {}),
         ...(evidencePack ? { evidencePack: true } : {}),
+        ...(includeSuperseded ? { includeSuperseded: true } : {}),
       }),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,
