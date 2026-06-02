@@ -39,6 +39,8 @@ export const BRAIN_SIGNAL_SOURCE_TYPE = {
   live: "live",
   inline: "inline",
   session: "session",
+  /** Regex fact extraction (Memory Integrity Suite). */
+  extracted: "extracted",
 } as const;
 export type BrainSignalSourceType =
   (typeof BRAIN_SIGNAL_SOURCE_TYPE)[keyof typeof BRAIN_SIGNAL_SOURCE_TYPE];

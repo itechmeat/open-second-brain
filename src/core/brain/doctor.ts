@@ -43,6 +43,7 @@ import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
+import { buildCaptureBoundary } from "./capture-boundary.ts";
 import { verifyContentHash } from "./content-hash.ts";
 import { scanDanglingWorkruns } from "./dream-workrun.ts";
 import { parseLogDayFile } from "./log.ts";
@@ -340,6 +341,21 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
   // hand edits or sync merges - observable, never auto-deleted.
   try {
     checkEntities(vault, issues);
+  } catch {
+    /* doctor never throws */
+  }
+  // Memory Integrity Suite: capture-boundary patterns that failed to
+  // compile (invalid regex in sessions.ignore_message_patterns or the
+  // machine-local additions). Capture itself degrades gracefully; the
+  // doctor makes the skipped pattern visible.
+  try {
+    for (const warning of buildCaptureBoundary(vault).warnings) {
+      issues.push({
+        severity: "warning",
+        code: "invalid-capture-pattern",
+        message: warning,
+      });
+    }
   } catch {
     /* doctor never throws */
   }

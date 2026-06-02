@@ -154,3 +154,13 @@ describe("buildCaptureBoundary (vault + machine-local union)", () => {
     expect(b.sessionDecision("anything")).toBe("capture");
   });
 });
+
+describe("doctor invalid-capture-pattern lint", () => {
+  test("an invalid message regex in the vault policy surfaces in doctor", async () => {
+    appendBrainConfig(["sessions:", "  ignore_message_patterns:", '    - "([unclosed"'].join("\n"));
+    const { runDoctor } = await import("../../../src/core/brain/doctor.ts");
+    const hits = runDoctor(vault).warnings.filter((i) => i.code === "invalid-capture-pattern");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.message).toContain("([unclosed");
+  });
+});
