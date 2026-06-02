@@ -45,6 +45,7 @@ import {
   type BrainSchemaVocabulary,
 } from "./schema-vocab.ts";
 import { brainDirs, preferencePath, retiredPath, validateSlug } from "./paths.ts";
+import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import {
   BRAIN_CONFIDENCE,
   BRAIN_MEMORY_LAYER,
@@ -359,7 +360,7 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
     tags: [...tags],
     topic: input.topic.trim(),
     _status: input.status,
-    principle: input.principle.trim(),
+    principle: sanitisePrinciple(input.principle),
     _evidenced_by: [...input.evidenced_by],
     _applied_count: applied,
     _violated_count: violated,

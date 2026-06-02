@@ -247,8 +247,23 @@ describe("regenerateActive — Most-applied (30d) section", () => {
     const body = readActive();
     expect(body).toContain("## Most-applied (30d) (1)");
     expect(body).toContain("`pref-a` (scope: writing, applied_in_window: 2)");
-    expect(body).toContain("Rule A");
     expect(result.counts.most_applied_30d).toBe(1);
+  });
+
+  test("entries are id + count one-liners - the principle body lives in Confirmed only", () => {
+    // The Most-applied section used to repeat the full principle text
+    // of preferences already rendered verbatim under Confirmed; on a
+    // real vault that duplication was 31% of the injected bytes.
+    seedConfirmed("a", "Rule A unique principle body", "medium");
+    seedAppliedEvidence("pref-a", "2026-05-15T10:00:00Z");
+    regenerateActive(vault, { now: new Date("2026-05-20T00:00:00Z") });
+    const body = readActive();
+    const line = body
+      .split("\n")
+      .find((l) => l.startsWith("- ") && l.includes("applied_in_window"));
+    expect(line).toBe("- `pref-a` (scope: writing, applied_in_window: 1)");
+    // Exactly one copy of the principle text in the whole document.
+    expect(body.split("Rule A unique principle body").length - 1).toBe(1);
   });
 
   test("section appears between Confirmed and Quarantine", () => {

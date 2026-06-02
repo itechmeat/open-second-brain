@@ -67,6 +67,7 @@ import {
   type SemanticHealthReport,
 } from "./health/reconcile.ts";
 import { parseSignal } from "./signal.ts";
+import { principleNeedsRepair } from "./text/sanitize-principle.ts";
 import { findSimilarPairs, tokenise } from "./similarity.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
@@ -641,6 +642,19 @@ function checkPreferences(
       checkWikilinks(path, "evidenced_by", pref.evidenced_by, knownBasenames, issues);
       if (pref.supersedes) {
         checkWikilinks(path, "supersedes", [pref.supersedes], knownBasenames, issues);
+      }
+      // Principle corruption (token-diet, t_40eb1de7): leaked tool-call
+      // fragments or escape-amplified quote chains written before the
+      // sanitizing write seam shipped. `o2b brain upgrade --apply`
+      // repairs these in place.
+      if (principleNeedsRepair(pref.principle)) {
+        issues.push({
+          severity: "warning",
+          code: "principle-corrupted",
+          path,
+          message:
+            "principle carries leaked tool-call fragments or escape-amplified quotes; run `o2b brain upgrade --apply` to repair",
+        });
       }
     } catch (err) {
       if (err instanceof BrainStatusFolderMismatchError) {

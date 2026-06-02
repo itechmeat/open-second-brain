@@ -262,3 +262,105 @@ describe("applyUpgrade", () => {
     expect(listSnapshots(vault).some((s) => s.run_id === res.run_id)).toBe(true);
   });
 });
+
+// ── Corrupted preference principle repair (token-diet, t_40eb1de7) ─────────
+
+describe("planUpgrade / applyUpgrade — preference principle repair", () => {
+  const PREF_DIR = "Brain/preferences";
+
+  function writeCorruptedPref(slug: string): string {
+    const path = join(vault, PREF_DIR, `pref-${slug}.md`);
+    // Faithful copy of the live-vault corruption shape: multi-level
+    // backslash-quote chains plus a leaked tool-call XML fragment,
+    // inside a double-quoted YAML scalar.
+    const principle =
+      'When the user describes a rule like \\\\\\"давай так:\\\\\\" wait for approval.</principle>\\\\n<parameter name=\\\\\\"scope\\\\\\">collaboration';
+    const content = [
+      "---",
+      "kind: brain-preference",
+      `id: pref-${slug}`,
+      'created_at: "2026-05-17T15:12:12Z"',
+      'unconfirmed_until: "2026-05-17T15:12:12Z"',
+      `tags: [brain, brain/preference, brain/topic/${slug}]`,
+      `topic: ${slug}`,
+      "_status: confirmed",
+      `principle: "${principle}"`,
+      "_applied_count: 0",
+      "_violated_count: 0",
+      "_last_evidence_at: null",
+      "_confidence: low",
+      "_confidence_value: 0",
+      "pinned: false",
+      "---",
+      "",
+      "## Origin",
+      "",
+      "test fixture",
+      "",
+    ].join("\n");
+    atomicWriteFileSync(path, content);
+    return path;
+  }
+
+  function writeCleanPref(slug: string): string {
+    const path = join(vault, PREF_DIR, `pref-${slug}.md`);
+    const content = [
+      "---",
+      "kind: brain-preference",
+      `id: pref-${slug}`,
+      'created_at: "2026-05-17T15:12:12Z"',
+      'unconfirmed_until: "2026-05-17T15:12:12Z"',
+      `tags: [brain, brain/preference, brain/topic/${slug}]`,
+      `topic: ${slug}`,
+      "_status: confirmed",
+      'principle: "Use measured punctuation in docs."',
+      "_applied_count: 2",
+      "_violated_count: 0",
+      "_last_evidence_at: null",
+      "_confidence: medium",
+      "_confidence_value: 0.5",
+      "pinned: false",
+      "---",
+      "",
+      "## Origin",
+      "",
+      "test fixture",
+      "",
+    ].join("\n");
+    atomicWriteFileSync(path, content);
+    return path;
+  }
+
+  test("plan flags a corrupted principle and leaves clean preferences alone", () => {
+    writeCorruptedPref("broken");
+    writeCleanPref("healthy");
+    const plan = planUpgrade(vault);
+    const prefPlans = plan.files.filter((f) => f.path.startsWith(PREF_DIR));
+    expect(prefPlans.map((f) => f.path)).toEqual([`${PREF_DIR}/pref-broken.md`]);
+    expect(prefPlans[0]!.status).toBe("update");
+    expect(prefPlans[0]!.after).not.toContain("</principle>");
+    expect(prefPlans[0]!.after).not.toContain("<parameter");
+  });
+
+  test("apply rewrites the corrupted file once and is idempotent", () => {
+    const path = writeCorruptedPref("broken");
+    const res = applyUpgrade(vault, { agent: "claude-dev-agent" });
+    expect(res.files_updated).toContain(`${PREF_DIR}/pref-broken.md`);
+
+    const bytes = readFileSync(path, "utf8");
+    expect(bytes).not.toContain("</principle>");
+    expect(bytes).not.toContain("<parameter");
+    expect(bytes).not.toContain('\\\\"');
+    expect(bytes).toContain('\\"давай так:\\"');
+    // Untouched fields survive verbatim.
+    expect(bytes).toContain("_status: confirmed");
+    expect(bytes).toContain("topic: broken");
+    expect(bytes).toContain("## Origin");
+
+    // Second pass: nothing pending.
+    const plan2 = planUpgrade(vault);
+    expect(plan2.files.filter((f) => f.path.startsWith(PREF_DIR))).toEqual([]);
+    const res2 = applyUpgrade(vault, { agent: "claude-dev-agent" });
+    expect(res2.files_updated).toEqual([]);
+  });
+});

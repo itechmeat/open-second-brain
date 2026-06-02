@@ -26,6 +26,7 @@
 
 import type { FrontmatterMap } from "../types.ts";
 import { sanitiseTextField } from "../redactor.ts";
+import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
 import { allocateSlug, brainDirs, validateIsoDate } from "./paths.ts";
@@ -247,7 +248,9 @@ const RAW_MAX_LEN = 4096;
 const SOURCE_ITEM_MAX_LEN = 512;
 
 function sanitiseSignalInput(input: WriteSignalInput): WriteSignalInput {
-  const principle = sanitiseTextField(input.principle, {
+  // Principle-specific repair first (leaked tool-call fragments,
+  // escape-amplified quote chains), then the generic field sanitiser.
+  const principle = sanitiseTextField(sanitisePrinciple(input.principle), {
     maxLen: PRINCIPLE_MAX_LEN,
     singleLine: true,
   });

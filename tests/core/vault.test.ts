@@ -96,6 +96,39 @@ describe("writeFrontmatter", () => {
     const [meta] = parseFrontmatter(path);
     expect(meta["tags"]).toEqual([]);
   });
+
+  test("double-quoted scalar with quotes round-trips without escape amplification", () => {
+    // The formatter escapes `"` to `\"` inside double-quoted scalars;
+    // the parser must unescape symmetrically. Before the fix every
+    // parse -> format cycle doubled the backslashes, which is how the
+    // live vault accumulated \\\\\\" chains in preference frontmatter.
+    const path = join(tmp, "note.md");
+    const value = 'phrasing like "давай так:" or "пусть так"';
+    writeFrontmatter(path, { principle: value }, "Body.");
+    const [meta] = parseFrontmatter(path);
+    expect(meta["principle"]).toBe(value);
+
+    // Second cycle: rewrite what we parsed; bytes must be stable.
+    const firstBytes = readFileSync(path, "utf8");
+    writeFrontmatter(path, { principle: meta["principle"] as string }, "Body.");
+    expect(readFileSync(path, "utf8")).toBe(firstBytes);
+  });
+
+  test("escaped newline and backslash round-trip through double-quoted scalars", () => {
+    const path = join(tmp, "note.md");
+    const value = "line one\nline two with backslash \\ and tab\there";
+    writeFrontmatter(path, { summary: value }, "Body.");
+    const [meta] = parseFrontmatter(path);
+    expect(meta["summary"]).toBe(value);
+  });
+
+  test("inline array elements with quotes round-trip", () => {
+    const path = join(tmp, "note.md");
+    const tags = ["plain", 'say "hi"'];
+    writeFrontmatter(path, { tags }, "Body.");
+    const [meta] = parseFrontmatter(path);
+    expect(meta["tags"]).toEqual(tags);
+  });
 });
 
 describe("slugify", () => {
