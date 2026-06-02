@@ -954,6 +954,31 @@ export class Store {
     return out;
   }
 
+  /**
+   * Corpus document frequency per term (recall-trust-suite, coverage
+   * engine): how many distinct documents match each term in FTS. Each
+   * term is quoted so FTS5 metacharacters stay literal. A term that
+   * fails to query (e.g. tokenizer edge case) counts as 0 rather than
+   * failing the search.
+   */
+  documentFrequencies(terms: ReadonlyArray<string>): Map<string, number> {
+    const out = new Map<string, number>();
+    if (terms.length === 0) return out;
+    const q = this.db.query<{ n: number }, [string]>(
+      "SELECT COUNT(DISTINCT c.document_id) AS n " +
+        "FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid " +
+        "WHERE chunk_fts MATCH ?",
+    );
+    for (const term of terms) {
+      try {
+        out.set(term, q.get(`"${term.replace(/"/g, '""')}"`)?.n ?? 0);
+      } catch {
+        out.set(term, 0);
+      }
+    }
+    return out;
+  }
+
   // ── search ─────────────────────────────────────────────────────────────────
 
   ftsIntegrityCounts(): { readonly chunks: number; readonly ftsRows: number } {

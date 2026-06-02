@@ -1,3 +1,5 @@
+import { buildCoverageReport, significantTerms, termIncludedIn } from "./coverage.ts";
+import type { CoverageReport } from "./coverage.ts";
 import type { BrainSearchResult } from "./types.ts";
 
 export interface EvidenceRecord {
@@ -12,6 +14,28 @@ export interface EvidenceRecord {
   readonly droppedCandidateReasons: ReadonlyArray<string>;
 }
 
+/**
+ * One per-token recall-union record (recall-trust-suite, Feature C): a
+ * document fetched specifically because it covers a significant term
+ * the ranked result set left uncovered. Union records live in the pack
+ * only — the primary `results` contract stays untouched.
+ */
+export interface EvidenceUnionRecord {
+  readonly term: string;
+  readonly path: string;
+  readonly documentId: number;
+  readonly chunkId: number;
+}
+
+/**
+ * Verification extras computed by the coverage engine when the search
+ * runs in evidence-pack mode (recall-trust-suite, Features C and E).
+ */
+export interface EvidenceVerification {
+  readonly coverage: CoverageReport;
+  readonly unionRecords: ReadonlyArray<EvidenceUnionRecord>;
+}
+
 export interface EvidencePack {
   readonly significantTerms: ReadonlyArray<string>;
   readonly matchedTerms: ReadonlyArray<string>;
@@ -23,38 +47,25 @@ export interface EvidencePack {
     readonly reason: string;
   }>;
   readonly abstention: string | null;
+  /**
+   * IDF-weighted support coverage (Feature C): the share of the query's
+   * IDF mass the covered terms carry. Present only when the search ran
+   * with coverage verification.
+   */
+  readonly idfWeightedCoverage?: number;
+  /** Rare (high-signal) significant terms per the corpus statistics. */
+  readonly rareTerms?: ReadonlyArray<string>;
+  /** Rare terms no returned record covers — the abstention trigger. */
+  readonly uncoveredRareTerms?: ReadonlyArray<string>;
+  /** Per-token recall union for uncovered significant terms. */
+  readonly unionRecords?: ReadonlyArray<EvidenceUnionRecord>;
 }
-
-const STOPWORDS = new Set([
-  "about",
-  "and",
-  "are",
-  "for",
-  "from",
-  "how",
-  "the",
-  "this",
-  "that",
-  "what",
-  "when",
-  "where",
-  "with",
-]);
 
 const TERMINAL_STATE_RE =
   /\b(?:archived|closed|deprecated|done|resolved|retired|superseded|terminal)\b/iu;
 
-function significantTerms(query: string): string[] {
-  const terms = new Set<string>();
-  for (const token of query.toLocaleLowerCase().split(/[^\p{L}\p{N}_-]+/u)) {
-    if (token.length >= 3 && !STOPWORDS.has(token)) terms.add(token);
-  }
-  return [...terms];
-}
-
 function includesTerm(result: BrainSearchResult, term: string): boolean {
-  const haystack = `${result.path}\n${result.title ?? ""}\n${result.content}`.toLocaleLowerCase();
-  return haystack.includes(term);
+  return termIncludedIn(`${result.path}\n${result.title ?? ""}\n${result.content}`, term);
 }
 
 function supportCoverage(
@@ -92,9 +103,23 @@ export function downrankTerminalEvidenceResults(
   });
 }
 
+function abstentionMessage(
+  missing: ReadonlyArray<string>,
+  verification: EvidenceVerification | undefined,
+): string | null {
+  // Rare-term gate (Feature C): an uncovered rare term is the strongest
+  // abstention signal — high-signal evidence is absent from the answer set.
+  const uncoveredRare = verification?.coverage.uncoveredRareTerms ?? [];
+  if (uncoveredRare.length > 0) {
+    return `Rare significant terms uncovered: ${uncoveredRare.join(", ")}`;
+  }
+  return missing.length > 0 ? `Unsupported significant terms: ${missing.join(", ")}` : null;
+}
+
 export function buildEvidencePack(
   query: string,
   results: ReadonlyArray<BrainSearchResult>,
+  verification?: EvidenceVerification,
 ): EvidencePack {
   const significant = Object.freeze(significantTerms(query));
   const matchedSet = new Set<string>();
@@ -129,6 +154,16 @@ export function buildEvidencePack(
     supportCoverage: supportCoverage(matched, significant),
     records: Object.freeze(records),
     droppedCandidates: Object.freeze([]),
-    abstention: missing.length > 0 ? `Unsupported significant terms: ${missing.join(", ")}` : null,
+    abstention: abstentionMessage(missing, verification),
+    ...(verification !== undefined
+      ? {
+          idfWeightedCoverage: verification.coverage.idfWeightedCoverage,
+          rareTerms: verification.coverage.rareTerms,
+          uncoveredRareTerms: verification.coverage.uncoveredRareTerms,
+          unionRecords: verification.unionRecords,
+        }
+      : {}),
   });
 }
+
+export { buildCoverageReport, significantTerms };

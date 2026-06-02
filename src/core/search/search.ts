@@ -22,7 +22,9 @@ import {
   readLearnedWeights,
 } from "./feedback.ts";
 import { extractEntities } from "./entities.ts";
+import { buildCoverageReport, significantTerms, termIncludedIn } from "./coverage.ts";
 import { buildEvidencePack, downrankTerminalEvidenceResults } from "./evidence-pack.ts";
+import type { EvidenceUnionRecord, EvidenceVerification } from "./evidence-pack.ts";
 import { runFtsQueryDetailed } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
 import { buildQueryPlan } from "./query-plan.ts";
@@ -333,7 +335,10 @@ export async function search(
     for (const h of semHits) allChunkIds.add(h.chunkId);
     const idsList = Array.from(allChunkIds);
     if (idsList.length === 0) {
-      const evidencePack = opts.evidencePack === true ? buildEvidencePack(query, []) : undefined;
+      const evidencePack =
+        opts.evidencePack === true
+          ? buildEvidencePack(query, [], buildEvidenceVerification(store, query, [], pathPrefix))
+          : undefined;
       return finalize(
         Object.freeze({
           results: Object.freeze([] as ReadonlyArray<BrainSearchResult>),
@@ -514,7 +519,13 @@ export async function search(
         ? downrankTerminalEvidenceResults(withStructuredReasons)
         : withStructuredReasons;
     const evidencePack =
-      opts.evidencePack === true ? buildEvidencePack(query, finalResults) : undefined;
+      opts.evidencePack === true
+        ? buildEvidencePack(
+            query,
+            finalResults,
+            buildEvidenceVerification(store, query, finalResults, pathPrefix),
+          )
+        : undefined;
 
     return finalize(
       Object.freeze({
@@ -587,6 +598,69 @@ function applyTraversal(
     },
     opts,
   );
+}
+
+/** Cap on extra records fetched per uncovered term (Feature C union). */
+const UNION_RECORDS_PER_TERM = 2;
+/** Cap on the total recall-union fetch per query. */
+const UNION_RECORDS_TOTAL = 8;
+
+/**
+ * Coverage verification for evidence-pack mode (recall-trust-suite,
+ * Feature C): corpus document frequencies for the significant terms,
+ * the covered-term set over the returned results, and a bounded
+ * per-token recall union — for each term the ranked set left uncovered,
+ * fetch up to {@link UNION_RECORDS_PER_TERM} records that DO cover it
+ * (evidence can span records the primary ranking never surfaced).
+ */
+function buildEvidenceVerification(
+  store: Store,
+  query: string,
+  results: ReadonlyArray<BrainSearchResult>,
+  pathPrefix: string | undefined,
+): EvidenceVerification {
+  const terms = significantTerms(query);
+  const dfByTerm = store.documentFrequencies(terms);
+  const documentCount = store.counts().documents;
+  const covered = new Set<string>();
+  for (const r of results) {
+    const haystack = `${r.path}\n${r.title ?? ""}\n${r.content}`;
+    for (const t of terms) {
+      if (!covered.has(t) && termIncludedIn(haystack, t)) covered.add(t);
+    }
+  }
+  const coverage = buildCoverageReport({
+    significantTerms: terms,
+    coveredTerms: covered,
+    documentCount,
+    dfByTerm,
+  });
+
+  const unionRecords: EvidenceUnionRecord[] = [];
+  for (const t of coverage.terms) {
+    if (t.covered || t.df === 0) continue; // nothing in the corpus covers a df=0 term
+    if (unionRecords.length >= UNION_RECORDS_TOTAL) break;
+    const outcome = runFtsQueryDetailed(store, t.term, {
+      limit: UNION_RECORDS_PER_TERM,
+      pathPrefix,
+    });
+    const ids = outcome.hits.map((h) => h.chunkId);
+    const hydrated = store.hydrateChunks(ids);
+    for (const hit of outcome.hits) {
+      if (unionRecords.length >= UNION_RECORDS_TOTAL) break;
+      const h = hydrated.get(hit.chunkId);
+      if (!h) continue;
+      unionRecords.push(
+        Object.freeze({
+          term: t.term,
+          path: h.path,
+          documentId: h.documentId,
+          chunkId: h.chunkId,
+        }),
+      );
+    }
+  }
+  return Object.freeze({ coverage, unionRecords: Object.freeze(unionRecords) });
 }
 
 /**

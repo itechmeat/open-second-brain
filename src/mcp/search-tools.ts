@@ -422,6 +422,23 @@ function mcpEvidencePack(
     })),
     dropped_candidates: pack.droppedCandidates,
     abstention: pack.abstention,
+    ...(pack.idfWeightedCoverage !== undefined
+      ? { idf_weighted_coverage: pack.idfWeightedCoverage }
+      : {}),
+    ...(pack.rareTerms !== undefined ? { rare_terms: pack.rareTerms } : {}),
+    ...(pack.uncoveredRareTerms !== undefined
+      ? { uncovered_rare_terms: pack.uncoveredRareTerms }
+      : {}),
+    ...(pack.unionRecords !== undefined
+      ? {
+          union_records: pack.unionRecords.map((r) => ({
+            term: r.term,
+            path: r.path,
+            document_id: r.documentId,
+            chunk_id: r.chunkId,
+          })),
+        }
+      : {}),
   };
 }
 
