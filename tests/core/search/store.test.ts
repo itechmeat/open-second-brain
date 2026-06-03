@@ -25,6 +25,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     timeoutMs: 10_000,
     concurrency: 4,
     batchSize: 32,
+    costGateUsd: 0,
   });
   return Object.freeze({
     vault: tmp,

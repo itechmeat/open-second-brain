@@ -39,6 +39,7 @@ function semanticConfig(model = "fake-model", dim = 4) {
       timeoutMs: 5_000,
       concurrency: 2,
       batchSize: 8,
+      costGateUsd: 0,
     },
   });
 }
@@ -102,6 +103,7 @@ test("--embeddings without a key throws EMBEDDING_KEY_MISSING", async () => {
       timeoutMs: 5_000,
       concurrency: 1,
       batchSize: 8,
+      costGateUsd: 0,
     },
   });
   let err: SearchError | null = null;

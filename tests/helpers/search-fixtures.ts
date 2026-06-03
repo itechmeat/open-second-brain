@@ -76,6 +76,7 @@ export function makeConfig(opts: {
     timeoutMs: 10_000,
     concurrency: 4,
     batchSize: 32,
+    costGateUsd: 0,
   });
   const semantic: ResolvedEmbeddingConfig = Object.freeze({
     ...baseSemantic,

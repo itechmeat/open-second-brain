@@ -624,6 +624,7 @@ async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
     db: { type: "string" },
     embeddings: { type: "boolean" },
     force: { type: "boolean" },
+    "force-cost": { type: "boolean" },
     concurrency: { type: "string" },
     verbose: { type: "boolean" },
     json: { type: "boolean" },
@@ -634,6 +635,7 @@ async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
   const stats = await indexVault(cfg, {
     embeddings: flags["embeddings"] === true,
     force: flags["force"] === true,
+    forceCost: flags["force-cost"] === true,
     onFile: (e) => {
       events.push(e);
       if (flags["verbose"]) {
@@ -697,6 +699,7 @@ async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
     config: { type: "string" },
     db: { type: "string" },
     embeddings: { type: "boolean" },
+    "force-cost": { type: "boolean" },
     concurrency: { type: "string" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
@@ -720,6 +723,7 @@ async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
   const cfg = resolveConfig(flags);
   const stats = await reindexVault(cfg, {
     embeddings: flags["embeddings"] === true,
+    forceCost: flags["force-cost"] === true,
     onFile: flags["verbose"] ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`) : undefined,
   });
   if (flags["json"]) {
@@ -760,6 +764,8 @@ function jsonForStatus(s: IndexStatusSnapshot): unknown {
     stale_embeddings: s.staleEmbeddings,
     embedding_model: s.embeddingModel,
     embedding_dimension: s.embeddingDimension,
+    embedding_signature: s.embeddingSignature,
+    estimated_refresh_cost_usd: s.estimatedRefreshCostUsd,
     vec_extension: s.vecExtension,
     semantic_enabled: s.semanticEnabled,
     embedding_key_present: s.embeddingKeyPresent,
@@ -781,6 +787,10 @@ function renderStatusHuman(s: IndexStatusSnapshot): string {
   lines.push(`embeddings: ${s.embeddings} (stale: ${s.staleEmbeddings})`);
   lines.push(`embedding_model:     ${s.embeddingModel ?? "(none)"}`);
   lines.push(`embedding_dimension: ${s.embeddingDimension ?? "(none)"}`);
+  lines.push(`embedding_signature: ${s.embeddingSignature ?? "(disabled)"}`);
+  if (s.estimatedRefreshCostUsd > 0) {
+    lines.push(`refresh_cost_est:    $${s.estimatedRefreshCostUsd.toFixed(4)}`);
+  }
   lines.push(`vec_extension:       ${s.vecExtension}`);
   lines.push(`semantic_enabled:    ${s.semanticEnabled}`);
   lines.push(`embedding_key:       ${s.embeddingKeyPresent ? "present" : "missing"}`);

@@ -102,6 +102,7 @@ const DEFAULTS = {
   timeoutMs: 10_000,
   concurrency: 4,
   batchSize: 32,
+  costGateUsd: 0,
   mmrLambda: 0.7,
   maxHops: 1,
   hopDecay: 0.5,
@@ -150,6 +151,16 @@ function parsePositiveFloat(raw: string | null, fallback: number, fieldName: str
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) {
     throw new SearchError("INVALID_INPUT", `${fieldName} must be a number > 0, got '${raw}'`);
+  }
+  return n;
+}
+
+/** Parse a non-negative finite float (e.g. a cost gate; 0 disables). */
+function parseNonNegativeFloat(raw: string | null, fallback: number, fieldName: string): number {
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be a number >= 0, got '${raw}'`);
   }
   return n;
 }
@@ -337,6 +348,11 @@ export function resolveSearchConfig(opts: {
     "embedding_batch_size",
     { min: 1 },
   );
+  const costGateUsd = parseNonNegativeFloat(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_COST_GATE", "embedding_cost_gate_usd"),
+    DEFAULTS.costGateUsd,
+    "embedding_cost_gate_usd",
+  );
 
   const semantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: semanticEnabled,
@@ -348,6 +364,7 @@ export function resolveSearchConfig(opts: {
     timeoutMs,
     concurrency,
     batchSize,
+    costGateUsd,
   });
 
   const mmrLambda = parseFloat01(

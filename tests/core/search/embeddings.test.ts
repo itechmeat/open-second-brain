@@ -20,6 +20,7 @@ function cfg(overrides: Partial<ResolvedEmbeddingConfig> = {}): ResolvedEmbeddin
     timeoutMs: 5_000,
     concurrency: 2,
     batchSize: 32,
+    costGateUsd: 0,
     ...overrides,
   });
 }
@@ -214,6 +215,7 @@ test("makeProvider returns NullProvider when semantic is disabled", () => {
     timeoutMs: 10_000,
     concurrency: 1,
     batchSize: 1,
+    costGateUsd: 0,
   });
   expect(p).toBeInstanceOf(NullProvider);
 });
@@ -230,6 +232,7 @@ test("makeProvider throws when key is missing under openai-compat", () => {
       timeoutMs: 10_000,
       concurrency: 1,
       batchSize: 1,
+      costGateUsd: 0,
     }),
   ).toThrow(/embedding_api_key/);
 });
