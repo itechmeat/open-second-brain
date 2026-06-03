@@ -289,6 +289,17 @@ export function resolveSearchFocusContextPack(configPath?: string): boolean {
   return raw === "true" || raw === "1";
 }
 
+/**
+ * SessionEnd handoff-note gate (Agent Surface Suite, t_28afa4d2).
+ * Default OFF: lifecycle capture writes no handoff note unless
+ * `session_handoff: "true"`.
+ */
+export function resolveSessionHandoff(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_SESSION_HANDOFF"]?.trim();
+  const raw = env || discoverConfig(configPath).data["session_handoff"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
 export const SESSION_CAPTURE_ROLES = ["user", "assistant", "system", "tool", "meta"] as const;
 
 export type SessionCaptureRole = (typeof SESSION_CAPTURE_ROLES)[number];

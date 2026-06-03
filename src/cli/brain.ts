@@ -50,6 +50,7 @@ import {
   cmdBrainScanInline,
   cmdBrainEntity,
   cmdBrainImportSession,
+  cmdBrainHandoff,
   cmdBrainSessionHook,
   cmdBrainImportClaudeMemory,
   cmdBrainPageDedup,
@@ -172,6 +173,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainScanInline(rest);
       case "import-session":
         return await cmdBrainImportSession(rest);
+      case "handoff":
+        return await cmdBrainHandoff(rest);
       case "entity":
         return await cmdBrainEntity(rest);
       case "session-hook":
