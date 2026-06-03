@@ -22,13 +22,14 @@ import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../co
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
-import { defaultConfigPath } from "../core/config.ts";
+import { defaultConfigPath, resolveRecallGateTelemetry } from "../core/config.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
+import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -155,6 +156,8 @@ const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
     prompt: { type: "string", minLength: 1, maxLength: 4000 },
     previous_prompt: { type: "string", maxLength: 4000 },
     explicit: { type: "boolean" },
+    telemetry_host: { type: "string", maxLength: 200 },
+    session_id: { type: "string", maxLength: 512 },
   },
   required: ["prompt"],
   additionalProperties: false,
@@ -476,7 +479,7 @@ function mcpEvidencePack(
 }
 
 async function toolBrainRecallGate(
-  _ctx: ServerContext,
+  ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const prompt = args["prompt"];
@@ -488,13 +491,29 @@ async function toolBrainRecallGate(
   }
   const previousPrompt = coerceStringOptional(args, "previous_prompt", 4000);
   const explicit = coerceBoolOptional(args, "explicit") ?? false;
-  return {
-    ...evaluateSurfacingGate({
-      prompt,
-      previousPrompt: previousPrompt ?? null,
-      explicit,
-    }),
-  };
+  const decision = evaluateSurfacingGate({
+    prompt,
+    previousPrompt: previousPrompt ?? null,
+    explicit,
+  });
+  // Gate telemetry (t_65036e02): default off; fail-soft so a broken
+  // continuity store never breaks the gate's pure-diagnostic contract.
+  if (resolveRecallGateTelemetry(ctx.configPath ?? undefined)) {
+    try {
+      const host = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
+      const sessionId = coerceStringOptional(args, "session_id", 512);
+      emitGateTelemetry(ctx.vault, {
+        host,
+        prompt,
+        retrieve: decision.retrieve,
+        reason: decision.reason,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+      });
+    } catch {
+      // never let telemetry break the gate
+    }
+  }
+  return { ...decision };
 }
 
 const RECALL_FEEDBACK_INPUT_SCHEMA: Record<string, unknown> = {

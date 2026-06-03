@@ -1,6 +1,7 @@
 export type ContinuityRecordKind =
   | "context_receipt"
   | "recall_telemetry"
+  | "gate_telemetry"
   | "pre_compact_extract"
   | "session_turn"
   | "session_summary_node"

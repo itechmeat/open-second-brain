@@ -353,6 +353,19 @@ export function resolveTriggerCooldownDays(configPath?: string): number {
   return days;
 }
 
+/**
+ * Recall-gate telemetry gate (Workspace Insight Suite, t_65036e02).
+ * Default OFF: brain_recall_gate stays a pure diagnostic unless
+ * `recall_gate_telemetry: "true"`, when every decision lands as a
+ * gate_telemetry continuity record (prompt hash only, never the
+ * prompt).
+ */
+export function resolveRecallGateTelemetry(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_RECALL_GATE_TELEMETRY"]?.trim();
+  const raw = env || discoverConfig(configPath).data["recall_gate_telemetry"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
 export const SESSION_CAPTURE_ROLES = ["user", "assistant", "system", "tool", "meta"] as const;
 
 export type SessionCaptureRole = (typeof SESSION_CAPTURE_ROLES)[number];

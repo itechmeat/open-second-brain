@@ -5,6 +5,7 @@ import {
   listRecallTelemetry,
   summarizeRecallTelemetry,
 } from "../../../core/brain/recall-telemetry.ts";
+import { listGateTelemetry, summarizeGateTelemetry } from "../../../core/brain/gate-telemetry.ts";
 import { CliError, parse, resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainRecallTelemetry(argv: string[]): Promise<number> {
@@ -12,7 +13,10 @@ export async function cmdBrainRecallTelemetry(argv: string[]): Promise<number> {
   const rest = argv.slice(1);
   if (subcommand === "list") return listTelemetry(rest);
   if (subcommand === "summary") return summarizeTelemetry(rest);
-  throw new CliError("brain recall-telemetry: expected list or summary");
+  // Gate-decision telemetry (Workspace Insight Suite, t_65036e02).
+  if (subcommand === "gate-list") return listGate(rest);
+  if (subcommand === "gate-summary") return summarizeGate(rest);
+  throw new CliError("brain recall-telemetry: expected list, summary, gate-list, or gate-summary");
 }
 
 function listTelemetry(argv: string[]): number {
@@ -54,6 +58,49 @@ function summarizeTelemetry(argv: string[]): number {
   process.stdout.write(`by mode: ${JSON.stringify(summary.by_mode)}\n`);
   process.stdout.write(`by status: ${JSON.stringify(summary.by_status)}\n`);
   process.stdout.write(`gaps: ${JSON.stringify(summary.gap_counts)}\n`);
+  return 0;
+}
+
+function listGate(argv: string[]): number {
+  const { flags } = parseTelemetryFlags(argv);
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const filter = telemetryFilter(flags, "brain recall-telemetry gate-list");
+  const records = listGateTelemetry(vault, {
+    ...(filter.host !== undefined ? { host: filter.host } : {}),
+    ...(filter.since !== undefined ? { since: filter.since } : {}),
+    ...(filter.until !== undefined ? { until: filter.until } : {}),
+    ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+  });
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify({ total: records.length, records }, null, 2) + "\n");
+    return 0;
+  }
+  process.stdout.write(`${records.length} gate decision(s):\n`);
+  for (const record of records) {
+    process.stdout.write(
+      `  ${record.createdAt}  ${record.payload["decision"]}  ${record.payload["reason"]}  host=${record.payload["host"] ?? "?"}\n`,
+    );
+  }
+  return 0;
+}
+
+function summarizeGate(argv: string[]): number {
+  const { flags } = parseTelemetryFlags(argv);
+  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const filter = telemetryFilter(flags, "brain recall-telemetry gate-summary");
+  const summary = summarizeGateTelemetry(vault, {
+    ...(filter.host !== undefined ? { host: filter.host } : {}),
+    ...(filter.since !== undefined ? { since: filter.since } : {}),
+    ...(filter.until !== undefined ? { until: filter.until } : {}),
+  });
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
+    return 0;
+  }
+  process.stdout.write(`decisions: ${summary.total}\n`);
+  process.stdout.write(`retrieved: ${summary.retrieved}\n`);
+  process.stdout.write(`skipped: ${summary.skipped}\n`);
+  process.stdout.write(`by reason: ${JSON.stringify(summary.by_reason)}\n`);
   return 0;
 }
 

@@ -66,6 +66,7 @@ import { scanTriggers } from "../core/brain/triggers/scan.ts";
 import { createTriggers, listTriggers, transitionTrigger } from "../core/brain/triggers/store.ts";
 import { deepSynthesis, synthesisCandidates } from "../core/brain/deep-synthesis.ts";
 import { discoverIdeas, ideaCandidates } from "../core/brain/idea-discovery.ts";
+import { listGateTelemetry, summarizeGateTelemetry } from "../core/brain/gate-telemetry.ts";
 import { isTriggerStatus, type TriggerRecord } from "../core/brain/triggers/types.ts";
 import { aggregateSources } from "../core/brain/portability/sources.ts";
 import { switchProfile, listProfiles } from "../core/brain/portability/profiles.ts";
@@ -2240,7 +2241,29 @@ async function toolBrainRecallTelemetry(
     const summary = summarizeRecallTelemetry(ctx.vault, filter);
     return { ...summary };
   }
-  throw new MCPError(INVALID_PARAMS, "brain_recall_telemetry: operation must be list or summary");
+  // Gate-decision telemetry (Workspace Insight Suite, t_65036e02):
+  // records emitted by brain_recall_gate when recall_gate_telemetry is on.
+  if (operation === "gate_list") {
+    const records = listGateTelemetry(ctx.vault, {
+      ...(filter.host !== undefined ? { host: filter.host } : {}),
+      ...(filter.since !== undefined ? { since: filter.since } : {}),
+      ...(filter.until !== undefined ? { until: filter.until } : {}),
+      ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+    });
+    return { vault_path: ctx.vault, total: records.length, records };
+  }
+  if (operation === "gate_summary") {
+    const summary = summarizeGateTelemetry(ctx.vault, {
+      ...(filter.host !== undefined ? { host: filter.host } : {}),
+      ...(filter.since !== undefined ? { since: filter.since } : {}),
+      ...(filter.until !== undefined ? { until: filter.until } : {}),
+    });
+    return { ...summary };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_recall_telemetry: operation must be list, summary, gate_list, or gate_summary",
+  );
 }
 
 function recallTelemetryFilter(args: Record<string, unknown>): RecallTelemetryFilter {
@@ -3649,8 +3672,9 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         operation: {
           type: "string",
-          enum: ["list", "summary"],
-          description: "Use list for raw records, summary for aggregate counts.",
+          enum: ["list", "summary", "gate_list", "gate_summary"],
+          description:
+            "list/summary for recall telemetry; gate_list/gate_summary for recall-gate decisions.",
         },
         mode: {
           type: "string",
