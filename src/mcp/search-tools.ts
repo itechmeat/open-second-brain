@@ -343,7 +343,9 @@ async function toolBrainSearch(
       searchTimeoutError,
     );
   } catch (e) {
-    if (telemetry) {
+    // Lazy emit kernel (t_5d7aa7c5): a throwing telemetry write inside
+    // this catch can no longer mask the original search error.
+    emitGatedTelemetry(telemetry || undefined, () =>
       emitRecallTelemetry(ctx.vault, {
         host: telemetryHost,
         ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
@@ -362,40 +364,40 @@ async function toolBrainSearch(
           keyword_only: keywordOnly,
           semantic: semantic ?? null,
         },
-      });
-    }
+      }),
+    );
     if (e instanceof SearchError) throw searchErrorToMcp(e);
     if (e instanceof MCPError) throw e;
     throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
   }
 
   const recallHint = deriveRecallHint(outcome.results, outcome.total);
-  const telemetryRecord = telemetry
-    ? emitRecallTelemetry(ctx.vault, {
-        host: telemetryHost,
-        ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
-        ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
-        mode: "search",
-        status: outcome.results.length > 0 ? "ok" : "empty",
-        durationMs: Date.now() - startedAtMs,
-        resultCount: outcome.results.length,
-        topArtifacts: outcome.results.slice(0, 10).map((result) => ({
-          id: `${result.documentId}:${result.chunkId}`,
-          path: result.path,
-          score: result.score,
-        })),
-        gaps: searchTelemetryGaps(outcome),
-        metadata: {
-          limit,
-          total: outcome.total,
-          keyword_only: keywordOnly,
-          semantic: semantic ?? null,
-          evidence_pack: evidencePack,
-          warnings_count: outcome.warnings.length,
-          ...(pathPrefix !== undefined ? { path_prefix: pathPrefix } : {}),
-        },
-      })
-    : null;
+  const telemetryRecord = emitGatedTelemetry(telemetry || undefined, () =>
+    emitRecallTelemetry(ctx.vault, {
+      host: telemetryHost,
+      ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
+      ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+      mode: "search",
+      status: outcome.results.length > 0 ? "ok" : "empty",
+      durationMs: Date.now() - startedAtMs,
+      resultCount: outcome.results.length,
+      topArtifacts: outcome.results.slice(0, 10).map((result) => ({
+        id: `${result.documentId}:${result.chunkId}`,
+        path: result.path,
+        score: result.score,
+      })),
+      gaps: searchTelemetryGaps(outcome),
+      metadata: {
+        limit,
+        total: outcome.total,
+        keyword_only: keywordOnly,
+        semantic: semantic ?? null,
+        evidence_pack: evidencePack,
+        warnings_count: outcome.warnings.length,
+        ...(pathPrefix !== undefined ? { path_prefix: pathPrefix } : {}),
+      },
+    }),
+  );
   return {
     results: outcome.results.map((r: BrainSearchResult) => ({
       path: r.path,
