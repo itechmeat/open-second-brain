@@ -963,6 +963,10 @@ re-renders it from the current template.
 
 ## Where to go next
 
+- **`docs/observability.md`** — the observability contract: every
+  log and continuity event kind, the always-on vs opt-in matrix,
+  correlation IDs, payload safety, fail-open rules, and the
+  `o2b.continuity.v1` schema version with its evolution rule.
 - **`docs/architecture.md`** — layered system architecture beyond
   Brain (vault model, runtime adapters, configuration model).
 - **`docs/plans/2026-05-15-brain-observing-memory.md`** — the Brain

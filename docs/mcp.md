@@ -305,6 +305,10 @@ decision when the `recall_gate_telemetry` config key is `"true"`
 never the raw prompt. `brain_recall_telemetry` gains `gate_list` /
 `gate_summary` operations.
 
+The full observability contract behind these tools - event kinds,
+always-on vs opt-in status, correlation IDs, payload safety, and the
+continuity schema version - lives in `docs/observability.md`.
+
 ## Hermes integration
 
 Hermes discovers MCP servers from `~/.hermes/config.yaml` under the
