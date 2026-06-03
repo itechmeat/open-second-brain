@@ -348,6 +348,15 @@ export interface ResolvedSearchConfig {
   readonly chunkOverlap: number;
   readonly keywordWeight: number;
   readonly semanticWeight: number;
+  /**
+   * Rank-fusion mode (Embedding Provider Suite). `linear` (default) is
+   * the weighted sum of normalised BM25 and cosine; `rrf` fuses the two
+   * lanes by reciprocal rank. `linear` keeps ranking bit-identical to
+   * pre-suite behaviour.
+   */
+  readonly fusionMode: "linear" | "rrf";
+  /** Reciprocal Rank Fusion damping constant (only used when rrf). */
+  readonly rrfK: number;
   readonly semantic: ResolvedEmbeddingConfig;
   readonly recall: ResolvedRecallConfig;
 }

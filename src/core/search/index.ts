@@ -12,6 +12,7 @@ import {
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { resolveIndexPath } from "./paths.ts";
+import { isFusionMode, DEFAULT_RRF_K } from "./fusion.ts";
 import {
   loadProviderRegistry,
   expandRegisteredProvider,
@@ -112,7 +113,18 @@ const DEFAULTS = {
   recencyAmplitude: 0.05,
   synonymMaxTerms: 3,
   cacheTtlSeconds: 300,
+  fusionMode: "linear" as const,
+  rrfK: DEFAULT_RRF_K,
 };
+
+function parseFusionMode(raw: string | null): "linear" | "rrf" {
+  if (raw === null) return DEFAULTS.fusionMode;
+  if (isFusionMode(raw)) return raw;
+  throw new SearchError(
+    "INVALID_INPUT",
+    `search_fusion_mode must be 'linear' or 'rrf', got '${raw}'`,
+  );
+}
 
 type IntegerRange = { readonly min?: number; readonly max?: number };
 
@@ -280,6 +292,15 @@ export function resolveSearchConfig(opts: {
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_SEM_WEIGHT", "search_semantic_weight"),
     DEFAULTS.semanticWeight,
     "search_semantic_weight",
+  );
+  const fusionMode = parseFusionMode(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_FUSION_MODE", "search_fusion_mode"),
+  );
+  const rrfK = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RRF_K", "search_rrf_k"),
+    DEFAULTS.rrfK,
+    "search_rrf_k",
+    { min: 1 },
   );
 
   // v0.10.9: single source of truth lives in Brain/_brain.yaml under
@@ -491,6 +512,8 @@ export function resolveSearchConfig(opts: {
     chunkOverlap,
     keywordWeight,
     semanticWeight,
+    fusionMode,
+    rrfK,
     semantic,
     recall,
   });

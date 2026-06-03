@@ -451,6 +451,8 @@ export async function search(
           },
           ...(weightProfile !== undefined ? { weightProfile } : {}),
           ...(sessionFocus !== undefined ? { sessionFocus } : {}),
+          fusionMode: config.fusionMode,
+          rrfK: config.rrfK,
         },
       );
       const capHit = ranked.length >= rankCap;

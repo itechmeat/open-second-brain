@@ -35,6 +35,8 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     chunkOverlap: 100,
     keywordWeight: 0.6,
     semanticWeight: 0.4,
+    fusionMode: "linear" as const,
+    rrfK: 60,
     semantic,
     recall: Object.freeze({
       mmrLambda: 0.7,

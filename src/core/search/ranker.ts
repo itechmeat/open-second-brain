@@ -12,6 +12,7 @@
 import { PAGE_TIER_DEFAULT, tierWeight, type PageTier } from "../brain/page-meta/tier.ts";
 import { weibullDecay, DEFAULT_RECENCY, type WeibullRecencyOptions } from "./recency.ts";
 import { scoreSessionFocusTarget, type SearchSessionFocus } from "./session-focus.ts";
+import { rrfFuse, DEFAULT_RRF_K, type FusionMode } from "./fusion.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "./store.ts";
 import type { BrainSearchResult, WeightProfile } from "./types.ts";
 
@@ -60,6 +61,15 @@ export interface RankerOptions {
    */
   readonly weightProfile?: WeightProfile;
   readonly sessionFocus?: SearchSessionFocus | null;
+  /**
+   * Rank-fusion mode (Embedding Provider Suite). `linear` (default) is
+   * the weighted sum of normalised BM25 and cosine; `rrf` fuses the two
+   * lanes by reciprocal rank. Absent or `linear` keeps ranking
+   * bit-identical to pre-suite behaviour.
+   */
+  readonly fusionMode?: FusionMode;
+  /** RRF damping constant; defaults to {@link DEFAULT_RRF_K}. */
+  readonly rrfK?: number;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -131,10 +141,12 @@ function buildReasons(parts: {
   tierMul: number;
   entityBoost?: number;
   sessionFocus?: number;
+  rrf?: number;
 }): ReadonlyArray<string> {
   const reasons: string[] = [];
   if (parts.keywordScore > 0) reasons.push(`fts5_bm25: ${fmt(parts.keywordScore)}`);
   if (parts.semanticScore > 0) reasons.push(`semantic_cos: ${fmt(parts.semanticScore)}`);
+  if (parts.rrf && parts.rrf > 0) reasons.push(`rrf: ${fmt(parts.rrf)}`);
   if (parts.entityBoost && parts.entityBoost > 0) {
     reasons.push(`entity_match: ${fmt(parts.entityBoost)}`);
   }
@@ -165,6 +177,25 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     for (const h of inputs.semantic) {
       semNorm.set(h.chunkId, semanticFromDistance(h.distance));
     }
+  }
+
+  // Reciprocal Rank Fusion (Embedding Provider Suite): fuse the lanes by
+  // rank position instead of weighted magnitude. Off by default; when on,
+  // it replaces the linear relevance term while every boost still applies.
+  const fusionMode: FusionMode = opts.fusionMode ?? "linear";
+  let rrfByChunk: Map<number, number> | null = null;
+  if (fusionMode === "rrf") {
+    const keywordRanked = inputs.keyword
+      .toSorted((a, b) => a.bm25 - b.bm25) // lower BM25 = better
+      .map((h) => h.chunkId);
+    const semanticRanked = semanticEnabled
+      ? inputs.semantic.toSorted((a, b) => a.distance - b.distance).map((h) => h.chunkId)
+      : [];
+    rrfByChunk = rrfFuse({
+      keywordRankedChunkIds: keywordRanked,
+      semanticRankedChunkIds: semanticRanked,
+      k: opts.rrfK ?? DEFAULT_RRF_K,
+    });
   }
 
   const candidates = new Map<number, Candidate>();
@@ -248,9 +279,15 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const tag = tagBoostFor(c);
     const linkBoost = Math.min(0.05, link + tag);
     const recency = recencyBoost(c.mtime, nowMs, recencyOpts) * recMul;
+    // Relevance term: reciprocal-rank-fused when in rrf mode, otherwise
+    // the weighted sum of the normalised lanes. RRF is weightless, so the
+    // per-lane weights and intent multipliers do not apply to it.
+    const rrf = rrfByChunk?.get(c.chunkId) ?? 0;
     const weighted =
-      opts.keywordWeight * kwMul * c.keywordScore +
-      (semanticEnabled ? opts.semanticWeight * semMul : 0) * c.semanticScore;
+      rrfByChunk !== null
+        ? rrf
+        : opts.keywordWeight * kwMul * c.keywordScore +
+          (semanticEnabled ? opts.semanticWeight * semMul : 0) * c.semanticScore;
     // Tier multiplier applied to the relevance portion only so the
     // tag / link / recency boosts stay tier-neutral. Default
     // `supporting` → 1.0 keeps untagged vaults bit-identical.
@@ -287,6 +324,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           tierMul,
           entityBoost,
           sessionFocus,
+          rrf: rrfByChunk !== null ? rrf : 0,
         }),
       }),
     );
