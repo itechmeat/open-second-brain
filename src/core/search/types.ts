@@ -232,7 +232,7 @@ export interface SearchOutcome {
 
 export interface ResolvedEmbeddingConfig {
   readonly enabled: boolean;
-  readonly provider: "openai-compat" | "disabled";
+  readonly provider: "openai-compat" | "disabled" | "local";
   readonly baseUrl: string | null;
   readonly model: string | null;
   readonly apiKey: string | null;

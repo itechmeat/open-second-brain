@@ -296,7 +296,8 @@ async function populateEmbeddings(
       "set search_semantic_enabled=true and embedding_* keys to compute embeddings",
     );
   }
-  if (!config.semantic.apiKey) {
+  // The offline local provider needs no key; every remote provider does.
+  if (config.semantic.provider !== "local" && !config.semantic.apiKey) {
     throw new SearchError(
       "EMBEDDING_KEY_MISSING",
       "embedding_api_key is required when computing embeddings",

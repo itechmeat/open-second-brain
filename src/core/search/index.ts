@@ -190,10 +190,10 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
 
 function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {
   if (raw === null) return DEFAULTS.provider;
-  if (raw === "openai-compat" || raw === "disabled") return raw;
+  if (raw === "openai-compat" || raw === "disabled" || raw === "local") return raw;
   throw new SearchError(
     "INVALID_INPUT",
-    `embedding_provider must be 'openai-compat' or 'disabled', got '${raw}'`,
+    `embedding_provider must be 'openai-compat', 'local', or 'disabled', got '${raw}'`,
   );
 }
 

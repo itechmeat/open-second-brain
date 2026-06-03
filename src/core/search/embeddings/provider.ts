@@ -32,6 +32,12 @@ export function makeProvider(config: ResolvedEmbeddingConfig): EmbeddingProvider
     const { NullProvider } = require("./null-provider.ts") as typeof import("./null-provider.ts");
     return new NullProvider();
   }
+  if (config.provider === "local") {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { LocalProvider, LOCAL_DEFAULT_DIMENSION } =
+      require("./local-provider.ts") as typeof import("./local-provider.ts");
+    return new LocalProvider(config.dimension ?? LOCAL_DEFAULT_DIMENSION);
+  }
   if (config.provider === "openai-compat") {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { OpenAICompatProvider } =
