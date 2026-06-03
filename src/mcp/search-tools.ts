@@ -39,6 +39,12 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     query_document: { type: "string", minLength: 1, maxLength: 4000 },
     focus_query: { type: "string", minLength: 1, maxLength: 1000 },
     focus_path_prefix: { type: "string", minLength: 1, maxLength: 256 },
+    focus_session: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      description: "Session id whose bound focus applies (falls back to the global focus).",
+    },
     evidence_pack: { type: "boolean" },
     include_superseded: {
       type: "boolean",
@@ -287,6 +293,7 @@ async function toolBrainSearch(
           pathPrefix: focusPathPrefix ?? null,
         })
       : undefined;
+  const focusSession = coerceStringOptional(args, "focus_session", 128);
   const properties = parsePropertiesArgument(args["properties"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
 
@@ -309,6 +316,7 @@ async function toolBrainSearch(
         ...(visibility !== undefined ? { visibility } : {}),
         ...(structuredQuery !== undefined ? { structuredQuery } : {}),
         ...(sessionFocus !== undefined ? { sessionFocus } : {}),
+        ...(focusSession !== undefined ? { focusSession } : {}),
         ...(evidencePack ? { evidencePack: true } : {}),
         ...(includeSuperseded ? { includeSuperseded: true } : {}),
         ...(since !== undefined ? { since } : {}),

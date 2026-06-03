@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendAuditRecord } from "../reliability/audit.ts";
@@ -11,6 +12,8 @@ import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
 import { validateBrainFeedbackInput } from "./sessions/validate-feedback.ts";
+import { resolveSearchConfig } from "../search/index.ts";
+import { clearSessionFocus, sessionFocusPath } from "../search/session-focus.ts";
 
 export interface CaptureSessionLifecycleOptions {
   readonly agent: string;
@@ -33,6 +36,8 @@ export interface CaptureSessionLifecycleResult {
   readonly facts_deduped: number;
   readonly audit_path: string;
   readonly log_path?: string;
+  /** True when a SessionEnd event cleared that session's bound focus. */
+  readonly focus_cleared?: boolean;
 }
 
 interface NormalizedPayload {
@@ -101,6 +106,24 @@ export async function captureSessionLifecycleEvent(
     captureToolFeedback(vault, normalized, opts, now, ensureDedup(), counters);
   }
 
+  // Session-scoped focus lifecycle (Agent Surface Suite, t_5b478e47):
+  // a finished session's bound focus must not leak into the next one.
+  // Fail-soft - focus cleanup can never block lifecycle capture.
+  let focusCleared = false;
+  if (normalized.event === "SessionEnd" && normalized.sessionId !== undefined && !opts.dryRun) {
+    try {
+      const searchConfig = resolveSearchConfig({ vault });
+      // Clear by file presence, not by activity: an already-expired
+      // focus file is still stale state worth removing.
+      if (existsSync(sessionFocusPath(searchConfig, normalized.sessionId))) {
+        clearSessionFocus(searchConfig, normalized.sessionId);
+        focusCleared = true;
+      }
+    } catch {
+      // ignore - lifecycle capture must survive a broken search config
+    }
+  }
+
   let logPath: string | undefined;
   if (mayWrite && !opts.dryRun) {
     logPath = appendLifecycleLog(vault, normalized, opts.agent, now, counters);
@@ -134,6 +157,7 @@ export async function captureSessionLifecycleEvent(
     facts_deduped: counters.facts_deduped,
     audit_path: auditPath,
     ...(logPath ? { log_path: logPath } : {}),
+    ...(focusCleared ? { focus_cleared: true } : {}),
   };
 }
 

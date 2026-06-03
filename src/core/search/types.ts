@@ -216,6 +216,13 @@ export interface SearchOptions {
   readonly structuredQuery?: StructuredRecallQueryDocument;
   /** Optional per-query or persisted session focus steering. Undefined means load persisted focus. */
   readonly sessionFocus?: SearchSessionFocus | null;
+  /**
+   * Session id for scoped focus resolution (Agent Surface Suite,
+   * t_5b478e47). Applies only when `sessionFocus` is undefined: the
+   * persisted focus lookup checks `search-focus/<scope>.json` first
+   * and falls back to the global focus file.
+   */
+  readonly focusSession?: string;
   /** Opt-in verified evidence pack diagnostics. Omitted preserves the legacy search outcome shape. */
   readonly evidencePack?: boolean;
   /**

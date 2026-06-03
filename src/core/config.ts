@@ -277,6 +277,18 @@ export function resolveSkillAutoAttach(configPath?: string): boolean {
   return raw === "true" || raw === "1";
 }
 
+/**
+ * Context-pack focus wiring gate (Agent Surface Suite, t_5b478e47).
+ * Default OFF: brain_context_pack ignores the active search focus
+ * unless `search_focus_context_pack: "true"`, keeping the default
+ * pack byte-identical.
+ */
+export function resolveSearchFocusContextPack(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_SEARCH_FOCUS_CONTEXT_PACK"]?.trim();
+  const raw = env || discoverConfig(configPath).data["search_focus_context_pack"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
 export const SESSION_CAPTURE_ROLES = ["user", "assistant", "system", "tool", "meta"] as const;
 
 export type SessionCaptureRole = (typeof SESSION_CAPTURE_ROLES)[number];

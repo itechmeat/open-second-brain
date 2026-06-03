@@ -34,7 +34,7 @@ import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from ".
 import { filterByProperties } from "./property-filter.ts";
 import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
-import { readSessionFocus } from "./session-focus.ts";
+import { readActiveSessionFocus } from "./session-focus.ts";
 import { mtimeInRange, resolveTimeRange } from "./time-range.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
 import { Store } from "./store.ts";
@@ -195,7 +195,9 @@ export async function search(
   const warnings: string[] = [];
   const structured = opts.structuredQuery;
   const sessionFocus =
-    opts.sessionFocus === undefined ? readSessionFocus(config, Date.now()) : opts.sessionFocus;
+    opts.sessionFocus === undefined
+      ? readActiveSessionFocus(config, opts.focusSession, Date.now())
+      : opts.sessionFocus;
   const keywordQuery = structuredKeywordQuery(query, structured);
   const semanticLaneQuery = structuredSemanticQuery(structured);
   // Time-aware recall (recall-trust-suite): resolve since/until up front

@@ -41,6 +41,11 @@ import {
   type ContextLanesReport,
 } from "./context-lanes.ts";
 import { buildAttentionContextBlock } from "./attention-flows.ts";
+import {
+  scoreSessionFocusTarget,
+  sessionFocusIsActive,
+  type SearchSessionFocus,
+} from "../search/session-focus.ts";
 
 const TIER_ORDER: ReadonlyArray<PageTier> = [
   PAGE_TIER.core,
@@ -105,6 +110,14 @@ export interface ContextPackOptions {
   readonly transforms?: ContextTransformOptions;
   /** Optional declarative attention-flow ids to include as a synthetic context item. */
   readonly attentionFlowIds?: ReadonlyArray<string>;
+  /**
+   * Active search focus (Agent Surface Suite, t_5b478e47). When set
+   * and unexpired, focus-matching memories are promoted WITHIN their
+   * tier; a peripheral page can never outrank a core one. Omitted or
+   * null keeps the legacy ordering byte-identical. Callers gate this
+   * on the `search_focus_context_pack` config key.
+   */
+  readonly sessionFocus?: SearchSessionFocus | null;
 }
 
 interface Candidate {
@@ -218,10 +231,27 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   const query = opts.query ? normalizeForDedup(opts.query) : null;
   const candidates = collectCandidates(vault);
 
+  // Focus boost (within-tier only): computed once per candidate, 0 for
+  // every candidate when no active focus is supplied, so the default
+  // sort stays byte-identical.
+  const focus = sessionFocusIsActive(opts.sessionFocus) ? opts.sessionFocus! : null;
+  const focusScore = new Map<string, number>();
+  if (focus !== null) {
+    for (const c of candidates) {
+      focusScore.set(
+        c.id,
+        scoreSessionFocusTarget({ path: c.path, title: c.topic, content: c.body }, focus),
+      );
+    }
+  }
+
   candidates.sort((a, b) => {
     const tierA = TIER_ORDER.indexOf(a.tier);
     const tierB = TIER_ORDER.indexOf(b.tier);
     if (tierA !== tierB) return tierA - tierB;
+    const focusA = focusScore.get(a.id) ?? 0;
+    const focusB = focusScore.get(b.id) ?? 0;
+    if (focusA !== focusB) return focusB - focusA;
     if (a.createdAtMs !== b.createdAtMs) return b.createdAtMs - a.createdAtMs;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });

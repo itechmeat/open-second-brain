@@ -40,7 +40,13 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { existsSync, readFileSync } from "node:fs";
 
-import { resolveAgentName, resolveLinkOutputFormat } from "../core/config.ts";
+import {
+  resolveAgentName,
+  resolveLinkOutputFormat,
+  resolveSearchFocusContextPack,
+} from "../core/config.ts";
+import { resolveSearchConfig } from "../core/search/index.ts";
+import { readActiveSessionFocus } from "../core/search/session-focus.ts";
 import { brainActivePath, brainDirs } from "../core/brain/paths.ts";
 import { regenerateActive, type RegenerateActiveResult } from "../core/brain/active.ts";
 import { parseFrontmatter } from "../core/vault.ts";
@@ -1834,8 +1840,26 @@ async function toolBrainContextPack(
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
   const receipt = receiptOptionsFromArgs("brain_context_pack", args, "context_pack", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
+  // Focus wiring (Agent Surface Suite, t_5b478e47): gated on the
+  // search_focus_context_pack config key (default off) so the default
+  // pack stays byte-identical. Fail-soft - a broken search config
+  // never breaks the pack.
+  let sessionFocus: ReturnType<typeof readActiveSessionFocus> = null;
+  if (resolveSearchFocusContextPack(ctx.configPath ?? undefined)) {
+    try {
+      const focusSession = coerceStr(args, "focus_session", false) ?? undefined;
+      const searchConfig = resolveSearchConfig({
+        vault: ctx.vault,
+        configPath: ctx.configPath ?? undefined,
+      });
+      sessionFocus = readActiveSessionFocus(searchConfig, focusSession);
+    } catch {
+      sessionFocus = null;
+    }
+  }
   const report = packContext(ctx.vault, {
     maxTokens,
+    ...(sessionFocus !== null ? { sessionFocus } : {}),
     ...(query ? { query } : {}),
     ...(includeLanes ? { includeLanes: true } : {}),
     ...(receipt !== undefined ? { receipt } : {}),
@@ -3159,6 +3183,13 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         query: {
           type: "string",
           description: "Optional case/Unicode-insensitive substring filter on topic + principle.",
+        },
+        focus_session: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description:
+            "Session id whose bound search focus boosts matching memories (requires search_focus_context_pack).",
         },
         max_chars_per_memory: {
           type: "integer",
