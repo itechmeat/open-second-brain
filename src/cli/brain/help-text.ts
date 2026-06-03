@@ -86,6 +86,7 @@ Brain verbs (observing memory):
   profile             Materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
   sgrep               Grep-shaped semantic search: o2b brain sgrep <query> [path]
   trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/history)
+  deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
 
 Common flags:
   --vault <path>   Override the configured vault

@@ -158,6 +158,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("profile", "Materialize the compact Brain/profile.md digest"),
         command("sgrep", "Grep-shaped semantic Brain search (path:line: output)"),
         command("trigger", "Grounded proactive trigger queue (scan/list/ack/dismiss/act/history)"),
+        command("deep-synthesis", "Topic dossier: agreements, contradictions, stale claims, gaps"),
         command("entity", "Canonical entity registry: set, get, list, relate, archive"),
         command("session-hook", "Capture runtime lifecycle hook payloads"),
         command("import-claude-memory", "Import Claude memory feedback"),

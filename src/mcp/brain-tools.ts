@@ -63,7 +63,8 @@ import { readPrefAudit } from "../core/brain/pref-audit.ts";
 import { buildMorningBrief } from "../core/brain/morning-brief.ts";
 import { deliverBriefTriggers, renderTriggerBriefSection } from "../core/brain/triggers/brief.ts";
 import { scanTriggers } from "../core/brain/triggers/scan.ts";
-import { listTriggers, transitionTrigger } from "../core/brain/triggers/store.ts";
+import { createTriggers, listTriggers, transitionTrigger } from "../core/brain/triggers/store.ts";
+import { deepSynthesis, synthesisCandidates } from "../core/brain/deep-synthesis.ts";
 import { isTriggerStatus, type TriggerRecord } from "../core/brain/triggers/types.ts";
 import { aggregateSources } from "../core/brain/portability/sources.ts";
 import { switchProfile, listProfiles } from "../core/brain/portability/profiles.ts";
@@ -1975,6 +1976,49 @@ function toolBrainTrigger(
   );
 }
 
+// ----- brain_deep_synthesis (Workspace Insight Suite) -----------------------
+
+async function toolBrainDeepSynthesis(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const topic = coerceStr(args, "topic", true)!;
+  const limit = optionalPositiveInt(args, "limit", "brain_deep_synthesis") ?? 30;
+  if (limit > 100) {
+    throw new MCPError(INVALID_PARAMS, "brain_deep_synthesis: limit must be at most 100");
+  }
+  const enqueue = coerceBool(args, "triggers");
+  const now = new Date();
+  const searchConfig = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+  const report = await deepSynthesis(searchConfig, topic, { now, limit });
+  let triggersCreated: number | undefined;
+  if (enqueue) {
+    const result = createTriggers(ctx.vault, synthesisCandidates(report), {
+      now,
+      cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
+    });
+    triggersCreated = result.created.length;
+  }
+  return {
+    topic: report.topic,
+    generated_at: report.generatedAt,
+    checked: report.checked,
+    notes: report.notes,
+    agreements: report.agreements,
+    contradictions: report.contradictions,
+    stale_claims: report.staleClaims.map((s) => ({
+      path: s.path,
+      age_days: s.ageDays,
+      superseded_by: s.supersededBy,
+    })),
+    gaps: report.gaps,
+    ...(triggersCreated !== undefined ? { triggers_created: triggersCreated } : {}),
+  };
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -3085,6 +3129,26 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     },
     previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainTrigger,
+  },
+  {
+    name: "brain_deep_synthesis",
+    description:
+      "Topic-scoped deterministic dossier: matched notes, agreements (positive typed relations), contradictions, stale claims, and knowledge gaps (dangling wikilinks). Evidence assembly only - prose synthesis stays with the caller. Optional triggers=true enqueues findings.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", minLength: 1, maxLength: 500 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+        triggers: {
+          type: "boolean",
+          description: "Enqueue contradiction/gap findings into the trigger queue.",
+        },
+      },
+      required: ["topic"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainDeepSynthesis,
   },
   {
     name: "brain_context",
