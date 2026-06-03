@@ -76,6 +76,12 @@ import { buildWeeklySynthesis } from "../core/brain/temporal/weekly-brief.ts";
 import { loadTemporalConfigSafe } from "../core/brain/policy.ts";
 import { isBrainLogEventKind, type BrainLogEventKind } from "../core/brain/types.ts";
 import { packContext } from "../core/brain/context-pack.ts";
+import {
+  listIntentions,
+  moveIntentionToHistory,
+  setIntention,
+  showIntention,
+} from "../core/brain/intentions.ts";
 import { buildPreCompressPack } from "../core/brain/pre-compress-pack.ts";
 import {
   getContextReceipt,
@@ -1811,6 +1817,57 @@ async function toolBrainWeeklySynthesis(
   };
 }
 
+// ----- brain_intention (Agent Surface Suite) --------------------------------
+
+function toolBrainIntention(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const operation = coerceStr(args, "operation", true)!;
+  if (operation === "list") {
+    return {
+      intentions: listIntentions(ctx.vault).map((chain) => ({
+        scope: chain.scope,
+        version: chain.version,
+        updated_at: chain.updatedAt,
+        text: chain.text,
+      })),
+    };
+  }
+  const scope = coerceStr(args, "scope", true)!;
+  if (operation === "set") {
+    const text = coerceStr(args, "text", true)!;
+    const chain = setIntention(ctx.vault, {
+      scope,
+      text,
+      agent: resolveAgentName(ctx.configPath ?? undefined),
+    });
+    return { operation, scope: chain.scope, version: chain.version, path: chain.path };
+  }
+  if (operation === "show") {
+    const chain = showIntention(ctx.vault, scope);
+    if (chain === null) return { operation, scope, present: false };
+    return {
+      operation,
+      scope: chain.scope,
+      present: true,
+      version: chain.version,
+      updated_at: chain.updatedAt,
+      text: chain.text,
+      history: chain.history,
+      path: chain.path,
+    };
+  }
+  if (operation === "move") {
+    const moved = moveIntentionToHistory(ctx.vault, { scope });
+    return { operation, scope: moved.scope, archive_path: moved.archivePath };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_intention operation must be one of: set, show, list, move",
+  );
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -2857,6 +2914,37 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     },
     outputSchema: PINNED_CONTEXT_OUTPUT_SCHEMA,
     handler: toolBrainPinnedContext,
+  },
+  {
+    name: "brain_intention",
+    description:
+      "Scoped current-intention chains under Brain/intentions/: set updates a workstream's now-document (prior text lands in its history trail), show/list read, move retires the chain into history/.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["set", "show", "list", "move"],
+          description: "Operation to perform.",
+        },
+        scope: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description: "Workstream or session label (normalised to a scope slug).",
+        },
+        text: {
+          type: "string",
+          minLength: 1,
+          maxLength: 4000,
+          description: "Intention text for the set operation.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainIntention,
   },
   {
     name: "brain_context",

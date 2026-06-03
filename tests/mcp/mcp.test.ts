@@ -252,6 +252,7 @@ describe("tool listing", () => {
         "get_skill",
         "skills_attach",
         "tool_hydrate",
+        "brain_intention",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -499,9 +500,9 @@ describe("stdio loop", () => {
     // + brain_brief / brain_analytics / schema_inspect (token-diet) = 74
     // - 18 predecessors hidden as deprecated aliases (callable via
     //   tools/call, not advertised) = 56 (+1 capability diagnostic = 57).
-    // + list_skills / get_skill / skills_attach / tool_hydrate
-    //   (Agent Surface Suite) = 61.
-    expect(list.result.tools.length).toBe(61);
+    // + list_skills / get_skill / skills_attach / tool_hydrate /
+    //   brain_intention (Agent Surface Suite) = 62.
+    expect(list.result.tools.length).toBe(62);
   });
 
   test("returns parse error for invalid JSON", async () => {
