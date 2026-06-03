@@ -5,6 +5,93 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.0] - 2026-06-03
+
+Workspace Insight Suite: eight changes in two themes. Theme A makes
+the Brain reachable from anywhere in the workspace - a pointer file
+links any project directory to its owning vault, external vaults
+attach as read-only recall sources, one query can search every
+registered vault with origin labels, and a shell-native surface
+(materialized profile digest plus a grep-shaped search verb) works
+without MCP. Theme B makes the Brain proactive with memory of what it
+already said - a topic dossier cross-references notes for
+contradictions and gaps, a Markdown trigger queue gives findings an
+anti-nag lifecycle, idea discovery ranks next directions from open
+loops, and recall-gate decisions become observable telemetry. All
+behaviour-changing pieces are off by default or per-call explicit.
+
+### Added
+
+- **Project vault pointers.** `o2b brain project link <path>` writes a
+  `.o2b-vault.json` pointer into any project directory - a repo, a
+  monorepo package, a sibling worktree - and `resolveVault` now walks
+  up from the working directory and honours it (after the `VAULT_DIR`
+  env override, before the profile chain). `list`, `remove`, and
+  `status` inspect and repair links via a `projects.json` registry
+  beside the config; malformed pointers and dangling targets fail soft
+  and are reported, never thrown.
+- **Read-only recall sources.** `o2b brain source add <vault> --alias
+  <name>` attaches an external vault as a read-only recall origin of
+  the active Brain. The registry is keyed by owning vault (switching
+  profiles never leaks sources), validation concentrates in one place
+  (alias and path uniqueness, self-links, direct circular links), and
+  deleted targets are flagged BROKEN rather than dropped.
+- **Cross-vault union search.** `o2b search <query> --global` (and
+  `brain_search { global: true }`) fans one query out over the active
+  vault, registered profile vaults, and read-only sources, merging
+  results by score. Every result carries its origin as an additive
+  `origin` field plus an `origin:<label>` entry in `reasons[]`
+  (`local`, `profile/<name>`, `source/<alias>`). Read-only invariant:
+  non-active origins search with self-healing and the query cache
+  disabled, so an external vault is never written to - a missing index
+  degrades to a per-origin warning.
+- **Configurable wikilink path format.** The `wiki_link_format` config
+  key selects `preserve` (default, byte-identical), `full`
+  (vault-relative key path), or `short` (shortest unambiguous suffix)
+  for generated and normalized links. `o2b brain links normalize
+  [path] [--mode M] [--write]` rewrites wikilinks across Brain notes -
+  dry-run by default, decorations and code blocks preserved verbatim,
+  ambiguous and unknown targets left as typed and reported.
+- **Shell-native Brain surface.** `o2b brain profile` materializes a
+  compact `Brain/profile.md` digest (facts, top preferences, recent
+  activity; age-gated regeneration) plus a `.o2bfs` root marker so
+  shell wrappers can detect a Brain root safely. `o2b brain sgrep
+  <query> [path]` is a grep-shaped semantic search - `path:line:`
+  output lines, path scoping, `--json`, exit 1 on no matches - with no
+  MCP and no OSB-specific knowledge required.
+- **Grounded trigger queue with anti-nag lifecycle.** `o2b brain
+  trigger scan` turns existing semantic-health and retention findings
+  into Markdown trigger records under `Brain/triggers/` (urgency,
+  reason, suggested action, source artifacts, context snippets).
+  Stable cooldown keys make repeated scans idempotent: an open twin
+  blocks recreation, a dismissed/acted twin blocks for
+  `trigger_cooldown_days` (default 7), an expired twin allows.
+  Lifecycle is a strict machine (`pending → delivered → acknowledged →
+  acted`, dismiss from any open state) over `list`, `ack`, `dismiss`,
+  `act`, and `history` verbs plus one consolidated `brain_trigger` MCP
+  tool. The morning brief surfaces capped pending triggers and marks
+  them delivered, so the same prompt shows at most once per cooldown
+  window and dismissed items never resurface.
+- **Deep vault synthesis.** `o2b brain deep-synthesis <topic>` (and
+  `brain_deep_synthesis`) assembles a deterministic topic dossier:
+  matched notes, agreements (positive typed relations),
+  contradictions (`contradicts` relations), stale claims (aged or
+  superseded notes), and knowledge gaps (dangling wikilink targets).
+  The dossier names exactly which dimensions it checked; prose
+  synthesis stays with the calling agent. `--triggers` enqueues
+  contradiction and gap findings into the trigger queue.
+- **Idea discovery.** `o2b brain ideas` (and `brain_idea_discovery`)
+  ranks next-direction candidates from the vault's open loops -
+  unanswered open questions, orphan research notes with no inbound
+  links, and aging unresolved inbox signals - with documented
+  deterministic scoring. `--triggers` enqueues the ranked ideas.
+- **Recall-gate telemetry.** With `recall_gate_telemetry: "true"`
+  (default off), every `brain_recall_gate` decision lands as a
+  `gate_telemetry` continuity record - decision, stable reason, host,
+  and a SHA-256 prompt prefix; the raw prompt is never stored.
+  `brain_recall_telemetry` and `o2b brain recall-telemetry` gain
+  `gate_list` / `gate_summary` operations for skip/retrieve analysis.
+
 ## [0.37.0] - 2026-06-03
 
 Agent Surface Suite: eight changes in two themes. Theme A makes the
@@ -4184,6 +4271,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.38.0]: https://github.com/itechmeat/open-second-brain/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/itechmeat/open-second-brain/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/itechmeat/open-second-brain/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/itechmeat/open-second-brain/compare/v0.34.0...v0.35.0
