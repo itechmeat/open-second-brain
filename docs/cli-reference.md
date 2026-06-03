@@ -136,6 +136,15 @@ o2b search <query> --global   Cross-vault union over profiles + read-only source
 
 Trigger generation, brief delivery, and gate telemetry are pull-based or config-gated; pointer resolution activates only when a pointer file exists.
 
+### Memory observability (since v0.39.0)
+
+```text
+o2b brain continuity          export --format atof|atif [--session <id>] [--month YYYY-MM] [--out <dir>] [--json] - read-only trajectory export of the continuity store; private records dropped, redacted text stays masked
+o2b brain bench               memory --fixture <name|path> [--resume <run-id>] [--runs-dir <dir>] [--json] - memory quality benchmark over a disposable fixture vault; quality, latency, and context cost reported separately; checkpoint/resume by run id; exit 1 on any failed question
+```
+
+The benchmark never touches the configured vault - the fixture materializes into `<runs-dir>/<run-id>/vault` (default runs dir `.open-second-brain/bench-runs/`, gitignored). The optional `bench_judge_cmd` config key (env `OPEN_SECOND_BRAIN_BENCH_JUDGE_CMD`) arms an advisory external judge; absent means the judge phase is skipped. The full observability contract (event kinds, gates, correlation ids, payload safety, schema version) lives in `docs/observability.md`.
+
 ## Vault scope
 
 Single exclusion policy for every vault walker.

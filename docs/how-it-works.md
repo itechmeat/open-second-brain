@@ -866,6 +866,33 @@ enqueue their findings as triggers. Opt-in recall-gate telemetry
 records every automatic-recall decision with a hashed prompt for
 tuning, never the raw text.
 
+## Memory observability (since v0.39.0)
+
+The continuity store is the Brain's flight recorder, and the Memory
+Observability Suite turns it into a contract. Every new record is
+stamped with a contract-wide schema version (`o2b.continuity.v1`);
+legacy records read as v1, nothing is migrated, and the dedup id
+deliberately excludes the stamp so identical records keep identical
+ids. Gated telemetry surfaces (context-pack receipts and telemetry,
+pre-compress, search, the recall gate) route through one lazy emit
+kernel: with the gate off the payload thunk never runs, and a broken
+continuity store can never fail the operation it was observing. A
+read-model normalizes stamped and legacy records identically and
+drops `private` records by default, so every read-side consumer
+agrees on masking.
+
+Two consumers ship with the suite. `o2b brain continuity export`
+renders the store as standard trajectory formats - ATOF JSONL events
+or ATIF v1.7 documents (one per session, memory-layer events marked
+as deterministic dispatch) - so recall traces feed existing replay
+and eval tooling. `o2b brain bench memory` measures recall quality
+against disposable fixture vaults: checkpointed phases with resume by
+run id, deterministic no-network evaluation, and a report that keeps
+quality, latency, and context cost as separate families so a ranking
+change cannot hide a token-cost regression behind a quality win. The
+full contract - every event kind, its gate, correlation ids, payload
+safety, fail-open rules - lives in `docs/observability.md`.
+
 ## Safety properties
 
 These are invariants of the system, not configuration to enable.

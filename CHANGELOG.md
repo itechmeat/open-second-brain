@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.0] - 2026-06-03
+
+Memory Observability Suite: the continuity store becomes a documented,
+versioned, exportable contract, and recall quality becomes a measured
+number instead of an intuition. Every new continuity record carries a
+contract-wide schema version, gated telemetry surfaces route through
+one lazy emit kernel that makes "no consumer, no payload work" and
+"telemetry never fails the primary operation" structural guarantees, a
+read-model normalizes legacy and stamped records identically for every
+consumer, trajectories export as standard ATOF/ATIF formats for replay
+and eval tooling, and a deterministic memory benchmark reports
+quality, latency, and context cost as separate families with
+checkpoint/resume. One contract document enumerates every event kind,
+gate, correlation id, and safety rule. Everything additive; telemetry
+stays default-off.
+
+### Added
+
+- **Versioned continuity schema.** Every new continuity record is
+  stamped `schema: "o2b.continuity.v1"`; legacy records without the
+  field read as v1 and existing JSONL files are never migrated. The
+  dedup id deliberately excludes the stamp, so identical records keep
+  identical ids across the transition (locked by a known-answer
+  test). Evolution rule documented: additive fields never bump the
+  version, renames/removals/semantic changes do.
+- **Lazy gated telemetry emit kernel.** One `emitGatedTelemetry(gate,
+  build)` helper now carries every gated telemetry surface
+  (context-pack receipts and telemetry, pre-compress, `brain_search`
+  telemetry, recall-gate telemetry): with the gate off the payload
+  thunk is never invoked and nothing reaches the continuity store; a
+  throwing thunk or write is swallowed, so telemetry can no longer
+  fail a pack, a search, or a gate decision. No-consumer regression
+  tests pin the property per surface; session-recall import and
+  pre-compact extract stay deliberately fail-fast (their write IS the
+  operation).
+- **Continuity read-model.** `loadNormalizedContinuityRecords()`
+  absorbs schema-version dispatch, lifts `session_id`/`turn_id` into
+  first-class fields, drops `private` records by default, and never
+  un-masks redacted text - the single normalization layer every
+  read-side consumer shares.
+- **ATOF/ATIF trajectory export.** `o2b brain continuity export
+  --format atof|atif [--session <id>] [--month YYYY-MM]` renders the
+  store as standard trajectory formats: ATOF JSONL events (recall
+  telemetry as `retriever` scope pairs with a marked synthetic start,
+  other kinds as marks) and ATIF v1.7 documents (one per session,
+  memory-layer events as `llm_call_count: 0` system steps). Read-only
+  over the read-model; private records never reach an export file.
+- **Memory quality benchmark.** `o2b brain bench memory --fixture
+  <name|path>` ingests a fixture into a disposable vault inside the
+  runs directory (never the configured vault), indexes, retrieves,
+  evaluates, and reports - quality (pass rate per category), latency,
+  and context cost as separate families, never one collapsed score.
+  Checkpointed phases resume by run id with a fixture-hash guard;
+  shipped fixtures cover single-hop recall, temporal supersession (a
+  stale-fact regression catcher), contradiction visibility,
+  multi-record evidence, session handoff, and context budget
+  truncation. Deterministic and network-free; `bench_judge_cmd` arms
+  an optional external judge that is advisory and fail-open.
+- **Observability contract.** `docs/observability.md` enumerates every
+  Brain log event kind and continuity record kind verified against
+  source, the always-on vs opt-in matrix, correlation ids, payload
+  safety guarantees, fail-open rules, and the schema version with its
+  evolution rule.
+
 ## [0.38.0] - 2026-06-03
 
 Workspace Insight Suite: eight changes in two themes. Theme A makes
@@ -4271,6 +4335,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.39.0]: https://github.com/itechmeat/open-second-brain/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/itechmeat/open-second-brain/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/itechmeat/open-second-brain/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/itechmeat/open-second-brain/compare/v0.35.0...v0.36.0
