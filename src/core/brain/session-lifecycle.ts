@@ -114,6 +114,9 @@ export async function captureSessionLifecycleEvent(
 
   // Session-scoped focus lifecycle (Agent Surface Suite, t_5b478e47):
   // a finished session's bound focus must not leak into the next one.
+  // Deliberately NOT gated on the capture boundary (unlike the handoff
+  // below): removing the session's own steering state is cleanup, not
+  // memory capture, so it applies even for stateless sessions.
   // Fail-soft - focus cleanup can never block lifecycle capture.
   let focusCleared = false;
   if (normalized.event === "SessionEnd" && normalized.sessionId !== undefined && !opts.dryRun) {
