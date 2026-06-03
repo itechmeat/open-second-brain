@@ -181,7 +181,28 @@ o2b search focus status       Show the active focus; --json emits { active, focu
 o2b search focus clear        Clear the persisted focus file next to the search index
 o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               (required after upgrading to v0.13.0 recall schema or v0.26.0 CJK FTS content)
+                              --force-cost bypasses the embedding cost gate for this run (since v0.36.0)
+o2b search index              Incrementally update the index; --embeddings computes vectors
+                              --force-cost bypasses the embedding cost gate (since v0.36.0)
+o2b search status             Index status; since v0.36.0 also reports the active embedding
+                              signature (<provider>:<model>:<dimension>) and a refresh-cost estimate
+o2b search provider add NAME  Register an OpenAI-compatible embedding endpoint (since v0.36.0)
+                              --base-url U --model M --env-key K (K is the env var NAME holding the key);
+                              persisted to Brain/search/embedding-providers.json, resolved after built-ins
+o2b search provider list      List registered provider profiles (--json for the array)
+o2b search provider show NAME Show one registered profile (--json)
+o2b search provider remove    Remove a registered profile by NAME
 ```
+
+Embedding providers (since v0.36.0): `embedding_provider` accepts the
+built-in `openai-compat`, the offline `local` feature-hashing embedder
+(no cloud, no key, no model download; `embedding_dimension` default 256),
+`disabled`, or any name registered via `o2b search provider add`.
+`embedding_cost_gate_usd` (default 0 = off) refuses an embedding run whose
+estimated spend exceeds it unless `--force-cost`. `search_fusion_mode`
+(default `linear`) may be set to `rrf` to fuse the keyword and semantic
+lanes by reciprocal rank (`search_rrf_k`, default 60); `linear` keeps
+ranking bit-identical.
 
 Typed relations participate in ranking (relation polarity): a page whose
 frontmatter declares `superseded_by:` is demoted when it matches and its

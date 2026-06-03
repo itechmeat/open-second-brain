@@ -41,6 +41,7 @@ function semanticConfig() {
       timeoutMs: 5_000,
       concurrency: 2,
       batchSize: 8,
+      costGateUsd: 0,
     },
   });
 }
@@ -339,6 +340,7 @@ test("explicit --semantic without vec extension throws (configured-down case)", 
       timeoutMs: 5_000,
       concurrency: 1,
       batchSize: 8,
+      costGateUsd: 0,
     },
   });
   await indexVault(cfg);

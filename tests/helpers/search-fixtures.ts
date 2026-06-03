@@ -65,6 +65,10 @@ export function makeConfig(opts: {
   relationPolarityEnabled?: boolean;
   /** Learned recall weights from feedback; defaults to false (opt-in). */
   learnedWeightsEnabled?: boolean;
+  /** Rank-fusion mode; defaults to "linear". */
+  fusionMode?: "linear" | "rrf";
+  /** RRF damping constant; defaults to 60. */
+  rrfK?: number;
 }): ResolvedSearchConfig {
   const baseSemantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: false,
@@ -76,6 +80,7 @@ export function makeConfig(opts: {
     timeoutMs: 10_000,
     concurrency: 4,
     batchSize: 32,
+    costGateUsd: 0,
   });
   const semantic: ResolvedEmbeddingConfig = Object.freeze({
     ...baseSemantic,
@@ -93,6 +98,8 @@ export function makeConfig(opts: {
     chunkOverlap: 100,
     keywordWeight: 0.6,
     semanticWeight: 0.4,
+    fusionMode: opts.fusionMode ?? "linear",
+    rrfK: opts.rrfK ?? 60,
     semantic,
     recall: Object.freeze({
       mmrLambda: opts.mmrLambda ?? 0.7,

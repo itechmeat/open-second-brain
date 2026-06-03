@@ -728,8 +728,25 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   mode for concurrent reads, `proper-lockfile` on the index path for
   writer exclusivity (three attempts, 1 s backoff, then
   `INDEX_LOCKED`).
+- **Embedding providers (v0.36.0).** `embedding_provider` selects
+  `openai-compat` (remote `/v1/embeddings`), `local` (an offline
+  feature-hashing embedder: token unigrams + character trigrams hashed
+  into a fixed unit-normalised vector, no cloud / key / model download),
+  `disabled`, or a name registered through `o2b search provider add`
+  (which resolves to `openai-compat` config after the built-ins). One
+  `signature.ts` kernel canonicalises `<provider>:<model>:<dimension>`
+  and prices it; `embedding_cost_gate_usd` refuses an over-budget run
+  unless `--force-cost`, and the local / unlisted-model price is 0.
+- **Fusion modes (v0.36.0).** `search_fusion_mode` is `linear` (default,
+  the weighted sum below) or `rrf` - Reciprocal Rank Fusion, which scores
+  each candidate `Σ 1/(search_rrf_k + rank_in_lane)` across the keyword
+  and semantic lanes, min-max-normalised to `[0,1]`. RRF is weightless
+  and replaces only the relevance term; every boost below still applies,
+  and `linear` is bit-identical to pre-v0.36.0 ranking.
 - **Ranking.** `final_score = clamp01(keyword_weight·norm_BM25 +
-semantic_weight·cosine + link_boost + recency_boost + entity_boost)`.
+semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
+  (linear mode; in `rrf` mode the first two terms are replaced by the
+  fused reciprocal-rank relevance).
   BM25 is min-max-normalised within the candidate set; cosine is
   `1 - L2² / 2` on unit-normalised vectors; link boost rewards
   candidates that other candidates reference via `[[wikilink]]` /

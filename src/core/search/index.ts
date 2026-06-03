@@ -12,6 +12,12 @@ import {
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { resolveIndexPath } from "./paths.ts";
+import { isFusionMode, DEFAULT_RRF_K } from "./fusion.ts";
+import {
+  loadProviderRegistry,
+  expandRegisteredProvider,
+  type ExpandedProvider,
+} from "./embeddings/registry.ts";
 import { SearchError } from "./types.ts";
 import type {
   ResolvedEmbeddingConfig,
@@ -54,6 +60,15 @@ export {
 } from "./session-focus.ts";
 export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-gate.ts";
 export { buildEvidencePack, type EvidencePack } from "./evidence-pack.ts";
+export {
+  loadProviderRegistry,
+  addProviderProfile,
+  removeProviderProfile,
+  getProviderProfile,
+  providerRegistryPath,
+  RESERVED_PROVIDER_NAMES,
+  type ProviderProfile,
+} from "./embeddings/registry.ts";
 
 export { resolveIndexPath } from "./paths.ts";
 export {
@@ -88,6 +103,7 @@ const DEFAULTS = {
   timeoutMs: 10_000,
   concurrency: 4,
   batchSize: 32,
+  costGateUsd: 0,
   mmrLambda: 0.7,
   maxHops: 1,
   hopDecay: 0.5,
@@ -97,7 +113,18 @@ const DEFAULTS = {
   recencyAmplitude: 0.05,
   synonymMaxTerms: 3,
   cacheTtlSeconds: 300,
+  fusionMode: "linear" as const,
+  rrfK: DEFAULT_RRF_K,
 };
+
+function parseFusionMode(raw: string | null): "linear" | "rrf" {
+  if (raw === null) return DEFAULTS.fusionMode;
+  if (isFusionMode(raw)) return raw;
+  throw new SearchError(
+    "INVALID_INPUT",
+    `search_fusion_mode must be 'linear' or 'rrf', got '${raw}'`,
+  );
+}
 
 type IntegerRange = { readonly min?: number; readonly max?: number };
 
@@ -136,6 +163,16 @@ function parsePositiveFloat(raw: string | null, fallback: number, fieldName: str
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) {
     throw new SearchError("INVALID_INPUT", `${fieldName} must be a number > 0, got '${raw}'`);
+  }
+  return n;
+}
+
+/** Parse a non-negative finite float (e.g. a cost gate; 0 disables). */
+function parseNonNegativeFloat(raw: string | null, fallback: number, fieldName: string): number {
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be a number >= 0, got '${raw}'`);
   }
   return n;
 }
@@ -190,11 +227,33 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
 
 function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {
   if (raw === null) return DEFAULTS.provider;
-  if (raw === "openai-compat" || raw === "disabled") return raw;
+  if (raw === "openai-compat" || raw === "disabled" || raw === "local") return raw;
   throw new SearchError(
     "INVALID_INPUT",
-    `embedding_provider must be 'openai-compat' or 'disabled', got '${raw}'`,
+    `embedding_provider must be 'openai-compat', 'local', 'disabled', or a registered provider name, got '${raw}'`,
   );
+}
+
+const BUILTIN_PROVIDERS: ReadonlySet<string> = new Set(["openai-compat", "disabled", "local"]);
+
+/**
+ * Resolve a non-built-in `embedding_provider` name against the registry.
+ * Returns null when the name is null, a built-in, or not registered - the
+ * caller then defers to `parseProvider` (which validates built-ins and
+ * raises a clear error for an unknown name). Fail-soft: a bad registry
+ * yields null, never an exception.
+ */
+function resolveRegistryProvider(
+  rawProvider: string | null,
+  vault: string,
+  env: NodeJS.ProcessEnv,
+): ExpandedProvider | null {
+  if (rawProvider === null || BUILTIN_PROVIDERS.has(rawProvider)) return null;
+  try {
+    return expandRegisteredProvider(rawProvider, loadProviderRegistry(vault), env);
+  } catch {
+    return null;
+  }
 }
 
 export function resolveSearchConfig(opts: {
@@ -234,6 +293,15 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.semanticWeight,
     "search_semantic_weight",
   );
+  const fusionMode = parseFusionMode(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_FUSION_MODE", "search_fusion_mode"),
+  );
+  const rrfK = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RRF_K", "search_rrf_k"),
+    DEFAULTS.rrfK,
+    "search_rrf_k",
+    { min: 1 },
+  );
 
   // v0.10.9: single source of truth lives in Brain/_brain.yaml under
   // `vault.ignore_paths`. The legacy `search_ignore_paths` config key
@@ -246,17 +314,40 @@ export function resolveSearchConfig(opts: {
     false,
     "search_semantic_enabled",
   );
-  const provider = parseProvider(
-    envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER", "embedding_provider"),
+  const rawProvider = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER",
+    "embedding_provider",
   );
-  const baseUrl = envOrConfig(
+  // A provider name that is not a built-in is looked up in the registry
+  // AFTER the built-ins, so it never shadows an explicitly configured
+  // built-in. A registered name resolves to openai-compat fields; an
+  // unknown name falls through to parseProvider's clear validation error.
+  const registryExpansion = resolveRegistryProvider(rawProvider, opts.vault, env);
+  const provider = registryExpansion ? "openai-compat" : parseProvider(rawProvider);
+  const explicitBaseUrl = envOrConfig(
     env,
     config,
     "OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL",
     "embedding_base_url",
   );
-  const model = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_MODEL", "embedding_model");
-  const apiKey = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_KEY", "embedding_api_key");
+  const explicitModel = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_MODEL",
+    "embedding_model",
+  );
+  const explicitApiKey = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_KEY",
+    "embedding_api_key",
+  );
+  // Explicit config/env always wins over the registry profile's fields.
+  const baseUrl = explicitBaseUrl ?? registryExpansion?.baseUrl ?? null;
+  const model = explicitModel ?? registryExpansion?.model ?? null;
+  const apiKey = explicitApiKey ?? registryExpansion?.apiKey ?? null;
   const dimRaw = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_DIM", "embedding_dimension");
   const dimension =
     dimRaw === null ? null : parseInteger(dimRaw, 0, "embedding_dimension", { min: 1 });
@@ -278,6 +369,11 @@ export function resolveSearchConfig(opts: {
     "embedding_batch_size",
     { min: 1 },
   );
+  const costGateUsd = parseNonNegativeFloat(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_COST_GATE", "embedding_cost_gate_usd"),
+    DEFAULTS.costGateUsd,
+    "embedding_cost_gate_usd",
+  );
 
   const semantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: semanticEnabled,
@@ -289,6 +385,7 @@ export function resolveSearchConfig(opts: {
     timeoutMs,
     concurrency,
     batchSize,
+    costGateUsd,
   });
 
   const mmrLambda = parseFloat01(
@@ -415,6 +512,8 @@ export function resolveSearchConfig(opts: {
     chunkOverlap,
     keywordWeight,
     semanticWeight,
+    fusionMode,
+    rrfK,
     semantic,
     recall,
   });

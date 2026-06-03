@@ -28,6 +28,14 @@ import { basename, dirname } from "node:path";
 import { chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
 import { makeProvider } from "./embeddings/provider.ts";
+import {
+  embeddingSignature,
+  estimateCostUsd,
+  estimateTokens,
+  evaluateCostGate,
+  pricePerMillionTokens,
+  LOCAL_EMBEDDING_MODEL,
+} from "./embeddings/signature.ts";
 import { extractLinks } from "./links.ts";
 import { extractFrontmatterRelations } from "../graph/frontmatter-relations.ts";
 import { parseFrontmatterText } from "../vault.ts";
@@ -56,6 +64,8 @@ export interface IndexVaultOptions {
   readonly embeddings?: boolean;
   /** When true, every file is reindexed even if hash + mtime match. */
   readonly force?: boolean;
+  /** When true, bypass the embedding cost gate for this run. */
+  readonly forceCost?: boolean;
   readonly onFile?: (event: IndexProgressEvent) => void;
 }
 
@@ -264,7 +274,7 @@ async function indexInto(
     store.resolveLinkTargets();
 
     if (opts?.embeddings) {
-      await populateEmbeddings(store, config, stats);
+      await populateEmbeddings(store, config, stats, opts?.forceCost === true);
     }
 
     const now = new Date().toISOString();
@@ -285,10 +295,30 @@ async function indexInto(
   }
 }
 
+/**
+ * Canonical signature of the ACTIVE embedding configuration for status
+ * reporting. Null when semantic search is disabled. Stored model and
+ * dimension fill in fields the config leaves unset (e.g. an
+ * auto-detected dimension or the local provider's implicit model).
+ */
+function activeEmbeddingSignature(
+  config: ResolvedSearchConfig,
+  storedModel: string | null = null,
+  storedDim: number | null = null,
+): string | null {
+  if (!config.semantic.enabled) return null;
+  const provider = config.semantic.provider;
+  const model =
+    provider === "local" ? LOCAL_EMBEDDING_MODEL : (config.semantic.model ?? storedModel);
+  const dimension = config.semantic.dimension ?? storedDim;
+  return embeddingSignature({ provider, model, dimension });
+}
+
 async function populateEmbeddings(
   store: Store,
   config: ResolvedSearchConfig,
   stats: MutableStats,
+  forceCost: boolean,
 ): Promise<void> {
   if (!config.semantic.enabled) {
     throw new SearchError(
@@ -296,7 +326,8 @@ async function populateEmbeddings(
       "set search_semantic_enabled=true and embedding_* keys to compute embeddings",
     );
   }
-  if (!config.semantic.apiKey) {
+  // The offline local provider needs no key; every remote provider does.
+  if (config.semantic.provider !== "local" && !config.semantic.apiKey) {
     throw new SearchError(
       "EMBEDDING_KEY_MISSING",
       "embedding_api_key is required when computing embeddings",
@@ -314,6 +345,24 @@ async function populateEmbeddings(
 
   const provider = makeProvider(config.semantic);
   const model = config.semantic.model ?? provider.model;
+
+  // Cost gate: estimate the spend for the whole pending set up front and
+  // refuse the run when it exceeds the configured ceiling, unless forced.
+  // The local provider (price 0) and unknown-price models never block.
+  const gate = evaluateCostGate({
+    texts: pending.map((p) => p.content),
+    model,
+    gateUsd: config.semantic.costGateUsd,
+    forced: forceCost,
+  });
+  if (gate.blocked) {
+    throw new SearchError(
+      "EMBEDDING_COST_GATE",
+      `estimated embedding cost $${gate.estimatedUsd.toFixed(4)} for ${pending.length} chunk(s) ` +
+        `exceeds embedding_cost_gate_usd $${config.semantic.costGateUsd.toFixed(4)}. ` +
+        `Re-run with --force-cost to proceed or raise the gate.`,
+    );
+  }
   const batchSize = Math.max(1, config.semantic.batchSize);
   // Hand the provider a super-batch sized to fully saturate its
   // internal `embedding_concurrency` semaphore. Without this multiplier
@@ -423,6 +472,8 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
         staleEmbeddings: 0,
         embeddingModel: null,
         embeddingDimension: null,
+        embeddingSignature: activeEmbeddingSignature(config),
+        estimatedRefreshCostUsd: 0,
         vecExtension: "unknown" as const,
         semanticEnabled: config.semantic.enabled,
         embeddingKeyPresent: !!config.semantic.apiKey,
@@ -445,8 +496,27 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
     if (config.semantic.enabled && !store.vecLoaded()) {
       warnings.push("sqlite-vec unavailable; semantic search disabled this session");
     }
-    if (config.semantic.enabled && !config.semantic.apiKey) {
+    if (
+      config.semantic.enabled &&
+      config.semantic.provider !== "local" &&
+      !config.semantic.apiKey
+    ) {
       warnings.push("embedding_api_key not configured; semantic search disabled");
+    }
+
+    // Best-effort spend estimate to bring stale/missing embeddings current.
+    // Only scan chunk content when the active model is actually priced.
+    const activeModel =
+      config.semantic.provider === "local"
+        ? LOCAL_EMBEDDING_MODEL
+        : (config.semantic.model ?? model);
+    let estimatedRefreshCostUsd = 0;
+    if (config.semantic.enabled && pricePerMillionTokens(activeModel) > 0) {
+      const pending = store.findChunksWithoutEmbeddings();
+      estimatedRefreshCostUsd = estimateCostUsd(
+        estimateTokens(pending.map((p) => p.content)),
+        activeModel,
+      );
     }
 
     return Object.freeze({
@@ -459,6 +529,8 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       staleEmbeddings: counts.staleEmbeddings,
       embeddingModel: model,
       embeddingDimension: dim,
+      embeddingSignature: activeEmbeddingSignature(config, model, dim),
+      estimatedRefreshCostUsd,
       vecExtension: store.vecLoaded() ? ("loaded" as const) : ("unavailable" as const),
       semanticEnabled: config.semantic.enabled,
       embeddingKeyPresent: !!config.semantic.apiKey,

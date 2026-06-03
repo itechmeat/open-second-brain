@@ -25,6 +25,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     timeoutMs: 10_000,
     concurrency: 4,
     batchSize: 32,
+    costGateUsd: 0,
   });
   return Object.freeze({
     vault: tmp,
@@ -34,6 +35,8 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     chunkOverlap: 100,
     keywordWeight: 0.6,
     semanticWeight: 0.4,
+    fusionMode: "linear" as const,
+    rrfK: 60,
     semantic,
     recall: Object.freeze({
       mmrLambda: 0.7,

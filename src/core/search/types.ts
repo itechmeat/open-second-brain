@@ -21,6 +21,7 @@ export const SEARCH_ERROR_CODES = [
   "EMBEDDING_PROVIDER_HTTP",
   "EMBEDDING_PROVIDER_TIMEOUT",
   "EMBEDDING_DIMENSION_MISMATCH",
+  "EMBEDDING_COST_GATE",
   "INDEX_LOCKED",
   "INVALID_INPUT",
 ] as const;
@@ -136,6 +137,19 @@ export interface IndexStatusSnapshot {
   readonly staleEmbeddings: number;
   readonly embeddingModel: string | null;
   readonly embeddingDimension: number | null;
+  /**
+   * Canonical `<provider>:<model>:<dimension>` fingerprint of the ACTIVE
+   * embedding configuration (Embedding Provider Suite). Null when
+   * semantic search is disabled. Compare with the stored model/dimension
+   * to reason about staleness after a config change.
+   */
+  readonly embeddingSignature: string | null;
+  /**
+   * Best-effort USD estimate to (re-)embed the chunks that currently
+   * lack a current embedding, at the active model's rate. 0 for the
+   * local/unknown-price case.
+   */
+  readonly estimatedRefreshCostUsd: number;
   readonly vecExtension: VecExtensionState;
   readonly semanticEnabled: boolean;
   readonly embeddingKeyPresent: boolean;
@@ -232,7 +246,7 @@ export interface SearchOutcome {
 
 export interface ResolvedEmbeddingConfig {
   readonly enabled: boolean;
-  readonly provider: "openai-compat" | "disabled";
+  readonly provider: "openai-compat" | "disabled" | "local";
   readonly baseUrl: string | null;
   readonly model: string | null;
   readonly apiKey: string | null;
@@ -240,6 +254,12 @@ export interface ResolvedEmbeddingConfig {
   readonly timeoutMs: number;
   readonly concurrency: number;
   readonly batchSize: number;
+  /**
+   * Spend ceiling in USD for a single embedding run (Embedding Provider
+   * Suite). 0 (default) disables the gate. When positive, an embedding
+   * run whose estimated cost exceeds this is refused unless forced.
+   */
+  readonly costGateUsd: number;
 }
 
 /**
@@ -328,6 +348,15 @@ export interface ResolvedSearchConfig {
   readonly chunkOverlap: number;
   readonly keywordWeight: number;
   readonly semanticWeight: number;
+  /**
+   * Rank-fusion mode (Embedding Provider Suite). `linear` (default) is
+   * the weighted sum of normalised BM25 and cosine; `rrf` fuses the two
+   * lanes by reciprocal rank. `linear` keeps ranking bit-identical to
+   * pre-suite behaviour.
+   */
+  readonly fusionMode: "linear" | "rrf";
+  /** Reciprocal Rank Fusion damping constant (only used when rrf). */
+  readonly rrfK: number;
   readonly semantic: ResolvedEmbeddingConfig;
   readonly recall: ResolvedRecallConfig;
 }
