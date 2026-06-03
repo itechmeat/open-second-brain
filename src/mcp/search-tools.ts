@@ -30,6 +30,7 @@ import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
 import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
+import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -496,23 +497,21 @@ async function toolBrainRecallGate(
     previousPrompt: previousPrompt ?? null,
     explicit,
   });
-  // Gate telemetry (t_65036e02): default off; fail-soft so a broken
-  // continuity store never breaks the gate's pure-diagnostic contract.
-  if (resolveRecallGateTelemetry(ctx.configPath ?? undefined)) {
-    try {
-      const host = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
-      const sessionId = coerceStringOptional(args, "session_id", 512);
-      emitGateTelemetry(ctx.vault, {
-        host,
-        prompt,
-        retrieve: decision.retrieve,
-        reason: decision.reason,
-        ...(sessionId !== undefined ? { sessionId } : {}),
-      });
-    } catch {
-      // never let telemetry break the gate
-    }
-  }
+  // Gate telemetry (t_65036e02): default off. Routed through the lazy
+  // emit kernel (t_5d7aa7c5) - the payload thunk never runs with the
+  // config off, and a broken continuity store never breaks the gate's
+  // pure-diagnostic contract (fail-open).
+  emitGatedTelemetry(resolveRecallGateTelemetry(ctx.configPath ?? undefined), () => {
+    const host = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
+    const sessionId = coerceStringOptional(args, "session_id", 512);
+    return emitGateTelemetry(ctx.vault, {
+      host,
+      prompt,
+      retrieve: decision.retrieve,
+      reason: decision.reason,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    });
+  });
   return { ...decision };
 }
 
