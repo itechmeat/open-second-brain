@@ -20,7 +20,9 @@ import {
 } from "../core/search/index.ts";
 import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
+import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
+import { defaultConfigPath } from "../core/config.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts";
@@ -66,6 +68,11 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
+    global: {
+      type: "boolean",
+      description:
+        "Cross-vault union: fan the query out over registered profile vaults and read-only recall sources, merging results with origin labels. Default false (active vault only).",
+    },
     path_prefix: { type: "string", maxLength: 256 },
     telemetry: { type: "boolean" },
     telemetry_host: { type: "string", maxLength: 200 },
@@ -118,6 +125,7 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
           endLine: { type: "integer" },
           searchType: { type: "string" },
           reasons: { type: "array", items: { type: "string" } },
+          origin: { type: "string" },
           why_retrieved: { type: "array", items: { type: "string" } },
           relations: {
             type: "array",
@@ -270,6 +278,7 @@ async function toolBrainSearch(
 
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
+  const globalSearch = coerceBoolOptional(args, "global") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
   const includeSuperseded = coerceBoolOptional(args, "include_superseded") ?? false;
@@ -304,24 +313,28 @@ async function toolBrainSearch(
 
   let outcome: SearchOutcome;
   const startedAtMs = Date.now();
+  const searchOpts = {
+    query,
+    limit,
+    semantic: semantic ?? null,
+    keywordOnly,
+    pathPrefix,
+    ...(properties !== undefined ? { properties } : {}),
+    ...(visibility !== undefined ? { visibility } : {}),
+    ...(structuredQuery !== undefined ? { structuredQuery } : {}),
+    ...(sessionFocus !== undefined ? { sessionFocus } : {}),
+    ...(focusSession !== undefined ? { focusSession } : {}),
+    ...(evidencePack ? { evidencePack: true } : {}),
+    ...(includeSuperseded ? { includeSuperseded: true } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  };
   try {
+    // Cross-vault union (t_72a22658): explicit per-call opt-in.
     outcome = await withTimeout(
-      search(config, {
-        query,
-        limit,
-        semantic: semantic ?? null,
-        keywordOnly,
-        pathPrefix,
-        ...(properties !== undefined ? { properties } : {}),
-        ...(visibility !== undefined ? { visibility } : {}),
-        ...(structuredQuery !== undefined ? { structuredQuery } : {}),
-        ...(sessionFocus !== undefined ? { sessionFocus } : {}),
-        ...(focusSession !== undefined ? { focusSession } : {}),
-        ...(evidencePack ? { evidencePack: true } : {}),
-        ...(includeSuperseded ? { includeSuperseded: true } : {}),
-        ...(since !== undefined ? { since } : {}),
-        ...(until !== undefined ? { until } : {}),
-      }),
+      globalSearch
+        ? searchAcrossVaults(ctx.configPath ?? defaultConfigPath(), ctx.vault, searchOpts)
+        : search(config, searchOpts),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,
     );
@@ -389,6 +402,7 @@ async function toolBrainSearch(
       endLine: r.endLine,
       searchType: r.searchType,
       reasons: r.reasons,
+      ...(r.origin !== undefined ? { origin: r.origin } : {}),
       ...(outcome.evidencePack ? { why_retrieved: r.reasons } : {}),
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
     })),

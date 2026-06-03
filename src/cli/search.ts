@@ -49,6 +49,7 @@ import type {
   SearchSessionFocus,
   SearchOutcome,
 } from "../core/search/index.ts";
+import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { CronTemplateError, renderCronTemplate } from "./search-cron-template.ts";
 
@@ -416,6 +417,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     "include-superseded": { type: "boolean" },
     since: { type: "string" },
     until: { type: "string" },
+    global: { type: "boolean" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
   });
@@ -463,7 +465,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
   const properties = parsePropertyFlags(flags["property"] as string[] | undefined);
   const visibility = flags["visibility"] as string[] | undefined;
 
-  const outcome = await search(cfg, {
+  const searchOpts = {
     query,
     limit: limitNum,
     semantic: semanticOverride,
@@ -476,7 +478,17 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     ...(flags["include-superseded"] === true ? { includeSuperseded: true } : {}),
     ...(typeof flags["since"] === "string" ? { since: flags["since"] as string } : {}),
     ...(typeof flags["until"] === "string" ? { until: flags["until"] as string } : {}),
-  });
+  };
+  // Cross-vault union (t_72a22658): explicit per-call opt-in fans the
+  // query out over profiles and read-only sources with origin labels.
+  const outcome =
+    flags["global"] === true
+      ? await searchAcrossVaults(
+          typeof flags["config"] === "string" ? (flags["config"] as string) : defaultConfigPath(),
+          cfg.vault,
+          searchOpts,
+        )
+      : await search(cfg, searchOpts);
 
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(jsonForOutcome(outcome)) + "\n");
@@ -531,6 +543,7 @@ function jsonForOutcome(o: SearchOutcome): unknown {
       end_line: r.endLine,
       search_type: r.searchType,
       reasons: r.reasons,
+      ...(r.origin !== undefined ? { origin: r.origin } : {}),
       ...(o.evidencePack ? { why_retrieved: r.reasons } : {}),
       document_id: r.documentId,
       chunk_id: r.chunkId,
@@ -599,7 +612,8 @@ function renderOutcomeHuman(o: SearchOutcome, verbose: boolean): string {
   }
   o.results.forEach((r, i) => {
     const score = r.score.toFixed(2);
-    lines.push(`[${i + 1}] ${r.path}  •  ${score}`);
+    const originSuffix = r.origin !== undefined ? `  •  ${r.origin}` : "";
+    lines.push(`[${i + 1}] ${r.path}  •  ${score}${originSuffix}`);
     lines.push(
       `    line ${r.startLine}-${r.endLine}  •  ${r.searchType}` +
         (verbose

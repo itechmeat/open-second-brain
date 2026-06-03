@@ -212,7 +212,13 @@ export async function search(
   // folded in once they have been derived from the store below.
   const basePlan = buildQueryPlan(keywordQuery, [], structured?.intent);
 
-  const store = await openReadOrSelfHeal(config);
+  // Read-only origins (cross-vault search) disable self-healing: a
+  // rebuild would write an index INTO the external vault. Default
+  // (selfHeal absent) keeps the legacy heal-and-retry behaviour.
+  const store =
+    opts.selfHeal === false
+      ? await Store.open(config, { mode: "read" })
+      : await openReadOrSelfHeal(config);
   try {
     // Persistent query cache (v0.20.0): opt-in. Keyed by the request +
     // base plan hash + a config fingerprint, gated by the corpus
