@@ -1,5 +1,9 @@
-import { defaultConfigPath } from "../../../core/config.ts";
+import { defaultConfigPath, resolveTriggerCooldownDays } from "../../../core/config.ts";
 import { buildMorningBrief } from "../../../core/brain/morning-brief.ts";
+import {
+  deliverBriefTriggers,
+  renderTriggerBriefSection,
+} from "../../../core/brain/triggers/brief.ts";
 import { parseOptionalNumberFlag } from "../../coerce.ts";
 import { fail, parse, resolveBrainVault } from "../helpers.ts";
 
@@ -54,10 +58,47 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
     return fail(`morning-brief failed: ${(exc as Error).message ?? exc}`);
   }
 
+  // Pending-trigger section (t_cd1fee79): renders only when a trigger
+  // scan has produced surfaceable triggers; included triggers are
+  // marked delivered so the same prompt shows once per cooldown window.
+  const now = new Date();
+  let triggerSection;
+  try {
+    triggerSection = renderTriggerBriefSection(vault, {
+      now,
+      cooldownDays: resolveTriggerCooldownDays(config),
+    });
+  } catch {
+    triggerSection = null;
+  }
+
+  // Delivery is the store mutation: do it BEFORE emitting output so a
+  // failed write cannot follow a successful-looking response.
+  if (triggerSection !== null && triggerSection.triggers.length > 0) {
+    deliverBriefTriggers(vault, triggerSection, now);
+  }
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(brief, null, 2) + "\n");
+    const payload = {
+      ...brief,
+      ...(triggerSection !== null && triggerSection.triggers.length > 0
+        ? {
+            triggers: triggerSection.triggers.map((t) => ({
+              id: t.id,
+              kind: t.kind,
+              urgency: t.urgency,
+              reason: t.reason,
+            })),
+          }
+        : {}),
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
   } else {
-    process.stdout.write((brief.text.length > 0 ? brief.text : "(nothing to surface)") + "\n");
+    const base = brief.text.length > 0 ? brief.text : "(nothing to surface)";
+    const text =
+      triggerSection !== null && triggerSection.text !== ""
+        ? `${base}\n\n${triggerSection.text}`
+        : base;
+    process.stdout.write(text + "\n");
   }
   return 0;
 }

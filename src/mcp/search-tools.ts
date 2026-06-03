@@ -20,13 +20,16 @@ import {
 } from "../core/search/index.ts";
 import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
+import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
+import { defaultConfigPath, resolveRecallGateTelemetry } from "../core/config.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
+import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -66,6 +69,11 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
+    global: {
+      type: "boolean",
+      description:
+        "Cross-vault union: search profile vaults and read-only recall sources too, merging results with origin labels. Default false (active vault only).",
+    },
     path_prefix: { type: "string", maxLength: 256 },
     telemetry: { type: "boolean" },
     telemetry_host: { type: "string", maxLength: 200 },
@@ -118,6 +126,7 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
           endLine: { type: "integer" },
           searchType: { type: "string" },
           reasons: { type: "array", items: { type: "string" } },
+          origin: { type: "string" },
           why_retrieved: { type: "array", items: { type: "string" } },
           relations: {
             type: "array",
@@ -147,6 +156,8 @@ const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
     prompt: { type: "string", minLength: 1, maxLength: 4000 },
     previous_prompt: { type: "string", maxLength: 4000 },
     explicit: { type: "boolean" },
+    telemetry_host: { type: "string", maxLength: 200 },
+    session_id: { type: "string", maxLength: 512 },
   },
   required: ["prompt"],
   additionalProperties: false,
@@ -270,6 +281,7 @@ async function toolBrainSearch(
 
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
+  const globalSearch = coerceBoolOptional(args, "global") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
   const includeSuperseded = coerceBoolOptional(args, "include_superseded") ?? false;
@@ -304,24 +316,28 @@ async function toolBrainSearch(
 
   let outcome: SearchOutcome;
   const startedAtMs = Date.now();
+  const searchOpts = {
+    query,
+    limit,
+    semantic: semantic ?? null,
+    keywordOnly,
+    pathPrefix,
+    ...(properties !== undefined ? { properties } : {}),
+    ...(visibility !== undefined ? { visibility } : {}),
+    ...(structuredQuery !== undefined ? { structuredQuery } : {}),
+    ...(sessionFocus !== undefined ? { sessionFocus } : {}),
+    ...(focusSession !== undefined ? { focusSession } : {}),
+    ...(evidencePack ? { evidencePack: true } : {}),
+    ...(includeSuperseded ? { includeSuperseded: true } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  };
   try {
+    // Cross-vault union (t_72a22658): explicit per-call opt-in.
     outcome = await withTimeout(
-      search(config, {
-        query,
-        limit,
-        semantic: semantic ?? null,
-        keywordOnly,
-        pathPrefix,
-        ...(properties !== undefined ? { properties } : {}),
-        ...(visibility !== undefined ? { visibility } : {}),
-        ...(structuredQuery !== undefined ? { structuredQuery } : {}),
-        ...(sessionFocus !== undefined ? { sessionFocus } : {}),
-        ...(focusSession !== undefined ? { focusSession } : {}),
-        ...(evidencePack ? { evidencePack: true } : {}),
-        ...(includeSuperseded ? { includeSuperseded: true } : {}),
-        ...(since !== undefined ? { since } : {}),
-        ...(until !== undefined ? { until } : {}),
-      }),
+      globalSearch
+        ? searchAcrossVaults(ctx.configPath ?? defaultConfigPath(), ctx.vault, searchOpts, config)
+        : search(config, searchOpts),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,
     );
@@ -389,6 +405,7 @@ async function toolBrainSearch(
       endLine: r.endLine,
       searchType: r.searchType,
       reasons: r.reasons,
+      ...(r.origin !== undefined ? { origin: r.origin } : {}),
       ...(outcome.evidencePack ? { why_retrieved: r.reasons } : {}),
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
     })),
@@ -462,7 +479,7 @@ function mcpEvidencePack(
 }
 
 async function toolBrainRecallGate(
-  _ctx: ServerContext,
+  ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const prompt = args["prompt"];
@@ -474,13 +491,29 @@ async function toolBrainRecallGate(
   }
   const previousPrompt = coerceStringOptional(args, "previous_prompt", 4000);
   const explicit = coerceBoolOptional(args, "explicit") ?? false;
-  return {
-    ...evaluateSurfacingGate({
-      prompt,
-      previousPrompt: previousPrompt ?? null,
-      explicit,
-    }),
-  };
+  const decision = evaluateSurfacingGate({
+    prompt,
+    previousPrompt: previousPrompt ?? null,
+    explicit,
+  });
+  // Gate telemetry (t_65036e02): default off; fail-soft so a broken
+  // continuity store never breaks the gate's pure-diagnostic contract.
+  if (resolveRecallGateTelemetry(ctx.configPath ?? undefined)) {
+    try {
+      const host = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
+      const sessionId = coerceStringOptional(args, "session_id", 512);
+      emitGateTelemetry(ctx.vault, {
+        host,
+        prompt,
+        retrieve: decision.retrieve,
+        reason: decision.reason,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+      });
+    } catch {
+      // never let telemetry break the gate
+    }
+  }
+  return { ...decision };
 }
 
 const RECALL_FEEDBACK_INPUT_SCHEMA: Record<string, unknown> = {

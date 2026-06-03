@@ -17,6 +17,12 @@ import lockfile from "proper-lockfile";
 import { atomicWriteFileSync } from "./fs-atomic.ts";
 import { isFile } from "./fs-utils.ts";
 import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
+import { resolvePointerVault } from "./brain/portability/pointer.ts";
+import {
+  isWikiLinkFormat,
+  WIKI_LINK_FORMATS,
+  type WikiLinkFormat,
+} from "./brain/link-graph/format-wikilink.ts";
 import type { ConfigDiscovery } from "./types.ts";
 
 const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"] as const;
@@ -149,12 +155,22 @@ export function resolveTimezone(configPath?: string): string | null {
 /**
  * Resolve the vault directory.
  *
- * Order: `VAULT_DIR` env → `vault` field in plugin config → `null`. Caller
- * decides whether to error out or accept a positional path.
+ * Order: `VAULT_DIR` env → project pointer walk-up → active profile →
+ * `vault` field in plugin config → `null`. Caller decides whether to
+ * error out or accept a positional path.
  */
-export function resolveVault(configPath?: string): string | null {
+export function resolveVault(configPath?: string, opts: { cwd?: string } = {}): string | null {
   const env = process.env["VAULT_DIR"];
   if (env) return expandTilde(env);
+  // Project pointer (Workspace Insight Suite, t_1375e69f): a pointer file
+  // in (or above) the working directory is the most specific durable
+  // artifact, so it beats the profile pointer. Pointers only exist when
+  // the operator linked the directory - without one the chain is
+  // byte-identical to before. The walk stops at the filesystem root and
+  // reads at most one small JSON per level; malformed pointers and
+  // dangling targets fail soft to the next resolution step.
+  const pointerVault = resolvePointerVault(opts.cwd ?? process.cwd());
+  if (pointerVault !== null) return expandTilde(pointerVault);
   // Multi-vault profiles (v0.22.0): an active named profile overrides the
   // bare `vault` key. With no profiles registry the result is unchanged.
   const discovery = discoverConfig(configPath);
@@ -297,6 +313,56 @@ export function resolveSearchFocusContextPack(configPath?: string): boolean {
 export function resolveSessionHandoff(configPath?: string): boolean {
   const env = process.env["OPEN_SECOND_BRAIN_SESSION_HANDOFF"]?.trim();
   const raw = env || discoverConfig(configPath).data["session_handoff"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
+/**
+ * Wikilink output format (Workspace Insight Suite, t_5f31b5f1).
+ * Default `preserve` keeps every generated/normalized link exactly as
+ * typed - byte-identical to pre-suite behaviour. `full` and `short`
+ * select the rewrite mode for `o2b brain links normalize` and for
+ * generators that adopt the kernel. An unknown value fails fast: a
+ * typo must never silently rewrite links in the wrong mode.
+ */
+export function resolveWikiLinkFormat(configPath?: string): WikiLinkFormat {
+  const env = process.env["OPEN_SECOND_BRAIN_WIKI_LINK_FORMAT"]?.trim();
+  const raw = env || discoverConfig(configPath).data["wiki_link_format"]?.trim();
+  if (raw === undefined || raw === "") return "preserve";
+  if (!isWikiLinkFormat(raw)) {
+    throw new Error(
+      `wiki_link_format must be one of ${WIKI_LINK_FORMATS.join(", ")}; got '${raw}'`,
+    );
+  }
+  return raw;
+}
+
+/**
+ * Trigger cooldown window in days (Workspace Insight Suite,
+ * t_cd1fee79): how long a dismissed/acted trigger blocks recreation
+ * and how long a delivered trigger stays out of the morning brief.
+ * Default 7. An invalid value fails fast.
+ */
+export function resolveTriggerCooldownDays(configPath?: string): number {
+  const env = process.env["OPEN_SECOND_BRAIN_TRIGGER_COOLDOWN_DAYS"]?.trim();
+  const raw = env || discoverConfig(configPath).data["trigger_cooldown_days"]?.trim();
+  if (raw === undefined || raw === "") return 7;
+  const days = Number(raw);
+  if (!Number.isInteger(days) || days < 0) {
+    throw new Error(`trigger_cooldown_days must be a non-negative integer; got '${raw}'`);
+  }
+  return days;
+}
+
+/**
+ * Recall-gate telemetry gate (Workspace Insight Suite, t_65036e02).
+ * Default OFF: brain_recall_gate stays a pure diagnostic unless
+ * `recall_gate_telemetry: "true"`, when every decision lands as a
+ * gate_telemetry continuity record (prompt hash only, never the
+ * prompt).
+ */
+export function resolveRecallGateTelemetry(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_RECALL_GATE_TELEMETRY"]?.trim();
+  const raw = env || discoverConfig(configPath).data["recall_gate_telemetry"]?.trim();
   return raw === "true" || raw === "1";
 }
 

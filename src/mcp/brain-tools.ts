@@ -44,6 +44,7 @@ import {
   resolveAgentName,
   resolveLinkOutputFormat,
   resolveSearchFocusContextPack,
+  resolveTriggerCooldownDays,
 } from "../core/config.ts";
 import { resolveSearchConfig } from "../core/search/index.ts";
 import { readActiveSessionFocus } from "../core/search/session-focus.ts";
@@ -60,6 +61,13 @@ import { EntityAmbiguityError, getEntity, listEntities } from "../core/brain/ent
 import { validateEntityCategory } from "../core/brain/entities/canonical.ts";
 import { readPrefAudit } from "../core/brain/pref-audit.ts";
 import { buildMorningBrief } from "../core/brain/morning-brief.ts";
+import { deliverBriefTriggers, renderTriggerBriefSection } from "../core/brain/triggers/brief.ts";
+import { scanTriggers } from "../core/brain/triggers/scan.ts";
+import { createTriggers, listTriggers, transitionTrigger } from "../core/brain/triggers/store.ts";
+import { deepSynthesis, synthesisCandidates } from "../core/brain/deep-synthesis.ts";
+import { discoverIdeas, ideaCandidates } from "../core/brain/idea-discovery.ts";
+import { listGateTelemetry, summarizeGateTelemetry } from "../core/brain/gate-telemetry.ts";
+import { isTriggerStatus, type TriggerRecord } from "../core/brain/triggers/types.ts";
 import { aggregateSources } from "../core/brain/portability/sources.ts";
 import { switchProfile, listProfiles } from "../core/brain/portability/profiles.ts";
 import { defaultConfigPath } from "../core/config.ts";
@@ -1055,19 +1063,48 @@ async function toolBrainMorningBrief(
     "brain_morning_brief",
   );
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_morning_brief");
+  const now = new Date();
   const brief = buildMorningBrief(ctx.vault, {
-    now: new Date(),
+    now,
     topK,
     lookbackDays,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
   });
+  // Pending-trigger section (t_cd1fee79): renders only when a trigger
+  // scan persisted surfaceable triggers; included triggers are marked
+  // delivered so a prompt shows once per cooldown window. Fail-soft -
+  // a broken queue never breaks the brief.
+  let triggerSection: ReturnType<typeof renderTriggerBriefSection> | null = null;
+  try {
+    triggerSection = renderTriggerBriefSection(ctx.vault, {
+      now,
+      cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
+    });
+    if (triggerSection.triggers.length > 0) deliverBriefTriggers(ctx.vault, triggerSection, now);
+  } catch {
+    triggerSection = null;
+  }
+  const text =
+    triggerSection !== null && triggerSection.text !== ""
+      ? `${brief.text}${brief.text.length > 0 ? "\n\n" : ""}${triggerSection.text}`
+      : brief.text;
   return {
-    text: brief.text,
+    text,
     preferences: brief.preferences,
     open_questions: brief.openQuestions,
     recent_notes: brief.recentNotes,
     total_chars: brief.totalChars,
+    ...(triggerSection !== null && triggerSection.triggers.length > 0
+      ? {
+          triggers: triggerSection.triggers.map((t) => ({
+            id: t.id,
+            kind: t.kind,
+            urgency: t.urgency,
+            reason: t.reason,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -1868,6 +1905,155 @@ function toolBrainIntention(
   );
 }
 
+// ----- brain_trigger (Workspace Insight Suite) ------------------------------
+
+function triggerToJson(record: TriggerRecord): Record<string, unknown> {
+  return {
+    id: record.id,
+    kind: record.kind,
+    status: record.effectiveStatus,
+    urgency: record.urgency,
+    reason: record.reason,
+    suggested_action: record.suggestedAction,
+    source_artifacts: record.sourceArtifacts,
+    cooldown_key: record.cooldownKey,
+    created_at: record.createdAt,
+    expires_at: record.expiresAt,
+    delivered_at: record.deliveredAt,
+    resolved_at: record.resolvedAt,
+  };
+}
+
+const TRIGGER_TERMINAL = new Set(["acted", "dismissed", "expired"]);
+
+function toolBrainTrigger(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const operation = coerceStr(args, "operation", true)!;
+  const now = new Date();
+  if (operation === "scan") {
+    const cooldownDays = resolveTriggerCooldownDays(ctx.configPath ?? undefined);
+    const result = scanTriggers(ctx.vault, { now, cooldownDays });
+    return {
+      operation,
+      candidates: result.candidates,
+      created: result.created.map(triggerToJson),
+      skipped: result.skipped.map((skip) => ({
+        cooldown_key: skip.cooldownKey,
+        reason: skip.reason,
+      })),
+    };
+  }
+  if (operation === "list" || operation === "history") {
+    const statusRaw = coerceStr(args, "status", false);
+    if (statusRaw !== null && statusRaw !== undefined && !isTriggerStatus(statusRaw)) {
+      throw new MCPError(INVALID_PARAMS, `brain_trigger: unknown status '${statusRaw}'`);
+    }
+    let records = listTriggers(ctx.vault, {
+      now,
+      ...(statusRaw ? { status: statusRaw } : {}),
+    });
+    if (operation === "history") {
+      records = records.filter((record) => TRIGGER_TERMINAL.has(record.effectiveStatus));
+    } else if (!statusRaw) {
+      records = records.filter((record) => !TRIGGER_TERMINAL.has(record.effectiveStatus));
+    }
+    return { operation, triggers: records.map(triggerToJson) };
+  }
+  if (operation === "acknowledge" || operation === "dismiss" || operation === "act") {
+    const id = coerceStr(args, "id", true)!;
+    try {
+      return {
+        operation,
+        trigger: triggerToJson(transitionTrigger(ctx.vault, id, operation, { now })),
+      };
+    } catch (err) {
+      throw new MCPError(INVALID_PARAMS, `brain_trigger: ${(err as Error).message}`);
+    }
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_trigger operation must be one of: scan, list, history, acknowledge, dismiss, act",
+  );
+}
+
+// ----- brain_deep_synthesis (Workspace Insight Suite) -----------------------
+
+async function toolBrainDeepSynthesis(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const topic = coerceStr(args, "topic", true)!;
+  const limit = optionalPositiveInt(args, "limit", "brain_deep_synthesis") ?? 30;
+  if (limit > 100) {
+    throw new MCPError(INVALID_PARAMS, "brain_deep_synthesis: limit must be at most 100");
+  }
+  const enqueue = coerceBool(args, "triggers");
+  const now = new Date();
+  const searchConfig = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+  const report = await deepSynthesis(searchConfig, topic, { now, limit });
+  let triggersCreated: number | undefined;
+  if (enqueue) {
+    const result = createTriggers(ctx.vault, synthesisCandidates(report), {
+      now,
+      cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
+    });
+    triggersCreated = result.created.length;
+  }
+  return {
+    topic: report.topic,
+    generated_at: report.generatedAt,
+    checked: report.checked,
+    notes: report.notes,
+    agreements: report.agreements,
+    contradictions: report.contradictions,
+    stale_claims: report.staleClaims.map((s) => ({
+      path: s.path,
+      age_days: s.ageDays,
+      superseded_by: s.supersededBy,
+    })),
+    gaps: report.gaps,
+    ...(triggersCreated !== undefined ? { triggers_created: triggersCreated } : {}),
+  };
+}
+
+// ----- brain_idea_discovery (Workspace Insight Suite) ------------------------
+
+function toolBrainIdeaDiscovery(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const cap = optionalPositiveInt(args, "cap", "brain_idea_discovery") ?? 5;
+  if (cap > 50) {
+    throw new MCPError(INVALID_PARAMS, "brain_idea_discovery: cap must be at most 50");
+  }
+  const enqueue = coerceBool(args, "triggers");
+  const now = new Date();
+  const ideas = discoverIdeas(ctx.vault, { now, cap });
+  let triggersCreated: number | undefined;
+  if (enqueue) {
+    const result = createTriggers(ctx.vault, ideaCandidates(ideas), {
+      now,
+      cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
+    });
+    triggersCreated = result.created.length;
+  }
+  return {
+    ideas: ideas.map((idea) => ({
+      kind: idea.kind,
+      title: idea.title,
+      reason: idea.reason,
+      score: idea.score,
+      source_artifacts: idea.sourceArtifacts,
+    })),
+    ...(triggersCreated !== undefined ? { triggers_created: triggersCreated } : {}),
+  };
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -2055,7 +2241,29 @@ async function toolBrainRecallTelemetry(
     const summary = summarizeRecallTelemetry(ctx.vault, filter);
     return { ...summary };
   }
-  throw new MCPError(INVALID_PARAMS, "brain_recall_telemetry: operation must be list or summary");
+  // Gate-decision telemetry (Workspace Insight Suite, t_65036e02):
+  // records emitted by brain_recall_gate when recall_gate_telemetry is on.
+  if (operation === "gate_list") {
+    const records = listGateTelemetry(ctx.vault, {
+      ...(filter.host !== undefined ? { host: filter.host } : {}),
+      ...(filter.since !== undefined ? { since: filter.since } : {}),
+      ...(filter.until !== undefined ? { until: filter.until } : {}),
+      ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+    });
+    return { vault_path: ctx.vault, total: records.length, records };
+  }
+  if (operation === "gate_summary") {
+    const summary = summarizeGateTelemetry(ctx.vault, {
+      ...(filter.host !== undefined ? { host: filter.host } : {}),
+      ...(filter.since !== undefined ? { since: filter.since } : {}),
+      ...(filter.until !== undefined ? { until: filter.until } : {}),
+    });
+    return { ...summary };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_recall_telemetry: operation must be list, summary, gate_list, or gate_summary",
+  );
 }
 
 function recallTelemetryFilter(args: Record<string, unknown>): RecallTelemetryFilter {
@@ -2950,6 +3158,74 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainIntention,
   },
   {
+    name: "brain_trigger",
+    description:
+      "Grounded proactive trigger queue under Brain/triggers/: scan generates deduped triggers from health/retention data, list/history read by lifecycle status, acknowledge/dismiss/act transition one trigger. Anti-nag: cooldown keys keep the same issue from reappearing every run.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["scan", "list", "history", "acknowledge", "dismiss", "act"],
+          description: "Operation to perform.",
+        },
+        id: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description: "Trigger id for acknowledge/dismiss/act.",
+        },
+        status: {
+          type: "string",
+          enum: ["pending", "delivered", "acknowledged", "acted", "dismissed", "expired"],
+          description: "Effective-status filter for list.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainTrigger,
+  },
+  {
+    name: "brain_deep_synthesis",
+    description:
+      "Topic-scoped deterministic dossier: matched notes, agreements (positive typed relations), contradictions, stale claims, and knowledge gaps (dangling wikilinks). Evidence assembly only - prose synthesis stays with the caller. Optional triggers=true enqueues findings.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", minLength: 1, maxLength: 500 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+        triggers: {
+          type: "boolean",
+          description: "Enqueue contradiction/gap findings into the trigger queue.",
+        },
+      },
+      required: ["topic"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainDeepSynthesis,
+  },
+  {
+    name: "brain_idea_discovery",
+    description:
+      "Ranked next-direction candidates from the vault's open loops: unanswered open questions, orphan research notes (no inbound links), and aging unresolved inbox signals. Deterministic scoring; triggers=true enqueues the ranked ideas.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cap: { type: "integer", minimum: 1, maximum: 50 },
+        triggers: {
+          type: "boolean",
+          description: "Enqueue the ranked ideas into the trigger queue.",
+        },
+      },
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainIdeaDiscovery,
+  },
+  {
     name: "brain_context",
     description:
       "Pull the current Brain/active.md body, pinned current-task context, and active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Read-only.",
@@ -3396,8 +3672,9 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         operation: {
           type: "string",
-          enum: ["list", "summary"],
-          description: "Use list for raw records, summary for aggregate counts.",
+          enum: ["list", "summary", "gate_list", "gate_summary"],
+          description:
+            "list/summary for recall telemetry; gate_list/gate_summary for recall-gate decisions.",
         },
         mode: {
           type: "string",

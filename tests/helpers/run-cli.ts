@@ -36,11 +36,14 @@ const RUNTIME_OVERRIDABLE_ENV = [
   "VAULT_AGENT_NAME",
   "VAULT_TIMEZONE",
   "OPEN_SECOND_BRAIN_CONFIG",
+  "OPEN_SECOND_BRAIN_TRIGGER_COOLDOWN_DAYS",
+  "OPEN_SECOND_BRAIN_WIKI_LINK_FORMAT",
+  "OPEN_SECOND_BRAIN_RECALL_GATE_TELEMETRY",
 ] as const;
 
 export async function runCli(
   args: ReadonlyArray<string>,
-  opts: { env?: Record<string, string>; stdin?: string } = {},
+  opts: { env?: Record<string, string>; stdin?: string; cwd?: string } = {},
 ): Promise<RunResult> {
   const callerEnv = opts.env ?? {};
   // Build the child env from process.env, then strip any runtime-resolution
@@ -58,7 +61,7 @@ export async function runCli(
   }
   try {
     const proc = Bun.spawn(["bun", "run", CLI_ENTRY, ...args], {
-      cwd: ROOT,
+      cwd: opts.cwd ?? ROOT,
       env,
       stdin: opts.stdin === undefined ? "ignore" : "pipe",
       stdout: "pipe",

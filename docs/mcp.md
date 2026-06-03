@@ -11,14 +11,14 @@ in Open Second Brain depends on the MCP server being running.
 
 - Transport: stdio (JSON-RPC 2.0, newline-delimited).
 - Protocol version: `2025-06-18`.
-- Capabilities advertised: `tools` only. No `resources`, `prompts`, or
-  `sampling`.
+- Capabilities advertised: `tools` and `resources` (see "Resources"
+  below). No `prompts` or `sampling`.
 - Standard MCP lifecycle: `initialize`, `notifications/initialized`,
   `tools/list`, `tools/call`, optional `ping`.
 
 ## Tool Highlights
 
-The full server currently advertises 56 tools; 18 further names stay callable
+The full server currently advertises 65 tools; 18 further names stay callable
 through `tools/call` as hidden deprecated aliases (see "Consolidated views and
 deprecated aliases" below). The table highlights the operator-facing core,
 schema, agent-source, health, recovery, and Pay Memory tools; the full surface
@@ -273,6 +273,37 @@ scorer and returns a char-budgeted block of top matches; it returns
 `enabled: false` with an empty block unless the `skill_auto_attach`
 config key is `"true"`, so default per-turn injection is unchanged. The
 native Hermes provider calls it from `prefetch()` fail-soft.
+
+## Workspace Insight Suite tools (since v0.38.0)
+
+`brain_search` accepts `global: true` for cross-vault union search:
+one query fans out over the active vault, registered profile vaults,
+and read-only recall sources (managed by `o2b brain source`), merging
+results by score. Each result carries an additive `origin` field plus
+an `origin:<label>` reason (`local`, `profile/<name>`,
+`source/<alias>`). Non-active origins search with self-healing and the
+query cache disabled, so an external vault is never written to; a
+missing index degrades to a per-origin warning.
+
+`brain_trigger` is the consolidated trigger-queue tool: `scan`
+generates deduped triggers from semantic-health and retention data,
+`list` / `history` read by effective lifecycle status,
+`acknowledge` / `dismiss` / `act` transition one trigger. Cooldown keys
+keep the same issue from reappearing while an earlier trigger is open
+or cooling down; `brain_morning_brief` surfaces capped pending
+triggers and marks them delivered (once per `trigger_cooldown_days`).
+
+`brain_deep_synthesis` assembles a deterministic topic dossier
+(matched notes, agreements, contradictions, stale claims, knowledge
+gaps; `triggers: true` enqueues findings). `brain_idea_discovery`
+ranks next-direction candidates from open questions, orphan notes, and
+aging inbox signals.
+
+`brain_recall_gate` emits a `gate_telemetry` continuity record per
+decision when the `recall_gate_telemetry` config key is `"true"`
+(default off) - decision, stable reason, host, SHA-256 prompt prefix;
+never the raw prompt. `brain_recall_telemetry` gains `gate_list` /
+`gate_summary` operations.
 
 ## Hermes integration
 

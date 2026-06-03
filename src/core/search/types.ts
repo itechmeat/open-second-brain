@@ -68,6 +68,13 @@ export interface BrainSearchResult {
     readonly relation: string;
     readonly target: string;
   }>;
+  /**
+   * Kind-namespaced origin label (Workspace Insight Suite, cross-vault
+   * search): "local", "profile/<name>", or "source/<alias>". Only set
+   * by `searchAcrossVaults`; plain single-vault search leaves it
+   * absent, keeping the legacy result shape byte-identical.
+   */
+  readonly origin?: string;
 }
 
 /**
@@ -242,6 +249,14 @@ export interface SearchOptions {
    */
   readonly since?: string;
   readonly until?: string;
+  /**
+   * Self-healing index policy (Workspace Insight Suite). Default true:
+   * a missing or schema-stale index is rebuilt once and the search
+   * retried. `searchAcrossVaults` passes false for non-active origins
+   * so a read-only external vault is NEVER written to - its missing
+   * index surfaces as a per-origin warning instead.
+   */
+  readonly selfHeal?: boolean;
 }
 
 export interface SearchOutcome {

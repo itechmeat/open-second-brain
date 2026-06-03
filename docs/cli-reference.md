@@ -119,6 +119,23 @@ o2b brain intention           set|show|list|move [--scope S] [--text T] [--json]
 
 Receipts, telemetry, transforms, and session recall import are opt-in. Receipt and telemetry records store redaction-safe payloads, source references, hashes, counters, and bounded snippets rather than raw private prompt context; session recall stores redacted turn text only when explicitly imported for later expansion.
 
+### Workspace reach and proactive insight (since v0.38.0)
+
+```text
+o2b brain project             link <path> [--vault V] | list | remove <path> | status [path] [--json] - .o2b-vault.json pointer files; resolveVault honours the nearest pointer (env override still wins)
+o2b brain source              add <vault> --alias <name> | list | remove <alias> [--json] - read-only recall sources of the active vault; BROKEN flag for missing targets
+o2b brain links               normalize [path-prefix] [--mode preserve|full|short] [--write] [--json] - wikilink path format rewrite; dry-run by default; config key wiki_link_format
+o2b brain profile             [--stale-seconds N] [--force] [--json] - materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
+o2b brain sgrep               <query> [path-prefix] [--limit N] [--keyword-only] [--json] - grep-shaped semantic search; path:line: lines; exit 1 on no matches
+o2b brain trigger             scan | list [--status S] | ack <id> | dismiss <id> | act <id> | history [--json] - grounded trigger queue; cooldown via trigger_cooldown_days (default 7)
+o2b brain deep-synthesis      <topic> [--limit N] [--triggers] [--json] - deterministic topic dossier: agreements, contradictions, stale claims, knowledge gaps
+o2b brain ideas               [--cap N] [--triggers] [--json] - ranked next-direction candidates from open questions, orphan notes, aging signals
+o2b brain recall-telemetry    gate-list | gate-summary [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json] - recall-gate decision telemetry (recall_gate_telemetry, default off)
+o2b search <query> --global   Cross-vault union over profiles + read-only sources; origin-labelled results; external vaults are never written to
+```
+
+Trigger generation, brief delivery, and gate telemetry are pull-based or config-gated; pointer resolution activates only when a pointer file exists.
+
 ## Vault scope
 
 Single exclusion policy for every vault walker.

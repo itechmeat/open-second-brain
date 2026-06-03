@@ -833,6 +833,39 @@ Full design and migration notes:
 and the matching implementation plan
 [`docs/plans/2026-05-16-brain-search-impl.md`](plans/2026-05-16-brain-search-impl.md).
 
+## Workspace reach and proactive insight (since v0.38.0)
+
+Two suites extend where the Brain can be reached and what it
+volunteers.
+
+Workspace reach: a `.o2b-vault.json` pointer file written by
+`o2b brain project link` binds any project directory (repo, monorepo
+package, worktree) to its owning vault; `resolveVault` walks up from
+the working directory and honours the nearest pointer after the
+`VAULT_DIR` env override and before the profile chain, so commands run
+from a linked tree resolve the right Brain with zero per-command
+flags. External vaults attach as read-only recall sources
+(`o2b brain source add`), and `o2b search <query> --global` unions the
+active vault, profile vaults, and sources with per-result origin
+labels - reads only, never a write or an index build inside an
+external vault. For shell-first use, `o2b brain profile` materializes
+a compact `Brain/profile.md` digest plus a `.o2bfs` root marker, and
+`o2b brain sgrep` answers with grep-shaped `path:line:` lines.
+
+Proactive insight: `o2b brain trigger scan` converts semantic-health
+and retention findings into Markdown trigger records under
+`Brain/triggers/` with a strict lifecycle (pending, delivered,
+acknowledged, acted, dismissed, expired). Stable cooldown keys make
+scans idempotent, and the morning brief delivers pending triggers at
+most once per cooldown window - the Brain remembers what the operator
+already saw, dismissed, or acted on instead of rediscovering it every
+run. `o2b brain deep-synthesis <topic>` builds a deterministic topic
+dossier (agreements, contradictions, stale claims, knowledge gaps)
+and `o2b brain ideas` ranks next directions from open loops; both can
+enqueue their findings as triggers. Opt-in recall-gate telemetry
+records every automatic-recall decision with a hashed prompt for
+tuning, never the raw text.
+
 ## Safety properties
 
 These are invariants of the system, not configuration to enable.
