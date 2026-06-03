@@ -18,6 +18,11 @@ import { atomicWriteFileSync } from "./fs-atomic.ts";
 import { isFile } from "./fs-utils.ts";
 import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
 import { resolvePointerVault } from "./brain/portability/pointer.ts";
+import {
+  isWikiLinkFormat,
+  WIKI_LINK_FORMATS,
+  type WikiLinkFormat,
+} from "./brain/link-graph/format-wikilink.ts";
 import type { ConfigDiscovery } from "./types.ts";
 
 const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"] as const;
@@ -309,6 +314,26 @@ export function resolveSessionHandoff(configPath?: string): boolean {
   const env = process.env["OPEN_SECOND_BRAIN_SESSION_HANDOFF"]?.trim();
   const raw = env || discoverConfig(configPath).data["session_handoff"]?.trim();
   return raw === "true" || raw === "1";
+}
+
+/**
+ * Wikilink output format (Workspace Insight Suite, t_5f31b5f1).
+ * Default `preserve` keeps every generated/normalized link exactly as
+ * typed - byte-identical to pre-suite behaviour. `full` and `short`
+ * select the rewrite mode for `o2b brain links normalize` and for
+ * generators that adopt the kernel. An unknown value fails fast: a
+ * typo must never silently rewrite links in the wrong mode.
+ */
+export function resolveWikiLinkFormat(configPath?: string): WikiLinkFormat {
+  const env = process.env["OPEN_SECOND_BRAIN_WIKI_LINK_FORMAT"]?.trim();
+  const raw = env || discoverConfig(configPath).data["wiki_link_format"]?.trim();
+  if (raw === undefined || raw === "") return "preserve";
+  if (!isWikiLinkFormat(raw)) {
+    throw new Error(
+      `wiki_link_format must be one of ${WIKI_LINK_FORMATS.join(", ")}; got '${raw}'`,
+    );
+  }
+  return raw;
 }
 
 export const SESSION_CAPTURE_ROLES = ["user", "assistant", "system", "tool", "meta"] as const;

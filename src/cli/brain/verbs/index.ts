@@ -40,6 +40,7 @@ export { cmdBrainHandoff } from "./handoff.ts";
 export { cmdBrainIntention } from "./intention.ts";
 export { cmdBrainProject } from "./project.ts";
 export { cmdBrainSource } from "./source.ts";
+export { cmdBrainLinks } from "./links.ts";
 export { cmdBrainEntity } from "./entity.ts";
 export { cmdBrainSessionHook } from "./session-hook.ts";
 export { cmdBrainImportClaudeMemory } from "./import-claude-memory.ts";

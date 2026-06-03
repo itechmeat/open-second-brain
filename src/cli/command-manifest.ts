@@ -154,6 +154,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("intention", "Manage scoped current-intention chains"),
         command("project", "Link project directories to their owning vault"),
         command("source", "Manage read-only recall sources of the active vault"),
+        command("links", "Normalize wikilink path format across Brain notes"),
         command("entity", "Canonical entity registry: set, get, list, relate, archive"),
         command("session-hook", "Capture runtime lifecycle hook payloads"),
         command("import-claude-memory", "Import Claude memory feedback"),

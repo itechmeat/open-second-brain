@@ -82,6 +82,7 @@ Brain verbs (observing memory):
   weekly              7-day synthesis: transitions, retired, contradictions, vault delta
   project             Link project directories to their owning vault (link/list/remove/status)
   source              Read-only recall sources of the active vault (add/list/remove)
+  links               Normalize wikilink path format (preserve/full/short); dry-run by default
 
 Common flags:
   --vault <path>   Override the configured vault

@@ -54,6 +54,7 @@ import {
   cmdBrainIntention,
   cmdBrainProject,
   cmdBrainSource,
+  cmdBrainLinks,
   cmdBrainSessionHook,
   cmdBrainImportClaudeMemory,
   cmdBrainPageDedup,
@@ -184,6 +185,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainProject(rest);
       case "source":
         return await cmdBrainSource(rest);
+      case "links":
+        return await cmdBrainLinks(rest);
       case "entity":
         return await cmdBrainEntity(rest);
       case "session-hook":
