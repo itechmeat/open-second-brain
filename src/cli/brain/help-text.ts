@@ -81,6 +81,7 @@ Brain verbs (observing memory):
   daily               Daily brief: events by kind, status transitions, vault delta
   weekly              7-day synthesis: transitions, retired, contradictions, vault delta
   project             Link project directories to their owning vault (link/list/remove/status)
+  source              Read-only recall sources of the active vault (add/list/remove)
 
 Common flags:
   --vault <path>   Override the configured vault

@@ -153,6 +153,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("handoff", "Write an operator-readable session handoff note"),
         command("intention", "Manage scoped current-intention chains"),
         command("project", "Link project directories to their owning vault"),
+        command("source", "Manage read-only recall sources of the active vault"),
         command("entity", "Canonical entity registry: set, get, list, relate, archive"),
         command("session-hook", "Capture runtime lifecycle hook payloads"),
         command("import-claude-memory", "Import Claude memory feedback"),
