@@ -28,6 +28,7 @@ import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
+import { emitGatedTelemetry } from "./continuity/emit.ts";
 import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
 import {
   applyContextTransforms,
@@ -395,9 +396,12 @@ function finalizeContextPackReport(
   startedAtMs: number,
 ): ContextPackReport {
   let enriched = report;
-  if (opts.receipt) {
-    const receipt = emitContextReceipt(vault, {
-      options: opts.receipt,
+  // Gated emissions route through the lazy emit kernel (t_5d7aa7c5):
+  // with the option absent the thunk never runs, and a broken
+  // continuity store can no longer fail the pack (fail-open).
+  const receipt = emitGatedTelemetry(opts.receipt, (receiptOptions) =>
+    emitContextReceipt(vault, {
+      options: receiptOptions,
       items: report.items.map((item) => ({
         id: item.id,
         path: item.path,
@@ -413,15 +417,15 @@ function finalizeContextPackReport(
         skipped_count: report.skipped.length,
         lanes: opts.includeLanes === true,
       },
-    });
-    enriched = { ...enriched, receiptId: receipt.id };
-  }
-  if (opts.telemetry) {
-    const telemetry = emitRecallTelemetry(vault, {
-      createdAt: opts.telemetry.createdAt,
-      host: opts.telemetry.host,
-      sessionId: opts.telemetry.sessionId,
-      turnId: opts.telemetry.turnId,
+    }),
+  );
+  if (receipt) enriched = { ...enriched, receiptId: receipt.id };
+  const telemetry = emitGatedTelemetry(opts.telemetry, (telemetryOptions) =>
+    emitRecallTelemetry(vault, {
+      createdAt: telemetryOptions.createdAt,
+      host: telemetryOptions.host,
+      sessionId: telemetryOptions.sessionId,
+      turnId: telemetryOptions.turnId,
       mode: "context_pack",
       status: report.items.length > 0 ? "ok" : "empty",
       durationMs: Date.now() - startedAtMs,
@@ -429,15 +433,15 @@ function finalizeContextPackReport(
       topArtifacts: report.items.slice(0, 10).map((item) => ({ id: item.id, path: item.path })),
       gaps: contextPackGaps(report),
       metadata: {
-        ...(opts.telemetry.metadata ?? {}),
+        ...(telemetryOptions.metadata ?? {}),
         ...contextPackBudgetMetadata(opts, report),
         skipped_count: report.skipped.length,
         lanes: opts.includeLanes === true,
         ...(enriched.receiptId ? { receipt_id: enriched.receiptId } : {}),
       },
-    });
-    enriched = { ...enriched, telemetryId: telemetry.id };
-  }
+    }),
+  );
+  if (telemetry) enriched = { ...enriched, telemetryId: telemetry.id };
   return Object.freeze(enriched);
 }
 

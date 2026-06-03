@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { BRAIN_LOG_REL, ensureInsideVault } from "../paths.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
 import { safeContinuityPayload } from "./redaction.ts";
+import { CONTINUITY_SCHEMA_VERSION } from "./types.ts";
 import type {
   AppendContinuityRecordInput,
   ContinuityRecord,
@@ -96,8 +97,11 @@ function buildRecord(
 ): ContinuityRecord {
   const payloadResult = safeContinuityPayload(input.payload ?? {});
   const sourceRefs = Object.freeze([...(input.sourceRefs ?? [])]);
+  // `schema` stays OUT of recordId(): identical records must keep
+  // identical dedup ids across the version-stamp transition.
   const id = recordId(input.kind, input.createdAt, sourceRefs, payloadResult.payload);
   return Object.freeze({
+    schema: CONTINUITY_SCHEMA_VERSION,
     id,
     kind: input.kind,
     createdAt: input.createdAt,

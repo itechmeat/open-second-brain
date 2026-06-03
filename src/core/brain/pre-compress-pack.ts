@@ -22,6 +22,7 @@ import { brainActivePath, brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
+import { emitGatedTelemetry } from "./continuity/emit.ts";
 import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
 import {
   contextSafetyReport,
@@ -170,66 +171,69 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
   }
 
   const text = sections.join("\n\n");
-  const receipt = opts.receipt
-    ? emitContextReceipt(vault, {
-        options: opts.receipt,
-        items: [
-          ...(activeText !== null
-            ? [
-                {
-                  id: ACTIVE_ID,
-                  path: brainActivePath(vault),
-                  text: activeText,
-                },
-              ]
-            : []),
-          ...items.map((item) => ({
-            id: item.id,
-            text: item.principle,
-            trimmed: item.trimmed,
-            safetyFiltered: item.safety?.filtered,
-          })),
-        ],
-        finalText: text,
-        budget: {
-          top_k: opts.topK,
-          ...(opts.maxCharsPerMemory !== undefined
-            ? { max_chars_per_memory: opts.maxCharsPerMemory }
-            : {}),
-          ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
-        },
-        extra: { active_head_included: activeText !== null },
-      })
-    : null;
+  // Gated emissions route through the lazy emit kernel (t_5d7aa7c5):
+  // option absent means the thunk never runs; a broken continuity
+  // store can no longer fail the pack (fail-open).
+  const receipt = emitGatedTelemetry(opts.receipt, (receiptOptions) =>
+    emitContextReceipt(vault, {
+      options: receiptOptions,
+      items: [
+        ...(activeText !== null
+          ? [
+              {
+                id: ACTIVE_ID,
+                path: brainActivePath(vault),
+                text: activeText,
+              },
+            ]
+          : []),
+        ...items.map((item) => ({
+          id: item.id,
+          text: item.principle,
+          trimmed: item.trimmed,
+          safetyFiltered: item.safety?.filtered,
+        })),
+      ],
+      finalText: text,
+      budget: {
+        top_k: opts.topK,
+        ...(opts.maxCharsPerMemory !== undefined
+          ? { max_chars_per_memory: opts.maxCharsPerMemory }
+          : {}),
+        ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
+      },
+      extra: { active_head_included: activeText !== null },
+    }),
+  );
 
-  const telemetry = opts.telemetry
-    ? emitRecallTelemetry(vault, {
-        createdAt: opts.telemetry.createdAt,
-        host: opts.telemetry.host,
-        sessionId: opts.telemetry.sessionId,
-        turnId: opts.telemetry.turnId,
-        mode: "pre_compress",
-        status: activeText !== null || items.length > 0 ? "ok" : "empty",
-        durationMs: Date.now() - startedAtMs,
-        resultCount: items.length + (activeText !== null ? 1 : 0),
-        topArtifacts: [
-          ...(activeText !== null ? [{ id: ACTIVE_ID, path: brainActivePath(vault) }] : []),
-          ...items.slice(0, 10).map((item) => ({ id: item.id })),
-        ],
-        gaps: activeText === null && items.length === 0 ? ["no_matching_context"] : [],
-        metadata: {
-          ...opts.telemetry.metadata,
-          top_k: opts.topK,
-          total_chars: budgeted.totalChars,
-          active_head_included: activeText !== null,
-          ...(opts.maxCharsPerMemory !== undefined
-            ? { max_chars_per_memory: opts.maxCharsPerMemory }
-            : {}),
-          ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
-          ...(receipt ? { receipt_id: receipt.id } : {}),
-        },
-      })
-    : null;
+  const telemetry = emitGatedTelemetry(opts.telemetry, (telemetryOptions) =>
+    emitRecallTelemetry(vault, {
+      createdAt: telemetryOptions.createdAt,
+      host: telemetryOptions.host,
+      sessionId: telemetryOptions.sessionId,
+      turnId: telemetryOptions.turnId,
+      mode: "pre_compress",
+      status: activeText !== null || items.length > 0 ? "ok" : "empty",
+      durationMs: Date.now() - startedAtMs,
+      resultCount: items.length + (activeText !== null ? 1 : 0),
+      topArtifacts: [
+        ...(activeText !== null ? [{ id: ACTIVE_ID, path: brainActivePath(vault) }] : []),
+        ...items.slice(0, 10).map((item) => ({ id: item.id })),
+      ],
+      gaps: activeText === null && items.length === 0 ? ["no_matching_context"] : [],
+      metadata: {
+        ...telemetryOptions.metadata,
+        top_k: opts.topK,
+        total_chars: budgeted.totalChars,
+        active_head_included: activeText !== null,
+        ...(opts.maxCharsPerMemory !== undefined
+          ? { max_chars_per_memory: opts.maxCharsPerMemory }
+          : {}),
+        ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
+        ...(receipt ? { receipt_id: receipt.id } : {}),
+      },
+    }),
+  );
 
   return Object.freeze({
     text,

@@ -1,3 +1,14 @@
+/**
+ * Contract-wide continuity schema version (Memory Observability Suite,
+ * t_26040ee8), stamped on every new record at `buildRecord()`.
+ *
+ * Evolution rule: additive optional fields do NOT bump the version;
+ * renames, removals, or semantic changes bump to `o2b.continuity.v2`.
+ * Records written before the stamp existed carry no `schema` field and
+ * are read as v1. Existing JSONL files are never migrated.
+ */
+export const CONTINUITY_SCHEMA_VERSION = "o2b.continuity.v1";
+
 export type ContinuityRecordKind =
   | "context_receipt"
   | "recall_telemetry"
@@ -17,6 +28,13 @@ export interface ContinuitySourceRef {
 }
 
 export interface ContinuityRecord {
+  /**
+   * Schema version of the record's on-disk shape. `undefined` on legacy
+   * records written before the stamp existed - readers treat that as v1.
+   * Deliberately EXCLUDED from `recordId()` so identical records dedupe
+   * identically across the stamp transition.
+   */
+  readonly schema?: string;
   readonly id: string;
   readonly kind: ContinuityRecordKind;
   readonly createdAt: string;

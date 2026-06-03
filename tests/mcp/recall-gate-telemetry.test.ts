@@ -87,3 +87,15 @@ test("with recall_gate_telemetry on, decisions land as continuity records", asyn
   })) as { total: number; records: unknown[] };
   expect(listed.total).toBe(1);
 });
+
+test("fail-open: a broken continuity store never breaks the gate decision", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  // The continuity directory path exists as a FILE, so every append throws.
+  mkdirSync(join(vault, "Brain", "log"), { recursive: true });
+  writeFileSync(join(vault, "Brain", "log", "continuity"), "not a directory");
+  const decision = (await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "what did we decide about the index?",
+  })) as { retrieve: boolean; reason: string };
+  expect(typeof decision.retrieve).toBe("boolean");
+  expect(typeof decision.reason).toBe("string");
+});

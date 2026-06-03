@@ -30,6 +30,7 @@ import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
 import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
+import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -342,7 +343,9 @@ async function toolBrainSearch(
       searchTimeoutError,
     );
   } catch (e) {
-    if (telemetry) {
+    // Lazy emit kernel (t_5d7aa7c5): a throwing telemetry write inside
+    // this catch can no longer mask the original search error.
+    emitGatedTelemetry(telemetry || undefined, () =>
       emitRecallTelemetry(ctx.vault, {
         host: telemetryHost,
         ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
@@ -361,40 +364,40 @@ async function toolBrainSearch(
           keyword_only: keywordOnly,
           semantic: semantic ?? null,
         },
-      });
-    }
+      }),
+    );
     if (e instanceof SearchError) throw searchErrorToMcp(e);
     if (e instanceof MCPError) throw e;
     throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
   }
 
   const recallHint = deriveRecallHint(outcome.results, outcome.total);
-  const telemetryRecord = telemetry
-    ? emitRecallTelemetry(ctx.vault, {
-        host: telemetryHost,
-        ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
-        ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
-        mode: "search",
-        status: outcome.results.length > 0 ? "ok" : "empty",
-        durationMs: Date.now() - startedAtMs,
-        resultCount: outcome.results.length,
-        topArtifacts: outcome.results.slice(0, 10).map((result) => ({
-          id: `${result.documentId}:${result.chunkId}`,
-          path: result.path,
-          score: result.score,
-        })),
-        gaps: searchTelemetryGaps(outcome),
-        metadata: {
-          limit,
-          total: outcome.total,
-          keyword_only: keywordOnly,
-          semantic: semantic ?? null,
-          evidence_pack: evidencePack,
-          warnings_count: outcome.warnings.length,
-          ...(pathPrefix !== undefined ? { path_prefix: pathPrefix } : {}),
-        },
-      })
-    : null;
+  const telemetryRecord = emitGatedTelemetry(telemetry || undefined, () =>
+    emitRecallTelemetry(ctx.vault, {
+      host: telemetryHost,
+      ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
+      ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+      mode: "search",
+      status: outcome.results.length > 0 ? "ok" : "empty",
+      durationMs: Date.now() - startedAtMs,
+      resultCount: outcome.results.length,
+      topArtifacts: outcome.results.slice(0, 10).map((result) => ({
+        id: `${result.documentId}:${result.chunkId}`,
+        path: result.path,
+        score: result.score,
+      })),
+      gaps: searchTelemetryGaps(outcome),
+      metadata: {
+        limit,
+        total: outcome.total,
+        keyword_only: keywordOnly,
+        semantic: semantic ?? null,
+        evidence_pack: evidencePack,
+        warnings_count: outcome.warnings.length,
+        ...(pathPrefix !== undefined ? { path_prefix: pathPrefix } : {}),
+      },
+    }),
+  );
   return {
     results: outcome.results.map((r: BrainSearchResult) => ({
       path: r.path,
@@ -496,23 +499,21 @@ async function toolBrainRecallGate(
     previousPrompt: previousPrompt ?? null,
     explicit,
   });
-  // Gate telemetry (t_65036e02): default off; fail-soft so a broken
-  // continuity store never breaks the gate's pure-diagnostic contract.
-  if (resolveRecallGateTelemetry(ctx.configPath ?? undefined)) {
-    try {
-      const host = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
-      const sessionId = coerceStringOptional(args, "session_id", 512);
-      emitGateTelemetry(ctx.vault, {
-        host,
-        prompt,
-        retrieve: decision.retrieve,
-        reason: decision.reason,
-        ...(sessionId !== undefined ? { sessionId } : {}),
-      });
-    } catch {
-      // never let telemetry break the gate
-    }
-  }
+  // Gate telemetry (t_65036e02): default off. Routed through the lazy
+  // emit kernel (t_5d7aa7c5) - the payload thunk never runs with the
+  // config off, and a broken continuity store never breaks the gate's
+  // pure-diagnostic contract (fail-open).
+  emitGatedTelemetry(resolveRecallGateTelemetry(ctx.configPath ?? undefined), () => {
+    const host = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
+    const sessionId = coerceStringOptional(args, "session_id", 512);
+    return emitGateTelemetry(ctx.vault, {
+      host,
+      prompt,
+      retrieve: decision.retrieve,
+      reason: decision.reason,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    });
+  });
   return { ...decision };
 }
 

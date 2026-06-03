@@ -1,0 +1,24 @@
+{
+  "name": "stale-recall",
+  "description": "Focused stale-fact regression fixture: a keyword-stuffed superseded note must never outrank the current note for the same topic. A ranking change that resurfaces stale facts fails this fixture.",
+  "notes": [
+    {
+      "path": "Brain/notes/current.md",
+      "body": "# Current\n\nThe coffee preference today is flat white, replacing every older note about it. Coffee preference confirmed.\n"
+    },
+    {
+      "path": "Brain/notes/superseded.md",
+      "body": "# Old\n\nCoffee preference: espresso. Espresso was the choice before the change.\n"
+    }
+  ],
+  "questions": [
+    {
+      "id": "q-stale-guard",
+      "category": "temporal",
+      "query": "coffee preference",
+      "top_k": 5,
+      "expected_paths": ["Brain/notes/current.md"],
+      "not_expected_above": ["Brain/notes/superseded.md"]
+    }
+  ]
+}

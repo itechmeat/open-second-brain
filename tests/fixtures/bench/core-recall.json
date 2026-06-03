@@ -1,0 +1,101 @@
+{
+  "name": "core-recall",
+  "description": "Core memory quality fixture: one question per category - single-hop preference recall, temporal supersession, contradiction visibility, multi-record evidence, session handoff, and context budget truncation.",
+  "notes": [
+    {
+      "path": "Brain/notes/coffee.md",
+      "body": "# Coffee preference\n\nCoffee preference of the operator: flat white every morning. The coffee preference is stable.\n"
+    },
+    {
+      "path": "Brain/notes/coffee-old.md",
+      "body": "# Superseded note\n\nOld coffee preference: espresso. Replaced by the flat white note.\n"
+    },
+    {
+      "path": "Brain/notes/timezone-a.md",
+      "body": "# Timezone claim A\n\nThe team standup timezone is Berlin time according to the calendar invite.\n"
+    },
+    {
+      "path": "Brain/notes/timezone-b.md",
+      "body": "# Timezone claim B\n\nThe team standup timezone is Lisbon time according to the latest announcement.\n"
+    },
+    {
+      "path": "Brain/notes/deploy-a.md",
+      "body": "# Deploy step A\n\nDeployment requires the staging gate to pass first.\n"
+    },
+    {
+      "path": "Brain/notes/deploy-b.md",
+      "body": "# Deploy step B\n\nDeployment finishes with the production smoke checklist.\n"
+    },
+    {
+      "path": "Brain/preferences/pref-tabs.md",
+      "body": "---\nid: pref-tabs\ntopic: tabs\nstatus: confirmed\nprinciple: Use tabs for indentation in Go files\ncreated_at: 2026-05-01T10:00:00\n---\n\nUse tabs for indentation in Go files\n"
+    }
+  ],
+  "continuity": [
+    {
+      "kind": "session_turn",
+      "created_at": "2026-06-01T10:00:00.000Z",
+      "payload": {
+        "session_id": "bench-session",
+        "turn_id": "t-1",
+        "role": "user",
+        "text": "handoff context: remember the flat white decision"
+      }
+    },
+    {
+      "kind": "session_turn",
+      "created_at": "2026-06-01T10:01:00.000Z",
+      "payload": {
+        "session_id": "bench-session",
+        "turn_id": "t-2",
+        "role": "assistant",
+        "text": "recorded the decision"
+      }
+    }
+  ],
+  "questions": [
+    {
+      "id": "q-single-hop",
+      "category": "single_hop",
+      "query": "flat white",
+      "top_k": 5,
+      "expected_paths": ["Brain/notes/coffee.md"]
+    },
+    {
+      "id": "q-temporal",
+      "category": "temporal",
+      "query": "coffee preference",
+      "top_k": 5,
+      "expected_paths": ["Brain/notes/coffee.md"],
+      "not_expected_above": ["Brain/notes/coffee-old.md"]
+    },
+    {
+      "id": "q-contradiction",
+      "category": "contradiction",
+      "query": "standup timezone",
+      "top_k": 5,
+      "expected_paths": ["Brain/notes/timezone-a.md", "Brain/notes/timezone-b.md"]
+    },
+    {
+      "id": "q-multi-evidence",
+      "category": "multi_evidence",
+      "query": "deployment",
+      "top_k": 5,
+      "expected_paths": ["Brain/notes/deploy-a.md", "Brain/notes/deploy-b.md"]
+    },
+    {
+      "id": "q-session-handoff",
+      "category": "session_handoff",
+      "session_id": "bench-session",
+      "expected_turns": 2,
+      "expected_text": "flat white decision"
+    },
+    {
+      "id": "q-budget",
+      "category": "budget",
+      "expected_ids": ["pref-tabs"],
+      "max_tokens": 500,
+      "max_total_chars": 2000
+    }
+  ]
+}

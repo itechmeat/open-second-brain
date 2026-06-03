@@ -88,6 +88,8 @@ Brain verbs (observing memory):
   trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/history)
   deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
   ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
+  continuity          Export continuity records as ATOF/ATIF trajectories (read-only)
+  bench               Memory quality benchmark over a disposable fixture vault
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -537,4 +539,16 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain ideas [--cap <n>] [--triggers] [--vault <path>] [--json]\n" +
     "Ranked next-direction candidates from open questions, orphan notes,\n" +
     "and aging inbox signals. --triggers enqueues the ranked ideas.\n",
+  continuity:
+    "usage: o2b brain continuity export --format atof|atif [--session <id>] [--month YYYY-MM] [--out <dir>] [--json]\n" +
+    "Read-only trajectory export of the continuity store. atof renders one\n" +
+    "JSONL event stream; atif renders one trajectory document per session.\n" +
+    "Records flagged private are dropped; redacted text stays masked.\n",
+  bench:
+    "usage: o2b brain bench memory --fixture <name|path> [--resume <run-id>] [--runs-dir <dir>] [--json]\n" +
+    "Memory quality benchmark over a disposable fixture vault under the\n" +
+    "runs directory (never the configured vault). Reports quality,\n" +
+    "latency, and context cost separately; checkpoint/resume by run id;\n" +
+    "bench_judge_cmd arms the optional external judge. Exit 1 on any\n" +
+    "failed question.\n",
 };
