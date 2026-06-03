@@ -17,6 +17,7 @@ import lockfile from "proper-lockfile";
 import { atomicWriteFileSync } from "./fs-atomic.ts";
 import { isFile } from "./fs-utils.ts";
 import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
+import { resolvePointerVault } from "./brain/portability/pointer.ts";
 import type { ConfigDiscovery } from "./types.ts";
 
 const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"] as const;
@@ -149,12 +150,22 @@ export function resolveTimezone(configPath?: string): string | null {
 /**
  * Resolve the vault directory.
  *
- * Order: `VAULT_DIR` env → `vault` field in plugin config → `null`. Caller
- * decides whether to error out or accept a positional path.
+ * Order: `VAULT_DIR` env → project pointer walk-up → active profile →
+ * `vault` field in plugin config → `null`. Caller decides whether to
+ * error out or accept a positional path.
  */
-export function resolveVault(configPath?: string): string | null {
+export function resolveVault(configPath?: string, opts: { cwd?: string } = {}): string | null {
   const env = process.env["VAULT_DIR"];
   if (env) return expandTilde(env);
+  // Project pointer (Workspace Insight Suite, t_1375e69f): a pointer file
+  // in (or above) the working directory is the most specific durable
+  // artifact, so it beats the profile pointer. Pointers only exist when
+  // the operator linked the directory - without one the chain is
+  // byte-identical to before. The walk stops at the filesystem root and
+  // reads at most one small JSON per level; malformed pointers and
+  // dangling targets fail soft to the next resolution step.
+  const pointerVault = resolvePointerVault(opts.cwd ?? process.cwd());
+  if (pointerVault !== null) return expandTilde(pointerVault);
   // Multi-vault profiles (v0.22.0): an active named profile overrides the
   // bare `vault` key. With no profiles registry the result is unchanged.
   const discovery = discoverConfig(configPath);

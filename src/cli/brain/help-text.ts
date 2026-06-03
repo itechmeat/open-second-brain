@@ -80,6 +80,7 @@ Brain verbs (observing memory):
   stale               Stale preferences/signals/log files (configurable thresholds)
   daily               Daily brief: events by kind, status transitions, vault delta
   weekly              7-day synthesis: transitions, retired, contradictions, vault delta
+  project             Link project directories to their owning vault (link/list/remove/status)
 
 Common flags:
   --vault <path>   Override the configured vault

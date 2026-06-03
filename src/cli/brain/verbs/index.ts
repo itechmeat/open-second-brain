@@ -38,6 +38,7 @@ export { cmdBrainScanInline } from "./scan-inline.ts";
 export { cmdBrainImportSession } from "./import-session.ts";
 export { cmdBrainHandoff } from "./handoff.ts";
 export { cmdBrainIntention } from "./intention.ts";
+export { cmdBrainProject } from "./project.ts";
 export { cmdBrainEntity } from "./entity.ts";
 export { cmdBrainSessionHook } from "./session-hook.ts";
 export { cmdBrainImportClaudeMemory } from "./import-claude-memory.ts";

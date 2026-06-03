@@ -152,6 +152,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("import-session", "Replay registered agent sessions"),
         command("handoff", "Write an operator-readable session handoff note"),
         command("intention", "Manage scoped current-intention chains"),
+        command("project", "Link project directories to their owning vault"),
         command("entity", "Canonical entity registry: set, get, list, relate, archive"),
         command("session-hook", "Capture runtime lifecycle hook payloads"),
         command("import-claude-memory", "Import Claude memory feedback"),
