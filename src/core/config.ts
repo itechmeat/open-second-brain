@@ -253,6 +253,18 @@ export function resolveLinkOutputFormat(configPath?: string): LinkOutputFormat {
   return raw === "markdown" ? "markdown" : "wikilink";
 }
 
+/**
+ * Named MCP tool-surface profile (Agent Surface Suite). Returns the raw
+ * configured name or null; validation against the known profile set
+ * happens in the resolver, which fails open on unknown names.
+ */
+export function resolveMcpToolProfile(configPath?: string): string | null {
+  const env = process.env["OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE"]?.trim();
+  if (env) return env;
+  const raw = discoverConfig(configPath).data["mcp_tool_profile"]?.trim();
+  return raw ? raw : null;
+}
+
 /** Replace values for keys whose name suggests a secret with `[REDACTED]`. */
 export function redactMapping<T extends Record<string, unknown>>(data: T): Record<string, unknown> {
   const redacted: Record<string, unknown> = {};
