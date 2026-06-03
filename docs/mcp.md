@@ -233,6 +233,47 @@ tool counts, an `available[]` list, and a `withheld[]` list. Withheld reasons
 are stable strings such as `disabled by runtime capability window`, `not allowed
 by runtime capability window`, and `outside runtime capability max tool window`.
 
+## Tool-surface profiles and the two-pass catalog (since v0.37.0)
+
+Named profiles bundle a scope plus capability window so hosts stop
+hand-rolling allow/deny flag lists:
+
+```bash
+o2b mcp --vault /path/to/vault --tool-profile catalog
+o2b mcp --vault /path/to/vault --tool-profile recall --probe
+```
+
+Profiles: `full` (default), `writer`, `catalog`, `recall` (memory
+read/write surface, no admin tools), and `minimal` (writers + context +
+search). The `mcp_tool_profile` config key (env:
+`OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE`) selects one without flags; an
+explicit `--scope` or window flag wins over the profile's fields. An
+unknown profile name FAILS OPEN to the full surface with a stderr note -
+a typo can never lock an agent out. Hard-window profiles always retain
+`second_brain_capabilities`, so withheld tools stay discoverable with
+reasons.
+
+The `catalog` scope is the two-pass surface: `tools/list` advertises
+only the capability diagnostic, the five always-loaded Brain tools, and
+`tool_hydrate`; every other tool stays callable through `tools/call`.
+Call `tool_hydrate` with no arguments for the compact catalog (name,
+one-line description, group), then with `names: [...]` for the full
+input/output schemas of exactly the tools you need - unknown names are
+reported per-name without failing the batch.
+
+## Skill surface (since v0.37.0)
+
+`list_skills` returns the agent skills shipped in the plugin's
+`skills/` directory plus vault-local `Brain/skills/` (vault entries
+shadow shipped ones by name). `get_skill` fetches a skill's SKILL.md by
+name; an optional `file_path` reads an auxiliary file and is
+path-traversal-guarded to the skill directory. `skills_attach` scores
+skills against the current turn text with a deterministic BM25-style
+scorer and returns a char-budgeted block of top matches; it returns
+`enabled: false` with an empty block unless the `skill_auto_attach`
+config key is `"true"`, so default per-turn injection is unchanged. The
+native Hermes provider calls it from `prefetch()` fail-soft.
+
 ## Hermes integration
 
 Hermes discovers MCP servers from `~/.hermes/config.yaml` under the

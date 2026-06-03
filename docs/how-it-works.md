@@ -199,6 +199,26 @@ Four independent paths land a signal in `Brain/inbox/`:
 - **Session import** - `o2b brain import-session <path>` reads a Claude Code / Codex CLI / Hermes session JSONL and extracts both `@osb` markers from message text and replays of `brain_feedback` tool-use calls. Useful when MCP was not available at recording time or the agent did not make the call live.
 - **Lifecycle hook** - Claude Code / Codex hooks call `o2b brain session-hook` through `hooks/session-capture.ts`. `UserPromptSubmit` prompt markers and `PostToolUse` `brain_feedback` inputs are captured immediately through the same signal dedup hash, while SessionStart / Stop / SessionEnd / PostCompact observations append non-blocking lifecycle audit/log rows.
 
+Session capture is role-filterable (since v0.37.0): `session_capture_roles`
+in the config (comma-separated subset of `user,assistant,system,tool,meta`)
+supplies the default `--filter-role` set for `brain import-session`; an
+explicit flag wins, an absent key captures every role, and an unknown role
+name fails fast.
+
+SessionEnd carries two more lifecycle duties (since v0.37.0). It clears the
+ending session's bound search focus (`search-focus/<scope>.json`) so a
+finished session's steering never leaks into the next one - cleanup runs
+regardless of the capture boundary. And when `session_handoff` is `"true"`
+(default off), it writes an operator-readable handoff note to
+`Brain/handoffs/<date>-<scope>.md` - request, completed work, changed files,
+learned context, next steps - extracted from the recorded transcript by
+deterministic regex (`o2b brain handoff <session-file>` is the manual
+equivalent). Alongside the scope-free `Brain/pinned.md` scratchpad, scoped
+current-intention chains live at `Brain/intentions/<scope>.md`
+(`o2b brain intention set|show|list|move`, MCP `brain_intention`): every
+update bumps `version` and appends the superseded text to an in-file history
+trail, and `move` retires the chain into `Brain/intentions/history/`.
+
 All four paths share a normalised payload hash so the same rule captured twice from different surfaces dedups automatically. Pinned preferences are exempt from automatic retire (`stale-no-evidence`, `expired-unconfirmed`, `rebutted`); only `o2b brain reject` can retire them.
 
 `o2b brain watchdog` is the recovery surface for this layout. It checks the

@@ -15,7 +15,7 @@ o2b doctor                    Run vault + adapter checks
 o2b index                     Rebuild the Markdown page index
 o2b export-config             Write a redacted config snapshot
 o2b secrets list|status       Inspect $secret:NAME references without printing values
-o2b mcp                       Run the MCP tool server (stdio); --scope full|writer, --probe, --allow-tool, --disable-tool, --max-tools
+o2b mcp                       Run the MCP tool server (stdio); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal, --probe, --allow-tool, --disable-tool, --max-tools
 o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b help --json               Print the command/flag manifest as JSON
 o2b completions --shell zsh   Print completions for bash|zsh|fish|elvish|nushell|powershell
@@ -113,6 +113,8 @@ o2b brain import-session      <path> --recall [--recall-session-id <id>] [--reca
 o2b brain session-grep        --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--json]
 o2b brain session-describe    --session-id <id> [--json]
 o2b brain session-expand      <record-id> [--raw-limit <n>] [--cursor <offset>] [--json]
+o2b brain handoff             <session-file> [--session-id <id>] [--format auto|claude|codex|hermes] [--json] - write Brain/handoffs/<date>-<scope>.md (since v0.37.0)
+o2b brain intention           set|show|list|move [--scope S] [--text T] [--json] - scoped current-intention chains under Brain/intentions/ (since v0.37.0)
 ```
 
 Receipts, telemetry, transforms, and session recall import are opt-in. Receipt and telemetry records store redaction-safe payloads, source references, hashes, counters, and bounded snippets rather than raw private prompt context; session recall stores redacted turn text only when explicitly imported for later expansion.
@@ -176,9 +178,9 @@ o2b search feedback           Record explicit recall feedback for one result
                               under Brain/search/feedback/, learned weights refresh deterministically)
 o2b search weights            Show base weights, learned multipliers, event count, and bounds
                               --reset removes the derived learned-weights file (events kept)
-o2b search focus set          Persist a 120-minute ranking focus (--query Q and/or --path P; --ttl-minutes N)
+o2b search focus set          Persist a 120-minute ranking focus (--query Q and/or --path P; --ttl-minutes N; --session S binds it to one session, since v0.37.0)
 o2b search focus status       Show the active focus; --json emits { active, focus }
-o2b search focus clear        Clear the persisted focus file next to the search index
+o2b search focus clear        Clear the persisted focus file next to the search index (--session S clears one session's focus)
 o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               (required after upgrading to v0.13.0 recall schema or v0.26.0 CJK FTS content)
                               --force-cost bypasses the embedding cost gate for this run (since v0.36.0)
