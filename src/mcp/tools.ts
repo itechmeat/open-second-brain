@@ -33,6 +33,7 @@ import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import { SCHEMA_TOOLS } from "./schema-tools.ts";
 import { WATCHDOG_TOOLS } from "./watchdog-tools.ts";
 import { PAY_MEMORY_TOOLS } from "./pay-memory-tools.ts";
+import { SKILL_TOOLS } from "./skill-tools.ts";
 import { normalizeAgentArgument, PLACEHOLDER_AGENT_VALUES } from "../core/agent-identity.ts";
 import { vaultRelative } from "../core/path-safety.ts";
 import { listVaultPages } from "../core/vault.ts";
@@ -414,6 +415,7 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
     ...SCHEMA_TOOLS,
     ...WATCHDOG_TOOLS,
     ...PAY_MEMORY_TOOLS,
+    ...SKILL_TOOLS,
   ];
   if (scope === "full") return all;
   return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));
