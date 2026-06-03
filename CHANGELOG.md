@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0] - 2026-06-03
+
+Embedding Provider Suite: four changes to the semantic layer that make
+recall cheaper, more portable, and provider-flexible - an offline
+embedder that needs no cloud, a runtime registry for embedding
+endpoints, spend visibility with a cost gate, and an alternative
+rank-fusion mode - all behind one shared signature kernel and all
+off-by-default where they could change behaviour.
+
+### Added
+
+- **Offline local embedder.** A new `local` embedding provider produces
+  deterministic vectors with no cloud call, no API key, and no model
+  download: token unigrams and character trigrams are feature-hashed
+  (FNV-1a, signed buckets) into a configurable fixed dimension (default
+  256) and unit-normalised, so the existing cosine ranker math is
+  unchanged. Set `embedding_provider: local` (and
+  `search_semantic_enabled: true`) for a privacy-first, no-cloud recall
+  path; both indexing and query embedding run without a key. It is a
+  lexical baseline - `openai-compat` remains the recommended provider for
+  semantic depth.
+- **CLI provider registry.** Register OpenAI-compatible embedding
+  endpoints at runtime with `o2b search provider add | list | show |
+  remove`, persisted to `Brain/search/embedding-providers.json` (base
+  URL, default model, and the NAME of the environment variable holding
+  the key - never the key itself, so the file is safe to sync). A
+  registered name resolves to `openai-compat` config during config
+  resolution, AFTER the built-ins, so it never shadows an explicitly
+  configured key; explicit config or environment always wins over a
+  profile's fields. The resolved provider union stays closed.
+- **Embedding cost gate and signature reporting.** A best-effort
+  per-model pricing table plus a chars/4 token estimate gate large
+  embedding runs: when `embedding_cost_gate_usd` is positive (default 0 =
+  disabled) and the estimated spend exceeds it, the run is refused with
+  the estimate, and `o2b search index --force-cost` overrides. The local
+  provider and any unlisted model price at 0 and never block.
+  `o2b search status` now reports the active
+  `<provider>:<model>:<dimension>` embedding signature and a best-effort
+  refresh-cost estimate.
+- **Reciprocal Rank Fusion mode.** `search_fusion_mode: rrf` (default
+  `linear`) fuses the sparse (BM25) and dense (cosine) lanes by rank
+  position - `1 / (search_rrf_k + rank)`, `search_rrf_k` default 60 -
+  rather than by weighted score magnitude, rewarding cross-lane presence
+  and staying robust to differing score scales. The fused relevance is
+  min-max-normalised so the link, recency, entity, tier, and
+  session-focus boosts compose unchanged, and results carry an `rrf:`
+  recall reason. The default `linear` mode keeps ranking bit-identical;
+  storage stays SQLite + sqlite-vec + FTS5 (no cloud vector database).
+
 ## [0.35.0] - 2026-06-02
 
 Memory Integrity Suite: four changes that make the memory itself
@@ -4064,6 +4113,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.36.0]: https://github.com/itechmeat/open-second-brain/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/itechmeat/open-second-brain/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/itechmeat/open-second-brain/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/itechmeat/open-second-brain/compare/v0.32.1...v0.33.0
