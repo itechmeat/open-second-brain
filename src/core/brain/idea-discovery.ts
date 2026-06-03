@@ -136,6 +136,9 @@ export function discoverIdeas(
   for (const note of notes) {
     const name = baseName(note.relPath);
     if (name === "profile" || name === "active" || name === "pinned") continue;
+    // Heuristic: inbound matching is by bare basename, so two notes
+    // sharing a basename can mask a true orphan. Acceptable for a
+    // ranked suggestion list - precision over completeness.
     if (inbound.has(name)) continue;
     const age = ageDays(note.absPath, opts.now);
     candidates.push(

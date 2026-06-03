@@ -86,6 +86,8 @@ export async function searchAcrossVaults(
   return Object.freeze({
     results: Object.freeze(merged.slice(0, limit)),
     warnings: Object.freeze(warnings),
+    // Sum of per-origin totals - informational, mirrors single-vault
+    // semantics where `total` can exceed the capped `results` length.
     total,
   });
 }
