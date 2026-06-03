@@ -253,9 +253,10 @@ describe("tool listing", () => {
         "skills_attach",
         "tool_hydrate",
         "brain_intention",
-        // Workspace Insight Suite: trigger queue + deep synthesis.
+        // Workspace Insight Suite: trigger queue + proactive insight.
         "brain_trigger",
         "brain_deep_synthesis",
+        "brain_idea_discovery",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -505,8 +506,9 @@ describe("stdio loop", () => {
     //   tools/call, not advertised) = 56 (+1 capability diagnostic = 57).
     // + list_skills / get_skill / skills_attach / tool_hydrate /
     //   brain_intention (Agent Surface Suite) = 62.
-    // + brain_trigger / brain_deep_synthesis (Workspace Insight Suite) = 64.
-    expect(list.result.tools.length).toBe(64);
+    // + brain_trigger / brain_deep_synthesis / brain_idea_discovery
+    //   (Workspace Insight Suite) = 65.
+    expect(list.result.tools.length).toBe(65);
   });
 
   test("returns parse error for invalid JSON", async () => {

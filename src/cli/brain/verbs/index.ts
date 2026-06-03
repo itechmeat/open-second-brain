@@ -45,6 +45,7 @@ export { cmdBrainProfile } from "./profile.ts";
 export { cmdBrainSgrep } from "./sgrep.ts";
 export { cmdBrainTrigger } from "./trigger.ts";
 export { cmdBrainDeepSynthesis } from "./deep-synthesis.ts";
+export { cmdBrainIdeas } from "./ideas.ts";
 export { cmdBrainEntity } from "./entity.ts";
 export { cmdBrainSessionHook } from "./session-hook.ts";
 export { cmdBrainImportClaudeMemory } from "./import-claude-memory.ts";

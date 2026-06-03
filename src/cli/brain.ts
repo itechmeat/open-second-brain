@@ -59,6 +59,7 @@ import {
   cmdBrainSgrep,
   cmdBrainTrigger,
   cmdBrainDeepSynthesis,
+  cmdBrainIdeas,
   cmdBrainSessionHook,
   cmdBrainImportClaudeMemory,
   cmdBrainPageDedup,
@@ -199,6 +200,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainTrigger(rest);
       case "deep-synthesis":
         return await cmdBrainDeepSynthesis(rest);
+      case "ideas":
+        return await cmdBrainIdeas(rest);
       case "entity":
         return await cmdBrainEntity(rest);
       case "session-hook":

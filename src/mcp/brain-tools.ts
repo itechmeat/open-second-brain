@@ -65,6 +65,7 @@ import { deliverBriefTriggers, renderTriggerBriefSection } from "../core/brain/t
 import { scanTriggers } from "../core/brain/triggers/scan.ts";
 import { createTriggers, listTriggers, transitionTrigger } from "../core/brain/triggers/store.ts";
 import { deepSynthesis, synthesisCandidates } from "../core/brain/deep-synthesis.ts";
+import { discoverIdeas, ideaCandidates } from "../core/brain/idea-discovery.ts";
 import { isTriggerStatus, type TriggerRecord } from "../core/brain/triggers/types.ts";
 import { aggregateSources } from "../core/brain/portability/sources.ts";
 import { switchProfile, listProfiles } from "../core/brain/portability/profiles.ts";
@@ -2019,6 +2020,39 @@ async function toolBrainDeepSynthesis(
   };
 }
 
+// ----- brain_idea_discovery (Workspace Insight Suite) ------------------------
+
+function toolBrainIdeaDiscovery(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const cap = optionalPositiveInt(args, "cap", "brain_idea_discovery") ?? 5;
+  if (cap > 50) {
+    throw new MCPError(INVALID_PARAMS, "brain_idea_discovery: cap must be at most 50");
+  }
+  const enqueue = coerceBool(args, "triggers");
+  const now = new Date();
+  const ideas = discoverIdeas(ctx.vault, { now, cap });
+  let triggersCreated: number | undefined;
+  if (enqueue) {
+    const result = createTriggers(ctx.vault, ideaCandidates(ideas), {
+      now,
+      cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
+    });
+    triggersCreated = result.created.length;
+  }
+  return {
+    ideas: ideas.map((idea) => ({
+      kind: idea.kind,
+      title: idea.title,
+      reason: idea.reason,
+      score: idea.score,
+      source_artifacts: idea.sourceArtifacts,
+    })),
+    ...(triggersCreated !== undefined ? { triggers_created: triggersCreated } : {}),
+  };
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -3149,6 +3183,24 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     },
     previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainDeepSynthesis,
+  },
+  {
+    name: "brain_idea_discovery",
+    description:
+      "Ranked next-direction candidates from the vault's open loops: unanswered open questions, orphan research notes (no inbound links), and aging unresolved inbox signals. Deterministic scoring; triggers=true enqueues the ranked ideas.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cap: { type: "integer", minimum: 1, maximum: 50 },
+        triggers: {
+          type: "boolean",
+          description: "Enqueue the ranked ideas into the trigger queue.",
+        },
+      },
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainIdeaDiscovery,
   },
   {
     name: "brain_context",

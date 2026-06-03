@@ -87,6 +87,7 @@ Brain verbs (observing memory):
   sgrep               Grep-shaped semantic search: o2b brain sgrep <query> [path]
   trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/history)
   deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
+  ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
 
 Common flags:
   --vault <path>   Override the configured vault
