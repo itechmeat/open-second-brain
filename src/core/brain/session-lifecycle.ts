@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 
 import { appendAuditRecord } from "../reliability/audit.ts";
 import { appendLogEvent } from "./log.ts";
@@ -11,6 +12,12 @@ import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
 import { validateBrainFeedbackInput } from "./sessions/validate-feedback.ts";
+import { resolveSearchConfig } from "../search/index.ts";
+import { clearSessionFocus, sessionFocusPath } from "../search/session-focus.ts";
+import { resolveSessionHandoff } from "../config.ts";
+import { writeHandoffNote, type HandoffNoteResult } from "./handoff.ts";
+import { detectAdapter } from "./sessions/registry.ts";
+import type { SessionTurn } from "./sessions/types.ts";
 
 export interface CaptureSessionLifecycleOptions {
   readonly agent: string;
@@ -33,6 +40,10 @@ export interface CaptureSessionLifecycleResult {
   readonly facts_deduped: number;
   readonly audit_path: string;
   readonly log_path?: string;
+  /** True when a SessionEnd event cleared that session's bound focus. */
+  readonly focus_cleared?: boolean;
+  /** Path of the handoff note a SessionEnd event produced (gated). */
+  readonly handoff_path?: string;
 }
 
 interface NormalizedPayload {
@@ -101,6 +112,47 @@ export async function captureSessionLifecycleEvent(
     captureToolFeedback(vault, normalized, opts, now, ensureDedup(), counters);
   }
 
+  // Session-scoped focus lifecycle (Agent Surface Suite, t_5b478e47):
+  // a finished session's bound focus must not leak into the next one.
+  // Deliberately NOT gated on the capture boundary (unlike the handoff
+  // below): removing the session's own steering state is cleanup, not
+  // memory capture, so it applies even for stateless sessions.
+  // Fail-soft - focus cleanup can never block lifecycle capture.
+  let focusCleared = false;
+  if (normalized.event === "SessionEnd" && normalized.sessionId !== undefined && !opts.dryRun) {
+    try {
+      const searchConfig = resolveSearchConfig({ vault });
+      // Clear by file presence, not by activity: an already-expired
+      // focus file is still stale state worth removing.
+      if (existsSync(sessionFocusPath(searchConfig, normalized.sessionId))) {
+        clearSessionFocus(searchConfig, normalized.sessionId);
+        focusCleared = true;
+      }
+    } catch {
+      // ignore - lifecycle capture must survive a broken search config
+    }
+  }
+
+  // Handoff note on SessionEnd (Agent Surface Suite, t_28afa4d2):
+  // gated by the session_handoff config key (default off) and the
+  // capture boundary; reads the recorded transcript through the
+  // session adapters. Fail-soft like the rest of lifecycle capture.
+  let handoffPath: string | undefined;
+  if (
+    normalized.event === "SessionEnd" &&
+    normalized.transcriptPath !== undefined &&
+    mayWrite &&
+    !opts.dryRun &&
+    resolveSessionHandoff()
+  ) {
+    try {
+      handoffPath = (await writeHandoffNoteFromTranscript(vault, normalized, opts.agent, now))
+        ?.path;
+    } catch {
+      // ignore - a malformed transcript never blocks lifecycle capture
+    }
+  }
+
   let logPath: string | undefined;
   if (mayWrite && !opts.dryRun) {
     logPath = appendLifecycleLog(vault, normalized, opts.agent, now, counters);
@@ -134,7 +186,33 @@ export async function captureSessionLifecycleEvent(
     facts_deduped: counters.facts_deduped,
     audit_path: auditPath,
     ...(logPath ? { log_path: logPath } : {}),
+    ...(focusCleared ? { focus_cleared: true } : {}),
+    ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
   };
+}
+
+/** Read the recorded transcript via the session adapters and write a handoff note. */
+async function writeHandoffNoteFromTranscript(
+  vault: string,
+  normalized: NormalizedPayload,
+  agent: string,
+  now: Date,
+): Promise<HandoffNoteResult | null> {
+  const path = normalized.transcriptPath!;
+  if (!existsSync(path)) return null;
+  const text = readFileSync(path, "utf8");
+  const nl = text.indexOf("\n");
+  const adapter = detectAdapter(nl < 0 ? text : text.slice(0, nl));
+  if (adapter === null) return null;
+  const turns: SessionTurn[] = [];
+  for await (const turn of adapter.iterate(path)) turns.push(turn);
+  if (turns.length === 0) return null;
+  return writeHandoffNote(vault, {
+    turns,
+    sessionId: normalized.sessionId ?? basename(path),
+    agent,
+    now,
+  });
 }
 
 function normalizePayload(payload: unknown): NormalizedPayload {

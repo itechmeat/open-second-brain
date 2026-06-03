@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { resolveSessionScope } from "../brain/session-scope.ts";
 import { resolveIndexPath } from "./paths.ts";
 import { SearchError, type ResolvedSearchConfig } from "./types.ts";
 
@@ -25,6 +26,7 @@ export interface SessionFocusTarget {
 const DEFAULT_TTL_MINUTES = 120;
 const MAX_TTL_MINUTES = 24 * 60;
 const FOCUS_FILE = "search-focus.json";
+const FOCUS_DIR = "search-focus";
 
 function normalizePathPrefix(pathPrefix: string | null | undefined): string | null {
   if (pathPrefix === undefined || pathPrefix === null) return null;
@@ -78,15 +80,24 @@ export function sessionFocusIsActive(
   return focus.expiresAt === null || focus.expiresAt > nowMs;
 }
 
-export function sessionFocusPath(config: ResolvedSearchConfig): string {
-  return join(dirname(resolveIndexPath(config.vault, config.dbPath)), FOCUS_FILE);
+/**
+ * Focus file location. With no scope: the PR #54 global file. With a
+ * session scope (Agent Surface Suite, t_5b478e47): one file per scope
+ * slug under `search-focus/`, so concurrent sessions never clobber
+ * each other's focus.
+ */
+export function sessionFocusPath(config: ResolvedSearchConfig, sessionScope?: string): string {
+  const dir = dirname(resolveIndexPath(config.vault, config.dbPath));
+  if (sessionScope === undefined) return join(dir, FOCUS_FILE);
+  return join(dir, FOCUS_DIR, `${resolveSessionScope(sessionScope)}.json`);
 }
 
 export function readSessionFocus(
   config: ResolvedSearchConfig,
   nowMs = Date.now(),
+  sessionScope?: string,
 ): SearchSessionFocus | null {
-  const path = sessionFocusPath(config);
+  const path = sessionFocusPath(config, sessionScope);
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as SearchSessionFocus;
@@ -103,15 +114,37 @@ export function readSessionFocus(
   }
 }
 
-export function writeSessionFocus(config: ResolvedSearchConfig, focus: SearchSessionFocus): void {
-  const path = sessionFocusPath(config);
+export function writeSessionFocus(
+  config: ResolvedSearchConfig,
+  focus: SearchSessionFocus,
+  sessionScope?: string,
+): void {
+  const path = sessionFocusPath(config, sessionScope);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(focus, null, 2) + "\n");
 }
 
-export function clearSessionFocus(config: ResolvedSearchConfig): void {
-  const path = sessionFocusPath(config);
+export function clearSessionFocus(config: ResolvedSearchConfig, sessionScope?: string): void {
+  const path = sessionFocusPath(config, sessionScope);
   if (existsSync(path)) rmSync(path, { force: true });
+}
+
+/**
+ * The focus that applies to a turn: the session's own focus when one
+ * is bound and unexpired, else the global focus. The two are never
+ * merged - a bound session focus is more specific than the global one,
+ * and averaging two intents would steer toward neither.
+ */
+export function readActiveSessionFocus(
+  config: ResolvedSearchConfig,
+  sessionId: string | undefined,
+  nowMs = Date.now(),
+): SearchSessionFocus | null {
+  if (sessionId !== undefined) {
+    const scoped = readSessionFocus(config, nowMs, sessionId);
+    if (scoped !== null) return scoped;
+  }
+  return readSessionFocus(config, nowMs);
 }
 
 function focusTokens(query: string): string[] {

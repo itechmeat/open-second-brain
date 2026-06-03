@@ -177,6 +177,14 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             recalled = self._text(pack)
             if recalled:
                 parts.append(recalled)
+        # Skill auto-attach (Agent Surface Suite): the TS side gates on the
+        # skill_auto_attach config key and returns an empty block when off,
+        # so the default injection stays byte-identical. Fail-soft like every
+        # other lifecycle bridge call.
+        attach = self._structured(self._safe_call("skills_attach", {"query": query}))
+        skills_block = str(attach.get("block", "") or "")
+        if attach.get("enabled") and skills_block:
+            parts.append(skills_block)
         reminder = config.build_reminder()
         if reminder:
             parts.append(reminder)

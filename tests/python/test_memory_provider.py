@@ -318,6 +318,38 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertIn("RECALLED", out)
         self.assertIn("@pf-agent", out)
 
+    def test_prefetch_appends_skills_attach_block_when_enabled(self):
+        os.environ["VAULT_AGENT_NAME"] = "pf-agent"
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": False}},
+                "skills_attach": {
+                    "structuredContent": {
+                        "enabled": True,
+                        "block": "## Relevant skills\n\n- embeddings-setup - configure providers",
+                        "skills": [{"name": "embeddings-setup"}],
+                    }
+                },
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("configure embeddings", session_id="sess-1")
+        self.assertIn("## Relevant skills", out)
+        self.assertIn("embeddings-setup", out)
+
+    def test_prefetch_unchanged_when_skills_attach_disabled_or_missing(self):
+        os.environ["VAULT_AGENT_NAME"] = "pf-agent"
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": False}},
+                "skills_attach": {"structuredContent": {"enabled": False, "block": ""}},
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("hello", session_id="sess-1")
+        self.assertNotIn("Relevant skills", out)
+        self.assertIn("@pf-agent", out)
+
     def test_prefetch_reminder_only_when_gate_declines(self):
         os.environ["VAULT_AGENT_NAME"] = "pf-agent"
         bridge = FakeBrainBridge(

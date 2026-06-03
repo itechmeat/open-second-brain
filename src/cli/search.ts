@@ -145,7 +145,9 @@ function resolveConfig(
 async function cmdSearchFocus(argv: ReadonlyArray<string>): Promise<number> {
   const action = argv[0];
   if (!action || !["set", "status", "clear"].includes(action)) {
-    throw new CliError("usage: o2b search focus <set|status|clear> [--query Q] [--path P]");
+    throw new CliError(
+      "usage: o2b search focus <set|status|clear> [--query Q] [--path P] [--session S]",
+    );
   }
   const { flags } = parseFlags(argv.slice(1), {
     vault: { type: "string" },
@@ -153,10 +155,14 @@ async function cmdSearchFocus(argv: ReadonlyArray<string>): Promise<number> {
     db: { type: "string" },
     query: { type: "string" },
     path: { type: "string" },
+    session: { type: "string" },
     "ttl-minutes": { type: "string", default: "120" },
     json: { type: "boolean" },
   });
   const cfg = resolveConfig(flags);
+  // Session-scoped focus (t_5b478e47): --session binds the focus to
+  // one session's file under search-focus/ instead of the global file.
+  const session = typeof flags["session"] === "string" ? (flags["session"] as string) : undefined;
 
   if (action === "set") {
     const ttlMinutes = Number(flags["ttl-minutes"] ?? "120");
@@ -168,18 +174,18 @@ async function cmdSearchFocus(argv: ReadonlyArray<string>): Promise<number> {
       },
       Date.now(),
     );
-    writeSessionFocus(cfg, focus);
+    writeSessionFocus(cfg, focus, session);
     writeFocusResponse(focus, flags["json"] === true);
     return 0;
   }
 
   if (action === "clear") {
-    clearSessionFocus(cfg);
+    clearSessionFocus(cfg, session);
     writeFocusResponse(null, flags["json"] === true);
     return 0;
   }
 
-  writeFocusResponse(readSessionFocus(cfg), flags["json"] === true);
+  writeFocusResponse(readSessionFocus(cfg, Date.now(), session), flags["json"] === true);
   return 0;
 }
 

@@ -40,7 +40,13 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { existsSync, readFileSync } from "node:fs";
 
-import { resolveAgentName, resolveLinkOutputFormat } from "../core/config.ts";
+import {
+  resolveAgentName,
+  resolveLinkOutputFormat,
+  resolveSearchFocusContextPack,
+} from "../core/config.ts";
+import { resolveSearchConfig } from "../core/search/index.ts";
+import { readActiveSessionFocus } from "../core/search/session-focus.ts";
 import { brainActivePath, brainDirs } from "../core/brain/paths.ts";
 import { regenerateActive, type RegenerateActiveResult } from "../core/brain/active.ts";
 import { parseFrontmatter } from "../core/vault.ts";
@@ -70,6 +76,12 @@ import { buildWeeklySynthesis } from "../core/brain/temporal/weekly-brief.ts";
 import { loadTemporalConfigSafe } from "../core/brain/policy.ts";
 import { isBrainLogEventKind, type BrainLogEventKind } from "../core/brain/types.ts";
 import { packContext } from "../core/brain/context-pack.ts";
+import {
+  listIntentions,
+  moveIntentionToHistory,
+  setIntention,
+  showIntention,
+} from "../core/brain/intentions.ts";
 import { buildPreCompressPack } from "../core/brain/pre-compress-pack.ts";
 import {
   getContextReceipt,
@@ -1805,6 +1817,57 @@ async function toolBrainWeeklySynthesis(
   };
 }
 
+// ----- brain_intention (Agent Surface Suite) --------------------------------
+
+function toolBrainIntention(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const operation = coerceStr(args, "operation", true)!;
+  if (operation === "list") {
+    return {
+      intentions: listIntentions(ctx.vault).map((chain) => ({
+        scope: chain.scope,
+        version: chain.version,
+        updated_at: chain.updatedAt,
+        text: chain.text,
+      })),
+    };
+  }
+  const scope = coerceStr(args, "scope", true)!;
+  if (operation === "set") {
+    const text = coerceStr(args, "text", true)!;
+    const chain = setIntention(ctx.vault, {
+      scope,
+      text,
+      agent: resolveAgentName(ctx.configPath ?? undefined),
+    });
+    return { operation, scope: chain.scope, version: chain.version, path: chain.path };
+  }
+  if (operation === "show") {
+    const chain = showIntention(ctx.vault, scope);
+    if (chain === null) return { operation, scope, present: false };
+    return {
+      operation,
+      scope: chain.scope,
+      present: true,
+      version: chain.version,
+      updated_at: chain.updatedAt,
+      text: chain.text,
+      history: chain.history,
+      path: chain.path,
+    };
+  }
+  if (operation === "move") {
+    const moved = moveIntentionToHistory(ctx.vault, { scope });
+    return { operation, scope: moved.scope, archive_path: moved.archivePath };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_intention operation must be one of: set, show, list, move",
+  );
+}
+
 // ----- brain_context_pack (v0.10.15) ---------------------------------------
 
 /**
@@ -1834,8 +1897,29 @@ async function toolBrainContextPack(
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
   const receipt = receiptOptionsFromArgs("brain_context_pack", args, "context_pack", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
+  // Focus wiring (Agent Surface Suite, t_5b478e47): gated on the
+  // search_focus_context_pack config key (default off) so the default
+  // pack stays byte-identical. Fail-soft - a broken search config
+  // never breaks the pack.
+  let sessionFocus: ReturnType<typeof readActiveSessionFocus> = null;
+  if (resolveSearchFocusContextPack(ctx.configPath ?? undefined)) {
+    // Argument validation stays OUTSIDE the fail-soft block: an invalid
+    // focus_session is a caller error (INVALID_PARAMS), not a config
+    // read to swallow.
+    const focusSession = coerceStr(args, "focus_session", false) ?? undefined;
+    try {
+      const searchConfig = resolveSearchConfig({
+        vault: ctx.vault,
+        configPath: ctx.configPath ?? undefined,
+      });
+      sessionFocus = readActiveSessionFocus(searchConfig, focusSession);
+    } catch {
+      sessionFocus = null;
+    }
+  }
   const report = packContext(ctx.vault, {
     maxTokens,
+    ...(sessionFocus !== null ? { sessionFocus } : {}),
     ...(query ? { query } : {}),
     ...(includeLanes ? { includeLanes: true } : {}),
     ...(receipt !== undefined ? { receipt } : {}),
@@ -2835,6 +2919,37 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainPinnedContext,
   },
   {
+    name: "brain_intention",
+    description:
+      "Scoped current-intention chains under Brain/intentions/: set updates a workstream's now-document (prior text lands in its history trail), show/list read, move retires the chain into history/.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["set", "show", "list", "move"],
+          description: "Operation to perform.",
+        },
+        scope: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description: "Workstream or session label (normalised to a scope slug).",
+        },
+        text: {
+          type: "string",
+          minLength: 1,
+          maxLength: 4000,
+          description: "Intention text for the set operation.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainIntention,
+  },
+  {
     name: "brain_context",
     description:
       "Pull the current Brain/active.md body, pinned current-task context, and active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Read-only.",
@@ -3159,6 +3274,13 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         query: {
           type: "string",
           description: "Optional case/Unicode-insensitive substring filter on topic + principle.",
+        },
+        focus_session: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description:
+            "Session id whose bound search focus boosts matching memories (requires search_focus_context_pack).",
         },
         max_chars_per_memory: {
           type: "integer",

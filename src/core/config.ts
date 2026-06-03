@@ -253,6 +253,87 @@ export function resolveLinkOutputFormat(configPath?: string): LinkOutputFormat {
   return raw === "markdown" ? "markdown" : "wikilink";
 }
 
+/**
+ * Named MCP tool-surface profile (Agent Surface Suite). Returns the raw
+ * configured name or null; validation against the known profile set
+ * happens in the resolver, which fails open on unknown names.
+ */
+export function resolveMcpToolProfile(configPath?: string): string | null {
+  const env = process.env["OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE"]?.trim();
+  if (env) return env;
+  const raw = discoverConfig(configPath).data["mcp_tool_profile"]?.trim();
+  return raw ? raw : null;
+}
+
+/**
+ * Skill auto-attach gate (Agent Surface Suite). Default OFF: the
+ * skills_attach tool returns an empty block unless the operator sets
+ * `skill_auto_attach: "true"` (or the matching env override), so the
+ * default per-turn injection stays bit-identical.
+ */
+export function resolveSkillAutoAttach(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_SKILL_AUTO_ATTACH"]?.trim();
+  const raw = env || discoverConfig(configPath).data["skill_auto_attach"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
+/**
+ * Context-pack focus wiring gate (Agent Surface Suite, t_5b478e47).
+ * Default OFF: brain_context_pack ignores the active search focus
+ * unless `search_focus_context_pack: "true"`, keeping the default
+ * pack byte-identical.
+ */
+export function resolveSearchFocusContextPack(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_SEARCH_FOCUS_CONTEXT_PACK"]?.trim();
+  const raw = env || discoverConfig(configPath).data["search_focus_context_pack"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
+/**
+ * SessionEnd handoff-note gate (Agent Surface Suite, t_28afa4d2).
+ * Default OFF: lifecycle capture writes no handoff note unless
+ * `session_handoff: "true"`.
+ */
+export function resolveSessionHandoff(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_SESSION_HANDOFF"]?.trim();
+  const raw = env || discoverConfig(configPath).data["session_handoff"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
+export const SESSION_CAPTURE_ROLES = ["user", "assistant", "system", "tool", "meta"] as const;
+
+export type SessionCaptureRole = (typeof SESSION_CAPTURE_ROLES)[number];
+
+function isSessionCaptureRole(value: string): value is SessionCaptureRole {
+  return (SESSION_CAPTURE_ROLES as ReadonlyArray<string>).includes(value);
+}
+
+/**
+ * Config-level default for session-capture role filtering (Agent
+ * Surface Suite, t_e2346fe9). `session_capture_roles` is a
+ * comma-separated subset of user/assistant/system/tool/meta; absent or
+ * empty means "capture every role" (null = no filter, bit-identical to
+ * the pre-key behaviour). An unknown role name fails fast - a silent
+ * typo here would silently drop memory.
+ */
+export function resolveSessionCaptureRoles(configPath?: string): SessionCaptureRole[] | null {
+  const env = process.env["OPEN_SECOND_BRAIN_SESSION_CAPTURE_ROLES"]?.trim();
+  const raw = env || discoverConfig(configPath).data["session_capture_roles"]?.trim();
+  if (!raw) return null;
+  const roles: SessionCaptureRole[] = [];
+  for (const part of raw.split(",")) {
+    const role = part.trim().toLowerCase();
+    if (role.length === 0) continue;
+    if (!isSessionCaptureRole(role)) {
+      throw new Error(
+        `session_capture_roles: unknown role "${role}" (expected a subset of ${SESSION_CAPTURE_ROLES.join(", ")})`,
+      );
+    }
+    if (!roles.includes(role)) roles.push(role);
+  }
+  return roles.length > 0 ? roles : null;
+}
+
 /** Replace values for keys whose name suggests a secret with `[REDACTED]`. */
 export function redactMapping<T extends Record<string, unknown>>(data: T): Record<string, unknown> {
   const redacted: Record<string, unknown> = {};

@@ -15,6 +15,7 @@ import {
   defaultConfigPath,
   discoverConfig,
   redactMapping,
+  resolveMcpToolProfile,
   setConfigValue,
   validateTimezoneName,
 } from "../core/config.ts";
@@ -66,6 +67,7 @@ import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "../mcp/capabilities.ts";
+import { resolveToolSurface, toolSurfaceProfileNames } from "../mcp/profiles.ts";
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
 
@@ -392,6 +394,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
     repo: { type: "string" },
     scope: { type: "string" },
     "writer-only": { type: "boolean" },
+    "tool-profile": { type: "string" },
     probe: { type: "boolean" },
     json: { type: "boolean" },
     "allow-tool": { type: "string-array" },
@@ -405,22 +408,45 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // contradictory pair (e.g. `--scope full --writer-only`) is
   // rejected to avoid silent surprises.
   const writerOnly = Boolean(flags["writer-only"]);
-  const rawScope = (flags["scope"] as string | undefined) ?? (writerOnly ? "writer" : "full");
-  if (rawScope !== "full" && rawScope !== "writer") {
+  const explicitScope =
+    (flags["scope"] as string | undefined) ?? (writerOnly ? "writer" : undefined);
+  if (
+    explicitScope !== undefined &&
+    explicitScope !== "full" &&
+    explicitScope !== "writer" &&
+    explicitScope !== "catalog"
+  ) {
     process.stderr.write(
-      `o2b mcp: invalid --scope value: ${rawScope}; expected one of: full, writer\n`,
+      `o2b mcp: invalid --scope value: ${explicitScope}; expected one of: full, writer, catalog\n`,
     );
     return 2;
   }
-  if (writerOnly && rawScope !== "writer") {
-    process.stderr.write(`o2b mcp: --writer-only conflicts with --scope ${rawScope}\n`);
+  if (writerOnly && explicitScope !== "writer") {
+    process.stderr.write(`o2b mcp: --writer-only conflicts with --scope ${explicitScope}\n`);
     return 2;
   }
-  const scope = rawScope;
-  const serverName = scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
-  const capabilityWindow = parseCapabilityWindow(flags);
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
+
+  // Named tool-surface profile: flag wins over the config key; an
+  // unknown name FAILS OPEN to the full surface (logged, never fatal).
+  const profileName =
+    (flags["tool-profile"] as string | undefined) ?? resolveMcpToolProfile(config);
+  const explicitWindow = parseCapabilityWindow(flags);
+  const surface = resolveToolSurface({
+    profileName,
+    ...(explicitScope !== undefined ? { explicitScope } : {}),
+    ...(explicitWindow !== undefined ? { explicitWindow } : {}),
+  });
+  if (surface.unknownProfile !== undefined) {
+    process.stderr.write(
+      `o2b mcp: unknown tool profile "${surface.unknownProfile}"; ` +
+        `failing open to the full surface (known: ${toolSurfaceProfileNames().join(", ")})\n`,
+    );
+  }
+  const scope = surface.scope;
+  const serverName = scope === "writer" ? "open-second-brain-writer" : "open-second-brain";
+  const capabilityWindow = surface.window;
 
   if (flags["probe"]) {
     return await runMcpProbe({
@@ -482,7 +508,7 @@ function parseCapabilityWindow(
 async function runMcpProbe(args: {
   vault: string | undefined;
   config: string;
-  scope: "full" | "writer";
+  scope: "full" | "writer" | "catalog";
   serverName: string;
   json: boolean;
   capabilityWindow: RuntimeCapabilityWindow | undefined;

@@ -5,6 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.0] - 2026-06-03
+
+Agent Surface Suite: eight changes in two themes. Theme A makes the
+MCP tool and skill surface adaptive - skills become discoverable over
+MCP, a two-pass catalog keeps schemas out of the prompt until needed,
+named profiles curate the surface per host, and relevant skills can
+auto-attach to a turn. Theme B closes the session lifecycle - capture
+filters by role, search focus binds to a session and auto-clears, a
+finished session leaves an operator-readable handoff note, and every
+workstream gets a versioned current-intention chain. All
+behaviour-changing pieces are off by default.
+
+### Added
+
+- **Skills as callable MCP tools.** `list_skills` returns the agent
+  skills Open Second Brain ships in `skills/` (plus vault-local
+  `Brain/skills/`, which shadow shipped ones by name) with one-line
+  descriptions; `get_skill` fetches SKILL.md content or a
+  traversal-guarded auxiliary file inside the skill directory. Any
+  MCP-connected agent can now self-discover and load skills without
+  shell access.
+- **Two-pass tool catalog hydration.** A new `catalog` scope
+  (`o2b mcp --scope catalog`) advertises a compact first pass - the
+  capability diagnostic, the five always-loaded Brain tools, and
+  `tool_hydrate` - while every other tool stays callable but
+  unadvertised. `tool_hydrate` with no arguments returns the sorted
+  compact catalog (name, one-line description, group); with a `names`
+  batch it returns full input/output schemas, reporting unknown names
+  per-name. Schema tokens stay out of the prompt until the agent
+  actually needs the tool.
+- **Adaptive tool-surface profiles.** Five named profiles (`full`,
+  `writer`, `catalog`, `recall`, `minimal`) resolve to a scope plus
+  capability window, selected via the `mcp_tool_profile` config key or
+  `o2b mcp --tool-profile`. An unknown profile fails OPEN to the full
+  surface with a logged note; hard-window profiles always retain the
+  `second_brain_capabilities` diagnostic so withheld tools stay
+  discoverable with reasons.
+- **Deterministic skill auto-attach.** `skills_attach` scores skills
+  against the current turn text with a shared BM25-style lexical
+  scorer (name > tags > description field weights, no LLM) and returns
+  a char-budgeted block of top matches with `get_skill` load hints.
+  Gated by `skill_auto_attach` (default off); the native Hermes
+  provider's prefetch appends the block through one fail-soft bridge
+  call.
+- **Config-level capture role filtering.** `session_capture_roles`
+  (comma-separated subset of `user,assistant,system,tool,meta`)
+  supplies the default `--filter-role` set for `brain import-session`.
+  Absent captures every role; an explicit flag wins; an unknown role
+  fails fast.
+- **Session-scoped search focus.** `o2b search focus set|status|clear
+  --session <id>` binds a focus to one session's file under
+  `search-focus/` beside the global file; a bound session focus wins
+  over the global one, `brain_search` gains an optional
+  `focus_session` input, and SessionEnd lifecycle capture auto-clears
+  the ending session's focus. When `search_focus_context_pack` is true
+  (default off), `brain_context_pack` promotes focus-matching memories
+  within their tier.
+- **Operator-readable handoff notes.** `o2b brain handoff
+  <session-file>` (and, when `session_handoff` is true, SessionEnd
+  lifecycle capture) writes `Brain/handoffs/<date>-<scope>.md` with
+  request, completed work, changed files, learned context, and next
+  steps - extracted by deterministic regex from the recorded turns, no
+  LLM.
+- **Scoped current-intention chains.** `o2b brain intention
+  set|show|list|move` (and the consolidated `brain_intention` MCP
+  tool) maintain per-workstream now-documents at
+  `Brain/intentions/<scope>.md`: every update bumps `version` and
+  appends the superseded text to an in-file history trail; `move`
+  retires the chain into `Brain/intentions/history/`. `Brain/pinned.md`
+  stays the scope-free scratchpad.
+
 ## [0.36.0] - 2026-06-03
 
 Embedding Provider Suite: four changes to the semantic layer that make
@@ -4113,6 +4184,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.37.0]: https://github.com/itechmeat/open-second-brain/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/itechmeat/open-second-brain/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/itechmeat/open-second-brain/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/itechmeat/open-second-brain/compare/v0.33.0...v0.34.0
