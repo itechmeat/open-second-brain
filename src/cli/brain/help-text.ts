@@ -85,6 +85,7 @@ Brain verbs (observing memory):
   links               Normalize wikilink path format (preserve/full/short); dry-run by default
   profile             Materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
   sgrep               Grep-shaped semantic search: o2b brain sgrep <query> [path]
+  trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/history)
 
 Common flags:
   --vault <path>   Override the configured vault

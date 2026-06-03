@@ -71,7 +71,7 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     global: {
       type: "boolean",
       description:
-        "Cross-vault union: fan the query out over registered profile vaults and read-only recall sources, merging results with origin labels. Default false (active vault only).",
+        "Cross-vault union: search profile vaults and read-only recall sources too, merging results with origin labels. Default false (active vault only).",
     },
     path_prefix: { type: "string", maxLength: 256 },
     telemetry: { type: "boolean" },

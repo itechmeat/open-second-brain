@@ -44,6 +44,7 @@ import {
   resolveAgentName,
   resolveLinkOutputFormat,
   resolveSearchFocusContextPack,
+  resolveTriggerCooldownDays,
 } from "../core/config.ts";
 import { resolveSearchConfig } from "../core/search/index.ts";
 import { readActiveSessionFocus } from "../core/search/session-focus.ts";
@@ -60,6 +61,10 @@ import { EntityAmbiguityError, getEntity, listEntities } from "../core/brain/ent
 import { validateEntityCategory } from "../core/brain/entities/canonical.ts";
 import { readPrefAudit } from "../core/brain/pref-audit.ts";
 import { buildMorningBrief } from "../core/brain/morning-brief.ts";
+import { deliverBriefTriggers, renderTriggerBriefSection } from "../core/brain/triggers/brief.ts";
+import { scanTriggers } from "../core/brain/triggers/scan.ts";
+import { listTriggers, transitionTrigger } from "../core/brain/triggers/store.ts";
+import { isTriggerStatus, type TriggerRecord } from "../core/brain/triggers/types.ts";
 import { aggregateSources } from "../core/brain/portability/sources.ts";
 import { switchProfile, listProfiles } from "../core/brain/portability/profiles.ts";
 import { defaultConfigPath } from "../core/config.ts";
@@ -1055,19 +1060,48 @@ async function toolBrainMorningBrief(
     "brain_morning_brief",
   );
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_morning_brief");
+  const now = new Date();
   const brief = buildMorningBrief(ctx.vault, {
-    now: new Date(),
+    now,
     topK,
     lookbackDays,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
   });
+  // Pending-trigger section (t_cd1fee79): renders only when a trigger
+  // scan persisted surfaceable triggers; included triggers are marked
+  // delivered so a prompt shows once per cooldown window. Fail-soft -
+  // a broken queue never breaks the brief.
+  let triggerSection: ReturnType<typeof renderTriggerBriefSection> | null = null;
+  try {
+    triggerSection = renderTriggerBriefSection(ctx.vault, {
+      now,
+      cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
+    });
+    if (triggerSection.triggers.length > 0) deliverBriefTriggers(ctx.vault, triggerSection, now);
+  } catch {
+    triggerSection = null;
+  }
+  const text =
+    triggerSection !== null && triggerSection.text !== ""
+      ? `${brief.text}${brief.text.length > 0 ? "\n\n" : ""}${triggerSection.text}`
+      : brief.text;
   return {
-    text: brief.text,
+    text,
     preferences: brief.preferences,
     open_questions: brief.openQuestions,
     recent_notes: brief.recentNotes,
     total_chars: brief.totalChars,
+    ...(triggerSection !== null && triggerSection.triggers.length > 0
+      ? {
+          triggers: triggerSection.triggers.map((t) => ({
+            id: t.id,
+            kind: t.kind,
+            urgency: t.urgency,
+            reason: t.reason,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -1865,6 +1899,79 @@ function toolBrainIntention(
   throw new MCPError(
     INVALID_PARAMS,
     "brain_intention operation must be one of: set, show, list, move",
+  );
+}
+
+// ----- brain_trigger (Workspace Insight Suite) ------------------------------
+
+function triggerToJson(record: TriggerRecord): Record<string, unknown> {
+  return {
+    id: record.id,
+    kind: record.kind,
+    status: record.effectiveStatus,
+    urgency: record.urgency,
+    reason: record.reason,
+    suggested_action: record.suggestedAction,
+    source_artifacts: record.sourceArtifacts,
+    cooldown_key: record.cooldownKey,
+    created_at: record.createdAt,
+    expires_at: record.expiresAt,
+    delivered_at: record.deliveredAt,
+    resolved_at: record.resolvedAt,
+  };
+}
+
+const TRIGGER_TERMINAL = new Set(["acted", "dismissed", "expired"]);
+
+function toolBrainTrigger(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const operation = coerceStr(args, "operation", true)!;
+  const now = new Date();
+  if (operation === "scan") {
+    const cooldownDays = resolveTriggerCooldownDays(ctx.configPath ?? undefined);
+    const result = scanTriggers(ctx.vault, { now, cooldownDays });
+    return {
+      operation,
+      candidates: result.candidates,
+      created: result.created.map(triggerToJson),
+      skipped: result.skipped.map((skip) => ({
+        cooldown_key: skip.cooldownKey,
+        reason: skip.reason,
+      })),
+    };
+  }
+  if (operation === "list" || operation === "history") {
+    const statusRaw = coerceStr(args, "status", false);
+    if (statusRaw !== null && statusRaw !== undefined && !isTriggerStatus(statusRaw)) {
+      throw new MCPError(INVALID_PARAMS, `brain_trigger: unknown status '${statusRaw}'`);
+    }
+    let records = listTriggers(ctx.vault, {
+      now,
+      ...(statusRaw ? { status: statusRaw } : {}),
+    });
+    if (operation === "history") {
+      records = records.filter((record) => TRIGGER_TERMINAL.has(record.effectiveStatus));
+    } else if (!statusRaw) {
+      records = records.filter((record) => !TRIGGER_TERMINAL.has(record.effectiveStatus));
+    }
+    return { operation, triggers: records.map(triggerToJson) };
+  }
+  if (operation === "acknowledge" || operation === "dismiss" || operation === "act") {
+    const id = coerceStr(args, "id", true)!;
+    try {
+      return {
+        operation,
+        trigger: triggerToJson(transitionTrigger(ctx.vault, id, operation, { now })),
+      };
+    } catch (err) {
+      throw new MCPError(INVALID_PARAMS, `brain_trigger: ${(err as Error).message}`);
+    }
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_trigger operation must be one of: scan, list, history, acknowledge, dismiss, act",
   );
 }
 
@@ -2948,6 +3055,36 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     },
     previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainIntention,
+  },
+  {
+    name: "brain_trigger",
+    description:
+      "Grounded proactive trigger queue under Brain/triggers/: scan generates deduped triggers from health/retention data, list/history read by lifecycle status, acknowledge/dismiss/act transition one trigger. Anti-nag: cooldown keys keep the same issue from reappearing every run.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["scan", "list", "history", "acknowledge", "dismiss", "act"],
+          description: "Operation to perform.",
+        },
+        id: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description: "Trigger id for acknowledge/dismiss/act.",
+        },
+        status: {
+          type: "string",
+          enum: ["pending", "delivered", "acknowledged", "acted", "dismissed", "expired"],
+          description: "Effective-status filter for list.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainTrigger,
   },
   {
     name: "brain_context",

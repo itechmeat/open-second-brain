@@ -336,6 +336,23 @@ export function resolveWikiLinkFormat(configPath?: string): WikiLinkFormat {
   return raw;
 }
 
+/**
+ * Trigger cooldown window in days (Workspace Insight Suite,
+ * t_cd1fee79): how long a dismissed/acted trigger blocks recreation
+ * and how long a delivered trigger stays out of the morning brief.
+ * Default 7. An invalid value fails fast.
+ */
+export function resolveTriggerCooldownDays(configPath?: string): number {
+  const env = process.env["OPEN_SECOND_BRAIN_TRIGGER_COOLDOWN_DAYS"]?.trim();
+  const raw = env || discoverConfig(configPath).data["trigger_cooldown_days"]?.trim();
+  if (raw === undefined || raw === "") return 7;
+  const days = Number(raw);
+  if (!Number.isInteger(days) || days < 0) {
+    throw new Error(`trigger_cooldown_days must be a non-negative integer; got '${raw}'`);
+  }
+  return days;
+}
+
 export const SESSION_CAPTURE_ROLES = ["user", "assistant", "system", "tool", "meta"] as const;
 
 export type SessionCaptureRole = (typeof SESSION_CAPTURE_ROLES)[number];
