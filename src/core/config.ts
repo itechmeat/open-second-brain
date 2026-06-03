@@ -366,6 +366,17 @@ export function resolveRecallGateTelemetry(configPath?: string): boolean {
   return raw === "true" || raw === "1";
 }
 
+/**
+ * Optional external judge command for the memory benchmark (Memory
+ * Observability Suite, t_882c396a). Unset (the default) means the
+ * judge phase is skipped - the harness itself never calls an LLM.
+ */
+export function resolveBenchJudgeCmd(configPath?: string): string | undefined {
+  const env = process.env["OPEN_SECOND_BRAIN_BENCH_JUDGE_CMD"]?.trim();
+  const raw = env || discoverConfig(configPath).data["bench_judge_cmd"]?.trim();
+  return raw !== undefined && raw !== "" ? raw : undefined;
+}
+
 export const SESSION_CAPTURE_ROLES = ["user", "assistant", "system", "tool", "meta"] as const;
 
 export type SessionCaptureRole = (typeof SESSION_CAPTURE_ROLES)[number];

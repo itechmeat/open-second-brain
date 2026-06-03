@@ -25,3 +25,4 @@ sandbox-vault/
 .codegraph/
 .orphaned_at
 .claude/scheduled_tasks.lock
+.open-second-brain/bench-runs/
