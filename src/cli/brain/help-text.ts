@@ -83,6 +83,8 @@ Brain verbs (observing memory):
   project             Link project directories to their owning vault (link/list/remove/status)
   source              Read-only recall sources of the active vault (add/list/remove)
   links               Normalize wikilink path format (preserve/full/short); dry-run by default
+  profile             Materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
+  sgrep               Grep-shaped semantic search: o2b brain sgrep <query> [path]
 
 Common flags:
   --vault <path>   Override the configured vault
