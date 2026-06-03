@@ -1903,8 +1903,11 @@ async function toolBrainContextPack(
   // never breaks the pack.
   let sessionFocus: ReturnType<typeof readActiveSessionFocus> = null;
   if (resolveSearchFocusContextPack(ctx.configPath ?? undefined)) {
+    // Argument validation stays OUTSIDE the fail-soft block: an invalid
+    // focus_session is a caller error (INVALID_PARAMS), not a config
+    // read to swallow.
+    const focusSession = coerceStr(args, "focus_session", false) ?? undefined;
     try {
-      const focusSession = coerceStr(args, "focus_session", false) ?? undefined;
       const searchConfig = resolveSearchConfig({
         vault: ctx.vault,
         configPath: ctx.configPath ?? undefined,

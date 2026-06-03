@@ -79,7 +79,7 @@ export function toolDescriptors(
       tags: [],
     }),
   );
-  out.sort((a, b) => a.name.localeCompare(b.name));
+  out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return Object.freeze(out);
 }
 
@@ -96,6 +96,6 @@ export function skillDescriptors(
       tags: [],
     }),
   );
-  out.sort((a, b) => a.name.localeCompare(b.name));
+  out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return Object.freeze(out);
 }

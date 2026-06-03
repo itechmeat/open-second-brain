@@ -127,11 +127,14 @@ export function writeHandoffNote(vault: string, input: WriteHandoffNoteInput): H
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${isoDate(now)}-${scope}.md`);
   const body = buildHandoffNote(input.turns, input);
+  // JSON.stringify-quote the caller-supplied scalars: YAML-significant
+  // characters or newlines in a session id / agent name must not be
+  // able to break or inject frontmatter fields.
   const content = [
     "---",
-    `session_id: ${input.sessionId}`,
+    `session_id: ${JSON.stringify(input.sessionId)}`,
     `scope: ${scope}`,
-    `agent: ${input.agent}`,
+    `agent: ${JSON.stringify(input.agent)}`,
     `created_at: ${isoSecond(now)}`,
     `turns: ${input.turns.length}`,
     "---",

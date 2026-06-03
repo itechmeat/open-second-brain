@@ -103,6 +103,16 @@ test("readSkillFile rejects traversal and absolute paths", () => {
   expect(() => readSkillFile(skill!, "/etc/passwd")).toThrow(SkillError);
 });
 
+test("readSkillFile refuses a symlink that escapes the skill directory", () => {
+  const root = join(tmp, "skills");
+  const dir = writeSkill(root, "linked", "name: linked\ndescription: l", "l");
+  writeFileSync(join(tmp, "outside-secret.txt"), "secret");
+  const { symlinkSync } = require("node:fs") as typeof import("node:fs");
+  symlinkSync(join(tmp, "outside-secret.txt"), join(dir, "escape.md"));
+  const [skill] = discoverSkills([root]);
+  expect(() => readSkillFile(skill!, "escape.md")).toThrow(SkillError);
+});
+
 test("readSkillFile throws NOT_FOUND for a missing auxiliary file", () => {
   const root = join(tmp, "skills");
   writeSkill(root, "sparse", "name: sparse\ndescription: s", "s");

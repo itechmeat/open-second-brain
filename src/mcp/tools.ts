@@ -265,7 +265,7 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
     "withheld",
   ],
   properties: {
-    scope: { type: "string", enum: ["full", "writer"] },
+    scope: { type: "string", enum: ["full", "writer", "catalog"] },
     server_name: { type: "string" },
     static_tool_count: { type: "integer" },
     available_tool_count: { type: "integer" },

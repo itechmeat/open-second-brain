@@ -33,28 +33,34 @@ export async function cmdBrainHandoff(argv: string[]): Promise<number> {
   const agent = normalizeFlagString(flags["agent"]) ?? resolveAgentName(config);
   const sessionId = normalizeFlagString(flags["session-id"]) ?? basename(sessionPath);
 
-  const formatRaw = flags["format"] as string | undefined;
-  let adapter;
-  if (formatRaw !== undefined && formatRaw !== "auto") {
-    if (!isSessionAdapterId(formatRaw)) return fail(`unknown --format: ${formatRaw}`);
-    adapter = getAdapter(formatRaw);
-  } else {
-    const text = readFileSync(sessionPath, "utf8");
-    const nl = text.indexOf("\n");
-    adapter = detectAdapter(nl < 0 ? text : text.slice(0, nl));
-    if (adapter === null) {
-      return fail(`could not autodetect session format for ${sessionPath}; pass --format`);
+  // CLI error boundary: read/parse/write failures land as fail(...)
+  // (controlled exit), never an uncaught exception.
+  try {
+    const formatRaw = flags["format"] as string | undefined;
+    let adapter;
+    if (formatRaw !== undefined && formatRaw !== "auto") {
+      if (!isSessionAdapterId(formatRaw)) return fail(`unknown --format: ${formatRaw}`);
+      adapter = getAdapter(formatRaw);
+    } else {
+      const text = readFileSync(sessionPath, "utf8");
+      const nl = text.indexOf("\n");
+      adapter = detectAdapter(nl < 0 ? text : text.slice(0, nl));
+      if (adapter === null) {
+        return fail(`could not autodetect session format for ${sessionPath}; pass --format`);
+      }
     }
-  }
 
-  const turns: SessionTurn[] = [];
-  for await (const turn of adapter.iterate(sessionPath)) turns.push(turn);
+    const turns: SessionTurn[] = [];
+    for await (const turn of adapter.iterate(sessionPath)) turns.push(turn);
 
-  const result = writeHandoffNote(vault, { turns, sessionId, agent });
-  if (flags["json"]) {
-    okJson({ ok: true, path: result.path, scope: result.scope, turns: turns.length });
+    const result = writeHandoffNote(vault, { turns, sessionId, agent });
+    if (flags["json"]) {
+      okJson({ ok: true, path: result.path, scope: result.scope, turns: turns.length });
+      return 0;
+    }
+    ok(`handoff note written: ${result.path} (${turns.length} turns)`);
     return 0;
+  } catch (err) {
+    return fail((err as Error).message ?? String(err));
   }
-  ok(`handoff note written: ${result.path} (${turns.length} turns)`);
-  return 0;
 }

@@ -10,7 +10,7 @@
  * filesystem.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
@@ -115,7 +115,7 @@ export function discoverSkills(roots: ReadonlyArray<string>): SkillEntry[] {
       }
     }
   }
-  return [...byName.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  return [...byName.values()].toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 /**
@@ -135,5 +135,12 @@ export function readSkillFile(entry: SkillEntry, filePath?: string): string {
   if (!existsSync(abs)) {
     throw new SkillError("NOT_FOUND", `skill file not found: ${filePath}`);
   }
-  return readFileSync(abs, "utf8");
+  // Re-check after symlink resolution: a link inside the skill
+  // directory must not smuggle reads outside it.
+  const realDir = realpathSync(entry.path);
+  const realTarget = realpathSync(abs);
+  if (realTarget !== realDir && !realTarget.startsWith(realDir + sep)) {
+    throw new SkillError("INVALID_PATH", "skill file path must stay inside the skill directory");
+  }
+  return readFileSync(realTarget, "utf8");
 }

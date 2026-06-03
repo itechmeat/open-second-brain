@@ -113,7 +113,8 @@ test("writeHandoffNote lands Brain/handoffs/<date>-<scope>.md with frontmatter",
   expect(result.path.endsWith(join("Brain", "handoffs", "2026-06-03-sess-42.md"))).toBe(true);
   expect(existsSync(result.path)).toBe(true);
   const content = readFileSync(result.path, "utf8");
-  expect(content).toContain("session_id: Sess 42");
-  expect(content).toContain("agent: test-agent");
+  // Caller-supplied scalars are JSON-quoted against YAML injection.
+  expect(content).toContain('session_id: "Sess 42"');
+  expect(content).toContain('agent: "test-agent"');
   expect(content).toContain("## Request");
 });

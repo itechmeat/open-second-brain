@@ -63,12 +63,15 @@ function renderChain(chain: Omit<IntentionChain, "path">): string {
     chain.history.length === 0
       ? ""
       : `\n${HISTORY_HEADER}\n\n${chain.history.map((line) => `- ${line}`).join("\n")}\n`;
+  // The agent name is caller-supplied: JSON.stringify-quote it so
+  // YAML-significant characters cannot corrupt the chain file
+  // (parseFrontmatter strips the quotes on read).
   return [
     "---",
     `scope: ${chain.scope}`,
     `version: ${chain.version}`,
     `updated_at: ${chain.updatedAt}`,
-    `agent: ${chain.agent}`,
+    `agent: ${JSON.stringify(chain.agent)}`,
     "---",
     "",
     chain.text,
@@ -85,7 +88,10 @@ function parseChain(vault: string, scope: string): IntentionChain | null {
     typeof versionRaw === "string" && /^[0-9]+$/.test(versionRaw)
       ? Number.parseInt(versionRaw, 10)
       : 1;
-  const headerIndex = body.indexOf(HISTORY_HEADER);
+  // Match the trail as a real heading line, not a substring, so
+  // intention text that merely mentions "## History" is never split.
+  const headerMatch = /^## History$/mu.exec(body);
+  const headerIndex = headerMatch?.index ?? -1;
   const text = (headerIndex < 0 ? body : body.slice(0, headerIndex)).trim();
   const history: string[] = [];
   if (headerIndex >= 0) {
@@ -148,7 +154,7 @@ export function listIntentions(vault: string): IntentionChain[] {
     const chain = parseChain(vault, name.replace(/\.md$/u, ""));
     if (chain !== null) out.push(chain);
   }
-  return out.toSorted((a, b) => a.scope.localeCompare(b.scope));
+  return out.toSorted((a, b) => (a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0));
 }
 
 /** Retire a chain into Brain/intentions/history/ and clear the active file. */

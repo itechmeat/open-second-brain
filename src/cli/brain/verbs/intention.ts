@@ -30,7 +30,12 @@ export async function cmdBrainIntention(argv: string[]): Promise<number> {
   const json = flags["json"] === true;
 
   if (action === "list") {
-    const intentions = listIntentions(vault);
+    let intentions;
+    try {
+      intentions = listIntentions(vault);
+    } catch (err) {
+      return fail((err as Error).message ?? String(err));
+    }
     if (json) {
       okJson({
         ok: true,

@@ -24,8 +24,10 @@ export const SESSION_SCOPE_MAX_LENGTH = 64;
  * separator-only input is a caller bug and throws.
  */
 export function resolveSessionScope(raw: string): string {
+  // Plain toLowerCase: scope slugs become cross-host filenames, so
+  // locale-dependent casing (Turkish dotless-i) must never vary them.
   const slug = raw
-    .toLocaleLowerCase()
+    .toLowerCase()
     .replace(/[^a-z0-9]+/gu, "-")
     .replace(/^-+|-+$/gu, "")
     .slice(0, SESSION_SCOPE_MAX_LENGTH)

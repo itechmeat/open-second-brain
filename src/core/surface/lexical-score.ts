@@ -30,10 +30,13 @@ export interface LexicalScoreOptions {
 
 const DEFAULTS = Object.freeze({ nameWeight: 3, tagWeight: 2, k1: 1.2, b: 0.75 });
 
-/** Lowercase, split on non-alphanumerics, drop 1-char tokens. */
+/**
+ * Lowercase, split on non-alphanumerics, drop 1-char tokens. Plain
+ * toLowerCase keeps tokenisation identical across host locales.
+ */
 export function tokenize(text: string): string[] {
   const out: string[] = [];
-  for (const raw of text.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+  for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
     if (raw.length >= 2) out.push(raw);
   }
   return out;
@@ -106,6 +109,10 @@ export function scoreDescriptors(
     if (score > 0) scored.push({ descriptor: doc.descriptor, score });
   }
 
-  scored.sort((a, b) => b.score - a.score || a.descriptor.name.localeCompare(b.descriptor.name));
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      (a.descriptor.name < b.descriptor.name ? -1 : a.descriptor.name > b.descriptor.name ? 1 : 0),
+  );
   return scored;
 }
