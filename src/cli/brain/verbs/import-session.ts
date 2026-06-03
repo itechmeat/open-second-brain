@@ -1,5 +1,9 @@
 import { statSync } from "node:fs";
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import {
+  defaultConfigPath,
+  resolveAgentName,
+  resolveSessionCaptureRoles,
+} from "../../../core/config.ts";
 import { importSession, importSessionPath } from "../../../core/brain/sessions/import.ts";
 import { SessionImportError, type SessionAdapterId } from "../../../core/brain/sessions/types.ts";
 import {
@@ -54,7 +58,17 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     "--recall-summary-group-size",
   );
   const ingestScope = normalizeFlagString(flags["ingest-scope"] as string | undefined);
-  const filterRoles = normalizeRoleFilter(flags["filter-role"] as string[] | undefined);
+  const explicitRoles = normalizeRoleFilter(flags["filter-role"] as string[] | undefined);
+  // Config-level default (t_e2346fe9): session_capture_roles applies
+  // only when no explicit --filter-role flag is given; flag wins.
+  let filterRoles = explicitRoles;
+  if (explicitRoles.length === 0) {
+    try {
+      filterRoles = resolveSessionCaptureRoles(config) ?? [];
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  }
   const filterText = normalizeFlagString(flags["filter-text"] as string | undefined);
 
   const formatRaw = flags["format"] as string | undefined;

@@ -277,6 +277,40 @@ export function resolveSkillAutoAttach(configPath?: string): boolean {
   return raw === "true" || raw === "1";
 }
 
+export const SESSION_CAPTURE_ROLES = ["user", "assistant", "system", "tool", "meta"] as const;
+
+export type SessionCaptureRole = (typeof SESSION_CAPTURE_ROLES)[number];
+
+function isSessionCaptureRole(value: string): value is SessionCaptureRole {
+  return (SESSION_CAPTURE_ROLES as ReadonlyArray<string>).includes(value);
+}
+
+/**
+ * Config-level default for session-capture role filtering (Agent
+ * Surface Suite, t_e2346fe9). `session_capture_roles` is a
+ * comma-separated subset of user/assistant/system/tool/meta; absent or
+ * empty means "capture every role" (null = no filter, bit-identical to
+ * the pre-key behaviour). An unknown role name fails fast - a silent
+ * typo here would silently drop memory.
+ */
+export function resolveSessionCaptureRoles(configPath?: string): SessionCaptureRole[] | null {
+  const env = process.env["OPEN_SECOND_BRAIN_SESSION_CAPTURE_ROLES"]?.trim();
+  const raw = env || discoverConfig(configPath).data["session_capture_roles"]?.trim();
+  if (!raw) return null;
+  const roles: SessionCaptureRole[] = [];
+  for (const part of raw.split(",")) {
+    const role = part.trim().toLowerCase();
+    if (role.length === 0) continue;
+    if (!isSessionCaptureRole(role)) {
+      throw new Error(
+        `session_capture_roles: unknown role "${role}" (expected a subset of ${SESSION_CAPTURE_ROLES.join(", ")})`,
+      );
+    }
+    if (!roles.includes(role)) roles.push(role);
+  }
+  return roles.length > 0 ? roles : null;
+}
+
 /** Replace values for keys whose name suggests a secret with `[REDACTED]`. */
 export function redactMapping<T extends Record<string, unknown>>(data: T): Record<string, unknown> {
   const redacted: Record<string, unknown> = {};
