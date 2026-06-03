@@ -265,6 +265,18 @@ export function resolveMcpToolProfile(configPath?: string): string | null {
   return raw ? raw : null;
 }
 
+/**
+ * Skill auto-attach gate (Agent Surface Suite). Default OFF: the
+ * skills_attach tool returns an empty block unless the operator sets
+ * `skill_auto_attach: "true"` (or the matching env override), so the
+ * default per-turn injection stays bit-identical.
+ */
+export function resolveSkillAutoAttach(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_SKILL_AUTO_ATTACH"]?.trim();
+  const raw = env || discoverConfig(configPath).data["skill_auto_attach"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
 /** Replace values for keys whose name suggests a secret with `[REDACTED]`. */
 export function redactMapping<T extends Record<string, unknown>>(data: T): Record<string, unknown> {
   const redacted: Record<string, unknown> = {};

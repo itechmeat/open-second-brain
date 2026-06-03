@@ -250,6 +250,7 @@ describe("tool listing", () => {
         // Agent Surface Suite: skill discovery + two-pass hydration.
         "list_skills",
         "get_skill",
+        "skills_attach",
         "tool_hydrate",
       ].toSorted(),
     );
@@ -498,8 +499,9 @@ describe("stdio loop", () => {
     // + brain_brief / brain_analytics / schema_inspect (token-diet) = 74
     // - 18 predecessors hidden as deprecated aliases (callable via
     //   tools/call, not advertised) = 56 (+1 capability diagnostic = 57).
-    // + list_skills / get_skill / tool_hydrate (Agent Surface Suite) = 60.
-    expect(list.result.tools.length).toBe(60);
+    // + list_skills / get_skill / skills_attach / tool_hydrate
+    //   (Agent Surface Suite) = 61.
+    expect(list.result.tools.length).toBe(61);
   });
 
   test("returns parse error for invalid JSON", async () => {

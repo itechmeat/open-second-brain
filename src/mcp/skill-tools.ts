@@ -4,11 +4,16 @@
  * `list_skills` / `get_skill` let any MCP-connected agent discover and
  * load the skills Open Second Brain ships in `skills/` (plus optional
  * vault-local skills under `Brain/skills/`) without shell access or
- * prior knowledge of skill names.
+ * prior knowledge of skill names. `skills_attach` is the deterministic
+ * per-turn relevance surface: gated by the `skill_auto_attach` config
+ * key (default off), it scores skills against the current turn text
+ * with the shared lexical scorer and returns a char-budgeted block.
  */
 
+import { resolveSkillAutoAttach } from "../core/config.ts";
+import { buildSkillAttachment } from "../core/surface/skill-attach.ts";
 import { discoverSkills, readSkillFile, skillRoots, SkillError } from "../core/surface/skills.ts";
-import { coerceStr } from "./coerce.ts";
+import { coerceInt, coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
@@ -54,6 +59,32 @@ function toolGetSkill(ctx: ServerContext, args: Record<string, unknown>): Record
   };
 }
 
+function toolSkillsAttach(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const query = coerceStr(args, "query", true)!;
+  const maxSkills = coerceInt(args, "max_skills", 3, 1, 10);
+  if (!resolveSkillAutoAttach(ctx.configPath ?? undefined)) {
+    return { enabled: false, block: "", skills: [] };
+  }
+  const attachment = buildSkillAttachment({
+    query,
+    skills: discoverSkills(rootsFor(ctx)),
+    maxSkills,
+  });
+  return {
+    enabled: true,
+    block: attachment.block,
+    skills: attachment.items.map((item) => ({
+      name: item.name,
+      description: item.description,
+      path: item.path,
+      score: item.score,
+    })),
+  };
+}
+
 export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "list_skills",
@@ -87,5 +118,29 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
       additionalProperties: false,
     },
     handler: (ctx, args) => toolGetSkill(ctx, args),
+  },
+  {
+    name: "skills_attach",
+    description:
+      "Score available skills against the current turn text and return a char-budgeted block of relevant skill summaries. Returns enabled:false unless skill_auto_attach is configured.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Current turn text to score skills against.",
+        },
+        max_skills: {
+          type: "integer",
+          minimum: 1,
+          maximum: 10,
+          description: "Maximum number of skills to attach (default 3).",
+        },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: (ctx, args) => toolSkillsAttach(ctx, args),
   },
 ];
