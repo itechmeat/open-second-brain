@@ -9,6 +9,7 @@
 
 import { discoverSkills, readSkillFile, skillRoots, SkillError } from "../core/surface/skills.ts";
 import { coerceStr } from "./coerce.ts";
+import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
 
@@ -63,6 +64,7 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
       properties: {},
       additionalProperties: false,
     },
+    previewBudget: MCP_PREVIEW_BUDGET,
     handler: (ctx) => toolListSkills(ctx),
   },
   {

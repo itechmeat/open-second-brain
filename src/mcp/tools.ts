@@ -34,6 +34,7 @@ import { SCHEMA_TOOLS } from "./schema-tools.ts";
 import { WATCHDOG_TOOLS } from "./watchdog-tools.ts";
 import { PAY_MEMORY_TOOLS } from "./pay-memory-tools.ts";
 import { SKILL_TOOLS } from "./skill-tools.ts";
+import { buildHydrateTool, TOOL_HYDRATE_NAME } from "./hydrate-tool.ts";
 import { normalizeAgentArgument, PLACEHOLDER_AGENT_VALUES } from "../core/agent-identity.ts";
 import { vaultRelative } from "../core/path-safety.ts";
 import { listVaultPages } from "../core/vault.ts";
@@ -287,7 +288,7 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
   },
 };
 
-export type ToolScope = "full" | "writer";
+export type ToolScope = "full" | "writer" | "catalog";
 
 /**
  * Deprecated delegating alias (token-diet, t_3920db77): the tool name
@@ -325,6 +326,15 @@ const WRITER_TOOL_NAMES: ReadonlySet<string> = new Set([
   "brain_feedback",
   "brain_note",
   "brain_pinned_context",
+]);
+
+// First-pass surface of the two-pass catalog scope (Agent Surface
+// Suite): the always-available diagnostic, the writer set, and the
+// hydration tool. Everything else stays callable but unadvertised.
+const CATALOG_ADVERTISED_NAMES: ReadonlySet<string> = new Set([
+  CAPABILITY_DIAGNOSTIC_TOOL,
+  ...WRITER_TOOL_NAMES,
+  TOOL_HYDRATE_NAME,
 ]);
 
 export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
@@ -417,8 +427,17 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
     ...PAY_MEMORY_TOOLS,
     ...SKILL_TOOLS,
   ];
+  if (scope === "writer") return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));
+  // The hydrate tool closes over the finished table (itself included)
+  // so its catalog and schema lookups always reflect this process's
+  // real surface.
+  all.push(buildHydrateTool(() => all));
   if (scope === "full") return all;
-  return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));
+  // Catalog scope: the compact first-pass set stays advertised; every
+  // other tool keeps `hidden` semantics - callable, not listed.
+  return all.map((t) =>
+    CATALOG_ADVERTISED_NAMES.has(t.name) || t.hidden === true ? t : { ...t, hidden: true },
+  );
 }
 
 export function findTool(tools: ReadonlyArray<ToolDefinition>, name: string): ToolDefinition {

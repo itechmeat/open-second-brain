@@ -49,12 +49,31 @@ Prefer the writer-server copies of brain_feedback / brain_apply_evidence /
 brain_note / brain_pinned_context over any duplicate exposed by the full server — both call the same
 handler, but the writer copy is always available without ToolSearch.`;
 
+const CATALOG_INSTRUCTIONS = `Open Second Brain — two-pass catalog MCP surface.
+
+This server advertises a compact first-pass tool set: the capability
+diagnostic, the five always-loaded Brain writers/readers, and
+tool_hydrate. Every other Open Second Brain tool stays CALLABLE via
+tools/call — it is only omitted from tools/list to keep schema tokens
+out of your prompt until needed.
+
+Second pass: call tool_hydrate with no arguments to get the compact
+catalog (name, one-line description, group) of every tool in this
+process, then call tool_hydrate with names: [...] to fetch the full
+input/output schemas for the tools you actually need. After hydration,
+invoke those tools directly by name through tools/call — no further
+registration step exists or is needed.
+
+Do not invent substitute workflows for a capability you cannot see:
+hydrate the catalog first; the tool is almost certainly already here.`;
+
 export function buildInstructions(opts: BuildInstructionsOpts | string): string {
   // Legacy call-site compat: plain string → full-surface branch.
   const agent = typeof opts === "string" ? opts : opts.agent;
   const scope = typeof opts === "string" ? undefined : opts.scope;
 
   if (scope === "writer") return WRITER_INSTRUCTIONS;
+  if (scope === "catalog") return CATALOG_INSTRUCTIONS;
 
   // Deliberately terse (token-diet): per-tool detail lives in the tool
   // descriptions and docs/mcp.md; this text carries only the contract

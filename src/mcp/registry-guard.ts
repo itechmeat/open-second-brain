@@ -125,6 +125,8 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_procedural_graph: "bounded graph summary",
   brain_recurrence: "bounded recurrence records; learn/forget are writes",
   brain_agent_diff: "bounded two-agent comparison",
+  get_skill: "explicit full-content fetch; truncating the skill the agent asked for defeats it",
+  tool_hydrate: "the two-pass schema escape hatch; truncating hydration would defeat itself",
 
   // Deprecated aliases (token-diet): the consolidated tool carries the
   // budget; the alias keeps its predecessor's budget status until

@@ -406,9 +406,9 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // rejected to avoid silent surprises.
   const writerOnly = Boolean(flags["writer-only"]);
   const rawScope = (flags["scope"] as string | undefined) ?? (writerOnly ? "writer" : "full");
-  if (rawScope !== "full" && rawScope !== "writer") {
+  if (rawScope !== "full" && rawScope !== "writer" && rawScope !== "catalog") {
     process.stderr.write(
-      `o2b mcp: invalid --scope value: ${rawScope}; expected one of: full, writer\n`,
+      `o2b mcp: invalid --scope value: ${rawScope}; expected one of: full, writer, catalog\n`,
     );
     return 2;
   }
@@ -482,7 +482,7 @@ function parseCapabilityWindow(
 async function runMcpProbe(args: {
   vault: string | undefined;
   config: string;
-  scope: "full" | "writer";
+  scope: "full" | "writer" | "catalog";
   serverName: string;
   json: boolean;
   capabilityWindow: RuntimeCapabilityWindow | undefined;
