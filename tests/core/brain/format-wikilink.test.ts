@@ -95,6 +95,23 @@ test("normalizeWikilinks in preserve mode returns byte-identical content", () =>
   expect(result.changed).toBe(0);
 });
 
+test("tilde and long-backtick fences are preserved too", () => {
+  const content = [
+    "Outside [[alpha]].",
+    "~~~",
+    "[[alpha]] in a tilde fence stays",
+    "~~~",
+    "````",
+    "[[alpha]] in a four-backtick fence stays",
+    "````",
+  ].join("\n");
+  const result = normalizeWikilinks(content, "full", PAGES);
+  expect(result.content).toContain("Outside [[Brain/notes/alpha]].");
+  expect(result.content).toContain("[[alpha]] in a tilde fence stays");
+  expect(result.content).toContain("[[alpha]] in a four-backtick fence stays");
+  expect(result.changed).toBe(1);
+});
+
 test("media embeds are never rewritten", () => {
   const content = "![[diagram.png]] and [[alpha]]";
   const result = normalizeWikilinks(content, "full", PAGES);

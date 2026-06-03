@@ -11,6 +11,7 @@ import {
   findVaultPointer,
   linkedProjectsStatus,
   listLinkedProjects,
+  readVaultPointer,
   registerLinkedProject,
   removeVaultPointer,
   unregisterLinkedProject,
@@ -36,8 +37,19 @@ export async function cmdBrainProject(argv: string[]): Promise<number> {
       if (!target) return fail("brain project link requires a project path");
       const projectDir = resolve(target);
       const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+      const priorPointer = readVaultPointer(projectDir);
       const pointerPath = writeVaultPointer(projectDir, vault);
-      registerLinkedProject(config, projectDir, vault);
+      try {
+        registerLinkedProject(config, projectDir, vault);
+      } catch (registryErr) {
+        // Keep the two stores in agreement: roll the pointer back to
+        // its prior state before surfacing the registry failure.
+        if (priorPointer === null) removeVaultPointer(projectDir);
+        else if (priorPointer.pointer !== null) {
+          writeVaultPointer(projectDir, priorPointer.pointer.vault);
+        }
+        throw registryErr;
+      }
       if (json) okJson({ ok: true, path: projectDir, vault, pointer: pointerPath });
       else ok(`linked ${projectDir} -> ${vault}`);
       return 0;
@@ -61,8 +73,11 @@ export async function cmdBrainProject(argv: string[]): Promise<number> {
       const target = positional[0];
       if (!target) return fail("brain project remove requires a project path");
       const projectDir = resolve(target);
-      const removedPointer = removeVaultPointer(projectDir);
+      // Registry first: if the pointer removal then fails, a re-run
+      // still succeeds (pointer present, entry already gone). The
+      // reverse order would leave a registered project with no pointer.
       const removedEntry = unregisterLinkedProject(config, projectDir);
+      const removedPointer = removeVaultPointer(projectDir);
       if (!removedPointer && !removedEntry) {
         return fail(`no project link found at ${projectDir}`);
       }

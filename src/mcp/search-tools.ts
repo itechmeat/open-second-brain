@@ -336,7 +336,7 @@ async function toolBrainSearch(
     // Cross-vault union (t_72a22658): explicit per-call opt-in.
     outcome = await withTimeout(
       globalSearch
-        ? searchAcrossVaults(ctx.configPath ?? defaultConfigPath(), ctx.vault, searchOpts)
+        ? searchAcrossVaults(ctx.configPath ?? defaultConfigPath(), ctx.vault, searchOpts, config)
         : search(config, searchOpts),
       SEARCH_TIMEOUT_MS,
       searchTimeoutError,

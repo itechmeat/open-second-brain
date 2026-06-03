@@ -50,9 +50,18 @@ interface NoteFile {
   readonly absPath: string;
 }
 
-/** Recursively list .md files under Brain/, skipping machine dirs. */
-function listBrainNotes(vault: string): NoteFile[] {
-  const skip = new Set(["log", "inbox", "triggers", "intentions", "handoffs", "continuity"]);
+/** Top-level Brain dirs whose notes never count as orphan CANDIDATES. */
+const MACHINE_DIRS: ReadonlySet<string> = new Set([
+  "log",
+  "inbox",
+  "triggers",
+  "intentions",
+  "handoffs",
+  "continuity",
+]);
+
+/** Recursively list .md files under Brain/, optionally skipping dirs. */
+function listBrainNotes(vault: string, skipTopLevel: ReadonlySet<string> = new Set()): NoteFile[] {
   const out: NoteFile[] = [];
   const walk = (dir: string, rel: string): void => {
     let entries;
@@ -65,7 +74,7 @@ function listBrainNotes(vault: string): NoteFile[] {
       if (entry.name.startsWith(".")) continue;
       const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
       if (entry.isDirectory()) {
-        if (rel === "" && skip.has(entry.name)) continue;
+        if (rel === "" && skipTopLevel.has(entry.name)) continue;
         walk(join(dir, entry.name), childRel);
       } else if (entry.name.endsWith(".md")) {
         out.push({ relPath: `Brain/${childRel}`, absPath: join(dir, entry.name) });
@@ -118,10 +127,14 @@ export function discoverIdeas(
     );
   }
 
-  // 2. Orphan research notes: no inbound wikilink from any Brain note.
-  const notes = listBrainNotes(vault);
+  // 2. Orphan research notes: no inbound wikilink from ANY Brain note.
+  // Two passes: inbound links are collected from the FULL Brain tree
+  // (a reference from a handoff or trigger still counts), while orphan
+  // CANDIDATES come only from non-machine dirs.
+  const allNotes = listBrainNotes(vault);
+  const notes = listBrainNotes(vault, MACHINE_DIRS);
   const inbound = new Set<string>();
-  for (const note of notes) {
+  for (const note of allNotes) {
     let content: string;
     try {
       content = readFileSync(note.absPath, "utf8");

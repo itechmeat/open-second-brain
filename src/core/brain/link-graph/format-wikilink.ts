@@ -32,9 +32,11 @@ export function isWikiLinkFormat(value: string): value is WikiLinkFormat {
   return (WIKI_LINK_FORMATS as ReadonlyArray<string>).includes(value);
 }
 
-/** Mirrors the masks used by the link-graph parser. */
+/** Mirrors the masks used by the link-graph parser, broadened for the
+ * rewrite path: backtick fences of any length (3+), tilde fences, and
+ * inline code spans all stay verbatim. */
 const RICH_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
-const CODE_BLOCK_RE = /```[\s\S]*?```|`[^`]+`/g;
+const CODE_BLOCK_RE = /(`{3,}|~{3,})[\s\S]*?\1|`[^`]+`/g;
 
 export interface NormalizeResult {
   readonly content: string;

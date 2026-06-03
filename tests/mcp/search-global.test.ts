@@ -29,7 +29,11 @@ beforeEach(async () => {
   configPath = join(tmp, "config.yaml");
   writeFileSync(configPath, `vault: "${vault}"\n`);
   writeMd(vault, "Brain/notes/local.md", "# Local\n\nA chimera sighting in the local vault.");
-  writeMd(external, "Brain/notes/ext.md", "# Ext\n\nA chimera sighting in the external vault.");
+  writeMd(
+    external,
+    "Brain/notes/ext.md",
+    "# Ext\n\nA chimera sighting in the external vault. Xylocopa beacon.",
+  );
   await indexVault(resolveSearchConfig({ vault, configPath }));
   await indexVault(resolveSearchConfig({ vault: external, configPath }));
   addRecallSource(configPath, vault, "team", external);
@@ -60,4 +64,11 @@ test("default (no global flag) stays scoped to the active vault", async () => {
   };
   expect(result.results.length).toBeGreaterThan(0);
   expect(result.results.every((r) => r.origin === undefined)).toBe(true);
+  // A token that exists ONLY in the external vault must yield nothing
+  // without the global flag - leaked external matches would slip past
+  // the origin-field check above.
+  const externalOnly = (await searchTool().handler(ctx, { query: "xylocopa" })) as {
+    results: unknown[];
+  };
+  expect(externalOnly.results).toHaveLength(0);
 });

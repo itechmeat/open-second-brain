@@ -21,10 +21,18 @@
  * version; the origin label makes any skew diagnosable per result.
  */
 
+import { resolve } from "node:path";
+
 import { listSearchOrigins } from "../brain/portability/origins.ts";
 import { resolveSearchConfig } from "./index.ts";
 import { search } from "./search.ts";
-import type { BrainSearchResult, SearchOptions, SearchOutcome } from "./types.ts";
+import { readActiveSessionFocus } from "./session-focus.ts";
+import type {
+  BrainSearchResult,
+  ResolvedSearchConfig,
+  SearchOptions,
+  SearchOutcome,
+} from "./types.ts";
 
 function labelled(result: BrainSearchResult, label: string): BrainSearchResult {
   return Object.freeze({
@@ -48,6 +56,13 @@ export async function searchAcrossVaults(
   configPath: string,
   activeVault: string,
   opts: SearchOptions,
+  /**
+   * Caller-resolved config for the ACTIVE origin (preserves CLI
+   * overrides like --db / --keyword-weight in global mode). Non-active
+   * origins always resolve fresh: per-vault overrides such as a dbPath
+   * would point at the wrong index there.
+   */
+  activeConfig?: ResolvedSearchConfig,
 ): Promise<SearchOutcome> {
   const origins = listSearchOrigins(configPath, activeVault);
   const limit = Math.max(1, Math.min(100, opts.limit ?? 10));
@@ -55,12 +70,29 @@ export async function searchAcrossVaults(
   const warnings: string[] = [];
   let total = 0;
 
+  // Session focus resolves ONCE in the active-vault context: otherwise
+  // each origin would load ITS OWN persisted search-focus state and
+  // filter its slice of the union differently.
+  let sessionFocus = opts.sessionFocus;
+  if (sessionFocus === undefined) {
+    try {
+      const focusConfig =
+        activeConfig ?? resolveSearchConfig({ vault: resolve(activeVault), configPath });
+      sessionFocus = readActiveSessionFocus(focusConfig, opts.focusSession, Date.now());
+    } catch {
+      sessionFocus = null;
+    }
+  }
+
   // Origins run sequentially: each opens its own SQLite store, and a
   // handful of local index reads gains nothing from interleaving.
   for (const origin of origins) {
     const isActive = origin.kind === "active";
     try {
-      const base = resolveSearchConfig({ vault: origin.vault, configPath });
+      const base =
+        isActive && activeConfig !== undefined
+          ? activeConfig
+          : resolveSearchConfig({ vault: origin.vault, configPath });
       // Never write cache rows into a read-only external index.
       const config = isActive
         ? base
@@ -71,6 +103,7 @@ export async function searchAcrossVaults(
       // eslint-disable-next-line no-await-in-loop -- per-origin stores, sequential by design
       const outcome = await search(config, {
         ...opts,
+        sessionFocus,
         limit,
         ...(isActive ? {} : { selfHeal: false }),
       });

@@ -92,17 +92,22 @@ export async function deepSynthesis(
 ): Promise<DeepSynthesisReport> {
   const limit = opts.limit ?? 30;
   const staleAgeDays = opts.staleAgeDays ?? 90;
-  const outcome = await search(config, { query: topic, limit, keywordOnly: true });
+  // Fetch raw CHUNK hits well past the note limit: one long document
+  // can produce many chunks, and capping before the per-document
+  // dedupe would let it crowd every other note out of the dossier.
+  const rawLimit = Math.min(100, Math.max(limit * 3, limit));
+  const outcome = await search(config, { query: topic, limit: rawLimit, keywordOnly: true });
 
-  // Dedupe chunk hits into per-document notes (best score wins).
+  // Dedupe chunk hits into per-document notes (best score wins), THEN
+  // apply the note limit.
   const byPath = new Map<string, BrainSearchResult>();
   for (const result of outcome.results) {
     const seen = byPath.get(result.path);
     if (seen === undefined || result.score > seen.score) byPath.set(result.path, result);
   }
-  const matched = [...byPath.values()].toSorted((a, b) =>
-    a.score !== b.score ? b.score - a.score : a.path < b.path ? -1 : 1,
-  );
+  const matched = [...byPath.values()]
+    .toSorted((a, b) => (a.score !== b.score ? b.score - a.score : a.path < b.path ? -1 : 1))
+    .slice(0, limit);
 
   // Known pages across the vault: gap detection needs the full set,
   // not just the matched slice.
@@ -112,6 +117,20 @@ export async function deepSynthesis(
     knownTargets.add(page);
     const slash = page.lastIndexOf("/");
     knownTargets.add(slash >= 0 ? page.slice(slash + 1) : page);
+  }
+
+  // Agreement edges stay scoped to the matched-topic set: a positive
+  // relation to an off-topic note is not evidence about THIS topic.
+  // Contradiction edges deliberately stay unscoped - the counterpart
+  // of a topical claim often uses different vocabulary and would never
+  // match the query, and those are exactly the finds a synthesis is
+  // for.
+  const matchedTargets = new Set<string>();
+  for (const note of matched) {
+    const page = stripMd(note.path);
+    matchedTargets.add(page);
+    const slash = page.lastIndexOf("/");
+    matchedTargets.add(slash >= 0 ? page.slice(slash + 1) : page);
   }
 
   const agreements: SynthesisAgreement[] = [];
@@ -126,7 +145,7 @@ export async function deepSynthesis(
         contradictions.push(Object.freeze({ path: note.path, target: rel.target }));
       } else if (rel.relation === "superseded_by") {
         supersededBy = rel.target;
-      } else if (POSITIVE_RELATIONS.has(rel.relation)) {
+      } else if (POSITIVE_RELATIONS.has(rel.relation) && matchedTargets.has(rel.target)) {
         agreements.push(
           Object.freeze({ path: note.path, relation: rel.relation, target: rel.target }),
         );

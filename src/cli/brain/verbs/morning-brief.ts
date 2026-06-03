@@ -72,6 +72,11 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
     triggerSection = null;
   }
 
+  // Delivery is the store mutation: do it BEFORE emitting output so a
+  // failed write cannot follow a successful-looking response.
+  if (triggerSection !== null && triggerSection.triggers.length > 0) {
+    deliverBriefTriggers(vault, triggerSection, now);
+  }
   if (flags["json"]) {
     const payload = {
       ...brief,
@@ -94,9 +99,6 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
         ? `${base}\n\n${triggerSection.text}`
         : base;
     process.stdout.write(text + "\n");
-  }
-  if (triggerSection !== null && triggerSection.triggers.length > 0) {
-    deliverBriefTriggers(vault, triggerSection, now);
   }
   return 0;
 }

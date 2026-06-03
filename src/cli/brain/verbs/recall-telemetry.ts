@@ -61,8 +61,23 @@ function summarizeTelemetry(argv: string[]): number {
   return 0;
 }
 
+function rejectRecallOnlyFlags(
+  flags: Record<string, string | boolean | string[] | undefined>,
+  command: string,
+  alsoReject: ReadonlyArray<string> = [],
+): void {
+  // Gate records have no mode/status dimensions - dropping these
+  // silently would hand back unfiltered results.
+  for (const name of ["mode", "status", ...alsoReject]) {
+    if (flags[name] !== undefined) {
+      throw new CliError(`${command}: --${name} is not supported for gate telemetry`);
+    }
+  }
+}
+
 function listGate(argv: string[]): number {
   const { flags } = parseTelemetryFlags(argv);
+  rejectRecallOnlyFlags(flags, "brain recall-telemetry gate-list");
   const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
   const filter = telemetryFilter(flags, "brain recall-telemetry gate-list");
   const records = listGateTelemetry(vault, {
@@ -86,6 +101,7 @@ function listGate(argv: string[]): number {
 
 function summarizeGate(argv: string[]): number {
   const { flags } = parseTelemetryFlags(argv);
+  rejectRecallOnlyFlags(flags, "brain recall-telemetry gate-summary", ["limit"]);
   const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
   const filter = telemetryFilter(flags, "brain recall-telemetry gate-summary");
   const summary = summarizeGateTelemetry(vault, {

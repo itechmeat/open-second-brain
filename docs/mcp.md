@@ -11,14 +11,14 @@ in Open Second Brain depends on the MCP server being running.
 
 - Transport: stdio (JSON-RPC 2.0, newline-delimited).
 - Protocol version: `2025-06-18`.
-- Capabilities advertised: `tools` only. No `resources`, `prompts`, or
-  `sampling`.
+- Capabilities advertised: `tools` and `resources` (see "Resources"
+  below). No `prompts` or `sampling`.
 - Standard MCP lifecycle: `initialize`, `notifications/initialized`,
   `tools/list`, `tools/call`, optional `ping`.
 
 ## Tool Highlights
 
-The full server currently advertises 56 tools; 18 further names stay callable
+The full server currently advertises 65 tools; 18 further names stay callable
 through `tools/call` as hidden deprecated aliases (see "Consolidated views and
 deprecated aliases" below). The table highlights the operator-facing core,
 schema, agent-source, health, recovery, and Pay Memory tools; the full surface

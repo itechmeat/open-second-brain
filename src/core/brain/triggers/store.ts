@@ -12,9 +12,10 @@
  *   - cooldown-key dedup across ALL statuses makes repeated scans
  *     idempotent (an open twin always blocks; a terminal twin blocks
  *     for `cooldownDays` after its resolution; an expired twin allows);
- *   - lifecycle transitions are a strict machine
- *     (pending → delivered → acknowledged → acted, dismiss from any
- *     open state, terminal states reject everything);
+ *   - lifecycle transitions: acknowledge / act / dismiss are allowed
+ *     from ANY open state (an operator may act on a trigger they found
+ *     via `list` before the brief ever delivered it - delivery is a
+ *     surfacing step, not a gate), terminal states reject everything;
  *   - brief delivery happens at most once per cooldown window
  *     ({@link briefTriggers} + {@link markTriggersDelivered}).
  */
@@ -22,6 +23,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { parseFrontmatterText } from "../../vault.ts";
@@ -95,6 +98,11 @@ function sectionText(body: string, heading: string): string {
 }
 
 function parseJsonArray(raw: unknown): ReadonlyArray<string> {
+  // Defensive: a frontmatter parser that materializes the value as a
+  // real array round-trips too.
+  if (Array.isArray(raw) && raw.every((x) => typeof x === "string")) {
+    return Object.freeze([...raw]);
+  }
   if (typeof raw !== "string" || raw.trim() === "") return Object.freeze([]);
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -234,6 +242,24 @@ export function createTriggers(
   candidates: ReadonlyArray<InsightCandidate>,
   opts: CreateTriggersOptions,
 ): CreateTriggersResult {
+  // Serialize the check-then-write against concurrent scans (CLI and
+  // MCP can both reach this): without the lock two callers could each
+  // observe "no twin" and persist duplicates for one cooldown key.
+  const dir = triggersDir(vault);
+  mkdirSync(dir, { recursive: true });
+  const release = lockfile.lockSync(dir, { stale: 10_000, realpath: false });
+  try {
+    return createTriggersLocked(vault, candidates, opts);
+  } finally {
+    release();
+  }
+}
+
+function createTriggersLocked(
+  vault: string,
+  candidates: ReadonlyArray<InsightCandidate>,
+  opts: CreateTriggersOptions,
+): CreateTriggersResult {
   const cooldownDays = opts.cooldownDays ?? TRIGGER_COOLDOWN_DAYS;
   const ttlDays = opts.ttlDays ?? TRIGGER_TTL_DAYS;
   const maxPerKind = opts.maxPerKind ?? TRIGGER_MAX_PER_KIND;
@@ -248,7 +274,6 @@ export function createTriggers(
   const skipped: SkippedCandidate[] = [];
   const perKind = new Map<string, number>();
   const dir = triggersDir(vault);
-  mkdirSync(dir, { recursive: true });
   const createdAt = opts.now.toISOString();
   const expiresAt = new Date(opts.now.getTime() + ttlDays * DAY_MS).toISOString();
   const usedKeys = new Set<string>();

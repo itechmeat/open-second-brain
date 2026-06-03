@@ -174,7 +174,10 @@ export function projectsRegistryPath(configPath: string): string {
   return join(dirname(configPath), "projects.json");
 }
 
-function loadRegistry(configPath: string): ProjectsFile {
+function loadRegistry(
+  configPath: string,
+  opts: { tolerateParseError?: boolean } = {},
+): ProjectsFile {
   const path = projectsRegistryPath(configPath);
   if (!existsSync(path)) return { projects: {} };
   try {
@@ -188,8 +191,14 @@ function loadRegistry(configPath: string): ProjectsFile {
       }
     }
     return { projects };
-  } catch {
-    // Tolerant read: a hand-edited registry never breaks list/status.
+  } catch (exc) {
+    // Read-only callers tolerate a malformed registry (treat as empty);
+    // mutating callers must fail fast so a save() does not clobber a
+    // file we could not parse, silently dropping every other project
+    // (same contract as profiles.ts).
+    if (!opts.tolerateParseError) {
+      throw new Error(`projects registry is malformed: ${path}`, { cause: exc });
+    }
     return { projects: {} };
   }
 }
@@ -227,7 +236,7 @@ export function unregisterLinkedProject(configPath: string, projectDir: string):
 
 /** Every registered project link, sorted by path. */
 export function listLinkedProjects(configPath: string): ReadonlyArray<LinkedProject> {
-  const data = loadRegistry(configPath);
+  const data = loadRegistry(configPath, { tolerateParseError: true });
   return Object.freeze(
     Object.keys(data.projects)
       .toSorted()

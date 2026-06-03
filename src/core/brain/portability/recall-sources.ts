@@ -45,7 +45,10 @@ function isDirectory(path: string): boolean {
   }
 }
 
-function loadRegistry(configPath: string): SourcesFile {
+function loadRegistry(
+  configPath: string,
+  opts: { tolerateParseError?: boolean } = {},
+): SourcesFile {
   const path = recallSourcesPath(configPath);
   if (!existsSync(path)) return { sources: {} };
   try {
@@ -64,8 +67,13 @@ function loadRegistry(configPath: string): SourcesFile {
       }
     }
     return { sources };
-  } catch {
-    // Tolerant read: a hand-edited registry never breaks list.
+  } catch (exc) {
+    // Read-only callers tolerate a malformed registry; mutating callers
+    // must fail fast so a save() cannot truncate sources it could not
+    // parse (same contract as profiles.ts).
+    if (!opts.tolerateParseError) {
+      throw new Error(`recall-sources registry is malformed: ${path}`, { cause: exc });
+    }
     return { sources: {} };
   }
 }
@@ -155,7 +163,7 @@ export function listRecallSources(
   ownerVault: string,
 ): ReadonlyArray<RecallSourceStatus> {
   const owner = resolve(ownerVault);
-  const data = loadRegistry(configPath);
+  const data = loadRegistry(configPath, { tolerateParseError: true });
   const ownEntries = data.sources[owner] ?? {};
   return Object.freeze(
     Object.keys(ownEntries)

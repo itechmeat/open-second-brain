@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -56,9 +56,22 @@ test("with recall_gate_telemetry on, decisions land as continuity records", asyn
   expect(records.some((r) => r.payload["decision"] === "retrieve")).toBe(true);
   expect(records.some((r) => r.payload["decision"] === "skip")).toBe(true);
   expect(records.some((r) => r.payload["host"] === "hermes")).toBe(true);
-  // The raw prompt never lands on disk.
+  // The raw prompt never lands on disk - assert against the PERSISTED
+  // continuity files, not just the returned payloads, so a serializer
+  // regression cannot slip through.
   for (const record of records) {
     expect(JSON.stringify(record.payload)).not.toContain("what did we decide");
+  }
+  const continuityDir = join(vault, "Brain", "log", "continuity");
+  for (const name of readdirSync(continuityDir, { recursive: true }) as string[]) {
+    const filePath = join(continuityDir, name);
+    let content: string;
+    try {
+      content = readFileSync(filePath, "utf8");
+    } catch {
+      continue; // directories
+    }
+    expect(content).not.toContain("what did we decide");
   }
 
   const summary = (await tool("brain_recall_telemetry").handler(ctx(), {

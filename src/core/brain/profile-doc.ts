@@ -114,7 +114,9 @@ export function writeProfileDoc(vault: string, opts: ProfileDocOptions): WritePr
  */
 export function isProfileStale(vault: string, maxAgeSeconds: number, now: Date): boolean {
   const path = join(vault, PROFILE_DOC_REL);
-  if (!existsSync(path)) return true;
+  // A missing root marker is stale too: shell-root detection depends
+  // on it, so a deleted/failed marker must force regeneration.
+  if (!existsSync(path) || !existsSync(join(vault, O2BFS_MARKER_FILE))) return true;
   try {
     const mtimeMs = statSync(path).mtimeMs;
     return now.getTime() - mtimeMs > maxAgeSeconds * 1000;

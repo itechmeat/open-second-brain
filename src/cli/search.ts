@@ -487,6 +487,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
           typeof flags["config"] === "string" ? (flags["config"] as string) : defaultConfigPath(),
           cfg.vault,
           searchOpts,
+          cfg,
         )
       : await search(cfg, searchOpts);
 

@@ -499,4 +499,42 @@ export const VERB_HELP: Record<string, string> = {
     "retired-in-window list, contradictions (signal-suppressed plus\n" +
     "apply-evidence violated), vault delta, source pointers. Defaults to\n" +
     "today UTC for week-end. Read-only.\n",
+  project:
+    "usage: o2b brain project <link|list|remove|status> [path] [--vault <path>] [--json]\n" +
+    "Link a project directory to its owning vault via a .o2b-vault.json pointer.\n" +
+    "resolveVault honours the nearest pointer above the working directory\n" +
+    "(VAULT_DIR still wins). status reports resolution mode and registry health.\n",
+  source:
+    "usage: o2b brain source <add|list|remove> [path|alias] [--alias <name>] [--vault <path>] [--json]\n" +
+    "Read-only recall sources of the active vault. add validates self-links,\n" +
+    "duplicates, and direct circular references; list flags missing targets\n" +
+    "as BROKEN. Distinct from `o2b brain sources` (signals dashboard).\n",
+  links:
+    "usage: o2b brain links normalize [path-prefix] [--mode preserve|full|short] [--write] [--json]\n" +
+    "Rewrite wikilink targets to the configured path format (wiki_link_format).\n" +
+    "Dry-run by default; decorations, code fences, and media embeds stay\n" +
+    "verbatim; ambiguous targets are reported and left as typed.\n",
+  profile:
+    "usage: o2b brain profile [--stale-seconds <n>] [--force] [--vault <path>] [--json]\n" +
+    "Materialize the compact Brain/profile.md digest plus the .o2bfs root\n" +
+    "marker. Age-gated: a fresh profile is left alone unless --force.\n",
+  sgrep:
+    "usage: o2b brain sgrep <query> [path-prefix] [--limit <n>] [--keyword-only] [--vault <path>] [--json]\n" +
+    "Grep-shaped semantic Brain search: path:line: output lines, path\n" +
+    "scoping, exit 1 on no matches (also in --json mode).\n",
+  trigger:
+    "usage: o2b brain trigger <scan|list|ack|dismiss|act|history> [id] [--status <s>] [--vault <path>] [--json]\n" +
+    "Grounded proactive trigger queue under Brain/triggers/. scan generates\n" +
+    "deduped triggers from health/retention data (cooldown via\n" +
+    "trigger_cooldown_days, default 7); ack/dismiss/act transition one\n" +
+    "trigger; history lists terminal ones.\n",
+  "deep-synthesis":
+    "usage: o2b brain deep-synthesis <topic> [--limit <n>] [--triggers] [--vault <path>] [--json]\n" +
+    "Deterministic topic dossier: matched notes, agreements, contradictions,\n" +
+    "stale claims, knowledge gaps. --triggers enqueues contradiction/gap\n" +
+    "findings into the trigger queue.\n",
+  ideas:
+    "usage: o2b brain ideas [--cap <n>] [--triggers] [--vault <path>] [--json]\n" +
+    "Ranked next-direction candidates from open questions, orphan notes,\n" +
+    "and aging inbox signals. --triggers enqueues the ranked ideas.\n",
 };

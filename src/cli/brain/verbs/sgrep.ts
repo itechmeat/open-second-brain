@@ -54,7 +54,8 @@ export async function cmdBrainSgrep(argv: string[]): Promise<number> {
         total: outcome.total,
         warnings: outcome.warnings,
       });
-      return 0;
+      // Grep-like contract holds in JSON mode too: no matches -> 1.
+      return outcome.results.length > 0 ? 0 : 1;
     }
     for (const r of outcome.results) {
       const snippet = r.content.trim().replace(/\s+/gu, " ").slice(0, 160);

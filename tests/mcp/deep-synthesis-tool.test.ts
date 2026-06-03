@@ -52,7 +52,8 @@ test("returns the dossier and optionally enqueues triggers", async () => {
   expect(listTriggers(vault, { now: new Date() }).length).toBe(report.triggers_created);
 });
 
-test("rejects a missing topic", () => {
+test("rejects a missing topic", async () => {
   const tool = findTool(buildToolTable("full"), "brain_deep_synthesis");
-  expect(() => tool.handler(ctx, {})).toThrow();
+  // The handler is async: assert the rejected promise, not a sync throw.
+  await expect(Promise.resolve(tool.handler(ctx, {}))).rejects.toThrow();
 });
