@@ -822,7 +822,8 @@ async function runSemanticPhase(
     warnings.push("semantic not enabled in config; using keyword-only");
     return { attempted: false, hits: [], warnings };
   }
-  if (!config.semantic.apiKey) {
+  // The offline local provider needs no key; every remote provider does.
+  if (config.semantic.provider !== "local" && !config.semantic.apiKey) {
     if (opts.explicit) {
       throw new SearchError("EMBEDDING_KEY_MISSING", "embedding key not configured");
     }
