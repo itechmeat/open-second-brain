@@ -164,6 +164,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("reindex", "Rebuild the search index"),
         command("status", "Print search index status"),
         command("check", "Run search pre-flight diagnostics"),
+        command("provider", "Manage embedding provider profiles"),
       ],
     ),
     command(

@@ -12,6 +12,11 @@ import {
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { resolveIndexPath } from "./paths.ts";
+import {
+  loadProviderRegistry,
+  expandRegisteredProvider,
+  type ExpandedProvider,
+} from "./embeddings/registry.ts";
 import { SearchError } from "./types.ts";
 import type {
   ResolvedEmbeddingConfig,
@@ -54,6 +59,15 @@ export {
 } from "./session-focus.ts";
 export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-gate.ts";
 export { buildEvidencePack, type EvidencePack } from "./evidence-pack.ts";
+export {
+  loadProviderRegistry,
+  addProviderProfile,
+  removeProviderProfile,
+  getProviderProfile,
+  providerRegistryPath,
+  RESERVED_PROVIDER_NAMES,
+  type ProviderProfile,
+} from "./embeddings/registry.ts";
 
 export { resolveIndexPath } from "./paths.ts";
 export {
@@ -193,8 +207,30 @@ function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] 
   if (raw === "openai-compat" || raw === "disabled" || raw === "local") return raw;
   throw new SearchError(
     "INVALID_INPUT",
-    `embedding_provider must be 'openai-compat', 'local', or 'disabled', got '${raw}'`,
+    `embedding_provider must be 'openai-compat', 'local', 'disabled', or a registered provider name, got '${raw}'`,
   );
+}
+
+const BUILTIN_PROVIDERS: ReadonlySet<string> = new Set(["openai-compat", "disabled", "local"]);
+
+/**
+ * Resolve a non-built-in `embedding_provider` name against the registry.
+ * Returns null when the name is null, a built-in, or not registered - the
+ * caller then defers to `parseProvider` (which validates built-ins and
+ * raises a clear error for an unknown name). Fail-soft: a bad registry
+ * yields null, never an exception.
+ */
+function resolveRegistryProvider(
+  rawProvider: string | null,
+  vault: string,
+  env: NodeJS.ProcessEnv,
+): ExpandedProvider | null {
+  if (rawProvider === null || BUILTIN_PROVIDERS.has(rawProvider)) return null;
+  try {
+    return expandRegisteredProvider(rawProvider, loadProviderRegistry(vault), env);
+  } catch {
+    return null;
+  }
 }
 
 export function resolveSearchConfig(opts: {
@@ -246,17 +282,40 @@ export function resolveSearchConfig(opts: {
     false,
     "search_semantic_enabled",
   );
-  const provider = parseProvider(
-    envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER", "embedding_provider"),
+  const rawProvider = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER",
+    "embedding_provider",
   );
-  const baseUrl = envOrConfig(
+  // A provider name that is not a built-in is looked up in the registry
+  // AFTER the built-ins, so it never shadows an explicitly configured
+  // built-in. A registered name resolves to openai-compat fields; an
+  // unknown name falls through to parseProvider's clear validation error.
+  const registryExpansion = resolveRegistryProvider(rawProvider, opts.vault, env);
+  const provider = registryExpansion ? "openai-compat" : parseProvider(rawProvider);
+  const explicitBaseUrl = envOrConfig(
     env,
     config,
     "OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL",
     "embedding_base_url",
   );
-  const model = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_MODEL", "embedding_model");
-  const apiKey = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_KEY", "embedding_api_key");
+  const explicitModel = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_MODEL",
+    "embedding_model",
+  );
+  const explicitApiKey = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_KEY",
+    "embedding_api_key",
+  );
+  // Explicit config/env always wins over the registry profile's fields.
+  const baseUrl = explicitBaseUrl ?? registryExpansion?.baseUrl ?? null;
+  const model = explicitModel ?? registryExpansion?.model ?? null;
+  const apiKey = explicitApiKey ?? registryExpansion?.apiKey ?? null;
   const dimRaw = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_DIM", "embedding_dimension");
   const dimension =
     dimRaw === null ? null : parseInteger(dimRaw, 0, "embedding_dimension", { min: 1 });
