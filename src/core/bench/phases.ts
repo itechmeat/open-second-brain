@@ -66,7 +66,7 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   const run: BenchRunHandle =
     opts.resume !== undefined
       ? loadBenchRun(opts.runsDir, opts.resume, { expectFixture: opts.fixture })
-      : createBenchRun(opts.runsDir, opts.fixture, { ...(opts.now ? { now: opts.now } : {}) });
+      : createBenchRun(opts.runsDir, opts.fixture, opts.now ? { now: opts.now } : {});
   let checkpoint = run.checkpoint;
   const vault = benchVaultDir(run.runDir);
 
@@ -88,7 +88,11 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   if (!phaseDone(checkpoint, "retrieve")) {
     const config = resolveSearchConfig({ vault });
     mkdirSync(benchResultsDir(run.runDir), { recursive: true });
+    // Deliberately sequential: per-question latency_ms must not include
+    // contention from sibling searches running on the same store.
+    // oxlint-disable-next-line no-await-in-loop
     for (const question of opts.fixture.questions) {
+      // oxlint-disable-next-line no-await-in-loop
       const retrieved = await retrieveQuestion(vault, config, question);
       writeFileSync(
         join(benchResultsDir(run.runDir), `${question.id}.json`),

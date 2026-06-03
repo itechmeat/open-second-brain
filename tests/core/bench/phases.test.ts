@@ -116,9 +116,7 @@ describe("runMemoryBench", () => {
     expect(report.context_cost.est_tokens).toBeGreaterThan(0);
     expect(report.judge.status).toBe("skipped");
     // Stable question order by id for diffability.
-    expect(report.questions.map((q) => q.id)).toEqual(
-      [...report.questions.map((q) => q.id)].toSorted(),
-    );
+    expect(report.questions.map((q) => q.id)).toEqual(report.questions.map((q) => q.id).toSorted());
     // report.json lands in the run directory.
     const onDisk = JSON.parse(
       readFileSync(join(runsDir, report.run_id, "report.json"), "utf8"),
