@@ -140,6 +140,44 @@ class HermesLoaderContractTests(unittest.TestCase):
         self.assertNotIn("spec_from_file_location", source)
         self.assertIn("from .plugins.hermes import", source)
 
+    def test_root_cli_shim_loads_through_the_lightweight_scan(self):
+        """Mirror ``discover_plugin_cli_commands()`` for a user plugin.
+
+        The scan imports ``<plugin_root>/cli.py`` as
+        ``_hermes_user_memory.<name>.cli`` after registering the synthetic
+        parent packages (the parent shell carries the plugin dir as its
+        search location) and never executes the root ``__init__.py``. The
+        root ``cli.py`` shim must resolve ``register_cli`` through that
+        exact sequence and wire an argparse subtree.
+        """
+        import argparse
+
+        synthetic_cli = f"{self.SYNTHETIC_PARENT}.{PLUGIN_NAME}.cli"
+        # Parent shells exactly as the loader registers them: the namespace
+        # root with no search locations, the per-provider shell with the
+        # plugin directory.
+        for mod_name, locations in (
+            (self.SYNTHETIC_PARENT, []),
+            (f"{self.SYNTHETIC_PARENT}.{PLUGIN_NAME}", [str(ROOT)]),
+        ):
+            spec = importlib.util.spec_from_loader(mod_name, loader=None, is_package=True)
+            spec.submodule_search_locations = locations
+            sys.modules[mod_name] = importlib.util.module_from_spec(spec)
+        spec = importlib.util.spec_from_file_location(synthetic_cli, ROOT / "cli.py")
+        cli_mod = importlib.util.module_from_spec(spec)
+        sys.modules[synthetic_cli] = cli_mod
+        try:
+            spec.loader.exec_module(cli_mod)
+            self.assertTrue(callable(cli_mod.register_cli))
+            self.assertTrue(callable(cli_mod.run))
+            parser = argparse.ArgumentParser()
+            sub = parser.add_subparsers().add_parser(PLUGIN_NAME)
+            cli_mod.register_cli(sub)  # must not raise
+        finally:
+            for name in list(sys.modules):
+                if name == self.SYNTHETIC_PARENT or name.startswith(self.SYNTHETIC_PARENT + "."):
+                    sys.modules.pop(name, None)
+
     def test_register_does_not_raise_on_minimal_context(self):
         class Context:
             pass
