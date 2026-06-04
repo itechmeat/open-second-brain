@@ -933,6 +933,18 @@ observability gap v0.39.0 left open: `brain_query` now emits opt-in
 recall telemetry with a kind-only payload, so the supplied preference
 id, topic, or timestamp never lands in a continuity record.
 
+## The agent write contract (since v0.41.0)
+
+The Brain core stays deterministic - no LLM ever runs inside it. The write-session protocol is how that rule survives contact with agents that need to PROPOSE structured artifacts: schema-typed notes, handoffs, curated summaries, panel deliberations.
+
+A calling agent opens a session and receives a JSON envelope: what to generate (`prompt`), what shape it must satisfy (`schema_hints`), and what already occupies the target (`existing` with byte length, content hash, and first heading). The agent generates and submits; the Brain validates fail-closed. A failing submit returns machine-readable `{code, path, message}` errors plus a compact correction prompt - and the session keeps its state, so the agent fixes and resubmits without losing the target, the schema, or its attempt budget (default 3, then terminal `failed`). A clean submit commits atomically, or parks at `needs-review` when the session was opened with the operator gate. Sessions are plain JSON files under `Brain/.sessions/write/` with lazy TTL: they survive process restarts, sync with the vault, and expire on read instead of by daemon.
+
+Three rules are enforced at the commit boundary, not by convention: `create` intent never overwrites an existing file, `merge` appends a session-stamped delimited section without touching existing bytes, and reserved namespaces (preferences, logs, the schema file, machine stores) are refused before a session even opens. Every terminal transition - committed, failed, abandoned, approved - lands exactly one `write-session` audit event in the Brain log.
+
+The decision panel is the first consumer of the kernel: persona steps (operator-curated notes under `Brain/personas/`, or the built-in technical / strategic / risk / user-experience set) walk in declared order, the synthesis step sees every accepted answer, and the committed decision note under `Brain/decisions/panels/` records who argued what through which lens. The Brain contributes sequencing, validation, and the commit; every word of analysis comes from the calling agent.
+
+Two adjacent seams complete the contract. The memory backend boundary (`memory_backend` config key) routes memory import through a format-adapter registry - the Claude Code adapter is the default and byte-identical to the pre-seam behavior, and a second runtime becomes one self-contained module. The shared namespace (`shared_namespace` config key) mirrors explicit remember-writes into a second vault after the primary write succeeds, attributed by agent and origin vault; mirroring is fail-soft by contract, so a broken shared vault degrades to a reported `mirror: "failed"` and the primary write never notices.
+
 ## Safety properties
 
 These are invariants of the system, not configuration to enable.
