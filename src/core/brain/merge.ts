@@ -27,6 +27,8 @@ import { join } from "node:path";
 
 import { regenerateActiveQuiet } from "./active.ts";
 import { computeContentHash } from "./content-hash.ts";
+import { buildEntityIndex } from "./entities/index-builder.ts";
+import { guardEntityMerge, type GuardEntityLike } from "./truth/merge-guard.ts";
 import { appendLogEvent } from "./log.ts";
 import { brainDirs, preferencePath } from "./paths.ts";
 import { appendPrefAudit } from "./pref-audit.ts";
@@ -43,7 +45,8 @@ export type BrainMergeErrorCode =
   | "topic-mismatch"
   | "scope-mismatch"
   | "pin-parity"
-  | "unsupported-status";
+  | "unsupported-status"
+  | "entity-guard";
 
 export class BrainMergeError extends Error {
   readonly code: BrainMergeErrorCode;
@@ -61,6 +64,12 @@ export interface MergeOptions {
   readonly agentName?: string;
   /** When true, return the plan but make no writes. */
   readonly dryRun?: boolean;
+  /**
+   * Skip the name-aware entity merge guard (t_e9692750). The CLI maps
+   * `--force` here; the guard otherwise refuses to collapse claims
+   * about different people/orgs into one preference.
+   */
+  readonly bypassEntityGuard?: boolean;
 }
 
 export interface MergePlan {
@@ -156,6 +165,25 @@ export function mergePreferences(
       `drop '${dropId}' is pinned but keep '${keepId}' is not;` +
         " put the pinned pref first as <keep> if you want to merge.",
     );
+  }
+
+  // Name-aware entity guard (t_e9692750): same-topic near-duplicates
+  // naming different people/orgs must not collapse into one rule.
+  if (opts.bypassEntityGuard !== true) {
+    let entities: ReadonlyArray<GuardEntityLike> = [];
+    try {
+      entities = buildEntityIndex(vault).entities;
+    } catch {
+      // No readable registry means nothing to anchor against.
+    }
+    const verdict = guardEntityMerge({
+      keepText: `${keep.topic} ${keep.principle}`,
+      dropText: `${drop.topic} ${drop.principle}`,
+      entities,
+    });
+    if (!verdict.allowed) {
+      throw new BrainMergeError("entity-guard", `${verdict.reason}; pass --force to override`);
+    }
   }
 
   const merged_evidenced_by = mergeEvidencedBy(keep.evidenced_by, drop.evidenced_by);

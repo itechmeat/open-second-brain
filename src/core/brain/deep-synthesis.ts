@@ -20,8 +20,10 @@ import { join } from "node:path";
 import { search } from "../search/search.ts";
 import { walkVault } from "../search/walker.ts";
 import type { BrainSearchResult, ResolvedSearchConfig } from "../search/types.ts";
+import { buildEntityIndex } from "./entities/index-builder.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import type { InsightCandidate } from "./triggers/types.ts";
+import { checkEntityContamination, type ContaminationEntityLike } from "./truth/contamination.ts";
 
 const POSITIVE_RELATIONS: ReadonlySet<string> = new Set(["related", "extends", "supports"]);
 
@@ -53,6 +55,15 @@ export interface SynthesisGap {
   readonly sources: ReadonlyArray<string>;
 }
 
+export interface SynthesisContamination {
+  /** The note asserting the entity. */
+  readonly path: string;
+  /** Canonical entity id mentioned but uncited. */
+  readonly entity: string;
+  /** The cited sources that fail to mention it. */
+  readonly sources: ReadonlyArray<string>;
+}
+
 export interface DeepSynthesisReport {
   readonly topic: string;
   readonly generatedAt: string;
@@ -63,6 +74,14 @@ export interface DeepSynthesisReport {
   readonly contradictions: ReadonlyArray<SynthesisContradiction>;
   readonly staleClaims: ReadonlyArray<SynthesisStaleClaim>;
   readonly gaps: ReadonlyArray<SynthesisGap>;
+  /**
+   * Entity-contamination findings (t_e9692750): matched notes whose
+   * wikilink-cited sources never mention a registered entity the note
+   * asserts. Empty when the vault has no entity registry, and the
+   * `entity_contamination` dimension is then omitted from `checked`
+   * so registry-free vaults stay byte-identical.
+   */
+  readonly contaminated: ReadonlyArray<SynthesisContamination>;
 }
 
 export interface DeepSynthesisOptions {
@@ -110,13 +129,29 @@ export async function deepSynthesis(
     .slice(0, limit);
 
   // Known pages across the vault: gap detection needs the full set,
-  // not just the matched slice.
+  // not just the matched slice. The name->relPath map additionally
+  // lets the contamination check resolve a cited wikilink target back
+  // to the source file it names (first deterministic match wins).
   const knownTargets = new Set<string>();
+  const pageByName = new Map<string, string>();
   for (const file of walkVault(config)) {
     const page = stripMd(file.relPath);
     knownTargets.add(page);
+    if (!pageByName.has(page)) pageByName.set(page, file.relPath);
     const slash = page.lastIndexOf("/");
-    knownTargets.add(slash >= 0 ? page.slice(slash + 1) : page);
+    const short = slash >= 0 ? page.slice(slash + 1) : page;
+    knownTargets.add(short);
+    if (!pageByName.has(short)) pageByName.set(short, file.relPath);
+  }
+
+  // Entity-contamination substrate (t_e9692750): the dimension only
+  // exists when the vault HAS a registry, so registry-free vaults
+  // produce byte-identical reports.
+  let guardEntities: ReadonlyArray<ContaminationEntityLike> = [];
+  try {
+    guardEntities = buildEntityIndex(config.vault).entities;
+  } catch {
+    guardEntities = [];
   }
 
   // Agreement edges stay scoped to the matched-topic set: a positive
@@ -137,6 +172,8 @@ export async function deepSynthesis(
   const contradictions: SynthesisContradiction[] = [];
   const staleClaims: SynthesisStaleClaim[] = [];
   const gapSources = new Map<string, Set<string>>();
+  const contaminated: SynthesisContamination[] = [];
+  const citedContentCache = new Map<string, string>();
 
   for (const note of matched) {
     let supersededBy: string | null = null;
@@ -172,19 +209,67 @@ export async function deepSynthesis(
     } catch {
       continue;
     }
+    const citedRel = new Set<string>();
     for (const body of extractWikilinkRichBodies(content)) {
       const target = parseWikilinkRich(body).target;
-      if (target === "" || knownTargets.has(target)) continue;
+      if (target === "") continue;
+      if (knownTargets.has(target)) {
+        const rel = pageByName.get(target);
+        if (rel !== undefined && rel !== note.path) citedRel.add(rel);
+        continue;
+      }
       const sources = gapSources.get(target) ?? new Set<string>();
       sources.add(note.path);
       gapSources.set(target, sources);
     }
+
+    // Contamination: a note asserting a registered entity its cited
+    // sources never mention. Only notes that actually cite something
+    // are checked - an uncited note claims no provenance.
+    if (guardEntities.length > 0 && citedRel.size > 0) {
+      const cited = [...citedRel].toSorted();
+      const sourceTexts: string[] = [];
+      for (const rel of cited) {
+        const cachedText = citedContentCache.get(rel);
+        if (cachedText !== undefined) {
+          sourceTexts.push(cachedText);
+          continue;
+        }
+        try {
+          const text = readFileSync(join(config.vault, rel), "utf8");
+          citedContentCache.set(rel, text);
+          sourceTexts.push(text);
+        } catch {
+          // An unreadable source cannot clear an entity; skip it.
+        }
+      }
+      const result = checkEntityContamination({
+        conclusion: content,
+        sources: sourceTexts,
+        entities: guardEntities,
+      });
+      for (const violation of result.violations) {
+        contaminated.push(
+          Object.freeze({
+            path: note.path,
+            entity: violation.entityId,
+            sources: Object.freeze(cited),
+          }),
+        );
+      }
+    }
   }
+
+  contaminated.sort((a, b) => {
+    if (a.path !== b.path) return a.path < b.path ? -1 : 1;
+    return a.entity < b.entity ? -1 : a.entity > b.entity ? 1 : 0;
+  });
 
   return Object.freeze({
     topic,
     generatedAt: opts.now.toISOString(),
-    checked: CHECKED,
+    checked:
+      guardEntities.length > 0 ? Object.freeze([...CHECKED, "entity_contamination"]) : CHECKED,
     notes: Object.freeze(
       matched.map((note) =>
         Object.freeze({ path: note.path, title: note.title, score: note.score }),
@@ -200,6 +285,7 @@ export async function deepSynthesis(
           Object.freeze({ target, sources: Object.freeze([...sources].toSorted()) }),
         ),
     ),
+    contaminated: Object.freeze(contaminated),
   });
 }
 

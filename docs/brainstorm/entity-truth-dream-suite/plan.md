@@ -15,7 +15,7 @@ TDD order: each task starts with failing tests, lands as one conventional commit
 - **Depends on**: Task 1
 
 ### Task 3: Merge guard + contamination check - t_e9692750
-- **Files**: `truth/merge-guard.ts`, `truth/contamination.ts`; wire into `maintenance/action-scorer.ts` (skip recommending guarded pairs) and merge verb (refuse with reason, `--force` override); contamination wired into `deep-synthesis.ts` report; tests `truth/merge-guard.test.ts`, `truth/contamination.test.ts`, extended action-scorer + deep-synthesis tests
+- **Files**: `truth/merge-guard.ts`, `truth/contamination.ts`; guard wired into the merge execution path (`mergePreferences`, `entity-guard` error code, CLI `--force` maps to bypass); contamination wired into `deep-synthesis.ts` report; tests `truth/merge-guard.test.ts`, `truth/contamination.test.ts`. Deviation from the original sketch: `action-scorer` dedup recommendations come from `findDuplicateCandidates`, which groups EXACT-equal normalized text - both sides always carry identical anchors, so a scorer-side guard is dead code by construction; the guard lives where merges execute instead.
 - **Acceptance**: disjoint person/org anchor sets block merge with explainable reason; overlapping/absent anchors unchanged; conclusions mentioning entities absent from cited sources flagged with the offending entities listed.
 - **Depends on**: Task 1 (canonical entity normalization helpers)
 

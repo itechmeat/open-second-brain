@@ -2203,6 +2203,7 @@ async function toolBrainDeepSynthesis(
       superseded_by: s.supersededBy,
     })),
     gaps: report.gaps,
+    contaminated: report.contaminated,
     ...(triggersCreated !== undefined ? { triggers_created: triggersCreated } : {}),
   };
 }
