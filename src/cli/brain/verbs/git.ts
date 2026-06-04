@@ -8,12 +8,13 @@
  */
 
 import { defaultConfigPath } from "../../../core/config.ts";
+import { mineCommitDecisions } from "../../../core/brain/git/decisions.ts";
 import { GitIngestError, ingestGitHistory } from "../../../core/brain/git/ingest.ts";
 import { listGitCommits, listGitRepos, listGitTags } from "../../../core/brain/git/store.ts";
 import type { GitCommitFilter, GitCommitRecord } from "../../../core/brain/git/store.ts";
 import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
-const USAGE = "usage: o2b brain git <ingest|status|find> [args] [--vault V] [--json]";
+const USAGE = "usage: o2b brain git <ingest|status|find|mine> [args] [--vault V] [--json]";
 
 const FIND_DEFAULT_LIMIT = 20;
 
@@ -22,7 +23,54 @@ export async function cmdBrainGit(argv: string[]): Promise<number> {
   if (action === "ingest") return cmdIngest(argv.slice(1));
   if (action === "status") return cmdStatus(argv.slice(1));
   if (action === "find") return cmdFind(argv.slice(1));
+  if (action === "mine") return cmdMine(argv.slice(1));
   return fail(USAGE);
+}
+
+async function cmdMine(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+    repo: { type: "string" },
+  });
+  try {
+    const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+    const repoFilter = flags["repo"] as string | undefined;
+    const repos = listGitRepos(vault).filter(
+      (entry) => repoFilter === undefined || entry.key === repoFilter,
+    );
+    if (repoFilter !== undefined && repos.length === 0) {
+      return fail(`no ingested git history for repo key: ${repoFilter}`);
+    }
+    const results = repos.map((entry) => mineCommitDecisions(vault, entry.key));
+    if (flags["json"] === true) {
+      okJson({
+        ok: true,
+        repos: results.map((res) => ({
+          repo_key: res.repoKey,
+          scanned: res.scanned,
+          candidates: res.candidates,
+          created: res.created,
+          skipped_existing: res.skippedExisting,
+          notes: res.notes,
+        })),
+      });
+      return 0;
+    }
+    if (results.length === 0) {
+      ok("no git history ingested yet (run: o2b brain git ingest <repo-path>)");
+      return 0;
+    }
+    for (const res of results) {
+      ok(
+        `${res.repoKey}: ${res.scanned} commit(s) scanned, ${res.created} new ` +
+          `candidate(s), ${res.skippedExisting} already curated`,
+      );
+    }
+    return 0;
+  } catch (err) {
+    return fail((err as Error).message ?? String(err));
+  }
 }
 
 async function cmdIngest(argv: string[]): Promise<number> {

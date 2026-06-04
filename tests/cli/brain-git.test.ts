@@ -143,6 +143,40 @@ test("ingest of a non-repo fails with exit 1 and a clear message", async () => {
   expect(res.stderr).toContain("not a git repository");
 });
 
+test("mine surfaces decision-shaped commits as ADR candidates, skip-existing on re-run", async () => {
+  commitFile("src/a.ts", "1", "feat!: drop legacy index format");
+  commitFile("src/b.ts", "2", "fix: typo");
+  await runCli(["brain", "git", "ingest", repo, "--vault", vault]);
+
+  const first = await runCli(["brain", "git", "mine", "--vault", vault, "--json"]);
+  expect(first.returncode).toBe(0);
+  const mined = JSON.parse(first.stdout) as {
+    repos: Array<{ scanned: number; created: number; notes: string[] }>;
+  };
+  expect(mined.repos[0]!.scanned).toBe(2);
+  expect(mined.repos[0]!.created).toBe(1);
+  expect(existsSync(mined.repos[0]!.notes[0]!)).toBe(true);
+
+  const second = await runCli(["brain", "git", "mine", "--vault", vault, "--json"]);
+  const rerun = JSON.parse(second.stdout) as {
+    repos: Array<{ created: number; skipped_existing: number }>;
+  };
+  expect(rerun.repos[0]!.created).toBe(0);
+  expect(rerun.repos[0]!.skipped_existing).toBe(1);
+
+  const missing = await runCli([
+    "brain",
+    "git",
+    "mine",
+    "--repo",
+    "nope-00000000",
+    "--vault",
+    vault,
+  ]);
+  expect(missing.returncode).toBe(1);
+  expect(missing.stderr).toContain("no ingested git history");
+});
+
 test("usage line on unknown subcommand", async () => {
   const res = await runCli(["brain", "git", "frobnicate", "--vault", vault]);
   expect(res.returncode).toBe(1);
