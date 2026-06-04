@@ -30,7 +30,7 @@ Every continuity record shares one envelope: `schema`, `id`, `kind`, `createdAt`
 
 | Kind | Gate | Emitted by |
 |---|---|---|
-| `recall_telemetry` | opt-in per call (`telemetry` option/param) | `packContext` (`mode: context_pack`), `buildPreCompressPack` (`mode: pre_compress`), `brain_search` MCP handler (`mode: search`) |
+| `recall_telemetry` | opt-in per call (`telemetry` option/param) | `packContext` (`mode: context_pack`), `buildPreCompressPack` (`mode: pre_compress`), `brain_search` MCP handler (`mode: search`), `brain_query` MCP handler (`mode: query`, since v0.40.0 - payload carries the query kind only, never the supplied preference id / topic / timestamp) |
 | `context_receipt` | opt-in per call (`receipt` option/param) | `packContext`, `buildPreCompressPack` |
 | `gate_telemetry` | config key `recall_gate_telemetry` (default off) | `brain_recall_gate` MCP handler |
 | `session_turn`, `session_summary_node` | always-on within its operation | session-recall import (`src/core/brain/session-recall.ts`) - the write IS the operation |

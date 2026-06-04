@@ -893,6 +893,46 @@ change cannot hide a token-cost regression behind a quality win. The
 full contract - every event kind, its gate, correlation ids, payload
 safety, fail-open rules - lives in `docs/observability.md`.
 
+## Project history as memory (since v0.40.0)
+
+A linked project's git history is durable project memory, and the
+Project History Suite makes it queryable without the repository
+present. `o2b brain git ingest <repo-path>` walks a worktree with a
+sanitized read-only reader (fixed argv, full-40-hex sha validation on
+everything a caller could supply) and lands commits, tags, and
+release ranges as structured records in
+`Brain/projects/git/<repo-key>/commits.jsonl`. Typed edges are record
+fields - touched files, author, the carrying release attributed by
+chronological tag ranges - and a watermark bounds every later run to
+`<last>..HEAD`, so incremental ingest is duplicate-free by
+construction. A force-pushed or tampered watermark degrades to a
+reported full re-scan, never to silent loss. Each repo gets one
+deterministic digest note (releases, recent commits, hot files), so
+full-text search can discover the history, while `o2b brain git find`
+answers "why and when did this file change" from the store alone.
+
+Decision-shaped commits become first-class memory through `o2b brain
+git mine`: deterministic heuristics (conventional breaking markers,
+BREAKING CHANGE footers, word-boundary decision keywords, revert
+shape) surface draft ADR candidates under
+`Brain/decisions/candidates/` with matched-signal provenance. A
+candidate's identity is its commit sha: re-runs never duplicate, and
+an existing file is never touched, so operator curation owns the
+draft from the moment it exists.
+
+Architecture knowledge gets the same treatment via `o2b brain
+architect <project-path>`: a stdlib-only scanner derives structural
+facts (module layout, language mix, entry points, manifests, test
+layout - no LLM, no network) and renders an overview plus per-module
+notes under `Brain/projects/arch/<repo-key>/`. Generated content
+lives between paired `<!-- o2b:begin <id> -->` / `<!-- o2b:end <id>
+-->` sentinels: regeneration replaces only generated bodies, operator
+prose outside regions survives byte-for-byte, and corrupted markers
+fail closed before any write. The same release also closes the
+observability gap v0.39.0 left open: `brain_query` now emits opt-in
+recall telemetry with a kind-only payload, so the supplied preference
+id, topic, or timestamp never lands in a continuity record.
+
 ## Safety properties
 
 These are invariants of the system, not configuration to enable.
