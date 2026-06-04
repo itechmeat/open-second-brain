@@ -37,6 +37,7 @@ export const TRIGGER_KINDS = [
   "open_question",
   "orphan_research",
   "idea_direction",
+  "agent_collision",
 ] as const;
 export type TriggerKind = (typeof TRIGGER_KINDS)[number];
 
