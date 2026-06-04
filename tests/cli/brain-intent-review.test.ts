@@ -37,7 +37,11 @@ afterEach(() => {
 
 describe("o2b brain intent-review", () => {
   test("prints JSON intent review report", async () => {
-    const result = await runCli(["brain", "intent-review", "--json"], {
+    // Fixed --now keeps the fixture inside the clustering window: the
+    // signals carry hardcoded May 2026 dates, and a wall-clock run
+    // ages them out (the 2026-05-21 signal left the 14-day window on
+    // 2026-06-04, flipping the decision to needs_more_evidence).
+    const result = await runCli(["brain", "intent-review", "--json", "--now", "2026-05-24"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
     });
     expect(result.returncode).toBe(0);

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { mirrorSignal, resolveSharedNamespace } from "../../../core/brain/shared-namespace.ts";
 import { writeSignal } from "../../../core/brain/signal.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { writePreference } from "../../../core/brain/preference.ts";
@@ -60,23 +61,29 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   const date = (flags["date"] as string | undefined) ?? isoDate(now);
   const slug = (flags["slug"] as string | undefined) ?? String(flags["topic"]);
 
+  const signalInput = {
+    topic: String(flags["topic"]),
+    signal: signalSign as "positive" | "negative",
+    agent,
+    principle: String(flags["principle"]),
+    created_at: now.toISOString(),
+    date,
+    slug,
+    ...(flags["scope"] ? { scope: String(flags["scope"]) } : {}),
+    ...(flags["source"] ? { source: flags["source"] as string[] } : {}),
+    ...(raw !== undefined ? { raw } : {}),
+  };
   let sigResult;
   try {
-    sigResult = writeSignal(vault, {
-      topic: String(flags["topic"]),
-      signal: signalSign as "positive" | "negative",
-      agent,
-      principle: String(flags["principle"]),
-      created_at: now.toISOString(),
-      date,
-      slug,
-      ...(flags["scope"] ? { scope: String(flags["scope"]) } : {}),
-      ...(flags["source"] ? { source: flags["source"] as string[] } : {}),
-      ...(raw !== undefined ? { raw } : {}),
-    });
+    sigResult = writeSignal(vault, signalInput);
   } catch (exc) {
     return fail(`failed to write signal: ${(exc as Error).message ?? exc}`);
   }
+  // t_936a1a61: fail-soft mirror into the shared namespace AFTER the
+  // primary write; surfaced only when the key is configured.
+  const sharedNamespace = resolveSharedNamespace(config);
+  const mirror =
+    sharedNamespace === null ? undefined : mirrorSignal(sharedNamespace, vault, signalInput);
 
   try {
     appendLogEvent(vault, {
@@ -134,12 +141,16 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     okJson({
       signal_path: sigResult.path,
       signal_id: sigResult.id,
+      ...(mirror !== undefined ? { mirror } : {}),
       ...(prefResult ? { preference_path: prefResult.path, preference_id: prefResult.id } : {}),
     });
     return 0;
   }
   ok(`signal: ${sigResult.path}`);
   ok(`id: ${sigResult.id}`);
+  if (mirror !== undefined) {
+    ok(`mirror: ${mirror}`);
+  }
   if (prefResult) {
     ok(`preference: ${prefResult.path}`);
     ok(`status: confirmed`);

@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41.0] - 2026-06-04
+
+Agent Write Contract Suite: how external agents write into and
+deliberate with the Brain without an LLM inside the core. One
+file-backed write-session kernel gives callers a JSON-envelope
+lifecycle - open a session, receive the generation prompt, submit the
+artifact, get machine-readable correction errors without losing
+state, and commit only when validation is clean. A multi-persona
+decision panel rides the same kernel as a session kind, memory
+import gains a pluggable backend boundary, and explicit
+remember-writes can mirror into a cross-agent shared namespace with
+fail-soft semantics. The calling agent generates every word; the
+Brain sequences, validates, and commits. MCP grows by exactly one
+tool (65 -> 66).
+
+### Added
+
+- **Write-session protocol** (`o2b brain session`, MCP
+  `brain_write_session`). `open` returns a `needs-llm-step` envelope
+  with a generation prompt, schema hints, and collision metadata when
+  the target is occupied; `submit` validates fail-closed and returns
+  `done`, `needs-correction` (coded `{code, path, message}` errors
+  plus a compact correction prompt, retry cap default 3), or
+  `needs-review` for operator-gated sessions (`approve` commits,
+  `abandon` is terminal). Sessions persist as JSON under
+  `Brain/.sessions/write/` with lazy TTL (default 24h) and a `sweep`
+  op; `create` intent never overwrites, `merge` appends a
+  session-stamped delimited section, reserved namespaces
+  (`Brain/preferences/`, `Brain/log/`, `Brain/_brain.yaml`, dot-stores)
+  are refused outright. Every terminal transition lands one
+  `write-session` audit event in the Brain log.
+- **Decision panel** (`o2b brain panel`). Distinct analytical lenses
+  walk deterministic steps (`persona:<slug>` ... then `synthesis`) on
+  the write-session kernel; persona definitions are operator-curated
+  notes under `Brain/personas/` (built-in default set: technical,
+  strategic, risk, user-experience), and the committed decision note
+  lands under `Brain/decisions/panels/` with per-persona sections.
+  The Brain supplies prompts and validation only - the calling agent
+  authors every answer and the synthesis.
+- **Memory backend boundary**. A `MemorySourceBackend` protocol
+  (`discoverMemoryDir`, `parseMemoryFile`, `renderPreference`,
+  `slugifyName`) with a frozen registry and config-driven selection
+  (`memory_backend`, default `claude`); the Claude Code adapter
+  delegates to the existing import modules byte-identically, and an
+  unknown backend id fails with the registered list.
+- **Cross-agent shared namespace**. The opt-in `shared_namespace`
+  config key mirrors explicit remember-writes (feedback signals and
+  narrative notes) into a second vault after the primary write
+  succeeds, with agent plus `origin_vault` attribution. Mirroring is
+  fail-soft by contract - a broken or self-pointing shared vault
+  degrades to `mirror: "failed"` and the primary write is never
+  affected; the key absent means zero behavior change.
+
 ## [0.40.0] - 2026-06-04
 
 Project History Suite: a linked project's git history and code
@@ -4399,6 +4452,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.41.0]: https://github.com/itechmeat/open-second-brain/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/itechmeat/open-second-brain/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/itechmeat/open-second-brain/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/itechmeat/open-second-brain/compare/v0.37.0...v0.38.0

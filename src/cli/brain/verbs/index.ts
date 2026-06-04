@@ -47,6 +47,8 @@ export { cmdBrainContinuity } from "./continuity.ts";
 export { cmdBrainBench } from "./bench.ts";
 export { cmdBrainGit } from "./git.ts";
 export { cmdBrainArchitect } from "./architect.ts";
+export { cmdBrainSession } from "./session.ts";
+export { cmdBrainPanel } from "./panel.ts";
 export { cmdBrainTrigger } from "./trigger.ts";
 export { cmdBrainDeepSynthesis } from "./deep-synthesis.ts";
 export { cmdBrainIdeas } from "./ideas.ts";

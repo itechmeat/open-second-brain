@@ -1,6 +1,6 @@
 import { defaultConfigPath } from "../../../core/config.ts";
 import { importClaudeMemory, ConflictsError } from "../../../core/brain/import-claude-memory.ts";
-import { defaultMemoryDir } from "../../../core/brain/claude-memory-paths.ts";
+import { resolveMemoryBackend } from "../../../core/brain/agent-backend/registry.ts";
 import { resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number> {
@@ -82,7 +82,11 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
   }
 
   const vault = resolveBrainVault(vaultFlag, config);
-  const memDir = memory ?? defaultMemoryDir(vault);
+  // t_53f9f67f: the memory-format backend is config-selected
+  // (`memory_backend`, default claude) - unknown ids fail loudly here,
+  // before any filesystem work.
+  const backend = resolveMemoryBackend(config);
+  const memDir = memory ?? backend.discoverMemoryDir(vault);
 
   try {
     const res = importClaudeMemory({
@@ -90,6 +94,7 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
       memoryDir: memDir,
       mode,
       allowArbitraryMemoryPath: allowArbitrary,
+      backend,
     });
     if (asJson) {
       process.stdout.write(JSON.stringify(res, null, 2) + "\n");

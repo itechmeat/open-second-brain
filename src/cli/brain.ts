@@ -61,6 +61,8 @@ import {
   cmdBrainBench,
   cmdBrainGit,
   cmdBrainArchitect,
+  cmdBrainSession,
+  cmdBrainPanel,
   cmdBrainTrigger,
   cmdBrainDeepSynthesis,
   cmdBrainIdeas,
@@ -208,6 +210,10 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainGit(rest);
       case "architect":
         return await cmdBrainArchitect(rest);
+      case "session":
+        return await cmdBrainSession(rest);
+      case "panel":
+        return await cmdBrainPanel(rest);
       case "trigger":
         return await cmdBrainTrigger(rest);
       case "deep-synthesis":

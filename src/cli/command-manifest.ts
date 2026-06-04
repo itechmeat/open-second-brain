@@ -161,6 +161,11 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("bench", "Memory quality benchmark over a disposable fixture vault"),
         command("git", "Git history as project memory: ingest, status, find, mine"),
         command("architect", "Deterministic architecture notes for a code project"),
+        command(
+          "session",
+          "Agent write sessions: open, submit, approve, abandon, status, list, sweep",
+        ),
+        command("panel", "Multi-persona decision panel riding the write-session kernel"),
         command("trigger", "Grounded proactive trigger queue (scan/list/ack/dismiss/act/history)"),
         command("deep-synthesis", "Topic dossier: agreements, contradictions, stale claims, gaps"),
         command("ideas", "Ranked next-direction candidates from open loops"),

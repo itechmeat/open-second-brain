@@ -86,6 +86,12 @@ export interface WriteSignalInput {
   /** Session coordinates `<path>#<turn-id>` (§16). */
   readonly session_ref?: string;
   /**
+   * Cross-agent shared namespace (t_936a1a61): basename of the origin
+   * vault, stamped on MIRRORED records only. Absent on primary writes
+   * so existing signals stay byte-identical.
+   */
+  readonly origin_vault?: string;
+  /**
    * Vault portability suite (v0.22.0). Opt-in: when true and `raw` is
    * present, the body is stored through the deterministic codec and a
    * `_raw_codec` marker is stamped so `parseSignal` expands it on read.
@@ -212,6 +218,9 @@ export function writeSignal(
   }
   if (sanitised.session_ref && sanitised.session_ref.trim()) {
     metadata["session_ref"] = sanitised.session_ref.trim();
+  }
+  if (sanitised.origin_vault && sanitised.origin_vault.trim()) {
+    metadata["origin_vault"] = sanitised.origin_vault.trim();
   }
 
   // Opt-in codec (v0.22.0): store the raw body compressed and stamp a

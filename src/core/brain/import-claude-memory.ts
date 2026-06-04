@@ -7,11 +7,11 @@ import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 import { createSnapshot } from "./snapshot.ts";
 import { isoSecond } from "./time.ts";
 import { resolveAgentName } from "../config.ts";
-import { parseClaudeMemoryFile } from "./claude-memory-parser.ts";
 import { loadManifest, saveManifest } from "./claude-memory-manifest.ts";
 import { planAction, type PlannedFile } from "./claude-memory-plan.ts";
-import { renderPreferenceFromMemory, slugifyMemoryName } from "./claude-memory-render.ts";
 import { assertSafeMemoryPath } from "./claude-memory-paths.ts";
+import { claudeMemoryBackend } from "./agent-backend/claude.ts";
+import type { MemorySourceBackend } from "./agent-backend/types.ts";
 import { BRAIN_PREFERENCES_REL, preferencePath } from "./paths.ts";
 
 export interface ImportClaudeMemoryOpts {
@@ -20,6 +20,12 @@ export interface ImportClaudeMemoryOpts {
   readonly mode: "dry-run" | "apply";
   readonly allowArbitraryMemoryPath?: boolean;
   readonly now?: Date;
+  /**
+   * Memory-format adapter (t_53f9f67f). Defaults to the Claude Code
+   * backend - byte-identical to the pre-seam behavior. Resolve via
+   * `resolveMemoryBackend()` to honor the `memory_backend` config key.
+   */
+  readonly backend?: MemorySourceBackend;
 }
 
 export interface ImportClaudeMemoryResult {
@@ -72,6 +78,7 @@ function mergePreservingEvidence(existingBody: string, freshBody: string): strin
 }
 
 export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMemoryResult {
+  const backend = opts.backend ?? claudeMemoryBackend;
   assertSafeMemoryPath(opts.memoryDir, opts.allowArbitraryMemoryPath ?? false);
   if (!existsSync(opts.memoryDir)) {
     throw new Error(`memory directory not found: ${opts.memoryDir}`);
@@ -100,12 +107,12 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
     if (name === "MEMORY.md") continue;
     if (!name.endsWith(".md")) continue;
     const text = readFileSync(join(opts.memoryDir, name), "utf8");
-    const parsed = parseClaudeMemoryFile(text);
+    const parsed = backend.parseMemoryFile(text);
     if (parsed.kind === "skip") {
       skipped.push({ basename: name, reason: parsed.skipReason });
       continue;
     }
-    const slug = slugifyMemoryName(parsed.name);
+    const slug = backend.slugifyName(parsed.name);
     const prefId = `pref-${slug}`;
     const dupOf = seenPrefIds.get(prefId);
     if (dupOf) {
@@ -128,7 +135,7 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
     });
     plans.push(plan);
     if (plan.action === "CREATE" || plan.action === "RECREATE" || plan.action === "UPDATE") {
-      const body = renderPreferenceFromMemory({
+      const body = backend.renderPreference({
         name: parsed.name,
         description: parsed.description,
         body: parsed.body,

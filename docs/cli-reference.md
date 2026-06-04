@@ -157,6 +157,21 @@ o2b brain architect           <project-path> - deterministic stdlib-only project
 
 All flags accept `--vault V` and `--json`. The ingest never modifies the scanned repository; every caller-supplied sha is validated against the full-40-hex grammar before it can reach a git argument.
 
+### Agent write sessions (since v0.41.0)
+
+```text
+o2b brain session             open --target <Brain/...md> [--schema-type S] [--intent create|overwrite|merge] [--prompt P] [--require-review] [--retry-cap N] - open an artifact write session; the envelope carries the generation prompt, schema hints, and collision metadata for an occupied target
+                              submit <id> [--file F|-] - submit the generated artifact (stdin without --file); done | needs-correction with coded errors and a compact correction prompt | needs-review
+                              approve <id> - operator-side commit of a needs-review session
+                              abandon <id> - terminal abandon
+                              status <id> | list | sweep - inspect or clean the session store (Brain/.sessions/write/, lazy TTL default 24h)
+o2b brain panel               open <topic...> [--personas a,b,c] [--target T] [--require-review] - convene a decision panel; personas from Brain/personas/ (built-in defaults: technical, strategic, risk, user-experience)
+                              submit <id> [--file F|-] - answer the current persona step or the synthesis; the committed note lands under Brain/decisions/panels/
+                              status <id> - live envelope of a panel session
+```
+
+Envelopes are stable JSON with `--json` (`status`, `step`, `prompt`, `errors`, `attempts_left`, `expires_at`, `target_path`, `existing`) - the same contract the MCP `brain_write_session` tool returns. `create` intent never overwrites an existing target; `merge` appends a session-stamped delimited section; reserved namespaces (`Brain/preferences/`, `Brain/log/`, `Brain/_brain.yaml`, dot-stores) are refused. The Brain never generates content - the calling agent does.
+
 ## Vault scope
 
 Single exclusion policy for every vault walker.

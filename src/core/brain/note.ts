@@ -14,6 +14,7 @@ import { vaultRelative } from "../path-safety.ts";
 import { sanitiseTextField } from "../redactor.ts";
 
 import { appendLogEvent } from "./log.ts";
+import { mirrorNote, resolveSharedNamespace, type MirrorOutcome } from "./shared-namespace.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 
@@ -39,6 +40,12 @@ export interface AppendBrainNoteResult {
   readonly absolute_log_path: string;
   /** Identity actually written into the log entry. */
   readonly agent: string;
+  /**
+   * Shared-namespace mirror outcome (t_936a1a61). Present only when
+   * the `shared_namespace` config key is set - unconfigured setups
+   * keep the previous result shape.
+   */
+  readonly mirror?: MirrorOutcome;
 }
 
 /**
@@ -63,10 +70,22 @@ export function appendBrainNote(input: AppendBrainNoteInput): AppendBrainNoteRes
     body: { text: sanitised, agent },
   } as const;
   const res = appendLogEvent(input.vault, entry);
+  // t_936a1a61: mirror AFTER the primary append succeeded; the mirror
+  // is fail-soft and must never alter the primary result.
+  const shared = resolveSharedNamespace(input.configPath ?? null);
+  const mirror =
+    shared === null
+      ? undefined
+      : mirrorNote(shared, input.vault, {
+          text: sanitised,
+          agent,
+          ...(input.now ? { now: input.now } : {}),
+        });
   return {
     logged_at: timestamp,
     log_path: vaultRelative(res.logPath, input.vault),
     absolute_log_path: resolve(res.logPath),
     agent,
+    ...(mirror !== undefined ? { mirror } : {}),
   };
 }
