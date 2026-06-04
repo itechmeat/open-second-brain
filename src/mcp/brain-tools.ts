@@ -182,6 +182,7 @@ import {
   type BrainSignalSign,
 } from "../core/brain/types.ts";
 import { listDeadEnds, recordDeadEnd } from "../core/brain/dead-ends.ts";
+import { buildForesight, FORESIGHT_HORIZON_DAYS } from "../core/brain/temporal/foresight.ts";
 import { aggregateQuantities } from "../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../core/brain/truth/collision.ts";
 import { computeTruthStateWithConflicts } from "../core/brain/truth/conflicts.ts";
@@ -1765,6 +1766,27 @@ async function toolBrainUnlinkedMentions(
       context: m.contextSnippet,
     })),
   };
+}
+
+// ----- brain_foresight (t_08a79c81) -----------------------------------------
+
+/** Forward-looking projection envelope; read-only fold. */
+function toolBrainForesight(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const horizonRaw = args["horizon_days"];
+  let horizonDays = FORESIGHT_HORIZON_DAYS;
+  if (horizonRaw !== undefined && horizonRaw !== null) {
+    if (typeof horizonRaw !== "number" || !Number.isInteger(horizonRaw) || horizonRaw < 1) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_foresight: horizon_days must be a positive integer",
+      );
+    }
+    horizonDays = horizonRaw;
+  }
+  return { ...buildForesight(ctx.vault, { now: new Date(), horizonDays }) };
 }
 
 // ----- brain_dead_ends (t_be62c62d) -----------------------------------------
@@ -4320,6 +4342,22 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainDeadEnds,
+  },
+  {
+    name: "brain_foresight",
+    description:
+      "Forward-looking projection (Brain's only anticipatory surface): recurring routines coming due within the horizon via cadence arithmetic, recent open commitments, and open questions - deterministic, every item carries sources.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        horizon_days: {
+          type: "number",
+          description: "Forward horizon in days (default 14).",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainForesight,
   },
   {
     name: "brain_procedural_graph",

@@ -43,6 +43,7 @@ Brain verbs (observing memory):
   truth               Claim ledger: ingest, slots, conflicts, aggregate, collisions, sweep
   facts               Decompose text into atomic assertions (--ingest to ledger)
   dead-end            Negative-knowledge registry: record and list failed approaches
+  foresight           Forward projection: routines coming due, open commitments and questions
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -237,6 +238,12 @@ export const VERB_HELP: Record<string, string> = {
     "tried-and-failed approach as a markdown note (FTS-indexed, so recall can\n" +
     "surface avoid-X alongside prefer-Y); the active set is bounded and overflow\n" +
     "archives the oldest entries. list renders active entries newest first.\n",
+  foresight:
+    "usage: o2b brain foresight [--horizon-days N] [--write] [--vault <path>] [--json]\n" +
+    "Forward-looking projection over the continuity log and recurrence ladder:\n" +
+    "recurring routines coming due within the horizon (cadence arithmetic, soonest\n" +
+    "first), recent open commitments, and open questions - every item carries\n" +
+    "deterministic sources. --write persists Brain/foresight/<date>.md.\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +
