@@ -13,8 +13,14 @@
  * `brain_dream` with `dry_run: true` directly.
  */
 
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
+import type { ResolvedSearchConfig } from "../search/types.ts";
 import { dream } from "./dream.ts";
 import type { BrainIntentReviewEntry } from "./intent-review.ts";
+import { brainDirs } from "./paths.ts";
+import { scoreSignalNovelty, sortByNovelty, type SignalNoveltyEntry } from "./surprisal.ts";
 import { BRAIN_RETIRED_REASON, type BrainRetiredReason } from "./types.ts";
 
 export interface ReviewCandidatesReport {
@@ -58,23 +64,58 @@ export interface ReviewCandidatesReport {
   }>;
   /** Intent-review decisions for active signal clusters before main dream planning. */
   readonly intent_reviews: ReadonlyArray<BrainIntentReviewEntry>;
+  /**
+   * Surprisal annotation (t_fddfe64a): inbox signals ranked by
+   * embedding-space novelty, highest first. Present ONLY when a
+   * search config was provided AND at least one signal actually
+   * scored - vec-less vaults keep the report byte-identical.
+   */
+  readonly signal_novelty?: ReadonlyArray<SignalNoveltyEntry>;
 }
 
 export interface BuildReviewCandidatesOptions {
   /** Wall clock for the underlying dream pass. */
   readonly now?: Date;
+  /**
+   * When provided, annotate the report with surprisal novelty over
+   * the existing vec index (t_fddfe64a). Read-only; absent or
+   * unembedded indexes leave the report unchanged.
+   */
+  readonly searchConfig?: ResolvedSearchConfig;
 }
 
-export function buildReviewCandidates(
+/** Active inbox signal files as (id, relPath) refs. */
+function listInboxSignalRefs(vault: string): Array<{ id: string; relPath: string }> {
+  const inbox = brainDirs(vault).inbox;
+  if (!existsSync(inbox)) return [];
+  return readdirSync(inbox)
+    .filter((n) => n.startsWith("sig-") && n.endsWith(".md"))
+    .toSorted()
+    .map((n) => ({ id: n.replace(/\.md$/, ""), relPath: join("Brain", "inbox", n) }));
+}
+
+export async function buildReviewCandidates(
   vault: string,
   opts: BuildReviewCandidatesOptions = {},
-): ReviewCandidatesReport {
+): Promise<ReviewCandidatesReport> {
   const summary = dream(vault, {
     dryRun: true,
     ...(opts.now ? { now: opts.now } : {}),
   });
 
+  let signalNovelty: ReadonlyArray<SignalNoveltyEntry> | undefined;
+  if (opts.searchConfig !== undefined) {
+    const refs = listInboxSignalRefs(vault);
+    if (refs.length > 0) {
+      const scored = await scoreSignalNovelty(opts.searchConfig, refs);
+      if (scored.some((s) => s.novelty !== null)) {
+        signalNovelty = sortByNovelty(scored);
+      }
+    }
+  }
+
   return Object.freeze({
+    ...(signalNovelty !== undefined ? { signal_novelty: signalNovelty } : {}),
     would_create: Object.freeze([...summary.new_unconfirmed]),
     would_promote: Object.freeze([...summary.confirmed]),
     would_retire: Object.freeze(

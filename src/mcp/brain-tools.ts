@@ -499,8 +499,24 @@ async function toolBrainReviewCandidates(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const nowDate = coerceIsoDate(args, "now");
-  const report = buildReviewCandidates(ctx.vault, nowDate ? { now: nowDate } : {});
+  // Surprisal annotation (t_fddfe64a) is best-effort: a resolvable
+  // search config adds novelty ranking, anything else degrades to the
+  // plain report.
+  let searchConfig: ReturnType<typeof resolveSearchConfig> | undefined;
+  try {
+    searchConfig = resolveSearchConfig({
+      vault: ctx.vault,
+      configPath: ctx.configPath ?? undefined,
+    });
+  } catch {
+    searchConfig = undefined;
+  }
+  const report = await buildReviewCandidates(ctx.vault, {
+    ...(nowDate ? { now: nowDate } : {}),
+    ...(searchConfig !== undefined ? { searchConfig } : {}),
+  });
   return {
+    ...(report.signal_novelty !== undefined ? { signal_novelty: report.signal_novelty } : {}),
     would_create: [...report.would_create],
     would_promote: [...report.would_promote],
     would_retire: report.would_retire.map((r) => ({
