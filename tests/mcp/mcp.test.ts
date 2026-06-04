@@ -257,6 +257,8 @@ describe("tool listing", () => {
         "brain_trigger",
         "brain_deep_synthesis",
         "brain_idea_discovery",
+        // Agent Write Contract Suite: provider-agnostic write sessions.
+        "brain_write_session",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -508,7 +510,8 @@ describe("stdio loop", () => {
     //   brain_intention (Agent Surface Suite) = 62.
     // + brain_trigger / brain_deep_synthesis / brain_idea_discovery
     //   (Workspace Insight Suite) = 65.
-    expect(list.result.tools.length).toBe(65);
+    // + brain_write_session (Agent Write Contract Suite) = 66.
+    expect(list.result.tools.length).toBe(66);
   });
 
   test("returns parse error for invalid JSON", async () => {

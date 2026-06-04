@@ -86,6 +86,7 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_pinned_context: "pinned.md is operator-curated and small by practice",
   brain_recall_feedback: "write; returns one event receipt plus bounded weights",
   brain_switch_vault: "write; returns a small profile ack",
+  brain_write_session: "lifecycle ops return one fixed-shape envelope; prompts are kernel-bounded",
   schema_apply_mutations: "write; returns a bounded mutation receipt",
   payment_memory_init: "write; returns a bootstrap receipt",
   payment_receipt_append: "write; returns a single receipt path",
