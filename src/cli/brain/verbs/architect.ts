@@ -47,6 +47,6 @@ export async function cmdBrainArchitect(argv: string[]): Promise<number> {
         `${err.message} - repair the sentinel markers (or delete the note to regenerate it)`,
       );
     }
-    return fail((err as Error).message ?? String(err));
+    return fail(err instanceof Error ? err.message : String(err));
   }
 }

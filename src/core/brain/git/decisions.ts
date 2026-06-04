@@ -38,6 +38,10 @@ const DECISION_KEYWORDS = [
 const CONVENTIONAL_BREAKING_RE = /^[a-z]+(\([^)]*\))?!:/;
 const REVERT_RE = /^revert\b/i;
 const SLUG_MAX = 40;
+// 12 hex chars: git's own "unambiguous in large repos" abbreviation
+// length. Identity must not collide - a collision here would silently
+// skip a real decision via the skip-existing rule.
+const CANDIDATE_SHA_LEN = 12;
 
 /**
  * Matched signal ids for one commit message, deterministic order.
@@ -125,7 +129,10 @@ export function mineCommitDecisions(vault: string, repoKey: string): MineCommitD
   for (const commit of commits) {
     const signals = detectDecisionSignals(commit.subject, commit.body);
     if (signals.length === 0) continue;
-    const path = join(dir, `adr-${commit.sha.slice(0, 7)}-${slugFromSubject(commit.subject)}.md`);
+    const path = join(
+      dir,
+      `adr-${commit.sha.slice(0, CANDIDATE_SHA_LEN)}-${slugFromSubject(commit.subject)}.md`,
+    );
     notes.push(path);
     if (existsSync(path)) {
       // Operator-curated drafts are sacrosanct: identity by sha means

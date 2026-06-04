@@ -170,8 +170,9 @@ function readRecords(vault: string, repoKey: string): ReadonlyArray<GitRecord> {
 }
 
 /**
- * Append records, deduplicating commits by sha and tags by name against
- * everything already on disk AND earlier entries of the same batch.
+ * Append records, deduplicating commits by sha and tags by
+ * (name, target) against everything already on disk AND earlier
+ * entries of the same batch.
  */
 export function appendGitRecords(
   vault: string,
@@ -180,17 +181,20 @@ export function appendGitRecords(
 ): AppendGitRecordsResult {
   const existing = readRecords(vault, repoKey);
   const seenShas = new Set<string>();
+  // Tag identity is (name, target): a RETARGETED tag (same name, new
+  // commit after a force-move) appends a fresh record instead of being
+  // silently dropped; listGitTags surfaces the latest record per name.
   const seenTags = new Set<string>();
   for (const record of existing) {
     if (record.kind === "commit") seenShas.add(record.sha);
-    else seenTags.add(record.name);
+    else seenTags.add(`${record.name}\x00${record.targetSha}`);
   }
   const lines: string[] = [];
   let skipped = 0;
   let appendedCommits = 0;
   let appendedTags = 0;
   for (const record of records) {
-    const key = record.kind === "commit" ? record.sha : record.name;
+    const key = record.kind === "commit" ? record.sha : `${record.name}\x00${record.targetSha}`;
     const seen = record.kind === "commit" ? seenShas : seenTags;
     if (seen.has(key)) {
       skipped += 1;
@@ -233,10 +237,16 @@ export function listGitCommits(
   }
   if (filter.since !== undefined) {
     const since = Date.parse(filter.since);
+    if (Number.isNaN(since)) {
+      throw new Error(`invalid 'since' datetime: ${filter.since}`);
+    }
     commits = commits.filter((c) => Date.parse(c.committedAt) >= since);
   }
   if (filter.until !== undefined) {
     const until = Date.parse(filter.until);
+    if (Number.isNaN(until)) {
+      throw new Error(`invalid 'until' datetime: ${filter.until}`);
+    }
     commits = commits.filter((c) => Date.parse(c.committedAt) <= until);
   }
   if (filter.limit !== undefined && filter.limit >= 0) {
@@ -245,11 +255,17 @@ export function listGitCommits(
   return Object.freeze(commits);
 }
 
-/** Tags in file (ingest) order. */
+/**
+ * Tags in first-seen order, latest record per name - a retargeted tag
+ * (appended as a fresh (name, target) record) replaces its predecessor
+ * in this view.
+ */
 export function listGitTags(vault: string, repoKey: string): ReadonlyArray<GitTagRecord> {
-  return Object.freeze(
-    readRecords(vault, repoKey).filter((record): record is GitTagRecord => record.kind === "tag"),
-  );
+  const byName = new Map<string, GitTagRecord>();
+  for (const record of readRecords(vault, repoKey)) {
+    if (record.kind === "tag") byName.set(record.name, record);
+  }
+  return Object.freeze([...byName.values()]);
 }
 
 /** Watermark write; the sha grammar is enforced before anything lands. */

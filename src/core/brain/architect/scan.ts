@@ -12,7 +12,7 @@
  * guessing.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 
 const SKIP_DIRS = new Set([
@@ -94,10 +94,13 @@ function walk(dir: string, stats: WalkStats, prefix: string): void {
     const rel = prefix === "" ? entry : `${prefix}/${entry}`;
     let stat;
     try {
-      stat = statSync(abs);
+      // lstat: a symlinked directory must not pull the walk outside the
+      // project tree or into a cycle - symlinks are skipped entirely.
+      stat = lstatSync(abs);
     } catch {
       continue;
     }
+    if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
       walk(abs, stats, rel);
       continue;
@@ -127,7 +130,8 @@ function listDirs(dir: string): ReadonlyArray<string> {
     .filter((entry) => !SKIP_DIRS.has(entry))
     .filter((entry) => {
       try {
-        return statSync(join(dir, entry)).isDirectory();
+        const stat = lstatSync(join(dir, entry));
+        return !stat.isSymbolicLink() && stat.isDirectory();
       } catch {
         return false;
       }

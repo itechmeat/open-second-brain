@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,6 +67,14 @@ test("scanProject produces deterministic structural facts", () => {
   expect(facts.languages[".ts"]).toBe(5);
   // Determinism: scanning twice gives deep-equal results.
   expect(scanProject(project)).toEqual(facts);
+});
+
+test("scanProject skips symlinks instead of following them", () => {
+  // A symlink cycle inside the tree must not hang or overflow the scan,
+  // and symlinked content outside the module must not be counted.
+  symlinkSync(project, join(project, "src", "core", "loop"), "dir");
+  const facts = scanProject(project);
+  expect(facts.modules.find((m) => m.name === "core")!.files).toBe(2);
 });
 
 test("scanProject degrades to a single root module on flat layouts", () => {

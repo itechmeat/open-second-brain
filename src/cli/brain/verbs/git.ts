@@ -69,7 +69,7 @@ async function cmdMine(argv: string[]): Promise<number> {
     }
     return 0;
   } catch (err) {
-    return fail((err as Error).message ?? String(err));
+    return fail(err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -115,7 +115,7 @@ async function cmdIngest(argv: string[]): Promise<number> {
     return 0;
   } catch (err) {
     if (err instanceof GitIngestError) return fail(err.message);
-    return fail((err as Error).message ?? String(err));
+    return fail(err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -150,7 +150,7 @@ async function cmdStatus(argv: string[]): Promise<number> {
     }
     return 0;
   } catch (err) {
-    return fail((err as Error).message ?? String(err));
+    return fail(err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -239,6 +239,6 @@ async function cmdFind(argv: string[]): Promise<number> {
     }
     return 0;
   } catch (err) {
-    return fail((err as Error).message ?? String(err));
+    return fail(err instanceof Error ? err.message : String(err));
   }
 }

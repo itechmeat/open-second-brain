@@ -22,8 +22,8 @@
  * construction, and the only writes land inside the vault.
  */
 
-import { join } from "node:path";
-import { resolve } from "node:path";
+import { rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { renderGitDigest } from "./digest.ts";
@@ -179,11 +179,18 @@ export function ingestGitHistory(
   const batch: GitRecord[] = [...newTagRecords, ...newCommitRecords];
   const appendResult = appendGitRecords(vault, key, batch);
 
-  // Advance the watermark to the newest commit we saw this run; when no
-  // new commits arrived, the previous watermark (if any) still holds.
-  const newest = commits.at(-1)?.sha ?? probe.state?.lastSha ?? null;
+  // Advance the watermark to the newest commit we saw this run. On an
+  // INCREMENTAL run with no new commits the previous watermark still
+  // holds; on a re-scan the prior watermark is the very sha that failed
+  // to resolve, so writing it back would loop the repo through rescan
+  // warnings forever - clear the state instead and let the next run
+  // start clean as an initial walk.
+  const newest =
+    commits.at(-1)?.sha ?? (mode === "incremental" ? (probe.state?.lastSha ?? null) : null);
   if (newest !== null) {
     writeGitState(vault, key, { repoPath: repo, lastSha: newest, lastIngestedAt: now });
+  } else if (mode === "rescan") {
+    rmSync(join(gitStoreDir(vault, key), "state.json"), { force: true });
   }
 
   // Regenerate the digest projection from the FULL store.

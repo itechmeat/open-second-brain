@@ -97,6 +97,15 @@ test("fail-closed: unbalanced, duplicate, and nested sentinels raise RegionError
   );
 });
 
+test("CRLF documents keep their regions visible (no duplicate appends)", () => {
+  const crlf = ["<!-- o2b:begin a -->", "old body", "<!-- o2b:end a -->", ""].join("\r\n");
+  expect(parseRegions(crlf).has("a")).toBe(true);
+  const merged = mergeRegions(crlf, [{ id: "a", body: "new body" }]);
+  expect(merged).toContain("new body");
+  // Updated in place - not appended as a second region block.
+  expect(merged.match(/o2b:begin a/g)).toHaveLength(1);
+});
+
 test("buildRegionDocument renders regions for a fresh file", () => {
   const doc = buildRegionDocument([
     { id: "summary", body: "First summary." },

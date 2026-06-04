@@ -148,6 +148,23 @@ test("a malformed watermark file triggers a re-scan with the probe error surface
   expect(listGitCommits(vault, res.repoKey)).toHaveLength(1);
 });
 
+test("a zero-commit re-scan clears the stale watermark instead of looping", () => {
+  // Watermark points at a sha that never existed; the repo has no
+  // commits at all (orphaned after a force-push). Writing the stale sha
+  // back would re-trigger rescan warnings on every later run.
+  writeGitState(vault, repoKey(repo), {
+    repoPath: repo,
+    lastSha: "0".repeat(40),
+    lastIngestedAt: "2026-06-04T00:00:00Z",
+  });
+  const res = ingestGitHistory(vault, repo);
+  expect(res.mode).toBe("rescan");
+  expect(res.watermark).toBeNull();
+  // State cleared: the next run starts clean as an initial walk.
+  expect(readGitState(vault, repoKey(repo))).toEqual({ state: null, error: null });
+  expect(ingestGitHistory(vault, repo).mode).toBe("initial");
+});
+
 test("maxCount bounds the initial walk and surfaces the truncation", () => {
   for (let i = 0; i < 5; i += 1) commitFile(`f${i}.txt`, String(i), `commit ${i}`);
   const res = ingestGitHistory(vault, repo, { maxCount: 2 });

@@ -26,8 +26,11 @@
  *     stays as the operator last saw it rather than silently vanishing).
  */
 
-const BEGIN_RE = /^<!-- o2b:begin ([A-Za-z0-9_-]+) -->$/;
-const END_RE = /^<!-- o2b:end ([A-Za-z0-9_-]+) -->$/;
+// Trailing \r tolerated so CRLF files keep their regions visible -
+// otherwise mergeRegions would append duplicates instead of updating
+// in place.
+const BEGIN_RE = /^<!-- o2b:begin ([A-Za-z0-9_-]+) -->\r?$/;
+const END_RE = /^<!-- o2b:end ([A-Za-z0-9_-]+) -->\r?$/;
 
 export class RegionError extends Error {
   readonly code: "UNBALANCED" | "DUPLICATE" | "NESTED" | "MISMATCHED";

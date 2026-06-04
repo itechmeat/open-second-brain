@@ -114,11 +114,12 @@ test("empty history is a clean no-op", () => {
   expect(res.notes).toEqual([]);
 });
 
-test("candidate paths are stable and slugged from the subject", () => {
+test("candidate paths are stable, 12-hex-prefixed, and slugged from the subject", () => {
   appendGitRecords(vault, KEY, [
     commit("d".repeat(40), "feat!: Switch to Postgres (was: SQLite)!!"),
   ]);
   const res = mineCommitDecisions(vault, KEY);
   expect(res.notes[0]).toContain(join("Brain", "decisions", "candidates"));
-  expect(res.notes[0]).toMatch(/adr-ddddddd-feat-switch-to-postgres[a-z-]*\.md$/);
+  // 12 hex chars of sha (git's large-repo abbreviation length), then slug.
+  expect(res.notes[0]).toMatch(/adr-d{12}-feat-switch-to-postgres[a-z-]*\.md$/);
 });

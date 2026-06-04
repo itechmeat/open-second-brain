@@ -118,6 +118,26 @@ test("listGitCommits filters by file, author, text, time range, and limit keeps 
   expect(limited.map((c) => c.subject)).toEqual(["fix: beta touches a", "docs: gamma"]);
 });
 
+test("a retargeted tag appends a fresh record and wins in listGitTags", () => {
+  appendGitRecords(vault, KEY, [tag("v1.0.0", "a".repeat(40))]);
+  // Same (name, target): dedup. New target for the same name: append.
+  const res = appendGitRecords(vault, KEY, [
+    tag("v1.0.0", "a".repeat(40)),
+    tag("v1.0.0", "b".repeat(40)),
+  ]);
+  expect(res.skipped).toBe(1);
+  expect(res.appendedTags).toBe(1);
+  const tags = listGitTags(vault, KEY);
+  expect(tags).toHaveLength(1);
+  expect(tags[0]!.targetSha).toBe("b".repeat(40));
+});
+
+test("invalid since/until datetimes are rejected, not silently empty", () => {
+  appendGitRecords(vault, KEY, [commit("a".repeat(40))]);
+  expect(() => listGitCommits(vault, KEY, { since: "not-a-date" })).toThrow(/invalid 'since'/);
+  expect(() => listGitCommits(vault, KEY, { until: "garbage" })).toThrow(/invalid 'until'/);
+});
+
 test("malformed JSONL lines are skipped, not fatal", () => {
   appendGitRecords(vault, KEY, [commit("a".repeat(40))]);
   const path = join(gitStoreDir(vault, KEY), "commits.jsonl");
