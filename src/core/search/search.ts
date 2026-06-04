@@ -9,6 +9,7 @@
  * the store but the public surface stays uniform.
  */
 
+import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
@@ -45,6 +46,7 @@ import { filterByProperties } from "./property-filter.ts";
 import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
+import { applyTemporalBridge } from "./temporal-bridge.ts";
 import { resolveTimeRange } from "./time-range.ts";
 import { eventTimeInRange, parseValidityWindow, type ValidityWindow } from "./validity.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
@@ -385,21 +387,22 @@ export async function search(
     // when explicit event time exists. One cached frontmatter read per
     // candidate path; an unparseable declared value warns once and
     // falls back to mtime.
+    const validityWindowCache = new Map<string, ValidityWindow | null>();
+    const validityWindowFor = (path: string): ValidityWindow | null => {
+      if (validityWindowCache.has(path)) return validityWindowCache.get(path) ?? null;
+      let window: ValidityWindow | null = null;
+      try {
+        const [meta] = parseFrontmatter(join(config.vault, path));
+        window = parseValidityWindow(meta as Record<string, unknown>);
+      } catch {
+        window = null;
+      }
+      validityWindowCache.set(path, window);
+      return window;
+    };
     if (timeRange !== null) {
-      const windowCache = new Map<string, ValidityWindow | null>();
       const warnedInvalid = new Set<string>();
-      const windowFor = (path: string): ValidityWindow | null => {
-        if (windowCache.has(path)) return windowCache.get(path) ?? null;
-        let window: ValidityWindow | null = null;
-        try {
-          const [meta] = parseFrontmatter(join(config.vault, path));
-          window = parseValidityWindow(meta as Record<string, unknown>);
-        } catch {
-          window = null;
-        }
-        windowCache.set(path, window);
-        return window;
-      };
+      const windowFor = validityWindowFor;
       const inRange = (chunkId: number): boolean => {
         const h = hydrated.get(chunkId);
         if (h === undefined) return false;
@@ -620,6 +623,27 @@ export async function search(
           hopDecay: config.recall.hopDecay,
           maxExpansionPerHit: config.recall.maxExpansionPerHit,
         });
+        // Temporal bridge (t_c3871f0c): with an active time range,
+        // traversal expansions must stay within a padded event-time
+        // neighbourhood of the window - linked causes/consequences
+        // bridge in with proximity-decayed scores, arbitrary old
+        // neighbours do not. Event time = validity start, else mtime.
+        if (timeRange !== null) {
+          ranked = applyTemporalBridge(ranked, {
+            range: timeRange,
+            eventTimeMs: (path) => {
+              const w = validityWindowFor(path);
+              if (w !== null && !w.invalid && (w.validFromMs !== null || w.validUntilMs !== null)) {
+                return w.validFromMs ?? w.validUntilMs!;
+              }
+              try {
+                return statSync(join(config.vault, path)).mtimeMs;
+              } catch {
+                return Number.NEGATIVE_INFINITY;
+              }
+            },
+          });
+        }
       }
       // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
       if (mmrActive) {
