@@ -181,6 +181,7 @@ import {
   type BrainSignal,
   type BrainSignalSign,
 } from "../core/brain/types.ts";
+import { normalizeEntityName } from "../core/brain/entities/canonical.ts";
 import { listDeadEnds, recordDeadEnd } from "../core/brain/dead-ends.ts";
 import { buildForesight, FORESIGHT_HORIZON_DAYS } from "../core/brain/temporal/foresight.ts";
 import { aggregateQuantities } from "../core/brain/truth/aggregate.ts";
@@ -1864,6 +1865,15 @@ function toolBrainTruth(
 
   if (op === "ingest") {
     const quantityValue = args["quantity_value"];
+    if (
+      (quantityValue === undefined || quantityValue === null) &&
+      (typeof args["quantity_unit"] === "string" || typeof args["quantity_action"] === "string")
+    ) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_truth ingest: quantity_value is required when quantity_unit or quantity_action is provided",
+      );
+    }
     let quantity: { value: number; unit: string | null; action: string | null } | undefined;
     if (quantityValue !== undefined && quantityValue !== null) {
       if (typeof quantityValue !== "number" || !Number.isFinite(quantityValue)) {
@@ -1904,7 +1914,7 @@ function toolBrainTruth(
     const entityFilter = args["entity"];
     const slots =
       typeof entityFilter === "string" && entityFilter.trim() !== ""
-        ? state.slots.filter((s) => s.entity === entityFilter.trim().toLowerCase())
+        ? state.slots.filter((s) => s.entity === normalizeEntityName(entityFilter))
         : state.slots;
     return { events: state.events, slots };
   }
@@ -4353,7 +4363,8 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       type: "object",
       properties: {
         horizon_days: {
-          type: "number",
+          type: "integer",
+          minimum: 1,
           description: "Forward horizon in days (default 14).",
         },
       },

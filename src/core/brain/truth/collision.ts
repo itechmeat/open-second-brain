@@ -95,6 +95,7 @@ export function detectAgentCollisions(
 /** Findings as trigger candidates for the standing queue. */
 export function collisionCandidates(
   findings: ReadonlyArray<AgentCollisionFinding>,
+  windowDays: number = COLLISION_WINDOW_DAYS,
 ): ReadonlyArray<InsightCandidate> {
   return Object.freeze(
     findings.map((f) =>
@@ -103,7 +104,7 @@ export function collisionCandidates(
         urgency: "medium" as const,
         reason:
           `${f.agents.join(" and ")} independently logged ${f.claims} claim(s) about ` +
-          `${f.entity} within ${COLLISION_WINDOW_DAYS}d (aspects: ${f.aspects.join(", ")})`,
+          `${f.entity} within ${windowDays}d (aspects: ${f.aspects.join(", ")})`,
         suggestedAction: "Cross-reference the converging claims and connect or reconcile them",
         sourceArtifacts: Object.freeze([...f.sources]),
         contextSnippets: Object.freeze([`entity: ${f.entity}`, `agents: ${f.agents.join(", ")}`]),

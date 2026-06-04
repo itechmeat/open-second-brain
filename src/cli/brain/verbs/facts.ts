@@ -45,8 +45,8 @@ export async function cmdBrainFacts(argv: string[]): Promise<number> {
     return 2;
   }
   const ingest = flags["ingest"] === true;
-  const entity = flags["entity"] as string | undefined;
-  if (ingest && (entity === undefined || entity.trim() === "")) {
+  const entity = (flags["entity"] as string | undefined)?.trim();
+  if (ingest && (entity === undefined || entity === "")) {
     process.stderr.write(`brain facts decompose: --ingest requires --entity\n${USAGE}\n`);
     return 2;
   }

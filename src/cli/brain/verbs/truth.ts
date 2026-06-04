@@ -19,6 +19,7 @@ import {
   readClaimEvents,
   sweepClaimEvents,
 } from "../../../core/brain/truth/store.ts";
+import { normalizeEntityName } from "../../../core/brain/entities/canonical.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
@@ -77,11 +78,20 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
     switch (op) {
       case "ingest": {
         const quantityValueRaw = flags["quantity-value"] as string | undefined;
+        if (
+          quantityValueRaw === undefined &&
+          (flags["quantity-unit"] !== undefined || flags["quantity-action"] !== undefined)
+        ) {
+          throw new UsageError(
+            "--quantity-value is required when --quantity-unit or --quantity-action is provided",
+          );
+        }
         let valueKind: "text" | "quantity" = "text";
         let quantity: { value: number; unit: string | null; action: string | null } | undefined;
         if (quantityValueRaw !== undefined) {
           const qv = Number(quantityValueRaw);
-          if (!Number.isFinite(qv)) throw new UsageError("--quantity-value must be a number");
+          if (!Number.isFinite(qv))
+            throw new UsageError("--quantity-value must be a finite number");
           valueKind = "quantity";
           quantity = {
             value: qv,
@@ -114,7 +124,7 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
         const state = computeTruthStateWithConflicts(readClaimEvents(vault).events);
         const entityFilter = flags["entity"] as string | undefined;
         const slots = state.slots.filter(
-          (s) => entityFilter === undefined || s.entity === entityFilter.trim().toLowerCase(),
+          (s) => entityFilter === undefined || s.entity === normalizeEntityName(entityFilter),
         );
         if (asJson) {
           okJson({ events: state.events, slots });
@@ -215,5 +225,4 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
     }
     return fail(message);
   }
-  return 2;
 }

@@ -14,7 +14,7 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import { dream } from "./dream.ts";
@@ -88,10 +88,11 @@ export interface BuildReviewCandidatesOptions {
 function listInboxSignalRefs(vault: string): Array<{ id: string; relPath: string }> {
   const inbox = brainDirs(vault).inbox;
   if (!existsSync(inbox)) return [];
+  const inboxRel = relative(vault, inbox);
   return readdirSync(inbox)
     .filter((n) => n.startsWith("sig-") && n.endsWith(".md"))
     .toSorted()
-    .map((n) => ({ id: n.replace(/\.md$/, ""), relPath: join("Brain", "inbox", n) }));
+    .map((n) => ({ id: n.replace(/\.md$/, ""), relPath: join(inboxRel, n) }));
 }
 
 export async function buildReviewCandidates(
