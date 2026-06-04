@@ -257,6 +257,10 @@ describe("tool listing", () => {
         "brain_trigger",
         "brain_deep_synthesis",
         "brain_idea_discovery",
+        // Entity Truth & Self-Improving Dream Suite.
+        "brain_truth",
+        "brain_dead_ends",
+        "brain_foresight",
         // Agent Write Contract Suite: provider-agnostic write sessions.
         "brain_write_session",
       ].toSorted(),
@@ -511,7 +515,9 @@ describe("stdio loop", () => {
     // + brain_trigger / brain_deep_synthesis / brain_idea_discovery
     //   (Workspace Insight Suite) = 65.
     // + brain_write_session (Agent Write Contract Suite) = 66.
-    expect(list.result.tools.length).toBe(66);
+    // + brain_truth / brain_dead_ends / brain_foresight
+    //   (Entity Truth & Self-Improving Dream Suite) = 69.
+    expect(list.result.tools.length).toBe(69);
   });
 
   test("returns parse error for invalid JSON", async () => {

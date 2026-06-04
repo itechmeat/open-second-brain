@@ -577,7 +577,7 @@ async function toolBrainApplyEvidence(
   const note = coerceStr(args, "note", false);
   const outcomeRaw = coerceStr(args, "outcome", false);
   if (
-    outcomeRaw !== undefined &&
+    outcomeRaw !== null &&
     outcomeRaw !== "success" &&
     outcomeRaw !== "failure" &&
     outcomeRaw !== "unknown"
@@ -595,7 +595,7 @@ async function toolBrainApplyEvidence(
     artifact,
     result: resultRaw as BrainApplyResult,
     agent,
-    ...(outcomeRaw !== undefined ? { outcome: outcomeRaw } : {}),
+    ...(outcomeRaw !== null ? { outcome: outcomeRaw } : {}),
     ...(note ? { note } : {}),
   };
 
@@ -4320,6 +4320,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainTruth,
+    previewBudget: MCP_PREVIEW_BUDGET,
   },
   {
     name: "brain_dead_ends",
@@ -4342,6 +4343,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainDeadEnds,
+    previewBudget: MCP_PREVIEW_BUDGET,
   },
   {
     name: "brain_foresight",
@@ -4358,6 +4360,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainForesight,
+    previewBudget: MCP_PREVIEW_BUDGET,
   },
   {
     name: "brain_procedural_graph",
