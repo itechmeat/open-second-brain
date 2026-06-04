@@ -1,7 +1,7 @@
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
 
-export type RecallTelemetryMode = "search" | "context_pack" | "pre_compress";
+export type RecallTelemetryMode = "search" | "context_pack" | "pre_compress" | "query";
 export type RecallTelemetryStatus = "ok" | "empty" | "error" | "timeout";
 
 export interface RecallTelemetryArtifactInput {
@@ -135,7 +135,9 @@ export function summarizeRecallTelemetry(
 }
 
 export function isRecallTelemetryMode(value: unknown): value is RecallTelemetryMode {
-  return value === "search" || value === "context_pack" || value === "pre_compress";
+  return (
+    value === "search" || value === "context_pack" || value === "pre_compress" || value === "query"
+  );
 }
 
 export function isRecallTelemetryStatus(value: unknown): value is RecallTelemetryStatus {

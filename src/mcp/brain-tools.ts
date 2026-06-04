@@ -200,10 +200,14 @@ import {
   coerceStr,
   coerceStrList,
   coerceBool,
+  coerceBoolOptional,
   coerceIsoDate,
   coerceFormat,
   coerceInt,
+  coerceStringOptional,
 } from "./coerce.ts";
+import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
+import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
 
 // ----- brain_feedback ------------------------------------------------------
 
@@ -828,40 +832,77 @@ async function toolBrainQuery(
     );
   }
 
-  if (preference !== null) {
-    try {
-      const res = queryByPreference(ctx.vault, preference);
-      return {
-        mode: "preference",
-        preference: serializePreference(res.preference),
-        evidence: res.evidence.map(serializeLogEntry),
-      };
-    } catch (exc) {
-      if (exc instanceof BrainNotFoundError) {
-        throw new Error(exc.message, { cause: exc });
-      }
-      throw exc;
-    }
-  }
-
-  if (topic !== null) {
-    const res = queryByTopic(ctx.vault, topic);
-    return {
-      mode: "topic",
-      topic,
-      signals: res.signals.map(serializeSignal),
-      preference: res.preference ? serializePreference(res.preference) : null,
-      all_log_events: res.all_log_events.map(serializeLogEntry),
-    };
-  }
-
-  // since
-  const res = queryByLogSince(ctx.vault, since!);
-  return {
-    mode: "since",
-    since: since!.toISOString(),
-    events: res.map(serializeLogEntry),
+  // Recall telemetry (t_405b8053): per-call opt-in mirroring
+  // brain_search. The payload carries the query KIND only - never the
+  // supplied preference id / topic slug / timestamp value.
+  const telemetry = coerceBoolOptional(args, "telemetry") ?? false;
+  const telemetryHost = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
+  const telemetrySessionId = coerceStringOptional(args, "session_id", 512);
+  const telemetryTurnId = coerceStringOptional(args, "turn_id", 512);
+  const queryKind = preference !== null ? "preference" : topic !== null ? "topic" : "since";
+  const startedAtMs = Date.now();
+  const emitQueryTelemetry = (status: "ok" | "empty" | "error", resultCount: number): void => {
+    // Lazy emit kernel (t_5d7aa7c5): gate off = thunk never runs; a
+    // throwing continuity write can never fail the query itself.
+    emitGatedTelemetry(telemetry || undefined, () =>
+      emitRecallTelemetry(ctx.vault, {
+        host: telemetryHost,
+        ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
+        ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+        mode: "query",
+        status,
+        durationMs: Date.now() - startedAtMs,
+        resultCount,
+        gaps:
+          status === "error" ? ["query_error"] : status === "empty" ? ["no_matching_context"] : [],
+        metadata: { query_kind: queryKind },
+      }),
+    );
   };
+
+  try {
+    if (preference !== null) {
+      try {
+        const res = queryByPreference(ctx.vault, preference);
+        emitQueryTelemetry(res.evidence.length > 0 ? "ok" : "empty", res.evidence.length);
+        return {
+          mode: "preference",
+          preference: serializePreference(res.preference),
+          evidence: res.evidence.map(serializeLogEntry),
+        };
+      } catch (exc) {
+        if (exc instanceof BrainNotFoundError) {
+          throw new Error(exc.message, { cause: exc });
+        }
+        throw exc;
+      }
+    }
+
+    if (topic !== null) {
+      const res = queryByTopic(ctx.vault, topic);
+      const resultCount = res.signals.length + res.all_log_events.length;
+      emitQueryTelemetry(resultCount > 0 ? "ok" : "empty", resultCount);
+      return {
+        mode: "topic",
+        topic,
+        signals: res.signals.map(serializeSignal),
+        preference: res.preference ? serializePreference(res.preference) : null,
+        all_log_events: res.all_log_events.map(serializeLogEntry),
+      };
+    }
+
+    // since
+    const res = queryByLogSince(ctx.vault, since!);
+    emitQueryTelemetry(res.length > 0 ? "ok" : "empty", res.length);
+    return {
+      mode: "since",
+      since: since!.toISOString(),
+      events: res.map(serializeLogEntry),
+    };
+  } catch (exc) {
+    emitQueryTelemetry("error", 0);
+    throw exc;
+  }
 }
 
 // ----- brain_agent_query / brain_agent_diff --------------------------------
@@ -3273,6 +3314,14 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "Reserved for forward-compat; the structured response is the same regardless.",
         },
+        telemetry: {
+          type: "boolean",
+          description:
+            "Opt-in recall telemetry: emit one continuity record (mode 'query', kind-only payload) for this call.",
+        },
+        telemetry_host: { type: "string", maxLength: 200 },
+        session_id: { type: "string", maxLength: 512 },
+        turn_id: { type: "string", maxLength: 512 },
       },
       additionalProperties: false,
     },
