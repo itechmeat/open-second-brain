@@ -552,6 +552,10 @@ export async function search(
     // multiplier. Restricted to Brain/preferences/ paths - the stamp is
     // a preference-lifecycle field, not a generic page property - and
     // O(candidate preference pages) frontmatter reads.
+    // Cache note: like the tier signal, the stamp is read from
+    // frontmatter at query time and is NOT part of the query-cache key;
+    // a dream re-stamp reaches cached queries on the next reindex (the
+    // content change bumps the corpus generation).
     let trendByDoc: ReadonlyMap<number, string> | undefined;
     {
       const byDoc = new Map<number, string>();
