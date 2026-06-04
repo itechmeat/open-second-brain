@@ -59,6 +59,7 @@ import {
   cmdBrainSgrep,
   cmdBrainContinuity,
   cmdBrainBench,
+  cmdBrainGit,
   cmdBrainTrigger,
   cmdBrainDeepSynthesis,
   cmdBrainIdeas,
@@ -202,6 +203,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainContinuity(rest);
       case "bench":
         return await cmdBrainBench(rest);
+      case "git":
+        return await cmdBrainGit(rest);
       case "trigger":
         return await cmdBrainTrigger(rest);
       case "deep-synthesis":

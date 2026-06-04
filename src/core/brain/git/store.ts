@@ -77,6 +77,8 @@ export interface GitCommitFilter {
 
 export interface AppendGitRecordsResult {
   readonly appended: number;
+  readonly appendedCommits: number;
+  readonly appendedTags: number;
   readonly skipped: number;
 }
 
@@ -185,6 +187,8 @@ export function appendGitRecords(
   }
   const lines: string[] = [];
   let skipped = 0;
+  let appendedCommits = 0;
+  let appendedTags = 0;
   for (const record of records) {
     const key = record.kind === "commit" ? record.sha : record.name;
     const seen = record.kind === "commit" ? seenShas : seenTags;
@@ -193,13 +197,15 @@ export function appendGitRecords(
       continue;
     }
     seen.add(key);
+    if (record.kind === "commit") appendedCommits += 1;
+    else appendedTags += 1;
     lines.push(serializeRecord(record) + "\n");
   }
   if (lines.length > 0) {
     mkdirSync(gitStoreDir(vault, repoKey), { recursive: true });
     appendFileSync(commitsPath(vault, repoKey), lines.join(""));
   }
-  return { appended: lines.length, skipped };
+  return { appended: lines.length, appendedCommits, appendedTags, skipped };
 }
 
 /** Commits oldest-first (file order), optionally filtered. */

@@ -90,6 +90,7 @@ Brain verbs (observing memory):
   ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
   continuity          Export continuity records as ATOF/ATIF trajectories (read-only)
   bench               Memory quality benchmark over a disposable fixture vault
+  git                 Git history as project memory: ingest, status, find
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -544,6 +545,13 @@ export const VERB_HELP: Record<string, string> = {
     "Read-only trajectory export of the continuity store. atof renders one\n" +
     "JSONL event stream; atif renders one trajectory document per session.\n" +
     "Records flagged private are dropped; redacted text stays masked.\n",
+  git:
+    "usage: o2b brain git <ingest|status|find> [args] [--vault V] [--json]\n" +
+    "ingest <repo-path> [--max-count N]  walk a worktree read-only, store\n" +
+    "commit/tag records + digest note under Brain/projects/git/<repo-key>/.\n" +
+    "status  per-repo watermarks and record counts.\n" +
+    "find [text] [--repo K] [--file F] [--author A] [--since S] [--until U]\n" +
+    "[--limit N]  query ingested history newest-first.",
   bench:
     "usage: o2b brain bench memory --fixture <name|path> [--resume <run-id>] [--runs-dir <dir>] [--json]\n" +
     "Memory quality benchmark over a disposable fixture vault under the\n" +
