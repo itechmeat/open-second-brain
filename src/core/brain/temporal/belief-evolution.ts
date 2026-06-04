@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { parseFrontmatter } from "../../vault.ts";
 import { brainDirs } from "./../paths.ts";
 import { BRAIN_APPLY_RESULT, BRAIN_LOG_EVENT_KIND, type BrainApplyResult } from "./../types.ts";
+import { classifyFreshnessTrend, type FreshnessTrendReport } from "./freshness-trend.ts";
 import { extractId } from "./period-common.ts";
 import { selectEvents } from "./select-events.ts";
 import type { TemporalEvent, TimelineIndex } from "./types.ts";
@@ -72,6 +73,13 @@ export interface BeliefEvolutionEnvelope {
   readonly transitions: ReadonlyArray<BeliefTransition>;
   readonly evidence: ReadonlyArray<BeliefEvidenceRow>;
   readonly retirements: ReadonlyArray<BeliefRetirement>;
+  /**
+   * Directional freshness trend computed live from the evidence rows
+   * (Time-Aware Recall & Activation Suite, t_ee09a6ce). Absent only
+   * when the window holds no signal at all (no transitions and no
+   * evidence), so empty envelopes stay shaped as before.
+   */
+  readonly freshnessTrend?: FreshnessTrendReport;
   readonly generatedAt: string;
 }
 
@@ -85,18 +93,33 @@ export function buildBeliefEvolution(
   target: BeliefEvolutionTarget,
   opts: BuildBeliefEvolutionOptions = {},
 ): BeliefEvolutionEnvelope {
-  const generatedAt = (opts.now ?? new Date()).toISOString();
+  const now = opts.now ?? new Date();
+  const generatedAt = now.toISOString();
   const targetIdSet = resolveTargetIds(index, vault, target);
 
   const transitions = collectTransitions(index, targetIdSet);
   const evidence = collectEvidence(index, targetIdSet);
   const retirements = collectRetirements(vault, target, targetIdSet);
 
+  // Freshness trend (t_ee09a6ce): classified live from the evidence
+  // rows. `createdAt` comes from the creation transition when the
+  // window saw one; otherwise the classifier treats age as unknown.
+  const creation = transitions.find((t) => t.kind === "creation");
+  const freshnessTrend =
+    transitions.length > 0 || evidence.length > 0
+      ? classifyFreshnessTrend({
+          createdAt: creation?.at ?? null,
+          events: evidence.map((e) => ({ at: e.at, result: e.result })),
+          nowMs: now.getTime(),
+        })
+      : undefined;
+
   return Object.freeze({
     target,
     transitions: Object.freeze(transitions),
     evidence: Object.freeze(evidence),
     retirements: Object.freeze(retirements),
+    ...(freshnessTrend !== undefined ? { freshnessTrend } : {}),
     generatedAt,
   });
 }

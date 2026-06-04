@@ -49,6 +49,7 @@ import {
 import { extractTemporalConstraints } from "./temporal-extract.ts";
 import { runHealEnrichment } from "./heal-run.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
+import { classifyFreshnessTrend } from "./temporal/freshness-trend.ts";
 import { buildIntentReview, type BrainIntentReviewEntry } from "./intent-review.ts";
 import { writePreferenceTxn } from "./preference-txn.ts";
 import { appendLogEvent, type BrainLogEntry } from "./log.ts";
@@ -498,6 +499,24 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       const ev = collectEvidenceForSlug(vault, update.slug, {
         sinceIso: update.created_at,
       });
+      // Freshness trend (t_ee09a6ce): classify the FULL evidence
+      // distribution (a second, uncapped collect - the display slice
+      // above caps rows) and stamp the label so recall reads it off
+      // frontmatter without replaying the log. Refreshed on every
+      // consolidation pass, the Hindsight contract.
+      const trendEv = collectEvidenceForSlug(vault, update.slug, {
+        sinceIso: update.created_at,
+        maxApplied: 1000,
+        maxViolated: 1000,
+      });
+      const trend = classifyFreshnessTrend({
+        createdAt: update.created_at,
+        events: [...trendEv.applied, ...trendEv.violated].map((r) => ({
+          at: r.timestamp,
+          result: r.result,
+        })),
+        nowMs: now.getTime(),
+      });
       // Same txn route as the newUnconfirmed loop: auto-stamps
       // _revision (existing+1) and _content_hash on confirmed status.
       writePreferenceTxn(
@@ -519,6 +538,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           pinned: update.pinned,
           recentApplied: ev.applied,
           recentViolated: ev.violated,
+          freshness_trend: trend.trend,
           ...(update.scope ? { scope: update.scope } : {}),
         },
         [],
