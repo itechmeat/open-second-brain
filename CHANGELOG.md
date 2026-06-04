@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.43.1] - 2026-06-04
+
+Patch release: the Hermes CLI discovery contract is now actually
+satisfied for standalone installs. Hermes'
+`discover_plugin_cli_commands()` scans only `<plugin_root>/cli.py`,
+while the implementation lives in `plugins/hermes/cli.py`, so the
+documented `hermes open-second-brain` CLI subtree was never
+discoverable on a stock Hermes. A root re-export shim closes the gap.
+
+### Fixed
+
+- **Root `cli.py` shim for Hermes CLI discovery.** A relative
+  re-export (`from .plugins.hermes.cli import register_cli, run`)
+  through the synthetic parent packages the upstream loader registers
+  (hermes-agent PR #37366) makes the `hermes open-second-brain`
+  subcommands discoverable before the provider itself loads. The
+  import stays SDK-free. A loader-contract test mirrors the upstream
+  scan's exact import sequence so the contract cannot break silently.
+
 ## [0.43.0] - 2026-06-04
 
 Entity Truth & Self-Improving Dream Suite: a current-truth surface
@@ -4602,6 +4621,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.43.1]: https://github.com/itechmeat/open-second-brain/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/itechmeat/open-second-brain/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/itechmeat/open-second-brain/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/itechmeat/open-second-brain/compare/v0.40.0...v0.41.0
