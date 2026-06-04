@@ -42,6 +42,7 @@ Brain verbs (observing memory):
   activation          Activation event store: status and sweep
   truth               Claim ledger: ingest, slots, conflicts, aggregate, collisions, sweep
   facts               Decompose text into atomic assertions (--ingest to ledger)
+  dead-end            Negative-knowledge registry: record and list failed approaches
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -230,6 +231,12 @@ export const VERB_HELP: Record<string, string> = {
     "(headings, list items, sentence boundaries with an abbreviation guard), anchored\n" +
     "to canonical entities. --ingest appends structured-family assertions (quantity,\n" +
     "possession, identity, location, email, url) to the claim ledger for --entity.\n",
+  "dead-end":
+    "usage: o2b brain dead-end <record|list> [--approach T --reason T [--context T]] [--max-active N] [--vault <path>] [--json]\n" +
+    "Negative-knowledge registry under Brain/dead-ends/. record persists one\n" +
+    "tried-and-failed approach as a markdown note (FTS-indexed, so recall can\n" +
+    "surface avoid-X alongside prefer-Y); the active set is bounded and overflow\n" +
+    "archives the oldest entries. list renders active entries newest first.\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +

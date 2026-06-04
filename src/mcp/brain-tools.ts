@@ -181,6 +181,7 @@ import {
   type BrainSignal,
   type BrainSignalSign,
 } from "../core/brain/types.ts";
+import { listDeadEnds, recordDeadEnd } from "../core/brain/dead-ends.ts";
 import { aggregateQuantities } from "../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../core/brain/truth/collision.ts";
 import { computeTruthStateWithConflicts } from "../core/brain/truth/conflicts.ts";
@@ -1748,6 +1749,46 @@ async function toolBrainUnlinkedMentions(
       context: m.contextSnippet,
     })),
   };
+}
+
+// ----- brain_dead_ends (t_be62c62d) -----------------------------------------
+
+/**
+ * Negative-knowledge registry: record one tried-and-failed approach
+ * or list the bounded active set, newest first.
+ */
+function toolBrainDeadEnds(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const op = args["operation"];
+  if (op !== "record" && op !== "list") {
+    throw new MCPError(INVALID_PARAMS, "brain_dead_ends: operation must be record|list");
+  }
+  if (op === "list") {
+    const { entries, warnings } = listDeadEnds(ctx.vault);
+    return { entries, warnings };
+  }
+  const approach = args["approach"];
+  const reason = args["reason"];
+  if (typeof approach !== "string" || approach.trim() === "") {
+    throw new MCPError(INVALID_PARAMS, "brain_dead_ends record: approach must be non-empty");
+  }
+  if (typeof reason !== "string" || reason.trim() === "") {
+    throw new MCPError(INVALID_PARAMS, "brain_dead_ends record: reason must be non-empty");
+  }
+  const agentArg = args["agent"];
+  const agent =
+    normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
+    resolveAgentName(ctx.configPath ?? undefined);
+  const result = recordDeadEnd(ctx.vault, {
+    approach,
+    reason,
+    ...(typeof args["context"] === "string" ? { context: args["context"] as string } : {}),
+    agent,
+    now: new Date(),
+  });
+  return { ok: true, id: result.entry.id, path: result.entry.path, archived: result.archived };
 }
 
 // ----- brain_truth (Entity Truth & Self-Improving Dream Suite) ---------------
@@ -4241,6 +4282,28 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainTruth,
+  },
+  {
+    name: "brain_dead_ends",
+    description:
+      "Negative-knowledge registry (Brain/dead-ends/): record one tried-and-failed approach with why it failed, or list the bounded active set so recall surfaces avoid-X alongside prefer-Y.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["record", "list"],
+          description: "Tool operation.",
+        },
+        approach: { type: "string", description: "What was tried (record)." },
+        reason: { type: "string", description: "Why it failed or was set aside (record)." },
+        context: { type: "string", description: "Optional context (record)." },
+        agent: { type: "string", description: "Agent identity override (record)." },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainDeadEnds,
   },
   {
     name: "brain_procedural_graph",

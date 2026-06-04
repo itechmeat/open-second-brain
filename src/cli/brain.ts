@@ -35,6 +35,7 @@ import {
   cmdBrainActivation,
   cmdBrainTruth,
   cmdBrainFacts,
+  cmdBrainDeadEnd,
   cmdBrainAudit,
   cmdBrainMorningBrief,
   cmdBrainCodec,
@@ -173,6 +174,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainTruth(rest);
       case "facts":
         return await cmdBrainFacts(rest);
+      case "dead-end":
+        return await cmdBrainDeadEnd(rest);
       case "audit":
         return await cmdBrainAudit(rest);
       case "morning-brief":

@@ -22,6 +22,7 @@ export { cmdBrainHistory } from "./history.ts";
 export { cmdBrainActivation } from "./activation.ts";
 export { cmdBrainTruth } from "./truth.ts";
 export { cmdBrainFacts } from "./facts.ts";
+export { cmdBrainDeadEnd } from "./dead-end.ts";
 export { cmdBrainAudit } from "./audit.ts";
 export { cmdBrainMorningBrief } from "./morning-brief.ts";
 export { cmdBrainCodec } from "./codec.ts";

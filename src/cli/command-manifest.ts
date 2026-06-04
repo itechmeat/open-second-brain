@@ -116,6 +116,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("activation", "Activation event store: status and sweep"),
         command("truth", "Claim ledger: slots, conflicts, aggregate, collisions"),
         command("facts", "Decompose text into atomic assertions"),
+        command("dead-end", "Record or list failed approaches"),
         command("audit", "Render mutation audit trail"),
         command("morning-brief", "Render session-start summary"),
         command("codec", "Compress or expand session prose"),
