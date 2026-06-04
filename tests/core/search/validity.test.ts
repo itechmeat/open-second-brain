@@ -8,7 +8,6 @@
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
 import { utimesSync } from "node:fs";
-import { join } from "node:path";
 
 import { eventTimeInRange, parseValidityWindow } from "../../../src/core/search/validity.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";

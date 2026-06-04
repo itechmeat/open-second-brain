@@ -38,6 +38,14 @@ function violated(atDaysAgo: number): { at: string; result: "violated" } {
   return { at: iso(atDaysAgo), result: "violated" };
 }
 
+function evidenceLine(ts: string, result: string): string {
+  return JSON.stringify({
+    ts,
+    kind: "apply-evidence",
+    payload: { preference: "pref-foo", result, artifact: "[[x]]" },
+  });
+}
+
 describe("classifyFreshnessTrend (pure)", () => {
   test("a young preference with no prior evidence is new", () => {
     const r = classifyFreshnessTrend({ createdAt: iso(3), events: [], nowMs: NOW });
@@ -116,19 +124,13 @@ describe("belief-evolution envelope carries the trend", () => {
   });
 
   test("freshnessTrend reflects the evidence distribution", () => {
-    const day = (d: string, ts: string, result: string): string =>
-      JSON.stringify({
-        ts,
-        kind: "apply-evidence",
-        payload: { preference: "pref-foo", result, artifact: "[[x]]" },
-      });
     writeFileSync(
       join(vault, "Brain", "log", "2026-05-25.jsonl"),
-      day("2026-05-25", "2026-05-25T08:00:00Z", "applied") + "\n",
+      evidenceLine("2026-05-25T08:00:00Z", "applied") + "\n",
     );
     writeFileSync(
       join(vault, "Brain", "log", "2026-05-30.jsonl"),
-      day("2026-05-30", "2026-05-30T08:00:00Z", "applied") + "\n",
+      evidenceLine("2026-05-30T08:00:00Z", "applied") + "\n",
     );
     const idx = buildTimelineIndex(vault, {});
     const evo = buildBeliefEvolution(

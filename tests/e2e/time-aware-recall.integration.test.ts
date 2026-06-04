@@ -21,6 +21,13 @@ let vault: string;
 let dbPath: string;
 let cleanup: () => void;
 
+function prefBody(trend: string | null): string {
+  return (
+    `---\nkind: brain-preference\n${trend ? `freshness_trend: ${trend}\n` : ""}---\n\n` +
+    "# Rule\n\nGlacier deploy approvals are mandatory.\n"
+  );
+}
+
 beforeEach(() => {
   ({ vault, dbPath, cleanup } = createTempVault("time-aware-e2e"));
 });
@@ -37,9 +44,6 @@ test("the suite composes end to end on one vault", async () => {
   writeMd(vault, "Brain/notes/runbook.md", "# Runbook\n\nGlacier deploy runbook steps.\n");
   writeMd(vault, "Brain/notes/checklist.md", "# Checklist\n\nGlacier deploy checklist items.\n");
   // Preferences: one weakening, one unstamped twin.
-  const prefBody = (trend: string | null): string =>
-    `---\nkind: brain-preference\n${trend ? `freshness_trend: ${trend}\n` : ""}---\n\n` +
-    "# Rule\n\nGlacier deploy approvals are mandatory.\n";
   writeMd(vault, "Brain/preferences/pref-fresh.md", prefBody(null));
   writeMd(vault, "Brain/preferences/pref-fading.md", prefBody("weakening"));
   // Event-time discipline: an old file describing a recent event.
@@ -69,10 +73,13 @@ test("the suite composes end to end on one vault", async () => {
   await indexVault(config);
 
   // -- Activation + co-access (t_2bc79017 + t_c5ef25a3) ---------------
-  // Recall the working set repeatedly with recording on.
-  for (let i = 0; i < 4; i++) {
-    await search(config, { query: "glacier deploy", recordAccess: true, limit: 5 });
-  }
+  // Recall the working set repeatedly with recording on. Sequential on
+  // purpose: each recording must land before the next query so the
+  // event files carry distinct timestamps.
+  await search(config, { query: "glacier deploy", recordAccess: true, limit: 5 });
+  await search(config, { query: "glacier deploy", recordAccess: true, limit: 5 });
+  await search(config, { query: "glacier deploy", recordAccess: true, limit: 5 });
+  await search(config, { query: "glacier deploy", recordAccess: true, limit: 5 });
   expect(loadAccessEvents(vault).length).toBeGreaterThanOrEqual(1);
   const activated = await search(config, { query: "glacier deploy", limit: 10 });
   const runbook = activated.results.find((r) => r.path === "Brain/notes/runbook.md");
