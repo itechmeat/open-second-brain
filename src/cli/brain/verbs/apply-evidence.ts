@@ -11,6 +11,7 @@ export async function cmdBrainApplyEvidence(argv: string[]): Promise<number> {
     pref: { type: "string" },
     artifact: { type: "string" },
     result: { type: "string" },
+    outcome: { type: "string" },
     agent: { type: "string" },
     note: { type: "string" },
     json: { type: "boolean" },
@@ -32,6 +33,15 @@ export async function cmdBrainApplyEvidence(argv: string[]): Promise<number> {
   if (resultStr !== "applied" && resultStr !== "violated" && resultStr !== "outdated") {
     return fail(`--result must be 'applied', 'violated', or 'outdated'; got ${resultStr}`);
   }
+  const outcomeStr = flags["outcome"] !== undefined ? String(flags["outcome"]) : undefined;
+  if (
+    outcomeStr !== undefined &&
+    outcomeStr !== "success" &&
+    outcomeStr !== "failure" &&
+    outcomeStr !== "unknown"
+  ) {
+    return fail(`--outcome must be 'success', 'failure', or 'unknown'; got ${outcomeStr}`);
+  }
 
   try {
     const out = appendApplyEvidence(vault, {
@@ -39,6 +49,7 @@ export async function cmdBrainApplyEvidence(argv: string[]): Promise<number> {
       artifact: String(flags["artifact"]),
       result: resultStr,
       agent,
+      ...(outcomeStr !== undefined ? { outcome: outcomeStr } : {}),
       ...(flags["note"] ? { note: String(flags["note"]) } : {}),
     });
     if (flags["json"]) {

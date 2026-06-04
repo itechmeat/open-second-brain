@@ -557,6 +557,18 @@ async function toolBrainApplyEvidence(
   }
   const agentArg = coerceStr(args, "agent", false);
   const note = coerceStr(args, "note", false);
+  const outcomeRaw = coerceStr(args, "outcome", false);
+  if (
+    outcomeRaw !== undefined &&
+    outcomeRaw !== "success" &&
+    outcomeRaw !== "failure" &&
+    outcomeRaw !== "unknown"
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument 'outcome' must be 'success', 'failure', or 'unknown'`,
+    );
+  }
 
   const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
 
@@ -565,6 +577,7 @@ async function toolBrainApplyEvidence(
     artifact,
     result: resultRaw as BrainApplyResult,
     agent,
+    ...(outcomeRaw !== undefined ? { outcome: outcomeRaw } : {}),
     ...(note ? { note } : {}),
   };
 
@@ -3356,6 +3369,12 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agent: {
           type: "string",
           description: "Optional agent identity override; defaults to the server-resolved name.",
+        },
+        outcome: {
+          type: "string",
+          enum: ["success", "failure", "unknown"],
+          description:
+            "Optional downstream outcome of the artifact (t_d478df53): did the work the rule was applied to actually succeed? `unknown` is treated like an absent outcome.",
         },
         note: {
           type: "string",

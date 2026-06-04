@@ -132,6 +132,20 @@ export const BRAIN_APPLY_RESULT = {
 export type BrainApplyResult = (typeof BRAIN_APPLY_RESULT)[keyof typeof BRAIN_APPLY_RESULT];
 
 /**
+ * Optional downstream outcome riding on an apply-evidence event
+ * (t_d478df53): did the artifact the rule was applied to actually
+ * succeed? `unknown` is the explicit "cannot tell" spelling and is
+ * treated exactly like an absent outcome - only success/failure
+ * persist, so outcome-free vaults stay byte-identical.
+ */
+export const BRAIN_APPLY_OUTCOME = {
+  success: "success",
+  failure: "failure",
+  unknown: "unknown",
+} as const;
+export type BrainApplyOutcome = (typeof BRAIN_APPLY_OUTCOME)[keyof typeof BRAIN_APPLY_OUTCOME];
+
+/**
  * All possible log event types. `dream` summarises a run; `feedback`
  * records the creation of a signal; `apply-evidence` records a real-work
  * application; `force-confirmed` records a `--force-confirmed` flag use;
@@ -568,6 +582,8 @@ export interface BrainEvidenceSummary {
   readonly result: BrainApplyResult;
   readonly agent?: string;
   readonly note?: string;
+  /** Downstream outcome when recorded (t_d478df53). */
+  readonly outcome?: BrainApplyOutcome;
 }
 
 // ----- Log events -----------------------------------------------------------
