@@ -184,6 +184,7 @@ import {
 import { appendLogEvent } from "../core/brain/log.ts";
 import type { BrainLogEntry } from "../core/brain/log.ts";
 import { appendBrainNote } from "../core/brain/note.ts";
+import { mirrorSignal, resolveSharedNamespace } from "../core/brain/shared-namespace.ts";
 import { buildMcpLandscape } from "../core/graph/mcp-config.ts";
 import {
   appendPinnedContext,
@@ -260,7 +261,7 @@ async function toolBrainFeedback(
   //    audit trail in `Brain/log/` and `inbox/processed/` stays consistent
   //    across CLI and MCP entry points. `--force-confirmed` ADDITIONALLY
   //    creates a confirmed pref below.
-  const sigResult = writeSignal(ctx.vault, {
+  const signalInput = {
     topic,
     signal: signalRaw as BrainSignalSign,
     agent,
@@ -271,7 +272,13 @@ async function toolBrainFeedback(
     ...(scope ? { scope } : {}),
     ...(source && source.length > 0 ? { source: [...source] } : {}),
     ...(raw ? { raw } : {}),
-  });
+  };
+  const sigResult = writeSignal(ctx.vault, signalInput);
+  // t_936a1a61: fail-soft mirror into the shared namespace AFTER the
+  // primary write; `mirror` is reported only when the key is configured.
+  const sharedNamespace = resolveSharedNamespace(ctx.configPath);
+  const mirror =
+    sharedNamespace === null ? undefined : mirrorSignal(sharedNamespace, ctx.vault, signalInput);
 
   try {
     appendLogEvent(ctx.vault, {
@@ -326,6 +333,7 @@ async function toolBrainFeedback(
 
   return {
     kind: prefResult ? "preference" : "signal",
+    ...(mirror !== undefined ? { mirror } : {}),
     signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
     signal_absolute_path: resolve(sigResult.path),
     signal_id: sigResult.id,
