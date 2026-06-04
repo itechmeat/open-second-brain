@@ -773,7 +773,11 @@ export class Store {
       .get(chunkId);
     if (!row) return null;
     const bytes = row.embedding;
-    return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    // Copy instead of viewing: a pooled buffer with a non-4-byte-aligned
+    // byteOffset would make the Float32Array constructor throw.
+    return new Float32Array(
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    );
   }
 
   getEmbeddingHash(chunkId: number): string | null {
