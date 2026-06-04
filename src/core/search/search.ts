@@ -22,6 +22,7 @@ import {
   learnedWeightsReason,
   readLearnedWeights,
 } from "./feedback.ts";
+import { parseFreshnessTrend } from "../brain/temporal/freshness-trend.ts";
 import { effectiveActivation, halfLifeDays, resolveActivationKind } from "./activation/decay.ts";
 import {
   ACCESS_EVENT_PATHS_CAP,
@@ -485,6 +486,31 @@ export async function search(
       }
     }
 
+    // Freshness-trend bias (t_ee09a6ce): preference pages stamped with
+    // a `freshness_trend` by the dream refresh get a bounded relevance
+    // multiplier. Restricted to Brain/preferences/ paths - the stamp is
+    // a preference-lifecycle field, not a generic page property - and
+    // O(candidate preference pages) frontmatter reads.
+    let trendByDoc: ReadonlyMap<number, string> | undefined;
+    {
+      const byDoc = new Map<number, string>();
+      const seenDocs = new Set<number>();
+      for (const chunkId of idsList) {
+        const h = hydrated.get(chunkId);
+        if (h === undefined || seenDocs.has(h.documentId)) continue;
+        seenDocs.add(h.documentId);
+        if (!h.path.startsWith("Brain/preferences/")) continue;
+        try {
+          const [meta] = parseFrontmatter(join(config.vault, h.path));
+          const trend = parseFreshnessTrend((meta as Record<string, unknown>)["freshness_trend"]);
+          if (trend !== null) byDoc.set(h.documentId, trend);
+        } catch {
+          // Unreadable frontmatter stays neutral.
+        }
+      }
+      if (byDoc.size > 0) trendByDoc = byDoc;
+    }
+
     // When a property filter is active, overfetch the ranked
     // candidates so the post-filter result set still has a chance
     // of producing `limit` matching rows. Without this, the
@@ -538,6 +564,7 @@ export async function search(
           ...(entityMatchByChunk !== undefined ? { entityMatchByChunk } : {}),
           ...(activationByChunk !== undefined ? { activationByChunk } : {}),
           ...(coAccessByChunk !== undefined ? { coAccessByChunk } : {}),
+          ...(trendByDoc !== undefined ? { trendByDoc } : {}),
         },
         {
           keywordWeight: opts.keywordWeight ?? config.keywordWeight,

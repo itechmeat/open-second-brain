@@ -55,7 +55,22 @@ export interface RankerInputs {
    * working set without floating unrelated documents.
    */
   readonly coAccessByChunk?: ReadonlyMap<number, ReadonlyMap<number, number>>;
+  /**
+   * Optional freshness trend per documentId (t_ee09a6ce), read from
+   * the `freshness_trend` frontmatter the dream refresh stamps on
+   * preference pages. Maps to a bounded multiplier on the relevance
+   * portion (strengthening 1.05, weakening 0.93, stale 0.85); absent
+   * entries (and the absent map) stay neutral.
+   */
+  readonly trendByDoc?: ReadonlyMap<number, string>;
 }
+
+/** Freshness-trend multipliers on the relevance portion. */
+const TREND_MULTIPLIERS: ReadonlyMap<string, number> = new Map([
+  ["strengthening", 1.05],
+  ["weakening", 0.93],
+  ["stale", 0.85],
+]);
 
 export interface RankerOptions {
   readonly keywordWeight: number;
@@ -159,6 +174,8 @@ function buildReasons(parts: {
   entityBoost?: number;
   activationBoost?: number;
   coAccessBoost?: number;
+  trend?: string;
+  trendMul?: number;
   sessionFocus?: number;
   rrf?: number;
 }): ReadonlyArray<string> {
@@ -174,6 +191,9 @@ function buildReasons(parts: {
   }
   if (parts.coAccessBoost && parts.coAccessBoost > 0) {
     reasons.push(`co_access: ${fmt(parts.coAccessBoost)}`);
+  }
+  if (parts.trend !== undefined && parts.trendMul !== undefined && parts.trendMul !== 1) {
+    reasons.push(`freshness_trend: ${parts.trend} x${fmt(parts.trendMul)}`);
   }
   if (parts.linkBoost > 0) reasons.push(`link_boost: ${fmt(parts.linkBoost)}`);
   if (parts.recency > 0) reasons.push(`recency: ${fmt(parts.recency)}`);
@@ -318,6 +338,11 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // `supporting` → 1.0 keeps untagged vaults bit-identical.
     const tier = inputs.tierByDoc?.get(c.documentId) ?? PAGE_TIER_DEFAULT;
     const tierMul = tierWeight(tier);
+    // Freshness-trend multiplier (t_ee09a6ce): like tier, it scales the
+    // relevance portion only. Unstamped documents (and unknown labels)
+    // stay at the neutral 1.0.
+    const trend = inputs.trendByDoc?.get(c.documentId);
+    const trendMul = trend !== undefined ? (TREND_MULTIPLIERS.get(trend) ?? 1) : 1;
     // Entity boost: capped contribution from shared query entities.
     // Per-match 0.02, capped at 0.04 so it only re-ranks an already
     // relevant set - never enough to float an irrelevant chunk.
@@ -344,7 +369,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const coAccessBoost = Math.min(0.03, coAccessRaw);
     const sessionFocus = scoreSessionFocusTarget(hyd, opts.sessionFocus, nowMs);
     const score = clamp01(
-      weighted * tierMul +
+      weighted * tierMul * trendMul +
         linkBoost +
         recency +
         entityBoost +
@@ -377,6 +402,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           entityBoost,
           activationBoost,
           coAccessBoost,
+          ...(trend !== undefined ? { trend, trendMul } : {}),
           sessionFocus,
           rrf: rrfByChunk !== null ? rrf : 0,
         }),
