@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import {
   allocateWriteSessionId,
+  createWriteSession,
   deleteWriteSession,
   isWriteSessionId,
   listWriteSessions,
@@ -78,6 +79,34 @@ test("session id grammar accepts allocated ids and rejects traversal shapes", ()
   expect(isWriteSessionId("ws-UPPER")).toBe(false);
   expect(isWriteSessionId("")).toBe(false);
   expect(() => writeSessionPath(vault, "../escape")).toThrow(/session id/);
+});
+
+test("createWriteSession claims ids exclusively - same-second creates never collide", () => {
+  const a = createWriteSession(vault, NOW, (id) => record(id));
+  const b = createWriteSession(vault, NOW, (id) => record(id));
+  expect(a.id).not.toBe(b.id);
+  expect(readWriteSession(vault, a.id, NOW).session).not.toBeNull();
+  expect(readWriteSession(vault, b.id, NOW).session).not.toBeNull();
+});
+
+test("a structurally incomplete record reads as an error probe (fail closed)", () => {
+  const id = allocateWriteSessionId(vault, NOW);
+  mkdirSync(writeSessionDir(vault), { recursive: true });
+  writeFileSync(
+    writeSessionPath(vault, id),
+    JSON.stringify({ id, kind: "artifact", status: "needs-llm-step" }),
+  );
+  const probe = readWriteSession(vault, id, NOW);
+  expect(probe.session).toBeNull();
+  expect(probe.error).toMatch(/malformed/);
+});
+
+test("sweep removes *.json files whose names violate the id grammar", () => {
+  mkdirSync(writeSessionDir(vault), { recursive: true });
+  writeFileSync(join(writeSessionDir(vault), "GARBAGE.json"), "{}");
+  const swept = sweepWriteSessions(vault, NOW);
+  expect(swept.removed).toBe(1);
+  expect(existsSync(join(writeSessionDir(vault), "GARBAGE.json"))).toBe(false);
 });
 
 test("allocateWriteSessionId never collides with an existing session file", () => {

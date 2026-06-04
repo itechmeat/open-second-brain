@@ -62,7 +62,9 @@ test("an unknown backend id fails with the registered list in the message", () =
 
 test("resolveMemoryBackend defaults to claude and honors the memory_backend config key", () => {
   const configPath = join(tmp, "config.yaml");
-  expect(resolveMemoryBackend(null).id).toBe("claude");
+  // A guaranteed-missing path keeps the default-resolution assertion
+  // hermetic - the host machine's real config must not leak in.
+  expect(resolveMemoryBackend(join(tmp, "missing-config.yaml")).id).toBe("claude");
   expect(resolveMemoryBackend(configPath).id).toBe("claude");
 
   writeFileSync(configPath, 'vault: "/tmp/x"\nmemory_backend: claude\n');

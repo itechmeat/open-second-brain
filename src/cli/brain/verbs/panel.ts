@@ -42,6 +42,15 @@ function exitCode(env: WriteSessionEnvelope): number {
   return env.status === "needs-correction" || env.status === "failed" ? 1 : 0;
 }
 
+/** JSON-mode callers get JSON on EVERY failure path, not just envelopes. */
+function emitCliError(message: string, asJson: boolean): number {
+  if (asJson) {
+    okJson({ ok: false, message });
+    return 1;
+  }
+  return fail(message);
+}
+
 export async function cmdBrainPanel(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
     vault: { type: "string" },
@@ -105,8 +114,10 @@ export async function cmdBrainPanel(argv: string[]): Promise<number> {
           return 2;
         }
         const probe = readWriteSession(vault, id, new Date().toISOString());
-        if (probe.error !== null) return fail(probe.error);
-        if (probe.session === null) return fail(`unknown write-session: ${id}`);
+        if (probe.error !== null) return emitCliError(probe.error, asJson);
+        if (probe.session === null) {
+          return emitCliError(`unknown write-session: ${id}`, asJson);
+        }
         renderEnvelope(sessionEnvelope(probe.session), asJson);
         return 0;
       }
@@ -123,6 +134,6 @@ export async function cmdBrainPanel(argv: string[]): Promise<number> {
       }
       return fail(err.message);
     }
-    return fail(err instanceof Error ? err.message : String(err));
+    return emitCliError(err instanceof Error ? err.message : String(err), asJson);
   }
 }

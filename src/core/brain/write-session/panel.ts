@@ -24,7 +24,7 @@ import {
   DEFAULT_RETRY_CAP,
   DEFAULT_TTL_MS,
 } from "./engine.ts";
-import { allocateWriteSessionId, saveWriteSession } from "./store.ts";
+import { createWriteSession, saveWriteSession } from "./store.ts";
 import { loadPersonas } from "./personas.ts";
 import { inspectExistingTarget, validateTargetPath } from "./validate.ts";
 import { formatFrontmatter, slugify } from "../../vault.ts";
@@ -74,30 +74,32 @@ export function openPanelSession(
     );
   }
   const first = personas[0]!;
-  const record: WriteSessionRecord = Object.freeze({
-    id: allocateWriteSessionId(vault, now),
-    kind: "panel" as const,
-    status: "needs-llm-step" as const,
-    step: `persona:${first.slug}`,
-    agent: input.agent.trim() || "unknown",
-    createdAt: now,
-    updatedAt: now,
-    expiresAt: new Date(Date.parse(now) + (input.ttlMs ?? DEFAULT_TTL_MS)).toISOString(),
-    attempts: 0,
-    retryCap: input.retryCap ?? DEFAULT_RETRY_CAP,
-    targetPath,
-    intent: "create" as const,
-    requireReview: input.requireReview === true,
-    prompt: personaPrompt(first, topic),
-    schemaType: null,
-    topic,
-    personas,
-    responses: {},
-    pendingArtifact: null,
-    lastErrors: [],
-    failReason: null,
-  });
-  saveWriteSession(vault, record);
+  const expiresAt = new Date(Date.parse(now) + (input.ttlMs ?? DEFAULT_TTL_MS)).toISOString();
+  const record = createWriteSession(vault, now, (id) =>
+    Object.freeze({
+      id,
+      kind: "panel" as const,
+      status: "needs-llm-step" as const,
+      step: `persona:${first.slug}`,
+      agent: input.agent.trim() || "unknown",
+      createdAt: now,
+      updatedAt: now,
+      expiresAt,
+      attempts: 0,
+      retryCap: input.retryCap ?? DEFAULT_RETRY_CAP,
+      targetPath,
+      intent: "create" as const,
+      requireReview: input.requireReview === true,
+      prompt: personaPrompt(first, topic),
+      schemaType: null,
+      topic,
+      personas,
+      responses: {},
+      pendingArtifact: null,
+      lastErrors: [],
+      failReason: null,
+    }),
+  );
   return sessionEnvelope(record);
 }
 
@@ -222,7 +224,19 @@ function selectPersonas(
   if (requested === undefined || requested.length === 0) return loaded;
   const bySlug = new Map(loaded.map((p) => [p.slug, p]));
   const selected: WriteSessionPersona[] = [];
-  for (const slug of requested) {
+  // Duplicates would break step progression: `nextStep` walks the
+  // persona list by indexOf, so a repeated slug loops on itself and
+  // the session never reaches synthesis.
+  const seen = new Set<string>();
+  for (const rawSlug of requested) {
+    const slug = rawSlug.trim();
+    if (slug === "") {
+      throw new WriteSessionRequestError("persona slug must not be empty");
+    }
+    if (seen.has(slug)) {
+      throw new WriteSessionRequestError(`duplicate persona '${slug}' requested`);
+    }
+    seen.add(slug);
     const persona = bySlug.get(slug);
     if (persona === undefined) {
       throw new WriteSessionRequestError(

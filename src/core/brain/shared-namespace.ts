@@ -16,6 +16,7 @@
  * dream pass treats mirrored records as ordinary first-class signals.
  */
 
+import { realpathSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
 import { discoverConfig } from "../config.ts";
@@ -88,5 +89,14 @@ export function mirrorNote(
  * silently duplicating.
  */
 function isSelfMirror(sharedVault: string, originVault: string): boolean {
-  return resolve(sharedVault) === resolve(originVault);
+  return canonicalPath(sharedVault) === canonicalPath(originVault);
+}
+
+/** Realpath when resolvable (catches symlink aliases), lexical otherwise. */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
 }

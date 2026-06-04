@@ -29,7 +29,7 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { appendLogEvent } from "../log.ts";
 import { loadSchemaPack } from "../schema-pack.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
-import { allocateWriteSessionId, readWriteSession, saveWriteSession } from "./store.ts";
+import { createWriteSession, readWriteSession, saveWriteSession } from "./store.ts";
 import {
   buildCorrectionPrompt,
   inspectExistingTarget,
@@ -87,30 +87,33 @@ export function openArtifactSession(
   }
   const now = resolveNow(input.now);
   const schemaType = input.schemaType?.trim() || null;
-  const record: WriteSessionRecord = Object.freeze({
-    id: allocateWriteSessionId(vault, now),
-    kind: "artifact" as const,
-    status: "needs-llm-step" as const,
-    step: "artifact",
-    agent: input.agent.trim() || "unknown",
-    createdAt: now,
-    updatedAt: now,
-    expiresAt: new Date(Date.parse(now) + (input.ttlMs ?? DEFAULT_TTL_MS)).toISOString(),
-    attempts: 0,
-    retryCap: normalizeRetryCap(input.retryCap),
-    targetPath: input.targetPath,
-    intent: input.intent ?? "create",
-    requireReview: input.requireReview === true,
-    prompt: input.prompt?.trim() || buildArtifactPrompt(input.targetPath, schemaType),
-    schemaType,
-    topic: null,
-    personas: [],
-    responses: {},
-    pendingArtifact: null,
-    lastErrors: [],
-    failReason: null,
-  });
-  saveWriteSession(vault, record);
+  const expiresAt = new Date(Date.parse(now) + normalizeTtlMs(input.ttlMs)).toISOString();
+  const retryCap = normalizeRetryCap(input.retryCap);
+  const record = createWriteSession(vault, now, (id) =>
+    Object.freeze({
+      id,
+      kind: "artifact" as const,
+      status: "needs-llm-step" as const,
+      step: "artifact",
+      agent: input.agent.trim() || "unknown",
+      createdAt: now,
+      updatedAt: now,
+      expiresAt,
+      attempts: 0,
+      retryCap,
+      targetPath: input.targetPath,
+      intent: input.intent ?? ("create" as const),
+      requireReview: input.requireReview === true,
+      prompt: input.prompt?.trim() || buildArtifactPrompt(input.targetPath, schemaType),
+      schemaType,
+      topic: null,
+      personas: [],
+      responses: {},
+      pendingArtifact: null,
+      lastErrors: [],
+      failReason: null,
+    }),
+  );
   return sessionEnvelope(record, inspectExistingTarget(vault, record.targetPath));
 }
 
@@ -234,6 +237,15 @@ export function resolveNow(now: string | undefined): string {
   return new Date(ts).toISOString();
 }
 
+/** TTL must be a positive integer; reject before any date arithmetic. */
+function normalizeTtlMs(ttlMs: number | undefined): number {
+  if (ttlMs === undefined) return DEFAULT_TTL_MS;
+  if (!Number.isFinite(ttlMs) || !Number.isInteger(ttlMs) || ttlMs < 1) {
+    throw new WriteSessionRequestError(`ttlMs must be a positive integer, got: ${ttlMs}`);
+  }
+  return ttlMs;
+}
+
 function normalizeRetryCap(cap: number | undefined): number {
   if (cap === undefined) return DEFAULT_RETRY_CAP;
   if (!Number.isInteger(cap) || cap < 1 || cap > 20) {
@@ -326,6 +338,26 @@ export function commitArtifact(
   now: string,
 ): WriteSessionEnvelope {
   const absolute = join(vault, session.targetPath);
+  // Last-line-of-defense collision guard: submit-time checks cannot
+  // cover the window between a needs-review park and the operator's
+  // approve - if the target appeared meanwhile, `create` must still
+  // refuse to overwrite at the write chokepoint itself.
+  if (session.intent === "create" && existsSync(absolute)) {
+    return recordFailedAttempt(
+      vault,
+      session,
+      [
+        Object.freeze({
+          code: "target-exists",
+          path: "target",
+          message:
+            `${session.targetPath} already exists; reopen the session with overwrite or merge intent ` +
+            "(or abandon)",
+        }),
+      ],
+      now,
+    );
+  }
   const body = artifact.endsWith("\n") ? artifact : `${artifact}\n`;
   mkdirSync(dirname(absolute), { recursive: true });
   if (session.intent === "merge" && existsSync(absolute)) {

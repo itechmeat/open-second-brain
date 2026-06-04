@@ -729,8 +729,12 @@ async function toolBrainWriteSession(
         return asRecord(sessionEnvelope(probe.session));
       }
       case "list": {
+        const limit = coerceInt(args, "limit", 100, 1, 500);
         const sessions = listWriteSessions(ctx.vault, new Date().toISOString());
-        return { sessions: sessions.map((rec) => asRecord(sessionEnvelope(rec))) };
+        return {
+          total: sessions.length,
+          sessions: sessions.slice(0, limit).map((rec) => asRecord(sessionEnvelope(rec))),
+        };
       }
       default:
         throw new MCPError(
@@ -740,11 +744,14 @@ async function toolBrainWriteSession(
     }
   } catch (err) {
     if (err instanceof WriteSessionRequestError) {
-      const detail =
-        err.errors.length > 0
-          ? ` [${err.errors.map((e) => `${e.code}: ${e.message}`).join("; ")}]`
-          : "";
-      throw new MCPError(INVALID_PARAMS, `${err.message}${detail}`);
+      // Preserve the {code, path, message} boundary contract: the
+      // structured list rides MCPError's data slot, the message stays
+      // human-readable prose.
+      throw new MCPError(
+        INVALID_PARAMS,
+        err.message,
+        err.errors.length > 0 ? { errors: err.errors } : undefined,
+      );
     }
     throw err;
   }
@@ -3359,6 +3366,10 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description: "Park the validated artifact at needs-review until an operator approves.",
         },
         retry_cap: { type: "number", description: "Failed submits allowed per step (default 3)." },
+        limit: {
+          type: "number",
+          description: "Max sessions returned by op=list (default 100, cap 500).",
+        },
         agent: { type: "string", description: "Agent identity override (open)." },
       },
       required: ["op"],

@@ -150,7 +150,10 @@ export function validateArtifact(
       }
     }
   }
-  if (meta["tags"] !== undefined && !Array.isArray(meta["tags"])) {
+  if (
+    meta["tags"] !== undefined &&
+    (!Array.isArray(meta["tags"]) || !meta["tags"].every((t) => typeof t === "string"))
+  ) {
     errors.push(err("tags-malformed", "tags", "tags must be an array of strings"));
   }
   return Object.freeze(errors);

@@ -70,6 +70,15 @@ function emitRequestError(err: WriteSessionRequestError, asJson: boolean): numbe
   );
 }
 
+/** JSON-mode callers get JSON on EVERY failure path, not just envelopes. */
+function emitCliError(message: string, asJson: boolean): number {
+  if (asJson) {
+    okJson({ ok: false, message });
+    return 1;
+  }
+  return fail(message);
+}
+
 function readBody(fileFlag: string | undefined): string {
   if (fileFlag !== undefined && fileFlag !== "-") {
     return readFileSync(fileFlag, "utf8");
@@ -153,8 +162,10 @@ export async function cmdBrainSession(argv: string[]): Promise<number> {
           return 2;
         }
         const probe = readWriteSession(vault, id, new Date().toISOString());
-        if (probe.error !== null) return fail(probe.error);
-        if (probe.session === null) return fail(`unknown write-session: ${id}`);
+        if (probe.error !== null) return emitCliError(probe.error, asJson);
+        if (probe.session === null) {
+          return emitCliError(`unknown write-session: ${id}`, asJson);
+        }
         // A status QUERY always exits 0 - the envelope carries the state.
         renderEnvelope(sessionEnvelope(probe.session), asJson);
         return 0;
@@ -192,6 +203,6 @@ export async function cmdBrainSession(argv: string[]): Promise<number> {
     if (err instanceof WriteSessionRequestError) {
       return emitRequestError(err, asJson);
     }
-    return fail(err instanceof Error ? err.message : String(err));
+    return emitCliError(err instanceof Error ? err.message : String(err), asJson);
   }
 }

@@ -19,7 +19,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "../../fs-atomic.ts";
 import {
   isTerminalWriteSessionStatus,
   type WriteSessionError,
@@ -159,12 +159,33 @@ function parseResponses(raw: unknown): Readonly<Record<string, string>> {
   return Object.freeze(out);
 }
 
+function isIsoDateString(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+function isCounter(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Fail-closed: a valid-JSON record missing required structure reads as
+ * malformed (error probe), never as a live session with defaulted
+ * fields - a corrupted store entry must not become writable state.
+ */
 function parseRecord(raw: unknown): WriteSessionRecord | null {
   if (typeof raw !== "object" || raw === null) return null;
   const rec = raw as Record<string, unknown>;
   if (!isWriteSessionId(rec["id"])) return null;
   if (!KIND_SET.has(String(rec["kind"]))) return null;
   if (!STATUS_SET.has(String(rec["status"]))) return null;
+  if (typeof rec["step"] !== "string" || rec["step"] === "") return null;
+  if (typeof rec["agent"] !== "string" || rec["agent"] === "") return null;
+  if (!isIsoDateString(rec["created_at"])) return null;
+  if (!isIsoDateString(rec["updated_at"])) return null;
+  if (!isIsoDateString(rec["expires_at"])) return null;
+  if (typeof rec["target_path"] !== "string" || rec["target_path"] === "") return null;
+  if (!isCounter(rec["attempts"])) return null;
+  if (!isCounter(rec["retry_cap"])) return null;
   const intent = INTENT_SET.has(String(rec["intent"]))
     ? (rec["intent"] as WriteSessionIntent)
     : "create";
@@ -206,10 +227,37 @@ function applyTtl(record: WriteSessionRecord, nowIso: string): WriteSessionRecor
   return Object.freeze({ ...record, status: "failed" as const, failReason: "expired" });
 }
 
-/** Persist a session record atomically. */
+/** Persist a session record atomically (updates an EXISTING session). */
 export function saveWriteSession(vault: string, record: WriteSessionRecord): void {
   mkdirSync(writeSessionDir(vault), { recursive: true });
   atomicWriteFileSync(writeSessionPath(vault, record.id), serializeRecord(record));
+}
+
+/**
+ * Allocate an id and persist a NEW session in one step. The first save
+ * goes through an exclusive create (hardlink-based, fails on EEXIST),
+ * so two concurrent openers in the same second can never claim the
+ * same id - the loser simply retries with the next suffix. This closes
+ * the check-then-use window a bare `allocate + save` pair would have.
+ */
+export function createWriteSession(
+  vault: string,
+  nowIso: string,
+  build: (id: string) => WriteSessionRecord,
+): WriteSessionRecord {
+  mkdirSync(writeSessionDir(vault), { recursive: true });
+  for (let attempt = 0; attempt < 10_000; attempt++) {
+    const id = allocateWriteSessionId(vault, nowIso);
+    const record = build(id);
+    try {
+      atomicCreateFileSyncExclusive(writeSessionPath(vault, id), serializeRecord(record));
+      return record;
+    } catch (exc) {
+      if ((exc as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw exc;
+    }
+  }
+  throw new Error("could not create a write-session: id space exhausted for this second");
 }
 
 /**
@@ -292,7 +340,13 @@ export function sweepWriteSessions(vault: string, nowIso: string): SweepWriteSes
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".json")) continue;
     const id = name.slice(0, -".json".length);
-    if (!isWriteSessionId(id)) continue;
+    if (!isWriteSessionId(id)) {
+      // A *.json name outside the id grammar can never become a live
+      // session - it is corrupt by definition; sweep owns its removal.
+      rmSync(join(dir, name), { force: true });
+      removed += 1;
+      continue;
+    }
     const probe = readWriteSession(vault, id, nowIso);
     if (probe.session === null || isTerminalWriteSessionStatus(probe.session.status)) {
       rmSync(join(dir, name), { force: true });
