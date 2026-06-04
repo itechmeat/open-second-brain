@@ -29,7 +29,7 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { renderGitDigest } from "./digest.ts";
 import { repoKey as deriveRepoKey } from "./identity.ts";
 import { readCommits, readTags, revListRange, shaExists } from "./reader.ts";
-import type { GitCommit } from "./reader.ts";
+import type { GitCommit, GitTag } from "./reader.ts";
 import {
   appendGitRecords,
   gitStoreDir,
@@ -82,7 +82,7 @@ export interface IngestGitHistoryResult {
  */
 function attributeReleases(
   repoPath: string,
-  tags: ReadonlyArray<GitTagRecord>,
+  tags: ReadonlyArray<GitTag>,
 ): ReadonlyMap<string, string> {
   const ordered = tags.toSorted((a, b) => {
     if (a.createdAt === null && b.createdAt === null) return a.name.localeCompare(b.name);
@@ -141,6 +141,16 @@ export function ingestGitHistory(
   });
   if (commits === null) {
     throw new GitIngestError(`not a git repository (or git unavailable): ${repo}`);
+  }
+  if (commits.length >= maxCount && mode !== "incremental") {
+    // A bounded initial/rescan walk kept only the NEWEST maxCount
+    // commits; older history is outside the watermark and will not
+    // arrive on later incremental runs. Surface that instead of letting
+    // the digest silently under-represent deep history.
+    warning =
+      (warning === null ? "" : `${warning}; `) +
+      `walk bounded at ${maxCount} commit(s) - older history not ingested ` +
+      "(re-run with a higher --max-count to backfill)";
   }
   const tags = readTags(repo) ?? [];
 

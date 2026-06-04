@@ -148,12 +148,14 @@ test("a malformed watermark file triggers a re-scan with the probe error surface
   expect(listGitCommits(vault, res.repoKey)).toHaveLength(1);
 });
 
-test("maxCount bounds the initial walk", () => {
+test("maxCount bounds the initial walk and surfaces the truncation", () => {
   for (let i = 0; i < 5; i += 1) commitFile(`f${i}.txt`, String(i), `commit ${i}`);
   const res = ingestGitHistory(vault, repo, { maxCount: 2 });
   expect(res.newCommits).toBe(2);
   const commits = listGitCommits(vault, res.repoKey);
   expect(commits.map((c) => c.subject)).toEqual(["commit 3", "commit 4"]);
+  // A bounded initial walk must SAY it skipped older history.
+  expect(res.warning).toMatch(/older history not ingested/);
 });
 
 test("non-repo paths raise a domain error; empty repos ingest cleanly", () => {
