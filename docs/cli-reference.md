@@ -181,6 +181,22 @@ o2b brain activation          status [--top N] - folded activation state: event/
 
 CLI and MCP searches record which documents they surfaced as one JSON event per access under `Brain/search/activation/` (query hashed, never raw text). `o2b search <query> --no-record-access` suppresses recording for one query; the MCP `brain_search` tool accepts `record_access: false`. Cross-vault (`--global`) and query-cache-hit searches never record, so reinforcement is miss-driven. The derived `Brain/search/activation-state.json` is a replayable fold - deleting it loses nothing. `search_activation_enabled: false` disables both the boost and recording; `search_two_pass_enabled: false` disables the evidence-pack broadened retry.
 
+### Entity truth and self-improving dream (since v0.43.0)
+
+```text
+o2b brain truth               ingest --entity E --aspect A --value V --source S [--quantity-value N --quantity-unit U --quantity-action W] - append one claim to the ledger
+                              slots [--entity E] - current values with superseded history and CONTESTED flags
+                              conflicts [--window-days N] - value conflicts (independent sources within the window; resolution always ask_user)
+                              aggregate --action W [--unit U] [--entity E] - sum exact (entity, action, unit) quantity matches
+                              collisions [--window-days N] - cross-agent convergence on one entity
+                              sweep [--max-events N] - keep the newest N claim events and refold
+o2b brain facts               decompose (--file <path> | --text <text>) [--ingest --entity E] - deterministic atomic assertions; --ingest appends structured-family claims
+o2b brain dead-end            record --approach T --reason T [--context T] | list - negative-knowledge registry under Brain/dead-ends/
+o2b brain foresight           [--horizon-days N] [--write] - forward projection: routines coming due, open commitments, open questions
+```
+
+Claims live as device-sharded append-only JSONL under `Brain/truth/` with a recomputable `state.json` fold - deleting the cache loses nothing. The merge guard rides `o2b brain merge` (an `entity-guard` refusal when the two preferences anchor disjoint people/orgs; `--force` bypasses). `o2b brain apply-evidence` accepts `--outcome success|failure|unknown`; the dream pass stages `outcome_regressions` with a deterministic confidence penalty when applied events carry repeated failures. `brain_review_candidates` annotates inbox signals with `signal_novelty` when the vault has indexed embeddings.
+
 ## Vault scope
 
 Single exclusion policy for every vault walker.
