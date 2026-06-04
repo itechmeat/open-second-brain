@@ -91,6 +91,7 @@ Brain verbs (observing memory):
   continuity          Export continuity records as ATOF/ATIF trajectories (read-only)
   bench               Memory quality benchmark over a disposable fixture vault
   git                 Git history as project memory: ingest, status, find
+  architect           Deterministic architecture notes for a code project
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -545,6 +546,12 @@ export const VERB_HELP: Record<string, string> = {
     "Read-only trajectory export of the continuity store. atof renders one\n" +
     "JSONL event stream; atif renders one trajectory document per session.\n" +
     "Records flagged private are dropped; redacted text stays masked.\n",
+  architect:
+    "usage: o2b brain architect <project-path> [--vault V] [--json]\n" +
+    "Scan a project tree deterministically (stdlib-only, no LLM) and\n" +
+    "write architecture notes under Brain/projects/arch/<repo-key>/.\n" +
+    "Generated content lives in sentinel regions; operator prose\n" +
+    "outside regions survives every re-scan byte-for-byte.",
   git:
     "usage: o2b brain git <ingest|status|find> [args] [--vault V] [--json]\n" +
     "ingest <repo-path> [--max-count N]  walk a worktree read-only, store\n" +
