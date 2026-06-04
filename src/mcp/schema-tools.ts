@@ -10,6 +10,7 @@ import {
   reviewSchemaOrphans,
 } from "../core/brain/schema-admin.ts";
 import type { SchemaMutation } from "../core/brain/schema-mutate.ts";
+import { resolveSearchConfig } from "../core/search/index.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import { coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
@@ -21,7 +22,11 @@ const SCHEMA_INSPECT_VIEWS: Readonly<
   Record<string, (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown>
 > = Object.freeze({
   graph: (ctx: ServerContext) => buildSchemaGraph(ctx.vault),
-  lint: (ctx: ServerContext) => buildSchemaLint(ctx.vault),
+  lint: (ctx: ServerContext) =>
+    buildSchemaLint(ctx.vault, {
+      dbPath: resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined })
+        .dbPath,
+    }),
   stats: (ctx: ServerContext) => buildSchemaStats(ctx.vault),
   orphans: (ctx: ServerContext) => reviewSchemaOrphans(ctx.vault),
   explain_type: (ctx: ServerContext, args: Record<string, unknown>) =>

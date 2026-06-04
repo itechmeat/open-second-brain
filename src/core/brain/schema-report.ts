@@ -31,6 +31,19 @@ export type SchemaReportFinding =
       readonly kind: "unused-declaration";
       readonly category: SchemaVocabularyCategory;
       readonly token: string;
+    }
+  | {
+      /**
+       * A typed edge whose endpoint page types violate the schema
+       * pack's `link_constraints`; the indexer's materialization
+       * post-pass blocked it (write-time-integrity-governance).
+       */
+      readonly kind: "link-constraint-violation";
+      readonly relation: string;
+      readonly source: string;
+      readonly target: string;
+      readonly source_type: string | null;
+      readonly target_type: string | null;
     };
 
 export interface BrainSchemaUsage {
@@ -229,8 +242,8 @@ function freezeUsage(counts: Map<string, number>): ReadonlyArray<SchemaTokenUsag
 function compareFindings(a: SchemaReportFinding, b: SchemaReportFinding): number {
   return (
     a.kind.localeCompare(b.kind) ||
-    a.category.localeCompare(b.category) ||
-    a.token.localeCompare(b.token) ||
+    ("category" in a ? a.category : "").localeCompare("category" in b ? b.category : "") ||
+    ("token" in a ? a.token : "").localeCompare("token" in b ? b.token : "") ||
     ("path" in a ? a.path : "").localeCompare("path" in b ? b.path : "")
   );
 }

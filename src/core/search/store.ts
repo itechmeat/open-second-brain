@@ -46,6 +46,12 @@ export interface DocumentInput {
   readonly contentHash: string;
   readonly mtime: number; // unix seconds
   readonly size: number;
+  /**
+   * The page's declared frontmatter `type` (normalized token), or null
+   * when undeclared. Persisted so link-constraint enforcement can join
+   * endpoint types without re-reading files (v6).
+   */
+  readonly pageType?: string | null;
 }
 
 export interface DocumentSummary {
@@ -507,20 +513,31 @@ export class Store {
     const row = this.db
       .query<
         { id: number },
-        [string, string | null, string, number, number, string, string, string]
+        [string, string | null, string, number, number, string | null, string, string, string]
       >(
-        "INSERT INTO documents(path, title, content_hash, mtime, size, created_at, updated_at, indexed_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+        "INSERT INTO documents(path, title, content_hash, mtime, size, page_type, created_at, updated_at, indexed_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
           "ON CONFLICT(path) DO UPDATE SET " +
           "  title = excluded.title, " +
           "  content_hash = excluded.content_hash, " +
           "  mtime = excluded.mtime, " +
           "  size = excluded.size, " +
+          "  page_type = excluded.page_type, " +
           "  updated_at = excluded.updated_at, " +
           "  indexed_at = excluded.indexed_at " +
           "RETURNING id",
       )
-      .get(doc.path, doc.title, doc.contentHash, doc.mtime, doc.size, now, now, now);
+      .get(
+        doc.path,
+        doc.title,
+        doc.contentHash,
+        doc.mtime,
+        doc.size,
+        doc.pageType ?? null,
+        now,
+        now,
+        now,
+      );
     if (!row) {
       throw new SearchError("INDEX_UNREADABLE", `upsertDocument returned no id for '${doc.path}'`);
     }
@@ -912,6 +929,7 @@ export class Store {
       >(
         "SELECT source_document_id, relation, target_path FROM links " +
           `WHERE source_document_id IN (${placeholders}) AND relation IS NOT NULL ` +
+          "AND relation_blocked = 0 " +
           "ORDER BY id",
       )
       .all(...(documentIds as number[]));
@@ -964,6 +982,7 @@ export class Store {
           "  ) AS resolved_target_id " +
           "FROM links l " +
           `WHERE l.source_document_id IN (${placeholders}) AND l.relation IS NOT NULL ` +
+          "AND l.relation_blocked = 0 " +
           "ORDER BY l.id",
       )
       .all(...(documentIds as number[]));
@@ -984,6 +1003,135 @@ export class Store {
       });
     }
     return out;
+  }
+
+  /**
+   * Recompute every typed edge's `relation_blocked` flag from the
+   * current schema-pack constraints (write-time-integrity-governance).
+   * Runs after `resolveLinkTargets` on every index pass, so removing a
+   * constraint restores blocked edges on the next run without touching
+   * files. Endpoint resolution mirrors `typedRelationEdgesForDocuments`
+   * (exact id, `<target>.md`, unambiguous basename). Returns the rows
+   * that ended up blocked. With an empty constraint map the pass only
+   * resets stale flags.
+   */
+  recomputeRelationConstraintFlags(
+    constraints: Readonly<Record<string, ReadonlyArray<string>>>,
+  ): Array<{
+    readonly relation: string;
+    readonly sourcePath: string;
+    readonly targetPath: string;
+    readonly sourceType: string;
+    readonly targetType: string;
+    readonly declared: ReadonlyArray<string>;
+  }> {
+    const rows = this.db
+      .query<
+        {
+          id: number;
+          relation: string;
+          blocked: number;
+          source_path: string;
+          source_type: string | null;
+          target_path: string | null;
+          target_type: string | null;
+        },
+        []
+      >(
+        "SELECT l.id, l.relation, l.relation_blocked AS blocked, " +
+          "  sd.path AS source_path, sd.page_type AS source_type, " +
+          "  l.target_path, td.page_type AS target_type " +
+          "FROM links l " +
+          "JOIN documents sd ON sd.id = l.source_document_id " +
+          "LEFT JOIN documents td ON td.id = COALESCE(" +
+          "    l.target_document_id, " +
+          "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
+          "    (SELECT d.id FROM documents d WHERE d.path LIKE '%/' || l.target_path || '.md' " +
+          "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
+          "                WHERE d2.path LIKE '%/' || l.target_path || '.md'))" +
+          "  ) " +
+          "WHERE l.relation IS NOT NULL",
+      )
+      .all();
+    const block = this.db.query("UPDATE links SET relation_blocked = 1 WHERE id = ?");
+    const unblock = this.db.query("UPDATE links SET relation_blocked = 0 WHERE id = ?");
+    const violations: Array<{
+      relation: string;
+      sourcePath: string;
+      targetPath: string;
+      sourceType: string;
+      targetType: string;
+      declared: ReadonlyArray<string>;
+    }> = [];
+    for (const row of rows) {
+      const declared = constraints[row.relation];
+      const allowed =
+        declared === undefined ||
+        declared.length === 0 ||
+        row.source_type === null ||
+        row.target_type === null ||
+        declared.includes(`${row.source_type}->${row.target_type}`);
+      if (allowed) {
+        if (row.blocked !== 0) unblock.run(row.id);
+        continue;
+      }
+      if (row.blocked === 0) block.run(row.id);
+      violations.push({
+        relation: row.relation,
+        sourcePath: row.source_path,
+        targetPath: row.target_path ?? "",
+        sourceType: row.source_type!,
+        targetType: row.target_type!,
+        declared: declared!,
+      });
+    }
+    return violations;
+  }
+
+  /**
+   * The typed edges currently blocked by link constraints, for lint
+   * surfacing. Read-only over the flags the last index pass computed.
+   */
+  blockedRelationRows(): Array<{
+    readonly relation: string;
+    readonly sourcePath: string;
+    readonly targetPath: string;
+    readonly sourceType: string | null;
+    readonly targetType: string | null;
+  }> {
+    return this.db
+      .query<
+        {
+          relation: string;
+          source_path: string;
+          target_path: string | null;
+          source_type: string | null;
+          target_type: string | null;
+        },
+        []
+      >(
+        "SELECT l.relation, sd.path AS source_path, l.target_path, " +
+          "  sd.page_type AS source_type, td.page_type AS target_type " +
+          "FROM links l " +
+          "JOIN documents sd ON sd.id = l.source_document_id " +
+          "LEFT JOIN documents td ON td.id = COALESCE(" +
+          "    l.target_document_id, " +
+          "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
+          "    (SELECT d.id FROM documents d WHERE d.path LIKE '%/' || l.target_path || '.md' " +
+          "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
+          "                WHERE d2.path LIKE '%/' || l.target_path || '.md'))" +
+          "  ) " +
+          "WHERE l.relation IS NOT NULL AND l.relation_blocked = 1 " +
+          "ORDER BY sd.path, l.id",
+      )
+      .all()
+      .map((r) => ({
+        relation: r.relation,
+        sourcePath: r.source_path,
+        targetPath: r.target_path ?? "",
+        sourceType: r.source_type,
+        targetType: r.target_type,
+      }));
   }
 
   /**

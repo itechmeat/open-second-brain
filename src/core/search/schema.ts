@@ -16,7 +16,7 @@ import { SearchError } from "./types.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 5;
+export const LATEST_SCHEMA_VERSION = 6;
 
 const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS documents (
@@ -263,6 +263,26 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
 
         INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild');
       `);
+    },
+  },
+  {
+    // v6 (write-time-integrity-governance) - link-constraint enforcement
+    // needs both endpoint page types at materialization time, so the
+    // document's declared frontmatter `type` is persisted alongside it,
+    // and a typed edge gains a `relation_blocked` flag the indexer's
+    // post-pass recomputes from the current schema pack on every run.
+    // Both additive and reindex-safe: existing rows default to NULL
+    // page type (constraints cannot evaluate - allowed) and unblocked.
+    version: 6,
+    up(db) {
+      const docCols = db.query<{ name: string }, []>("PRAGMA table_info(documents)").all();
+      if (!docCols.some((c) => c.name === "page_type")) {
+        db.exec("ALTER TABLE documents ADD COLUMN page_type TEXT");
+      }
+      const linkCols = db.query<{ name: string }, []>("PRAGMA table_info(links)").all();
+      if (!linkCols.some((c) => c.name === "relation_blocked")) {
+        db.exec("ALTER TABLE links ADD COLUMN relation_blocked INTEGER NOT NULL DEFAULT 0");
+      }
     },
   },
 ]);

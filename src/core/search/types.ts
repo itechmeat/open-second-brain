@@ -123,6 +123,20 @@ export interface IndexStats {
     readonly path: string;
     readonly message: string;
   }>;
+  /**
+   * Typed edges blocked by the schema pack's `link_constraints` during
+   * this run's materialization post-pass
+   * (write-time-integrity-governance). Empty when no constraints are
+   * declared.
+   */
+  readonly relationViolations: ReadonlyArray<{
+    readonly relation: string;
+    readonly sourcePath: string;
+    readonly targetPath: string;
+    readonly sourceType: string;
+    readonly targetType: string;
+    readonly declared: ReadonlyArray<string>;
+  }>;
   readonly durationMs: number;
 }
 

@@ -38,6 +38,8 @@ import {
 } from "./embeddings/signature.ts";
 import { extractLinks } from "./links.ts";
 import { extractFrontmatterRelations } from "../graph/frontmatter-relations.ts";
+import { loadSchemaPack } from "../brain/schema-pack.ts";
+import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { extractEntities } from "./entities.ts";
 import { Store } from "./store.ts";
@@ -78,6 +80,7 @@ interface MutableStats {
   embeddingsComputed: number;
   embeddingsRetries: number;
   errors: Array<{ readonly path: string; readonly message: string }>;
+  relationViolations: IndexStats["relationViolations"];
 }
 
 function newStats(): MutableStats {
@@ -90,6 +93,7 @@ function newStats(): MutableStats {
     embeddingsComputed: 0,
     embeddingsRetries: 0,
     errors: [],
+    relationViolations: [],
   };
 }
 
@@ -103,12 +107,26 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     embeddingsComputed: s.embeddingsComputed,
     embeddingsRetries: s.embeddingsRetries,
     errors: Object.freeze([...s.errors]),
+    relationViolations: Object.freeze([...s.relationViolations]),
     durationMs,
   });
 }
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+/**
+ * The page's declared frontmatter `type` as a normalized token, or
+ * null when undeclared or not a usable scalar. Tolerant by design:
+ * a malformed `type` value never fails indexing, it just leaves the
+ * page untyped for constraint purposes.
+ */
+function pageTypeFromFrontmatter(frontmatter: Record<string, unknown>): string | null {
+  const raw = frontmatter["type"];
+  if (typeof raw !== "string") return null;
+  const normalized = normalizeSchemaToken(raw);
+  return normalized.length > 0 ? normalized : null;
 }
 
 const UTF8_FATAL = new TextDecoder("utf-8", { fatal: true });
@@ -194,12 +212,17 @@ async function indexInto(
           stats.errors.push({ path: file.relPath, message: w });
         }
 
+        // The document's declared frontmatter `type` is persisted so
+        // the link-constraint post-pass can join endpoint types
+        // without re-reading files (v6).
+        const [frontmatter] = parseFrontmatterText(content);
         const docId = store.upsertDocument({
           path: file.relPath,
           title: chunkResult.title,
           contentHash,
           mtime: mtimeSec,
           size: file.stat.size,
+          pageType: pageTypeFromFrontmatter(frontmatter),
         });
 
         const chunkInputs: ChunkInput[] = chunkResult.chunks.map((c) => ({
@@ -235,7 +258,6 @@ async function indexInto(
         // (related / extends / contradicts / superseded_by) become typed
         // edges. They belong to the document, not a chunk, so anchor them
         // on the first chunk (or null when the doc produced no chunks).
-        const [frontmatter] = parseFrontmatterText(content);
         const relationChunkId = chunkIds[0] ?? null;
         for (const edge of extractFrontmatterRelations(frontmatter)) {
           links.push({
@@ -272,6 +294,21 @@ async function indexInto(
     }
 
     store.resolveLinkTargets();
+
+    // Link-constraint materialization post-pass
+    // (write-time-integrity-governance): recompute every typed edge's
+    // blocked flag from the current schema pack. Runs every pass - with
+    // no constraints declared it only resets stale flags, so removing a
+    // constraint restores edges without touching files. Fail-soft: an
+    // unparseable pack indexes as if no constraints were declared.
+    let constraints: Readonly<Record<string, ReadonlyArray<string>>> = {};
+    try {
+      constraints = loadSchemaPack(config.vault).link_constraints;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      stats.errors.push({ path: "Brain/_brain.yaml", message: `schema pack unreadable: ${msg}` });
+    }
+    stats.relationViolations = Object.freeze(store.recomputeRelationConstraintFlags(constraints));
 
     if (opts?.embeddings) {
       await populateEmbeddings(store, config, stats, opts?.forceCost === true);

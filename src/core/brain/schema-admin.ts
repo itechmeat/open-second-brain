@@ -1,4 +1,5 @@
 import { brainConfigPath } from "./paths.ts";
+import { readBlockedRelationRows } from "../search/link-constraints.ts";
 import {
   buildSchemaReport,
   type BrainSchemaReport,
@@ -116,10 +117,29 @@ export function buildSchemaStats(vault: string): SchemaStats {
   };
 }
 
-export function buildSchemaLint(vault: string): {
+export function buildSchemaLint(
+  vault: string,
+  opts: { readonly dbPath?: string } = {},
+): {
   findings: ReadonlyArray<SchemaReportFinding>;
 } {
-  return { findings: buildSchemaReport(vault).findings };
+  const findings: SchemaReportFinding[] = [...buildSchemaReport(vault).findings];
+  if (opts.dbPath !== undefined) {
+    // Link-constraint enforcement happens in the indexer's
+    // materialization post-pass; lint reads the blocked edges back
+    // from the index (fail-soft: no index file = no findings).
+    for (const row of readBlockedRelationRows(opts.dbPath)) {
+      findings.push({
+        kind: "link-constraint-violation",
+        relation: row.relation,
+        source: row.sourcePath,
+        target: row.targetPath,
+        source_type: row.sourceType,
+        target_type: row.targetType,
+      });
+    }
+  }
+  return { findings };
 }
 
 export function buildSchemaGraph(vault: string): SchemaGraph {
