@@ -19,6 +19,7 @@ export { cmdBrainDoctor } from "./doctor.ts";
 export { cmdBrainWatchdog } from "./watchdog.ts";
 export { cmdBrainHealth } from "./health.ts";
 export { cmdBrainHistory } from "./history.ts";
+export { cmdBrainActivation } from "./activation.ts";
 export { cmdBrainAudit } from "./audit.ts";
 export { cmdBrainMorningBrief } from "./morning-brief.ts";
 export { cmdBrainCodec } from "./codec.ts";
