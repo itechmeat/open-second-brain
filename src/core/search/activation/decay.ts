@@ -46,10 +46,13 @@ const PATH_KIND_PREFIXES: ReadonlyArray<readonly [string, string]> = [
 
 /**
  * Resolve the activation kind for a document: normalized frontmatter
- * `kind:` first, then framework path prefixes, then `note`.
+ * `kind:` first (the framework `brain-` prefix is stripped, so
+ * `kind: brain-preference` resolves to `preference`), then framework
+ * path prefixes, then `note`.
  */
 export function resolveActivationKind(frontmatterKind: string | null, path: string): string {
-  const fromFrontmatter = frontmatterKind?.trim().toLowerCase() ?? "";
+  const raw = frontmatterKind?.trim().toLowerCase() ?? "";
+  const fromFrontmatter = raw.startsWith("brain-") ? raw.slice("brain-".length) : raw;
   if (fromFrontmatter !== "") return fromFrontmatter;
   for (const [prefix, kind] of PATH_KIND_PREFIXES) {
     if (path.startsWith(prefix)) return kind;

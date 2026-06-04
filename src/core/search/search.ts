@@ -16,11 +16,19 @@ import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/vi
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   composeWeightProfiles,
+  fnv1aHex,
   isNeutralLearnedWeights,
   learnedWeightsFingerprint,
   learnedWeightsReason,
   readLearnedWeights,
 } from "./feedback.ts";
+import { effectiveActivation, halfLifeDays, resolveActivationKind } from "./activation/decay.ts";
+import {
+  ACCESS_EVENT_PATHS_CAP,
+  activationStateFingerprint,
+  readActivationState,
+  recordAccessEvent,
+} from "./activation/store.ts";
 import { extractEntities } from "./entities.ts";
 import { expandQueryEntities } from "./entity-alias.ts";
 import { buildCoverageReport, significantTerms, termIncludedIn } from "./coverage.ts";
@@ -254,10 +262,15 @@ export async function search(
         const lwFp = config.recall.learnedWeightsEnabled
           ? learnedWeightsFingerprint(config.vault)
           : "off";
+        // The activation state evolves with recorded accesses the same
+        // way, so its fingerprint joins too (Time-Aware Recall Suite).
+        const actFp = config.recall.activationEnabled
+          ? activationStateFingerprint(config.vault)
+          : "off";
         cacheKey = buildCacheKey(
           keyOpts,
           basePlan.planHash,
-          `${configFingerprint(config)}|lw:${lwFp}`,
+          `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}`,
         );
         const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
         if (hit) return hit;
@@ -395,6 +408,48 @@ export async function search(
         ? store.chunkEntityMatches(idsList, entityExpansion.added)
         : undefined;
 
+    // Access-reinforced activation (Time-Aware Recall & Activation
+    // Suite): map the derived activation state onto the candidate set.
+    // O(candidates): one state read per query, one frontmatter read per
+    // candidate path that actually carries activation. The type
+    // half-life decays the stored strength at read time, so a vault
+    // without recorded events contributes nothing and ranks
+    // bit-identically.
+    let activationByChunk: ReadonlyMap<number, number> | undefined;
+    if (config.recall.activationEnabled) {
+      const activationState = readActivationState(config.vault);
+      if (activationState !== null && Object.keys(activationState.paths).length > 0) {
+        const nowActivationMs = Date.now();
+        const kindCache = new Map<string, string>();
+        const kindFor = (path: string): string => {
+          const cached = kindCache.get(path);
+          if (cached !== undefined) return cached;
+          let fmKind: string | null = null;
+          try {
+            const [meta] = parseFrontmatter(join(config.vault, path));
+            const raw = (meta as Record<string, unknown>)["kind"];
+            fmKind = typeof raw === "string" ? raw : null;
+          } catch {
+            fmKind = null;
+          }
+          const kind = resolveActivationKind(fmKind, path);
+          kindCache.set(path, kind);
+          return kind;
+        };
+        const byChunk = new Map<number, number>();
+        for (const chunkId of idsList) {
+          const h = hydrated.get(chunkId);
+          if (h === undefined) continue;
+          const row = activationState.paths[h.path];
+          if (row === undefined) continue;
+          const days = (nowActivationMs - row.lastAccessAt) / (24 * 60 * 60 * 1000);
+          const act = effectiveActivation(row.strength, days, halfLifeDays(kindFor(h.path)));
+          if (act > 0) byChunk.set(chunkId, act);
+        }
+        if (byChunk.size > 0) activationByChunk = byChunk;
+      }
+    }
+
     // When a property filter is active, overfetch the ranked
     // candidates so the post-filter result set still has a chance
     // of producing `limit` matching rows. Without this, the
@@ -446,6 +501,7 @@ export async function search(
           inboundLinkSources,
           tagsByDoc,
           ...(entityMatchByChunk !== undefined ? { entityMatchByChunk } : {}),
+          ...(activationByChunk !== undefined ? { activationByChunk } : {}),
         },
         {
           keywordWeight: opts.keywordWeight ?? config.keywordWeight,
@@ -567,6 +623,28 @@ export async function search(
             buildEvidenceVerification(store, query, finalResults, pathPrefix),
           )
         : undefined;
+
+    // Access recording (Time-Aware Recall & Activation Suite): the
+    // orchestrator edge opted in, so persist which documents this query
+    // surfaced - AFTER ranking, so the current query is never affected
+    // by its own recording. Cache hits return earlier and never reach
+    // this point. Best-effort: a failed write never breaks the search.
+    if (opts.recordAccess === true && config.recall.activationEnabled && finalResults.length > 0) {
+      const surfacedPaths = Array.from(new Set(finalResults.map((r) => r.path))).slice(
+        0,
+        ACCESS_EVENT_PATHS_CAP,
+      );
+      const normalized = query.trim().replace(/\s+/gu, " ").toLowerCase();
+      try {
+        recordAccessEvent(config.vault, {
+          ts: Date.now(),
+          queryHash: fnv1aHex(normalized),
+          paths: surfacedPaths,
+        });
+      } catch {
+        warnings.push("activation: failed to record access event");
+      }
+    }
 
     return finalize(
       Object.freeze({

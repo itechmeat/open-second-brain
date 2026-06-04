@@ -487,6 +487,11 @@ export function resolveSearchConfig(opts: {
     false,
     "search_learned_weights_enabled",
   );
+  const activationEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_ACTIVATION", "search_activation_enabled"),
+    true,
+    "search_activation_enabled",
+  );
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
@@ -502,6 +507,7 @@ export function resolveSearchConfig(opts: {
     cacheTtlSeconds,
     relationPolarityEnabled,
     learnedWeightsEnabled,
+    activationEnabled,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({

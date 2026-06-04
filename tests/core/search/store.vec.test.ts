@@ -56,6 +56,7 @@ function semanticConfig(
       cacheTtlSeconds: 300,
       relationPolarityEnabled: true,
       learnedWeightsEnabled: false,
+      activationEnabled: true,
     }),
     ...overrides,
   });

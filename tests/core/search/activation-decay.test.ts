@@ -41,6 +41,13 @@ describe("resolveActivationKind", () => {
     expect(resolveActivationKind("handoff", "Brain/preferences/pref-x.md")).toBe("handoff");
   });
 
+  test("the framework brain- prefix is stripped", () => {
+    expect(resolveActivationKind("brain-preference", "Brain/preferences/pref-x.md")).toBe(
+      "preference",
+    );
+    expect(resolveActivationKind("Brain-Decision", "Brain/notes/x.md")).toBe("decision");
+  });
+
   test("path prefixes resolve framework directories without frontmatter", () => {
     expect(resolveActivationKind(null, "Brain/preferences/pref-x.md")).toBe("preference");
     expect(resolveActivationKind(null, "Brain/decisions/panels/p.md")).toBe("decision");

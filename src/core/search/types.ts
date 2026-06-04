@@ -233,6 +233,15 @@ export interface SearchOptions {
   /** Opt-in verified evidence pack diagnostics. Omitted preserves the legacy search outcome shape. */
   readonly evidencePack?: boolean;
   /**
+   * Access recording (Time-Aware Recall & Activation Suite). When true,
+   * the surfaced result paths are recorded as one activation access
+   * event AFTER ranking completes - the current query's own ranking is
+   * never affected by its own recording, and cache hits never record.
+   * Default false: the pure core stays read-only; CLI/MCP surfaces opt
+   * in explicitly.
+   */
+  readonly recordAccess?: boolean;
+  /**
    * History mode for relation polarity (recall-trust-suite). When true a
    * matched predecessor (`superseded_by` declarer) keeps its rank and no
    * successor is pulled in; informational reasons still land. Default
@@ -351,6 +360,15 @@ export interface ResolvedRecallConfig {
    * resettable — see `feedback.ts`.
    */
   readonly learnedWeightsEnabled: boolean;
+  /**
+   * Access-reinforced activation (Time-Aware Recall & Activation
+   * Suite). On by default: recorded access events under
+   * `Brain/search/activation/` feed a bounded, type-decayed activation
+   * boost and co-access companion boost. A vault without recorded
+   * events ranks bit-identically either way; this switch exists as the
+   * explicit kill switch.
+   */
+  readonly activationEnabled: boolean;
 }
 
 export interface ResolvedSearchConfig {

@@ -38,6 +38,14 @@ export interface RankerInputs {
    * populated by a reindex.
    */
   readonly entityMatchByChunk?: ReadonlyMap<number, number>;
+  /**
+   * Optional per-chunk effective activation in [0, 1] (Time-Aware
+   * Recall & Activation Suite): access-reinforced strength already
+   * decayed by the content-type half-life. Missing entries (and the
+   * absent map) contribute zero boost, so a vault without recorded
+   * accesses ranks bit-identically to pre-activation behaviour.
+   */
+  readonly activationByChunk?: ReadonlyMap<number, number>;
 }
 
 export interface RankerOptions {
@@ -140,6 +148,7 @@ function buildReasons(parts: {
   recency: number;
   tierMul: number;
   entityBoost?: number;
+  activationBoost?: number;
   sessionFocus?: number;
   rrf?: number;
 }): ReadonlyArray<string> {
@@ -149,6 +158,9 @@ function buildReasons(parts: {
   if (parts.rrf && parts.rrf > 0) reasons.push(`rrf: ${fmt(parts.rrf)}`);
   if (parts.entityBoost && parts.entityBoost > 0) {
     reasons.push(`entity_match: ${fmt(parts.entityBoost)}`);
+  }
+  if (parts.activationBoost && parts.activationBoost > 0) {
+    reasons.push(`activation: ${fmt(parts.activationBoost)}`);
   }
   if (parts.linkBoost > 0) reasons.push(`link_boost: ${fmt(parts.linkBoost)}`);
   if (parts.recency > 0) reasons.push(`recency: ${fmt(parts.recency)}`);
@@ -298,8 +310,16 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // relevant set - never enough to float an irrelevant chunk.
     const entityMatches = inputs.entityMatchByChunk?.get(c.chunkId) ?? 0;
     const entityBoost = Math.min(0.04, entityMatches * 0.02 * entMul);
+    // Activation boost (Time-Aware Recall & Activation Suite): the
+    // effective (type-decayed) activation scales into a capped 0.04
+    // contribution - a re-ranker for habitually-recalled memories,
+    // never enough to float an irrelevant chunk.
+    const activation = clamp01(inputs.activationByChunk?.get(c.chunkId) ?? 0);
+    const activationBoost = Math.min(0.04, activation * 0.04);
     const sessionFocus = scoreSessionFocusTarget(hyd, opts.sessionFocus, nowMs);
-    const score = clamp01(weighted * tierMul + linkBoost + recency + entityBoost + sessionFocus);
+    const score = clamp01(
+      weighted * tierMul + linkBoost + recency + entityBoost + activationBoost + sessionFocus,
+    );
 
     ranked.push(
       Object.freeze({
@@ -323,6 +343,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           recency,
           tierMul,
           entityBoost,
+          activationBoost,
           sessionFocus,
           rrf: rrfByChunk !== null ? rrf : 0,
         }),
