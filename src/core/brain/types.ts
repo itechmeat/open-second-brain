@@ -453,6 +453,13 @@ export interface BrainPreference {
    * `drift_detected` event in the log.
    */
   readonly content_hash?: string;
+  /**
+   * Directional freshness trend (Time-Aware Recall & Activation Suite,
+   * t_ee09a6ce): `new | strengthening | stable | weakening | stale`,
+   * stamped by the dream refresh from the evidence time distribution.
+   * Absent on never-refreshed files; readers treat absent as neutral.
+   */
+  readonly freshness_trend?: string;
   /** Optional wikilink to a retired pref this one replaces. */
   readonly supersedes?: string;
   readonly aliases?: ReadonlyArray<string>;

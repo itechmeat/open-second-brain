@@ -633,6 +633,9 @@ export function parsePreference(
     ...(optionalScalarString(meta, "scope") !== undefined
       ? { scope: optionalScalarString(meta, "scope") }
       : {}),
+    ...(optionalScalarString(meta, "freshness_trend") !== undefined
+      ? { freshness_trend: optionalScalarString(meta, "freshness_trend") }
+      : {}),
     ...(optionalScalarString(meta, "supersedes") !== undefined
       ? { supersedes: optionalScalarString(meta, "supersedes") }
       : {}),

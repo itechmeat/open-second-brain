@@ -522,7 +522,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           pinned: update.pinned,
           recentApplied: ev.applied,
           recentViolated: ev.violated,
-          freshness_trend: update.freshness_trend,
+          ...(update.freshness_trend !== undefined
+            ? { freshness_trend: update.freshness_trend }
+            : {}),
           ...(update.scope ? { scope: update.scope } : {}),
         },
         [],
@@ -1578,9 +1580,12 @@ interface RefreshUpdate {
    * Freshness trend (t_ee09a6ce), computed at PLAN time so the no-op
    * pre-flight (`wouldRewritePreference`) renders the same bytes the
    * write loop will stamp. Computing it only in the write loop would
-   * make every stamped pref look like "needs rewrite" forever.
+   * make every stamped pref look like "needs rewrite" forever. Absent
+   * when the stamp is withheld: a pref that has never carried the
+   * field and is not being rewritten anyway stays byte-identical, so
+   * legacy vaults keep their no-op dream guarantees.
    */
-  readonly freshness_trend: string;
+  readonly freshness_trend?: string;
 }
 
 /**
@@ -1807,22 +1812,31 @@ function planRefresh(
       confidence.band !== rec.pref.confidence ||
       valueDifferent;
 
-    // Freshness trend (t_ee09a6ce): classify the FULL evidence
-    // distribution here at plan time (uncapped collect) so the no-op
-    // pre-flight below and the write loop stamp identical bytes.
-    const trendEv = collectEvidenceForSlug(vault, slug, {
-      sinceIso: rec.pref.created_at,
-      maxApplied: 1000,
-      maxViolated: 1000,
-    });
-    const trend = classifyFreshnessTrend({
-      createdAt: rec.pref.created_at,
-      events: [...trendEv.applied, ...trendEv.violated].map((r) => ({
-        at: r.timestamp,
-        result: r.result,
-      })),
-      nowMs: now.getTime(),
-    });
+    // Freshness trend (t_ee09a6ce): classified at PLAN time so the
+    // no-op pre-flight below and the write loop render identical
+    // bytes. The stamp is OPPORTUNISTIC: it lands when the pref is
+    // being rewritten anyway (counters changed) or already carries
+    // the field (then it refreshes on every consolidation pass, the
+    // Hindsight contract). A never-stamped pref with unchanged
+    // counters is left byte-identical so legacy vaults keep their
+    // no-op dream guarantees.
+    const stampTrend = countersChanged || rec.pref.freshness_trend !== undefined;
+    let trendLabel: string | undefined;
+    if (stampTrend) {
+      const trendEv = collectEvidenceForSlug(vault, slug, {
+        sinceIso: rec.pref.created_at,
+        maxApplied: 1000,
+        maxViolated: 1000,
+      });
+      trendLabel = classifyFreshnessTrend({
+        createdAt: rec.pref.created_at,
+        events: [...trendEv.applied, ...trendEv.violated].map((r) => ({
+          at: r.timestamp,
+          result: r.result,
+        })),
+        nowMs: now.getTime(),
+      }).trend;
+    }
 
     const prospective = {
       slug,
@@ -1840,7 +1854,7 @@ function planRefresh(
       confidence: confidence.band,
       confidence_value: confidence.value,
       pinned: rec.pref.pinned,
-      freshness_trend: trend.trend,
+      ...(trendLabel !== undefined ? { freshness_trend: trendLabel } : {}),
     };
 
     if (!countersChanged) {
