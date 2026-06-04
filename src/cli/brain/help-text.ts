@@ -92,6 +92,8 @@ Brain verbs (observing memory):
   bench               Memory quality benchmark over a disposable fixture vault
   git                 Git history as project memory: ingest, status, find, mine
   architect           Deterministic architecture notes for a code project
+  session             Agent write sessions: open, submit, approve, abandon, status, list, sweep
+  panel               Multi-persona decision panel riding the write-session kernel
 
 Common flags:
   --vault <path>   Override the configured vault
@@ -546,6 +548,21 @@ export const VERB_HELP: Record<string, string> = {
     "Read-only trajectory export of the continuity store. atof renders one\n" +
     "JSONL event stream; atif renders one trajectory document per session.\n" +
     "Records flagged private are dropped; redacted text stays masked.\n",
+  session:
+    "usage: o2b brain session <open|submit|approve|abandon|status|list|sweep> [<session-id>] [flags]\n" +
+    "open --target <Brain/...md> [--schema-type S] [--intent create|overwrite|merge]\n" +
+    "     [--prompt P] [--require-review] [--retry-cap N]  open an artifact write session.\n" +
+    "submit <id> [--file F|-]  submit the generated artifact (stdin without --file).\n" +
+    "approve <id>   commit a needs-review session.  abandon <id>  terminal abandon.\n" +
+    "status <id> | list | sweep  inspect or clean the session store.\n" +
+    "Envelopes are JSON with --json: status, step, prompt, errors, attempts_left.",
+  panel:
+    "usage: o2b brain panel <open <topic...>|submit <id>|status <id>> [flags]\n" +
+    "open <topic> [--personas a,b,c] [--target T] [--require-review]  convene a\n" +
+    "decision panel; personas come from Brain/personas/ (built-in default set:\n" +
+    "technical, strategic, risk, user-experience). Each submit answers the\n" +
+    "current persona step; after synthesis the decision note commits under\n" +
+    "Brain/decisions/panels/. The calling agent generates every word.",
   architect:
     "usage: o2b brain architect <project-path> [--vault V] [--json]\n" +
     "Scan a project tree deterministically (stdlib-only, no LLM) and\n" +
