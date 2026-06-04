@@ -39,7 +39,9 @@ const USAGE =
 
 function renderEnvelope(env: WriteSessionEnvelope, asJson: boolean): void {
   if (asJson) {
-    okJson(env);
+    // Spread: the readonly envelope interface has no index signature,
+    // so it is not assignable to okJson's Record parameter directly.
+    okJson({ ...env });
     return;
   }
   ok(`session: ${env.session_id} (${env.kind})`);

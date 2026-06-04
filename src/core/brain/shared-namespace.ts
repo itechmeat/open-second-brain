@@ -16,7 +16,7 @@
  * dream pass treats mirrored records as ordinary first-class signals.
  */
 
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 
 import { discoverConfig } from "../config.ts";
 import { appendLogEvent } from "./log.ts";
@@ -43,6 +43,7 @@ export function mirrorSignal(
   originVault: string,
   input: WriteSignalInput,
 ): MirrorOutcome {
+  if (isSelfMirror(sharedVault, originVault)) return "failed";
   try {
     writeSignal(sharedVault, { ...input, origin_vault: basename(originVault) });
     return "ok";
@@ -63,6 +64,7 @@ export function mirrorNote(
   originVault: string,
   input: MirrorNoteInput,
 ): MirrorOutcome {
+  if (isSelfMirror(sharedVault, originVault)) return "failed";
   try {
     appendLogEvent(sharedVault, {
       timestamp: isoSecond(input.now ?? new Date()),
@@ -77,4 +79,14 @@ export function mirrorNote(
   } catch {
     return "failed";
   }
+}
+
+/**
+ * A shared namespace pointing back at the origin vault would
+ * double-write every record into its own store. That is always an
+ * operator misconfiguration - surface it as `failed` rather than
+ * silently duplicating.
+ */
+function isSelfMirror(sharedVault: string, originVault: string): boolean {
+  return resolve(sharedVault) === resolve(originVault);
 }

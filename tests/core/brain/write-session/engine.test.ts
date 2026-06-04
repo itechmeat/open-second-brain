@@ -190,6 +190,20 @@ test("abandon is terminal failed/abandoned with audit", () => {
   expect(entries.filter((e) => e.eventType === "write-session")).toHaveLength(1);
 });
 
+test("an expired session is audited exactly once across repeated ops", () => {
+  const opened = open({ ttlMs: 1000 });
+  const LATER = "2026-06-04T11:00:00Z";
+  for (let i = 0; i < 3; i++) {
+    expect(() =>
+      submitToSession(vault, { sessionId: opened.session_id, artifact: GOOD, now: LATER }),
+    ).toThrow(/terminal/);
+  }
+  const { entries } = parseLogDay(vault, DATE);
+  const audit = entries.filter((e) => e.eventType === "write-session");
+  expect(audit).toHaveLength(1);
+  expect(audit[0]!.body["reason"]).toBe("expired");
+});
+
 test("an expired session refuses submits with a terminal error", () => {
   const opened = open({ ttlMs: 1000 });
   expect(() =>

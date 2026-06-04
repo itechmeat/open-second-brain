@@ -26,7 +26,7 @@ import {
 } from "./engine.ts";
 import { allocateWriteSessionId, saveWriteSession } from "./store.ts";
 import { loadPersonas } from "./personas.ts";
-import { validateTargetPath } from "./validate.ts";
+import { inspectExistingTarget, validateTargetPath } from "./validate.ts";
 import { formatFrontmatter, slugify } from "../../vault.ts";
 import type {
   WriteSessionEnvelope,
@@ -126,6 +126,25 @@ export function submitToPanelSession(
   const text = input.text.trim();
 
   if (session.step === SYNTHESIS_STEP) {
+    // Commit-time collision guard: panel sessions always carry `create`
+    // intent, and create NEVER overwrites - same contract as the
+    // artifact flow. An occupied target (operator-specified, or a
+    // same-day rerun of the same topic) is a structured error, not a
+    // silent overwrite.
+    if (inspectExistingTarget(vault, session.targetPath) !== null) {
+      return recordFailedAttempt(
+        vault,
+        session,
+        [
+          Object.freeze({
+            code: "target-exists",
+            path: "target",
+            message: `${session.targetPath} already exists; abandon and reopen with --target`,
+          }),
+        ],
+        now,
+      );
+    }
     const note = renderPanelNote(session, text, now);
     if (session.requireReview) {
       const parked: WriteSessionRecord = Object.freeze({

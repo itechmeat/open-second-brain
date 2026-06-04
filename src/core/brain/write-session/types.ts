@@ -98,6 +98,14 @@ export interface WriteSessionRecord {
 export interface WriteSessionProbe {
   readonly session: WriteSessionRecord | null;
   readonly error: string | null;
+  /**
+   * True when the lazy-TTL transform fired on THIS read: the disk
+   * record is still non-terminal but the returned view is
+   * `failed`/`expired`. The engine uses this to persist + audit the
+   * expiry exactly once - a record already terminal on disk reads
+   * with `expiredOnRead: false`.
+   */
+  readonly expiredOnRead: boolean;
 }
 
 /**

@@ -73,6 +73,12 @@ test("a broken shared namespace degrades to failed without throwing", () => {
   expect(mirrorNote(shared, vault, { text: "hello", agent: "coding-agent" })).toBe("failed");
 });
 
+test("a shared namespace pointing at the origin vault is refused as failed", () => {
+  expect(mirrorSignal(vault, vault, SIGNAL_INPUT)).toBe("failed");
+  expect(mirrorNote(vault, vault, { text: "self", agent: "a" })).toBe("failed");
+  expect(readdirSync(join(vault, "Brain")).some((f) => f === "inbox")).toBe(false);
+});
+
 test("mirrorNote lands a note event with origin attribution", () => {
   expect(
     mirrorNote(shared, vault, {

@@ -257,8 +257,10 @@ export function loadLiveSession(vault: string, id: string, now: string): WriteSe
   }
   const session = probe.session;
   if (isTerminalWriteSessionStatus(session.status)) {
-    if (session.failReason === "expired") {
-      // Make the lazy expiry durable + audited exactly once.
+    if (probe.expiredOnRead) {
+      // The TTL transform fired on THIS read (disk record was still
+      // non-terminal): make the expiry durable + audited exactly once.
+      // A record already terminal on disk skips both.
       saveWriteSession(vault, session);
       auditTerminal(vault, session, now);
     }

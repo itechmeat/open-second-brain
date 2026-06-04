@@ -219,10 +219,16 @@ export function saveWriteSession(vault: string, record: WriteSessionRecord): voi
  */
 export function readWriteSession(vault: string, id: string, nowIso: string): WriteSessionProbe {
   if (!isWriteSessionId(id)) {
-    return Object.freeze({ session: null, error: `invalid write-session id: ${id}` });
+    return Object.freeze({
+      session: null,
+      error: `invalid write-session id: ${id}`,
+      expiredOnRead: false,
+    });
   }
   const path = writeSessionPath(vault, id);
-  if (!existsSync(path)) return Object.freeze({ session: null, error: null });
+  if (!existsSync(path)) {
+    return Object.freeze({ session: null, error: null, expiredOnRead: false });
+  }
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -230,13 +236,19 @@ export function readWriteSession(vault: string, id: string, nowIso: string): Wri
     return Object.freeze({
       session: null,
       error: `write-session file is not valid JSON: ${(exc as Error).message}`,
+      expiredOnRead: false,
     });
   }
   const record = parseRecord(raw);
   if (record === null) {
-    return Object.freeze({ session: null, error: `write-session record is malformed (${id})` });
+    return Object.freeze({
+      session: null,
+      error: `write-session record is malformed (${id})`,
+      expiredOnRead: false,
+    });
   }
-  return Object.freeze({ session: applyTtl(record, nowIso), error: null });
+  const view = applyTtl(record, nowIso);
+  return Object.freeze({ session: view, error: null, expiredOnRead: view !== record });
 }
 
 /** All readable sessions, sorted by created_at then id. Corrupt files are skipped. */

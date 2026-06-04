@@ -178,6 +178,22 @@ test("require_review parks the rendered note for operator approval", () => {
   expect(readFileSync(join(vault, parked.target_path), "utf8")).toContain("## Synthesis");
 });
 
+test("panel synthesis never overwrites an existing target", () => {
+  const target = "Brain/decisions/panels/manual.md";
+  mkdirSync(join(vault, "Brain", "decisions", "panels"), { recursive: true });
+  writeFileSync(join(vault, target), "PRECIOUS\n");
+  const opened = openPanel({ targetPath: target, personas: ["technical"] });
+  submitToPanelSession(vault, { sessionId: opened.session_id, text: "Feasible.", now: NOW });
+  const env = submitToPanelSession(vault, {
+    sessionId: opened.session_id,
+    text: "Adopt.",
+    now: NOW,
+  });
+  expect(env.status).toBe("needs-correction");
+  expect(env.errors.map((e) => e.code)).toContain("target-exists");
+  expect(readFileSync(join(vault, target), "utf8")).toBe("PRECIOUS\n");
+});
+
 test("dispatchSubmit routes by session kind", () => {
   const panel = openPanel();
   expect(dispatchSubmit(vault, { sessionId: panel.session_id, text: "Fine.", now: NOW }).step).toBe(
