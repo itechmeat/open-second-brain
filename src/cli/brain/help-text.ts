@@ -40,6 +40,8 @@ Brain verbs (observing memory):
   health              Semantic-health report: contradictions, concept gaps, stale claims
   history             Render a preference's edit-history timeline
   activation          Activation event store: status and sweep
+  truth               Claim ledger: ingest, slots, conflicts, aggregate, collisions, sweep
+  facts               Decompose text into atomic assertions (--ingest to ledger)
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -214,6 +216,20 @@ export const VERB_HELP: Record<string, string> = {
     "status reports the folded per-path activation and co-access pairs; sweep drops\n" +
     "events outside the retention window or beyond the newest-N cap and refolds\n" +
     "(--max-events 0 clears every retained event).\n",
+  truth:
+    "usage: o2b brain truth <ingest|slots|conflicts|aggregate|collisions|sweep> [--vault <path>] [--json]\n" +
+    "Operator surface over the entity claim ledger (Brain/truth/). ingest appends one\n" +
+    "claim (--entity --aspect --value --source, optional --quantity-value/--quantity-unit/\n" +
+    "--quantity-action); slots renders current values with superseded history; conflicts\n" +
+    "lists contested slots (two values within the window from independent sources,\n" +
+    "resolution always ask_user); aggregate sums exact (entity, action, unit) quantity\n" +
+    "matches; collisions reports cross-agent convergence; sweep keeps the newest N events.\n",
+  facts:
+    "usage: o2b brain facts decompose (--file <path> | --text <text>) [--ingest --entity E] [--vault <path>] [--json]\n" +
+    "Deterministically decompose text into atomic assertions via markdown structure\n" +
+    "(headings, list items, sentence boundaries with an abbreviation guard), anchored\n" +
+    "to canonical entities. --ingest appends structured-family assertions (quantity,\n" +
+    "possession, identity, location, email, url) to the claim ledger for --entity.\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +

@@ -181,6 +181,10 @@ import {
   type BrainSignal,
   type BrainSignalSign,
 } from "../core/brain/types.ts";
+import { aggregateQuantities } from "../core/brain/truth/aggregate.ts";
+import { detectAgentCollisions } from "../core/brain/truth/collision.ts";
+import { computeTruthStateWithConflicts } from "../core/brain/truth/conflicts.ts";
+import { appendClaimEvent, readClaimEvents } from "../core/brain/truth/store.ts";
 import { appendLogEvent } from "../core/brain/log.ts";
 import type { BrainLogEntry } from "../core/brain/log.ts";
 import { appendBrainNote } from "../core/brain/note.ts";
@@ -1730,6 +1734,100 @@ async function toolBrainUnlinkedMentions(
       term: m.term,
       context: m.contextSnippet,
     })),
+  };
+}
+
+// ----- brain_truth (Entity Truth & Self-Improving Dream Suite) ---------------
+
+/**
+ * Operator/agent surface over the entity claim ledger: ingest one
+ * claim, render slots/conflicts from the fold, aggregate exact-match
+ * quantities, report cross-agent collisions. Read ops are pure folds
+ * over the append-only ledger.
+ */
+function toolBrainTruth(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const op = args["operation"];
+  if (
+    op !== "ingest" &&
+    op !== "slots" &&
+    op !== "conflicts" &&
+    op !== "aggregate" &&
+    op !== "collisions"
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions",
+    );
+  }
+  const requireStr = (name: string): string => {
+    const value = args[name];
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new MCPError(INVALID_PARAMS, `brain_truth ${op}: ${name} must be a non-empty string`);
+    }
+    return value;
+  };
+
+  if (op === "ingest") {
+    const quantityValue = args["quantity_value"];
+    let quantity: { value: number; unit: string | null; action: string | null } | undefined;
+    if (quantityValue !== undefined && quantityValue !== null) {
+      if (typeof quantityValue !== "number" || !Number.isFinite(quantityValue)) {
+        throw new MCPError(INVALID_PARAMS, "brain_truth ingest: quantity_value must be a number");
+      }
+      quantity = {
+        value: quantityValue,
+        unit: typeof args["quantity_unit"] === "string" ? (args["quantity_unit"] as string) : null,
+        action:
+          typeof args["quantity_action"] === "string" ? (args["quantity_action"] as string) : null,
+      };
+    }
+    const agentArg = args["agent"];
+    const agent =
+      normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
+      resolveAgentName(ctx.configPath ?? undefined);
+    const result = appendClaimEvent(ctx.vault, {
+      ts: isoSecond(new Date()),
+      agent,
+      entity: requireStr("entity"),
+      aspect: requireStr("aspect"),
+      value: requireStr("value"),
+      ...(quantity !== undefined ? { valueKind: "quantity" as const, quantity } : {}),
+      source: requireStr("source"),
+    });
+    return {
+      ok: true,
+      entity: result.event.entity,
+      aspect: result.event.aspect,
+      path: result.path,
+    };
+  }
+
+  const events = readClaimEvents(ctx.vault).events;
+  if (op === "slots" || op === "conflicts") {
+    const state = computeTruthStateWithConflicts(events);
+    if (op === "conflicts") return { events: state.events, conflicts: state.conflicts };
+    const entityFilter = args["entity"];
+    const slots =
+      typeof entityFilter === "string" && entityFilter.trim() !== ""
+        ? state.slots.filter((s) => s.entity === entityFilter.trim().toLowerCase())
+        : state.slots;
+    return { events: state.events, slots };
+  }
+  if (op === "aggregate") {
+    const state = computeTruthStateWithConflicts(events);
+    return {
+      ...aggregateQuantities(state.slots, {
+        action: requireStr("action"),
+        unit: typeof args["unit"] === "string" ? (args["unit"] as string) : null,
+        ...(typeof args["entity"] === "string" ? { entity: args["entity"] as string } : {}),
+      }),
+    };
+  }
+  return {
+    collisions: detectAgentCollisions(events, { now: new Date() }),
   };
 }
 
@@ -4093,6 +4191,37 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRecurrence,
+  },
+  {
+    name: "brain_truth",
+    description:
+      "Entity claim ledger: ingest a claim, render current-truth slots with superseded history, list contested conflicts (ask_user), aggregate exact-match quantities, report cross-agent collisions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["ingest", "slots", "conflicts", "aggregate", "collisions"],
+          description: "Tool operation.",
+        },
+        entity: {
+          type: "string",
+          description: "Entity name (ingest, slots filter, aggregate filter).",
+        },
+        aspect: { type: "string", description: "Aspect slot for ingest." },
+        value: { type: "string", description: "Claim value for ingest." },
+        source: { type: "string", description: "Provenance wikilink/path for ingest." },
+        agent: { type: "string", description: "Agent identity override for ingest." },
+        quantity_value: { type: "number", description: "Numeric value for quantity claims." },
+        quantity_unit: { type: "string", description: "Unit token for quantity claims." },
+        quantity_action: { type: "string", description: "Measured action for quantity claims." },
+        action: { type: "string", description: "Measured action for aggregate." },
+        unit: { type: "string", description: "Unit token for aggregate (omit for unitless)." },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainTruth,
   },
   {
     name: "brain_procedural_graph",
