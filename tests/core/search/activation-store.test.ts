@@ -116,6 +116,20 @@ describe("replayability and robustness", () => {
     expect(loadAccessEvents(vault)).toHaveLength(1);
   });
 
+  test("corrupt nested rows in the derived state read as null (fail closed)", () => {
+    recordAccessEvent(vault, ev(T0, ["Brain/x.md"]));
+    const good = readActivationState(vault)!;
+    const poisonPath = {
+      ...good,
+      paths: { "Brain/x.md": { strength: "NaN", lastAccessAt: T0, accessCount: 1 } },
+    };
+    writeFileSync(activationStatePath(vault), JSON.stringify(poisonPath));
+    expect(readActivationState(vault)).toBeNull();
+    const poisonPair = { ...good, coAccess: [{ a: "Brain/x.md", count: 2 }] };
+    writeFileSync(activationStatePath(vault), JSON.stringify(poisonPair));
+    expect(readActivationState(vault)).toBeNull();
+  });
+
   test("fingerprint is 'off' without state and stable with it", () => {
     expect(activationStateFingerprint(vault)).toBe("off");
     recordAccessEvent(vault, ev(T0, ["Brain/x.md"]));
@@ -145,5 +159,15 @@ describe("sweepActivationEvents", () => {
     expect(outcome.removed).toBe(4);
     expect(outcome.kept).toBe(3);
     expect(loadAccessEvents(vault).map((e) => e.ts)).toEqual([T0 + 4000, T0 + 5000, T0 + 6000]);
+  });
+
+  test("a missing event directory refolds a leftover derived state to empty", () => {
+    recordAccessEvent(vault, ev(T0, ["Brain/x.md"]));
+    rmSync(activationDir(vault), { recursive: true, force: true });
+    const outcome = sweepActivationEvents(vault, { nowMs: T0 + DAY });
+    expect(outcome).toEqual({ removed: 0, kept: 0 });
+    const state = readActivationState(vault);
+    expect(state?.events).toBe(0);
+    expect(Object.keys(state?.paths ?? { x: 1 })).toHaveLength(0);
   });
 });

@@ -190,5 +190,12 @@ describe("dream refresh stamps freshness_trend", () => {
     dream(vault, { now: new Date("2026-05-21T10:00:00Z") });
     const raw = readFileSync(preferencePath(vault, topic), "utf8");
     expect(raw).toMatch(/freshness_trend: (new|strengthening|stable|weakening|stale)/);
+
+    // No-op rerun stays a no-op: the trend is classified at PLAN time,
+    // so the pre-flight render matches the stamped bytes and a rerun
+    // with identical state reports changed=false (CodeRabbit PR #73).
+    const rerun = dream(vault, { now: new Date("2026-05-21T10:00:00Z") });
+    expect(rerun.changed).toBe(false);
+    expect(readFileSync(preferencePath(vault, topic), "utf8")).toBe(raw);
   });
 });

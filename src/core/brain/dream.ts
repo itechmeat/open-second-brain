@@ -499,26 +499,10 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       const ev = collectEvidenceForSlug(vault, update.slug, {
         sinceIso: update.created_at,
       });
-      // Freshness trend (t_ee09a6ce): classify the FULL evidence
-      // distribution (a second, uncapped collect - the display slice
-      // above caps rows) and stamp the label so recall reads it off
-      // frontmatter without replaying the log. Refreshed on every
-      // consolidation pass, the Hindsight contract.
-      const trendEv = collectEvidenceForSlug(vault, update.slug, {
-        sinceIso: update.created_at,
-        maxApplied: 1000,
-        maxViolated: 1000,
-      });
-      const trend = classifyFreshnessTrend({
-        createdAt: update.created_at,
-        events: [...trendEv.applied, ...trendEv.violated].map((r) => ({
-          at: r.timestamp,
-          result: r.result,
-        })),
-        nowMs: now.getTime(),
-      });
       // Same txn route as the newUnconfirmed loop: auto-stamps
       // _revision (existing+1) and _content_hash on confirmed status.
+      // The freshness trend was classified at PLAN time (planRefresh)
+      // so the no-op pre-flight rendered these exact bytes.
       writePreferenceTxn(
         vault,
         {
@@ -538,7 +522,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           pinned: update.pinned,
           recentApplied: ev.applied,
           recentViolated: ev.violated,
-          freshness_trend: trend.trend,
+          freshness_trend: update.freshness_trend,
           ...(update.scope ? { scope: update.scope } : {}),
         },
         [],
@@ -1590,6 +1574,13 @@ interface RefreshUpdate {
   readonly confidence: BrainConfidence;
   readonly confidence_value: number;
   readonly pinned: boolean;
+  /**
+   * Freshness trend (t_ee09a6ce), computed at PLAN time so the no-op
+   * pre-flight (`wouldRewritePreference`) renders the same bytes the
+   * write loop will stamp. Computing it only in the write loop would
+   * make every stamped pref look like "needs rewrite" forever.
+   */
+  readonly freshness_trend: string;
 }
 
 /**
@@ -1816,6 +1807,23 @@ function planRefresh(
       confidence.band !== rec.pref.confidence ||
       valueDifferent;
 
+    // Freshness trend (t_ee09a6ce): classify the FULL evidence
+    // distribution here at plan time (uncapped collect) so the no-op
+    // pre-flight below and the write loop stamp identical bytes.
+    const trendEv = collectEvidenceForSlug(vault, slug, {
+      sinceIso: rec.pref.created_at,
+      maxApplied: 1000,
+      maxViolated: 1000,
+    });
+    const trend = classifyFreshnessTrend({
+      createdAt: rec.pref.created_at,
+      events: [...trendEv.applied, ...trendEv.violated].map((r) => ({
+        at: r.timestamp,
+        result: r.result,
+      })),
+      nowMs: now.getTime(),
+    });
+
     const prospective = {
       slug,
       topic: rec.pref.topic,
@@ -1832,6 +1840,7 @@ function planRefresh(
       confidence: confidence.band,
       confidence_value: confidence.value,
       pinned: rec.pref.pinned,
+      freshness_trend: trend.trend,
     };
 
     if (!countersChanged) {

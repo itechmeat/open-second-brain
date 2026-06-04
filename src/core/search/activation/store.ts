@@ -167,14 +167,51 @@ export function writeActivationState(vault: string, state: ActivationState): voi
   writeFileSync(activationStatePath(vault), JSON.stringify(state, null, 2) + "\n");
 }
 
-/** Read the derived state; structurally invalid content reads as null. */
+function isPathState(v: unknown): v is ActivationPathState {
+  if (v === null || typeof v !== "object") return false;
+  const row = v as Record<string, unknown>;
+  return (
+    typeof row["strength"] === "number" &&
+    Number.isFinite(row["strength"]) &&
+    typeof row["lastAccessAt"] === "number" &&
+    Number.isFinite(row["lastAccessAt"]) &&
+    typeof row["accessCount"] === "number" &&
+    Number.isInteger(row["accessCount"]) &&
+    (row["accessCount"] as number) >= 0
+  );
+}
+
+function isCoAccessPair(v: unknown): v is CoAccessPair {
+  if (v === null || typeof v !== "object") return false;
+  const p = v as Record<string, unknown>;
+  return (
+    typeof p["a"] === "string" &&
+    typeof p["b"] === "string" &&
+    typeof p["count"] === "number" &&
+    Number.isInteger(p["count"]) &&
+    (p["count"] as number) >= 0
+  );
+}
+
+/**
+ * Read the derived state; structurally invalid content reads as null -
+ * including corrupt NESTED rows, which would otherwise feed NaN into
+ * ranking. A null read falls back to the replayable event fold.
+ */
 export function readActivationState(vault: string): ActivationState | null {
   try {
     const parsed = JSON.parse(readFileSync(activationStatePath(vault), "utf8")) as ActivationState;
     if (parsed.version !== 1) return null;
-    if (typeof parsed.events !== "number") return null;
+    if (!Number.isInteger(parsed.events) || parsed.events < 0) return null;
+    if (!(parsed.updatedAt === null || typeof parsed.updatedAt === "string")) return null;
     if (parsed.paths === null || typeof parsed.paths !== "object") return null;
     if (!Array.isArray(parsed.coAccess)) return null;
+    for (const row of Object.values(parsed.paths as Record<string, unknown>)) {
+      if (!isPathState(row)) return null;
+    }
+    for (const pair of parsed.coAccess as ReadonlyArray<unknown>) {
+      if (!isCoAccessPair(pair)) return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -223,6 +260,11 @@ export function sweepActivationEvents(
       .filter((f) => f.endsWith(".json"))
       .toSorted();
   } catch {
+    // No event directory: refold a derived state that still exists so
+    // stale boosts never outlive their events.
+    if (existsSync(activationStatePath(vault))) {
+      writeActivationState(vault, computeActivationState([]));
+    }
     return Object.freeze({ removed: 0, kept: 0 });
   }
 

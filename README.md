@@ -145,7 +145,7 @@ o2b vault profile switch work         # Activate a named multi-vault profile
 o2b brain agent-query --agent claude --json   # Source-agent provenance query
 o2b brain agent-diff --mode diff --agent claude --agent codex
 o2b search "<query>" --evidence-pack # FTS5/hybrid search with matched/missing evidence
-o2b search "<query>" --since 7d --until today # Time-scoped recall (mtime window)
+o2b search "<query>" --since 7d --until today # Time-scoped recall (event-time validity window, mtime fallback)
 o2b search feedback --query "<q>" --result note.md --verdict up # Train learned recall weights
 o2b search weights --json     # Inspect base + learned ranking weights
 o2b search focus set --query "current task" --path Notes/Project
