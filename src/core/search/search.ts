@@ -45,7 +45,8 @@ import { filterByProperties } from "./property-filter.ts";
 import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
-import { mtimeInRange, resolveTimeRange } from "./time-range.ts";
+import { resolveTimeRange } from "./time-range.ts";
+import { eventTimeInRange, parseValidityWindow, type ValidityWindow } from "./validity.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -378,10 +379,36 @@ export async function search(
     // Time-aware recall (recall-trust-suite): drop out-of-range
     // candidates BEFORE ranking so every later phase (traversal seeds,
     // MMR, relation polarity) sees only in-range candidates.
+    // Event-time discipline (t_b7191486): a document declaring
+    // `valid_from` / `valid_until` is tested by validity-window
+    // OVERLAP - storage mtime is the fallback, never the authority,
+    // when explicit event time exists. One cached frontmatter read per
+    // candidate path; an unparseable declared value warns once and
+    // falls back to mtime.
     if (timeRange !== null) {
+      const windowCache = new Map<string, ValidityWindow | null>();
+      const warnedInvalid = new Set<string>();
+      const windowFor = (path: string): ValidityWindow | null => {
+        if (windowCache.has(path)) return windowCache.get(path) ?? null;
+        let window: ValidityWindow | null = null;
+        try {
+          const [meta] = parseFrontmatter(join(config.vault, path));
+          window = parseValidityWindow(meta as Record<string, unknown>);
+        } catch {
+          window = null;
+        }
+        windowCache.set(path, window);
+        return window;
+      };
       const inRange = (chunkId: number): boolean => {
         const h = hydrated.get(chunkId);
-        return h !== undefined && mtimeInRange(h.mtime, timeRange);
+        if (h === undefined) return false;
+        const window = windowFor(h.path);
+        if (window?.invalid === true && !warnedInvalid.has(h.path)) {
+          warnedInvalid.add(h.path);
+          warnings.push(`validity: unparseable valid_from/valid_until in ${h.path}; using mtime`);
+        }
+        return eventTimeInRange(window, h.mtime, timeRange);
       };
       kwHits = kwHits.filter((h) => inRange(h.chunkId));
       semHits = semHits.filter((h) => inRange(h.chunkId));
