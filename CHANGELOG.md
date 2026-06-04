@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.0] - 2026-06-04
+
+Project History Suite: a linked project's git history and code
+structure become queryable Second Brain memory. A sanitized read-only
+git reader ingests commits, tags, and release ranges into a per-repo
+record store inside the vault with a watermark for duplicate-free
+incremental runs, a deterministic digest note makes each repo's
+history FTS-discoverable, decision-shaped commits surface as draft
+ADR candidates that operator curation owns from the moment they
+exist, a stdlib-only scanner maintains regeneration-safe architecture
+notes through sentinel regions, and `brain_query` - the one recall
+surface v0.39.0 left without telemetry - joins the observability
+contract. Everything deterministic, no LLM anywhere; the MCP contract
+stays at 65 tools.
+
+### Added
+
+- **Git history memory** (`o2b brain git ingest <repo-path>`).
+  Commits, tags, and release ranges from a worktree land as
+  structured records in `Brain/projects/git/<repo-key>/commits.jsonl`
+  (typed edges as fields: touched files, author, carrying release via
+  chronological tag-range attribution). Incremental re-runs walk
+  `<watermark>..HEAD` only; a force-pushed or tampered watermark
+  degrades to a reported full re-scan and store dedup keeps that
+  duplicate-free; a bounded walk announces truncated older history.
+  The reader shells out with fixed argv and validates every
+  caller-supplied sha against the full-40-hex grammar before it can
+  reach git.
+- **Git history query** (`o2b brain git find [text] [--file F]
+  [--author A] [--since/--until] [--repo K]`, `o2b brain git
+  status`). Answers "why and when did this file change" and "which
+  release carried it" purely from the store - no live git on the
+  query path, so the answers survive checkout deletion. A
+  deterministic per-repo digest note (releases, recent commits, hot
+  files) anchors the history in full-text search.
+- **Commit-decision miner** (`o2b brain git mine`). Deterministic
+  heuristics (conventional breaking markers, BREAKING CHANGE footers,
+  word-boundary decision keywords, revert shape) turn decision-shaped
+  commits into draft ADR candidate notes under
+  `Brain/decisions/candidates/` with matched-signal provenance and
+  sha-stable identity: re-runs never duplicate, an existing candidate
+  is never touched.
+- **Sentinel-region merge engine** (`src/core/brain/regions.ts`).
+  Paired `<!-- o2b:begin <id> -->` / `<!-- o2b:end <id> -->` markers
+  delimit generated note content; merging replaces only generated
+  bodies, preserves operator bytes outside regions verbatim, appends
+  new regions, and fails closed (no partial rewrite) on unbalanced,
+  duplicate, nested, or mismatched sentinels.
+- **Architecture docs generator** (`o2b brain architect
+  <project-path>`). A deterministic stdlib-only scanner (module
+  layout, language mix, entry points, manifest, test layout - no LLM,
+  no network) renders an overview plus per-module notes under
+  `Brain/projects/arch/<repo-key>/` through the region engine:
+  re-scans refresh facts, operator prose survives byte-for-byte, an
+  unchanged tree regenerates byte-identically.
+- **`brain_query` recall telemetry.** Per-call opt-in arguments
+  (`telemetry`, `telemetry_host`, `session_id`, `turn_id`) mirroring
+  `brain_search`; mode `query` joins the `RecallTelemetryMode` union;
+  emission goes through the lazy gated kernel on both success and
+  error paths. The payload records the query kind
+  (preference|topic|since) and counts only - the supplied preference
+  id, topic slug, or timestamp value never lands in a continuity
+  record.
+
 ## [0.39.0] - 2026-06-03
 
 Memory Observability Suite: the continuity store becomes a documented,
@@ -4335,6 +4399,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.40.0]: https://github.com/itechmeat/open-second-brain/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/itechmeat/open-second-brain/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/itechmeat/open-second-brain/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/itechmeat/open-second-brain/compare/v0.36.0...v0.37.0

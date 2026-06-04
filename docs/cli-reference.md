@@ -145,6 +145,18 @@ o2b brain bench               memory --fixture <name|path> [--resume <run-id>] [
 
 The benchmark never touches the configured vault - the fixture materializes into `<runs-dir>/<run-id>/vault` (default runs dir `.open-second-brain/bench-runs/`, gitignored). The optional `bench_judge_cmd` config key (env `OPEN_SECOND_BRAIN_BENCH_JUDGE_CMD`) arms an advisory external judge; absent means the judge phase is skipped. The full observability contract (event kinds, gates, correlation ids, payload safety, schema version) lives in `docs/observability.md`.
 
+### Project history (since v0.40.0)
+
+```text
+o2b brain git                 ingest <repo-path> [--max-count N] - read-only walk of a worktree; commit/tag/release records + digest note land under Brain/projects/git/<repo-key>/; incremental via SHA-validated watermark, full re-scan with a reported warning on force-push or tampered state
+                              status - per-repo watermarks and record counts
+                              find [text] [--repo K] [--file F] [--author A] [--since S] [--until U] [--limit N] - query ingested history newest-first; no live git on the query path
+                              mine [--repo K] - surface decision-shaped commits as draft ADR candidate notes under Brain/decisions/candidates/ (sha-stable identity, skip-existing)
+o2b brain architect           <project-path> - deterministic stdlib-only project scan rendered as architecture notes under Brain/projects/arch/<repo-key>/; generated content lives in o2b:begin/o2b:end sentinel regions, operator prose outside regions survives every re-scan byte-for-byte
+```
+
+All flags accept `--vault V` and `--json`. The ingest never modifies the scanned repository; every caller-supplied sha is validated against the full-40-hex grammar before it can reach a git argument.
+
 ## Vault scope
 
 Single exclusion policy for every vault walker.
