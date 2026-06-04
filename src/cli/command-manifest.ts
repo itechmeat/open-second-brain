@@ -118,6 +118,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("facts", "Decompose text into atomic assertions"),
         command("dead-end", "Record or list failed approaches"),
         command("foresight", "Render forward-looking projection"),
+        command("label", "Assign, remove, or show controlled-vocabulary labels"),
         command("audit", "Render mutation audit trail"),
         command("morning-brief", "Render session-start summary"),
         command("codec", "Compress or expand session prose"),

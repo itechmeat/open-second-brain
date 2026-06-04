@@ -44,6 +44,7 @@ Brain verbs (observing memory):
   facts               Decompose text into atomic assertions (--ingest to ledger)
   dead-end            Negative-knowledge registry: record and list failed approaches
   foresight           Forward projection: routines coming due, open commitments and questions
+  label               Controlled-vocabulary classification: assign, remove, show note labels
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -244,6 +245,13 @@ export const VERB_HELP: Record<string, string> = {
     "recurring routines coming due within the horizon (cadence arithmetic, soonest\n" +
     "first), recent open commitments, and open questions - every item carries\n" +
     "deterministic sources. --write persists Brain/foresight/<date>.md.\n",
+  label:
+    "usage: o2b brain label <path> <dimension>=<value> | --remove <dimension> | --show  [--vault <path>] [--json]\n" +
+    "Controlled-vocabulary classification against the schema pack's labels\n" +
+    "field. Assignments are fail-closed - unknown dimensions and values are\n" +
+    "rejected with the declared vocabulary - single-choice per dimension, and\n" +
+    "persist as a sorted labels frontmatter array plus a canonical label\n" +
+    "entity. Filter recall with: o2b search <q> --property labels=<dim>/<value>.\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +
