@@ -25,6 +25,7 @@ import {
 import { effectiveActivation, halfLifeDays, resolveActivationKind } from "./activation/decay.ts";
 import {
   ACCESS_EVENT_PATHS_CAP,
+  CO_ACCESS_MIN_COUNT,
   activationStateFingerprint,
   readActivationState,
   recordAccessEvent,
@@ -416,6 +417,7 @@ export async function search(
     // without recorded events contributes nothing and ranks
     // bit-identically.
     let activationByChunk: ReadonlyMap<number, number> | undefined;
+    let coAccessByChunk: ReadonlyMap<number, ReadonlyMap<number, number>> | undefined;
     if (config.recall.activationEnabled) {
       const activationState = readActivationState(config.vault);
       if (activationState !== null && Object.keys(activationState.paths).length > 0) {
@@ -447,6 +449,39 @@ export async function search(
           if (act > 0) byChunk.set(chunkId, act);
         }
         if (byChunk.size > 0) activationByChunk = byChunk;
+      }
+      // Co-access companions (t_c5ef25a3): restrict the recorded pairs
+      // to documents present in this candidate set, then hand each
+      // chunk its companion documentIds with pair counts. Pairs seen
+      // fewer than CO_ACCESS_MIN_COUNT times are noise and skipped.
+      if (activationState !== null && activationState.coAccess.length > 0) {
+        const docIdByPath = new Map<string, number>();
+        const chunksByDocId = new Map<number, number[]>();
+        for (const chunkId of idsList) {
+          const h = hydrated.get(chunkId);
+          if (h === undefined) continue;
+          docIdByPath.set(h.path, h.documentId);
+          const list = chunksByDocId.get(h.documentId) ?? [];
+          list.push(chunkId);
+          chunksByDocId.set(h.documentId, list);
+        }
+        const companionsByChunk = new Map<number, Map<number, number>>();
+        const addCompanion = (ownDoc: number, otherDoc: number, count: number): void => {
+          for (const chunkId of chunksByDocId.get(ownDoc) ?? []) {
+            const m = companionsByChunk.get(chunkId) ?? new Map<number, number>();
+            m.set(otherDoc, Math.max(m.get(otherDoc) ?? 0, count));
+            companionsByChunk.set(chunkId, m);
+          }
+        };
+        for (const pair of activationState.coAccess) {
+          if (pair.count < CO_ACCESS_MIN_COUNT) continue;
+          const docA = docIdByPath.get(pair.a);
+          const docB = docIdByPath.get(pair.b);
+          if (docA === undefined || docB === undefined) continue;
+          addCompanion(docA, docB, pair.count);
+          addCompanion(docB, docA, pair.count);
+        }
+        if (companionsByChunk.size > 0) coAccessByChunk = companionsByChunk;
       }
     }
 
@@ -502,6 +537,7 @@ export async function search(
           tagsByDoc,
           ...(entityMatchByChunk !== undefined ? { entityMatchByChunk } : {}),
           ...(activationByChunk !== undefined ? { activationByChunk } : {}),
+          ...(coAccessByChunk !== undefined ? { coAccessByChunk } : {}),
         },
         {
           keywordWeight: opts.keywordWeight ?? config.keywordWeight,

@@ -46,6 +46,15 @@ export interface RankerInputs {
    * accesses ranks bit-identically to pre-activation behaviour.
    */
   readonly activationByChunk?: ReadonlyMap<number, number>;
+  /**
+   * Optional co-access companions per chunk (t_c5ef25a3): for each
+   * chunkId, the OTHER document ids habitually co-retrieved with its
+   * document, with the recorded pair count. Only companions that are
+   * also in the current candidate pool contribute (the same
+   * pool-membership rule the link boost uses), so the boost re-ranks a
+   * working set without floating unrelated documents.
+   */
+  readonly coAccessByChunk?: ReadonlyMap<number, ReadonlyMap<number, number>>;
 }
 
 export interface RankerOptions {
@@ -149,6 +158,7 @@ function buildReasons(parts: {
   tierMul: number;
   entityBoost?: number;
   activationBoost?: number;
+  coAccessBoost?: number;
   sessionFocus?: number;
   rrf?: number;
 }): ReadonlyArray<string> {
@@ -161,6 +171,9 @@ function buildReasons(parts: {
   }
   if (parts.activationBoost && parts.activationBoost > 0) {
     reasons.push(`activation: ${fmt(parts.activationBoost)}`);
+  }
+  if (parts.coAccessBoost && parts.coAccessBoost > 0) {
+    reasons.push(`co_access: ${fmt(parts.coAccessBoost)}`);
   }
   if (parts.linkBoost > 0) reasons.push(`link_boost: ${fmt(parts.linkBoost)}`);
   if (parts.recency > 0) reasons.push(`recency: ${fmt(parts.recency)}`);
@@ -316,9 +329,28 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // never enough to float an irrelevant chunk.
     const activation = clamp01(inputs.activationByChunk?.get(c.chunkId) ?? 0);
     const activationBoost = Math.min(0.04, activation * 0.04);
+    // Co-access companion boost (t_c5ef25a3): per habitual companion
+    // that is ALSO in the candidate pool, 0.005 per recorded pair
+    // count, capped at 0.03 - surfaces the rest of a recurring working
+    // set without floating unrelated documents.
+    let coAccessRaw = 0;
+    const companions = inputs.coAccessByChunk?.get(c.chunkId);
+    if (companions !== undefined) {
+      for (const [docId, count] of companions) {
+        if (docId === c.documentId) continue;
+        if (candidateDocIds.has(docId)) coAccessRaw += count * 0.005;
+      }
+    }
+    const coAccessBoost = Math.min(0.03, coAccessRaw);
     const sessionFocus = scoreSessionFocusTarget(hyd, opts.sessionFocus, nowMs);
     const score = clamp01(
-      weighted * tierMul + linkBoost + recency + entityBoost + activationBoost + sessionFocus,
+      weighted * tierMul +
+        linkBoost +
+        recency +
+        entityBoost +
+        activationBoost +
+        coAccessBoost +
+        sessionFocus,
     );
 
     ranked.push(
@@ -344,6 +376,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           tierMul,
           entityBoost,
           activationBoost,
+          coAccessBoost,
           sessionFocus,
           rrf: rrfByChunk !== null ? rrf : 0,
         }),

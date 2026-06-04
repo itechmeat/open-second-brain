@@ -38,6 +38,8 @@ export const ACCESS_EVENT_RETENTION_DAYS = 90;
 export const ACCESS_EVENT_MAX_COUNT = 5000;
 /** Cap on co-access pairs kept in the derived state. */
 export const CO_ACCESS_MAX_PAIRS = 500;
+/** Pairs seen fewer times than this are noise and never boost. */
+export const CO_ACCESS_MIN_COUNT = 2;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
