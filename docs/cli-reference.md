@@ -172,6 +172,15 @@ o2b brain panel               open <topic...> [--personas a,b,c] [--target T] [-
 
 Envelopes are stable JSON with `--json` (`status`, `step`, `prompt`, `errors`, `attempts_left`, `expires_at`, `target_path`, `existing`) - the same contract the MCP `brain_write_session` tool returns. `create` intent never overwrites an existing target; `merge` appends a session-stamped delimited section; reserved namespaces (`Brain/preferences/`, `Brain/log/`, `Brain/_brain.yaml`, dot-stores) are refused. The Brain never generates content - the calling agent does.
 
+### Recall activation (since v0.42.0)
+
+```text
+o2b brain activation          status [--top N] - folded activation state: event/path/co-access counts plus the strongest paths
+                              sweep [--retention-days N] [--max-events N] - drop access events outside the retention window or beyond the newest-N cap and refold (--max-events 0 clears every retained event)
+```
+
+CLI and MCP searches record which documents they surfaced as one JSON event per access under `Brain/search/activation/` (query hashed, never raw text). `o2b search <query> --no-record-access` suppresses recording for one query; the MCP `brain_search` tool accepts `record_access: false`. Cross-vault (`--global`) and query-cache-hit searches never record, so reinforcement is miss-driven. The derived `Brain/search/activation-state.json` is a replayable fold - deleting it loses nothing. `search_activation_enabled: false` disables both the boost and recording; `search_two_pass_enabled: false` disables the evidence-pack broadened retry.
+
 ## Vault scope
 
 Single exclusion policy for every vault walker.

@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.0] - 2026-06-04
+
+Time-Aware Recall & Activation Suite: ranking that reflects what the
+agent actually keeps using, and time filters that respect when things
+happened rather than when files were written. Recorded accesses
+reinforce a per-document activation that decays by content-type
+half-life (preferences and decisions never fade), habitual companions
+boost each other through co-access edges, preference pages carry a
+dream-stamped freshness trend that biases recall, `since`/`until`
+filters obey declared `valid_from`/`valid_until` validity windows,
+time-scoped traversal bridges in causes and consequences from a padded
+event-time neighbourhood, and a zero-candidate evidence query runs one
+broadened retry instead of dead-ending in an abstention. Everything is
+deterministic, bounded, and explainable; a vault without the new data
+ranks bit-identically. MCP tool count is unchanged (66).
+
+### Added
+
+- **Access-reinforced activation** (`Brain/search/activation/`).
+  CLI/MCP searches record which documents they surfaced (one JSON file
+  per access, query hashed, never raw text; `--no-record-access` /
+  `record_access: false` opt out, cross-vault and cached queries never
+  record); the derived activation state is a replayable fold, and a
+  bounded `activation` ranking boost (cap 0.04) decays the stored
+  strength by a content-type half-life table - preferences, decisions,
+  and antipatterns never decay, projects ~120d, handoffs/sessions
+  ~30d, notes 60d. Reinforcement is miss-driven: a query-cache hit
+  returns early and records nothing. `o2b brain activation
+  status|sweep` inspects and compacts the event store
+  (`search_activation_enabled` is the kill switch).
+- **Co-access reinforcement edges**. Documents habitually surfaced
+  together gain pairwise counts in the same fold; when one appears in
+  a candidate pool with its companions, each gains a bounded
+  `co_access` boost (cap 0.03, pairs seen fewer than twice are noise).
+- **Freshness-trend classification on preferences**. The dream refresh
+  classifies every preference's evidence time distribution into
+  `new | strengthening | stable | weakening | stale` and stamps
+  `freshness_trend` into frontmatter; recall multiplies the relevance
+  portion (strengthening 1.05, weakening 0.93, stale 0.85) with an
+  explainable reason, and the belief-evolution envelope carries the
+  live classification.
+- **Event-time recall discipline**. Documents declaring `valid_from` /
+  `valid_until` pass `since`/`until` filters by validity-window
+  overlap - storage mtime is only the fallback, so an old file about a
+  recent event is found and a fresh file about a closed-out past event
+  is excluded. Unparseable values warn and fall back to mtime.
+- **Temporal-bridge traversal**. With an active time range, link-graph
+  traversal keeps an expansion document only when its event time falls
+  within a padded neighbourhood of the window (default 7d) and decays
+  its score by temporal proximity (`temporal_bridge` reason) - causes
+  and consequences bridge in, arbitrary old neighbours do not.
+- **Self-correcting two-pass recall**. In evidence-pack mode a
+  zero-candidate first pass (implicit-AND too strict) triggers exactly
+  one broadened OR retry; recovered results carry a `second_pass`
+  reason and the envelope reports `secondPass: {triggered, reason,
+  added}` (`search_two_pass_enabled` is the kill switch).
+
+### Changed
+
+- The Hermes plugin entrypoint dropped its file-path self-bootstrap:
+  the upstream loader now registers the synthetic parent namespace for
+  user-installed providers, so the root `__init__.py` is a plain
+  relative re-export of `plugins/hermes`.
+
 ## [0.41.0] - 2026-06-04
 
 Agent Write Contract Suite: how external agents write into and
@@ -4452,6 +4516,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.42.0]: https://github.com/itechmeat/open-second-brain/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/itechmeat/open-second-brain/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/itechmeat/open-second-brain/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/itechmeat/open-second-brain/compare/v0.38.0...v0.39.0
