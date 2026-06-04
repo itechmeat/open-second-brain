@@ -179,7 +179,9 @@ test("brain procedural learning verbs wire end-to-end", async () => {
   expect(showRecurrence.returncode).toBe(0);
   const recShowJson = JSON.parse(showRecurrence.stdout);
   expect(recShowJson.supportCount).toBe(1);
-});
+  // The end-to-end chain spawns many sequential CLI processes and can
+  // exceed bun's 5s default per-test timeout on a loaded machine.
+}, 20000);
 
 function seedContinuity(vaultPath: string): void {
   for (const row of [
