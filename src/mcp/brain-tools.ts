@@ -181,6 +181,13 @@ import {
   type BrainSignal,
   type BrainSignalSign,
 } from "../core/brain/types.ts";
+import { normalizeEntityName } from "../core/brain/entities/canonical.ts";
+import { listDeadEnds, recordDeadEnd } from "../core/brain/dead-ends.ts";
+import { buildForesight, FORESIGHT_HORIZON_DAYS } from "../core/brain/temporal/foresight.ts";
+import { aggregateQuantities } from "../core/brain/truth/aggregate.ts";
+import { detectAgentCollisions } from "../core/brain/truth/collision.ts";
+import { computeTruthStateWithConflicts } from "../core/brain/truth/conflicts.ts";
+import { appendClaimEvent, readClaimEvents } from "../core/brain/truth/store.ts";
 import { appendLogEvent } from "../core/brain/log.ts";
 import type { BrainLogEntry } from "../core/brain/log.ts";
 import { appendBrainNote } from "../core/brain/note.ts";
@@ -494,8 +501,24 @@ async function toolBrainReviewCandidates(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const nowDate = coerceIsoDate(args, "now");
-  const report = buildReviewCandidates(ctx.vault, nowDate ? { now: nowDate } : {});
+  // Surprisal annotation (t_fddfe64a) is best-effort: a resolvable
+  // search config adds novelty ranking, anything else degrades to the
+  // plain report.
+  let searchConfig: ReturnType<typeof resolveSearchConfig> | undefined;
+  try {
+    searchConfig = resolveSearchConfig({
+      vault: ctx.vault,
+      configPath: ctx.configPath ?? undefined,
+    });
+  } catch {
+    searchConfig = undefined;
+  }
+  const report = await buildReviewCandidates(ctx.vault, {
+    ...(nowDate ? { now: nowDate } : {}),
+    ...(searchConfig !== undefined ? { searchConfig } : {}),
+  });
   return {
+    ...(report.signal_novelty !== undefined ? { signal_novelty: report.signal_novelty } : {}),
     would_create: [...report.would_create],
     would_promote: [...report.would_promote],
     would_retire: report.would_retire.map((r) => ({
@@ -553,6 +576,18 @@ async function toolBrainApplyEvidence(
   }
   const agentArg = coerceStr(args, "agent", false);
   const note = coerceStr(args, "note", false);
+  const outcomeRaw = coerceStr(args, "outcome", false);
+  if (
+    outcomeRaw !== null &&
+    outcomeRaw !== "success" &&
+    outcomeRaw !== "failure" &&
+    outcomeRaw !== "unknown"
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument 'outcome' must be 'success', 'failure', or 'unknown'`,
+    );
+  }
 
   const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
 
@@ -561,6 +596,7 @@ async function toolBrainApplyEvidence(
     artifact,
     result: resultRaw as BrainApplyResult,
     agent,
+    ...(outcomeRaw !== null ? { outcome: outcomeRaw } : {}),
     ...(note ? { note } : {}),
   };
 
@@ -1733,6 +1769,170 @@ async function toolBrainUnlinkedMentions(
   };
 }
 
+// ----- brain_foresight (t_08a79c81) -----------------------------------------
+
+/** Forward-looking projection envelope; read-only fold. */
+function toolBrainForesight(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const horizonRaw = args["horizon_days"];
+  let horizonDays = FORESIGHT_HORIZON_DAYS;
+  if (horizonRaw !== undefined && horizonRaw !== null) {
+    if (typeof horizonRaw !== "number" || !Number.isInteger(horizonRaw) || horizonRaw < 1) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_foresight: horizon_days must be a positive integer",
+      );
+    }
+    horizonDays = horizonRaw;
+  }
+  return { ...buildForesight(ctx.vault, { now: new Date(), horizonDays }) };
+}
+
+// ----- brain_dead_ends (t_be62c62d) -----------------------------------------
+
+/**
+ * Negative-knowledge registry: record one tried-and-failed approach
+ * or list the bounded active set, newest first.
+ */
+function toolBrainDeadEnds(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const op = args["operation"];
+  if (op !== "record" && op !== "list") {
+    throw new MCPError(INVALID_PARAMS, "brain_dead_ends: operation must be record|list");
+  }
+  if (op === "list") {
+    const { entries, warnings } = listDeadEnds(ctx.vault);
+    return { entries, warnings };
+  }
+  const approach = args["approach"];
+  const reason = args["reason"];
+  if (typeof approach !== "string" || approach.trim() === "") {
+    throw new MCPError(INVALID_PARAMS, "brain_dead_ends record: approach must be non-empty");
+  }
+  if (typeof reason !== "string" || reason.trim() === "") {
+    throw new MCPError(INVALID_PARAMS, "brain_dead_ends record: reason must be non-empty");
+  }
+  const agentArg = args["agent"];
+  const agent =
+    normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
+    resolveAgentName(ctx.configPath ?? undefined);
+  const result = recordDeadEnd(ctx.vault, {
+    approach,
+    reason,
+    ...(typeof args["context"] === "string" ? { context: args["context"] as string } : {}),
+    agent,
+    now: new Date(),
+  });
+  return { ok: true, id: result.entry.id, path: result.entry.path, archived: result.archived };
+}
+
+// ----- brain_truth (Entity Truth & Self-Improving Dream Suite) ---------------
+
+/**
+ * Operator/agent surface over the entity claim ledger: ingest one
+ * claim, render slots/conflicts from the fold, aggregate exact-match
+ * quantities, report cross-agent collisions. Read ops are pure folds
+ * over the append-only ledger.
+ */
+function toolBrainTruth(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const op = args["operation"];
+  if (
+    op !== "ingest" &&
+    op !== "slots" &&
+    op !== "conflicts" &&
+    op !== "aggregate" &&
+    op !== "collisions"
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions",
+    );
+  }
+  const requireStr = (name: string): string => {
+    const value = args[name];
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new MCPError(INVALID_PARAMS, `brain_truth ${op}: ${name} must be a non-empty string`);
+    }
+    return value;
+  };
+
+  if (op === "ingest") {
+    const quantityValue = args["quantity_value"];
+    if (
+      (quantityValue === undefined || quantityValue === null) &&
+      (typeof args["quantity_unit"] === "string" || typeof args["quantity_action"] === "string")
+    ) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_truth ingest: quantity_value is required when quantity_unit or quantity_action is provided",
+      );
+    }
+    let quantity: { value: number; unit: string | null; action: string | null } | undefined;
+    if (quantityValue !== undefined && quantityValue !== null) {
+      if (typeof quantityValue !== "number" || !Number.isFinite(quantityValue)) {
+        throw new MCPError(INVALID_PARAMS, "brain_truth ingest: quantity_value must be a number");
+      }
+      quantity = {
+        value: quantityValue,
+        unit: typeof args["quantity_unit"] === "string" ? (args["quantity_unit"] as string) : null,
+        action:
+          typeof args["quantity_action"] === "string" ? (args["quantity_action"] as string) : null,
+      };
+    }
+    const agentArg = args["agent"];
+    const agent =
+      normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
+      resolveAgentName(ctx.configPath ?? undefined);
+    const result = appendClaimEvent(ctx.vault, {
+      ts: isoSecond(new Date()),
+      agent,
+      entity: requireStr("entity"),
+      aspect: requireStr("aspect"),
+      value: requireStr("value"),
+      ...(quantity !== undefined ? { valueKind: "quantity" as const, quantity } : {}),
+      source: requireStr("source"),
+    });
+    return {
+      ok: true,
+      entity: result.event.entity,
+      aspect: result.event.aspect,
+      path: result.path,
+    };
+  }
+
+  const events = readClaimEvents(ctx.vault).events;
+  if (op === "slots" || op === "conflicts") {
+    const state = computeTruthStateWithConflicts(events);
+    if (op === "conflicts") return { events: state.events, conflicts: state.conflicts };
+    const entityFilter = args["entity"];
+    const slots =
+      typeof entityFilter === "string" && entityFilter.trim() !== ""
+        ? state.slots.filter((s) => s.entity === normalizeEntityName(entityFilter))
+        : state.slots;
+    return { events: state.events, slots };
+  }
+  if (op === "aggregate") {
+    const state = computeTruthStateWithConflicts(events);
+    return {
+      ...aggregateQuantities(state.slots, {
+        action: requireStr("action"),
+        unit: typeof args["unit"] === "string" ? (args["unit"] as string) : null,
+        ...(typeof args["entity"] === "string" ? { entity: args["entity"] as string } : {}),
+      }),
+    };
+  }
+  return {
+    collisions: detectAgentCollisions(events, { now: new Date() }),
+  };
+}
+
 // ----- brain_concept_synthesis (v0.10.17) ----------------------------------
 
 /**
@@ -2203,6 +2403,7 @@ async function toolBrainDeepSynthesis(
       superseded_by: s.supersededBy,
     })),
     gaps: report.gaps,
+    contaminated: report.contaminated,
     ...(triggersCreated !== undefined ? { triggers_created: triggersCreated } : {}),
   };
 }
@@ -3258,6 +3459,12 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description: "Optional agent identity override; defaults to the server-resolved name.",
         },
+        outcome: {
+          type: "string",
+          enum: ["success", "failure", "unknown"],
+          description:
+            "Optional downstream outcome of the artifact (t_d478df53): did the work the rule was applied to actually succeed? `unknown` is treated like an absent outcome.",
+        },
         note: {
           type: "string",
           description: "Optional one-line context.",
@@ -4092,6 +4299,79 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRecurrence,
+  },
+  {
+    name: "brain_truth",
+    description:
+      "Entity claim ledger: ingest a claim, render current-truth slots with superseded history, list contested conflicts (ask_user), aggregate exact-match quantities, report cross-agent collisions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["ingest", "slots", "conflicts", "aggregate", "collisions"],
+          description: "Tool operation.",
+        },
+        entity: {
+          type: "string",
+          description: "Entity name (ingest, slots filter, aggregate filter).",
+        },
+        aspect: { type: "string", description: "Aspect slot for ingest." },
+        value: { type: "string", description: "Claim value for ingest." },
+        source: { type: "string", description: "Provenance wikilink/path for ingest." },
+        agent: { type: "string", description: "Agent identity override for ingest." },
+        quantity_value: { type: "number", description: "Numeric value for quantity claims." },
+        quantity_unit: { type: "string", description: "Unit token for quantity claims." },
+        quantity_action: { type: "string", description: "Measured action for quantity claims." },
+        action: { type: "string", description: "Measured action for aggregate." },
+        unit: { type: "string", description: "Unit token for aggregate (omit for unitless)." },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainTruth,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+  {
+    name: "brain_dead_ends",
+    description:
+      "Negative-knowledge registry (Brain/dead-ends/): record one tried-and-failed approach with why it failed, or list the bounded active set so recall surfaces avoid-X alongside prefer-Y.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["record", "list"],
+          description: "Tool operation.",
+        },
+        approach: { type: "string", description: "What was tried (record)." },
+        reason: { type: "string", description: "Why it failed or was set aside (record)." },
+        context: { type: "string", description: "Optional context (record)." },
+        agent: { type: "string", description: "Agent identity override (record)." },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainDeadEnds,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+  {
+    name: "brain_foresight",
+    description:
+      "Forward-looking projection (Brain's only anticipatory surface): recurring routines coming due within the horizon via cadence arithmetic, recent open commitments, and open questions - deterministic, every item carries sources.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        horizon_days: {
+          type: "integer",
+          minimum: 1,
+          description: "Forward horizon in days (default 14).",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainForesight,
+    previewBudget: MCP_PREVIEW_BUDGET,
   },
   {
     name: "brain_procedural_graph",

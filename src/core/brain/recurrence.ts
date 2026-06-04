@@ -79,6 +79,67 @@ export function getRecurrenceEntry(
   );
 }
 
+/**
+ * Cadence projection for foresight (t_08a79c81): per surviving
+ * routine, the latest support timestamp and the mean interval between
+ * consecutive `learn` events. A single occurrence has no cadence
+ * (`meanIntervalDays: null`) and never projects forward. Purged
+ * sources are excluded globally - an approximation of the positional
+ * fold that can only under-project, never invent a routine.
+ */
+export interface RecurrenceCadence {
+  readonly contentHash: string;
+  readonly topScope: string;
+  readonly commitment: RecurrenceCommitment;
+  readonly supportCount: number;
+  readonly lastAt: string;
+  readonly meanIntervalDays: number | null;
+}
+
+export function listRecurrenceCadences(
+  vault: string,
+  thresholds: RecurrenceThresholds = DEFAULT_THRESHOLDS,
+): ReadonlyArray<RecurrenceCadence> {
+  const entries = listRecurrenceEntries(vault, thresholds);
+  if (entries.length === 0) return Object.freeze([]);
+  const events = readEvents(vault);
+  const purged = new Set(events.filter((e) => e.kind === "purge-source").map((e) => e.sourceId));
+  const byHash = new Map<string, string[]>();
+  for (const e of events) {
+    if (e.kind !== "support" || !e.contentHash || e.action !== "learn") continue;
+    if (purged.has(e.sourceId)) continue;
+    const list = byHash.get(e.contentHash) ?? [];
+    list.push(e.at);
+    byHash.set(e.contentHash, list);
+  }
+
+  const out: RecurrenceCadence[] = [];
+  for (const entry of entries) {
+    const ats = (byHash.get(entry.contentHash) ?? [])
+      .map((at) => Date.parse(at))
+      .filter((ms) => Number.isFinite(ms))
+      .toSorted((a, b) => a - b);
+    if (ats.length === 0) continue;
+    let meanIntervalDays: number | null = null;
+    if (ats.length >= 2) {
+      const spanDays = (ats.at(-1)! - ats[0]!) / (24 * 3600 * 1000);
+      meanIntervalDays = Math.round((spanDays / (ats.length - 1)) * 10) / 10;
+    }
+    out.push(
+      Object.freeze({
+        contentHash: entry.contentHash,
+        topScope: entry.scopes[0]?.scope ?? "",
+        commitment: entry.commitment,
+        supportCount: entry.supportCount,
+        lastAt: new Date(ats.at(-1)!).toISOString(),
+        meanIntervalDays,
+      }),
+    );
+  }
+  out.sort((a, b) => (a.contentHash < b.contentHash ? -1 : a.contentHash > b.contentHash ? 1 : 0));
+  return Object.freeze(out);
+}
+
 export function listRecurrenceEntries(
   vault: string,
   thresholds: RecurrenceThresholds = DEFAULT_THRESHOLDS,

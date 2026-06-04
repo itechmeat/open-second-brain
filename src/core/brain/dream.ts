@@ -216,6 +216,14 @@ export interface DreamRunSummary {
    */
   readonly gated_retires: ReadonlyArray<DreamGatedRetireEntry>;
   /**
+   * Outcome-regression findings (t_d478df53): confirmed preferences
+   * whose recent applied events co-occur with failure outcomes. The
+   * confidence penalty is already applied in this run's refresh; the
+   * list is the explainable staging surface. Empty on outcome-free
+   * vaults.
+   */
+  readonly outcome_regressions: ReadonlyArray<DreamOutcomeRegression>;
+  /**
    * Multi-phase dream pipeline (Brain lifecycle suite, Feature 2).
    * Ordered per-phase summaries (close, reconcile, synthesize, heal,
    * log) for a changed run; empty on a no-op run. Additive: existing
@@ -395,6 +403,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       quarantined: Object.freeze([...plan.quarantined]),
       intent_reviews: Object.freeze([...intentReview.reviews]),
       gated_retires: Object.freeze([] as ReadonlyArray<DreamGatedRetireEntry>),
+      outcome_regressions: Object.freeze([...refresh.outcomeRegressions]),
       phases: Object.freeze([] as ReadonlyArray<DreamPhaseSummary>),
       open_questions: Object.freeze([...reconcile.openQuestions]),
       ...(dryRun ? { dry_run: true } : {}),
@@ -860,6 +869,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     quarantined: Object.freeze([...plan.quarantined]),
     intent_reviews: Object.freeze([...intentReview.reviews]),
     gated_retires: Object.freeze([...gatedRetires]),
+    outcome_regressions: Object.freeze([...refresh.outcomeRegressions]),
     ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
     ...(dryRun
       ? { dry_run: true }
@@ -1593,6 +1603,22 @@ interface RefreshUpdate {
  * during refresh so the digest can render a `## Confidence drops`
  * section without re-deriving transitions from the log.
  */
+/**
+ * Outcome regression (t_d478df53): minimum applied-with-failure events
+ * before a preference is flagged, and the multiplicative confidence
+ * penalty a flagged preference receives. The penalty is part of the
+ * deterministic confidence derivation, so reruns stay no-ops.
+ */
+export const OUTCOME_REGRESSION_MIN_FAILURES = 2;
+export const OUTCOME_REGRESSION_PENALTY = 0.8;
+
+export interface DreamOutcomeRegression {
+  readonly id: string;
+  readonly principle: string;
+  readonly failures: number;
+  readonly successes: number;
+}
+
 export interface RefreshBandDrop {
   readonly id: string;
   readonly principle: string;
@@ -1615,12 +1641,16 @@ interface RefreshResult {
    * order at construction).
    */
   readonly bandDrops: RefreshBandDrop[];
+  /** Preferences flagged by the outcome-regression rule (t_d478df53). */
+  readonly outcomeRegressions: DreamOutcomeRegression[];
 }
 
 interface ApplyEvidenceEntry {
   readonly pref_slug: string;
   readonly timestamp: string;
   readonly result: (typeof BRAIN_APPLY_RESULT)[keyof typeof BRAIN_APPLY_RESULT];
+  /** Downstream outcome when recorded (t_d478df53). */
+  readonly outcome?: "success" | "failure";
 }
 
 function scanApplyEvidence(vault: string): ApplyEvidenceEntry[] {
@@ -1658,6 +1688,9 @@ function scanApplyEvidence(vault: string): ApplyEvidenceEntry[] {
         pref_slug: target.slice("pref-".length),
         timestamp: e.timestamp,
         result: result as ApplyEvidenceEntry["result"],
+        ...(e.body["outcome"] === "success" || e.body["outcome"] === "failure"
+          ? { outcome: e.body["outcome"] as "success" | "failure" }
+          : {}),
       });
     }
   }
@@ -1698,6 +1731,7 @@ function planRefresh(
   const confirmed = new Set<string>();
   const updated = new Map<string, RefreshUpdate>();
   const bandDrops: RefreshBandDrop[] = [];
+  const outcomeRegressions: DreamOutcomeRegression[] = [];
 
   // Index evidence by slug.
   const bySlug = new Map<string, ApplyEvidenceEntry[]>();
@@ -1787,7 +1821,36 @@ function planRefresh(
       }
     }
 
-    const confidence = computeConfidence(applied, violated, lastEvidence, cfg, now);
+    const baseConfidence = computeConfidence(applied, violated, lastEvidence, cfg, now);
+
+    // Outcome regression (t_d478df53): applied events whose downstream
+    // outcome was `failure` outnumbering `success` mean the rule looks
+    // confirmed while actively hurting. The flag stages an explainable
+    // finding and a multiplicative confidence penalty - retirement
+    // still goes through the existing gates, never silently. The
+    // penalty is a pure function of the evidence, so reruns converge.
+    const appliedFailures = ev.filter(
+      (e) => e.result === BRAIN_APPLY_RESULT.applied && e.outcome === "failure",
+    ).length;
+    const appliedSuccesses = ev.filter(
+      (e) => e.result === BRAIN_APPLY_RESULT.applied && e.outcome === "success",
+    ).length;
+    const regressed =
+      appliedFailures >= OUTCOME_REGRESSION_MIN_FAILURES && appliedFailures > appliedSuccesses;
+    const confidence = regressed
+      ? rebandConfidence(
+          Math.round(baseConfidence.value * OUTCOME_REGRESSION_PENALTY * 10000) / 10000,
+          cfg,
+        )
+      : baseConfidence;
+    if (regressed) {
+      outcomeRegressions.push({
+        id: rec.pref.id,
+        principle: rec.pref.principle,
+        failures: appliedFailures,
+        successes: appliedSuccesses,
+      });
+    }
 
     // Idempotency on a no-op rerun: skip refresh for prefs where
     // counters AND status are unchanged AND the on-disk body already
@@ -1912,7 +1975,7 @@ function planRefresh(
     }
   }
 
-  return { confirmed, updated, bandDrops };
+  return { confirmed, updated, bandDrops, outcomeRegressions };
 }
 
 /**
@@ -1973,6 +2036,19 @@ export function computeConfidence(
   const rawValue = wilsonLow * freshness;
   const value = Math.round(rawValue * 10000) / 10000;
 
+  let band: BrainConfidence;
+  if (value >= cfg.confidence.high_min) {
+    band = BRAIN_CONFIDENCE.high;
+  } else if (value >= cfg.confidence.medium_min) {
+    band = BRAIN_CONFIDENCE.medium;
+  } else {
+    band = BRAIN_CONFIDENCE.low;
+  }
+  return Object.freeze({ value, band });
+}
+
+/** Re-derive the confidence band for an externally adjusted value. */
+function rebandConfidence(value: number, cfg: BrainConfig): ConfidenceComputeResult {
   let band: BrainConfidence;
   if (value >= cfg.confidence.high_min) {
     band = BRAIN_CONFIDENCE.high;

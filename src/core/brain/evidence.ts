@@ -99,12 +99,18 @@ export function collectEvidenceForSlug(
       const artifact = typeof e.body["artifact"] === "string" ? e.body["artifact"] : "";
       const agent = typeof e.body["agent"] === "string" ? e.body["agent"] : undefined;
       const note = typeof e.body["note"] === "string" ? e.body["note"] : undefined;
+      const outcomeRaw = e.body["outcome"];
+      const outcome =
+        outcomeRaw === "success" || outcomeRaw === "failure"
+          ? (outcomeRaw as BrainEvidenceSummary["outcome"])
+          : undefined;
       const row: BrainEvidenceSummary = Object.freeze({
         timestamp: e.timestamp,
         artifact,
         result: result as BrainApplyResult,
         ...(agent !== undefined ? { agent } : {}),
         ...(note !== undefined ? { note } : {}),
+        ...(outcome !== undefined ? { outcome } : {}),
       });
       if (result === BRAIN_APPLY_RESULT.applied) {
         if (applied.length < maxApplied) applied.push(row);

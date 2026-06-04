@@ -748,6 +748,38 @@ export class Store {
     }
   }
 
+  /** Ordered chunk ids for one document (surprisal, t_fddfe64a). */
+  chunksForDocument(documentId: number): ReadonlyArray<{ id: number; chunkIndex: number }> {
+    return this.db
+      .query<{ id: number; chunk_index: number }, [number]>(
+        "SELECT id, chunk_index FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC",
+      )
+      .all(documentId)
+      .map((r) => ({ id: r.id, chunkIndex: r.chunk_index }));
+  }
+
+  /**
+   * The stored embedding for one chunk, or null when the vec layer is
+   * unavailable or the chunk was never embedded (surprisal,
+   * t_fddfe64a).
+   */
+  embeddingForChunk(chunkId: number): Float32Array | null {
+    if (!this.vecLoaded()) return null;
+    const row = this.db
+      .query<{ embedding: Uint8Array }, [number]>(
+        "SELECT v.embedding AS embedding FROM chunk_vec v " +
+          "JOIN chunk_vec_map m ON m.vec_rowid = v.rowid WHERE m.chunk_id = ?",
+      )
+      .get(chunkId);
+    if (!row) return null;
+    const bytes = row.embedding;
+    // Copy instead of viewing: a pooled buffer with a non-4-byte-aligned
+    // byteOffset would make the Float32Array constructor throw.
+    return new Float32Array(
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    );
+  }
+
   getEmbeddingHash(chunkId: number): string | null {
     const row = this.db
       .query<{ embedding_hash: string }, [number]>(

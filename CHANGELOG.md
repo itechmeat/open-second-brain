@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.43.0] - 2026-06-04
+
+Entity Truth & Self-Improving Dream Suite: a current-truth surface
+over entities and a dream pass that learns from outcomes, not only
+from claims. An append-only claim ledger folds extracted facts into
+addressable per-entity aspect slots with superseded history, detects
+contradictions and cross-agent convergence, guards merges against
+collapsing different people's claims, and answers quantitative
+questions by exact-match aggregation; on the learning side,
+apply-evidence carries a downstream outcome that stages regression
+findings against rules that look confirmed but hurt, failed
+approaches persist as recallable negative knowledge, inbox signals
+rank by embedding novelty, the weekly synthesis nominates the
+most-developable note, and a foresight fold projects what comes due
+next. Everything is deterministic, bounded, fail-closed, and
+explainable; a vault without the new data behaves bit-identically.
+MCP tool count grows 66 -> 69.
+
+### Added
+
+- **Entity claim ledger** (`Brain/truth/`). Device-sharded append-only
+  JSONL claim events (`claims.<deviceId>.jsonl`, schema-versioned,
+  fail-closed line parsing) fold into per-`(entity, aspect)` slots
+  holding the current value plus superseded history with provenance
+  lineage; the derived `state.json` is a recomputable cache, never
+  authority. Conflict detection is purely temporal-structural: two
+  distinct values for one slot within the window (default 30d) from
+  independent sources materialize a `value_conflict` with
+  `resolution: ask_user` - never auto-resolved - while a later value
+  outside the window supersedes silently. `o2b brain truth
+  ingest|slots|conflicts|aggregate|collisions|sweep` and the
+  `brain_truth` MCP tool are the operator surface.
+- **Atomic-fact decomposition and the quantity family**. `o2b brain
+  facts decompose` deterministically splits session text into discrete
+  assertions via markdown structure (heading paths, list items,
+  sentence boundaries with an abbreviation guard) anchored to
+  canonical entities - no model calls; `--ingest` bridges
+  structured-family assertions into the ledger. Fact extraction gains
+  an actor-framed `quantity` family (spent/ran/worked + value + unit),
+  and `aggregateQuantities` sums only exact `(entity, action, unit)`
+  matches so nearby numbers never pollute a total.
+- **Name-aware merge guard and contamination check**. `mergePreferences`
+  refuses to collapse claims about disjoint people/orgs
+  (`entity-guard`, CLI `--force` bypass), and the deep-synthesis
+  dossier flags notes asserting registered entities their cited
+  sources never mention (`entity_contamination` dimension, present
+  only when the vault has an entity registry).
+- **Cross-agent collision detection**. Two agents independently
+  logging claims about one entity within 14 days - citing different
+  sources - surface push-mode through the standing trigger queue as
+  the new `agent_collision` kind with cooldown dedup, instead of
+  waiting for an operator-run diff.
+- **Outcome-tied apply-evidence**. `brain_apply_evidence` and the CLI
+  accept an optional `outcome: success|failure|unknown`; the dream
+  refresh stages an `outcome_regressions` finding with a deterministic
+  0.8 confidence penalty when applied events carry 2+ failures
+  outnumbering successes - staged, never silent retirement, idempotent
+  on rerun.
+- **Dead-end registry** (`Brain/dead-ends/`). Tried-and-failed
+  approaches persist as markdown notes (approach + why it failed +
+  context) bounded to the most-recent-N with archive-on-overflow;
+  FTS indexes them with zero search changes so recall surfaces
+  "avoid X" alongside "prefer Y". `o2b brain dead-end record|list`
+  and the `brain_dead_ends` MCP tool.
+- **Surprisal novelty sampling**. Inbox signals rank by mean kNN
+  distance to their nearest indexed neighbours over the existing
+  sqlite-vec index (zero provider calls); `brain_review_candidates`
+  gains a `signal_novelty` annotation present only when at least one
+  signal actually scores.
+- **Weekly top-source**. The weekly synthesis nominates the single
+  most-developable note of the window (recency + inbound links + link
+  centrality, per-signal breakdown, one-line why), absent when nothing
+  qualified.
+- **Foresight** (`o2b brain foresight`, `brain_foresight`). The
+  Brain's first forward-looking fold: recurrence cadences project
+  next-due routines inside the horizon (default 14d), recent open
+  commitments and open questions surface with sources; `--write`
+  persists `Brain/foresight/<date>.md`.
+
+### Changed
+
+- `extractFacts`' span dedup key is now written with a `\u0000`
+  escape instead of a literal NUL byte, so the file diffs as text
+  again; chunk embeddings are copied out of the SQLite buffer instead
+  of viewed, hardening against unaligned pooled buffers.
+
 ## [0.42.0] - 2026-06-04
 
 Time-Aware Recall & Activation Suite: ranking that reflects what the
@@ -4516,6 +4602,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.43.0]: https://github.com/itechmeat/open-second-brain/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/itechmeat/open-second-brain/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/itechmeat/open-second-brain/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/itechmeat/open-second-brain/compare/v0.39.0...v0.40.0

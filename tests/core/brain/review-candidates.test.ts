@@ -30,8 +30,8 @@ afterEach(() => {
 });
 
 describe("buildReviewCandidates", () => {
-  test("returns a frozen report with all six top-level fields", () => {
-    const r = buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
+  test("returns a frozen report with all six top-level fields", async () => {
+    const r = await buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
     expect(Object.isFrozen(r)).toBe(true);
     expect(Array.isArray(r.would_create)).toBe(true);
     expect(Array.isArray(r.would_promote)).toBe(true);
@@ -41,8 +41,8 @@ describe("buildReviewCandidates", () => {
     expect(Array.isArray(r.gated_retires)).toBe(true);
   });
 
-  test("returns empty arrays on a fresh-bootstrap vault", () => {
-    const r = buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
+  test("returns empty arrays on a fresh-bootstrap vault", async () => {
+    const r = await buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
     expect(r.would_create).toEqual([]);
     expect(r.would_promote).toEqual([]);
     expect(r.would_retire).toEqual([]);
@@ -51,8 +51,8 @@ describe("buildReviewCandidates", () => {
     expect(r.gated_retires).toEqual([]);
   });
 
-  test("does NOT create a workrun file (dry-run path)", () => {
-    buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
+  test("does NOT create a workrun file (dry-run path)", async () => {
+    await buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
     const dir = dreamRunsDir(vault);
     if (existsSync(dir)) {
       const entries = readdirSync(dir);
@@ -60,9 +60,9 @@ describe("buildReviewCandidates", () => {
     }
   });
 
-  test("invoked twice in a row produces identical output (idempotent)", () => {
-    const a = buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
-    const b = buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
+  test("invoked twice in a row produces identical output (idempotent)", async () => {
+    const a = await buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
+    const b = await buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });

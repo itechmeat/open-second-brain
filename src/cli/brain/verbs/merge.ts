@@ -26,6 +26,7 @@ export async function cmdBrainMerge(argv: string[]): Promise<number> {
       now: new Date(),
       agentName: agent,
       dryRun: true,
+      bypassEntityGuard: force,
     });
   } catch (exc) {
     if (exc instanceof BrainMergeError) return fail(`brain merge: ${exc.message}`);
@@ -72,7 +73,11 @@ export async function cmdBrainMerge(argv: string[]): Promise<number> {
   }
 
   try {
-    mergePreferences(vault, keepId, dropId, { now: new Date(), agentName: agent });
+    mergePreferences(vault, keepId, dropId, {
+      now: new Date(),
+      agentName: agent,
+      bypassEntityGuard: force,
+    });
   } catch (exc) {
     if (exc instanceof BrainMergeError) return fail(`brain merge: ${exc.message}`);
     return fail(`brain merge: failed to commit merge: ${(exc as Error).message ?? exc}`);

@@ -16,6 +16,10 @@
  * Task 7 in `plan.md`.
  */
 
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+import { extractWikilinkRichBodies, parseWikilinkRich } from "../link-graph/parse-wikilink.ts";
 import { isoSecond } from "./../time.ts";
 import type { BrainLogEventKind, ResolvedBrainTemporalConfig } from "./../types.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./../types.ts";
@@ -47,6 +51,20 @@ export interface WeeklyRetirement {
   readonly link: string;
 }
 
+export interface WeeklyTopSource {
+  /** Vault-relative path of the nominated note. */
+  readonly path: string;
+  readonly score: number;
+  /** One-line deterministic rationale. */
+  readonly why: string;
+  /** Per-signal breakdown behind the score. */
+  readonly signals: {
+    readonly recencyDays: number;
+    readonly inboundLinks: number;
+    readonly outboundLinks: number;
+  };
+}
+
 export interface WeeklySynthesisEnvelope {
   readonly windowStart: string;
   readonly windowEnd: string;
@@ -57,6 +75,13 @@ export interface WeeklySynthesisEnvelope {
   readonly vaultDelta: PeriodVaultDelta;
   readonly sourcePointers: ReadonlyArray<string>;
   readonly generatedAt: string;
+  /**
+   * Weekly top-source (t_a8d49eae): the single most-developable note
+   * of the window - recency + inbound links + link centrality.
+   * Absent when no candidate note was modified inside the window, so
+   * historic envelopes stay byte-identical.
+   */
+  readonly topSource?: WeeklyTopSource;
 }
 
 export interface BuildWeeklySynthesisOptions {
@@ -66,12 +91,12 @@ export interface BuildWeeklySynthesisOptions {
 
 export function buildWeeklySynthesis(
   index: TimelineIndex,
-  _vault: string,
+  vault: string,
   weekEnd: string,
   _cfg: ResolvedBrainTemporalConfig,
   opts: BuildWeeklySynthesisOptions = {},
 ): WeeklySynthesisEnvelope {
-  // `_vault` / `_cfg` are part of the helper signature for parity
+  // `_cfg` is part of the helper signature for parity
   // with sibling projections and forward compatibility (weekday-
   // alignment overrides will read `_cfg.weekly_start_dow` in a
   // future release); the brief itself is a pure projection over the
@@ -96,8 +121,10 @@ export function buildWeeklySynthesis(
     .filter((t) => t.kind === "retirement")
     .map((t) => Object.freeze({ at: t.at, prefId: t.prefId, link: t.link }));
   const contradictions = collectContradictions(events);
+  const topSource = nominateTopSource(vault, windowStartMs, windowEndMs);
 
   return Object.freeze({
+    ...(topSource !== null ? { topSource } : {}),
     windowStart,
     windowEnd: windowEndIso,
     eventsByKind: Object.freeze(countByKind(events)),
@@ -135,4 +162,169 @@ function makeContradiction(
     ...(ev.reason !== undefined ? { reason: ev.reason } : {}),
     ...(ev.artifact !== undefined ? { artifact: ev.artifact } : {}),
   });
+}
+
+// ----- Weekly top-source (t_a8d49eae) ---------------------------------------
+
+// Machine-owned content never nominates: logs, signals, machine
+// stores, generated digests, and rule files are not "notes worth
+// developing further".
+const TOP_SOURCE_EXCLUDED_PREFIXES: ReadonlyArray<string> = Object.freeze([
+  "Brain/log/",
+  "Brain/inbox/",
+  "Brain/retired/",
+  "Brain/preferences/",
+  "Brain/.snapshots/",
+  "Brain/snapshots/",
+  "Brain/search/",
+  "Brain/procedural/",
+  "Brain/recurrence/",
+  "Brain/truth/",
+  "Brain/triggers/",
+  "Brain/continuity/",
+  "Brain/dead-ends/",
+  "Brain/foresight/",
+  "Brain/_",
+  "Brain/active",
+  "Brain/pinned",
+]);
+
+const SKIPPED_DIR_NAMES: ReadonlySet<string> = new Set([
+  ".git",
+  "node_modules",
+  ".open-second-brain",
+  ".obsidian",
+  ".trash",
+  ".stversions",
+]);
+
+interface TopSourceCandidate {
+  readonly relPath: string;
+  readonly mtimeMs: number;
+}
+
+function walkMarkdown(vault: string): string[] {
+  const out: string[] = [];
+  const stack: string[] = [""];
+  while (stack.length > 0) {
+    const rel = stack.pop()!;
+    const abs = rel === "" ? vault : join(vault, rel);
+    let names: string[];
+    try {
+      names = readdirSync(abs);
+    } catch {
+      continue;
+    }
+    for (const name of names.toSorted()) {
+      const childRel = rel === "" ? name : `${rel}/${name}`;
+      let isDir: boolean;
+      try {
+        isDir = statSync(join(vault, childRel)).isDirectory();
+      } catch {
+        continue;
+      }
+      if (isDir) {
+        if (SKIPPED_DIR_NAMES.has(name) || name.startsWith(".")) continue;
+        stack.push(childRel);
+      } else if (name.endsWith(".md")) {
+        out.push(childRel);
+      }
+    }
+  }
+  return out.toSorted();
+}
+
+function excluded(relPath: string): boolean {
+  return TOP_SOURCE_EXCLUDED_PREFIXES.some((prefix) => relPath.startsWith(prefix));
+}
+
+function pageNames(relPath: string): string[] {
+  const stripped = relPath.endsWith(".md") ? relPath.slice(0, -3) : relPath;
+  const slash = stripped.lastIndexOf("/");
+  return slash >= 0 ? [stripped, stripped.slice(slash + 1)] : [stripped];
+}
+
+/**
+ * Nominate the most-developable note of the window: every candidate
+ * modified inside [windowStart, windowEnd) scores
+ * `0.5*recency + 0.3*inbound/(inbound+3) + 0.2*outbound/(outbound+5)`
+ * over the whole-vault link graph. Null when nothing qualified.
+ */
+function nominateTopSource(
+  vault: string,
+  windowStartMs: number,
+  windowEndMs: number,
+): WeeklyTopSource | null {
+  const all = walkMarkdown(vault);
+  const candidates: TopSourceCandidate[] = [];
+  for (const relPath of all) {
+    if (excluded(relPath)) continue;
+    let mtimeMs: number;
+    try {
+      mtimeMs = statSync(join(vault, relPath)).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (mtimeMs >= windowStartMs && mtimeMs < windowEndMs) {
+      candidates.push({ relPath, mtimeMs });
+    }
+  }
+  if (candidates.length === 0) return null;
+
+  // Inbound counts over the WHOLE vault: links from machine files
+  // still count as evidence of centrality, only nomination is scoped.
+  const nameToCandidate = new Map<string, string>();
+  for (const c of candidates) {
+    for (const name of pageNames(c.relPath)) {
+      if (!nameToCandidate.has(name)) nameToCandidate.set(name, c.relPath);
+    }
+  }
+  const inbound = new Map<string, number>();
+  const outbound = new Map<string, number>();
+  for (const relPath of all) {
+    let content: string;
+    try {
+      content = readFileSync(join(vault, relPath), "utf8");
+    } catch {
+      continue;
+    }
+    let links = 0;
+    for (const body of extractWikilinkRichBodies(content)) {
+      const target = parseWikilinkRich(body).target;
+      if (target === "") continue;
+      links++;
+      const hit = nameToCandidate.get(target);
+      if (hit !== undefined && hit !== relPath) {
+        inbound.set(hit, (inbound.get(hit) ?? 0) + 1);
+      }
+    }
+    outbound.set(relPath, links);
+  }
+
+  let best: WeeklyTopSource | null = null;
+  for (const c of candidates) {
+    const recencyDays = Math.max(0, Math.floor((windowEndMs - c.mtimeMs) / (24 * 60 * 60 * 1000)));
+    const recency = Math.max(0, 1 - (windowEndMs - c.mtimeMs) / (windowEndMs - windowStartMs));
+    const inboundLinks = inbound.get(c.relPath) ?? 0;
+    const outboundLinks = outbound.get(c.relPath) ?? 0;
+    const score =
+      Math.round(
+        (0.5 * recency +
+          0.3 * (inboundLinks / (inboundLinks + 3)) +
+          0.2 * (outboundLinks / (outboundLinks + 5))) *
+          10000,
+      ) / 10000;
+    const candidate: WeeklyTopSource = Object.freeze({
+      path: c.relPath,
+      score,
+      why:
+        `Modified ${recencyDays}d before window end with ${inboundLinks} inbound and ` +
+        `${outboundLinks} outbound link(s) - the strongest develop-next lead of the window.`,
+      signals: Object.freeze({ recencyDays, inboundLinks, outboundLinks }),
+    });
+    if (best === null || score > best.score || (score === best.score && c.relPath < best.path)) {
+      best = candidate;
+    }
+  }
+  return best;
 }

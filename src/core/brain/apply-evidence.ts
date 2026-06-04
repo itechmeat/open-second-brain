@@ -39,7 +39,13 @@ import { isoSecond } from "./time.ts";
 import { checkRolePermission } from "./trust/check-role-permission.ts";
 import { BRAIN_OPERATIONS, type BrainRole } from "./trust/role.ts";
 import { renderPrefLink } from "./wikilink.ts";
-import { BRAIN_APPLY_RESULT, BRAIN_LOG_EVENT_KIND, type BrainApplyResult } from "./types.ts";
+import {
+  BRAIN_APPLY_OUTCOME,
+  BRAIN_APPLY_RESULT,
+  BRAIN_LOG_EVENT_KIND,
+  type BrainApplyOutcome,
+  type BrainApplyResult,
+} from "./types.ts";
 
 const ARTIFACT_MAX_LEN = 512;
 const NOTE_MAX_LEN = 4096;
@@ -97,6 +103,12 @@ export interface AppendApplyEvidenceInput {
   readonly result: BrainApplyResult;
   readonly agent: string;
   readonly note?: string;
+  /**
+   * Downstream outcome of the artifact the rule was applied to
+   * (t_d478df53). Optional and additive: `unknown` is treated like an
+   * absent outcome, only `success`/`failure` persist in the log.
+   */
+  readonly outcome?: BrainApplyOutcome;
 }
 
 export interface AppendApplyEvidenceOptions {
@@ -167,6 +179,16 @@ export function appendApplyEvidence(
       `apply-evidence field 'result' must be 'applied', 'violated', or 'outdated'; got ${JSON.stringify(input.result)}`,
     );
   }
+  if (
+    input.outcome !== undefined &&
+    input.outcome !== BRAIN_APPLY_OUTCOME.success &&
+    input.outcome !== BRAIN_APPLY_OUTCOME.failure &&
+    input.outcome !== BRAIN_APPLY_OUTCOME.unknown
+  ) {
+    throw new Error(
+      `apply-evidence field 'outcome' must be 'success', 'failure', or 'unknown'; got ${JSON.stringify(input.outcome)}`,
+    );
+  }
 
   // Resolve and validate the preference file. We accept both the bare
   // slug (`foo`) and the prefixed id (`pref-foo`) for caller comfort.
@@ -201,6 +223,12 @@ export function appendApplyEvidence(
     agent: input.agent.trim(),
     result: input.result,
   };
+  if (
+    input.outcome === BRAIN_APPLY_OUTCOME.success ||
+    input.outcome === BRAIN_APPLY_OUTCOME.failure
+  ) {
+    body["outcome"] = input.outcome;
+  }
   const trimmedNote = note?.trim();
   if (trimmedNote) body["note"] = trimmedNote;
 

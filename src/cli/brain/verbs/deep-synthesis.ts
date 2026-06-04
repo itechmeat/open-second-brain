@@ -62,6 +62,7 @@ export async function cmdBrainDeepSynthesis(argv: string[]): Promise<number> {
           superseded_by: s.supersededBy,
         })),
         gaps: report.gaps,
+        contaminated: report.contaminated,
         ...(flags["triggers"] === true ? { triggers_created: enqueued } : {}),
       });
       return 0;
@@ -70,6 +71,11 @@ export async function cmdBrainDeepSynthesis(argv: string[]): Promise<number> {
     ok(`notes: ${report.notes.length}`);
     for (const a of report.agreements) ok(`[agreement] ${a.path} ${a.relation} ${a.target}`);
     for (const c of report.contradictions) ok(`[contradiction] ${c.path} contradicts ${c.target}`);
+    for (const cont of report.contaminated) {
+      ok(
+        `[contaminated] ${cont.path} asserts ${cont.entity} uncited by ${cont.sources.join(", ")}`,
+      );
+    }
     for (const s of report.staleClaims) {
       ok(
         `[stale] ${s.path} (${s.ageDays}d${s.supersededBy !== null ? `, superseded by ${s.supersededBy}` : ""})`,
