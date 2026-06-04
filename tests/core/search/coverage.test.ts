@@ -98,7 +98,9 @@ test("per-token union gathers records for terms the ranked set left uncovered", 
   writeMd(vault, "alpha-note.md", "# Alpha\n\nthe alpha subsystem owns the export pipeline");
   writeMd(vault, "zephyr-note.md", "# Zephyr\n\nthe zephyr daemon owns the import pipeline");
   writeMd(vault, "filler.md", "# Filler\n\nunrelated prose about gardening");
-  const cfg = makeConfig({ vault, dbPath });
+  // Two-pass recall would now recover results for this AND dead end;
+  // disable it - this test exercises the zero-result union machinery.
+  const cfg = makeConfig({ vault, dbPath, twoPassEnabled: false });
   await indexVault(cfg);
 
   // FTS joins tokens with implicit AND: no document contains both terms,

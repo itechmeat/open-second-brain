@@ -9,6 +9,7 @@
  * the store but the public surface stays uniform.
  */
 
+import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
@@ -16,11 +17,21 @@ import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/vi
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   composeWeightProfiles,
+  fnv1aHex,
   isNeutralLearnedWeights,
   learnedWeightsFingerprint,
   learnedWeightsReason,
   readLearnedWeights,
 } from "./feedback.ts";
+import { parseFreshnessTrend } from "../brain/temporal/freshness-trend.ts";
+import { effectiveActivation, halfLifeDays, resolveActivationKind } from "./activation/decay.ts";
+import {
+  ACCESS_EVENT_PATHS_CAP,
+  CO_ACCESS_MIN_COUNT,
+  activationStateFingerprint,
+  readActivationState,
+  recordAccessEvent,
+} from "./activation/store.ts";
 import { extractEntities } from "./entities.ts";
 import { expandQueryEntities } from "./entity-alias.ts";
 import { buildCoverageReport, significantTerms, termIncludedIn } from "./coverage.ts";
@@ -35,7 +46,9 @@ import { filterByProperties } from "./property-filter.ts";
 import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
-import { mtimeInRange, resolveTimeRange } from "./time-range.ts";
+import { applyTemporalBridge } from "./temporal-bridge.ts";
+import { resolveTimeRange } from "./time-range.ts";
+import { eventTimeInRange, parseValidityWindow, type ValidityWindow } from "./validity.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -254,10 +267,15 @@ export async function search(
         const lwFp = config.recall.learnedWeightsEnabled
           ? learnedWeightsFingerprint(config.vault)
           : "off";
+        // The activation state evolves with recorded accesses the same
+        // way, so its fingerprint joins too (Time-Aware Recall Suite).
+        const actFp = config.recall.activationEnabled
+          ? activationStateFingerprint(config.vault)
+          : "off";
         cacheKey = buildCacheKey(
           keyOpts,
           basePlan.planHash,
-          `${configFingerprint(config)}|lw:${lwFp}`,
+          `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}`,
         );
         const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
         if (hit) return hit;
@@ -342,7 +360,38 @@ export async function search(
     const allChunkIds = new Set<number>();
     for (const h of kwHits) allChunkIds.add(h.chunkId);
     for (const h of semHits) allChunkIds.add(h.chunkId);
-    const idsList = Array.from(allChunkIds);
+    let idsList = Array.from(allChunkIds);
+
+    // Self-correcting two-pass recall (t_ef92dfdc): a zero-candidate
+    // first pass in evidence-pack mode means the implicit-AND keyword
+    // match was too strict - the classic abstention dead end. Instead
+    // of returning empty, run EXACTLY ONE broadened retry that keeps
+    // the first significant term as the base group and ORs the rest in
+    // as alternatives, then let the merged pool flow through the normal
+    // ranking, filters, and a recomputed evidence pack.
+    let secondPass: SearchOutcome["secondPass"];
+    if (idsList.length === 0 && opts.evidencePack === true && config.recall.twoPassEnabled) {
+      const terms = significantTerms(query);
+      if (terms.length >= 2) {
+        const broadened = runFtsQueryDetailed(store, terms[0]!, {
+          expandedTerms: terms.slice(1),
+          limit: Math.max(limit * 5, 50),
+          pathPrefix: pathPrefix ?? null,
+        });
+        for (const w of broadened.warnings) warnings.push(w);
+        if (broadened.hits.length > 0) {
+          kwHits = broadened.hits;
+          for (const h of kwHits) allChunkIds.add(h.chunkId);
+          idsList = Array.from(allChunkIds);
+          secondPass = Object.freeze({
+            triggered: true,
+            reason: "zero-candidate first pass; broadened OR retry",
+            added: kwHits.length,
+          });
+        }
+      }
+    }
+
     if (idsList.length === 0) {
       const evidencePack =
         opts.evidencePack === true
@@ -363,10 +412,37 @@ export async function search(
     // Time-aware recall (recall-trust-suite): drop out-of-range
     // candidates BEFORE ranking so every later phase (traversal seeds,
     // MMR, relation polarity) sees only in-range candidates.
+    // Event-time discipline (t_b7191486): a document declaring
+    // `valid_from` / `valid_until` is tested by validity-window
+    // OVERLAP - storage mtime is the fallback, never the authority,
+    // when explicit event time exists. One cached frontmatter read per
+    // candidate path; an unparseable declared value warns once and
+    // falls back to mtime.
+    const validityWindowCache = new Map<string, ValidityWindow | null>();
+    const validityWindowFor = (path: string): ValidityWindow | null => {
+      if (validityWindowCache.has(path)) return validityWindowCache.get(path) ?? null;
+      let window: ValidityWindow | null = null;
+      try {
+        const [meta] = parseFrontmatter(join(config.vault, path));
+        window = parseValidityWindow(meta as Record<string, unknown>);
+      } catch {
+        window = null;
+      }
+      validityWindowCache.set(path, window);
+      return window;
+    };
     if (timeRange !== null) {
+      const warnedInvalid = new Set<string>();
+      const windowFor = validityWindowFor;
       const inRange = (chunkId: number): boolean => {
         const h = hydrated.get(chunkId);
-        return h !== undefined && mtimeInRange(h.mtime, timeRange);
+        if (h === undefined) return false;
+        const window = windowFor(h.path);
+        if (window?.invalid === true && !warnedInvalid.has(h.path)) {
+          warnedInvalid.add(h.path);
+          warnings.push(`validity: unparseable valid_from/valid_until in ${h.path}; using mtime`);
+        }
+        return eventTimeInRange(window, h.mtime, timeRange);
       };
       kwHits = kwHits.filter((h) => inRange(h.chunkId));
       semHits = semHits.filter((h) => inRange(h.chunkId));
@@ -394,6 +470,111 @@ export async function search(
       entityExpansion.added.length > 0
         ? store.chunkEntityMatches(idsList, entityExpansion.added)
         : undefined;
+
+    // Access-reinforced activation (Time-Aware Recall & Activation
+    // Suite): map the derived activation state onto the candidate set.
+    // O(candidates): one state read per query, one frontmatter read per
+    // candidate path that actually carries activation. The type
+    // half-life decays the stored strength at read time, so a vault
+    // without recorded events contributes nothing and ranks
+    // bit-identically.
+    let activationByChunk: ReadonlyMap<number, number> | undefined;
+    let coAccessByChunk: ReadonlyMap<number, ReadonlyMap<number, number>> | undefined;
+    if (config.recall.activationEnabled) {
+      const activationState = readActivationState(config.vault);
+      if (activationState !== null && Object.keys(activationState.paths).length > 0) {
+        const nowActivationMs = Date.now();
+        const kindCache = new Map<string, string>();
+        const kindFor = (path: string): string => {
+          const cached = kindCache.get(path);
+          if (cached !== undefined) return cached;
+          let fmKind: string | null = null;
+          try {
+            const [meta] = parseFrontmatter(join(config.vault, path));
+            const raw = (meta as Record<string, unknown>)["kind"];
+            fmKind = typeof raw === "string" ? raw : null;
+          } catch {
+            fmKind = null;
+          }
+          const kind = resolveActivationKind(fmKind, path);
+          kindCache.set(path, kind);
+          return kind;
+        };
+        const byChunk = new Map<number, number>();
+        for (const chunkId of idsList) {
+          const h = hydrated.get(chunkId);
+          if (h === undefined) continue;
+          const row = activationState.paths[h.path];
+          if (row === undefined) continue;
+          const days = (nowActivationMs - row.lastAccessAt) / (24 * 60 * 60 * 1000);
+          const act = effectiveActivation(row.strength, days, halfLifeDays(kindFor(h.path)));
+          if (act > 0) byChunk.set(chunkId, act);
+        }
+        if (byChunk.size > 0) activationByChunk = byChunk;
+      }
+      // Co-access companions (t_c5ef25a3): restrict the recorded pairs
+      // to documents present in this candidate set, then hand each
+      // chunk its companion documentIds with pair counts. Pairs seen
+      // fewer than CO_ACCESS_MIN_COUNT times are noise and skipped.
+      if (activationState !== null && activationState.coAccess.length > 0) {
+        const docIdByPath = new Map<string, number>();
+        const chunksByDocId = new Map<number, number[]>();
+        for (const chunkId of idsList) {
+          const h = hydrated.get(chunkId);
+          if (h === undefined) continue;
+          docIdByPath.set(h.path, h.documentId);
+          const list = chunksByDocId.get(h.documentId) ?? [];
+          list.push(chunkId);
+          chunksByDocId.set(h.documentId, list);
+        }
+        const companionsByChunk = new Map<number, Map<number, number>>();
+        const addCompanion = (ownDoc: number, otherDoc: number, count: number): void => {
+          for (const chunkId of chunksByDocId.get(ownDoc) ?? []) {
+            const m = companionsByChunk.get(chunkId) ?? new Map<number, number>();
+            m.set(otherDoc, Math.max(m.get(otherDoc) ?? 0, count));
+            companionsByChunk.set(chunkId, m);
+          }
+        };
+        for (const pair of activationState.coAccess) {
+          if (pair.count < CO_ACCESS_MIN_COUNT) continue;
+          const docA = docIdByPath.get(pair.a);
+          const docB = docIdByPath.get(pair.b);
+          if (docA === undefined || docB === undefined) continue;
+          addCompanion(docA, docB, pair.count);
+          addCompanion(docB, docA, pair.count);
+        }
+        if (companionsByChunk.size > 0) coAccessByChunk = companionsByChunk;
+      }
+    }
+
+    // Freshness-trend bias (t_ee09a6ce): preference pages stamped with
+    // a `freshness_trend` by the dream refresh get a bounded relevance
+    // multiplier. Restricted to Brain/preferences/ paths - the stamp is
+    // a preference-lifecycle field, not a generic page property - and
+    // O(candidate preference pages) frontmatter reads.
+    // Cache note: like the tier signal, the stamp is read from
+    // frontmatter at query time and is NOT part of the query-cache key;
+    // a dream re-stamp reaches cached queries on the next reindex (the
+    // content change bumps the corpus generation).
+    let trendByDoc: ReadonlyMap<number, string> | undefined;
+    {
+      const byDoc = new Map<number, string>();
+      const seenDocs = new Set<number>();
+      for (const chunkId of idsList) {
+        const h = hydrated.get(chunkId);
+        if (h === undefined || seenDocs.has(h.documentId)) continue;
+        seenDocs.add(h.documentId);
+        if (!h.path.startsWith("Brain/preferences/")) continue;
+        try {
+          const [meta] = parseFrontmatter(join(config.vault, h.path));
+          const trend = parseFreshnessTrend((meta as Record<string, unknown>)["freshness_trend"]);
+          if (trend !== null) byDoc.set(h.documentId, trend);
+        } catch {
+          // Unreadable frontmatter stays neutral.
+        }
+      }
+      if (byDoc.size > 0) trendByDoc = byDoc;
+    }
 
     // When a property filter is active, overfetch the ranked
     // candidates so the post-filter result set still has a chance
@@ -446,6 +627,9 @@ export async function search(
           inboundLinkSources,
           tagsByDoc,
           ...(entityMatchByChunk !== undefined ? { entityMatchByChunk } : {}),
+          ...(activationByChunk !== undefined ? { activationByChunk } : {}),
+          ...(coAccessByChunk !== undefined ? { coAccessByChunk } : {}),
+          ...(trendByDoc !== undefined ? { trendByDoc } : {}),
         },
         {
           keywordWeight: opts.keywordWeight ?? config.keywordWeight,
@@ -474,6 +658,27 @@ export async function search(
           hopDecay: config.recall.hopDecay,
           maxExpansionPerHit: config.recall.maxExpansionPerHit,
         });
+        // Temporal bridge (t_c3871f0c): with an active time range,
+        // traversal expansions must stay within a padded event-time
+        // neighbourhood of the window - linked causes/consequences
+        // bridge in with proximity-decayed scores, arbitrary old
+        // neighbours do not. Event time = validity start, else mtime.
+        if (timeRange !== null) {
+          ranked = applyTemporalBridge(ranked, {
+            range: timeRange,
+            eventTimeMs: (path) => {
+              const w = validityWindowFor(path);
+              if (w !== null && !w.invalid && (w.validFromMs !== null || w.validUntilMs !== null)) {
+                return w.validFromMs ?? w.validUntilMs!;
+              }
+              try {
+                return statSync(join(config.vault, path)).mtimeMs;
+              } catch {
+                return Number.NEGATIVE_INFINITY;
+              }
+            },
+          });
+        }
       }
       // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
       if (mmrActive) {
@@ -555,10 +760,22 @@ export async function search(
               : r,
           )
         : withStructuredReasons;
+    // Two-pass attribution (t_ef92dfdc): every surfaced result of a
+    // broadened retry says so - the operator can tell recovered
+    // evidence from a first-pass hit.
+    const withSecondPassReasons =
+      secondPass !== undefined
+        ? withCanonicalReasons.map((r) =>
+            Object.freeze({
+              ...r,
+              reasons: Object.freeze([...r.reasons, "second_pass: or-broadened retry"]),
+            }),
+          )
+        : withCanonicalReasons;
     const finalResults =
       opts.evidencePack === true
-        ? downrankTerminalEvidenceResults(withCanonicalReasons)
-        : withCanonicalReasons;
+        ? downrankTerminalEvidenceResults(withSecondPassReasons)
+        : withSecondPassReasons;
     const evidencePack =
       opts.evidencePack === true
         ? buildEvidencePack(
@@ -568,12 +785,35 @@ export async function search(
           )
         : undefined;
 
+    // Access recording (Time-Aware Recall & Activation Suite): the
+    // orchestrator edge opted in, so persist which documents this query
+    // surfaced - AFTER ranking, so the current query is never affected
+    // by its own recording. Cache hits return earlier and never reach
+    // this point. Best-effort: a failed write never breaks the search.
+    if (opts.recordAccess === true && config.recall.activationEnabled && finalResults.length > 0) {
+      const surfacedPaths = Array.from(new Set(finalResults.map((r) => r.path))).slice(
+        0,
+        ACCESS_EVENT_PATHS_CAP,
+      );
+      const normalized = query.trim().replace(/\s+/gu, " ").toLowerCase();
+      try {
+        recordAccessEvent(config.vault, {
+          ts: Date.now(),
+          queryHash: fnv1aHex(normalized),
+          paths: surfacedPaths,
+        });
+      } catch {
+        warnings.push("activation: failed to record access event");
+      }
+    }
+
     return finalize(
       Object.freeze({
         results: Object.freeze(finalResults),
         warnings: Object.freeze(warnings),
         total: finalResults.length,
         ...(evidencePack !== undefined ? { evidencePack } : {}),
+        ...(secondPass !== undefined ? { secondPass } : {}),
       }),
     );
   } finally {

@@ -241,7 +241,9 @@ pinned: false
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain(`- A: ${first}`);
     expect(r.stdout).toContain(`- B: ${second}`);
-  });
+    // Seven sequential CLI invocations legitimately exceed bun's 5s
+    // default per-test timeout on a loaded machine.
+  }, 20000);
 
   test("--json returns parseable JSON", async () => {
     await bootstrap();

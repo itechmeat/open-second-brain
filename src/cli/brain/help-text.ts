@@ -39,6 +39,7 @@ Brain verbs (observing memory):
   watchdog            Probe Brain health and plan safe recovery (--remediate, --restore, --force-restore)
   health              Semantic-health report: contradictions, concept gaps, stale claims
   history             Render a preference's edit-history timeline
+  activation          Activation event store: status and sweep
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -207,6 +208,12 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain history <slug> [--vault <path>] [--json]\n" +
     "Render a preference's edit-history timeline (one entry per content\n" +
     "mutation: principle/scope/status before -> after). Read-only.\n",
+  activation:
+    "usage: o2b brain activation <status|sweep> [--top N] [--retention-days N] [--max-events N] [--vault <path>] [--json]\n" +
+    "Operator surface over the recall activation event store (Brain/search/activation/).\n" +
+    "status reports the folded per-path activation and co-access pairs; sweep drops\n" +
+    "events outside the retention window or beyond the newest-N cap and refolds\n" +
+    "(--max-events 0 clears every retained event).\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +

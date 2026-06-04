@@ -113,6 +113,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("watchdog", "Probe Brain recovery status"),
         command("health", "Render semantic Brain health"),
         command("history", "Render preference edit history"),
+        command("activation", "Activation event store: status and sweep"),
         command("audit", "Render mutation audit trail"),
         command("morning-brief", "Render session-start summary"),
         command("codec", "Compress or expand session prose"),

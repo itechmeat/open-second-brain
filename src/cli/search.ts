@@ -418,6 +418,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     since: { type: "string" },
     until: { type: "string" },
     global: { type: "boolean" },
+    "no-record-access": { type: "boolean" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
   });
@@ -478,6 +479,12 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     ...(flags["include-superseded"] === true ? { includeSuperseded: true } : {}),
     ...(typeof flags["since"] === "string" ? { since: flags["since"] as string } : {}),
     ...(typeof flags["until"] === "string" ? { until: flags["until"] as string } : {}),
+    // Access recording (Time-Aware Recall & Activation Suite): the CLI
+    // surface opts in by default; --no-record-access suppresses it, and
+    // cross-vault union never records (results span foreign vaults).
+    ...(flags["global"] !== true && flags["no-record-access"] !== true
+      ? { recordAccess: true }
+      : {}),
   };
   // Cross-vault union (t_72a22658): explicit per-call opt-in fans the
   // query out over profiles and read-only sources with origin labels.

@@ -38,7 +38,39 @@ export interface RankerInputs {
    * populated by a reindex.
    */
   readonly entityMatchByChunk?: ReadonlyMap<number, number>;
+  /**
+   * Optional per-chunk effective activation in [0, 1] (Time-Aware
+   * Recall & Activation Suite): access-reinforced strength already
+   * decayed by the content-type half-life. Missing entries (and the
+   * absent map) contribute zero boost, so a vault without recorded
+   * accesses ranks bit-identically to pre-activation behaviour.
+   */
+  readonly activationByChunk?: ReadonlyMap<number, number>;
+  /**
+   * Optional co-access companions per chunk (t_c5ef25a3): for each
+   * chunkId, the OTHER document ids habitually co-retrieved with its
+   * document, with the recorded pair count. Only companions that are
+   * also in the current candidate pool contribute (the same
+   * pool-membership rule the link boost uses), so the boost re-ranks a
+   * working set without floating unrelated documents.
+   */
+  readonly coAccessByChunk?: ReadonlyMap<number, ReadonlyMap<number, number>>;
+  /**
+   * Optional freshness trend per documentId (t_ee09a6ce), read from
+   * the `freshness_trend` frontmatter the dream refresh stamps on
+   * preference pages. Maps to a bounded multiplier on the relevance
+   * portion (strengthening 1.05, weakening 0.93, stale 0.85); absent
+   * entries (and the absent map) stay neutral.
+   */
+  readonly trendByDoc?: ReadonlyMap<number, string>;
 }
+
+/** Freshness-trend multipliers on the relevance portion. */
+const TREND_MULTIPLIERS: ReadonlyMap<string, number> = new Map([
+  ["strengthening", 1.05],
+  ["weakening", 0.93],
+  ["stale", 0.85],
+]);
 
 export interface RankerOptions {
   readonly keywordWeight: number;
@@ -140,6 +172,10 @@ function buildReasons(parts: {
   recency: number;
   tierMul: number;
   entityBoost?: number;
+  activationBoost?: number;
+  coAccessBoost?: number;
+  trend?: string;
+  trendMul?: number;
   sessionFocus?: number;
   rrf?: number;
 }): ReadonlyArray<string> {
@@ -149,6 +185,15 @@ function buildReasons(parts: {
   if (parts.rrf && parts.rrf > 0) reasons.push(`rrf: ${fmt(parts.rrf)}`);
   if (parts.entityBoost && parts.entityBoost > 0) {
     reasons.push(`entity_match: ${fmt(parts.entityBoost)}`);
+  }
+  if (parts.activationBoost && parts.activationBoost > 0) {
+    reasons.push(`activation: ${fmt(parts.activationBoost)}`);
+  }
+  if (parts.coAccessBoost && parts.coAccessBoost > 0) {
+    reasons.push(`co_access: ${fmt(parts.coAccessBoost)}`);
+  }
+  if (parts.trend !== undefined && parts.trendMul !== undefined && parts.trendMul !== 1) {
+    reasons.push(`freshness_trend: ${parts.trend} x${fmt(parts.trendMul)}`);
   }
   if (parts.linkBoost > 0) reasons.push(`link_boost: ${fmt(parts.linkBoost)}`);
   if (parts.recency > 0) reasons.push(`recency: ${fmt(parts.recency)}`);
@@ -293,13 +338,45 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // `supporting` → 1.0 keeps untagged vaults bit-identical.
     const tier = inputs.tierByDoc?.get(c.documentId) ?? PAGE_TIER_DEFAULT;
     const tierMul = tierWeight(tier);
+    // Freshness-trend multiplier (t_ee09a6ce): like tier, it scales the
+    // relevance portion only. Unstamped documents (and unknown labels)
+    // stay at the neutral 1.0.
+    const trend = inputs.trendByDoc?.get(c.documentId);
+    const trendMul = trend !== undefined ? (TREND_MULTIPLIERS.get(trend) ?? 1) : 1;
     // Entity boost: capped contribution from shared query entities.
     // Per-match 0.02, capped at 0.04 so it only re-ranks an already
     // relevant set - never enough to float an irrelevant chunk.
     const entityMatches = inputs.entityMatchByChunk?.get(c.chunkId) ?? 0;
     const entityBoost = Math.min(0.04, entityMatches * 0.02 * entMul);
+    // Activation boost (Time-Aware Recall & Activation Suite): the
+    // effective (type-decayed) activation scales into a capped 0.04
+    // contribution - a re-ranker for habitually-recalled memories,
+    // never enough to float an irrelevant chunk.
+    const activation = clamp01(inputs.activationByChunk?.get(c.chunkId) ?? 0);
+    const activationBoost = Math.min(0.04, activation * 0.04);
+    // Co-access companion boost (t_c5ef25a3): per habitual companion
+    // that is ALSO in the candidate pool, 0.005 per recorded pair
+    // count, capped at 0.03 - surfaces the rest of a recurring working
+    // set without floating unrelated documents.
+    let coAccessRaw = 0;
+    const companions = inputs.coAccessByChunk?.get(c.chunkId);
+    if (companions !== undefined) {
+      for (const [docId, count] of companions) {
+        if (docId === c.documentId) continue;
+        if (candidateDocIds.has(docId)) coAccessRaw += count * 0.005;
+      }
+    }
+    const coAccessBoost = Math.min(0.03, coAccessRaw);
     const sessionFocus = scoreSessionFocusTarget(hyd, opts.sessionFocus, nowMs);
-    const score = clamp01(weighted * tierMul + linkBoost + recency + entityBoost + sessionFocus);
+    const score = clamp01(
+      weighted * tierMul * trendMul +
+        linkBoost +
+        recency +
+        entityBoost +
+        activationBoost +
+        coAccessBoost +
+        sessionFocus,
+    );
 
     ranked.push(
       Object.freeze({
@@ -323,6 +400,9 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           recency,
           tierMul,
           entityBoost,
+          activationBoost,
+          coAccessBoost,
+          ...(trend !== undefined ? { trend, trendMul } : {}),
           sessionFocus,
           rrf: rrfByChunk !== null ? rrf : 0,
         }),

@@ -65,6 +65,10 @@ export function makeConfig(opts: {
   relationPolarityEnabled?: boolean;
   /** Learned recall weights from feedback; defaults to false (opt-in). */
   learnedWeightsEnabled?: boolean;
+  /** Access-reinforced activation; defaults to true (neutral without events). */
+  activationEnabled?: boolean;
+  /** Two-pass broadened retry in evidence-pack mode; defaults to true. */
+  twoPassEnabled?: boolean;
   /** Rank-fusion mode; defaults to "linear". */
   fusionMode?: "linear" | "rrf";
   /** RRF damping constant; defaults to 60. */
@@ -116,6 +120,8 @@ export function makeConfig(opts: {
       cacheTtlSeconds: 300,
       relationPolarityEnabled: opts.relationPolarityEnabled ?? true,
       learnedWeightsEnabled: opts.learnedWeightsEnabled ?? false,
+      activationEnabled: opts.activationEnabled ?? true,
+      twoPassEnabled: opts.twoPassEnabled ?? true,
     }),
   });
 }

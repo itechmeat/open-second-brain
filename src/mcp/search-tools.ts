@@ -70,6 +70,11 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
+    record_access: {
+      type: "boolean",
+      description:
+        "Record the surfaced paths as one activation access event (feeds the usage-aware ranking layer). Default true; never recorded for global searches.",
+    },
     global: {
       type: "boolean",
       description:
@@ -288,6 +293,7 @@ async function toolBrainSearch(
   const includeSuperseded = coerceBoolOptional(args, "include_superseded") ?? false;
   const since = coerceStringOptional(args, "since", 64);
   const until = coerceStringOptional(args, "until", 64);
+  const recordAccess = coerceBoolOptional(args, "record_access") ?? true;
   const telemetry = coerceBoolOptional(args, "telemetry") ?? false;
   const telemetryHost = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
   const telemetrySessionId = coerceStringOptional(args, "session_id", 512);
@@ -332,6 +338,10 @@ async function toolBrainSearch(
     ...(includeSuperseded ? { includeSuperseded: true } : {}),
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
+    // Access recording (Time-Aware Recall & Activation Suite): the MCP
+    // surface opts in by default; record_access=false suppresses it,
+    // and cross-vault union never records (results span foreign vaults).
+    ...(recordAccess && !globalSearch ? { recordAccess: true } : {}),
   };
   try {
     // Cross-vault union (t_72a22658): explicit per-call opt-in.

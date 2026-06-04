@@ -128,6 +128,14 @@ export interface WritePreferenceInput {
   readonly tier?: PageTier;
   readonly pinned?: boolean;
   /**
+   * Directional freshness trend (Time-Aware Recall & Activation Suite,
+   * t_ee09a6ce). Stamped by the dream refresh pass from the evidence
+   * time distribution; emitted only when supplied so legacy fixtures
+   * stay byte-identical. Recall reads it as a bounded ranking
+   * multiplier; absent means neutral.
+   */
+  readonly freshness_trend?: string;
+  /**
    * Brain Integrity Suite (v0.12.0). Optional monotonic write counter
    * persisted as `_revision`. `writePreferenceTxn` auto-stamps the
    * next value when callers omit. Direct `writePreference` callers
@@ -411,6 +419,9 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   // callers stay byte-identical.
   if (input.valid_from?.trim()) metadata["valid_from"] = input.valid_from.trim();
   if (input.valid_until?.trim()) metadata["valid_until"] = input.valid_until.trim();
+  // Freshness trend (t_ee09a6ce): stamped by the dream refresh pass;
+  // emitted only when supplied so legacy callers stay byte-identical.
+  if (input.freshness_trend?.trim()) metadata["freshness_trend"] = input.freshness_trend.trim();
   return metadata;
 }
 
@@ -621,6 +632,9 @@ export function parsePreference(
       : {}),
     ...(optionalScalarString(meta, "scope") !== undefined
       ? { scope: optionalScalarString(meta, "scope") }
+      : {}),
+    ...(optionalScalarString(meta, "freshness_trend") !== undefined
+      ? { freshness_trend: optionalScalarString(meta, "freshness_trend") }
       : {}),
     ...(optionalScalarString(meta, "supersedes") !== undefined
       ? { supersedes: optionalScalarString(meta, "supersedes") }

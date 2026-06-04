@@ -9,6 +9,7 @@ entrypoint re-export, and the identity-reminder template source of truth.
 
 import importlib.util
 import sys
+import types
 import unittest
 from pathlib import Path
 
@@ -93,55 +94,27 @@ class RegisterTests(unittest.TestCase):
         self.assertEqual(registered[0].name, PLUGIN_NAME)
 
 
-class SelfBootstrapTests(unittest.TestCase):
-    """Locks the root entrypoint's single self-bootstrap load path.
+class HermesLoaderContractTests(unittest.TestCase):
+    """Locks the entrypoint against the updated Hermes loader contract.
 
-    The root ``__init__.py`` loads ``plugins/hermes`` by file path under a
-    private package name with ``submodule_search_locations`` so the
-    implementation's own relative imports resolve against it. This is the
-    plugin's one intentional, host-agnostic load path -- it does not depend on
-    the host runtime registering a parent namespace package for the plugin.
-    These tests pin that behaviour.
+    Since hermes-agent PR #37366 the external memory-provider loader
+    registers the synthetic ``_hermes_user_memory`` parent namespace in
+    ``sys.modules`` before executing a user-installed plugin, so the
+    entrypoint uses ordinary relative imports (no file-path self-bootstrap).
+    This test mimics that exact loader sequence - parent shell registered,
+    plugin executed under the synthetic dotted name - and asserts the
+    entrypoint yields a working provider and ``register`` through the
+    ``plugins/`` namespace intermediate directory.
     """
 
-    def test_filepath_load_of_impl_yields_provider(self):
-        impl_dir = ROOT / "plugins" / "hermes"
-        spec = importlib.util.spec_from_file_location(
-            "_osb_hermes_impl_test",
-            impl_dir / "__init__.py",
-            submodule_search_locations=[str(impl_dir)],
-        )
-        self.assertIsNotNone(spec)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        try:
-            spec.loader.exec_module(module)
-            provider = module.OpenSecondBrainMemoryProvider()
-            self.assertEqual(provider.name, PLUGIN_NAME)
-            self.assertTrue(callable(module.register))
-        finally:
-            for name in list(sys.modules):
-                if name == spec.name or name.startswith(spec.name + "."):
-                    sys.modules.pop(name, None)
+    SYNTHETIC_PARENT = "_hermes_user_memory"
 
-    def test_entrypoint_loads_without_parent_namespace_registered(self):
-        """Regression for the stock-Hermes load path.
-
-        Hermes' external memory-provider loader imports a user-installed plugin
-        as ``_hermes_user_memory.<name>`` but does NOT register the
-        ``_hermes_user_memory`` parent in ``sys.modules``. A provider written
-        with ordinary relative/absolute imports fails there with
-        ``ModuleNotFoundError: No module named '_hermes_user_memory'``. The
-        self-bootstrap must load regardless, so this mimics that exact loader
-        condition (synthetic child name, parent intentionally absent) and
-        asserts the entrypoint still yields a working provider and ``register``.
-        """
-        synthetic = "_hermes_user_memory.open-second-brain"
-        self.assertNotIn(
-            "_hermes_user_memory",
-            sys.modules,
-            "parent namespace must be absent to reproduce the stock loader",
-        )
+    def test_entrypoint_loads_under_synthetic_name_with_parent_registered(self):
+        synthetic = f"{self.SYNTHETIC_PARENT}.{PLUGIN_NAME}"
+        # Mirror the loader: an empty namespace shell for the parent.
+        parent = types.ModuleType(self.SYNTHETIC_PARENT)
+        parent.__path__ = []  # mark it a package so child imports resolve
+        sys.modules[self.SYNTHETIC_PARENT] = parent
         spec = importlib.util.spec_from_file_location(
             synthetic,
             ROOT / "__init__.py",
@@ -150,12 +123,22 @@ class SelfBootstrapTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         sys.modules[synthetic] = module
         try:
-            spec.loader.exec_module(module)  # must not raise ModuleNotFoundError
+            spec.loader.exec_module(module)
             provider = module.OpenSecondBrainMemoryProvider()
             self.assertEqual(provider.name, PLUGIN_NAME)
             self.assertTrue(callable(module.register))
+            self.assertTrue(callable(module.register_cli))
         finally:
-            sys.modules.pop(synthetic, None)
+            for name in list(sys.modules):
+                if name == self.SYNTHETIC_PARENT or name.startswith(self.SYNTHETIC_PARENT + "."):
+                    sys.modules.pop(name, None)
+
+    def test_entrypoint_has_no_selfbootstrap_machinery(self):
+        """The crutch is gone: no private package name, no file-path import."""
+        source = (ROOT / "__init__.py").read_text(encoding="utf-8")
+        self.assertNotIn("_osb_hermes_impl", source)
+        self.assertNotIn("spec_from_file_location", source)
+        self.assertIn("from .plugins.hermes import", source)
 
     def test_register_does_not_raise_on_minimal_context(self):
         class Context:

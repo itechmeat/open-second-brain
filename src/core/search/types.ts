@@ -233,6 +233,15 @@ export interface SearchOptions {
   /** Opt-in verified evidence pack diagnostics. Omitted preserves the legacy search outcome shape. */
   readonly evidencePack?: boolean;
   /**
+   * Access recording (Time-Aware Recall & Activation Suite). When true,
+   * the surfaced result paths are recorded as one activation access
+   * event AFTER ranking completes - the current query's own ranking is
+   * never affected by its own recording, and cache hits never record.
+   * Default false: the pure core stays read-only; CLI/MCP surfaces opt
+   * in explicitly.
+   */
+  readonly recordAccess?: boolean;
+  /**
    * History mode for relation polarity (recall-trust-suite). When true a
    * matched predecessor (`superseded_by` declarer) keeps its rank and no
    * successor is pulled in; informational reasons still land. Default
@@ -264,6 +273,17 @@ export interface SearchOutcome {
   readonly warnings: ReadonlyArray<string>;
   readonly total: number;
   readonly evidencePack?: EvidencePack;
+  /**
+   * Self-correcting two-pass recall (Time-Aware Recall & Activation
+   * Suite, t_ef92dfdc). Present only when a zero-candidate first pass
+   * in evidence-pack mode triggered the single broadened OR retry.
+   */
+  readonly secondPass?: {
+    readonly triggered: true;
+    readonly reason: string;
+    /** Candidate hits the broadened pass contributed. */
+    readonly added: number;
+  };
 }
 
 export interface ResolvedEmbeddingConfig {
@@ -351,6 +371,22 @@ export interface ResolvedRecallConfig {
    * resettable — see `feedback.ts`.
    */
   readonly learnedWeightsEnabled: boolean;
+  /**
+   * Access-reinforced activation (Time-Aware Recall & Activation
+   * Suite). On by default: recorded access events under
+   * `Brain/search/activation/` feed a bounded, type-decayed activation
+   * boost and co-access companion boost. A vault without recorded
+   * events ranks bit-identically either way; this switch exists as the
+   * explicit kill switch.
+   */
+  readonly activationEnabled: boolean;
+  /**
+   * Self-correcting two-pass recall (t_ef92dfdc). On by default: a
+   * zero-candidate first pass in evidence-pack mode runs exactly one
+   * broadened OR retry instead of dead-ending in an abstention.
+   * Plain (non-evidence-pack) searches never broaden either way.
+   */
+  readonly twoPassEnabled: boolean;
 }
 
 export interface ResolvedSearchConfig {

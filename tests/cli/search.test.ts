@@ -253,8 +253,11 @@ test("search --evidence-pack --json exposes verification fields (union, complete
   writeVaultFile("zephyr-note.md", "# Zephyr\n\nthe zephyr daemon owns the import pipeline");
   await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
 
+  // Two-pass recall would now recover results for this AND dead end;
+  // disable it - this test exercises the zero-result union/completeness
+  // verification fields themselves.
   const out = await runCli(["search", "alpha zephyr", "--evidence-pack", "--json"], {
-    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    env: { OPEN_SECOND_BRAIN_CONFIG: config, OPEN_SECOND_BRAIN_SEARCH_TWO_PASS: "false" },
   });
   expect(out.returncode).toBe(0);
   const json = JSON.parse(out.stdout) as {
