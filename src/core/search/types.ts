@@ -273,6 +273,17 @@ export interface SearchOutcome {
   readonly warnings: ReadonlyArray<string>;
   readonly total: number;
   readonly evidencePack?: EvidencePack;
+  /**
+   * Self-correcting two-pass recall (Time-Aware Recall & Activation
+   * Suite, t_ef92dfdc). Present only when a zero-candidate first pass
+   * in evidence-pack mode triggered the single broadened OR retry.
+   */
+  readonly secondPass?: {
+    readonly triggered: true;
+    readonly reason: string;
+    /** Candidate hits the broadened pass contributed. */
+    readonly added: number;
+  };
 }
 
 export interface ResolvedEmbeddingConfig {
@@ -369,6 +380,13 @@ export interface ResolvedRecallConfig {
    * explicit kill switch.
    */
   readonly activationEnabled: boolean;
+  /**
+   * Self-correcting two-pass recall (t_ef92dfdc). On by default: a
+   * zero-candidate first pass in evidence-pack mode runs exactly one
+   * broadened OR retry instead of dead-ending in an abstention.
+   * Plain (non-evidence-pack) searches never broaden either way.
+   */
+  readonly twoPassEnabled: boolean;
 }
 
 export interface ResolvedSearchConfig {

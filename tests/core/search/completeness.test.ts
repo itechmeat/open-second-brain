@@ -82,7 +82,9 @@ test("a fully covered query yields a complete verdict in the pack", async () => 
 test("zero results over terms the corpus contains trips the false-absence guard", async () => {
   writeMd(vault, "alpha-note.md", "# Alpha\n\nthe alpha subsystem owns the export pipeline");
   writeMd(vault, "zephyr-note.md", "# Zephyr\n\nthe zephyr daemon owns the import pipeline");
-  const cfg = makeConfig({ vault, dbPath });
+  // Two-pass recall would now recover results for this AND dead end;
+  // disable it - this test exercises the false-absence guard itself.
+  const cfg = makeConfig({ vault, dbPath, twoPassEnabled: false });
   await indexVault(cfg);
 
   // AND semantics: no document holds both terms → zero results, but

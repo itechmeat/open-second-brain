@@ -360,7 +360,38 @@ export async function search(
     const allChunkIds = new Set<number>();
     for (const h of kwHits) allChunkIds.add(h.chunkId);
     for (const h of semHits) allChunkIds.add(h.chunkId);
-    const idsList = Array.from(allChunkIds);
+    let idsList = Array.from(allChunkIds);
+
+    // Self-correcting two-pass recall (t_ef92dfdc): a zero-candidate
+    // first pass in evidence-pack mode means the implicit-AND keyword
+    // match was too strict - the classic abstention dead end. Instead
+    // of returning empty, run EXACTLY ONE broadened retry that keeps
+    // the first significant term as the base group and ORs the rest in
+    // as alternatives, then let the merged pool flow through the normal
+    // ranking, filters, and a recomputed evidence pack.
+    let secondPass: SearchOutcome["secondPass"];
+    if (idsList.length === 0 && opts.evidencePack === true && config.recall.twoPassEnabled) {
+      const terms = significantTerms(query);
+      if (terms.length >= 2) {
+        const broadened = runFtsQueryDetailed(store, terms[0]!, {
+          expandedTerms: terms.slice(1),
+          limit: Math.max(limit * 5, 50),
+          pathPrefix: pathPrefix ?? null,
+        });
+        for (const w of broadened.warnings) warnings.push(w);
+        if (broadened.hits.length > 0) {
+          kwHits = broadened.hits;
+          for (const h of kwHits) allChunkIds.add(h.chunkId);
+          idsList = Array.from(allChunkIds);
+          secondPass = Object.freeze({
+            triggered: true,
+            reason: "zero-candidate first pass; broadened OR retry",
+            added: kwHits.length,
+          });
+        }
+      }
+    }
+
     if (idsList.length === 0) {
       const evidencePack =
         opts.evidencePack === true
@@ -725,10 +756,22 @@ export async function search(
               : r,
           )
         : withStructuredReasons;
+    // Two-pass attribution (t_ef92dfdc): every surfaced result of a
+    // broadened retry says so - the operator can tell recovered
+    // evidence from a first-pass hit.
+    const withSecondPassReasons =
+      secondPass !== undefined
+        ? withCanonicalReasons.map((r) =>
+            Object.freeze({
+              ...r,
+              reasons: Object.freeze([...r.reasons, "second_pass: or-broadened retry"]),
+            }),
+          )
+        : withCanonicalReasons;
     const finalResults =
       opts.evidencePack === true
-        ? downrankTerminalEvidenceResults(withCanonicalReasons)
-        : withCanonicalReasons;
+        ? downrankTerminalEvidenceResults(withSecondPassReasons)
+        : withSecondPassReasons;
     const evidencePack =
       opts.evidencePack === true
         ? buildEvidencePack(
@@ -766,6 +809,7 @@ export async function search(
         warnings: Object.freeze(warnings),
         total: finalResults.length,
         ...(evidencePack !== undefined ? { evidencePack } : {}),
+        ...(secondPass !== undefined ? { secondPass } : {}),
       }),
     );
   } finally {

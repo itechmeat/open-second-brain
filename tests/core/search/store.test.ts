@@ -54,6 +54,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
       relationPolarityEnabled: true,
       learnedWeightsEnabled: false,
       activationEnabled: true,
+      twoPassEnabled: true,
     }),
     ...overrides,
   });

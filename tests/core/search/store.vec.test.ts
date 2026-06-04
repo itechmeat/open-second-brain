@@ -57,6 +57,7 @@ function semanticConfig(
       relationPolarityEnabled: true,
       learnedWeightsEnabled: false,
       activationEnabled: true,
+      twoPassEnabled: true,
     }),
     ...overrides,
   });

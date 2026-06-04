@@ -492,6 +492,11 @@ export function resolveSearchConfig(opts: {
     true,
     "search_activation_enabled",
   );
+  const twoPassEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_TWO_PASS", "search_two_pass_enabled"),
+    true,
+    "search_two_pass_enabled",
+  );
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
@@ -508,6 +513,7 @@ export function resolveSearchConfig(opts: {
     relationPolarityEnabled,
     learnedWeightsEnabled,
     activationEnabled,
+    twoPassEnabled,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({
