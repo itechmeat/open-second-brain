@@ -217,6 +217,15 @@ export const BRAIN_LOG_EVENT_KIND = {
    * Emitted only on a changed run, so a no-op stays byte-identical.
    */
   reconcile: "reconcile",
+  /**
+   * `write-session` (Agent Write Contract Suite, t_bc36a8a2) - one
+   * audit row per TERMINAL write-session transition (done, failed,
+   * abandoned, approved commit). Payload carries `session_id`, `kind`,
+   * `status`, `target`, `attempts`, and whether operator review was
+   * required. Non-terminal correction loops stay inside the session
+   * file - the log records outcomes, not chatter.
+   */
+  writeSession: "write-session",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
