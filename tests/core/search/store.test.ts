@@ -55,6 +55,8 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
       learnedWeightsEnabled: false,
       activationEnabled: true,
       twoPassEnabled: true,
+      poolMultiplier: 3,
+      selfTuningEnabled: false,
     }),
     ...overrides,
   });

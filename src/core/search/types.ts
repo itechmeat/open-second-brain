@@ -149,6 +149,12 @@ export interface IndexStats {
     readonly expected: unknown;
     readonly actual: unknown;
   }>;
+  /**
+   * Links whose `target_document_id` the alias post-pass materialized
+   * through a frontmatter `aliases:` declaration this run
+   * (link-recall-intelligence, v7).
+   */
+  readonly aliasResolved: number;
   readonly durationMs: number;
 }
 
@@ -247,6 +253,13 @@ export interface SearchOptions {
   readonly visibility?: ReadonlyArray<string>;
   /** Optional parsed structured recall query document. Plain-string search ignores this. */
   readonly structuredQuery?: StructuredRecallQueryDocument;
+  /**
+   * Opt-in deterministic query expansion (link-recall-intelligence,
+   * t_2fa95db1): when true and no `structuredQuery` was supplied, the
+   * bare query is expanded into lex/vec/hyde lanes locally before
+   * retrieval. Never silently active.
+   */
+  readonly expand?: boolean;
   /** Optional per-query or persisted session focus steering. Undefined means load persisted focus. */
   readonly sessionFocus?: SearchSessionFocus | null;
   /**
@@ -413,6 +426,21 @@ export interface ResolvedRecallConfig {
    * Plain (non-evidence-pack) searches never broaden either way.
    */
   readonly twoPassEnabled: boolean;
+  /**
+   * Keyword candidate-pool width as a multiple of the requested limit
+   * (link-recall-intelligence, t_ae973491). Default 3 preserves the
+   * historical `limit * 3` FTS pools; the self-tuner may select 4 or
+   * 5. The semantic pool keeps its own `max(limit * 5, 50)` floor.
+   */
+  readonly poolMultiplier: number;
+  /**
+   * Opt-in self-tuning recall (t_ae973491). When true, `search()`
+   * applies the bounded parameters persisted in
+   * `Brain/search/tuning.json` (validated on read, fail-soft to the
+   * configured defaults). Off by default - tuning never activates
+   * silently.
+   */
+  readonly selfTuningEnabled: boolean;
 }
 
 export interface ResolvedSearchConfig {

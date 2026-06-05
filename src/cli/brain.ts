@@ -38,6 +38,10 @@ import {
   cmdBrainDeadEnd,
   cmdBrainForesight,
   cmdBrainLabel,
+  cmdBrainBridges,
+  cmdBrainClusters,
+  cmdBrainBenchmark,
+  cmdBrainTune,
   cmdBrainAttr,
   cmdBrainTiers,
   cmdBrainSecret,
@@ -186,6 +190,14 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainForesight(rest);
       case "label":
         return await cmdBrainLabel(rest);
+      case "bridges":
+        return await cmdBrainBridges(rest);
+      case "clusters":
+        return await cmdBrainClusters(rest);
+      case "benchmark":
+        return await cmdBrainBenchmark(rest);
+      case "tune":
+        return await cmdBrainTune(rest);
       case "attr":
         return await cmdBrainAttr(rest);
       case "tiers":

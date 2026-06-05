@@ -1,0 +1,24 @@
+{
+  "queries": [
+    { "id": "canary", "query": "canary rollout", "expected": ["deploy-canary.md"] },
+    {
+      "id": "bluegreen",
+      "query": "blue green deployment swap",
+      "expected": ["deploy-bluegreen.md"]
+    },
+    { "id": "oauth", "query": "oauth token refresh", "expected": ["auth-oauth.md"] },
+    { "id": "passwords", "query": "password hashing salts", "expected": ["auth-passwords.md"] },
+    { "id": "backups", "query": "nightly backup strategy", "expected": ["db-backups.md"] },
+    { "id": "indexing", "query": "slow queries missing index", "expected": ["db-indexing.md"] },
+    { "id": "incident", "query": "outage root cause timeout", "expected": ["incident-2026-05.md"] },
+    { "id": "alias-hop", "query": "PA importer progress", "expected": ["project-alpha.md"] },
+    {
+      "id": "embeddings",
+      "query": "embedding provider configuration",
+      "expected": ["embeddings-pipeline.md"]
+    },
+    { "id": "tuning", "query": "tune recall top-k parameters", "expected": ["search-tuning.md"] },
+    { "id": "standup", "query": "standup blockers staging", "expected": ["notes-standup.md"] },
+    { "id": "style", "query": "writing conventions active voice", "expected": ["style-guide.md"] }
+  ]
+}

@@ -16,7 +16,7 @@ import { SearchError } from "./types.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 6;
+export const LATEST_SCHEMA_VERSION = 7;
 
 const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS documents (
@@ -301,6 +301,27 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
           UNIQUE(document_id, field)
         );
         CREATE INDEX IF NOT EXISTS idx_tier_drift_document ON tier_drift(document_id);
+      `);
+    },
+  },
+  {
+    // v7 (link-recall-intelligence) - vault-wide frontmatter alias
+    // resolution at materialization time. The indexer extracts a
+    // note's `aliases:` array (NFC-normalised, lower-cased) into
+    // `doc_aliases`; `resolveAliasTargets` then materializes
+    // `target_document_id` for unresolved slash-free wikilink
+    // targets that match an alias. Additive and reindex-safe:
+    // existing rows simply have no aliases until a reindex
+    // repopulates them.
+    version: 7,
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS doc_aliases (
+          document_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          alias        TEXT NOT NULL,
+          UNIQUE(document_id, alias)
+        );
+        CREATE INDEX IF NOT EXISTS idx_doc_aliases_alias ON doc_aliases(alias);
       `);
     },
   },

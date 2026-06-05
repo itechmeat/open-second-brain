@@ -979,6 +979,22 @@ Until now almost nothing about a write into the Brain was declared: any frontmat
 
 **Heavy work waits its turn.** The maintenance lane runs dream and reindex behind three gates: a tz-aware local-time window, a busy gate over recent recall telemetry, and an expiring SQLite lease in its own database so holding it never contends with the search index writer lock. Force bypasses the soft gates but never the lease, tasks run stale-first, and every attempt - including each gate refusal - lands in a bounded journal, because a lane you cannot audit is a lane you cannot trust.
 
+## Link and recall intelligence (since v0.45.0)
+
+A second brain's value compounds through connections, but until now the graph only knew edges someone wrote by hand, and recall quality was an unmeasured feeling. The Link & Recall Intelligence Suite makes the graph self-organizing and the recall measurable - deterministically, with every output reviewable before it touches a note.
+
+**Aliases resolve where edges materialize.** Obsidian vaults lean on frontmatter `aliases:` for shorthand, but the search index resolved wikilink targets by exact path only - `[[PA]]` to a note titled "Project Alpha" stayed an unresolved string. The indexer now extracts every note's aliases into the index (schema v7) and a shadowing-safe post-pass materializes the target id: exact paths always win, a real document basename is never shadowed by someone else's alias, and collisions resolve deterministically. Traversal, backlinks, and link constraints all see the edge from then on.
+
+**Bridges surface the connections nobody wrote.** Traversal follows existing edges; unlinked-mentions catches textual name-drops. The third kind of latent structure - two notes that are embedding-near but never name each other - is found by an orphan-first pass over the vec index: weakly connected notes get scanned before well-wired hubs, chunk KNN similarity aggregates to document level, and pairs that already share an edge stay out. The output is a PROPOSAL artifact (`Brain/proposals/bridges.md`), regenerated per run; nothing touches a user note until someone runs `accept`, which writes exactly one `related:` wikilink, idempotently, under the schema pack's link constraints. Dismissals persist so re-runs stay quiet.
+
+**Communities become visible structure.** Deterministic label propagation (sorted sweeps, lowest-label tie-break, a hard iteration cap so bipartite stars cannot oscillate forever) discovers graph-wide communities; each one of four or more notes materializes a derived digest under `Brain/clusters/` - members by internal degree, shared entities, link density. No LLM prose: synthesis belongs to the reading agent, the digest is a projection. Stale generated notes are removed on the next run; a hand-written file in the same directory is never touched.
+
+**Recall quality gets a number.** A fixed query/expected-result dataset scores the live hybrid pipeline - hit@k and MRR per query and aggregate. The repository pins thresholds over a committed fixture vault with the deterministic local embedding provider, so a ranking regression fails CI instead of shipping silently; the same runner scores any operator vault on demand. And that number becomes an objective function: the self-tuner grid-evaluates a BOUNDED parameter space (keyword pool multiplier, traversal depth, learned weights, expansion) against it and persists the winner with every evaluated score and the dataset hash. Search applies the tuned point only under an explicit opt-in flag, re-validates it against the grid bounds on every read, and deleting the file restores defaults - the same replayable-fold philosophy as learned weights.
+
+**Expansion without a model.** A bare query can become a structured lex/vec/hyde document locally: stopword-stripped lex terms (the FTS lane is implicit AND, so one stopword absent from the target note kills the match), an entity-context line anchored to the vault's own registry, one template hyde passage for embedding retrieval. Opt-in per call, never silently active, so cached queries and benchmark runs stay comparable.
+
+**Every pass reports to one place.** Each feature appends one run-level record to `Brain/metrics/<surface>.jsonl` (`o2b.metrics.v1` envelope) - the stable contract a dashboard reads without importing internals, documented in `docs/metrics.md`.
+
 ## Safety properties
 
 These are invariants of the system, not configuration to enable.

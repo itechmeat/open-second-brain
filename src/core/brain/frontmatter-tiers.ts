@@ -89,6 +89,17 @@ export const DEFAULT_TIER_MAP: Readonly<Record<string, Readonly<Record<string, F
       created_at: "system",
       retired_at: "system",
     }),
+    // Derived cluster notes (link-recall-intelligence, t_4ba927ec):
+    // fully framework-owned and regenerated every run, so every field
+    // is system except the identity pair.
+    "brain-cluster": Object.freeze<Record<string, FrontmatterTier>>({
+      kind: "identity",
+      cluster: "identity",
+      generated_at: "system",
+      size: "system",
+      density: "system",
+      members: "system",
+    }),
     "brain-signal": Object.freeze<Record<string, FrontmatterTier>>({
       kind: "identity",
       id: "identity",

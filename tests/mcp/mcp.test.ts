@@ -266,6 +266,11 @@ describe("tool listing", () => {
         "brain_tiers",
         "brain_secrets",
         "brain_maintenance",
+        // Link & Recall Intelligence Suite (v0.45.0).
+        "brain_bridges",
+        "brain_clusters",
+        "brain_benchmark",
+        "brain_tune",
         // Agent Write Contract Suite: provider-agnostic write sessions.
         "brain_write_session",
       ].toSorted(),
@@ -524,7 +529,7 @@ describe("stdio loop", () => {
     //   (Entity Truth & Self-Improving Dream Suite) = 69.
     // + brain_labels / brain_tiers / brain_secrets / brain_maintenance
     //   (Write-Time Integrity & Governance Suite) = 73.
-    expect(list.result.tools.length).toBe(73);
+    expect(list.result.tools.length).toBe(77);
   });
 
   test("returns parse error for invalid JSON", async () => {

@@ -42,6 +42,7 @@ import { loadSchemaPack, type SchemaPack } from "../brain/schema-pack.ts";
 import { tieredFieldsForKind } from "../brain/frontmatter-tiers.ts";
 import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
 import { parseFrontmatterText } from "../vault.ts";
+import { appendMetric } from "../brain/metrics.ts";
 import { extractEntities } from "./entities.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -83,6 +84,7 @@ interface MutableStats {
   errors: Array<{ readonly path: string; readonly message: string }>;
   relationViolations: IndexStats["relationViolations"];
   tierDrift: IndexStats["tierDrift"];
+  aliasResolved: number;
 }
 
 function newStats(): MutableStats {
@@ -97,6 +99,7 @@ function newStats(): MutableStats {
     errors: [],
     relationViolations: [],
     tierDrift: [],
+    aliasResolved: 0,
   };
 }
 
@@ -112,6 +115,7 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     errors: Object.freeze([...s.errors]),
     relationViolations: Object.freeze([...s.relationViolations]),
     tierDrift: Object.freeze([...s.tierDrift]),
+    aliasResolved: s.aliasResolved,
     durationMs,
   });
 }
@@ -139,6 +143,17 @@ function pageTypeFromFrontmatter(frontmatter: Record<string, unknown>): string |
   if (typeof raw !== "string") return null;
   const normalized = normalizeSchemaToken(raw);
   return normalized.length > 0 ? normalized : null;
+}
+
+/**
+ * The page's declared frontmatter `aliases` as raw strings (the store
+ * normalises). Tolerant by design: a non-array value or non-string
+ * entries never fail indexing, they are simply skipped.
+ */
+function aliasesFromFrontmatter(frontmatter: Record<string, unknown>): string[] {
+  const raw = frontmatter["aliases"];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((v): v is string => typeof v === "string");
 }
 
 const UTF8_FATAL = new TextDecoder("utf-8", { fatal: true });
@@ -249,6 +264,10 @@ async function indexInto(
         if (typeof frontmatter["kind"] === "string" && frontmatter["kind"].length > 0) {
           tieredDocs.push({ docId, relPath: file.relPath, frontmatter });
         }
+        // Vault-wide alias resolution (v7): replace this document's
+        // declared aliases so the post-pass can materialize alias
+        // wikilink targets.
+        store.replaceDocAliases(docId, aliasesFromFrontmatter(frontmatter));
 
         const chunkInputs: ChunkInput[] = chunkResult.chunks.map((c) => ({
           chunkIndex: c.chunkIndex,
@@ -319,6 +338,9 @@ async function indexInto(
     }
 
     store.resolveLinkTargets();
+    // Alias post-pass (v7): exact path matches above always win; this
+    // only fills still-unresolved slash-free targets from doc_aliases.
+    stats.aliasResolved = store.resolveAliasTargets();
 
     // Link-constraint materialization post-pass
     // (write-time-integrity-governance): recompute every typed edge's
@@ -397,6 +419,25 @@ async function indexInto(
     // and schema are unchanged.
     if (stats.added + stats.updated + stats.deleted > 0) {
       store.bumpIndexRevision();
+      // Dashboard contract (link-recall-intelligence): one run-level
+      // record per non-empty index run. Fail-soft - a metrics-layer
+      // problem never fails the index.
+      try {
+        appendMetric(config.vault, {
+          surface: "index",
+          runAt: now,
+          payload: {
+            added: stats.added,
+            updated: stats.updated,
+            deleted: stats.deleted,
+            alias_resolved: stats.aliasResolved,
+            relation_violations: stats.relationViolations.length,
+            tier_drift: stats.tierDrift.length,
+          },
+        });
+      } catch {
+        // Metrics are observability, not correctness.
+      }
     }
 
     return freezeStats(stats, Date.now() - t0);

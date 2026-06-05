@@ -497,6 +497,17 @@ export function resolveSearchConfig(opts: {
     true,
     "search_two_pass_enabled",
   );
+  const poolMultiplier = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_POOL_MULTIPLIER", "search_pool_multiplier"),
+    3,
+    "search_pool_multiplier",
+    { min: 1, max: 10 },
+  );
+  const selfTuningEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_SELF_TUNING", "search_self_tuning_enabled"),
+    false,
+    "search_self_tuning_enabled",
+  );
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
@@ -514,6 +525,8 @@ export function resolveSearchConfig(opts: {
     learnedWeightsEnabled,
     activationEnabled,
     twoPassEnabled,
+    poolMultiplier,
+    selfTuningEnabled,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({

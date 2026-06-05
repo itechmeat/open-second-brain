@@ -42,7 +42,12 @@ test("run executes dream and reindex; status shows the journal", async () => {
     tasks: Array<{ name: string; ok: boolean }>;
   };
   expect(ran.verdict).toBe("run");
-  expect(ran.tasks.map((t) => t.name).toSorted()).toEqual(["dream", "reindex"]);
+  expect(ran.tasks.map((t) => t.name).toSorted()).toEqual([
+    "bridges",
+    "clusters",
+    "dream",
+    "reindex",
+  ]);
   expect(ran.tasks.every((t) => t.ok)).toBe(true);
   expect(existsSync(join(vault, ".open-second-brain", "maintenance-runs.jsonl"))).toBe(true);
 

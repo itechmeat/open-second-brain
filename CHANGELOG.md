@@ -5,6 +5,102 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.45.0] - 2026-06-05
+
+Link & Recall Intelligence Suite: the graph self-organizes and recall
+quality becomes measurable. Wikilinks to frontmatter aliases resolve
+at index materialization; an orphan-first bridge pass over the vec
+index proposes links between embedding-near notes that never name
+each other, as a reviewable artifact with an accept/dismiss
+lifecycle; deterministic label propagation discovers graph-wide
+communities and materializes derived cluster digests; a fixed-dataset
+recall benchmark (hit@k + MRR) gates ranking regressions in CI and
+scores operator vaults on demand; a bounded, replayable self-tuning
+fold selects retrieval parameters judged by that benchmark, applied
+only under an explicit opt-in flag; and a bare query can expand into
+the existing structured lex/vec/hyde lanes with no model and no paid
+call. Every feature reports run-level numbers into one
+schema-versioned `Brain/metrics/` layer - the stable on-disk contract
+the upcoming dashboard plugin reads without importing internals. A
+vault that enables none of it behaves bit-identically. MCP tool count
+grows 73 -> 77.
+
+### Added
+
+- **Dashboard-ready metrics layer.** One append-only JSONL file per
+  surface under `Brain/metrics/` (`index`, `bridge_discovery`,
+  `communities`, `recall_benchmark`, `self_tuning`), envelope
+  `{schema: "o2b.metrics.v1", surface, run_at, payload}` with the
+  continuity-record evolution rule (additive fields keep the
+  version). Run-level only - per-query events stay in recall
+  telemetry. Contract documented in `docs/metrics.md`.
+- **Vault-wide alias resolution** (schema v7). The indexer extracts
+  frontmatter `aliases:` arrays into a `doc_aliases` table
+  (NFC-normalised, lower-cased - the `alias-index.ts` rule); after
+  exact-path resolution a shadowing-safe alias pass materializes
+  `target_document_id` for slash-free wikilink targets, so traversal,
+  backlinks, and link constraints see `[[PA]] -> project-alpha.md`.
+  Exact paths always win; a real document basename is never shadowed;
+  collisions resolve first-wins by sorted path.
+  `IndexStats.aliasResolved` counts the pass.
+- **Bridge discovery** (`o2b brain bridges`, MCP `brain_bridges`).
+  Orphan-first scan (ascending inbound-link order) takes chunk
+  embeddings to sqlite-vec KNN, converts unit-vector L2 to cosine,
+  aggregates to document level, and proposes pairs above the
+  similarity threshold that share no edge in either direction.
+  Output is the regenerated reviewable
+  `Brain/proposals/bridges.md`; `dismiss` persists pair suppressions;
+  `accept` writes exactly one `related:` wikilink into the source
+  frontmatter, idempotently, honoring schema-pack link constraints.
+  Fail-soft without an index or embeddings.
+- **Community detection with cluster notes** (`o2b brain clusters`,
+  MCP `brain_clusters`). Deterministic synchronous label propagation
+  (sorted sweeps, lowest-label tie-break, iteration cap against
+  bipartite oscillation) over the resolved doc-level link graph;
+  communities of size >= 4 materialize
+  `Brain/clusters/cluster-<id>.md` digests - members by internal
+  degree, shared entities, link density, no LLM prose. Derived notes
+  regenerate every run; stale generated notes are removed;
+  hand-written files in the directory are never touched;
+  `brain-cluster` joins the frontmatter tier map as framework-owned.
+- **Reproducible recall benchmark** (`o2b brain benchmark`, MCP
+  `brain_benchmark`). `runRecallBenchmark` scores hit@k and MRR per
+  query and aggregate against the live hybrid pipeline; the committed
+  15-note fixture vault + 12-query dataset pin CI thresholds
+  (hit@5 >= 0.9, MRR >= 0.85; measured 1.000/0.958 with the
+  deterministic local embedding provider), so a ranking regression
+  fails the suite. The same runner scores operator vaults on demand
+  and serves as the self-tuner's objective function.
+- **Deterministic query expansion** (`o2b search --expand`,
+  `search(config, {expand: true})`). A bare query becomes a
+  structured lex/vec/hyde document locally: stopword-stripped lex
+  terms for the implicit-AND FTS lane, an entity-context vec line
+  from the vault's own registry, one template hyde passage. Opt-in
+  per call, never silently active, no GGUF model, no paid call.
+- **Opt-in self-tuning recall** (`o2b brain tune`, MCP `brain_tune`).
+  `tuneRecall` grid-evaluates bounded parameters (keyword pool
+  multiplier {3,4,5}, traversal depth {1,2}, learned weights on/off,
+  expansion on/off) with the benchmark as the objective and persists
+  the winner - with every evaluated score and the dataset hash - to
+  `Brain/search/tuning.json`. `search()` applies the re-validated
+  grid point only when `search_self_tuning_enabled` /
+  `OPEN_SECOND_BRAIN_SEARCH_SELF_TUNING` is on; an explicit `expand`
+  always wins; the tuned state joins the query-cache key; reset
+  deletes the file and nothing else changes. The keyword candidate
+  pool becomes the configurable `search_pool_multiplier` (default 3,
+  byte-identical).
+- **Maintenance-lane passes.** `o2b brain maintenance run` gains
+  `bridges` and `clusters` tasks after `reindex`, riding the existing
+  quiet window, busy gate, and lease.
+
+### Notes
+
+- The bridge verb ships as `bridges` because `o2b brain links` is the
+  v0.38.0 wikilink-normalize contract.
+- Re-scope: the upstream benchmark task referenced a nonexistent
+  yantrikdb integration directory; the benchmark targets Open Second
+  Brain's own hybrid search instead.
+
 ## [0.44.0] - 2026-06-05
 
 Write-Time Integrity & Governance Suite: every write into the Brain
@@ -4726,6 +4822,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.45.0]: https://github.com/itechmeat/open-second-brain/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/itechmeat/open-second-brain/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/itechmeat/open-second-brain/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/itechmeat/open-second-brain/compare/v0.42.0...v0.43.0

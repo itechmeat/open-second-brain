@@ -209,6 +209,18 @@ o2b brain maintenance         run [--force] [--window H-H] [--tz ZONE] [--busy-m
 
 The schema pack gains four additive ontology fields (`labels`, `link_constraints`, `attributes`, `frontmatter_tiers`) with audited mutations through `o2b brain schema apply`. Link constraints enforce at index materialization: a typed edge whose endpoint page types violate the declared pairs falls back to an untyped link, `o2b brain schema lint` lists each violation, and removing the constraint restores the edges on the next index run. Tier drift detection rides the same index pass - the snapshot keeps the expected value, so reindexes never absorb a hand-edit, and `brain_doctor` warns with the open count. Filter labelled recall with `o2b search <q> --property labels=<dim>/<value>`. Secrets protect against context leakage and vault sync exposure, not against root; every custody operation lands a no-values record in `Brain/log/secret-custody/`. A maintenance gate skip exits 0 so cron never alarms on a quiet hour.
 
+### Link and recall intelligence (since v0.45.0)
+
+```text
+o2b brain bridges             discover [--max N] [--min-similarity X] | list | accept <source> <target> | dismiss <source> <target> - embedding-near link proposals over the vec index, reviewable artifact, accept writes one related: wikilink
+o2b brain clusters            run [--min-size N] | list - graph-wide community detection; derived digests under Brain/clusters/, regenerated per run
+o2b brain benchmark           run --dataset <path> [--k N] [--expand] - hit@k + MRR against the live hybrid recall; records the recall_benchmark metric
+o2b brain tune                run --dataset <path> [--k N] | status | reset - bounded self-tuning grid judged by the benchmark; persisted to Brain/search/tuning.json
+o2b search <query> --expand   deterministic lex/vec/hyde expansion of a bare query (stopword-stripped lex, entity-context vec line, template hyde passage)
+```
+
+Wikilinks to frontmatter `aliases:` resolve at index materialization (schema v7): exact paths always win, a real basename is never shadowed, collisions resolve first-wins by sorted path, and `o2b search status` counts the pass via `IndexStats.aliasResolved`. Bridge discovery and clusters also run as maintenance-lane tasks after `reindex`. Self-tuning only changes behavior under `search_self_tuning_enabled` (or `OPEN_SECOND_BRAIN_SEARCH_SELF_TUNING=1`); an explicit `--expand`/`expand` always wins over the tuned default. Every surface appends one run-level record to `Brain/metrics/<surface>.jsonl` - the dashboard data contract documented in `docs/metrics.md`.
+
 ## Vault scope
 
 Single exclusion policy for every vault walker.
