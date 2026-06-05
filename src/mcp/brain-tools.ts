@@ -38,7 +38,7 @@
 
 import { isAbsolute, join, relative, resolve } from "node:path";
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 import {
   resolveAgentName,
@@ -57,6 +57,21 @@ import {
 import { loadSchemaPack } from "../core/brain/schema-pack.ts";
 import { listSecrets } from "../core/brain/secrets/store.ts";
 import { runWithSecret, SecretExecDeniedError } from "../core/brain/secrets/exec.ts";
+import {
+  acceptBridge,
+  bridgePairKey,
+  discoverBridges,
+  dismissBridge,
+  readDismissedBridges,
+  writeBridgeProposals,
+} from "../core/brain/link-graph/bridge-discovery.ts";
+import {
+  detectCommunities,
+  materializeClusterNotes,
+} from "../core/brain/link-graph/communities.ts";
+import { appendMetric } from "../core/brain/metrics.ts";
+import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../core/search/benchmark.ts";
+import { loadTunedParameters, resetTuning, tuneRecall } from "../core/search/tuning.ts";
 import { currentLease } from "../core/brain/maintenance/lease.ts";
 import { listJournal } from "../core/brain/maintenance/journal.ts";
 import { runMaintenance, type DailyWindow } from "../core/brain/maintenance/lane.ts";
@@ -2073,6 +2088,318 @@ async function toolBrainMaintenance(
     ],
   });
   return { verdict: result.verdict, tasks: result.tasks };
+}
+
+// ----- brain_bridges (t_ab540afe) --------------------------------------------
+
+/**
+ * Bridge discovery over the vec index: discover regenerates the
+ * reviewable proposals artifact, accept writes one related wikilink,
+ * dismiss persists a pair suppression, list reads the artifact back.
+ */
+async function toolBrainBridges(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const op = args["operation"];
+  if (op !== "discover" && op !== "list" && op !== "accept" && op !== "dismiss") {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_bridges: operation must be discover|list|accept|dismiss",
+    );
+  }
+  if (op === "accept" || op === "dismiss") {
+    const source = args["source"];
+    const target = args["target"];
+    if (typeof source !== "string" || source.trim() === "") {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_bridges ${op}: source must be a vault-relative path`,
+      );
+    }
+    if (typeof target !== "string" || target.trim() === "") {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_bridges ${op}: target must be a vault-relative path`,
+      );
+    }
+    if (op === "dismiss") {
+      return {
+        dismissed: bridgePairKey(source, target),
+        added: dismissBridge(ctx.vault, source, target),
+      };
+    }
+    try {
+      const pack = loadSchemaPack(ctx.vault);
+      return { ...acceptBridge(ctx.vault, source, target, { pack }), source, target };
+    } catch (exc) {
+      const message = (exc as Error).message ?? String(exc);
+      if (/outside the vault|does not exist|link constraint/.test(message)) {
+        throw new MCPError(INVALID_PARAMS, `brain_bridges accept: ${message}`);
+      }
+      throw exc;
+    }
+  }
+  if (op === "list") {
+    const path = join(ctx.vault, "Brain", "proposals", "bridges.md");
+    if (!existsSync(path)) return { exists: false, proposals: 0 };
+    const [meta] = parseFrontmatter(path);
+    return {
+      exists: true,
+      path: "Brain/proposals/bridges.md",
+      generated_at: meta["generated_at"] ?? null,
+      proposals: Number(meta["proposals"] ?? 0),
+    };
+  }
+  // discover
+  const max = args["max"];
+  if (max !== undefined && (!Number.isInteger(max) || (max as number) < 1)) {
+    throw new MCPError(INVALID_PARAMS, "brain_bridges discover: max must be a positive integer");
+  }
+  const minSimilarity = args["min_similarity"];
+  if (
+    minSimilarity !== undefined &&
+    (typeof minSimilarity !== "number" || minSimilarity <= 0 || minSimilarity > 1)
+  ) {
+    throw new MCPError(INVALID_PARAMS, "brain_bridges discover: min_similarity must be in (0, 1]");
+  }
+  const searchConfig = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+  if (!existsSync(searchConfig.dbPath)) {
+    return { vec_available: false, proposals: [], reason: "index not built" };
+  }
+  const store = await Store.open(searchConfig, { mode: "read" });
+  const now = new Date();
+  try {
+    const dismissed = readDismissedBridges(ctx.vault);
+    const report = discoverBridges(store, {
+      ...(max !== undefined ? { maxProposals: max as number } : {}),
+      ...(minSimilarity !== undefined ? { minSimilarity } : {}),
+      dismissed,
+    });
+    writeBridgeProposals(ctx.vault, report, { now });
+    try {
+      appendMetric(ctx.vault, {
+        surface: "bridge_discovery",
+        runAt: isoSecond(now),
+        payload: {
+          proposals: report.proposals.length,
+          scanned_candidates: report.scannedCandidates,
+          vec_available: report.vecAvailable,
+          dismissed_total: dismissed.size,
+        },
+      });
+    } catch {
+      // Metrics are observability, not correctness.
+    }
+    return {
+      vec_available: report.vecAvailable,
+      ...(report.reason !== undefined ? { reason: report.reason } : {}),
+      scanned_candidates: report.scannedCandidates,
+      proposals: report.proposals,
+      artifact: "Brain/proposals/bridges.md",
+    };
+  } finally {
+    await store.close();
+  }
+}
+
+// ----- brain_clusters (t_4ba927ec) --------------------------------------------
+
+/** Graph-wide community detection with materialized cluster notes. */
+async function toolBrainClusters(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const op = args["operation"];
+  if (op !== "run" && op !== "list") {
+    throw new MCPError(INVALID_PARAMS, "brain_clusters: operation must be run|list");
+  }
+  if (op === "list") {
+    const dir = join(ctx.vault, "Brain", "clusters");
+    if (!existsSync(dir)) return { clusters: [] };
+    const clusters = readdirSync(dir)
+      .filter((f) => f.endsWith(".md"))
+      .toSorted()
+      .map((f) => {
+        const [meta] = parseFrontmatter(join(dir, f));
+        return meta["kind"] === "brain-cluster"
+          ? {
+              path: `Brain/clusters/${f}`,
+              cluster: String(meta["cluster"] ?? ""),
+              size: Number(meta["size"] ?? 0),
+              density: Number(meta["density"] ?? 0),
+              generated_at: String(meta["generated_at"] ?? ""),
+            }
+          : null;
+      })
+      .filter((c) => c !== null);
+    return { clusters };
+  }
+  const minSize = args["min_size"];
+  if (minSize !== undefined && (!Number.isInteger(minSize) || (minSize as number) < 2)) {
+    throw new MCPError(INVALID_PARAMS, "brain_clusters run: min_size must be an integer >= 2");
+  }
+  const searchConfig = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+  if (!existsSync(searchConfig.dbPath)) {
+    return { communities: [], reason: "index not built" };
+  }
+  const store = await Store.open(searchConfig, { mode: "read" });
+  const now = new Date();
+  try {
+    const communities = detectCommunities(
+      store,
+      minSize !== undefined ? { minSize: minSize as number } : {},
+    );
+    const materialized = materializeClusterNotes(ctx.vault, communities, { store, now });
+    try {
+      appendMetric(ctx.vault, {
+        surface: "communities",
+        runAt: isoSecond(now),
+        payload: {
+          communities: communities.length,
+          sizes: communities.map((c) => c.size),
+          written: materialized.written.length,
+          removed: materialized.removed.length,
+        },
+      });
+    } catch {
+      // Metrics are observability, not correctness.
+    }
+    return {
+      communities: communities.map((c) => ({
+        id: c.id,
+        size: c.size,
+        density: c.density,
+        members: c.members.map((m) => m.path),
+      })),
+      written: materialized.written,
+      removed: materialized.removed,
+    };
+  } finally {
+    await store.close();
+  }
+}
+
+// ----- brain_benchmark (t_e2215d49) -------------------------------------------
+
+/** Recall-quality benchmark over an inline dataset. */
+async function toolBrainBenchmark(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const op = args["operation"];
+  if (op !== "run") {
+    throw new MCPError(INVALID_PARAMS, "brain_benchmark: operation must be run");
+  }
+  const k = args["k"];
+  if (k !== undefined && (!Number.isInteger(k) || (k as number) < 1)) {
+    throw new MCPError(INVALID_PARAMS, "brain_benchmark run: k must be a positive integer");
+  }
+  let dataset;
+  try {
+    dataset = parseRecallBenchmarkDataset(args["dataset"]);
+  } catch (exc) {
+    throw new MCPError(INVALID_PARAMS, `brain_benchmark run: ${(exc as Error).message}`);
+  }
+  const searchConfig = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+  const now = new Date();
+  const report = await runRecallBenchmark(searchConfig, dataset, {
+    ...(k !== undefined ? { k: k as number } : {}),
+    expand: args["expand"] === true,
+  });
+  try {
+    appendMetric(ctx.vault, {
+      surface: "recall_benchmark",
+      runAt: isoSecond(now),
+      payload: {
+        total: report.total,
+        k: report.k,
+        expand: report.expand,
+        hit_at_k: report.hitAtK,
+        mrr: report.mrr,
+        misses: report.perQuery.filter((q) => !q.hit).map((q) => q.id),
+      },
+    });
+  } catch {
+    // Metrics are observability, not correctness.
+  }
+  return {
+    total: report.total,
+    k: report.k,
+    expand: report.expand,
+    hit_at_k: report.hitAtK,
+    mrr: report.mrr,
+    per_query: report.perQuery,
+  };
+}
+
+// ----- brain_tune (t_ae973491) -------------------------------------------------
+
+/** Opt-in self-tuning recall: run the grid, inspect, or reset. */
+async function toolBrainTune(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const op = args["operation"];
+  if (op !== "run" && op !== "status" && op !== "reset") {
+    throw new MCPError(INVALID_PARAMS, "brain_tune: operation must be run|status|reset");
+  }
+  const searchConfig = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+  if (op === "status") {
+    return {
+      enabled: searchConfig.recall.selfTuningEnabled,
+      tuned: loadTunedParameters(ctx.vault),
+    };
+  }
+  if (op === "reset") {
+    return { removed: resetTuning(ctx.vault) };
+  }
+  const k = args["k"];
+  if (k !== undefined && (!Number.isInteger(k) || (k as number) < 1)) {
+    throw new MCPError(INVALID_PARAMS, "brain_tune run: k must be a positive integer");
+  }
+  let dataset;
+  try {
+    dataset = parseRecallBenchmarkDataset(args["dataset"]);
+  } catch (exc) {
+    throw new MCPError(INVALID_PARAMS, `brain_tune run: ${(exc as Error).message}`);
+  }
+  const now = new Date();
+  const report = await tuneRecall(searchConfig, dataset, {
+    ...(k !== undefined ? { k: k as number } : {}),
+    now,
+  });
+  try {
+    appendMetric(ctx.vault, {
+      surface: "self_tuning",
+      runAt: isoSecond(now),
+      payload: {
+        chosen: report.chosen,
+        evaluated: report.evaluated.length,
+        best_mrr: Math.max(...report.evaluated.map((e) => e.mrr)),
+        dataset_hash: report.datasetHash,
+      },
+    });
+  } catch {
+    // Metrics are observability, not correctness.
+  }
+  return {
+    chosen: report.chosen,
+    evaluated: report.evaluated.map((e) => ({ params: e.params, mrr: e.mrr, hit_at_k: e.hitAtK })),
+    dataset_hash: report.datasetHash,
+  };
 }
 
 // ----- brain_dead_ends (t_be62c62d) -----------------------------------------
@@ -4753,6 +5080,96 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainMaintenance,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+  {
+    name: "brain_bridges",
+    description:
+      "Bridge discovery over the vec index: discover proposes links between embedding-near notes that share no edge (orphan-first, regenerates Brain/proposals/bridges.md, records a metric); accept writes one related wikilink into the source note; dismiss silences a pair; list reads the artifact back.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["discover", "list", "accept", "dismiss"],
+          description: "Tool operation.",
+        },
+        source: { type: "string", description: "Vault-relative source note (accept/dismiss)." },
+        target: { type: "string", description: "Vault-relative target note (accept/dismiss)." },
+        max: { type: "integer", minimum: 1, description: "Proposal cap (discover)." },
+        min_similarity: {
+          type: "number",
+          exclusiveMinimum: 0,
+          maximum: 1,
+          description: "Cosine similarity threshold (discover, default 0.8).",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainBridges,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+  {
+    name: "brain_clusters",
+    description:
+      "Graph-wide community detection: run applies deterministic label propagation over the resolved link graph, materializes one derived note per community of size >= min_size under Brain/clusters/, removes stale generated notes, and records a metric; list reads the generated notes back.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: { type: "string", enum: ["run", "list"], description: "Tool operation." },
+        min_size: {
+          type: "integer",
+          minimum: 2,
+          description: "Smallest community that materializes (run, default 4).",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainClusters,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+  {
+    name: "brain_benchmark",
+    description:
+      "Recall-quality benchmark: score the vault's live hybrid recall against a fixed dataset ({queries: [{id, query, expected: [paths]}]}) - hit@k and MRR per query and aggregate - and record one recall_benchmark metric so quality is chartable over time.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: { type: "string", enum: ["run"], description: "Tool operation." },
+        dataset: {
+          type: "object",
+          description: "Benchmark dataset: {queries: [{id, query, expected, k?}]}.",
+        },
+        k: { type: "integer", minimum: 1, description: "Rank depth (default 5)." },
+        expand: { type: "boolean", description: "Route queries through deterministic expansion." },
+      },
+      required: ["operation", "dataset"],
+      additionalProperties: false,
+    },
+    handler: toolBrainBenchmark,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+  {
+    name: "brain_tune",
+    description:
+      "Opt-in self-tuning recall: run grid-evaluates bounded parameters (pool multiplier, traversal depth, learned weights, expansion) against a benchmark dataset and persists the winner to Brain/search/tuning.json; status shows the validated state; reset deletes it. Search honors it only when enabled.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["run", "status", "reset"],
+          description: "Tool operation.",
+        },
+        dataset: { type: "object", description: "Benchmark dataset (run)." },
+        k: { type: "integer", minimum: 1, description: "Rank depth (run, default 5)." },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainTune,
     previewBudget: MCP_PREVIEW_BUDGET,
   },
   {
