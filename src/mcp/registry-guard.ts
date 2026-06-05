@@ -102,7 +102,6 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_context:
     "session bootstrap; deliberately returns the full preference set - it is the full-view target the budgeted SessionStart injection points at",
   brain_pre_compress_pack: "self-budgeting; enforces its own char budget internally",
-  brain_morning_brief: "self-budgeting via max_chars_per_memory / max_total_chars",
   brain_artifact_get: "the preview-budget escape hatch; truncating it would defeat itself",
   brain_health: "fixed-shape counters",
   brain_doctor: "issue list bounded by vault invariants; CLI surface renders full detail",
@@ -128,18 +127,8 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_agent_diff: "bounded two-agent comparison",
   get_skill: "explicit full-content fetch; truncating the skill the agent asked for defeats it",
   tool_hydrate: "the two-pass schema escape hatch; truncating hydration would defeat itself",
-
-  // Deprecated aliases (token-diet): the consolidated tool carries the
-  // budget; the alias keeps its predecessor's budget status until
-  // removal.
-  get_active_schema_pack: "deprecated alias for schema_inspect; slated for removal",
-  list_schema_packs: "deprecated alias for schema_inspect; slated for removal",
-  schema_stats: "deprecated alias for schema_inspect; slated for removal",
-  schema_lint: "deprecated alias for schema_inspect; slated for removal",
-  schema_graph: "deprecated alias for schema_inspect; slated for removal",
-  schema_explain_type: "deprecated alias for schema_inspect; slated for removal",
-  schema_review_orphans: "deprecated alias for schema_inspect; slated for removal",
-  reload_schema_pack: "deprecated alias for schema_inspect; slated for removal",
+  // The deprecated-alias exemptions were dropped with the aliases
+  // themselves in the 1.0.0 sweep (tombstones in REMOVED_TOOLS).
 });
 
 export interface PreviewBudgetAudit {

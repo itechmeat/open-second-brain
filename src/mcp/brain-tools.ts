@@ -243,7 +243,7 @@ import {
 } from "../core/brain/pinned.ts";
 
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
-import { deprecatedAlias, type ServerContext, type ToolDefinition } from "./tools.ts";
+import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import {
   coerceStr,
@@ -509,12 +509,12 @@ async function toolBrainMonthlyReview(
   let month: string | undefined;
   if (monthRaw !== undefined && monthRaw !== null) {
     if (typeof monthRaw !== "string") {
-      throw new MCPError(INVALID_PARAMS, "brain_monthly_review: month must be YYYY-MM");
+      throw new MCPError(INVALID_PARAMS, "brain_brief view=monthly: month must be YYYY-MM");
     }
     try {
       month = normalizeMonthlyReviewMonth(monthRaw);
     } catch {
-      throw new MCPError(INVALID_PARAMS, "brain_monthly_review: month must be YYYY-MM");
+      throw new MCPError(INVALID_PARAMS, "brain_brief view=monthly: month must be YYYY-MM");
     }
   }
   const report = buildMonthlyReview(ctx.vault, month ? { month } : {});
@@ -1308,14 +1308,14 @@ async function toolBrainMorningBrief(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const topK = optionalPositiveInt(args, "top_k", "brain_morning_brief") ?? 10;
-  const lookbackDays = optionalPositiveInt(args, "lookback_days", "brain_morning_brief") ?? 7;
+  const topK = optionalPositiveInt(args, "top_k", "brain_brief view=morning") ?? 10;
+  const lookbackDays = optionalPositiveInt(args, "lookback_days", "brain_brief view=morning") ?? 7;
   const maxCharsPerMemory = optionalPositiveInt(
     args,
     "max_chars_per_memory",
-    "brain_morning_brief",
+    "brain_brief view=morning",
   );
-  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_morning_brief");
+  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_brief view=morning");
   const now = new Date();
   const brief = buildMorningBrief(ctx.vault, {
     now,
@@ -1670,7 +1670,7 @@ async function toolBrainOperatorSummary(
       if (!Number.isInteger(topRaw) || topRaw < 0) {
         throw new MCPError(
           INVALID_PARAMS,
-          "brain_operator_summary: top_actions must be a non-negative integer",
+          "brain_brief view=operator: top_actions must be a non-negative integer",
         );
       }
       topActionsN = topRaw;
@@ -1679,14 +1679,14 @@ async function toolBrainOperatorSummary(
       if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
         throw new MCPError(
           INVALID_PARAMS,
-          "brain_operator_summary: top_actions must be a non-negative integer",
+          "brain_brief view=operator: top_actions must be a non-negative integer",
         );
       }
       topActionsN = Number.parseInt(trimmed, 10);
     } else {
       throw new MCPError(
         INVALID_PARAMS,
-        "brain_operator_summary: top_actions must be a non-negative integer",
+        "brain_brief view=operator: top_actions must be a non-negative integer",
       );
     }
   }
@@ -1698,7 +1698,10 @@ async function toolBrainOperatorSummary(
   } else if (typeof includeDreamRaw === "boolean") {
     includeDream = includeDreamRaw;
   } else {
-    throw new MCPError(INVALID_PARAMS, "brain_operator_summary: include_dream must be a boolean");
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_brief view=operator: include_dream must be a boolean",
+    );
   }
 
   let dreamSummary;
@@ -2616,7 +2619,10 @@ async function toolBrainConceptSynthesis(
 ): Promise<Record<string, unknown>> {
   const idRaw = args["id"];
   if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
-    throw new MCPError(INVALID_PARAMS, "brain_concept_synthesis: id must be a non-empty string");
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_analytics view=concept_synthesis: id must be a non-empty string",
+    );
   }
   const includeUnlinkedRaw = args["include_unlinked"];
   let includeUnlinked = false;
@@ -2624,7 +2630,7 @@ async function toolBrainConceptSynthesis(
     if (typeof includeUnlinkedRaw !== "boolean") {
       throw new MCPError(
         INVALID_PARAMS,
-        "brain_concept_synthesis: include_unlinked must be a boolean",
+        "brain_analytics view=concept_synthesis: include_unlinked must be a boolean",
       );
     }
     includeUnlinked = includeUnlinkedRaw;
@@ -2809,7 +2815,7 @@ async function toolBrainBeliefEvolution(
   if (hasPref === hasTopic) {
     throw new MCPError(
       INVALID_PARAMS,
-      "brain_belief_evolution: exactly one of pref_id or topic is required",
+      "brain_analytics view=belief_evolution: exactly one of pref_id or topic is required",
     );
   }
   const target = hasPref
@@ -3777,7 +3783,7 @@ async function toolBrainAttentionFlows(
   }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_attention_flows: operation must be one of list|evaluate|render",
+    "brain_analytics view=attention_flows: operation must be one of list|evaluate|render",
   );
 }
 
@@ -4079,15 +4085,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainRetention,
   },
   {
-    ...deprecatedAlias({
-      name: "brain_monthly_review",
-      target: "brain_brief",
-      view: "monthly",
-      handler: toolBrainMonthlyReview,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
     name: "brain_review_candidates",
     description:
       "Read-only preview of the next `brain_dream` pass: would_create / would_promote / would_retire / would_supersede, clusters below threshold, gated retires, and intent reviews. Mutates nothing.",
@@ -4367,15 +4364,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainContext,
   },
   {
-    ...deprecatedAlias({
-      name: "brain_digest",
-      target: "brain_brief",
-      view: "digest",
-      handler: toolBrainDigest,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
     name: "brain_query",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
@@ -4637,14 +4625,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainAudit,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_morning_brief",
-      target: "brain_brief",
-      view: "morning",
-      handler: toolBrainMorningBrief,
-    }),
   },
   {
     name: "brain_sources",
@@ -5250,15 +5230,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainProceduralGraph,
   },
   {
-    ...deprecatedAlias({
-      name: "brain_attention_flows",
-      target: "brain_analytics",
-      view: "attention_flows",
-      handler: toolBrainAttentionFlows,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
     name: "brain_pre_compact_extract",
     description:
       "Extract typed Decision/Commitment/Outcome/Rule/Open question records from bounded text into continuity storage.",
@@ -5441,15 +5412,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainUnlinkedMentions,
   },
   {
-    ...deprecatedAlias({
-      name: "brain_concept_synthesis",
-      target: "brain_analytics",
-      view: "concept_synthesis",
-      handler: toolBrainConceptSynthesis,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
     name: "brain_moc_audit",
     description:
       "Per-MOC coverage audit. Given a hub note id, classifies its outbound cluster into well-covered / fragile / candidate-missing and surfaces a suggested-next candidate. MOC detection is purely structural (outbound link count + link density). Read-only.",
@@ -5467,24 +5429,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainMocAudit,
   },
   {
-    ...deprecatedAlias({
-      name: "brain_timeline",
-      target: "brain_analytics",
-      view: "timeline",
-      handler: toolBrainTimeline,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_belief_evolution",
-      target: "brain_analytics",
-      view: "belief_evolution",
-      handler: toolBrainBeliefEvolution,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
     name: "brain_stale_scan",
     description:
       "Structural staleness report: preferences, signals, and Brain/log files inactive longer than the configured `temporal:` thresholds (stale_pref_days / stale_signal_days / stale_log_days). Read-only.",
@@ -5494,32 +5438,5 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainStaleScan,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_daily_brief",
-      target: "brain_brief",
-      view: "daily",
-      handler: toolBrainDailyBrief,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_weekly_synthesis",
-      target: "brain_brief",
-      view: "weekly",
-      handler: toolBrainWeeklySynthesis,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_operator_summary",
-      target: "brain_brief",
-      view: "operator",
-      handler: toolBrainOperatorSummary,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
   },
 ]);

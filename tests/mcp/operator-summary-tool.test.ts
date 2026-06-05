@@ -71,24 +71,24 @@ async function callSummary(
     jsonrpc: JSONRPC_VERSION,
     id: 9,
     method: "tools/call",
-    params: { name: "brain_operator_summary", arguments: args },
+    params: { name: "brain_brief", arguments: { view: "operator", ...args } },
   })) as { result: { content: ReadonlyArray<{ type: string; text: string }> } };
   return JSON.parse(r.result.content[0]!.text);
 }
 
-describe("brain_operator_summary tool registration", () => {
+describe("brain_brief view=operator tool registration", () => {
   test("registered in the full tool table", () => {
     const tools = buildToolTable("full");
-    expect(tools.find((t) => t.name === "brain_operator_summary")).toBeDefined();
+    expect(tools.find((t) => t.name === "brain_brief")).toBeDefined();
   });
 
   test("NOT in the writer-only scope", () => {
     const tools = buildToolTable("writer");
-    expect(tools.find((t) => t.name === "brain_operator_summary")).toBeUndefined();
+    expect(tools.find((t) => t.name === "brain_brief")).toBeUndefined();
   });
 });
 
-describe("brain_operator_summary tool - round trip", () => {
+describe("brain_brief view=operator - round trip", () => {
   test("clean vault returns trust_verdict=clean", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
@@ -125,7 +125,7 @@ describe("brain_operator_summary tool - round trip", () => {
         jsonrpc: JSONRPC_VERSION,
         id,
         method: "tools/call",
-        params: { name: "brain_operator_summary", arguments: args },
+        params: { name: "brain_brief", arguments: { view: "operator", ...args } },
       })) as { error?: { code: number; message: string } };
       // JSON-RPC INVALID_PARAMS = -32602. Assert the specific code so
       // the test fails on the wrong failure mode (e.g. INTERNAL_ERROR

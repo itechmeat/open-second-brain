@@ -87,9 +87,9 @@ test("brain_trigger rejects unknown operations and terminal transitions", async 
   ).toThrow("terminal");
 });
 
-test("brain_morning_brief surfaces pending triggers once per cooldown", async () => {
+test("brain_brief view=morning surfaces pending triggers once per cooldown", async () => {
   createTriggers(vault, [CANDIDATE], { now: new Date() });
-  const first = (await tool("brain_morning_brief").handler(ctx, {})) as {
+  const first = (await tool("brain_brief").handler(ctx, { view: "morning" })) as {
     text: string;
     triggers?: Array<{ id: string }>;
   };
@@ -97,7 +97,7 @@ test("brain_morning_brief surfaces pending triggers once per cooldown", async ()
   expect(first.text).toContain("Pending triggers");
 
   // Second brief inside the cooldown window: silent.
-  const second = (await tool("brain_morning_brief").handler(ctx, {})) as {
+  const second = (await tool("brain_brief").handler(ctx, { view: "morning" })) as {
     text: string;
     triggers?: unknown[];
   };
@@ -105,7 +105,10 @@ test("brain_morning_brief surfaces pending triggers once per cooldown", async ()
   expect(second.text).not.toContain("Pending triggers");
 });
 
-test("brain_morning_brief without triggers keeps the legacy shape", async () => {
-  const brief = (await tool("brain_morning_brief").handler(ctx, {})) as Record<string, unknown>;
+test("brain_brief view=morning without triggers keeps the legacy shape", async () => {
+  const brief = (await tool("brain_brief").handler(ctx, { view: "morning" })) as Record<
+    string,
+    unknown
+  >;
   expect(brief["triggers"]).toBeUndefined();
 });

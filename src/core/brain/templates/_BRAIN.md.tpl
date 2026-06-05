@@ -150,7 +150,7 @@ them as part of normal agent work.
 
 The full CLI surface is documented in `docs/plans/2026-05-15-brain-observing-memory.md`
 section 9; the MCP tool surface mirrors it for the most common verbs
-(`brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_digest`,
+(`brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_brief`,
 `brain_query`, `brain_doctor`).
 
 ## Reading order for a new agent

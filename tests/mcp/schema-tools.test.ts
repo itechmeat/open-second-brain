@@ -87,8 +87,8 @@ describe("schema MCP tools", () => {
       (tool) => tool.name,
     );
 
-    // token-diet: the consolidated schema_inspect is advertised; the
-    // per-view predecessors stay callable as hidden deprecated aliases.
+    // token-diet consolidated the per-view readers into schema_inspect;
+    // the 1.0.0 sweep removed the hidden aliases entirely.
     expect(names).toContain("schema_inspect");
     expect(names).toContain("schema_apply_mutations");
     expect(names).not.toContain("schema_stats");
@@ -103,7 +103,7 @@ describe("schema MCP tools", () => {
     });
     expect((applied as any).result.structuredContent.applied).toBe(1);
 
-    const pack = await call(server, "get_active_schema_pack");
+    const pack = await call(server, "schema_inspect", { view: "active_pack" });
     expect((pack as any).result.structuredContent.pack.declarations.preference_types).toContain(
       "decision",
     );
@@ -119,7 +119,7 @@ describe("schema MCP tools", () => {
         { op: "add_link_type", token: "decision" },
       ],
     });
-    const graph = await call(server, "schema_graph");
+    const graph = await call(server, "schema_inspect", { view: "graph" });
     const nodes = (graph as any).result.structuredContent.nodes as ReadonlyArray<{ id: string }>;
 
     expect(nodes.map((node) => node.id)).toContain("decision");

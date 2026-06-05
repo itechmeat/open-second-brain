@@ -11,7 +11,7 @@ Use this skill when a user asks an agent to use, configure, inspect, or maintain
 
 Open Second Brain owns one top-level directory in the vault: `Brain/`. Everything the agent writes lives under it.
 
-- **`Brain/`** - agent-writable observing memory. Taste signals, accreted preferences (unconfirmed → confirmed → retired), evidence log, snapshots. Operations go through MCP tools `brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_digest`, `brain_query`, `brain_doctor` - see the `brain-memory` skill for the calling protocol. CLI counterparts: `o2b brain *`.
+- **`Brain/`** - agent-writable observing memory. Taste signals, accreted preferences (unconfirmed → confirmed → retired), evidence log, snapshots. Operations go through MCP tools `brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_brief`, `brain_query`, `brain_doctor` - see the `brain-memory` skill for the calling protocol. CLI counterparts: `o2b brain *`.
 - **`Brain/payments/`** - Pay Memory subtree (optional). Receipts, generated-asset notes, drafts, reports, policies, pending-approval requests. Agents use `payment_*` MCP tools when they make paid API calls. Same write contract as the rest of `Brain/` - one root.
 - **User-authored notes** - the operator's daily journal, weekly notes, project notes, etc. Folder names are operator-chosen. The agent reads these paths only when they appear under `notes.read_paths` in `Brain/_brain.yaml`; the agent never writes to them.
 

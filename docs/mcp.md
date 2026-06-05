@@ -71,19 +71,15 @@ flags for a narrower per-process full server.
 `brain_brief`, `brain_analytics`, and `schema_inspect` replaced three
 overlapping tool families in v0.34.0; per-view output is identical to the
 predecessor tools because dispatch goes to the same handlers. The 18
-predecessor names (`brain_morning_brief`, `brain_daily_brief`,
-`brain_weekly_synthesis`, `brain_monthly_review`, `brain_operator_summary`,
-`brain_digest`, `brain_timeline`, `brain_attention_flows`,
-`brain_belief_evolution`, `brain_concept_synthesis`, `get_active_schema_pack`,
-`list_schema_packs`, `schema_stats`, `schema_lint`, `schema_graph`,
-`schema_explain_type`, `schema_review_orphans`, `reload_schema_pack`) remain
-callable through `tools/call` as deprecated aliases for at least one minor
-release, but are hidden from `tools/list` so clients stop paying for their
-schemas. Migrate by switching to the consolidated tool with the matching
-`view` value; per-view parameters keep their old names (for example
+predecessor names were removed in 1.0.0: calling one answers a precise
+INVALID_PARAMS tombstone naming the replacement tool and `view` (for
+example `brain_digest was removed in 1.0.0; call brain_brief with
+view="digest"`), so a stale client learns the migration from the error
+itself. Per-view parameters keep their old names (for example
 `brain_brief` with `view: "daily"` accepts the same `date` argument
 `brain_daily_brief` did, and `brain_analytics` with
-`view: "attention_flows"` defaults `operation` to `list`).
+`view: "attention_flows"` defaults `operation` to `list`). The full
+alias-to-replacement table lives in `docs/updating.md`.
 
 `second_brain_query` accepts `pattern` (string) and `limit` (1–500, default 50).
 `vault_health` accepts `repo` (string) for plugin manifest validation.
@@ -163,8 +159,8 @@ come back from `resources/list`:
   generated digest of confirmed + quarantined preferences plus the
   last three retired entries. Auto-regenerated on first read if the
   file does not exist yet.
-- `osb://digest/latest` — same body as the `brain_digest` tool's
-  default (24h) Markdown window.
+- `osb://digest/latest` — same body as `brain_brief` `view="digest"`
+  in its default (24h) Markdown window.
 - `osb://status` — Brain operational snapshot: counts (inbox /
   preferences by status / retired / log_days / snapshots), last
   `dream` and `apply-evidence` timestamps, and a sanity flag for
@@ -290,7 +286,7 @@ generates deduped triggers from semantic-health and retention data,
 `list` / `history` read by effective lifecycle status,
 `acknowledge` / `dismiss` / `act` transition one trigger. Cooldown keys
 keep the same issue from reappearing while an earlier trigger is open
-or cooling down; `brain_morning_brief` surfaces capped pending
+or cooling down; `brain_brief` `view="morning"` surfaces capped pending
 triggers and marks them delivered (once per `trigger_cooldown_days`).
 
 `brain_deep_synthesis` assembles a deterministic topic dossier

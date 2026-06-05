@@ -377,11 +377,11 @@ describe("brain_apply_evidence", () => {
 // brain_digest
 // ---------------------------------------------------------------------------
 
-describe("brain_digest", () => {
+describe("brain_brief view=digest", () => {
   test("empty vault returns 'no changes' markdown", async () => {
     const server = makeServer();
     await initialize(server);
-    const r = await call(server, "brain_digest", {});
+    const r = await call(server, "brain_brief", { view: "digest" });
     expect(r.result.isError).toBe(false);
     const s = r.result.structuredContent;
     expect(s.empty).toBe(true);
@@ -405,7 +405,8 @@ describe("brain_digest", () => {
     });
     const server = makeServer();
     await initialize(server);
-    const r = await call(server, "brain_digest", {
+    const r = await call(server, "brain_brief", {
+      view: "digest",
       since: "2026-05-14T00:00:00Z",
       until: "2026-05-14T23:59:59Z",
     });
@@ -435,7 +436,8 @@ describe("brain_digest", () => {
     });
     const server = makeServer();
     await initialize(server);
-    const r = await call(server, "brain_digest", {
+    const r = await call(server, "brain_brief", {
+      view: "digest",
       since: "2026-05-14T00:00:00Z",
       until: "2026-05-14T23:59:59Z",
     });
@@ -447,7 +449,7 @@ describe("brain_digest", () => {
   test("format=json returns valid JSON content", async () => {
     const server = makeServer();
     await initialize(server);
-    const r = await call(server, "brain_digest", { format: "json" });
+    const r = await call(server, "brain_brief", { view: "digest", format: "json" });
     expect(r.result.isError).toBe(false);
     const s = r.result.structuredContent;
     expect(s.format).toBe("json");
@@ -629,7 +631,7 @@ describe("deprecated MCP tools — advertised list", () => {
       "brain_feedback",
       "brain_dream",
       "brain_apply_evidence",
-      "brain_digest",
+      "brain_brief",
       "brain_query",
       "brain_doctor",
       "brain_backlinks",
