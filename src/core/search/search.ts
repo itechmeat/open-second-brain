@@ -60,6 +60,7 @@ import type {
 } from "./types.ts";
 import type { StructuredRecallQueryDocument } from "./structured-query.ts";
 import { expandQuery } from "./query-expansion.ts";
+import { applyTunedParameters, loadTunedParameters } from "./tuning.ts";
 
 interface SemanticPolicy {
   /** caller asked for semantic on or off (true), or accepted the default (false). */
@@ -203,6 +204,13 @@ export async function search(
   if (!query) {
     throw new SearchError("INVALID_INPUT", "missing required argument: query");
   }
+  // Opt-in self-tuning (t_ae973491): apply the persisted, re-validated
+  // grid point. applyTunedParameters disarms selfTuningEnabled, so the
+  // applied config can never recurse. An explicit opts.expand always
+  // wins over the tuned expansion default.
+  const tuned = config.recall.selfTuningEnabled ? loadTunedParameters(config.vault) : null;
+  if (tuned !== null) config = applyTunedParameters(config, tuned);
+  const expandActive = opts.expand ?? (tuned !== null && tuned.expansion);
   const limit = Math.max(1, Math.min(100, opts.limit ?? 10));
   const pathPrefix = assertSafePathPrefix(opts.pathPrefix);
   const policy = resolveSemanticPolicy(config, opts);
@@ -210,7 +218,7 @@ export async function search(
   // Opt-in local expansion (t_2fa95db1): an explicit structured
   // document always wins; expansion only fills the gap.
   const structured =
-    opts.structuredQuery ?? (opts.expand === true ? expandQuery(config.vault, query) : undefined);
+    opts.structuredQuery ?? (expandActive === true ? expandQuery(config.vault, query) : undefined);
   const sessionFocus =
     opts.sessionFocus === undefined
       ? readActiveSessionFocus(config, opts.focusSession, Date.now())
@@ -276,10 +284,11 @@ export async function search(
         const actFp = config.recall.activationEnabled
           ? activationStateFingerprint(config.vault)
           : "off";
+        const tuneFp = tuned !== null ? JSON.stringify(tuned) : "off";
         cacheKey = buildCacheKey(
           keyOpts,
           basePlan.planHash,
-          `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}`,
+          `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}|tune:${tuneFp}`,
         );
         const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
         if (hit) return hit;
@@ -301,7 +310,7 @@ export async function search(
 
     // Keyword candidates.
     let kwOutcome = runFtsQueryDetailed(store, keywordQuery, {
-      limit: limit * 3,
+      limit: limit * config.recall.poolMultiplier,
       pathPrefix,
     });
     let kwHits = kwOutcome.hits;
@@ -324,7 +333,7 @@ export async function search(
       if (expandedTerms.length > 0) {
         plan = buildQueryPlan(keywordQuery, expandedTerms, structured?.intent);
         kwOutcome = runFtsQueryDetailed(store, keywordQuery, {
-          limit: limit * 3,
+          limit: limit * config.recall.poolMultiplier,
           pathPrefix,
           expandedTerms,
         });

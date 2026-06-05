@@ -426,6 +426,21 @@ export interface ResolvedRecallConfig {
    * Plain (non-evidence-pack) searches never broaden either way.
    */
   readonly twoPassEnabled: boolean;
+  /**
+   * Keyword candidate-pool width as a multiple of the requested limit
+   * (link-recall-intelligence, t_ae973491). Default 3 preserves the
+   * historical `limit * 3` FTS pools; the self-tuner may select 4 or
+   * 5. The semantic pool keeps its own `max(limit * 5, 50)` floor.
+   */
+  readonly poolMultiplier: number;
+  /**
+   * Opt-in self-tuning recall (t_ae973491). When true, `search()`
+   * applies the bounded parameters persisted in
+   * `Brain/search/tuning.json` (validated on read, fail-soft to the
+   * configured defaults). Off by default - tuning never activates
+   * silently.
+   */
+  readonly selfTuningEnabled: boolean;
 }
 
 export interface ResolvedSearchConfig {

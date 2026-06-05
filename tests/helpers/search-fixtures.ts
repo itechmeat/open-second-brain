@@ -71,6 +71,8 @@ export function makeConfig(opts: {
   twoPassEnabled?: boolean;
   /** Rank-fusion mode; defaults to "linear". */
   fusionMode?: "linear" | "rrf";
+  /** Opt-in self-tuning recall; defaults to false. */
+  selfTuningEnabled?: boolean;
   /** RRF damping constant; defaults to 60. */
   rrfK?: number;
 }): ResolvedSearchConfig {
@@ -122,6 +124,8 @@ export function makeConfig(opts: {
       learnedWeightsEnabled: opts.learnedWeightsEnabled ?? false,
       activationEnabled: opts.activationEnabled ?? true,
       twoPassEnabled: opts.twoPassEnabled ?? true,
+      poolMultiplier: 3,
+      selfTuningEnabled: opts.selfTuningEnabled ?? false,
     }),
   });
 }

@@ -58,6 +58,8 @@ function semanticConfig(
       learnedWeightsEnabled: false,
       activationEnabled: true,
       twoPassEnabled: true,
+      poolMultiplier: 3,
+      selfTuningEnabled: false,
     }),
     ...overrides,
   });
