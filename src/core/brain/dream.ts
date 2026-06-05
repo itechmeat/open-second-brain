@@ -424,6 +424,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // Snapshot must succeed before any mutation. If it fails, the
   // function throws and nothing changes on disk.
   let snapshotPathStr: string | undefined;
+  // Honor an already-expired deadline BEFORE spending snapshot I/O.
+  opts.safeguard?.checkpoint();
   if (!dryRun) {
     runId = nextAvailableDreamRunId(vault, runId);
     const snap = createSnapshot(vault, runId);

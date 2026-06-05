@@ -111,10 +111,10 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
     }
     if (e instanceof SafeguardTimeoutError) {
       // Operational failure with a precise cause: the cooperative
-      // deadline tripped at a checkpoint (t_06784b8d).
-      process.stdout.write(
-        JSON.stringify({ ok: false, timed_out: true, message: e.message }) + "\n",
-      );
+      // deadline tripped at a checkpoint (t_06784b8d). Search verbs
+      // report errors as stderr text regardless of --json, so the
+      // timeout follows the same convention.
+      process.stderr.write(`error: ${e.message} [SAFEGUARD_TIMEOUT]\n`);
       return 1;
     }
     if (e instanceof SearchError) {

@@ -124,12 +124,13 @@ describe("schema_inspect", () => {
   }
 
   test("view=explain_type forwards the token", async () => {
-    // An unknown token must surface the explain error, proving the
-    // token argument reaches the underlying handler.
-    const outcome = await Promise.allSettled([
-      run("schema_inspect", { view: "explain_type", token: "no-such-token" }),
-    ]);
-    expect(outcome[0]).toBeDefined();
+    // The explanation must echo the normalized token, proving the
+    // argument reaches the underlying handler.
+    const result = (await run("schema_inspect", {
+      view: "explain_type",
+      token: "no-such-token",
+    })) as Record<string, unknown>;
+    expect(result["token"]).toBe("no-such-token");
   });
 
   test("invalid view raises a clear error", async () => {

@@ -1085,9 +1085,13 @@ async function toolBrainDigest(
   const until = coerceIsoDate(args, "until");
   const format = coerceFormat(args) satisfies DigestFormat;
 
+  // Pin ONE effective until instant so the rendered content, the
+  // snapshot render, and the snapshot date key all describe the same
+  // window even when the caller omitted `until`.
+  const effectiveUntil = until ?? new Date();
   const result = renderDigest(ctx.vault, {
     ...(since ? { since } : {}),
-    ...(until ? { until } : {}),
+    until: effectiveUntil,
     format,
     linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
   });
@@ -1100,13 +1104,13 @@ async function toolBrainDigest(
   // Snapshot the structured summary, not the rendered string: render
   // a JSON digest for the snapshot regardless of the caller's format
   // so the run-over-run diff keys on data.
-  const digestDate = isoDate(until ?? new Date());
+  const digestDate = isoDate(effectiveUntil);
   const snapshotSource =
     format === "json"
       ? result.content
       : renderDigest(ctx.vault, {
           ...(since ? { since } : {}),
-          ...(until ? { until } : {}),
+          until: effectiveUntil,
           format: "json",
           linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
         }).content;

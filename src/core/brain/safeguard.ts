@@ -124,19 +124,23 @@ export interface CappedOutput {
 /**
  * Cap a text payload at `maxBytes` UTF-8 bytes without splitting a
  * character. The marker makes silent truncation impossible to misread
- * as a complete report.
+ * as a complete report, and its bytes count AGAINST the cap, so the
+ * returned text never exceeds `maxBytes` (unless the cap is smaller
+ * than the marker itself, in which case the marker alone returns).
  */
 export function capOutput(text: string, maxBytes: number): CappedOutput {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) {
     return { text, truncated: false };
   }
+  const marker = `\n[output truncated at ${maxBytes} bytes]`;
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(marker, "utf8"));
   let kept = "";
   let bytes = 0;
   for (const ch of text) {
     const w = Buffer.byteLength(ch, "utf8");
-    if (bytes + w > maxBytes) break;
+    if (bytes + w > budget) break;
     kept += ch;
     bytes += w;
   }
-  return { text: `${kept}\n[output truncated at ${maxBytes} bytes]`, truncated: true };
+  return { text: `${kept}${marker}`, truncated: true };
 }

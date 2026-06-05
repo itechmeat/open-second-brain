@@ -129,17 +129,20 @@ describe("capOutput", () => {
     expect(capOutput("hello", 100)).toEqual({ text: "hello", truncated: false });
   });
 
-  test("over the cap truncates with an explicit marker", () => {
-    const out = capOutput("a".repeat(100), 10);
+  test("over the cap truncates with an explicit marker inside the budget", () => {
+    const out = capOutput("a".repeat(500), 100);
     expect(out.truncated).toBe(true);
     expect(out.text).toContain("truncated");
-    expect(out.text.startsWith("aaaaaaaaaa")).toBe(true);
+    expect(out.text.startsWith("aaa")).toBe(true);
+    // The marker counts against the cap: the total stays within it.
+    expect(Buffer.byteLength(out.text, "utf8")).toBeLessThanOrEqual(100);
   });
 
   test("multibyte input is not split mid-character", () => {
-    const out = capOutput("я".repeat(50), 11);
+    const out = capOutput("я".repeat(200), 100);
     expect(out.truncated).toBe(true);
     // Every kept character survives intact (no U+FFFD replacement).
     expect(out.text).not.toContain("�");
+    expect(Buffer.byteLength(out.text, "utf8")).toBeLessThanOrEqual(100);
   });
 });

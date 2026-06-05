@@ -415,7 +415,7 @@ async function indexInto(
     }
 
     if (opts?.embeddings) {
-      await populateEmbeddings(store, config, stats, opts?.forceCost === true);
+      await populateEmbeddings(store, config, stats, opts?.forceCost === true, opts?.safeguard);
     }
 
     const now = new Date().toISOString();
@@ -479,6 +479,7 @@ async function populateEmbeddings(
   config: ResolvedSearchConfig,
   stats: MutableStats,
   forceCost: boolean,
+  safeguard?: import("../brain/safeguard.ts").Safeguard,
 ): Promise<void> {
   if (!config.semantic.enabled) {
     throw new SearchError(
@@ -531,6 +532,9 @@ async function populateEmbeddings(
   const superBatch = batchSize * Math.max(1, config.semantic.concurrency);
 
   for (let i = 0; i < pending.length; i += superBatch) {
+    // Cooperative deadline: embedding batches are the other long
+    // phase of an index run - abort between batches, never mid-batch.
+    safeguard?.checkpoint();
     const batch = pending.slice(i, i + superBatch);
     const texts = batch.map((p) => p.content);
     const vectors = await provider.embed(texts);

@@ -1336,7 +1336,11 @@ function checkRemovedToolReferences(vault: string, issues: DoctorIssue[]): void 
   collectMarkdownFiles(dirs.brain, candidates);
   for (const name of ["CLAUDE.md", "AGENTS.md"]) {
     const p = join(vault, name);
-    if (existsSync(p) && statSync(p).isFile()) candidates.push(p);
+    try {
+      if (existsSync(p) && statSync(p).isFile()) candidates.push(p);
+    } catch {
+      // One unreadable root file must not disable the whole scan.
+    }
   }
   collectMarkdownFiles(join(vault, ".claude", "skills"), candidates);
 
