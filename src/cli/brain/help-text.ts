@@ -48,6 +48,7 @@ Brain verbs (observing memory):
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
   tiers               Frontmatter tier guard: check identity-field drift, restore or accept
   secret              Capability-gated secret custody: set, list, rm, run (use w/o exposure)
+  maintenance         Quiet-window, lease-guarded lane for heavy passes (dream, reindex)
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -280,6 +281,14 @@ export const VERB_HELP: Record<string, string> = {
     "redacted before it reaches the caller. Every operation lands a\n" +
     "no-values record in Brain/log/secret-custody/. Protects against\n" +
     "context leakage and vault sync exposure - not against root.\n",
+  maintenance:
+    "usage: o2b brain maintenance run [--force] [--window H-H] [--tz ZONE] [--busy-minutes N] [--busy-threshold N] | status [--limit N]  [--vault <path>] [--json]\n" +
+    "Quiet-window, lease-guarded lane for heavy passes. run gates on the\n" +
+    "local-time window (unset = always open), recent interactive query-rate\n" +
+    "from recall telemetry, and an expiring SQLite lease no second worker\n" +
+    "can grab, then executes dream + reindex stale-first. --force bypasses\n" +
+    "the soft gates but never the lease. Every attempt - including gate\n" +
+    "refusals - lands in a bounded journal; status renders lease + journal.\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +

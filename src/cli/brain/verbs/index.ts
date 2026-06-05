@@ -28,6 +28,7 @@ export { cmdBrainLabel } from "./label.ts";
 export { cmdBrainAttr } from "./attr.ts";
 export { cmdBrainTiers } from "./tiers.ts";
 export { cmdBrainSecret } from "./secret.ts";
+export { cmdBrainMaintenance } from "./maintenance.ts";
 export { cmdBrainAudit } from "./audit.ts";
 export { cmdBrainMorningBrief } from "./morning-brief.ts";
 export { cmdBrainCodec } from "./codec.ts";

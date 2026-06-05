@@ -41,6 +41,7 @@ import {
   cmdBrainAttr,
   cmdBrainTiers,
   cmdBrainSecret,
+  cmdBrainMaintenance,
   cmdBrainAudit,
   cmdBrainMorningBrief,
   cmdBrainCodec,
@@ -191,6 +192,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainTiers(rest);
       case "secret":
         return await cmdBrainSecret(rest);
+      case "maintenance":
+        return await cmdBrainMaintenance(rest);
       case "audit":
         return await cmdBrainAudit(rest);
       case "morning-brief":
