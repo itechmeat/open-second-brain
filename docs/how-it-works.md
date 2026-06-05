@@ -995,6 +995,36 @@ A second brain's value compounds through connections, but until now the graph on
 
 **Every pass reports to one place.** Each feature appends one run-level record to `Brain/metrics/<surface>.jsonl` (`o2b.metrics.v1` envelope) - the stable contract a dashboard reads without importing internals, documented in `docs/metrics.md`.
 
+## Stability and trust (since v1.0.0)
+
+The first major release froze the public contracts - the advertised
+MCP tool surface, the CLI verb tree, configuration keys, the search
+schema ladder, and every on-disk schema string - under
+`docs/stability.md`, and spent its one breaking change on deleting the
+18 hidden alias tools from the token-diet era. A stale client that
+calls a removed name gets a tombstone naming the exact replacement,
+and `brain_doctor` flags vault-side text that still references one.
+
+Three hardening layers ship alongside the freeze. A cooperative
+safeguard gives every long pass (dream, reindex, bridge discovery,
+communities, the maintenance lane) a deadline checked at natural
+iteration boundaries: Bun runs SQLite synchronously, so the honest
+contract is to abort BETWEEN atomic writes rather than pretend an
+async cancellation. The staged dream pipeline turns the
+self-improvement loop inspectable before anything lands: `stage`
+persists the dry-run plan as a discardable bundle, `validate`
+recomputes it and reports drift, `apply` re-validates with the clock
+it runs with and then executes the one and only promotion engine -
+determinism guarantees the live run performs exactly the reviewed
+plan. And the reporting surfaces become self-comparing: with
+snapshots enabled, each digest / daily / weekly run persists a
+machine-diffable JSON snapshot and reports a deterministic "since
+last run" delta keyed on stable identities, never on array order.
+Presentation grows timezone awareness on the same principle the rest
+of the system follows - storage stays canonical UTC, conversion
+happens at the boundary, and an unconfigured vault renders
+byte-identically.
+
 ## Safety properties
 
 These are invariants of the system, not configuration to enable.

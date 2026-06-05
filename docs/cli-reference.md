@@ -221,6 +221,19 @@ o2b search <query> --expand   deterministic lex/vec/hyde expansion of a bare que
 
 Wikilinks to frontmatter `aliases:` resolve at index materialization (schema v7): exact paths always win, a real basename is never shadowed, collisions resolve first-wins by sorted path, and `o2b search status` counts the pass via `IndexStats.aliasResolved`. Bridge discovery and clusters also run as maintenance-lane tasks after `reindex`. Self-tuning only changes behavior under `search_self_tuning_enabled` (or `OPEN_SECOND_BRAIN_SEARCH_SELF_TUNING=1`); an explicit `--expand`/`expand` always wins over the tuned default. Every surface appends one run-level record to `Brain/metrics/<surface>.jsonl` - the dashboard data contract documented in `docs/metrics.md`.
 
+## Stability and trust (since v1.0.0)
+
+```text
+o2b brain dream               [run] [--dry-run] | stage | validate <run-id> | apply <run-id> | discard <run-id> | list - staged lifecycle over a persisted proposal bundle; validate/apply exit 1 on drift
+o2b brain doctor              gains the removed-tool-reference warning: vault notes, root instruction files, and installed skills naming a tool removed in 1.0.0 are flagged with the replacement
+o2b brain daily | weekly | monthly | morning-brief | timeline
+                              gain additive timezone + local_time JSON fields when `timezone:` is configured; storage stays canonical UTC
+o2b brain digest | daily | weekly
+                              with report_snapshots_enabled persist Brain/reports/<surface>/<date>.json and report a deterministic Since-last-run delta
+```
+
+Long-running operations (dream, `o2b search index | reindex`, bridges discover, clusters run, the maintenance lane) run under a cooperative safeguard deadline: `safeguard_timeout_seconds` (default 600, `0` disables, env `OPEN_SECOND_BRAIN_SAFEGUARD_TIMEOUT`) with per-operation overrides like `safeguard_timeout_dream_seconds`. A tripped deadline aborts at the next checkpoint - between atomic writes - and reports `{ok:false, timed_out:true}` on exit 1; maintenance-lane task results carry `timed_out` per task. The frozen-surface policy lives in `docs/stability.md`; the 0.x to 1.0.0 migration table in `docs/updating.md`.
+
 ## Vault scope
 
 Single exclusion policy for every vault walker.

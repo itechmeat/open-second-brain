@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-06-05
+
+Stability & Trust: the first major release formalizes what eleven
+release cycles built. The public contracts - the MCP tool surface,
+the CLI verb tree, configuration keys, the search schema ladder, and
+every on-disk format schema - are now frozen under an explicit
+stability policy (`docs/stability.md`), and the one breaking change a
+major allows is spent deliberately: the 18 hidden alias tools left
+over from the token-diet consolidation are removed, replaced by
+server-side tombstones that answer a stale call with the exact
+replacement tool and view. The hardening set makes "production-ready"
+an earned label: every long-running operation (dream, reindex, bridge
+discovery, communities, the maintenance lane) runs under a
+cooperative safeguard deadline with clean abort semantics and
+config-resolvable budgets; the self-improvement loop gains a staged
+stage -> validate -> apply lifecycle over a persisted, discardable
+proposal bundle while `dream()` stays the only promotion engine;
+user-facing and LLM-facing timestamps render the operator's
+configured timezone at the presentation layer while storage stays
+canonical UTC; and the digest / daily / weekly surfaces persist
+machine-diffable snapshots that report a deterministic "since last
+run" delta. A vault that configures nothing behaves identically -
+except calls to the 18 removed aliases, which is the documented
+break with a migration table in `docs/updating.md`.
+
+### Removed
+
+- **The 18 deprecated hidden MCP alias tools** (10 brain aliases of
+  `brain_brief` / `brain_analytics` views, 8 schema aliases of
+  `schema_inspect` views). Hidden from `tools/list` since v0.34.0,
+  they stayed callable; 1.0.0 deletes the alias layer so the
+  advertised list and the callable surface are the same set. Calling
+  a removed name answers an INVALID_PARAMS tombstone naming the
+  replacement (`brain_digest was removed in 1.0.0; call brain_brief
+  with view="digest"`). Full table in `docs/updating.md`.
+
+### Added
+
+- **Stability policy.** `docs/stability.md` pins the frozen contracts
+  and defines what counts as breaking per class; `docs/updating.md`
+  gains the 0.x -> 1.0.0 upgrade section.
+- **Doctor removed-surface check.** `removed-tool-reference` warnings
+  for Brain notes, root instruction files, and installed skills that
+  still name a removed tool, each with its replacement.
+- **Operation safeguard.** A cooperative deadline object checkpointed
+  at natural iteration boundaries in dream, indexing, bridge
+  discovery, communities, and the maintenance lane - honest abort
+  between atomic writes, never a fake async cancellation. Budgets
+  resolve per-operation (`safeguard_timeout_<op>_seconds`) -> env
+  (`OPEN_SECOND_BRAIN_SAFEGUARD_TIMEOUT`) -> global
+  (`safeguard_timeout_seconds`) -> default 600s; `0` disables. Lane
+  task results classify `timed_out`; persisted error strings cap at
+  4096 bytes with an explicit marker.
+- **Staged dream pipeline.** `o2b brain dream stage | validate
+  <run-id> | apply <run-id> | discard <run-id> | list` (MCP
+  `brain_dream` gains an `action` parameter - no new tools). Stage
+  persists a reviewable bundle under `Brain/dream/staged/<run-id>/`
+  (manifest with schema `o2b.dream-stage.v1`, human REPORT.md,
+  sources with content hashes, proposals as data); validate
+  recomputes the clock-normalized plan and reports drift; apply
+  re-validates and runs the same engine live, archives the bundle,
+  and records a `dream_stage` metric. A drifted bundle aborts before
+  any write.
+- **Timezone presentation layer.** With `timezone:` configured
+  (env `VAULT_TIMEZONE`), brief and analytics envelopes gain additive
+  `timezone` + `local_time` fields and human output renders local
+  wall time; storage, frontmatter, log headings, and run ids stay
+  canonical UTC.
+- **Dual-output reports.** With `report_snapshots_enabled` (env
+  `OPEN_SECOND_BRAIN_REPORT_SNAPSHOTS`), digest / daily / weekly runs
+  persist `Brain/reports/<surface>/<date>.json` (schema
+  `o2b.report-snapshot.v1`) and report a deterministic keyed delta -
+  arrays diff by stable identity, never by order - as a `delta` JSON
+  field and a "Since last run" block.
+
+### Changed
+
+- Error-message prefixes inside the consolidated view handlers now
+  name the consolidated form (`brain_brief view=monthly: ...`).
+- The `o2b brain dream` verb accepts an optional positional action;
+  the bare form is unchanged.
+
 ## [0.45.0] - 2026-06-05
 
 Link & Recall Intelligence Suite: the graph self-organizes and recall
@@ -4822,6 +4904,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.0.0]: https://github.com/itechmeat/open-second-brain/compare/v0.45.0...v1.0.0
 [0.45.0]: https://github.com/itechmeat/open-second-brain/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/itechmeat/open-second-brain/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/itechmeat/open-second-brain/compare/v0.43.0...v0.43.1
