@@ -261,6 +261,14 @@ export interface DreamOptions {
    * threaded yet); the CLI always provides the value.
    */
   readonly agentName?: string;
+  /**
+   * Cooperative deadline (t_06784b8d): checkpointed at entry and at
+   * the phase seams (pre-mutation, post-promote, pre-finalize). A
+   * tripped guard on the mutation path leaves the durable workrun
+   * dangling, which is exactly the integrity contract - the next
+   * pass spots and reports it.
+   */
+  readonly safeguard?: import("./safeguard.ts").Safeguard;
 }
 
 // ----- Internal scan types ------------------------------------------------
@@ -307,6 +315,7 @@ interface ScanResult {
 export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun === true;
+  opts.safeguard?.checkpoint();
   const cfg = loadBrainConfig(vault);
   let runId = formatRunId(now);
   const wikilinkToRun = `[[Brain/log/${isoDate(now)}]]`;
@@ -446,6 +455,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // no-op early-return). The handle is null until the exec branch
   // claims it; `finally` finalises if non-null.
   let workrun: WorkrunHandle | null = null;
+  opts.safeguard?.checkpoint();
   if (!dryRun) {
     workrun = openWorkrun(vault, runId);
     workrun.checkpoint(WORKRUN_PHASE.clusterComplete);
@@ -623,6 +633,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // dream.ts execution loop runs promote (writePreference) then retire
   // (moveToRetired) sequentially; one checkpoint covers both
   // mutations so the workrun stays compact yet recovery-meaningful.
+  opts.safeguard?.checkpoint();
   if (workrun !== null) {
     workrun.checkpoint(WORKRUN_PHASE.promoteComplete);
     // Multi-phase dream (F2): synthesize = the promote/confirm writes

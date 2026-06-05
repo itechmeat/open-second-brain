@@ -1,5 +1,10 @@
 import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import { dream } from "../../../core/brain/dream.ts";
+import {
+  createSafeguard,
+  resolveSafeguardTimeoutMs,
+  SafeguardTimeoutError,
+} from "../../../core/brain/safeguard.ts";
 import { parse, fail, ok, resolveBrainVault, parseOptionalIsoDate } from "../helpers.ts";
 
 export async function cmdBrainDream(argv: string[]): Promise<number> {
@@ -34,8 +39,18 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       ...(now !== null ? { now } : {}),
       dryRun: Boolean(flags["dry-run"]),
       ...(agent ? { agentName: agent } : {}),
+      safeguard: createSafeguard({
+        operation: "dream",
+        timeoutMs: resolveSafeguardTimeoutMs("dream", config ?? undefined),
+      }),
     });
   } catch (exc) {
+    if (exc instanceof SafeguardTimeoutError && flags["json"]) {
+      process.stdout.write(
+        JSON.stringify({ ok: false, timed_out: true, message: exc.message }) + "\n",
+      );
+      return 1;
+    }
     return fail(`dream failed: ${(exc as Error).message ?? exc}`);
   }
 

@@ -15,6 +15,11 @@
 
 import { defaultConfigPath, resolveVault } from "../core/config.ts";
 import {
+  createSafeguard,
+  resolveSafeguardTimeoutMs,
+  SafeguardTimeoutError,
+} from "../core/brain/safeguard.ts";
+import {
   captureRecallFeedback,
   indexCheck,
   indexStatus,
@@ -103,6 +108,14 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
     if (e instanceof CliError) {
       process.stderr.write(`error: ${e.message}\n`);
       return 2;
+    }
+    if (e instanceof SafeguardTimeoutError) {
+      // Operational failure with a precise cause: the cooperative
+      // deadline tripped at a checkpoint (t_06784b8d).
+      process.stdout.write(
+        JSON.stringify({ ok: false, timed_out: true, message: e.message }) + "\n",
+      );
+      return 1;
     }
     if (e instanceof SearchError) {
       process.stderr.write(`error: ${e.message} [${e.code}]\n`);
@@ -662,7 +675,12 @@ async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
   const cfg = resolveConfig(flags);
 
   const events: IndexProgressEvent[] = [];
+  const safeguard = createSafeguard({
+    operation: "reindex",
+    timeoutMs: resolveSafeguardTimeoutMs("reindex", flags["config"] as string | undefined),
+  });
   const stats = await indexVault(cfg, {
+    safeguard,
     embeddings: flags["embeddings"] === true,
     force: flags["force"] === true,
     forceCost: flags["force-cost"] === true,
@@ -752,6 +770,10 @@ async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
   }
   const cfg = resolveConfig(flags);
   const stats = await reindexVault(cfg, {
+    safeguard: createSafeguard({
+      operation: "reindex",
+      timeoutMs: resolveSafeguardTimeoutMs("reindex", flags["config"] as string | undefined),
+    }),
     embeddings: flags["embeddings"] === true,
     forceCost: flags["force-cost"] === true,
     onFile: flags["verbose"] ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`) : undefined,

@@ -70,6 +70,7 @@ import {
   materializeClusterNotes,
 } from "../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../core/brain/metrics.ts";
+import { createSafeguard, resolveSafeguardTimeoutMs } from "../core/brain/safeguard.ts";
 import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../core/search/benchmark.ts";
 import { loadTunedParameters, resetTuning, tuneRecall } from "../core/search/tuning.ts";
 import { currentLease } from "../core/brain/maintenance/lease.ts";
@@ -2070,6 +2071,14 @@ async function toolBrainMaintenance(
     vault: ctx.vault,
     configPath: ctx.configPath ?? undefined,
   });
+  // Same per-task deadlines as the CLI lane (t_06784b8d): one fresh
+  // cooperative safeguard per task, budget resolved per-op -> global
+  // -> default.
+  const laneSafeguard = (operation: "dream" | "reindex" | "bridges" | "clusters") =>
+    createSafeguard({
+      operation,
+      timeoutMs: resolveSafeguardTimeoutMs(operation, ctx.configPath ?? undefined),
+    });
   const result = await runMaintenance(ctx.vault, {
     now,
     holder: `${agent}@${process.pid}`,
@@ -2079,13 +2088,13 @@ async function toolBrainMaintenance(
       {
         name: "dream",
         run: async () => {
-          dream(ctx.vault, { now });
+          dream(ctx.vault, { now, safeguard: laneSafeguard("dream") });
         },
       },
       {
         name: "reindex",
         run: async () => {
-          await indexVault(searchConfig);
+          await indexVault(searchConfig, { safeguard: laneSafeguard("reindex") });
         },
       },
       // Same lane contract as the CLI verb (link-recall-intelligence):
@@ -2099,6 +2108,7 @@ async function toolBrainMaintenance(
           try {
             const report = discoverBridges(store, {
               dismissed: readDismissedBridges(ctx.vault),
+              safeguard: laneSafeguard("bridges"),
             });
             writeBridgeProposals(ctx.vault, report, { now });
             try {
@@ -2125,7 +2135,7 @@ async function toolBrainMaintenance(
         run: async () => {
           const store = await Store.open(searchConfig, { mode: "read" });
           try {
-            const communities = detectCommunities(store, {});
+            const communities = detectCommunities(store, { safeguard: laneSafeguard("clusters") });
             const materialized = materializeClusterNotes(ctx.vault, communities, { store, now });
             try {
               appendMetric(ctx.vault, {

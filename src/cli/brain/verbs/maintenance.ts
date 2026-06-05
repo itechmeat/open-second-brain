@@ -25,6 +25,7 @@ import {
   materializeClusterNotes,
 } from "../../../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../../../core/brain/metrics.ts";
+import { createSafeguard, resolveSafeguardTimeoutMs } from "../../../core/brain/safeguard.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { Store } from "../../../core/search/store.ts";
 import { currentLease, MAINTENANCE_LEASE_NAME } from "../../../core/brain/maintenance/lease.ts";
@@ -113,6 +114,14 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
     const holder =
       ((flags["agent"] as string | undefined)?.trim() || resolveAgentName(config)) +
       `@${process.pid}`;
+    // One fresh deadline per lane task: each long pass gets its own
+    // budget (per-op key -> global -> default), created lazily so the
+    // clock starts when the task starts, not when the lane is gated.
+    const laneSafeguard = (operation: "dream" | "reindex" | "bridges" | "clusters") =>
+      createSafeguard({
+        operation,
+        timeoutMs: resolveSafeguardTimeoutMs(operation, config ?? undefined),
+      });
     const searchConfig = resolveSearchConfig({ vault, configPath: config ?? undefined });
     const result = await runMaintenance(vault, {
       now,
@@ -124,13 +133,13 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
         {
           name: "dream",
           run: async () => {
-            dream(vault, { now });
+            dream(vault, { now, safeguard: laneSafeguard("dream") });
           },
         },
         {
           name: "reindex",
           run: async () => {
-            await indexVault(searchConfig);
+            await indexVault(searchConfig, { safeguard: laneSafeguard("reindex") });
           },
         },
         // Link-recall-intelligence passes ride the same lease, after
@@ -143,6 +152,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
             try {
               const report = discoverBridges(store, {
                 dismissed: readDismissedBridges(vault),
+                safeguard: laneSafeguard("bridges"),
               });
               writeBridgeProposals(vault, report, { now });
               try {
@@ -169,7 +179,9 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
           run: async () => {
             const store = await Store.open(searchConfig, { mode: "read" });
             try {
-              const communities = detectCommunities(store, {});
+              const communities = detectCommunities(store, {
+                safeguard: laneSafeguard("clusters"),
+              });
               const materialized = materializeClusterNotes(vault, communities, { store, now });
               try {
                 appendMetric(vault, {

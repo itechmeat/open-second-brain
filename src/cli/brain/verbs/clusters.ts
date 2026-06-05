@@ -19,6 +19,11 @@ import {
   COMMUNITY_DEFAULT_MIN_SIZE,
 } from "../../../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../../../core/brain/metrics.ts";
+import {
+  createSafeguard,
+  resolveSafeguardTimeoutMs,
+  SafeguardTimeoutError,
+} from "../../../core/brain/safeguard.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
@@ -104,7 +109,14 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
 
     const now = new Date();
     try {
-      const communities = detectCommunities(store, minSize !== undefined ? { minSize } : {});
+      const safeguard = createSafeguard({
+        operation: "clusters",
+        timeoutMs: resolveSafeguardTimeoutMs("clusters", config ?? undefined),
+      });
+      const communities = detectCommunities(store, {
+        ...(minSize !== undefined ? { minSize } : {}),
+        safeguard,
+      });
       const result = materializeClusterNotes(vault, communities, { store, now });
       try {
         appendMetric(vault, {
@@ -146,9 +158,10 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
       await store.close();
     }
   } catch (exc) {
+    const timedOut = exc instanceof SafeguardTimeoutError;
     const message = `clusters ${action} failed: ${(exc as Error).message ?? exc}`;
     if (asJson) {
-      okJson({ ok: false, message });
+      okJson({ ok: false, message, ...(timedOut ? { timed_out: true } : {}) });
       return 1;
     }
     return fail(message);

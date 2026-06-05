@@ -67,6 +67,11 @@ export interface DiscoverBridgesOptions {
   readonly maxCandidates?: number;
   /** Pair keys (see {@link bridgePairKey}) to suppress. */
   readonly dismissed?: ReadonlySet<string>;
+  /**
+   * Cooperative deadline (t_06784b8d): checkpointed at entry and once
+   * per scanned candidate document.
+   */
+  readonly safeguard?: import("../safeguard.ts").Safeguard;
 }
 
 /** Canonical unordered pair key. */
@@ -86,6 +91,7 @@ export function discoverBridges(
   const maxProposals = Math.max(1, opts.maxProposals ?? BRIDGE_DEFAULT_MAX_PROPOSALS);
   const maxCandidates = Math.max(1, opts.maxCandidates ?? BRIDGE_DEFAULT_MAX_CANDIDATES);
   const dismissed = opts.dismissed ?? new Set<string>();
+  opts.safeguard?.checkpoint();
 
   if (!store.vecLoaded() || store.countEmbeddings() === 0) {
     return Object.freeze({
@@ -123,6 +129,8 @@ export function discoverBridges(
   // Best similarity per unordered pair.
   const best = new Map<string, BridgeProposal>();
   for (const candidate of candidates) {
+    // Cooperative deadline: abort between candidates (read-only scan).
+    opts.safeguard?.checkpoint();
     const chunks = store.chunksForDocument(candidate.id).slice(0, BRIDGE_CHUNKS_PER_DOC);
     for (const chunk of chunks) {
       const embedding = store.embeddingForChunk(chunk.id);
