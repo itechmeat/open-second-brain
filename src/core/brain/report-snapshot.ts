@@ -33,6 +33,9 @@ export const REPORT_SNAPSHOT_SCHEMA_VERSION = "o2b.report-snapshot.v1";
 /** Fields stripped before snapshotting: volatile per-render decoration. */
 const VOLATILE_KEYS: ReadonlySet<string> = new Set([
   "generated_at",
+  // CLI surfaces snapshot raw core envelopes whose render stamp is
+  // camelCase - both spellings are per-render decoration.
+  "generatedAt",
   "run_id",
   "local_time",
   "timezone",

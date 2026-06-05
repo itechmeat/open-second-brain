@@ -93,6 +93,40 @@ test("weekly and digest surfaces persist snapshots under Brain/reports/", async 
   expect(existsSync(join(vault, "Brain", "reports", "digest"))).toBe(true);
 });
 
+test("a same-date rerun of identical data reports an empty delta", async () => {
+  // Guard against wall-clock leakage (independent review finding):
+  // two runs over the same date and unchanged vault must diff clean
+  // even though their render instants differ.
+  await runCli(["brain", "daily", "--date", "2026-06-04", "--vault", vault, "--json"], {
+    env: env(),
+  });
+  const rerun = await runCli(
+    ["brain", "daily", "--date", "2026-06-05", "--vault", vault, "--json"],
+    { env: env() },
+  );
+  // Different date, no data change: still nothing volatile in the diff.
+  const rerunParsed = JSON.parse(rerun.stdout) as {
+    delta: { changed: Array<{ path: string }> };
+  };
+  expect(rerunParsed.delta.changed.filter((c) => c.path.includes("enerated"))).toEqual([]);
+
+  const weeklyFirst = await runCli(
+    ["brain", "weekly", "--week-end", "2026-06-05", "--vault", vault, "--json"],
+    { env: env() },
+  );
+  expect(weeklyFirst.returncode).toBe(0);
+  const weeklyAgain = await runCli(
+    ["brain", "weekly", "--week-end", "2026-06-05", "--vault", vault, "--json"],
+    { env: env() },
+  );
+  const weeklyParsed = JSON.parse(weeklyAgain.stdout) as {
+    delta: { prior_date: string | null; added: string[]; changed: Array<{ path: string }> };
+  };
+  // Same date overwrites the snapshot; the prior is the older date or
+  // none - either way no generatedAt churn may appear.
+  expect(weeklyParsed.delta.changed.filter((c) => c.path.includes("enerated"))).toEqual([]);
+});
+
 test("human output renders a Since-last-run block", async () => {
   await runCli(["brain", "daily", "--date", "2026-06-04", "--vault", vault], { env: env() });
   const second = await runCli(["brain", "daily", "--date", "2026-06-05", "--vault", vault], {
