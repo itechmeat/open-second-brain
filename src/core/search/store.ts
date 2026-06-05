@@ -1709,6 +1709,20 @@ export class Store {
   }
 
   /**
+   * Distinct entities across one document's chunks, sorted
+   * (link-recall-intelligence: shared-entity digest in cluster notes).
+   */
+  entitiesForDocument(documentId: number): ReadonlyArray<string> {
+    return this.db
+      .query<{ entity: string }, [number]>(
+        "SELECT DISTINCT e.entity AS entity FROM chunk_entities e " +
+          "JOIN chunks c ON c.id = e.chunk_id WHERE c.document_id = ? ORDER BY e.entity ASC",
+      )
+      .all(documentId)
+      .map((r) => r.entity);
+  }
+
+  /**
    * For each candidate chunk, the count of distinct query entities it
    * also carries. Empty `queryEntities` yields an empty map (no work).
    * Pure read; used by the ranker to add a capped entity boost.
