@@ -36,7 +36,7 @@
  * one-way (Brain tools may grow their own coercion rules later).
  */
 
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { existsSync, readFileSync } from "node:fs";
 
@@ -1825,7 +1825,7 @@ function toolBrainLabels(
     throw new MCPError(INVALID_PARAMS, "brain_labels: path must be a vault-relative string");
   }
   if (op === "show") {
-    const [metadata] = parseFrontmatter(join(ctx.vault, path));
+    const [metadata] = parseFrontmatter(vaultContainedPath(ctx.vault, path, "brain_labels show"));
     return { path, labels: readLabels(metadata) };
   }
   const pack = loadSchemaPack(ctx.vault);
@@ -1909,7 +1909,7 @@ async function toolBrainTiers(
       throw new MCPError(INVALID_PARAMS, `brain_tiers ${op}: no open drift for ${path}`);
     }
     if (op === "restore") {
-      const absolute = join(ctx.vault, path);
+      const absolute = vaultContainedPath(ctx.vault, path, "brain_tiers restore");
       const [metadata, body] = parseFrontmatter(absolute);
       const next = { ...metadata };
       for (const r of rows) {
@@ -1929,6 +1929,16 @@ async function toolBrainTiers(
   } finally {
     await store.close();
   }
+}
+
+/** Resolve a vault-relative path, refusing traversal outside the vault. */
+function vaultContainedPath(vault: string, relPath: string, label: string): string {
+  const vaultRoot = resolve(vault);
+  const path = resolve(vaultRoot, relPath);
+  if (path !== vaultRoot && !path.startsWith(vaultRoot + sep)) {
+    throw new MCPError(INVALID_PARAMS, `${label}: path resolves outside the vault: ${relPath}`);
+  }
+  return path;
 }
 
 /** Narrow a snapshot value to the shapes frontmatter can carry. */

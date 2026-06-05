@@ -114,9 +114,11 @@ export function validateEndpointPair(value: string, field: string): string {
 }
 
 function validateAttributeDescription(value: string, field: string): string {
+  // Raw value checked for line breaks (same contract as the mutation
+  // op in schema-mutate.ts); the trimmed form is what gets stored.
+  if (/[\r\n]/.test(value)) throw new Error(`${field}: description must be a single line`);
   const trimmed = value.trim();
   if (trimmed.length === 0) throw new Error(`${field}: description must not be empty`);
-  if (/[\r\n]/.test(trimmed)) throw new Error(`${field}: description must be a single line`);
   return trimmed;
 }
 

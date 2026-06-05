@@ -158,13 +158,17 @@ export interface RedactRawOutputOptions {
 export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
   if (!text) return text;
 
-  const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
-  let out = text.length > maxInput ? text.slice(0, maxInput) + TRUNCATION_MARKER : text;
-
+  // Scrub known literals BEFORE the truncation guard: a secret value
+  // straddling the cut boundary must not survive as a partial
+  // fragment in the kept prefix.
+  let out = text;
   for (const literal of opts.literals ?? []) {
     if (literal.length === 0) continue;
     out = out.split(literal).join(PLACEHOLDER);
   }
+
+  const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
+  if (out.length > maxInput) out = out.slice(0, maxInput) + TRUNCATION_MARKER;
 
   out = stripPrivateRegions(out);
 
