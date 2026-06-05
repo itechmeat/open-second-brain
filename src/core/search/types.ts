@@ -149,6 +149,12 @@ export interface IndexStats {
     readonly expected: unknown;
     readonly actual: unknown;
   }>;
+  /**
+   * Links whose `target_document_id` the alias post-pass materialized
+   * through a frontmatter `aliases:` declaration this run
+   * (link-recall-intelligence, v7).
+   */
+  readonly aliasResolved: number;
   readonly durationMs: number;
 }
 
