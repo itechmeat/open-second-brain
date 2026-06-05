@@ -107,7 +107,10 @@ export function detectCommunities(store: Store, opts: DetectCommunitiesOptions =
     if (!changed) break;
   }
 
-  // Group, rank members, compute density.
+  // Group, rank members, compute density. Groups are final-label
+  // equivalence classes: when the iteration cap interrupts an
+  // oscillating topology, a group is not guaranteed to be a connected
+  // component - acceptable for a digest surface, never for routing.
   const groups = new Map<number, number[]>();
   for (const node of nodes) {
     const label = labels.get(node)!;

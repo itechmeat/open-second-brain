@@ -24,7 +24,12 @@ import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 
 const FIXTURE = join(import.meta.dir, "..", "..", "fixtures", "recall-benchmark");
 
-/** CI thresholds - margin below the measured values above. */
+/**
+ * CI thresholds - margin below the measured values above. Re-measure
+ * (run the suite and read the report) whenever the fixture vault,
+ * dataset, or ranking pipeline changes, and update both the pins and
+ * the header comment.
+ */
 const MIN_HIT_AT_5 = 0.9;
 const MIN_MRR = 0.85;
 

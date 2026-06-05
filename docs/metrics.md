@@ -48,7 +48,9 @@ benchmark, or tuning run. Per-query retrieval events stay in recall
 telemetry (`docs/observability.md`). Writes are O_APPEND single
 lines, so concurrent writers interleave instead of racing; readers
 must skip torn or non-object lines (the bundled `listMetrics` reader
-does).
+does). Keep payloads small (well under the platform pipe-buffer
+size, ~4 KiB) - O_APPEND atomicity is only guaranteed for short
+writes, and a metric record is a summary, not a report.
 
 ## Surfaces and payload fields (v0.45.0)
 

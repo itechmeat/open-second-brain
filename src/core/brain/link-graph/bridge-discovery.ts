@@ -286,6 +286,9 @@ export function acceptBridge(
         ? current.map(String)
         : [String(current)];
 
+  // Idempotency is checked BEFORE constraint validation: re-accepting
+  // an already-present link returns changed:false without re-judging
+  // it, because no write occurs either way.
   const targetIdNorm = normalizeRelationTarget(link);
   const existingNorm = items.map((item) => normalizeRelationTarget(item));
   if (targetIdNorm !== null && existingNorm.includes(targetIdNorm)) {
