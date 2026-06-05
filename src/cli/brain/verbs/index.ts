@@ -27,6 +27,8 @@ export { cmdBrainForesight } from "./foresight.ts";
 export { cmdBrainLabel } from "./label.ts";
 export { cmdBrainBridges } from "./bridges.ts";
 export { cmdBrainClusters } from "./clusters.ts";
+export { cmdBrainBenchmark } from "./benchmark.ts";
+export { cmdBrainTune } from "./tune.ts";
 export { cmdBrainAttr } from "./attr.ts";
 export { cmdBrainTiers } from "./tiers.ts";
 export { cmdBrainSecret } from "./secret.ts";

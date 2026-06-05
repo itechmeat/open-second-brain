@@ -47,6 +47,8 @@ Brain verbs (observing memory):
   label               Controlled-vocabulary classification: assign, remove, show note labels
   bridges             Embedding-near link proposals: discover, list, accept, dismiss
   clusters            Link-graph communities: detect and materialize cluster notes
+  benchmark           Recall quality benchmark: hit@k and MRR over a fixed dataset
+  tune                Self-tuning recall: grid-evaluate, persist, inspect, reset
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
   tiers               Frontmatter tier guard: check identity-field drift, restore or accept
   secret              Capability-gated secret custody: set, list, rm, run (use w/o exposure)
@@ -274,6 +276,19 @@ export const VERB_HELP: Record<string, string> = {
     "by internal degree, shared entities, density, no LLM prose - removes\n" +
     "stale generated notes, and records one communities metric. list reads\n" +
     "the generated notes back. Fail-soft without an index.\n",
+  benchmark:
+    "usage: o2b brain benchmark run --dataset <path> [--k N] [--expand]  [--vault <path>] [--json]\n" +
+    "Score the vault's live hybrid recall against a fixed query/expected-result\n" +
+    "dataset (hit@k + MRR, per query and aggregate) and record one\n" +
+    "recall_benchmark metric in Brain/metrics/ so recall quality is chartable\n" +
+    "over time. Dataset shape: {queries: [{id, query, expected: [paths]}]}.\n",
+  tune:
+    "usage: o2b brain tune run --dataset <path> [--k N] | status | reset  [--vault <path>] [--json]\n" +
+    "Opt-in self-tuning recall: run grid-evaluates bounded parameters (pool\n" +
+    "multiplier, traversal depth, learned weights, expansion) with the recall\n" +
+    "benchmark as the objective and persists the winner to\n" +
+    "Brain/search/tuning.json. Search honors it only when\n" +
+    "search_self_tuning_enabled is on; reset deletes the state.\n",
   attr:
     "usage: o2b brain attr <path> <field>=<value> | --remove <field> | --show  [--vault <path>] [--json]\n" +
     "Per-type attribute fields declared in the schema pack's attributes map.\n" +
