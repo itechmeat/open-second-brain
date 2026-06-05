@@ -26,11 +26,12 @@ afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
 });
 
-describe("brain_monthly_review MCP tool", () => {
+describe("brain_brief view=monthly MCP tool", () => {
   test("is registered and returns monthly summary", async () => {
-    const tool = BRAIN_TOOLS.find((entry) => entry.name === "brain_monthly_review");
+    const tool = BRAIN_TOOLS.find((entry) => entry.name === "brain_brief");
     expect(tool).toBeDefined();
     const out = (await tool!.handler(ctx as any, {
+      view: "monthly",
       month: "2026-05",
     })) as Record<string, unknown>;
     expect(out["month"]).toBe("2026-05");
@@ -38,8 +39,10 @@ describe("brain_monthly_review MCP tool", () => {
   });
 
   test("rejects malformed month", async () => {
-    const tool = BRAIN_TOOLS.find((entry) => entry.name === "brain_monthly_review");
-    await expect(tool!.handler(ctx as any, { month: "2026-13" })).rejects.toMatchObject({
+    const tool = BRAIN_TOOLS.find((entry) => entry.name === "brain_brief");
+    await expect(
+      tool!.handler(ctx as any, { view: "monthly", month: "2026-13" }),
+    ).rejects.toMatchObject({
       code: -32602,
     });
   });

@@ -14,10 +14,11 @@ import { resolveSearchConfig } from "../core/search/index.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import { coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
-import { deprecatedAlias, type ServerContext, type ToolDefinition } from "./tools.ts";
+import type { ServerContext, ToolDefinition } from "./tools.ts";
 
-// Read-side handlers shared by the consolidated `schema_inspect` and
-// its deprecated per-view aliases (token-diet, t_3920db77).
+// Read-side handlers behind the consolidated `schema_inspect` views.
+// The per-view alias tools were removed in 1.0.0 (tombstones in
+// `REMOVED_TOOLS`, src/mcp/tools.ts).
 const SCHEMA_INSPECT_VIEWS: Readonly<
   Record<string, (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown>
 > = Object.freeze({
@@ -73,48 +74,6 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
     },
     handler: toolSchemaInspect,
   },
-  deprecatedAlias({
-    name: "get_active_schema_pack",
-    target: "schema_inspect",
-    view: "active_pack",
-    handler: SCHEMA_INSPECT_VIEWS["active_pack"]!,
-  }),
-  deprecatedAlias({
-    name: "list_schema_packs",
-    target: "schema_inspect",
-    view: "packs",
-    handler: SCHEMA_INSPECT_VIEWS["packs"]!,
-  }),
-  deprecatedAlias({
-    name: "schema_stats",
-    target: "schema_inspect",
-    view: "stats",
-    handler: SCHEMA_INSPECT_VIEWS["stats"]!,
-  }),
-  deprecatedAlias({
-    name: "schema_lint",
-    target: "schema_inspect",
-    view: "lint",
-    handler: SCHEMA_INSPECT_VIEWS["lint"]!,
-  }),
-  deprecatedAlias({
-    name: "schema_graph",
-    target: "schema_inspect",
-    view: "graph",
-    handler: SCHEMA_INSPECT_VIEWS["graph"]!,
-  }),
-  deprecatedAlias({
-    name: "schema_explain_type",
-    target: "schema_inspect",
-    view: "explain_type",
-    handler: SCHEMA_INSPECT_VIEWS["explain_type"]!,
-  }),
-  deprecatedAlias({
-    name: "schema_review_orphans",
-    target: "schema_inspect",
-    view: "orphans",
-    handler: SCHEMA_INSPECT_VIEWS["orphans"]!,
-  }),
   {
     name: "schema_apply_mutations",
     description:
@@ -156,10 +115,4 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
       });
     },
   },
-  deprecatedAlias({
-    name: "reload_schema_pack",
-    target: "schema_inspect",
-    view: "active_pack",
-    handler: SCHEMA_INSPECT_VIEWS["active_pack"]!,
-  }),
 ];

@@ -44,6 +44,7 @@ import {
   resolveAgentName,
   resolveLinkOutputFormat,
   resolveSearchFocusContextPack,
+  resolveTimezone,
   resolveTriggerCooldownDays,
 } from "../core/config.ts";
 import { indexVault, resolveSearchConfig } from "../core/search/index.ts";
@@ -70,6 +71,7 @@ import {
   materializeClusterNotes,
 } from "../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../core/brain/metrics.ts";
+import { createSafeguard, resolveSafeguardTimeoutMs } from "../core/brain/safeguard.ts";
 import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../core/search/benchmark.ts";
 import { loadTunedParameters, resetTuning, tuneRecall } from "../core/search/tuning.ts";
 import { currentLease } from "../core/brain/maintenance/lease.ts";
@@ -180,6 +182,13 @@ import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts"
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
+import {
+  applyDreamBundle,
+  discardDreamBundle,
+  listDreamBundles,
+  stageDream,
+  validateDreamBundle,
+} from "../core/brain/dream-stage.ts";
 import { buildIntentReview } from "../core/brain/intent-review.ts";
 import { buildRetentionReview } from "../core/brain/retention.ts";
 import { buildMonthlyReview, normalizeMonthlyReviewMonth } from "../core/brain/monthly-review.ts";
@@ -200,6 +209,8 @@ import { writeSignal } from "../core/brain/signal.ts";
 import { writePreference } from "../core/brain/preference.ts";
 import { validateBrainFeedbackInput } from "../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../core/brain/time.ts";
+import { formatLocalTimestamp } from "../core/brain/present-time.ts";
+import { captureReportDelta } from "../core/brain/report-snapshot.ts";
 import { slugify } from "../core/vault.ts";
 import { normalizeAgentArgument } from "../core/agent-identity.ts";
 import {
@@ -243,7 +254,7 @@ import {
 } from "../core/brain/pinned.ts";
 
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
-import { deprecatedAlias, type ServerContext, type ToolDefinition } from "./tools.ts";
+import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import {
   coerceStr,
@@ -412,10 +423,83 @@ async function toolBrainDream(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  const action = args["action"] ?? "run";
+  if (
+    action !== "run" &&
+    action !== "stage" &&
+    action !== "validate" &&
+    action !== "apply" &&
+    action !== "discard" &&
+    action !== "list"
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_dream: action must be run|stage|validate|apply|discard|list",
+    );
+  }
   const dryRun = coerceBool(args, "dry_run");
   const nowDate = coerceIsoDate(args, "now");
   const agentArg = coerceStr(args, "agent", false);
   const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+
+  if (action !== "run") {
+    // Staged lifecycle (t_ae8a8ec0): stage -> validate -> apply over a
+    // persisted bundle; dream() stays the only promotion engine.
+    const runIdArg = coerceStr(args, "run_id", false);
+    if ((action === "validate" || action === "apply" || action === "discard") && !runIdArg) {
+      throw new MCPError(INVALID_PARAMS, `brain_dream action=${action}: run_id is required`);
+    }
+    const now = nowDate ?? new Date();
+    const stageOpts = { now, ...(agent ? { agentName: agent } : {}) };
+    switch (action) {
+      case "stage": {
+        const bundle = stageDream(ctx.vault, stageOpts);
+        return {
+          action,
+          run_id: bundle.runId,
+          plan: bundle.plan,
+          sources: bundle.sources.length,
+          dir: `Brain/dream/staged/${bundle.runId}`,
+        };
+      }
+      case "validate": {
+        const verdict = validateDreamBundle(ctx.vault, runIdArg!, stageOpts);
+        return { action, run_id: runIdArg, valid: verdict.valid, drift: [...verdict.drift] };
+      }
+      case "apply": {
+        const outcome = applyDreamBundle(ctx.vault, runIdArg!, stageOpts);
+        return {
+          action,
+          run_id: runIdArg,
+          applied: outcome.applied,
+          drift: [...outcome.validation.drift],
+          ...(outcome.summary !== undefined
+            ? {
+                changed: outcome.summary.changed,
+                new_unconfirmed: [...outcome.summary.new_unconfirmed],
+                confirmed: [...outcome.summary.confirmed],
+                retired: outcome.summary.retired.map((r) => ({ id: r.id, reason: r.reason })),
+              }
+            : {}),
+        };
+      }
+      case "discard": {
+        return { action, run_id: runIdArg, removed: discardDreamBundle(ctx.vault, runIdArg!) };
+      }
+      default: {
+        return {
+          action,
+          bundles: listDreamBundles(ctx.vault).map((b) => ({
+            run_id: b.runId,
+            status: b.status,
+            staged_at: b.stagedAt,
+            proposals: b.proposals,
+            sources: b.sources,
+          })),
+        };
+      }
+    }
+  }
 
   const summary = dream(ctx.vault, {
     dryRun,
@@ -509,12 +593,12 @@ async function toolBrainMonthlyReview(
   let month: string | undefined;
   if (monthRaw !== undefined && monthRaw !== null) {
     if (typeof monthRaw !== "string") {
-      throw new MCPError(INVALID_PARAMS, "brain_monthly_review: month must be YYYY-MM");
+      throw new MCPError(INVALID_PARAMS, "brain_brief view=monthly: month must be YYYY-MM");
     }
     try {
       month = normalizeMonthlyReviewMonth(monthRaw);
     } catch {
-      throw new MCPError(INVALID_PARAMS, "brain_monthly_review: month must be YYYY-MM");
+      throw new MCPError(INVALID_PARAMS, "brain_brief view=monthly: month must be YYYY-MM");
     }
   }
   const report = buildMonthlyReview(ctx.vault, month ? { month } : {});
@@ -1001,18 +1085,52 @@ async function toolBrainDigest(
   const until = coerceIsoDate(args, "until");
   const format = coerceFormat(args) satisfies DigestFormat;
 
+  // Pin ONE effective until instant so the rendered content, the
+  // snapshot render, and the snapshot date key all describe the same
+  // window even when the caller omitted `until`.
+  const effectiveUntil = until ?? new Date();
   const result = renderDigest(ctx.vault, {
     ...(since ? { since } : {}),
-    ...(until ? { until } : {}),
+    until: effectiveUntil,
     format,
     linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
   });
 
-  return {
+  const envelope: Record<string, unknown> = {
     format,
     empty: result.empty,
     content: result.content,
   };
+  // Snapshot the structured summary, not the rendered string: render
+  // a JSON digest for the snapshot regardless of the caller's format
+  // so the run-over-run diff keys on data.
+  const digestDate = isoDate(effectiveUntil);
+  const snapshotSource =
+    format === "json"
+      ? result.content
+      : renderDigest(ctx.vault, {
+          ...(since ? { since } : {}),
+          until: effectiveUntil,
+          format: "json",
+          linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
+        }).content;
+  let parsedSnapshot: unknown = null;
+  try {
+    parsedSnapshot = JSON.parse(snapshotSource);
+  } catch {
+    parsedSnapshot = null;
+  }
+  const delta =
+    parsedSnapshot !== null
+      ? captureReportDelta(
+          ctx.vault,
+          "digest",
+          digestDate,
+          parsedSnapshot,
+          ctx.configPath ? { configPath: ctx.configPath } : {},
+        )
+      : null;
+  return delta !== null ? { ...envelope, delta } : envelope;
 }
 
 // ----- brain_query ---------------------------------------------------------
@@ -1308,14 +1426,14 @@ async function toolBrainMorningBrief(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const topK = optionalPositiveInt(args, "top_k", "brain_morning_brief") ?? 10;
-  const lookbackDays = optionalPositiveInt(args, "lookback_days", "brain_morning_brief") ?? 7;
+  const topK = optionalPositiveInt(args, "top_k", "brain_brief view=morning") ?? 10;
+  const lookbackDays = optionalPositiveInt(args, "lookback_days", "brain_brief view=morning") ?? 7;
   const maxCharsPerMemory = optionalPositiveInt(
     args,
     "max_chars_per_memory",
-    "brain_morning_brief",
+    "brain_brief view=morning",
   );
-  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_morning_brief");
+  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_brief view=morning");
   const now = new Date();
   const brief = buildMorningBrief(ctx.vault, {
     now,
@@ -1670,7 +1788,7 @@ async function toolBrainOperatorSummary(
       if (!Number.isInteger(topRaw) || topRaw < 0) {
         throw new MCPError(
           INVALID_PARAMS,
-          "brain_operator_summary: top_actions must be a non-negative integer",
+          "brain_brief view=operator: top_actions must be a non-negative integer",
         );
       }
       topActionsN = topRaw;
@@ -1679,14 +1797,14 @@ async function toolBrainOperatorSummary(
       if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
         throw new MCPError(
           INVALID_PARAMS,
-          "brain_operator_summary: top_actions must be a non-negative integer",
+          "brain_brief view=operator: top_actions must be a non-negative integer",
         );
       }
       topActionsN = Number.parseInt(trimmed, 10);
     } else {
       throw new MCPError(
         INVALID_PARAMS,
-        "brain_operator_summary: top_actions must be a non-negative integer",
+        "brain_brief view=operator: top_actions must be a non-negative integer",
       );
     }
   }
@@ -1698,7 +1816,10 @@ async function toolBrainOperatorSummary(
   } else if (typeof includeDreamRaw === "boolean") {
     includeDream = includeDreamRaw;
   } else {
-    throw new MCPError(INVALID_PARAMS, "brain_operator_summary: include_dream must be a boolean");
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_brief view=operator: include_dream must be a boolean",
+    );
   }
 
   let dreamSummary;
@@ -2067,6 +2188,14 @@ async function toolBrainMaintenance(
     vault: ctx.vault,
     configPath: ctx.configPath ?? undefined,
   });
+  // Same per-task deadlines as the CLI lane (t_06784b8d): one fresh
+  // cooperative safeguard per task, budget resolved per-op -> global
+  // -> default.
+  const laneSafeguard = (operation: "dream" | "reindex" | "bridges" | "clusters") =>
+    createSafeguard({
+      operation,
+      timeoutMs: resolveSafeguardTimeoutMs(operation, ctx.configPath ?? undefined),
+    });
   const result = await runMaintenance(ctx.vault, {
     now,
     holder: `${agent}@${process.pid}`,
@@ -2076,13 +2205,13 @@ async function toolBrainMaintenance(
       {
         name: "dream",
         run: async () => {
-          dream(ctx.vault, { now });
+          dream(ctx.vault, { now, safeguard: laneSafeguard("dream") });
         },
       },
       {
         name: "reindex",
         run: async () => {
-          await indexVault(searchConfig);
+          await indexVault(searchConfig, { safeguard: laneSafeguard("reindex") });
         },
       },
       // Same lane contract as the CLI verb (link-recall-intelligence):
@@ -2096,6 +2225,7 @@ async function toolBrainMaintenance(
           try {
             const report = discoverBridges(store, {
               dismissed: readDismissedBridges(ctx.vault),
+              safeguard: laneSafeguard("bridges"),
             });
             writeBridgeProposals(ctx.vault, report, { now });
             try {
@@ -2122,7 +2252,7 @@ async function toolBrainMaintenance(
         run: async () => {
           const store = await Store.open(searchConfig, { mode: "read" });
           try {
-            const communities = detectCommunities(store, {});
+            const communities = detectCommunities(store, { safeguard: laneSafeguard("clusters") });
             const materialized = materializeClusterNotes(ctx.vault, communities, { store, now });
             try {
               appendMetric(ctx.vault, {
@@ -2616,7 +2746,10 @@ async function toolBrainConceptSynthesis(
 ): Promise<Record<string, unknown>> {
   const idRaw = args["id"];
   if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
-    throw new MCPError(INVALID_PARAMS, "brain_concept_synthesis: id must be a non-empty string");
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_analytics view=concept_synthesis: id must be a non-empty string",
+    );
   }
   const includeUnlinkedRaw = args["include_unlinked"];
   let includeUnlinked = false;
@@ -2624,7 +2757,7 @@ async function toolBrainConceptSynthesis(
     if (typeof includeUnlinkedRaw !== "boolean") {
       throw new MCPError(
         INVALID_PARAMS,
-        "brain_concept_synthesis: include_unlinked must be a boolean",
+        "brain_analytics view=concept_synthesis: include_unlinked must be a boolean",
       );
     }
     includeUnlinked = includeUnlinkedRaw;
@@ -2809,7 +2942,7 @@ async function toolBrainBeliefEvolution(
   if (hasPref === hasTopic) {
     throw new MCPError(
       INVALID_PARAMS,
-      "brain_belief_evolution: exactly one of pref_id or topic is required",
+      "brain_analytics view=belief_evolution: exactly one of pref_id or topic is required",
     );
   }
   const target = hasPref
@@ -2866,7 +2999,7 @@ async function toolBrainDailyBrief(
   const brief = buildDailyBrief(index, ctx.vault, date, {
     offsetHours: cfg.daily_window_offset_hours,
   });
-  return {
+  const envelope: Record<string, unknown> = {
     vault_path: ctx.vault,
     date: brief.date,
     window: brief.window,
@@ -2876,6 +3009,16 @@ async function toolBrainDailyBrief(
     source_pointers: brief.sourcePointers,
     generated_at: brief.generatedAt,
   };
+  // Dual-output (t_00eece5d): persist a machine snapshot and report
+  // the run-over-run delta when report snapshots are enabled.
+  const delta = captureReportDelta(
+    ctx.vault,
+    "daily",
+    brief.date,
+    envelope,
+    ctx.configPath ? { configPath: ctx.configPath } : {},
+  );
+  return delta !== null ? { ...envelope, delta } : envelope;
 }
 
 /**
@@ -2897,7 +3040,7 @@ async function toolBrainWeeklySynthesis(
   const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
   const synth = buildWeeklySynthesis(index, ctx.vault, weekEnd, cfg);
-  return {
+  const envelope: Record<string, unknown> = {
     vault_path: ctx.vault,
     window_start: synth.windowStart,
     window_end: synth.windowEnd,
@@ -2909,6 +3052,14 @@ async function toolBrainWeeklySynthesis(
     source_pointers: synth.sourcePointers,
     generated_at: synth.generatedAt,
   };
+  const delta = captureReportDelta(
+    ctx.vault,
+    "weekly",
+    weekEnd,
+    envelope,
+    ctx.configPath ? { configPath: ctx.configPath } : {},
+  );
+  return delta !== null ? { ...envelope, delta } : envelope;
 }
 
 // ----- brain_intention (Agent Surface Suite) --------------------------------
@@ -3777,7 +3928,7 @@ async function toolBrainAttentionFlows(
   }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_attention_flows: operation must be one of list|evaluate|render",
+    "brain_analytics view=attention_flows: operation must be one of list|evaluate|render",
   );
 }
 
@@ -3837,8 +3988,26 @@ function dispatchByView(
   return handler(ctx, args);
 }
 
+/**
+ * Timezone presentation (t_2ccadc6a): when the operator configured an
+ * IANA zone, brief/analytics envelopes gain two ADDITIVE fields - a
+ * `timezone` echo and `local_time` (the render instant in that zone).
+ * Stored timestamps inside the envelope stay canonical UTC; with no
+ * timezone configured the envelope is byte-identical to 0.45.0.
+ */
+function localizeEnvelope(ctx: ServerContext, result: unknown): unknown {
+  if (result === null || typeof result !== "object" || Array.isArray(result)) return result;
+  const tz = resolveTimezone(ctx.configPath ?? undefined);
+  if (tz === null) return result;
+  return {
+    ...(result as Record<string, unknown>),
+    timezone: tz,
+    local_time: formatLocalTimestamp(isoSecond(new Date()), tz),
+  };
+}
+
 async function toolBrainBrief(ctx: ServerContext, args: Record<string, unknown>): Promise<unknown> {
-  return await dispatchByView(BRIEF_VIEW_HANDLERS, ctx, args);
+  return localizeEnvelope(ctx, await dispatchByView(BRIEF_VIEW_HANDLERS, ctx, args));
 }
 
 async function toolBrainAnalytics(
@@ -3848,7 +4017,7 @@ async function toolBrainAnalytics(
   // attention_flows requires an `operation`; the consolidated surface
   // defaults it to the read-only `list` so `{view}` alone is valid.
   const withDefaults = args["view"] === "attention_flows" ? { operation: "list", ...args } : args;
-  return await dispatchByView(ANALYTICS_VIEW_HANDLERS, ctx, withDefaults);
+  return localizeEnvelope(ctx, await dispatchByView(ANALYTICS_VIEW_HANDLERS, ctx, withDefaults));
 }
 
 export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
@@ -4021,13 +4190,23 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_dream",
     description:
-      "Run the deterministic learning pass over `Brain/inbox/` (clusters signals, promotes preferences, retires stale rules). Typically scheduled via cron rather than invoked interactively.",
+      "Deterministic learning pass over `Brain/inbox/`. action=run (default) promotes inline; the staged lifecycle persists a reviewable bundle: stage -> validate -> apply (or discard), plus list. Typically scheduled via cron.",
     inputSchema: {
       type: "object",
       properties: {
+        action: {
+          type: "string",
+          enum: ["run", "stage", "validate", "apply", "discard", "list"],
+          description:
+            "run executes inline; stage persists a proposal bundle; validate/apply/discard manage one bundle by run_id; list shows bundles.",
+        },
+        run_id: {
+          type: "string",
+          description: "Bundle id for validate/apply/discard (from action=stage or list).",
+        },
         dry_run: {
           type: "boolean",
-          description: "When true, compute the plan without writing any files.",
+          description: "action=run only: compute the plan without writing any files.",
         },
         now: {
           type: "string",
@@ -4077,15 +4256,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRetention,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_monthly_review",
-      target: "brain_brief",
-      view: "monthly",
-      handler: toolBrainMonthlyReview,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
   },
   {
     name: "brain_review_candidates",
@@ -4367,15 +4537,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainContext,
   },
   {
-    ...deprecatedAlias({
-      name: "brain_digest",
-      target: "brain_brief",
-      view: "digest",
-      handler: toolBrainDigest,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
     name: "brain_query",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
@@ -4637,14 +4798,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainAudit,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_morning_brief",
-      target: "brain_brief",
-      view: "morning",
-      handler: toolBrainMorningBrief,
-    }),
   },
   {
     name: "brain_sources",
@@ -5250,15 +5403,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainProceduralGraph,
   },
   {
-    ...deprecatedAlias({
-      name: "brain_attention_flows",
-      target: "brain_analytics",
-      view: "attention_flows",
-      handler: toolBrainAttentionFlows,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
     name: "brain_pre_compact_extract",
     description:
       "Extract typed Decision/Commitment/Outcome/Rule/Open question records from bounded text into continuity storage.",
@@ -5441,15 +5585,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainUnlinkedMentions,
   },
   {
-    ...deprecatedAlias({
-      name: "brain_concept_synthesis",
-      target: "brain_analytics",
-      view: "concept_synthesis",
-      handler: toolBrainConceptSynthesis,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
     name: "brain_moc_audit",
     description:
       "Per-MOC coverage audit. Given a hub note id, classifies its outbound cluster into well-covered / fragile / candidate-missing and surfaces a suggested-next candidate. MOC detection is purely structural (outbound link count + link density). Read-only.",
@@ -5467,24 +5602,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     handler: toolBrainMocAudit,
   },
   {
-    ...deprecatedAlias({
-      name: "brain_timeline",
-      target: "brain_analytics",
-      view: "timeline",
-      handler: toolBrainTimeline,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_belief_evolution",
-      target: "brain_analytics",
-      view: "belief_evolution",
-      handler: toolBrainBeliefEvolution,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
     name: "brain_stale_scan",
     description:
       "Structural staleness report: preferences, signals, and Brain/log files inactive longer than the configured `temporal:` thresholds (stale_pref_days / stale_signal_days / stale_log_days). Read-only.",
@@ -5494,32 +5611,5 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainStaleScan,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_daily_brief",
-      target: "brain_brief",
-      view: "daily",
-      handler: toolBrainDailyBrief,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_weekly_synthesis",
-      target: "brain_brief",
-      view: "weekly",
-      handler: toolBrainWeeklySynthesis,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
-  },
-  {
-    ...deprecatedAlias({
-      name: "brain_operator_summary",
-      target: "brain_brief",
-      view: "operator",
-      handler: toolBrainOperatorSummary,
-    }),
-    previewBudget: MCP_PREVIEW_BUDGET,
   },
 ]);

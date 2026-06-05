@@ -36,9 +36,10 @@
  * the existing `doctor` legacy command on an empty vault.
  */
 
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 
+import { REMOVED_TOOLS } from "../removed-surfaces.ts";
 import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
@@ -294,6 +295,18 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
   //    but doesn't block the dream loop, so the digest / cron want
   //    to see it without failing the run.
   checkBrokenBacklinks(vault, issues, knownBasenames);
+
+  // 8b (1.0.0). Removed-surface references — Brain notes, root
+  //    instruction files, and installed skill files that still name
+  //    an MCP tool deleted in the 1.0.0 deprecation sweep. One
+  //    warning per file, naming each replacement, so an operator
+  //    upgrading an old vault learns the migration from the doctor
+  //    output. Best-effort and fail-soft like every other lint.
+  try {
+    checkRemovedToolReferences(vault, issues);
+  } catch {
+    /* doctor never throws */
+  }
 
   // 9. Hygiene lints — duplicate prefs, low-evidence confirmed, pinned
   //    without recent evidence, malformed apply-evidence ranges,
@@ -1288,3 +1301,92 @@ function collectAllBasenames(vault: string): ReadonlySet<string> {
 // invariants ultimately bottom out in the same parse pipeline as the
 // dream loop.
 void parseFrontmatter;
+
+// ---------------------------------------------------------------------------
+// Removed-surface references (1.0.0 deprecation sweep)
+// ---------------------------------------------------------------------------
+
+/** Word-boundary regex per removed tool name, compiled once. */
+const REMOVED_TOOL_PATTERNS: ReadonlyArray<{ name: string; pattern: RegExp }> = Object.freeze(
+  Object.keys(REMOVED_TOOLS).map((name) => ({
+    name,
+    // \b treats `_` as a word character, so `my_brain_digestion` does
+    // not match `brain_digest` but `call brain_digest.` does.
+    pattern: new RegExp(`\\b${name}\\b`),
+  })),
+);
+
+/** Hard cap so a pathological vault cannot flood the doctor report. */
+const REMOVED_TOOL_MAX_WARNINGS = 50;
+
+/**
+ * Scan vault-side text surfaces for references to MCP tools removed
+ * in 1.0.0. Scope is exactly what the doctor can see locally:
+ *
+ *   - every Markdown file under `Brain/` (recursive),
+ *   - root instruction files (`CLAUDE.md`, `AGENTS.md`),
+ *   - installed skills under `.claude/skills/` (recursive `.md`).
+ *
+ * One warning per file lists every removed name it mentions with the
+ * replacement spelling, mirroring the server-side tombstone error.
+ */
+function checkRemovedToolReferences(vault: string, issues: DoctorIssue[]): void {
+  const candidates: string[] = [];
+  const dirs = brainDirs(vault);
+  collectMarkdownFiles(dirs.brain, candidates);
+  for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+    const p = join(vault, name);
+    try {
+      if (existsSync(p) && statSync(p).isFile()) candidates.push(p);
+    } catch {
+      // One unreadable root file must not disable the whole scan.
+    }
+  }
+  collectMarkdownFiles(join(vault, ".claude", "skills"), candidates);
+
+  let emitted = 0;
+  for (const path of candidates) {
+    if (emitted >= REMOVED_TOOL_MAX_WARNINGS) return;
+    let body: string;
+    try {
+      body = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    const hits: string[] = [];
+    for (const { name, pattern } of REMOVED_TOOL_PATTERNS) {
+      if (pattern.test(body)) hits.push(name);
+    }
+    if (hits.length === 0) continue;
+    const replacements = hits
+      .map((name) => {
+        const record = REMOVED_TOOLS[name]!;
+        return `${name} -> ${record.target} view="${record.view}"`;
+      })
+      .join("; ");
+    issues.push({
+      severity: "warning",
+      code: "removed-tool-reference",
+      message:
+        `${relative(vault, path)} references tool(s) removed in 1.0.0: ` +
+        `${replacements} (see docs/updating.md)`,
+    });
+    emitted += 1;
+  }
+}
+
+/** Recursive `.md` collection, fail-soft on unreadable directories. */
+function collectMarkdownFiles(dir: string, out: string[]): void {
+  if (!existsSync(dir)) return;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) collectMarkdownFiles(p, out);
+    else if (entry.isFile() && entry.name.endsWith(".md")) out.push(p);
+  }
+}

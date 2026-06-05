@@ -9,9 +9,9 @@ Use this skill when a task changes the active Brain schema pack in `Brain/_brain
 
 ## Workflow
 
-1. Inspect the active schema pack with `get_active_schema_pack` or `o2b brain schema --json`.
-2. Check current usage and findings with `schema_stats`, `schema_lint`, and `schema_review_orphans`.
-3. Explain candidate tokens with `schema_explain_type` before renaming or deleting them.
+1. Inspect the active schema pack with `schema_inspect` (`view="active_pack"`) or `o2b brain schema --json`.
+2. Check current usage and findings with `schema_inspect` views `stats`, `lint`, and `orphans`.
+3. Explain candidate tokens with `schema_inspect` (`view="explain_type"`) before renaming or deleting them.
 4. Apply schema changes only through `schema_apply_mutations` or `o2b brain schema apply --mutation ...` so writes are locked, atomic, and audited.
 5. Re-run lint/stats after mutation and report changed tokens plus any remaining findings.
 

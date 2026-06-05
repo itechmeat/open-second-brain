@@ -1,8 +1,9 @@
 import { defaultConfigPath } from "../../../core/config.ts";
+import { captureReportDelta, renderReportDelta } from "../../../core/brain/report-snapshot.ts";
 import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts";
 import { buildWeeklySynthesis } from "../../../core/brain/temporal/weekly-brief.ts";
 import { loadTemporalConfigSafe } from "../../../core/brain/policy.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
 
 const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -31,8 +32,21 @@ export async function cmdBrainWeekly(argv: string[]): Promise<number> {
     throw exc;
   }
 
+  const delta = captureReportDelta(
+    vault,
+    "weekly",
+    weekEnd,
+    synth,
+    config ? { configPath: config } : {},
+  );
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(synth, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify(
+        { ...synth, ...(delta !== null ? { delta } : {}), ...localTimeFields(config) },
+        null,
+        2,
+      ) + "\n",
+    );
     return 0;
   }
 
@@ -52,6 +66,7 @@ export async function cmdBrainWeekly(argv: string[]): Promise<number> {
       `    ${c.at}  ${c.kind}${c.prefId ? `  ${c.prefId}` : ""}${c.reason ? `  (${c.reason})` : ""}\n`,
     );
   }
+  if (delta !== null) process.stdout.write(renderReportDelta(delta) + "\n");
   return 0;
 }
 

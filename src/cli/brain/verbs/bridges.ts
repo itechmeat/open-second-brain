@@ -25,6 +25,11 @@ import {
   BRIDGE_DEFAULT_MIN_SIMILARITY,
 } from "../../../core/brain/link-graph/bridge-discovery.ts";
 import { appendMetric } from "../../../core/brain/metrics.ts";
+import {
+  createSafeguard,
+  resolveSafeguardTimeoutMs,
+  SafeguardTimeoutError,
+} from "../../../core/brain/safeguard.ts";
 import { loadSchemaPack } from "../../../core/brain/schema-pack.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
@@ -130,6 +135,10 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
         ...(max !== undefined ? { maxProposals: max } : {}),
         ...(minSimilarity !== undefined ? { minSimilarity } : {}),
         dismissed,
+        safeguard: createSafeguard({
+          operation: "bridges",
+          timeoutMs: resolveSafeguardTimeoutMs("bridges", config ?? undefined),
+        }),
       });
       const path = writeBridgeProposals(vault, report, { now });
       try {
@@ -171,9 +180,10 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
       await store.close();
     }
   } catch (exc) {
+    const timedOut = exc instanceof SafeguardTimeoutError;
     const message = `bridges ${action} failed: ${(exc as Error).message ?? exc}`;
     if (asJson) {
-      okJson({ ok: false, message });
+      okJson({ ok: false, message, ...(timedOut ? { timed_out: true } : {}) });
       return 1;
     }
     return fail(message);

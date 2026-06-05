@@ -2,7 +2,7 @@ import { defaultConfigPath } from "../../../core/config.ts";
 import { isBrainLogEventKind, type BrainLogEventKind } from "../../../core/brain/types.ts";
 import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts";
 import { selectEvents } from "../../../core/brain/temporal/select-events.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
 
 /**
  * `o2b brain timeline [--vault PATH] [--pref-id ID] [--topic SLUG]
@@ -69,8 +69,11 @@ export async function cmdBrainTimeline(argv: string[]): Promise<number> {
 
   if (flags["json"]) {
     process.stdout.write(
-      JSON.stringify({ window: index.window, total: events.length, events: sliced }, null, 2) +
-        "\n",
+      JSON.stringify(
+        { window: index.window, total: events.length, events: sliced, ...localTimeFields(config) },
+        null,
+        2,
+      ) + "\n",
     );
     return 0;
   }

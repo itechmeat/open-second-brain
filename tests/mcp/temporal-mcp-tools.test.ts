@@ -101,11 +101,11 @@ beforeEach(() => {
   ]);
 });
 
-describe("brain_timeline", () => {
+describe("brain_analytics view=timeline", () => {
   test("happy-path: returns events array + window", async () => {
     const server = new MCPServer({ vault: VAULT });
     await initialize(server);
-    const { result } = await callTool(server, "brain_timeline", {});
+    const { result } = await callTool(server, "brain_analytics", { view: "timeline" });
     expect(Array.isArray(result?.events)).toBe(true);
     expect(result?.window).toBeDefined();
   });
@@ -113,7 +113,8 @@ describe("brain_timeline", () => {
   test("INVALID_PARAMS: unknown kind", async () => {
     const server = new MCPServer({ vault: VAULT });
     await initialize(server);
-    const { errorCode } = await callTool(server, "brain_timeline", {
+    const { errorCode } = await callTool(server, "brain_analytics", {
+      view: "timeline",
       kind: "made-up-kind",
     });
     expect(errorCode).toBeDefined();
@@ -122,18 +123,20 @@ describe("brain_timeline", () => {
   test("INVALID_PARAMS: limit must be positive integer", async () => {
     const server = new MCPServer({ vault: VAULT });
     await initialize(server);
-    const { errorCode } = await callTool(server, "brain_timeline", {
+    const { errorCode } = await callTool(server, "brain_analytics", {
+      view: "timeline",
       limit: -1,
     });
     expect(errorCode).toBeDefined();
   });
 });
 
-describe("brain_belief_evolution", () => {
+describe("brain_analytics view=belief_evolution", () => {
   test("happy-path: pref_id returns target + arrays", async () => {
     const server = new MCPServer({ vault: VAULT });
     await initialize(server);
-    const { result } = await callTool(server, "brain_belief_evolution", {
+    const { result } = await callTool(server, "brain_analytics", {
+      view: "belief_evolution",
       pref_id: "pref-foo",
     });
     expect(result?.target).toEqual({ prefId: "pref-foo" });
@@ -145,14 +148,15 @@ describe("brain_belief_evolution", () => {
   test("INVALID_PARAMS: missing both pref_id and topic", async () => {
     const server = new MCPServer({ vault: VAULT });
     await initialize(server);
-    const { errorCode } = await callTool(server, "brain_belief_evolution", {});
+    const { errorCode } = await callTool(server, "brain_analytics", { view: "belief_evolution" });
     expect(errorCode).toBeDefined();
   });
 
   test("INVALID_PARAMS: both pref_id and topic", async () => {
     const server = new MCPServer({ vault: VAULT });
     await initialize(server);
-    const { errorCode } = await callTool(server, "brain_belief_evolution", {
+    const { errorCode } = await callTool(server, "brain_analytics", {
+      view: "belief_evolution",
       pref_id: "pref-foo",
       topic: "foo",
     });
@@ -172,11 +176,12 @@ describe("brain_stale_scan", () => {
   });
 });
 
-describe("brain_daily_brief", () => {
+describe("brain_brief view=daily", () => {
   test("happy-path: returns date + counters envelope", async () => {
     const server = new MCPServer({ vault: VAULT });
     await initialize(server);
-    const { result } = await callTool(server, "brain_daily_brief", {
+    const { result } = await callTool(server, "brain_brief", {
+      view: "daily",
       date: "2026-05-20",
     });
     expect(result?.date).toBe("2026-05-20");
@@ -186,16 +191,17 @@ describe("brain_daily_brief", () => {
   test("happy-path: missing date defaults to today UTC", async () => {
     const server = new MCPServer({ vault: VAULT });
     await initialize(server);
-    const { result } = await callTool(server, "brain_daily_brief", {});
+    const { result } = await callTool(server, "brain_brief", { view: "daily" });
     expect(typeof result?.date).toBe("string");
   });
 });
 
-describe("brain_weekly_synthesis", () => {
+describe("brain_brief view=weekly", () => {
   test("happy-path: returns window_start/window_end + arrays", async () => {
     const server = new MCPServer({ vault: VAULT });
     await initialize(server);
-    const { result } = await callTool(server, "brain_weekly_synthesis", {
+    const { result } = await callTool(server, "brain_brief", {
+      view: "weekly",
       week_end: "2026-05-25",
     });
     expect(result?.window_end).toBe("2026-05-25T00:00:00Z");

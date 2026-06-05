@@ -72,7 +72,6 @@ describe("procedural learning tool registration", () => {
       "brain_procedural_memory",
       "brain_procedural_graph",
       "brain_recurrence",
-      "brain_attention_flows",
     ] as const) {
       expect(buildToolTable("full").find((tool) => tool.name === name)).toBeDefined();
       expect(buildToolTable("writer").find((tool) => tool.name === name)).toBeUndefined();
@@ -139,19 +138,22 @@ describe("procedural learning MCP tools", () => {
     });
     expect((graphHints.entries as unknown[]).length).toBeGreaterThan(0);
 
-    const flowsList = await callTool(server, "brain_attention_flows", {
+    const flowsList = await callTool(server, "brain_analytics", {
+      view: "attention_flows",
       operation: "list",
     });
     expect(flowsList.total).toBeGreaterThan(0);
     const flowId = (flowsList.flows as Array<Record<string, unknown>>)[0]!["id"] as string;
 
-    const flowsEval = await callTool(server, "brain_attention_flows", {
+    const flowsEval = await callTool(server, "brain_analytics", {
+      view: "attention_flows",
       operation: "evaluate",
       flow_id: flowId,
     });
     expect((flowsEval.sections as unknown[]).length).toBeGreaterThan(0);
 
-    const flowsRender = await callTool(server, "brain_attention_flows", {
+    const flowsRender = await callTool(server, "brain_analytics", {
+      view: "attention_flows",
       operation: "render",
       flow_id: flowId,
     });

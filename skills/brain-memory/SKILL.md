@@ -84,7 +84,7 @@ Mixed-language session → match the most recent user message at the time the ar
 - `brain_query --preference pref-foo` — full preference frontmatter + every evidence record in `Brain/log/*` referencing it.
 - `brain_query --topic <slug>` — all artifacts (signals, current preference, retired ones) by topic.
 - `brain_query --since <ISO>` — recent log events of any type.
-- `brain_digest` — daily summary of what `dream` did: new unconfirmed, confirmations, retirements, confidence shifts, contradictions.
+- `brain_brief` (`view="digest"`) — daily summary of what `dream` did: new unconfirmed, confirmations, retirements, confidence shifts, contradictions.
 
 ## CLI fallback
 

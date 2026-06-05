@@ -60,6 +60,11 @@ export interface Community {
 export interface DetectCommunitiesOptions {
   readonly minSize?: number;
   readonly maxIterations?: number;
+  /**
+   * Cooperative deadline (t_06784b8d): checkpointed at entry and once
+   * per propagation sweep.
+   */
+  readonly safeguard?: import("../safeguard.ts").Safeguard;
 }
 
 /**
@@ -69,6 +74,7 @@ export interface DetectCommunitiesOptions {
 export function detectCommunities(store: Store, opts: DetectCommunitiesOptions = {}): Community[] {
   const minSize = Math.max(2, opts.minSize ?? COMMUNITY_DEFAULT_MIN_SIZE);
   const maxIterations = Math.max(1, opts.maxIterations ?? COMMUNITY_MAX_ITERATIONS);
+  opts.safeguard?.checkpoint();
 
   const pathById = new Map<number, string>();
   for (const [path, summary] of store.listDocuments()) pathById.set(summary.id, path);
@@ -89,6 +95,8 @@ export function detectCommunities(store: Store, opts: DetectCommunitiesOptions =
   const nodes = [...adjacency.keys()].toSorted((a, b) => a - b);
   const labels = new Map<number, number>(nodes.map((n) => [n, n]));
   for (let iteration = 0; iteration < maxIterations; iteration++) {
+    // Cooperative deadline: abort between sweeps (read-only pass).
+    opts.safeguard?.checkpoint();
     let changed = false;
     const next = new Map<number, number>();
     for (const node of nodes) {

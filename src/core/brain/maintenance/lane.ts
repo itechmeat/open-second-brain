@@ -19,6 +19,7 @@
  */
 
 import { listRecallTelemetry } from "../recall-telemetry.ts";
+import { capOutput, SafeguardTimeoutError } from "../safeguard.ts";
 import { acquireLease, MAINTENANCE_LEASE_NAME, releaseLease } from "./lease.ts";
 import { appendJournal, listJournal, sweepJournal, type MaintenanceVerdict } from "./journal.ts";
 
@@ -49,6 +50,9 @@ export interface EvaluateGatesOptions {
   readonly busy?: BusyGate;
 }
 
+/** Cap for persisted per-task error strings (journal + results). */
+const LANE_ERROR_MAX_BYTES = 4096;
+
 export interface MaintenanceTask {
   readonly name: string;
   readonly run: () => Promise<void>;
@@ -67,6 +71,8 @@ export interface MaintenanceTaskResult {
   readonly ok: boolean;
   readonly duration_ms: number;
   readonly error?: string;
+  /** True when the task tripped its cooperative safeguard deadline. */
+  readonly timed_out?: boolean;
 }
 
 export interface RunMaintenanceResult {
@@ -138,16 +144,29 @@ export async function runMaintenance(
       const startedAt = Date.now();
       let ok = true;
       let error: string | undefined;
+      let timedOut = false;
       try {
         // Sequential by design: the lane exists to serialize heavy work.
         // eslint-disable-next-line no-await-in-loop
         await task.run();
       } catch (exc) {
         ok = false;
-        error = exc instanceof Error ? exc.message : String(exc);
+        timedOut = exc instanceof SafeguardTimeoutError;
+        // Caps keep a pathological error string from flooding the
+        // journal and every status render downstream.
+        error = capOutput(
+          exc instanceof Error ? exc.message : String(exc),
+          LANE_ERROR_MAX_BYTES,
+        ).text;
       }
       const duration = Date.now() - startedAt;
-      results.push({ name: task.name, ok, duration_ms: duration, ...(error ? { error } : {}) });
+      results.push({
+        name: task.name,
+        ok,
+        duration_ms: duration,
+        ...(error ? { error } : {}),
+        ...(timedOut ? { timed_out: true } : {}),
+      });
       appendJournal(vault, {
         ts: nowIso,
         holder: opts.holder,

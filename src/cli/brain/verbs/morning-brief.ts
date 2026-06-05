@@ -5,7 +5,7 @@ import {
   renderTriggerBriefSection,
 } from "../../../core/brain/triggers/brief.ts";
 import { parseOptionalNumberFlag } from "../../coerce.ts";
-import { fail, parse, resolveBrainVault } from "../helpers.ts";
+import { fail, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
 
 /**
  * `o2b brain morning-brief` - render a read-only session-start summary:
@@ -91,7 +91,9 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
           }
         : {}),
     };
-    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify({ ...payload, ...localTimeFields(config) }, null, 2) + "\n",
+    );
   } else {
     const base = brief.text.length > 0 ? brief.text : "(nothing to surface)";
     const text =

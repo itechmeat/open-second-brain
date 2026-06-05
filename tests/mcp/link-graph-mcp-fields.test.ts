@@ -194,19 +194,19 @@ describe("brain_moc_audit round trip", () => {
   });
 });
 
-describe("brain_concept_synthesis registration", () => {
+describe("brain_analytics view=concept_synthesis registration", () => {
   test("registered in the full tool table", () => {
     const tools = buildToolTable("full");
-    expect(tools.find((t) => t.name === "brain_concept_synthesis")).toBeDefined();
+    expect(tools.find((t) => t.name === "brain_analytics")).toBeDefined();
   });
 
   test("NOT in the writer-only scope", () => {
     const tools = buildToolTable("writer");
-    expect(tools.find((t) => t.name === "brain_concept_synthesis")).toBeUndefined();
+    expect(tools.find((t) => t.name === "brain_analytics")).toBeUndefined();
   });
 });
 
-describe("brain_concept_synthesis round trip", () => {
+describe("brain_analytics view=concept_synthesis round trip", () => {
   test("returns envelope with linkers", async () => {
     writePref("pref-tgt", {
       kind: "preference",
@@ -227,7 +227,8 @@ describe("brain_concept_synthesis round trip", () => {
     );
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
-    const r = await callTool(server, "brain_concept_synthesis", {
+    const r = await callTool(server, "brain_analytics", {
+      view: "concept_synthesis",
       id: "pref-tgt",
     });
     const out = JSON.parse(r.result!.content[0]!.text);
@@ -257,7 +258,8 @@ describe("brain_concept_synthesis round trip", () => {
     );
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
-    const r = await callTool(server, "brain_concept_synthesis", {
+    const r = await callTool(server, "brain_analytics", {
+      view: "concept_synthesis",
       id: "pref-tgt",
       include_unlinked: true,
     });
@@ -269,7 +271,7 @@ describe("brain_concept_synthesis round trip", () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
     for (const args of [{ id: "" }, { id: "pref-x", include_unlinked: "yes" }]) {
-      const r = await callTool(server, "brain_concept_synthesis", args);
+      const r = await callTool(server, "brain_analytics", { view: "concept_synthesis", ...args });
       expect(r.error?.code).toBe(-32602);
     }
   });

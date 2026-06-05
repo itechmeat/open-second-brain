@@ -90,7 +90,7 @@ const CONCRETE: ReadonlyArray<ResourceDescriptor> = [
   {
     uri: "osb://digest/latest",
     name: "Latest Brain digest",
-    description: "Same body as `brain_digest` (default window: last 24h). Markdown.",
+    description: "Same body as `brain_brief` view=digest (default window: last 24h). Markdown.",
     mimeType: MIME_MARKDOWN,
   },
   {

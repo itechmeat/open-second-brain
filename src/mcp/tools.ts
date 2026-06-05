@@ -24,6 +24,7 @@
  */
 
 import { discoverConfig, redactMapping } from "../core/config.ts";
+import { REMOVED_TOOLS } from "../core/removed-surfaces.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { isDir } from "../core/fs-utils.ts";
@@ -291,29 +292,19 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
 export type ToolScope = "full" | "writer" | "catalog";
 
 /**
- * Deprecated delegating alias (token-diet, t_3920db77): the tool name
- * stays callable for at least one minor release after its capability
- * moved into a consolidated view tool, but its registry footprint
- * shrinks to a one-line description and a permissive input schema.
- * The handler is the exact function the consolidated tool dispatches
- * to, so behavior is byte-identical under either name.
+ * Tombstones for the deprecated aliases removed in 1.0.0 (epic
+ * t_a77ade0a). The token-diet pass (t_3920db77) consolidated these 18
+ * tools into `brain_brief` / `brain_analytics` / `schema_inspect`
+ * views and kept the old names callable as hidden aliases; the 1.0.0
+ * sweep deletes the alias layer entirely. Calling a tombstoned name
+ * answers INVALID_PARAMS with the exact replacement instead of a
+ * generic METHOD_NOT_FOUND, so a stale client learns the migration
+ * from the error message itself. Zero token cost: tombstones are
+ * never advertised. The canonical map lives in core
+ * (src/core/removed-surfaces.ts) so `brain_doctor` shares it without
+ * importing the MCP layer; re-exported here for the server and tests.
  */
-export function deprecatedAlias(opts: {
-  readonly name: string;
-  readonly target: string;
-  readonly view: string;
-  readonly handler: ToolDefinition["handler"];
-  readonly previewBudget?: number;
-}): ToolDefinition {
-  return {
-    name: opts.name,
-    description: `Deprecated alias for ${opts.target} with view="${opts.view}". Will be removed in a future minor release.`,
-    inputSchema: { type: "object" },
-    hidden: true,
-    ...(opts.previewBudget !== undefined ? { previewBudget: opts.previewBudget } : {}),
-    handler: opts.handler,
-  };
-}
+export { REMOVED_TOOLS };
 
 // The set is named after the original payload (mutating writers). As
 // of v0.10.10 it also hosts `brain_context`, a *reader* tool that has
@@ -442,7 +433,16 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
 
 export function findTool(tools: ReadonlyArray<ToolDefinition>, name: string): ToolDefinition {
   const tool = tools.find((t) => t.name === name);
-  if (!tool) throw new MCPError(METHOD_NOT_FOUND, `unknown tool: ${name}`);
+  if (!tool) {
+    const tombstone = REMOVED_TOOLS[name];
+    if (tombstone !== undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `${name} was removed in ${tombstone.removedIn}; call ${tombstone.target} with view="${tombstone.view}"`,
+      );
+    }
+    throw new MCPError(METHOD_NOT_FOUND, `unknown tool: ${name}`);
+  }
   return tool;
 }
 
