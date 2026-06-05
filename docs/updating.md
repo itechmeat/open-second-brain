@@ -6,6 +6,47 @@ git marketplace snapshot). **An update must never break an existing install or
 the agent.** This document is the contract that guarantees it, for both
 operators and any agent that edits the plugin.
 
+## Upgrading from 0.x to 1.0.0
+
+1.0.0 is the first major release and ships exactly one breaking
+change: the 18 hidden MCP alias tools left over from the token-diet
+consolidation are removed. They were already absent from `tools/list`;
+since 1.0.0 calling one through `tools/call` answers an INVALID_PARAMS
+tombstone naming the replacement instead of executing. Everything else
+- CLI verbs, config keys, on-disk formats, the search schema ladder -
+is unchanged and now formally frozen under the stability policy
+([`docs/stability.md`](stability.md)).
+
+Migrate by switching each removed name to its consolidated tool with
+the matching `view` argument; every other parameter keeps its old name
+and meaning:
+
+| Removed tool | Replacement |
+| --- | --- |
+| `brain_digest` | `brain_brief` with `view: "digest"` |
+| `brain_daily_brief` | `brain_brief` with `view: "daily"` |
+| `brain_morning_brief` | `brain_brief` with `view: "morning"` |
+| `brain_weekly_synthesis` | `brain_brief` with `view: "weekly"` |
+| `brain_monthly_review` | `brain_brief` with `view: "monthly"` |
+| `brain_operator_summary` | `brain_brief` with `view: "operator"` |
+| `brain_timeline` | `brain_analytics` with `view: "timeline"` |
+| `brain_attention_flows` | `brain_analytics` with `view: "attention_flows"` |
+| `brain_belief_evolution` | `brain_analytics` with `view: "belief_evolution"` |
+| `brain_concept_synthesis` | `brain_analytics` with `view: "concept_synthesis"` |
+| `get_active_schema_pack` | `schema_inspect` with `view: "active_pack"` |
+| `list_schema_packs` | `schema_inspect` with `view: "packs"` |
+| `schema_stats` | `schema_inspect` with `view: "stats"` |
+| `schema_lint` | `schema_inspect` with `view: "lint"` |
+| `schema_graph` | `schema_inspect` with `view: "graph"` |
+| `schema_explain_type` | `schema_inspect` with `view: "explain_type"` |
+| `schema_review_orphans` | `schema_inspect` with `view: "orphans"` |
+| `reload_schema_pack` | `schema_inspect` with `view: "active_pack"` |
+
+`o2b brain doctor` scans your vault-side surfaces (Brain notes, root
+instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
+`.claude/skills/`) and warns with the exact replacement for any stale
+reference it finds (`removed-tool-reference`).
+
 ## For operators
 
 Normal updates need no manual steps:
