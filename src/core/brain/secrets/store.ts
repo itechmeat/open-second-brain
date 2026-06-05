@@ -14,6 +14,7 @@
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import lockfile from "proper-lockfile";
 
 import { appendAuditRecord } from "../../reliability/audit.ts";
 import { brainDirs } from "../paths.ts";
@@ -75,6 +76,39 @@ function keyPath(vault: string): string {
   return join(secretsDir(vault), "keyfile");
 }
 
+/**
+ * Serialise every read-modify-write of `secrets.json` across
+ * processes (CLI + MCP). proper-lockfile with retries, matching the
+ * search store's writer-lock discipline; the keyfile creation also
+ * creates the directory the lock anchors on.
+ */
+function withSecretsLock<T>(vault: string, fn: () => T): T {
+  loadOrCreateKey(keyPath(vault));
+  // The sync lockfile API has no retry option; spin briefly the same
+  // way the search store's writer lock does.
+  const maxAttempts = 20;
+  let release: (() => void) | null = null;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts && release === null; attempt++) {
+    try {
+      release = lockfile.lockSync(secretsDir(vault), { stale: 10_000, realpath: false });
+    } catch (exc) {
+      if ((exc as NodeJS.ErrnoException).code !== "ELOCKED") throw exc;
+      lastError = exc;
+      if (attempt < maxAttempts - 1) Bun.sleepSync(25);
+    }
+  }
+  if (release === null) {
+    const msg = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`another writer holds the secrets store lock: ${msg}`);
+  }
+  try {
+    return fn();
+  } finally {
+    void release();
+  }
+}
+
 export function setSecret(vault: string, input: SetSecretInput): SecretMetadata {
   const name = input.name.trim().toLowerCase();
   if (!NAME_RE.test(name)) {
@@ -96,22 +130,25 @@ export function setSecret(vault: string, input: SetSecretInput): SecretMetadata 
   });
 
   const key = loadOrCreateKey(keyPath(vault));
-  const file = readStore(vault);
-  const existing = file.secrets[name];
-  const next: SecretsFile = {
-    version: SECRETS_SCHEMA_VERSION,
-    secrets: {
-      ...file.secrets,
-      [name]: {
-        ...encryptValue(key, input.value),
-        env_var: envVar,
-        allow,
-        created_at: existing?.created_at ?? isoSecond(input.now),
-        last_used_at: existing?.last_used_at ?? null,
+  const { next, existing } = withSecretsLock(vault, () => {
+    const file = readStore(vault);
+    const current = file.secrets[name];
+    const updated: SecretsFile = {
+      version: SECRETS_SCHEMA_VERSION,
+      secrets: {
+        ...file.secrets,
+        [name]: {
+          ...encryptValue(key, input.value),
+          env_var: envVar,
+          allow,
+          created_at: current?.created_at ?? isoSecond(input.now),
+          last_used_at: current?.last_used_at ?? null,
+        },
       },
-    },
-  };
-  writeStore(vault, next);
+    };
+    writeStore(vault, updated);
+    return { next: updated, existing: current };
+  });
   audit(vault, input, "secret_set", name, {
     env_var: envVar,
     allow,
@@ -128,14 +165,17 @@ export function listSecrets(vault: string): SecretMetadata[] {
 }
 
 export function removeSecret(vault: string, name: string, ctx: SecretAuditContext): boolean {
-  const file = readStore(vault);
   const normalized = name.trim().toLowerCase();
-  if (file.secrets[normalized] === undefined) return false;
-  const secrets = { ...file.secrets };
-  delete secrets[normalized];
-  writeStore(vault, { version: SECRETS_SCHEMA_VERSION, secrets });
-  audit(vault, ctx, "secret_removed", normalized, {});
-  return true;
+  const removed = withSecretsLock(vault, () => {
+    const file = readStore(vault);
+    if (file.secrets[normalized] === undefined) return false;
+    const secrets = { ...file.secrets };
+    delete secrets[normalized];
+    writeStore(vault, { version: SECRETS_SCHEMA_VERSION, secrets });
+    return true;
+  });
+  if (removed) audit(vault, ctx, "secret_removed", normalized, {});
+  return removed;
 }
 
 export interface ResolvedSecret {
@@ -167,7 +207,7 @@ export function resolveSecretForExec(
   }
   const key = loadOrCreateKey(keyPath(vault));
   const value = decryptValue(key, stored);
-  touchLastUsed(vault, file, normalized, ctx.now);
+  touchLastUsed(vault, normalized, ctx.now);
   audit(vault, ctx, "secret_resolved_for_exec", normalized, { env_var: stored.env_var });
   return { name: normalized, env_var: stored.env_var, allow: stored.allow, value };
 }
@@ -214,12 +254,17 @@ function writeStore(vault: string, file: SecretsFile): void {
   renameSync(tmp, path);
 }
 
-function touchLastUsed(vault: string, file: SecretsFile, name: string, now: Date): void {
-  const stored = file.secrets[name];
-  if (stored === undefined) return;
-  writeStore(vault, {
-    version: SECRETS_SCHEMA_VERSION,
-    secrets: { ...file.secrets, [name]: { ...stored, last_used_at: isoSecond(now) } },
+function touchLastUsed(vault: string, name: string, now: Date): void {
+  // Re-read under the lock: the snapshot the resolver decrypted from
+  // may be stale by the time the usage stamp lands.
+  withSecretsLock(vault, () => {
+    const file = readStore(vault);
+    const stored = file.secrets[name];
+    if (stored === undefined) return;
+    writeStore(vault, {
+      version: SECRETS_SCHEMA_VERSION,
+      secrets: { ...file.secrets, [name]: { ...stored, last_used_at: isoSecond(now) } },
+    });
   });
 }
 

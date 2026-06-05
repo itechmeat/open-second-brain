@@ -97,6 +97,30 @@ describe("runWithSecret", () => {
     );
   });
 
+  test("the subprocess env is minimal - unrelated parent vars do not leak", async () => {
+    process.env["UNRELATED_PARENT_TOKEN"] = "leak-me-not";
+    try {
+      setSecret(vault, {
+        name: "api-key",
+        value: "sk-redact-me-12345",
+        envVar: "MY_API_KEY",
+        allow: ["bun -e *"],
+        agent: "tester",
+        now: NOW,
+      });
+      const result = await runWithSecret(
+        vault,
+        "api-key",
+        ["bun", "-e", "console.log('leak=' + process.env.UNRELATED_PARENT_TOKEN)"],
+        CTX,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("leak=undefined");
+    } finally {
+      delete process.env["UNRELATED_PARENT_TOKEN"];
+    }
+  });
+
   test("the subprocess exit code propagates", async () => {
     setSecret(vault, {
       name: "api-key",

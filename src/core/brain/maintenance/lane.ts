@@ -20,7 +20,7 @@
 
 import { listRecallTelemetry } from "../recall-telemetry.ts";
 import { acquireLease, MAINTENANCE_LEASE_NAME, releaseLease } from "./lease.ts";
-import { appendJournal, listJournal, type MaintenanceVerdict } from "./journal.ts";
+import { appendJournal, listJournal, sweepJournal, type MaintenanceVerdict } from "./journal.ts";
 
 /** Default lease TTL: generous enough for a full reindex + dream. */
 export const MAINTENANCE_LEASE_TTL_MS = 30 * 60 * 1000;
@@ -158,6 +158,9 @@ export async function runMaintenance(
         ...(error ? { error } : {}),
       });
     }
+    // The cap rewrite happens only here, while the lease is held -
+    // the one point where no other writer can race the journal.
+    sweepJournal(vault);
     return { verdict: "run", tasks: results };
   } finally {
     releaseLease(vault, { holder: opts.holder, name: MAINTENANCE_LEASE_NAME });

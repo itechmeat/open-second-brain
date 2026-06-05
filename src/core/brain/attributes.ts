@@ -13,10 +13,8 @@
  * extractor is unchanged.
  */
 
-import { existsSync } from "node:fs";
-import { resolve, sep } from "node:path";
-
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { resolveNotePath } from "./note-path.ts";
 import { normalizeSchemaToken } from "./schema-vocab.ts";
 import type { SchemaPack } from "./schema-pack.ts";
 
@@ -188,18 +186,6 @@ function readAttributeEntries(metadata: Record<string, unknown>): string[] {
   const raw = metadata["attributes"];
   if (!Array.isArray(raw)) return [];
   return raw.filter((entry): entry is string => typeof entry === "string");
-}
-
-function resolveNotePath(vault: string, relPath: string): string {
-  const vaultRoot = resolve(vault);
-  const path = resolve(vaultRoot, relPath);
-  if (path !== vaultRoot && !path.startsWith(vaultRoot + sep)) {
-    throw new Error(`note path resolves outside the vault: ${relPath}`);
-  }
-  if (!existsSync(path)) {
-    throw new Error(`note does not exist: ${relPath}`);
-  }
-  return path;
 }
 
 function sameEntries(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {

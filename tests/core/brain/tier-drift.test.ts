@@ -43,7 +43,7 @@ async function drift(): Promise<ReturnType<Store["listTierDrift"]>> {
   try {
     return store.listTierDrift();
   } finally {
-    store.close();
+    await store.close();
   }
 }
 
@@ -97,6 +97,26 @@ test("restoring the original value clears the drift on the next run", async () =
   const healed = await indexVault(config);
   expect(healed.tierDrift).toHaveLength(0);
   expect(await drift()).toHaveLength(0);
+});
+
+test("deleting an identity field stages drift with a null actual", async () => {
+  const config = makeConfig({ vault, dbPath });
+  writePref("pref-spaces");
+  await indexVault(config);
+  writeMd(
+    vault,
+    "Brain/preferences/pref-spaces.md",
+    "---\nkind: brain-preference\ncreated_at: 2026-05-01T00:00:00Z\ntopic: style\n---\n\nNo id anymore.\n",
+  );
+  const stats = await indexVault(config);
+  expect(stats.tierDrift).toEqual([
+    {
+      path: "Brain/preferences/pref-spaces.md",
+      field: "id",
+      expected: "pref-spaces",
+      actual: null,
+    },
+  ]);
 });
 
 test("system-tier changes update the snapshot without staging drift", async () => {

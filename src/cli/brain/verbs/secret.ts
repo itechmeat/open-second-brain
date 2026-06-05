@@ -16,8 +16,9 @@ import { listSecrets, removeSecret, setSecret } from "../../../core/brain/secret
 import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 const USAGE =
-  "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] | " +
-  "list | rm <name> | run <name> -- <command...>  [--vault <path>] [--json]";
+  "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] [--vault <path>] [--json] | " +
+  "list [--vault <path>] [--json] | rm <name> [--vault <path>] | " +
+  "run <name> [--agent N] [--vault <path>] [--json] -- <command...>";
 
 export async function cmdBrainSecret(argv: string[]): Promise<number> {
   // `run <name> -- cmd...`: everything after `--` belongs to the

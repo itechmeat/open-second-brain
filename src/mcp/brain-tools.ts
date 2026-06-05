@@ -36,7 +36,7 @@
  * one-way (Brain tools may grow their own coercion rules later).
  */
 
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { existsSync, readFileSync } from "node:fs";
 
@@ -61,6 +61,7 @@ import { currentLease } from "../core/brain/maintenance/lease.ts";
 import { listJournal } from "../core/brain/maintenance/journal.ts";
 import { runMaintenance, type DailyWindow } from "../core/brain/maintenance/lane.ts";
 import { writeFrontmatterAtomic } from "../core/vault.ts";
+import { resolveNotePath } from "../core/brain/note-path.ts";
 import type { FrontmatterMap } from "../core/types.ts";
 import { readActiveSessionFocus } from "../core/search/session-focus.ts";
 import { brainActivePath, brainDirs } from "../core/brain/paths.ts";
@@ -1931,14 +1932,13 @@ async function toolBrainTiers(
   }
 }
 
-/** Resolve a vault-relative path, refusing traversal outside the vault. */
+/** Resolve a vault-relative path, refusing traversal and symlink escapes. */
 function vaultContainedPath(vault: string, relPath: string, label: string): string {
-  const vaultRoot = resolve(vault);
-  const path = resolve(vaultRoot, relPath);
-  if (path !== vaultRoot && !path.startsWith(vaultRoot + sep)) {
-    throw new MCPError(INVALID_PARAMS, `${label}: path resolves outside the vault: ${relPath}`);
+  try {
+    return resolveNotePath(vault, relPath);
+  } catch (exc) {
+    throw new MCPError(INVALID_PARAMS, `${label}: ${(exc as Error).message}`);
   }
-  return path;
 }
 
 /** Narrow a snapshot value to the shapes frontmatter can carry. */

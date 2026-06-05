@@ -16,9 +16,9 @@ import {
   removeNoteAttribute,
 } from "../../../core/brain/attributes.ts";
 import { loadSchemaPack } from "../../../core/brain/schema-pack.ts";
+import { resolveNotePath } from "../../../core/brain/note-path.ts";
 import { defaultConfigPath } from "../../../core/config.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
-import { join } from "node:path";
 import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 const USAGE =
@@ -49,7 +49,7 @@ export async function cmdBrainAttr(argv: string[]): Promise<number> {
 
   try {
     if (show) {
-      const [metadata] = parseFrontmatter(join(vault, relPath));
+      const [metadata] = parseFrontmatter(resolveNotePath(vault, relPath));
       const attributes = readAttributes(metadata);
       if (asJson) okJson({ path: relPath, attributes });
       else {

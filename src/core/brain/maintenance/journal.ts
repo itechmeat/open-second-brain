@@ -7,7 +7,7 @@
  * sweep on append, matching the activation-store discipline.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -30,16 +30,23 @@ function journalPath(vault: string): string {
   return join(vault, ".open-second-brain", "maintenance-runs.jsonl");
 }
 
-export function appendJournal(
-  vault: string,
-  entry: MaintenanceJournalEntry,
-  cap: number = MAINTENANCE_JOURNAL_CAP,
-): void {
+export function appendJournal(vault: string, entry: MaintenanceJournalEntry): void {
   const path = journalPath(vault);
   mkdirSync(dirname(path), { recursive: true });
-  const existing = readLines(path);
-  const next = [...existing, JSON.stringify(entry)];
-  const kept = next.length > cap ? next.slice(next.length - cap) : next;
+  // O_APPEND, one line per call: concurrent gate-refusal writers
+  // (which run BEFORE the lease is held) interleave instead of
+  // overwriting each other through a read-modify-rewrite race. The
+  // cap is enforced separately by `sweepJournal`, which runMaintenance
+  // calls while it holds the lease - the only safe rewrite point.
+  appendFileSync(path, JSON.stringify(entry) + "\n");
+}
+
+/** Trim the journal to the newest `cap` lines. Lease-holder only. */
+export function sweepJournal(vault: string, cap: number = MAINTENANCE_JOURNAL_CAP): void {
+  const path = journalPath(vault);
+  const lines = readLines(path);
+  if (lines.length <= cap) return;
+  const kept = lines.slice(lines.length - cap);
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, kept.join("\n") + "\n");
   renameSync(tmp, path);

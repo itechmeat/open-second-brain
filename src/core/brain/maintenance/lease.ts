@@ -57,6 +57,11 @@ function openLeaseDb(vault: string): Database {
  * it was free, expired, or already ours (re-entrant renew).
  */
 export function acquireLease(vault: string, opts: AcquireLeaseOptions): boolean {
+  if (!Number.isFinite(opts.ttlMs) || opts.ttlMs <= 0) {
+    // A non-positive TTL would mint an already-expired lease and every
+    // contender would acquire at once - silent loss of mutual exclusion.
+    throw new Error(`lease ttlMs must be a positive number, got ${opts.ttlMs}`);
+  }
   const name = opts.name ?? MAINTENANCE_LEASE_NAME;
   const nowIso = opts.now.toISOString();
   const expiresAt = new Date(opts.now.getTime() + opts.ttlMs).toISOString();

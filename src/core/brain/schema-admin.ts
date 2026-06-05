@@ -1,5 +1,5 @@
 import { brainConfigPath } from "./paths.ts";
-import { readBlockedRelationRows } from "../search/link-constraints.ts";
+import { linkConstraintAllows, readBlockedRelationRows } from "../search/link-constraints.ts";
 import {
   buildSchemaReport,
   type BrainSchemaReport,
@@ -138,8 +138,16 @@ export function buildSchemaLint(
   if (opts.dbPath !== undefined) {
     // Link-constraint enforcement happens in the indexer's
     // materialization post-pass; lint reads the blocked edges back
-    // from the index (fail-soft: no index file = no findings).
+    // from the index (fail-soft: no index file = no findings) and
+    // re-checks each one against the CURRENT pack, so a `schema
+    // apply` that removed or relaxed a constraint stops reporting
+    // stale violations immediately - the next index run unblocks the
+    // edges themselves.
+    const constraints = loadSchemaPack(vault).link_constraints;
     for (const row of readBlockedRelationRows(opts.dbPath)) {
+      if (linkConstraintAllows(constraints, row.relation, row.sourceType, row.targetType)) {
+        continue; // stale flag; the next index run clears it
+      }
       findings.push({
         kind: "link-constraint-violation",
         relation: row.relation,

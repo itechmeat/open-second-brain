@@ -59,9 +59,10 @@ test("run executes dream and reindex; status shows the journal", async () => {
 });
 
 test("a window that excludes the current hour skips with exit 0", async () => {
-  await runCli(["brain", "init", "--vault", vault], {
+  const init = await runCli(["brain", "init", "--vault", vault], {
     env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
   });
+  expect(init.returncode).toBe(0);
   // A degenerate 1-hour window that the current hour cannot match:
   // pick the hour after next in UTC, exclusive end one hour later.
   const hour = (new Date().getUTCHours() + 2) % 24;

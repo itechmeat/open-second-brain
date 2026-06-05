@@ -250,7 +250,7 @@ export const VERB_HELP: Record<string, string> = {
     "first), recent open commitments, and open questions - every item carries\n" +
     "deterministic sources. --write persists Brain/foresight/<date>.md.\n",
   label:
-    "usage: o2b brain label <path> <dimension>=<value> | --remove <dimension> | --show  [--vault <path>] [--json]\n" +
+    "usage: o2b brain label <path> <dimension>=<value> | --remove <dimension> | --show  [--agent N] [--vault <path>] [--json]\n" +
     "Controlled-vocabulary classification against the schema pack's labels\n" +
     "field. Assignments are fail-closed - unknown dimensions and values are\n" +
     "rejected with the declared vocabulary - single-choice per dimension, and\n" +
@@ -264,7 +264,7 @@ export const VERB_HELP: Record<string, string> = {
     "natural-language descriptions. One value per field, persisted as a sorted\n" +
     "attributes frontmatter array (filterable via --property attributes=<f>=<v>).\n",
   tiers:
-    "usage: o2b brain tiers check | restore <path> [--field F] --apply | accept <path> [--field F]  [--vault <path>] [--json]\n" +
+    "usage: o2b brain tiers check | restore <path> [--field F] [--apply] | accept <path> [--field F]  [--vault <path>] [--json]\n" +
     "Frontmatter tier guard over framework-kind files. The index post-pass\n" +
     "snapshots identity/system fields and stages a finding when an identity\n" +
     "join key (kind, id, entity_id, category) changes by hand - the snapshot\n" +
@@ -272,7 +272,7 @@ export const VERB_HELP: Record<string, string> = {
     "lists open findings; restore writes the expected value back (--apply);\n" +
     "accept adopts the hand-edit as the new baseline. Nothing auto-resolves.\n",
   secret:
-    "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] | list | rm <name> | run <name> -- <command...>  [--vault <path>] [--json]\n" +
+    "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] | list | rm <name> | run <name> [--agent N] [--vault <path>] [--json] -- <command...>\n" +
     "Capability-gated secret custody under the vault-local state dir:\n" +
     "per-value AES-256-GCM ciphertext, 0600 keyfile, no surface ever prints\n" +
     "the value. set reads the value from stdin or --from-env (never argv);\n" +

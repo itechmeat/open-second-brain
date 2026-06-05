@@ -17,9 +17,9 @@ import {
   removeNoteLabel,
 } from "../../../core/brain/labels.ts";
 import { loadSchemaPack } from "../../../core/brain/schema-pack.ts";
+import { resolveNotePath } from "../../../core/brain/note-path.ts";
 import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
-import { join } from "node:path";
 import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 const USAGE =
@@ -51,7 +51,7 @@ export async function cmdBrainLabel(argv: string[]): Promise<number> {
 
   try {
     if (show) {
-      const [metadata] = parseFrontmatter(join(vault, relPath));
+      const [metadata] = parseFrontmatter(resolveNotePath(vault, relPath));
       const labels = readLabels(metadata);
       if (asJson) okJson({ path: relPath, labels });
       else {

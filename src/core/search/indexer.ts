@@ -360,18 +360,19 @@ async function indexInto(
             continue;
           }
           const expected = prev[field];
-          if (tier === "identity" && current !== undefined && !tierValueEquals(expected, current)) {
+          // Deleting an identity field is as much a hand-edit as
+          // changing it: `current === undefined` stages drift with a
+          // null actual instead of silently dropping the snapshot.
+          if (tier === "identity" && !tierValueEquals(expected, current)) {
+            const actual = current === undefined ? null : current;
             store.upsertTierDrift({
               documentId: doc.docId,
               field,
               expected,
-              actual: current,
+              actual,
               detectedAt,
             });
-            stats.tierDrift = [
-              ...stats.tierDrift,
-              { path: doc.relPath, field, expected, actual: current },
-            ];
+            stats.tierDrift = [...stats.tierDrift, { path: doc.relPath, field, expected, actual }];
             next[field] = expected; // the snapshot keeps the truth
             continue;
           }

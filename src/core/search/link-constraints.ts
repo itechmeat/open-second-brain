@@ -85,9 +85,10 @@ export function readBlockedRelationRows(dbPath: string): ReadonlyArray<BlockedRe
           "LEFT JOIN documents td ON td.id = COALESCE(" +
           "    l.target_document_id, " +
           "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
-          "    (SELECT d.id FROM documents d WHERE d.path LIKE '%/' || l.target_path || '.md' " +
+          "    (SELECT d.id FROM documents d " +
+          "       WHERE SUBSTR(d.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md' " +
           "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
-          "                WHERE d2.path LIKE '%/' || l.target_path || '.md'))" +
+          "                WHERE SUBSTR(d2.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md'))" +
           "  ) " +
           "WHERE l.relation IS NOT NULL AND l.relation_blocked = 1 " +
           "ORDER BY sd.path, l.id",

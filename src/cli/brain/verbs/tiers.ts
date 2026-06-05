@@ -22,7 +22,7 @@ import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain tiers check | " +
-  "o2b brain tiers restore <path> [--field F] --apply | " +
+  "o2b brain tiers restore <path> [--field F] [--apply] | " +
   "o2b brain tiers accept <path> [--field F]  [--vault <path>] [--json]";
 
 export async function cmdBrainTiers(argv: string[]): Promise<number> {
