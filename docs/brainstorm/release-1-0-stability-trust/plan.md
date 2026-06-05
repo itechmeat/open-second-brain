@@ -78,4 +78,29 @@ Docs phase (playbook phase 5) additionally updates `README.md`, `CHANGELOG.md` (
 
 ## Implementation deviations
 
-(recorded during implementation)
+- **18 aliases, not ~10.** The live registry carried 18 hidden
+  `deprecatedAlias` tools (10 brain + 8 schema); the sweep covers all
+  of them. The advertised `tools/list` count stays 77 - the aliases
+  were hidden, so the sweep shrinks the CALLABLE surface 95 -> 77.
+- **`timed_out` lives in lane task results / journal / CLI JSON**, not
+  in the per-run lane metric payloads as the design sketched: an
+  aborted bridges/clusters run never reaches its own metric write, so
+  a `timed_out` field there could only ever read false.
+- **Output caps scoped to lane error strings** (4096 bytes with an
+  explicit marker) rather than a blanket stream wrapper - the lane is
+  the only place with unbounded captured output.
+- **CLI timeout trip-path is unit-covered, not CLI-tested.** The
+  cooperative deadline needs an injected clock to trip
+  deterministically; across a process boundary that clock cannot be
+  injected, so the abort contract is proven on the core operations and
+  the lane, while CLI tests prove the plumbing (config keys resolve,
+  default behavior unchanged).
+- **Timezone localization is envelope-level** (`timezone` +
+  `local_time` additive fields, human-output line); per-event
+  `*_local` fields on timeline events are deferred.
+- **`stage` also records a `dream_stage` metric**, not only `apply` -
+  more dashboard signal at no cost.
+- **Digest JSON delta rides the tool envelope** (`delta` next to
+  `content`); the digest content's own `schema_version: 1` contract is
+  untouched. The CLI digest appends the Since-last-run block after the
+  markdown rendering.
