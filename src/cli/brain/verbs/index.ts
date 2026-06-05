@@ -25,6 +25,7 @@ export { cmdBrainFacts } from "./facts.ts";
 export { cmdBrainDeadEnd } from "./dead-end.ts";
 export { cmdBrainForesight } from "./foresight.ts";
 export { cmdBrainLabel } from "./label.ts";
+export { cmdBrainBridges } from "./bridges.ts";
 export { cmdBrainAttr } from "./attr.ts";
 export { cmdBrainTiers } from "./tiers.ts";
 export { cmdBrainSecret } from "./secret.ts";

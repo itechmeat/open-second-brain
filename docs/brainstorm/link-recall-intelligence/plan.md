@@ -203,4 +203,12 @@ per task.
 
 ## Implementation deviations
 
-(appended during implementation when reality diverges from this plan)
+- **Task 7 verb is `bridges`, not `links`**: `o2b brain links normalize`
+  already exists (Workspace Insight Suite, t_5f31b5f1) - clobbering or
+  overloading its contract for an unrelated feature would be a breaking
+  surprise. Bridge discovery ships as `o2b brain bridges
+  discover|list|accept|dismiss`; the MCP tool follows as `brain_bridges`.
+- **Task 5 acceptance reworded**: "expansion improves a case lex alone
+  misses" is pinned via the deterministic stopword case (implicit-AND FTS
+  drops a note when a stopword is absent from it) rather than a weight
+  override, which the public API does not expose.

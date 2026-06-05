@@ -39,9 +39,10 @@ afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
 });
 
+const link = (targets: string[]) => targets.map((t) => `[[${t}]]`).join(" and ");
+
 /** Two 4-cliques (deploy-*, cook-*) and one isolated note. */
 function writeTwoCommunities(): void {
-  const link = (targets: string[]) => targets.map((t) => `[[${t}]]`).join(" and ");
   const deploy = ["deploy-a", "deploy-b", "deploy-c", "deploy-d"];
   const cook = ["cook-a", "cook-b", "cook-c", "cook-d"];
   for (const group of [deploy, cook]) {

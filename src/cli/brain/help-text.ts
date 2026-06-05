@@ -45,6 +45,7 @@ Brain verbs (observing memory):
   dead-end            Negative-knowledge registry: record and list failed approaches
   foresight           Forward projection: routines coming due, open commitments and questions
   label               Controlled-vocabulary classification: assign, remove, show note labels
+  bridges             Embedding-near link proposals: discover, list, accept, dismiss
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
   tiers               Frontmatter tier guard: check identity-field drift, restore or accept
   secret              Capability-gated secret custody: set, list, rm, run (use w/o exposure)
@@ -256,6 +257,14 @@ export const VERB_HELP: Record<string, string> = {
     "rejected with the declared vocabulary - single-choice per dimension, and\n" +
     "persist as a sorted labels frontmatter array plus a canonical label\n" +
     "entity. Filter recall with: o2b search <q> --property labels=<dim>/<value>.\n",
+  bridges:
+    "usage: o2b brain bridges discover [--max N] [--min-similarity X] | list | accept <source> <target> | dismiss <source> <target>  [--vault <path>] [--json]\n" +
+    "Bridge discovery over the vec index: propose links between embedding-near\n" +
+    "notes that share no existing edge, orphan-first. discover regenerates the\n" +
+    "reviewable Brain/proposals/bridges.md artifact and records one\n" +
+    "bridge_discovery metric; accept writes a single related: wikilink into the\n" +
+    "source note (schema-pack link constraints honored); dismiss silences a\n" +
+    "pair across future runs. Fail-soft without an index or embeddings.\n",
   attr:
     "usage: o2b brain attr <path> <field>=<value> | --remove <field> | --show  [--vault <path>] [--json]\n" +
     "Per-type attribute fields declared in the schema pack's attributes map.\n" +

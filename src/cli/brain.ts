@@ -38,6 +38,7 @@ import {
   cmdBrainDeadEnd,
   cmdBrainForesight,
   cmdBrainLabel,
+  cmdBrainBridges,
   cmdBrainAttr,
   cmdBrainTiers,
   cmdBrainSecret,
@@ -186,6 +187,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainForesight(rest);
       case "label":
         return await cmdBrainLabel(rest);
+      case "bridges":
+        return await cmdBrainBridges(rest);
       case "attr":
         return await cmdBrainAttr(rest);
       case "tiers":

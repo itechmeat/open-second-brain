@@ -23,7 +23,7 @@
  * touched.
  */
 
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import type { Store } from "../../search/store.ts";
