@@ -1020,6 +1020,41 @@ export class Store {
   }
 
   /**
+   * Every link edge resolved to a (source, target) document-id pair,
+   * deduplicated, using the same conservative resolution ladder as
+   * {@link typedRelationEdgesForDocuments}: materialized id first,
+   * then `<target>.md` exact, then an UNAMBIGUOUS basename suffix.
+   * Unresolvable edges are absent. Read-only; feeds bridge discovery
+   * and community detection (link-recall-intelligence).
+   */
+  resolvedDocLinkPairs(): Array<{ readonly source: number; readonly target: number }> {
+    const rows = this.db
+      .query<{ source: number; target: number | null }, []>(
+        "SELECT DISTINCT l.source_document_id AS source, " +
+          "  COALESCE(" +
+          "    l.target_document_id, " +
+          "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
+          "    (SELECT d.id FROM documents d " +
+          "       WHERE SUBSTR(d.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md' " +
+          "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
+          "                WHERE SUBSTR(d2.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md'))" +
+          "  ) AS target " +
+          "FROM links l WHERE l.target_path IS NOT NULL",
+      )
+      .all();
+    const out: Array<{ source: number; target: number }> = [];
+    for (const r of rows) {
+      if (r.target !== null) out.push({ source: r.source, target: r.target });
+    }
+    return out;
+  }
+
+  /** Number of chunks with a stored embedding row. */
+  countEmbeddings(): number {
+    return this.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM embeddings").get()?.n ?? 0;
+  }
+
+  /**
    * For each document id, the typed relation edges it declares
    * (v3 / typed graph semantics): rows whose `relation` is set, in
    * insertion order. The target is the edge's `target_path` as written.
