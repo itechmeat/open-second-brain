@@ -62,6 +62,12 @@ export interface SchemaExplanation {
   readonly link_type: boolean;
   readonly extractable: boolean;
   readonly expert: string | null;
+  /**
+   * Declared attribute fields for this type with their natural-language
+   * descriptions (write-time-integrity-governance) - the vocabulary an
+   * agent should populate when capturing this type.
+   */
+  readonly attributes: Readonly<Record<string, string>>;
 }
 
 export interface SchemaOrphanReport {
@@ -217,6 +223,7 @@ export function explainSchemaToken(vault: string, rawToken: string): SchemaExpla
     link_type: pack.link_types.includes(token),
     extractable: pack.extractable.includes(token),
     expert: pack.expert_routing[token] ?? null,
+    attributes: pack.attributes[token] ?? {},
   };
 }
 

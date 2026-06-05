@@ -45,6 +45,7 @@ Brain verbs (observing memory):
   dead-end            Negative-knowledge registry: record and list failed approaches
   foresight           Forward projection: routines coming due, open commitments and questions
   label               Controlled-vocabulary classification: assign, remove, show note labels
+  attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -252,6 +253,13 @@ export const VERB_HELP: Record<string, string> = {
     "rejected with the declared vocabulary - single-choice per dimension, and\n" +
     "persist as a sorted labels frontmatter array plus a canonical label\n" +
     "entity. Filter recall with: o2b search <q> --property labels=<dim>/<value>.\n",
+  attr:
+    "usage: o2b brain attr <path> <field>=<value> | --remove <field> | --show  [--vault <path>] [--json]\n" +
+    "Per-type attribute fields declared in the schema pack's attributes map.\n" +
+    "The note's own frontmatter type selects the descriptor set; assigning an\n" +
+    "undeclared field is rejected with the declared fields and their\n" +
+    "natural-language descriptions. One value per field, persisted as a sorted\n" +
+    "attributes frontmatter array (filterable via --property attributes=<f>=<v>).\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +

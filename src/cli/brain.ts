@@ -38,6 +38,7 @@ import {
   cmdBrainDeadEnd,
   cmdBrainForesight,
   cmdBrainLabel,
+  cmdBrainAttr,
   cmdBrainAudit,
   cmdBrainMorningBrief,
   cmdBrainCodec,
@@ -182,6 +183,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainForesight(rest);
       case "label":
         return await cmdBrainLabel(rest);
+      case "attr":
+        return await cmdBrainAttr(rest);
       case "audit":
         return await cmdBrainAudit(rest);
       case "morning-brief":
