@@ -5,6 +5,111 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.44.0] - 2026-06-05
+
+Write-Time Integrity & Governance Suite: every write into the Brain
+passes declared contracts. The schema pack becomes the single
+declarative ontology - controlled-vocabulary labels, link-type
+endpoint constraints, per-type attribute descriptors, and a
+frontmatter field tier map, all additive - with enforcement at each
+feature's existing seam: fail-closed classification whose errors
+teach the declared vocabulary, typed edges blocked at index
+materialization when their endpoint page types violate the declared
+pairs, a tier guard that detects identity-key hand-edits without
+ever write-denying a human, capability-gated secret custody that
+lets an agent use a credential without the value entering its
+context, and a quiet-window lease-guarded lane that keeps heavy
+maintenance off live interactive recall. A vault that declares none
+of the new fields behaves bit-identically. MCP tool count grows
+69 -> 73.
+
+### Added
+
+- **Schema-pack ontology fields.** Four additive fields turn the
+  pack from a flat token list into a real ontology: `labels`
+  (dimension -> fixed enum values), `link_constraints` (link type ->
+  allowed `source->target` page-type pairs), `attributes` (type ->
+  field -> natural-language description), and `frontmatter_tiers`
+  (kind -> field -> tier). All parse, render, and mutate through the
+  existing audited machinery (`o2b brain schema apply` gains
+  `add_label_dimension`, `add_link_constraint`,
+  `set_attribute_field`, `set_frontmatter_tier`, and their inverses,
+  with reference validation and cascade on `remove_type` /
+  `remove_link_type`).
+- **Controlled-vocabulary labels** (`o2b brain label`, MCP
+  `brain_labels`). Assignment is fail-closed - an unknown dimension
+  or value is rejected with the declared vocabulary in the error -
+  single-choice per dimension, persisted as a sorted
+  `labels: [dim/value]` frontmatter array (filterable via
+  `o2b search <q> --property labels=<dim>/<value>`) plus a canonical
+  `label` entity in the registry, so related notes cluster without
+  free-form tag drift.
+- **Link-type endpoint constraints** enforced at index
+  materialization. Each page's declared frontmatter `type` is
+  persisted (index schema v6) and a post-pass recomputes every typed
+  edge's blocked flag from the current pack on every run: violating
+  edges fall back to plain untyped links instead of feeding
+  typed-relation recall, `o2b brain schema lint` (and MCP
+  `schema_inspect` lint) lists each violation, and removing a
+  constraint restores the edges on the next index run without
+  touching files. Fail-open on missing information - undeclared
+  relations and unknown endpoint types always pass.
+- **Per-type attribute fields** (`o2b brain attr`). The note's own
+  frontmatter `type` selects the descriptor set; assigning an
+  undeclared field lists the declared fields WITH their descriptions
+  so the vocabulary teaches itself. One value per field, persisted
+  as a sorted `attributes: [field=value]` frontmatter array;
+  descriptors render in schema explain output as agent guidance. The
+  regex fact extractor is unchanged.
+- **Frontmatter tier guard** (`o2b brain tiers`, MCP `brain_tiers`).
+  Four tiers (identity / system / business / user) with built-in
+  defaults grounded in the fields framework writers actually emit -
+  the preference files' `_`-prefix convention becomes an explicit
+  system-tier rule. `writePreference` merges through the tier model:
+  a hand-added user field survives every framework rewrite, legacy
+  unprefixed Group C keys migrate away, and a changed identity join
+  key throws instead of being silently re-accepted. The index pass
+  snapshots identity fields and stages drift findings the snapshot
+  never absorbs; `tiers check | restore --apply | accept` is the
+  staged repair surface and `brain_doctor` warns with the open
+  count. Unknown kinds resolve everything to user - a human's own
+  vault is never constrained.
+- **Capability-gated secret custody** (`o2b brain secret`, MCP
+  `brain_secrets`). Per-value AES-256-GCM ciphertext (random IV,
+  verified auth tag - tampering fails closed) beside an
+  exclusive-create 0600 keyfile under the vault-local state dir,
+  never synced as vault content. The value enters via stdin or
+  `--from-env` (never argv), no surface returns plaintext, and
+  `run <name> -- cmd...` injects the credential into a subprocess
+  whose command must match the operator-declared glob allowlist -
+  captured output passes through the redactor with the resolved
+  value as a known literal. Every operation lands a no-values audit
+  record in `Brain/log/secret-custody/`. MCP exposes list and run
+  only; storing and removing stays on the operator's CLI. Threat
+  model stated honestly: protects against context leakage, sync
+  exposure, and casual reads - not against root.
+- **Quiet-window maintenance lane** (`o2b brain maintenance`, MCP
+  `brain_maintenance`). Dream + reindex run behind three gates: a
+  tz-aware local-time hour window with midnight wrap (unset = always
+  open), a busy gate over recent recall-telemetry records, and an
+  expiring SQLite lease in a dedicated `maintenance.sqlite` so
+  holding it never contends with the search index writer lock.
+  `--force` bypasses the soft gates but never the lease, tasks run
+  stale-first, every attempt including gate refusals lands in a
+  bounded journal, and a gate skip exits 0 so cron never alarms on a
+  quiet hour.
+
+### Changed
+
+- The search index schema advances to v6 (additive):
+  `documents.page_type`, `documents.tier_snapshot`,
+  `links.relation_blocked`, and the `tier_drift` table - all
+  reindex-safe, existing rows default to neutral values.
+- `redactRawOutput` gains a `literals` option: known secret values
+  are scrubbed verbatim before the pattern passes run.
+- `IndexStats` reports `relationViolations` and `tierDrift` for the
+  materialization post-passes.
+
 ## [0.43.1] - 2026-06-04
 
 Patch release: the Hermes CLI discovery contract is now actually
@@ -4621,6 +4726,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[0.44.0]: https://github.com/itechmeat/open-second-brain/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/itechmeat/open-second-brain/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/itechmeat/open-second-brain/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/itechmeat/open-second-brain/compare/v0.41.0...v0.42.0

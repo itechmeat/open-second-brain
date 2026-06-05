@@ -75,3 +75,29 @@ Feature branch: `feat/write-time-integrity-governance`. TDD per task, one atomic
 - **What**: one vault exercising: declare ontology -> assign labels -> constraint-violating link linted -> attr validation -> hand-edit L1 -> tiers check finds + restores -> secret set/run with redacted output -> maintenance run inside/outside window. Docs per phase-5 conventions.
 - **Acceptance**: e2e green; docs build; CHANGELOG entry complete with compare link.
 - **Depends on**: all
+
+## Implementation deviations (documented during phase 2)
+
+- **Task 4 host surface**: attribute assignment ships as its own verb
+  `o2b brain attr <path> <field>=<value>` mirroring `label`, not as a
+  `--attr` flag on a capture verb - no single capture verb writes
+  typed pages today, and the note's own frontmatter `type` selecting
+  the descriptor set is the cleaner contract.
+- **Task 6 baseline**: the drift baseline is an index-time
+  `tier_snapshot` per document (seeded on first index, identity
+  fields never absorbed on later runs) rather than comparing against
+  fields "already stored in SQLite" - the index never persisted
+  frontmatter values before v6. Only identity-tier changes stage
+  findings; system-tier fields mutate legitimately on every
+  framework write and would false-positive on each dream run.
+- **Task 9 window math**: the daily window helper lives in
+  `maintenance/lane.ts` (Intl-based local hour); `discipline/window.ts`
+  stays untouched - its yesterday-interval contract is unrelated to
+  an hour-window predicate.
+- **Task 10/CLI**: the window is configured per invocation
+  (`--window H-H --tz ZONE` on the cron command line), not via a new
+  config key - explicit at the call site, neutral default preserved.
+- **Task 11**: no `brain_attr` MCP tool - descriptors already reach
+  agents through schema explain output, and attribute writes stay on
+  the CLI alongside `label`'s MCP counterpart covering the
+  classification use case.
