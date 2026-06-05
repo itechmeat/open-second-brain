@@ -11,6 +11,7 @@
  */
 
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
@@ -50,6 +51,13 @@ export async function cmdBrainTiers(argv: string[]): Promise<number> {
 
   try {
     if (op === "check") {
+      // Fail-soft: a vault that was never indexed has no snapshots
+      // and therefore no drift - not an error.
+      if (!existsSync(searchConfig.dbPath)) {
+        if (asJson) okJson({ findings: [] });
+        else ok("tier drift: 0 open finding(s)");
+        return 0;
+      }
       const store = await Store.open(searchConfig, { mode: "read" });
       try {
         const findings = store.listTierDrift();

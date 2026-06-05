@@ -5,7 +5,12 @@ import {
   type BrainSchemaReport,
   type SchemaReportFinding,
 } from "./schema-report.ts";
-import { loadSchemaPack, type SchemaPack } from "./schema-pack.ts";
+import {
+  FRONTMATTER_TIERS,
+  loadSchemaPack,
+  type FrontmatterTier,
+  type SchemaPack,
+} from "./schema-pack.ts";
 import {
   applySchemaMutations,
   type ApplySchemaMutationsResult,
@@ -321,9 +326,56 @@ function coerceSchemaMutation(value: unknown): SchemaMutation {
         throw new Error("mutation.expert must be a string or null");
       return { op, token: readString(value, "token"), expert };
     }
+    case "add_label_dimension":
+      return {
+        op,
+        dimension: readString(value, "dimension"),
+        values: readStringArray(value, "values"),
+      };
+    case "remove_label_dimension":
+      return { op, dimension: readString(value, "dimension") };
+    case "add_link_constraint":
+    case "remove_link_constraint":
+      return {
+        op,
+        link_type: readString(value, "link_type"),
+        source: readString(value, "source"),
+        target: readString(value, "target"),
+      };
+    case "set_attribute_field":
+      return {
+        op,
+        type: readString(value, "type"),
+        field: readString(value, "field"),
+        description: readString(value, "description"),
+      };
+    case "remove_attribute_field":
+      return { op, type: readString(value, "type"), field: readString(value, "field") };
+    case "set_frontmatter_tier": {
+      const tier = readString(value, "tier");
+      if (!(FRONTMATTER_TIERS as ReadonlyArray<string>).includes(tier)) {
+        throw new Error(`mutation.tier must be one of ${FRONTMATTER_TIERS.join(", ")}`);
+      }
+      return {
+        op,
+        kind: readString(value, "kind"),
+        field: readString(value, "field"),
+        tier: tier as FrontmatterTier,
+      };
+    }
+    case "remove_frontmatter_tier":
+      return { op, kind: readString(value, "kind"), field: readString(value, "field") };
     default:
       throw new Error(`unsupported schema mutation op: ${op}`);
   }
+}
+
+function readStringArray(value: Record<string, unknown>, key: string): string[] {
+  const raw = value[key];
+  if (!Array.isArray(raw) || !raw.every((item): item is string => typeof item === "string")) {
+    throw new Error(`mutation.${key} must be an array of strings`);
+  }
+  return raw;
 }
 
 function readCategory(value: Record<string, unknown>): SchemaVocabularyCategory {

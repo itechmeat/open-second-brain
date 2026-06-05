@@ -10,6 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { coerceSchemaMutations } from "../../../src/core/brain/schema-admin.ts";
 import {
   applyMutationsToPack,
   type SchemaMutation,
@@ -285,5 +286,37 @@ describe("ontology mutations", () => {
       { op: "remove_type", category: "page_types", token: "book" },
     ]);
     expect(removed.attributes).toEqual({});
+  });
+});
+
+describe("coerceSchemaMutations (CLI/MCP boundary)", () => {
+  test("the ontology mutation ops coerce from raw JSON", () => {
+    const coerced = coerceSchemaMutations([
+      { op: "add_label_dimension", dimension: "priority", values: ["low", "high"] },
+      { op: "remove_label_dimension", dimension: "priority" },
+      { op: "add_link_constraint", link_type: "depends_on", source: "paper", target: "person" },
+      { op: "remove_link_constraint", link_type: "depends_on", source: "paper", target: "person" },
+      { op: "set_attribute_field", type: "paper", field: "status", description: "reading status" },
+      { op: "remove_attribute_field", type: "paper", field: "status" },
+      { op: "set_frontmatter_tier", kind: "brain-preference", field: "id", tier: "identity" },
+      { op: "remove_frontmatter_tier", kind: "brain-preference", field: "id" },
+    ]);
+    expect(coerced).toHaveLength(8);
+    expect(coerced[0]).toEqual({
+      op: "add_label_dimension",
+      dimension: "priority",
+      values: ["low", "high"],
+    });
+  });
+
+  test("malformed ontology mutations fail closed", () => {
+    expect(() =>
+      coerceSchemaMutations([{ op: "add_label_dimension", dimension: "priority", values: "low" }]),
+    ).toThrow(/values must be an array of strings/);
+    expect(() =>
+      coerceSchemaMutations([
+        { op: "set_frontmatter_tier", kind: "k", field: "f", tier: "readonly" },
+      ]),
+    ).toThrow(/tier must be one of identity, system, business, user/);
   });
 });
