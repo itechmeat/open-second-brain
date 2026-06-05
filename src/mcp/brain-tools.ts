@@ -44,6 +44,7 @@ import {
   resolveAgentName,
   resolveLinkOutputFormat,
   resolveSearchFocusContextPack,
+  resolveTimezone,
   resolveTriggerCooldownDays,
 } from "../core/config.ts";
 import { indexVault, resolveSearchConfig } from "../core/search/index.ts";
@@ -208,6 +209,7 @@ import { writeSignal } from "../core/brain/signal.ts";
 import { writePreference } from "../core/brain/preference.ts";
 import { validateBrainFeedbackInput } from "../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../core/brain/time.ts";
+import { formatLocalTimestamp } from "../core/brain/present-time.ts";
 import { slugify } from "../core/vault.ts";
 import { normalizeAgentArgument } from "../core/agent-identity.ts";
 import {
@@ -3933,8 +3935,26 @@ function dispatchByView(
   return handler(ctx, args);
 }
 
+/**
+ * Timezone presentation (t_2ccadc6a): when the operator configured an
+ * IANA zone, brief/analytics envelopes gain two ADDITIVE fields - a
+ * `timezone` echo and `local_time` (the render instant in that zone).
+ * Stored timestamps inside the envelope stay canonical UTC; with no
+ * timezone configured the envelope is byte-identical to 0.45.0.
+ */
+function localizeEnvelope(ctx: ServerContext, result: unknown): unknown {
+  if (result === null || typeof result !== "object" || Array.isArray(result)) return result;
+  const tz = resolveTimezone(ctx.configPath ?? undefined);
+  if (tz === null) return result;
+  return {
+    ...(result as Record<string, unknown>),
+    timezone: tz,
+    local_time: formatLocalTimestamp(isoSecond(new Date()), tz),
+  };
+}
+
 async function toolBrainBrief(ctx: ServerContext, args: Record<string, unknown>): Promise<unknown> {
-  return await dispatchByView(BRIEF_VIEW_HANDLERS, ctx, args);
+  return localizeEnvelope(ctx, await dispatchByView(BRIEF_VIEW_HANDLERS, ctx, args));
 }
 
 async function toolBrainAnalytics(
@@ -3944,7 +3964,7 @@ async function toolBrainAnalytics(
   // attention_flows requires an `operation`; the consolidated surface
   // defaults it to the read-only `list` so `{view}` alone is valid.
   const withDefaults = args["view"] === "attention_flows" ? { operation: "list", ...args } : args;
-  return await dispatchByView(ANALYTICS_VIEW_HANDLERS, ctx, withDefaults);
+  return localizeEnvelope(ctx, await dispatchByView(ANALYTICS_VIEW_HANDLERS, ctx, withDefaults));
 }
 
 export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([

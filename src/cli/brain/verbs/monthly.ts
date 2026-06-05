@@ -3,7 +3,7 @@ import {
   buildMonthlyReview,
   normalizeMonthlyReviewMonth,
 } from "../../../core/brain/monthly-review.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
 
 const MONTH_RE = /^\d{4}-\d{2}$/;
 
@@ -24,7 +24,7 @@ export async function cmdBrainMonthly(argv: string[]): Promise<number> {
   const report = buildMonthlyReview(vault, month ? { month } : {});
 
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    process.stdout.write(JSON.stringify({ ...report, ...localTimeFields(config) }, null, 2) + "\n");
     return 0;
   }
 

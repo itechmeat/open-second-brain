@@ -2,7 +2,7 @@ import { defaultConfigPath } from "../../../core/config.ts";
 import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts";
 import { buildDailyBrief } from "../../../core/brain/temporal/daily-brief.ts";
 import { loadTemporalConfigSafe } from "../../../core/brain/policy.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
 
 const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -34,7 +34,7 @@ export async function cmdBrainDaily(argv: string[]): Promise<number> {
   }
 
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(brief, null, 2) + "\n");
+    process.stdout.write(JSON.stringify({ ...brief, ...localTimeFields(config) }, null, 2) + "\n");
     return 0;
   }
 

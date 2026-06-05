@@ -137,6 +137,27 @@ describe("schema_inspect", () => {
   });
 });
 
+describe("timezone presentation (t_2ccadc6a)", () => {
+  test("a configured timezone adds additive local fields to brief envelopes", async () => {
+    atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\ntimezone: Asia/Tokyo\n`);
+    const result = (await run("brain_brief", { view: "daily", date: "2026-06-05" })) as Record<
+      string,
+      unknown
+    >;
+    expect(result["timezone"]).toBe("Asia/Tokyo");
+    expect(String(result["local_time"])).toContain("+09:00");
+  });
+
+  test("no configured timezone keeps the envelope unchanged", async () => {
+    const result = (await run("brain_brief", { view: "daily", date: "2026-06-05" })) as Record<
+      string,
+      unknown
+    >;
+    expect(result["timezone"]).toBeUndefined();
+    expect(result["local_time"]).toBeUndefined();
+  });
+});
+
 describe("consolidated registration", () => {
   test("consolidated tools are registered and advertised", async () => {
     for (const name of ["brain_brief", "brain_analytics", "schema_inspect"]) {

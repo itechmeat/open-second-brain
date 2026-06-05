@@ -23,7 +23,9 @@
  * file because they are tiny and called by every verb.
  */
 
-import { resolveVault } from "../../core/config.ts";
+import { resolveTimezone, resolveVault } from "../../core/config.ts";
+import { formatLocalTimestamp } from "../../core/brain/present-time.ts";
+import { isoSecond } from "../../core/brain/time.ts";
 
 import { CliError, parseFlags, type FlagsSchema } from "../argparse.ts";
 import { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
@@ -75,3 +77,14 @@ export {
   renderQueryLogText,
 } from "./query-render.ts";
 export { diffSummary, readSingleLine, type DiffSummary } from "./rollback-prompt.ts";
+
+/**
+ * Timezone presentation (t_2ccadc6a): additive `timezone` +
+ * `local_time` fields for JSON envelopes when the operator configured
+ * an IANA zone; empty object (byte-identical output) otherwise.
+ */
+export function localTimeFields(configPath: string | null): Record<string, string> {
+  const tz = resolveTimezone(configPath ?? undefined);
+  if (tz === null) return {};
+  return { timezone: tz, local_time: formatLocalTimestamp(isoSecond(new Date()), tz) };
+}
