@@ -47,6 +47,7 @@ Brain verbs (observing memory):
   label               Controlled-vocabulary classification: assign, remove, show note labels
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
   tiers               Frontmatter tier guard: check identity-field drift, restore or accept
+  secret              Capability-gated secret custody: set, list, rm, run (use w/o exposure)
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -269,6 +270,16 @@ export const VERB_HELP: Record<string, string> = {
     "keeps the expected value, so reindexes never absorb the edit. check\n" +
     "lists open findings; restore writes the expected value back (--apply);\n" +
     "accept adopts the hand-edit as the new baseline. Nothing auto-resolves.\n",
+  secret:
+    "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] | list | rm <name> | run <name> -- <command...>  [--vault <path>] [--json]\n" +
+    "Capability-gated secret custody under the vault-local state dir:\n" +
+    "per-value AES-256-GCM ciphertext, 0600 keyfile, no surface ever prints\n" +
+    "the value. set reads the value from stdin or --from-env (never argv);\n" +
+    "run injects it as the declared env var into a subprocess whose command\n" +
+    "matches the allowlist declared at set time, and the captured output is\n" +
+    "redacted before it reaches the caller. Every operation lands a\n" +
+    "no-values record in Brain/log/secret-custody/. Protects against\n" +
+    "context leakage and vault sync exposure - not against root.\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +

@@ -121,6 +121,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("label", "Assign, remove, or show controlled-vocabulary labels"),
         command("attr", "Assign, remove, or show typed-page attribute fields"),
         command("tiers", "Check, restore, or accept identity-field drift"),
+        command("secret", "Capability-gated secret custody: set, list, rm, run"),
         command("audit", "Render mutation audit trail"),
         command("morning-brief", "Render session-start summary"),
         command("codec", "Compress or expand session prose"),

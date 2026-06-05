@@ -145,6 +145,14 @@ export interface RedactRawOutputOptions {
    * secrets.
    */
   readonly maxInput?: number;
+  /**
+   * Known secret values to scrub verbatim (write-time-integrity-
+   * governance, secret custody): every literal occurrence is replaced
+   * before the pattern passes run, so a credential injected into a
+   * subprocess env can never travel back through captured output even
+   * when no key=value shape surrounds it.
+   */
+  readonly literals?: ReadonlyArray<string>;
 }
 
 export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
@@ -152,6 +160,11 @@ export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {})
 
   const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
   let out = text.length > maxInput ? text.slice(0, maxInput) + TRUNCATION_MARKER : text;
+
+  for (const literal of opts.literals ?? []) {
+    if (literal.length === 0) continue;
+    out = out.split(literal).join(PLACEHOLDER);
+  }
 
   out = stripPrivateRegions(out);
 
