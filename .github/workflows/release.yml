@@ -152,9 +152,16 @@ jobs:
             prerelease_args+=(--prerelease)
           fi
 
+          # The normal flow publishes a curated release (notes, image assets)
+          # via `gh release create` BEFORE this workflow runs — creating the
+          # tag is what triggers it. An existing release is therefore the
+          # expected end state, not an error: verify stays the safety net and
+          # this step only creates a release when none exists yet (e.g. a
+          # bare `git push --tags` or a workflow_dispatch run).
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "Release ${TAG} already exists" >&2
-            exit 1
+            echo "Release ${TAG} already exists — keeping the curated release as-is."
+            echo "::notice title=Release exists::${TAG} was already published; skipped auto-creation."
+            exit 0
           fi
 
           gh release create "${TAG}" \
