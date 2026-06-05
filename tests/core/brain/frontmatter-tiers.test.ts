@@ -10,7 +10,10 @@
  * is never constrained.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   FrontmatterTierConflictError,
@@ -18,7 +21,9 @@ import {
   resolveFieldTier,
   tieredFieldsForKind,
 } from "../../../src/core/brain/frontmatter-tiers.ts";
+import { writePreference, type WritePreferenceInput } from "../../../src/core/brain/preference.ts";
 import { parseSchemaPack } from "../../../src/core/brain/schema-pack.ts";
+import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 
 const EMPTY_PACK = parseSchemaPack("schema_version: 1\n");
 
@@ -141,5 +146,67 @@ describe("mergeFrontmatterTiered", () => {
       { kind: "brain-preference", pack: EMPTY_PACK },
     );
     expect(merged["topic"]).toBe("style-v2");
+  });
+
+  test("framework-owned legacy keys the writer no longer emits are dropped", () => {
+    const merged = mergeFrontmatterTiered(
+      { ...existing, status: "confirmed", applied_count: 3 },
+      { kind: "brain-preference", id: "pref-spaces", _status: "confirmed" },
+      { kind: "brain-preference", pack: EMPTY_PACK },
+    );
+    expect(merged["status"]).toBeUndefined();
+    expect(merged["applied_count"]).toBeUndefined();
+    expect(merged["_status"]).toBe("confirmed");
+    expect(merged["favorite_quote"]).toBe("tabs are history");
+  });
+});
+
+describe("writePreference integration", () => {
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-tier-writer-"));
+    mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  function pref(principle: string): WritePreferenceInput {
+    return {
+      slug: "spaces",
+      topic: "style",
+      principle,
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: ["[[sig-2026-05-01-spaces]]"],
+      confirmed_at: "2026-05-02T00:00:00Z",
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: null,
+      confidence: BRAIN_CONFIDENCE.low,
+      confidence_value: null,
+      pinned: false,
+    };
+  }
+
+  test("a hand-added user field survives a framework rewrite", () => {
+    const { path } = writePreference(vault, pref("Use spaces"));
+    const withUserKey = readFileSync(path, "utf8").replace("---\n", "---\nmy_note: hands off\n");
+    writeFileSync(path, withUserKey);
+    writePreference(vault, pref("Use spaces, always"), { overwrite: true });
+    const rewritten = readFileSync(path, "utf8");
+    expect(rewritten).toContain("my_note: hands off");
+    expect(rewritten).toContain("Use spaces, always");
+  });
+
+  test("a hand-edited id makes the next framework rewrite throw", () => {
+    const { path } = writePreference(vault, pref("Use spaces"));
+    writeFileSync(path, readFileSync(path, "utf8").replace("id: pref-spaces", "id: pref-tabs"));
+    expect(() => writePreference(vault, pref("Use spaces, v2"), { overwrite: true })).toThrow(
+      FrontmatterTierConflictError,
+    );
   });
 });

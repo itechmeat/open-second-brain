@@ -271,18 +271,37 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
     // document's declared frontmatter `type` is persisted alongside it,
     // and a typed edge gains a `relation_blocked` flag the indexer's
     // post-pass recomputes from the current schema pack on every run.
-    // Both additive and reindex-safe: existing rows default to NULL
-    // page type (constraints cannot evaluate - allowed) and unblocked.
+    // The tier guard additionally snapshots a framework file's tiered
+    // frontmatter fields (`tier_snapshot`) and stages identity-field
+    // hand-edits in `tier_drift` for `o2b brain tiers check|restore`.
+    // All additive and reindex-safe: existing rows default to NULL
+    // page type (constraints cannot evaluate - allowed), unblocked
+    // edges, and no snapshot (first reindex seeds it).
     version: 6,
     up(db) {
       const docCols = db.query<{ name: string }, []>("PRAGMA table_info(documents)").all();
       if (!docCols.some((c) => c.name === "page_type")) {
         db.exec("ALTER TABLE documents ADD COLUMN page_type TEXT");
       }
+      if (!docCols.some((c) => c.name === "tier_snapshot")) {
+        db.exec("ALTER TABLE documents ADD COLUMN tier_snapshot TEXT");
+      }
       const linkCols = db.query<{ name: string }, []>("PRAGMA table_info(links)").all();
       if (!linkCols.some((c) => c.name === "relation_blocked")) {
         db.exec("ALTER TABLE links ADD COLUMN relation_blocked INTEGER NOT NULL DEFAULT 0");
       }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS tier_drift (
+          id           INTEGER PRIMARY KEY,
+          document_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          field        TEXT NOT NULL,
+          expected     TEXT NOT NULL,
+          actual       TEXT NOT NULL,
+          detected_at  TEXT NOT NULL,
+          UNIQUE(document_id, field)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tier_drift_document ON tier_drift(document_id);
+      `);
     },
   },
 ]);

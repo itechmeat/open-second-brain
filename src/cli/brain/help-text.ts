@@ -46,6 +46,7 @@ Brain verbs (observing memory):
   foresight           Forward projection: routines coming due, open commitments and questions
   label               Controlled-vocabulary classification: assign, remove, show note labels
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
+  tiers               Frontmatter tier guard: check identity-field drift, restore or accept
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -260,6 +261,14 @@ export const VERB_HELP: Record<string, string> = {
     "undeclared field is rejected with the declared fields and their\n" +
     "natural-language descriptions. One value per field, persisted as a sorted\n" +
     "attributes frontmatter array (filterable via --property attributes=<f>=<v>).\n",
+  tiers:
+    "usage: o2b brain tiers check | restore <path> [--field F] --apply | accept <path> [--field F]  [--vault <path>] [--json]\n" +
+    "Frontmatter tier guard over framework-kind files. The index post-pass\n" +
+    "snapshots identity/system fields and stages a finding when an identity\n" +
+    "join key (kind, id, entity_id, category) changes by hand - the snapshot\n" +
+    "keeps the expected value, so reindexes never absorb the edit. check\n" +
+    "lists open findings; restore writes the expected value back (--apply);\n" +
+    "accept adopts the hand-edit as the new baseline. Nothing auto-resolves.\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +

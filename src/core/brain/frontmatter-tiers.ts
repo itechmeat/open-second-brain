@@ -25,6 +25,9 @@
  * baseline and stages repair - it does not fight the editor.
  */
 
+import { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
+
 import { FRONTMATTER_TIERS, type FrontmatterTier, type SchemaPack } from "./schema-pack.ts";
 
 export { FRONTMATTER_TIERS };
@@ -68,6 +71,17 @@ export const DEFAULT_TIER_MAP: Readonly<Record<string, Readonly<Record<string, F
       tags: "business",
       aliases: "business",
       supersedes: "business",
+      // Legacy unprefixed Group C names (pre-§24). System tier so a
+      // tier-merging rewrite drops them instead of preserving a stale
+      // copy beside the `_`-prefixed field the writer emits today.
+      status: "system",
+      confirmed_at: "system",
+      evidenced_by: "system",
+      applied_count: "system",
+      violated_count: "system",
+      last_evidence_at: "system",
+      confidence: "system",
+      confidence_value: "system",
     }),
     "brain-retired": Object.freeze<Record<string, FrontmatterTier>>({
       kind: "identity",
@@ -151,17 +165,20 @@ export interface MergeFrontmatterTieredOptions {
 
 /**
  * Tier-respecting frontmatter merge for framework writers. Incoming
- * (framework) values win field-by-field, existing-only fields are
- * preserved - so a `user`-tier field a human added by hand survives
- * every framework rewrite - and a changed identity value throws
- * unless `acceptIdentity` marks an explicit migration. Unknown kinds
- * have no identity fields, so the merge degrades to a plain spread.
+ * (framework) values win field-by-field; existing-only fields are
+ * preserved when their tier is `user` - a field a human added by hand
+ * survives every framework rewrite - and DROPPED otherwise: a
+ * framework-owned field the writer no longer emits is a deliberate
+ * migration (e.g. legacy unprefixed names), not user data. A changed
+ * identity value throws unless `acceptIdentity` marks an explicit
+ * migration. Unknown kinds have no non-`user` fields, so the merge
+ * degrades to a plain spread.
  */
-export function mergeFrontmatterTiered(
-  existing: Readonly<Record<string, unknown>>,
-  incoming: Readonly<Record<string, unknown>>,
+export function mergeFrontmatterTiered<V>(
+  existing: Readonly<Record<string, V>>,
+  incoming: Readonly<Record<string, V>>,
   opts: MergeFrontmatterTieredOptions,
-): Record<string, unknown> {
+): Record<string, V> {
   if (opts.acceptIdentity !== true) {
     for (const [field, incomingValue] of Object.entries(incoming)) {
       if (resolveFieldTier(opts.pack, opts.kind, field) !== "identity") continue;
@@ -172,7 +189,12 @@ export function mergeFrontmatterTiered(
       }
     }
   }
-  return { ...existing, ...incoming };
+  const merged: Record<string, V> = {};
+  for (const [field, value] of Object.entries(existing)) {
+    if (field in incoming) continue;
+    if (resolveFieldTier(opts.pack, opts.kind, field) === "user") merged[field] = value;
+  }
+  return Object.assign(merged, incoming);
 }
 
 function sameScalar(left: unknown, right: unknown): boolean {
@@ -180,4 +202,22 @@ function sameScalar(left: unknown, right: unknown): boolean {
     return left.length === right.length && left.every((v, i) => sameScalar(v, right[i]));
   }
   return left === right;
+}
+
+/**
+ * Count the staged tier-drift findings straight from the index
+ * database (doctor surface). Read-only, fail-soft: a missing index
+ * file, a pre-v6 schema, or any read error counts as zero.
+ */
+export function readTierDriftCount(dbPath: string): number {
+  if (!existsSync(dbPath)) return 0;
+  let db: Database | null = null;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tier_drift").get()?.n ?? 0;
+  } catch {
+    return 0;
+  } finally {
+    db?.close();
+  }
 }

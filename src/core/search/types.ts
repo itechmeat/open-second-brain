@@ -137,6 +137,18 @@ export interface IndexStats {
     readonly targetType: string;
     readonly declared: ReadonlyArray<string>;
   }>;
+  /**
+   * Identity-tier frontmatter fields whose value changed against the
+   * stored snapshot during this run - staged hand-edits awaiting
+   * `o2b brain tiers check|restore|accept`
+   * (write-time-integrity-governance).
+   */
+  readonly tierDrift: ReadonlyArray<{
+    readonly path: string;
+    readonly field: string;
+    readonly expected: unknown;
+    readonly actual: unknown;
+  }>;
   readonly durationMs: number;
 }
 

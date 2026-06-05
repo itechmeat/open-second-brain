@@ -1374,7 +1374,11 @@ async function toolBrainDoctor(
   const strict = coerceBool(args, "strict");
   const format = coerceFormat(args);
 
-  const result = runDoctor(ctx.vault, { strict });
+  const result = runDoctor(ctx.vault, {
+    strict,
+    dbPath: resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined })
+      .dbPath,
+  });
 
   // Decide a single ok flag — `strict` only changes the CLI exit code,
   // so we mirror that semantic here: with `strict`, warnings demote ok
