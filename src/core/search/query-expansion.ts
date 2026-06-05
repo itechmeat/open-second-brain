@@ -97,12 +97,10 @@ export function expandQuery(
   const meaningful = tokens.filter((t) => !STOPWORDS.has(t));
   // Fall back to the raw tokens when the whole query is stopwords -
   // an empty lex lane would turn the FTS lane off entirely.
-  const lexTerms = (meaningful.length > 0 ? meaningful : tokens).slice(0, maxLexTerms);
+  const baseTokens = meaningful.length > 0 ? meaningful : tokens;
+  const lexTerms = baseTokens.slice(0, maxLexTerms);
 
-  const entityNames = matchEntities(vault, meaningful.length > 0 ? meaningful : tokens).slice(
-    0,
-    maxEntities,
-  );
+  const entityNames = matchEntities(vault, baseTokens).slice(0, maxEntities);
 
   const vec: string[] = [trimmed];
   if (entityNames.length > 0) {

@@ -28,7 +28,12 @@ import { linkConstraintAllows } from "../../search/link-constraints.ts";
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isoSecond } from "../time.ts";
-import { formatFrontmatter, parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
+import {
+  formatFrontmatter,
+  listVaultPages,
+  parseFrontmatter,
+  writeFrontmatterAtomic,
+} from "../../vault.ts";
 import { resolveNotePath } from "../note-path.ts";
 import type { SchemaPack } from "../schema-pack.ts";
 
@@ -264,7 +269,10 @@ function noteId(relPath: string): string {
  * Accept one proposal: append `related: "[[target]]"` to the source
  * note's frontmatter. Idempotent (normalised target comparison);
  * validates both endpoints exist inside the vault; honors a schema
- * pack's `related` link constraints when one is supplied.
+ * pack's `related` link constraints when one is supplied. When the
+ * target's basename is ambiguous across the vault, the wikilink keeps
+ * the full vault-relative path so the edge cannot point at the wrong
+ * note.
  */
 export function acceptBridge(
   vault: string,
@@ -276,7 +284,10 @@ export function acceptBridge(
   resolveNotePath(vault, target, { mustExist: true });
 
   const [meta, body] = parseFrontmatter(sourceAbs);
-  const link = `[[${noteId(target)}]]`;
+  const targetBase = noteId(target);
+  const targetFull = target.replace(/\.md$/u, "");
+  const ambiguous = countBasenameMatches(vault, targetBase) > 1;
+  const link = `[[${ambiguous ? targetFull : targetBase}]]`;
 
   const current = meta["related"];
   const items: string[] =
@@ -288,10 +299,10 @@ export function acceptBridge(
 
   // Idempotency is checked BEFORE constraint validation: re-accepting
   // an already-present link returns changed:false without re-judging
-  // it, because no write occurs either way.
-  const targetIdNorm = normalizeRelationTarget(link);
-  const existingNorm = items.map((item) => normalizeRelationTarget(item));
-  if (targetIdNorm !== null && existingNorm.includes(targetIdNorm)) {
+  // it, because no write occurs either way. Both the basename and the
+  // full-path form count as already-linked.
+  const existingNorm = new Set(items.map((item) => normalizeRelationTarget(item)));
+  if (existingNorm.has(targetBase) || existingNorm.has(targetFull)) {
     return Object.freeze({ changed: false, related: Object.freeze([...items]) });
   }
 
@@ -313,6 +324,15 @@ export function acceptBridge(
   const metadata = { ...meta, related: next.length === 1 ? next[0]! : next };
   writeFrontmatterAtomic(sourceAbs, metadata, body, { overwrite: true });
   return Object.freeze({ changed: true, related: Object.freeze(next) });
+}
+
+/** Number of vault pages sharing one basename (without `.md`). */
+function countBasenameMatches(vault: string, base: string): number {
+  let count = 0;
+  for (const page of listVaultPages(vault)) {
+    if (basename(page.path, ".md") === base) count++;
+  }
+  return count;
 }
 
 function frontmatterType(meta: Record<string, unknown>): string | null {

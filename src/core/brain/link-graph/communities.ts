@@ -43,7 +43,12 @@ export interface CommunityMember {
 }
 
 export interface Community {
-  /** Stable id: the most-central member's basename. */
+  /**
+   * Stable id: the most-central member's vault-relative path with
+   * `/` flattened to `-` (basename alone collides when two folders
+   * hold same-named hub notes, and colliding ids would overwrite
+   * each other's cluster files).
+   */
   readonly id: string;
   /** Members ranked by internal degree desc, path asc. */
   readonly members: ReadonlyArray<CommunityMember>;
@@ -144,7 +149,7 @@ export function detectCommunities(store: Store, opts: DetectCommunitiesOptions =
     const possible = (ids.length * (ids.length - 1)) / 2;
     communities.push(
       Object.freeze({
-        id: basename(members[0]!.path, ".md"),
+        id: communityId(members[0]!.path),
         members: Object.freeze(members),
         size: ids.length,
         density: possible === 0 ? 0 : internalEdges / possible,
@@ -153,6 +158,11 @@ export function detectCommunities(store: Store, opts: DetectCommunitiesOptions =
   }
 
   return communities.toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** Collision-free id: vault-relative path, `/` -> `-`, no `.md`. */
+function communityId(relPath: string): string {
+  return relPath.replace(/\.md$/u, "").split("/").join("-");
 }
 
 // ── materialization ──────────────────────────────────────────────────────────

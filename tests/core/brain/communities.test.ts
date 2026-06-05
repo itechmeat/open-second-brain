@@ -106,6 +106,31 @@ describe("detectCommunities", () => {
   });
 });
 
+test("two communities led by same-named hubs in different folders keep distinct ids", async () => {
+  mkdirSync(join(vault, "alpha"), { recursive: true });
+  mkdirSync(join(vault, "beta"), { recursive: true });
+  for (const dir of ["alpha", "beta"]) {
+    const group = ["topic", "x", "y", "z"];
+    for (const name of group) {
+      const others = group
+        .filter((g) => g !== name)
+        .map((g) => `[[${dir}/${g}]]`)
+        .join(" ");
+      writeFileSync(join(vault, dir, `${name}.md`), `# ${dir}/${name}\n\nSee ${others}.\n`);
+    }
+  }
+  await indexVault(config);
+  const communities = await withStore((store) => detectCommunities(store, { minSize: 4 }));
+  expect(communities).toHaveLength(2);
+  const ids = communities.map((c) => c.id).toSorted();
+  expect(new Set(ids).size).toBe(2);
+  const result = await withStore((store) =>
+    materializeClusterNotes(vault, communities, { store, now: NOW }),
+  );
+  expect(result.written).toHaveLength(2);
+  expect(new Set(result.written).size).toBe(2);
+});
+
 describe("materializeClusterNotes", () => {
   test("writes one derived note per community and registers the tier kind", async () => {
     writeTwoCommunities();

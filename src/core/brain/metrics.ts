@@ -150,8 +150,12 @@ function readSurface(vault: string, surface: string): MetricRecord[] {
         parsed !== null &&
         typeof parsed === "object" &&
         !Array.isArray(parsed) &&
+        typeof (parsed as { schema?: unknown }).schema === "string" &&
         typeof (parsed as { surface?: unknown }).surface === "string" &&
-        typeof (parsed as { run_at?: unknown }).run_at === "string"
+        typeof (parsed as { run_at?: unknown }).run_at === "string" &&
+        (parsed as { payload?: unknown }).payload !== null &&
+        typeof (parsed as { payload?: unknown }).payload === "object" &&
+        !Array.isArray((parsed as { payload?: unknown }).payload)
       ) {
         out.push(parsed as MetricRecord);
       }

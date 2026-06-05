@@ -126,12 +126,18 @@ export async function runRecallBenchmark(
   dataset: RecallBenchmarkDataset,
   opts: RecallBenchmarkOptions = {},
 ): Promise<RecallBenchmarkReport> {
-  const k = Math.max(1, opts.k ?? BENCHMARK_DEFAULT_K);
+  if (dataset.queries.length === 0) {
+    throw new SearchError("INVALID_INPUT", "benchmark dataset needs a non-empty `queries` array");
+  }
+  if (opts.k !== undefined && (!Number.isInteger(opts.k) || opts.k < 1)) {
+    throw new SearchError("INVALID_INPUT", "benchmark k must be a positive integer");
+  }
+  const k = opts.k ?? BENCHMARK_DEFAULT_K;
   const expand = opts.expand === true;
 
   const perQuery = await Promise.all(
     dataset.queries.map(async (q): Promise<RecallBenchmarkQueryResult> => {
-      const depth = Math.max(1, q.k ?? k);
+      const depth = q.k ?? k;
       const outcome = await search(config, {
         query: q.query,
         limit: depth,

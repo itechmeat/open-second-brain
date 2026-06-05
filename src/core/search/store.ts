@@ -977,7 +977,7 @@ export class Store {
       .query<{ target_path: string }, []>(
         "SELECT DISTINCT target_path FROM links " +
           "WHERE target_document_id IS NULL AND target_path IS NOT NULL " +
-          "AND instr(target_path, '/') = 0",
+          "AND link_type = 'wikilink' AND instr(target_path, '/') = 0",
       )
       .all();
     if (unresolved.length === 0) return 0;
@@ -993,7 +993,7 @@ export class Store {
     );
     const update = this.db.prepare<undefined, [number, string]>(
       "UPDATE links SET target_document_id = ? " +
-        "WHERE target_document_id IS NULL AND target_path = ?",
+        "WHERE target_document_id IS NULL AND target_path = ? AND link_type = 'wikilink'",
     );
 
     let resolved = 0;

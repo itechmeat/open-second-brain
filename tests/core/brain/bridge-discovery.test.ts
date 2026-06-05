@@ -8,7 +8,7 @@
  */
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -184,6 +184,20 @@ describe("acceptBridge", () => {
     expect(result.changed).toBe(true);
     const [fm] = parseFrontmatter(join(vault, "src.md"));
     expect(fm["related"]).toEqual(["[[existing]]", "[[tgt]]"]);
+  });
+
+  test("an ambiguous target basename keeps the full path in the wikilink", async () => {
+    mkdirSync(join(vault, "a-dir"), { recursive: true });
+    mkdirSync(join(vault, "b-dir"), { recursive: true });
+    writeFileSync(join(vault, "a-dir", "topic.md"), "# Topic A\n\nBody.\n");
+    writeFileSync(join(vault, "b-dir", "topic.md"), "# Topic B\n\nBody.\n");
+    writeFileSync(join(vault, "src.md"), "# Src\n\nBody.\n");
+    const result = acceptBridge(vault, "src.md", "a-dir/topic.md");
+    expect(result.changed).toBe(true);
+    const [fm] = parseFrontmatter(join(vault, "src.md"));
+    expect(fm["related"]).toEqual("[[a-dir/topic]]");
+    // Re-accept of the same pair stays idempotent on the full form.
+    expect(acceptBridge(vault, "src.md", "a-dir/topic.md").changed).toBe(false);
   });
 
   test("refuses paths outside the vault and missing notes", () => {

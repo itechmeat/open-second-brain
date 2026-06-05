@@ -2085,6 +2085,65 @@ async function toolBrainMaintenance(
           await indexVault(searchConfig);
         },
       },
+      // Same lane contract as the CLI verb (link-recall-intelligence):
+      // bridges and clusters run after reindex so they see fresh
+      // edges; both are fail-soft without embeddings, and a metrics
+      // write failure never fails the task.
+      {
+        name: "bridges",
+        run: async () => {
+          const store = await Store.open(searchConfig, { mode: "read" });
+          try {
+            const report = discoverBridges(store, {
+              dismissed: readDismissedBridges(ctx.vault),
+            });
+            writeBridgeProposals(ctx.vault, report, { now });
+            try {
+              appendMetric(ctx.vault, {
+                surface: "bridge_discovery",
+                runAt: isoSecond(now),
+                payload: {
+                  proposals: report.proposals.length,
+                  scanned_candidates: report.scannedCandidates,
+                  vec_available: report.vecAvailable,
+                  lane: true,
+                },
+              });
+            } catch {
+              // Metrics are observability, not correctness.
+            }
+          } finally {
+            await store.close();
+          }
+        },
+      },
+      {
+        name: "clusters",
+        run: async () => {
+          const store = await Store.open(searchConfig, { mode: "read" });
+          try {
+            const communities = detectCommunities(store, {});
+            const materialized = materializeClusterNotes(ctx.vault, communities, { store, now });
+            try {
+              appendMetric(ctx.vault, {
+                surface: "communities",
+                runAt: isoSecond(now),
+                payload: {
+                  communities: communities.length,
+                  sizes: communities.map((c) => c.size),
+                  written: materialized.written.length,
+                  removed: materialized.removed.length,
+                  lane: true,
+                },
+              });
+            } catch {
+              // Metrics are observability, not correctness.
+            }
+          } finally {
+            await store.close();
+          }
+        },
+      },
     ],
   });
   return { verdict: result.verdict, tasks: result.tasks };
@@ -5055,7 +5114,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_maintenance",
     description:
-      "Quiet-window, lease-guarded heavy maintenance lane: run executes dream + reindex stale-first behind the local-time window, recall-telemetry busy gate, and an expiring lease (force bypasses the soft gates, never the lease); status renders the lease holder and recent journal.",
+      "Quiet-window, lease-guarded heavy maintenance lane: run executes dream, reindex, bridges, and clusters stale-first behind the local-time window, busy gate, and an expiring lease (force bypasses the soft gates, never the lease); status renders the lease holder and recent journal.",
     inputSchema: {
       type: "object",
       properties: {

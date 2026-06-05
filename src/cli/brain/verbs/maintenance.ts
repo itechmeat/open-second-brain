@@ -2,8 +2,9 @@
  * `o2b brain maintenance <run|status>` (t_166d1226): the quiet-window
  * lane for heavy passes. `run` gates on the local-time window
  * (--window H-H, unset = always open), recent interactive query-rate,
- * and the expiring SQLite lease, then executes dream + reindex
- * stale-first; --force bypasses the soft gates but never the lease.
+ * and the expiring SQLite lease, then executes dream, reindex,
+ * bridges, and clusters stale-first; --force bypasses the soft gates
+ * but never the lease.
  * `status` renders the lease holder and recent journal. Designed as
  * the cron entry point: a dead dashboard hour surfaces as
  * skipped:window in the journal instead of a contended vault.
@@ -144,16 +145,20 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
                 dismissed: readDismissedBridges(vault),
               });
               writeBridgeProposals(vault, report, { now });
-              appendMetric(vault, {
-                surface: "bridge_discovery",
-                runAt: isoSecond(now),
-                payload: {
-                  proposals: report.proposals.length,
-                  scanned_candidates: report.scannedCandidates,
-                  vec_available: report.vecAvailable,
-                  lane: true,
-                },
-              });
+              try {
+                appendMetric(vault, {
+                  surface: "bridge_discovery",
+                  runAt: isoSecond(now),
+                  payload: {
+                    proposals: report.proposals.length,
+                    scanned_candidates: report.scannedCandidates,
+                    vec_available: report.vecAvailable,
+                    lane: true,
+                  },
+                });
+              } catch {
+                // Metrics are observability, not correctness.
+              }
             } finally {
               await store.close();
             }
@@ -166,17 +171,21 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
             try {
               const communities = detectCommunities(store, {});
               const materialized = materializeClusterNotes(vault, communities, { store, now });
-              appendMetric(vault, {
-                surface: "communities",
-                runAt: isoSecond(now),
-                payload: {
-                  communities: communities.length,
-                  sizes: communities.map((c) => c.size),
-                  written: materialized.written.length,
-                  removed: materialized.removed.length,
-                  lane: true,
-                },
-              });
+              try {
+                appendMetric(vault, {
+                  surface: "communities",
+                  runAt: isoSecond(now),
+                  payload: {
+                    communities: communities.length,
+                    sizes: communities.map((c) => c.size),
+                    written: materialized.written.length,
+                    removed: materialized.removed.length,
+                    lane: true,
+                  },
+                });
+              } catch {
+                // Metrics are observability, not correctness.
+              }
             } finally {
               await store.close();
             }
