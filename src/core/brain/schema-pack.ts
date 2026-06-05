@@ -19,7 +19,25 @@ export interface SchemaPack {
   readonly link_types: ReadonlyArray<string>;
   readonly extractable: ReadonlyArray<string>;
   readonly expert_routing: Readonly<Record<string, string>>;
+  /** Controlled-vocabulary label dimensions: dimension -> allowed values. */
+  readonly labels: Readonly<Record<string, ReadonlyArray<string>>>;
+  /** Allowed endpoint pairs per link type, each stored as `source->target`. */
+  readonly link_constraints: Readonly<Record<string, ReadonlyArray<string>>>;
+  /** Per-type attribute descriptors: type -> field -> description. */
+  readonly attributes: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** Frontmatter tier overrides: kind -> field -> tier. */
+  readonly frontmatter_tiers: Readonly<Record<string, Readonly<Record<string, FrontmatterTier>>>>;
 }
+
+/**
+ * Four-level frontmatter field tier model (EverOS-inspired):
+ * `identity` - framework-owned join keys (hand-edit = corruption);
+ * `system` - framework-written bookkeeping (hand-edit = drift);
+ * `business` - agent-written domain fields; `user` - freely editable.
+ */
+export const FRONTMATTER_TIERS = Object.freeze(["identity", "system", "business", "user"] as const);
+
+export type FrontmatterTier = (typeof FRONTMATTER_TIERS)[number];
 
 export function loadSchemaPack(vault: string): SchemaPack {
   const path = brainConfigPath(vault);
@@ -49,6 +67,25 @@ export function parseSchemaPack(configText: string): SchemaPack {
     "schema.expert_routing",
     false,
   );
+  const labels = parseMapListField(lines, "labels", "schema.labels");
+  const linkConstraints = parseMapListField(
+    lines,
+    "link_constraints",
+    "schema.link_constraints",
+    validateEndpointPair,
+  );
+  const attributes = parseCompoundMapField(
+    lines,
+    "attributes",
+    "schema.attributes",
+    validateAttributeDescription,
+  );
+  const frontmatterTiers = parseCompoundMapField(
+    lines,
+    "frontmatter_tiers",
+    "schema.frontmatter_tiers",
+    validateFrontmatterTier,
+  );
 
   return freezeSchemaPack({
     declarations,
@@ -58,7 +95,39 @@ export function parseSchemaPack(configText: string): SchemaPack {
     link_types: unique(linkTypes),
     extractable: unique(extractable),
     expert_routing: expertRouting,
+    labels,
+    link_constraints: linkConstraints,
+    attributes,
+    frontmatter_tiers: frontmatterTiers,
   });
+}
+
+/** Validate and normalize a `source->target` endpoint pair value. */
+export function validateEndpointPair(value: string, field: string): string {
+  const arrow = value.indexOf("->");
+  if (arrow < 0) {
+    throw new Error(`${field}: "${value}" must be a source->target pair of schema tokens`);
+  }
+  const source = validateSchemaToken(value.slice(0, arrow), field);
+  const target = validateSchemaToken(value.slice(arrow + 2), field);
+  return `${source}->${target}`;
+}
+
+function validateAttributeDescription(value: string, field: string): string {
+  // Raw value checked for line breaks (same contract as the mutation
+  // op in schema-mutate.ts); the trimmed form is what gets stored.
+  if (/[\r\n]/.test(value)) throw new Error(`${field}: description must be a single line`);
+  const trimmed = value.trim();
+  if (trimmed.length === 0) throw new Error(`${field}: description must not be empty`);
+  return trimmed;
+}
+
+function validateFrontmatterTier(value: string, field: string): FrontmatterTier {
+  const normalized = value.trim().toLowerCase();
+  if (!(FRONTMATTER_TIERS as ReadonlyArray<string>).includes(normalized)) {
+    throw new Error(`${field}: tier must be one of ${FRONTMATTER_TIERS.join(", ")}`);
+  }
+  return normalized as FrontmatterTier;
 }
 
 export function renderSchemaBlock(pack: SchemaPack): string {
@@ -74,6 +143,10 @@ export function renderSchemaBlock(pack: SchemaPack): string {
   renderList(lines, "link_types", pack.link_types);
   renderList(lines, "extractable", pack.extractable);
   renderMapScalar(lines, "expert_routing", pack.expert_routing);
+  renderMapList(lines, "labels", pack.labels);
+  renderMapList(lines, "link_constraints", pack.link_constraints);
+  renderCompoundMap(lines, "attributes", pack.attributes);
+  renderCompoundMap(lines, "frontmatter_tiers", pack.frontmatter_tiers);
   if (lines.length === 1) lines.push("  {}");
   return lines.join("\n") + "\n";
 }
@@ -138,9 +211,10 @@ function parseMapListField(
   lines: ReadonlyArray<string>,
   key: string,
   field: string,
+  validateValue: (value: string, field: string) => string = validateSchemaToken,
 ): Record<string, ReadonlyArray<string>> {
   const start = findField(lines, key);
-  if (start < 0) return {};
+  if (start < 0) return freezeRecord({});
   const out: Record<string, string[]> = {};
   for (let index = start + 1; index < lines.length; index++) {
     const line = lines[index]!;
@@ -149,9 +223,9 @@ function parseMapListField(
     if (flat) {
       const [rawToken, rawAlias] = splitPair(flat[1]!);
       const token = validateSchemaToken(rawToken, `${field}.${rawToken}`);
-      const alias = validateSchemaToken(rawAlias, `${field}.${token}`);
+      const alias = validateValue(rawAlias, `${field}.${token}`);
       out[token] = out[token] ?? [];
-      out[token]!.push(alias);
+      if (!out[token]!.includes(alias)) out[token]!.push(alias);
       continue;
     }
     const entry = /^    ([^:]+):\s*(.*)$/.exec(line);
@@ -160,12 +234,43 @@ function parseMapListField(
     const rest = entry[2]!.trim();
     const values = rest.startsWith("[") ? parseInlineList(rest) : collectNestedList(lines, index);
     out[token] = unique(
-      values.map((value, valueIndex) =>
-        validateSchemaToken(value, `${field}.${token}[${valueIndex}]`),
-      ),
+      values.map((value, valueIndex) => validateValue(value, `${field}.${token}[${valueIndex}]`)),
     );
   }
   return freezeRecord(out);
+}
+
+/**
+ * Parse a `- outer.inner=value` map-of-maps field. The compound key is
+ * split on its first `.`; both halves must be schema tokens, the value
+ * is checked by `validateValue` (free text stays untouched beyond it).
+ */
+function parseCompoundMapField<T extends string>(
+  lines: ReadonlyArray<string>,
+  key: string,
+  field: string,
+  validateValue: (value: string, field: string) => T,
+): Readonly<Record<string, Readonly<Record<string, T>>>> {
+  const start = findField(lines, key);
+  if (start < 0) return Object.freeze({});
+  const out: Record<string, Record<string, T>> = {};
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (/^  \S/.test(line)) break;
+    const flat = /^    -\s+(.+?)\s*$/.exec(line);
+    if (!flat) continue;
+    const [rawKey, rawValue] = splitPair(flat[1]!);
+    const dot = rawKey.indexOf(".");
+    if (dot <= 0 || dot === rawKey.length - 1) {
+      throw new Error(`${field}: "${rawKey}" must use a compound type.field key`);
+    }
+    const outer = validateSchemaToken(rawKey.slice(0, dot), `${field}.${rawKey}`);
+    const inner = validateSchemaToken(rawKey.slice(dot + 1), `${field}.${outer}`);
+    const value = validateValue(rawValue, `${field}.${outer}.${inner}`);
+    out[outer] = out[outer] ?? {};
+    out[outer]![inner] = value;
+  }
+  return freezeNestedRecord(out);
 }
 
 function parseMapScalarField(
@@ -266,6 +371,21 @@ function renderMapScalar(
   for (const [name, value] of entries) lines.push(`    - ${name}=${value}`);
 }
 
+function renderCompoundMap(
+  lines: string[],
+  key: string,
+  values: Readonly<Record<string, Readonly<Record<string, string>>>>,
+): void {
+  const outers = Object.entries(values).toSorted(([left], [right]) => left.localeCompare(right));
+  const rendered: string[] = [];
+  for (const [outer, fields] of outers) {
+    const inners = Object.entries(fields).toSorted(([left], [right]) => left.localeCompare(right));
+    for (const [inner, value] of inners) rendered.push(`    - ${outer}.${inner}=${value}`);
+  }
+  if (rendered.length === 0) return;
+  lines.push(`  ${key}:`, ...rendered);
+}
+
 function splitPair(raw: string): [string, string] {
   const index = raw.indexOf("=");
   if (index < 0) return [raw, ""];
@@ -283,11 +403,23 @@ function freezeSchemaPack(
     link_types: Object.freeze([...input.link_types]),
     extractable: Object.freeze([...input.extractable]),
     expert_routing: input.expert_routing,
+    labels: input.labels,
+    link_constraints: input.link_constraints,
+    attributes: input.attributes,
+    frontmatter_tiers: input.frontmatter_tiers,
   });
 }
 
 function freezeRecord<T>(record: Record<string, T>): Readonly<Record<string, T>> {
   return Object.freeze({ ...record });
+}
+
+function freezeNestedRecord<T extends string>(
+  record: Record<string, Record<string, T>>,
+): Readonly<Record<string, Readonly<Record<string, T>>>> {
+  const out: Record<string, Readonly<Record<string, T>>> = {};
+  for (const [key, inner] of Object.entries(record)) out[key] = Object.freeze({ ...inner });
+  return Object.freeze(out);
 }
 
 function unique(values: ReadonlyArray<string>): string[] {

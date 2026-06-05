@@ -10,6 +10,9 @@ import {
   renderSchemaBlock,
   replaceSchemaBlock,
   schemaPackTokens,
+  validateEndpointPair,
+  FRONTMATTER_TIERS,
+  type FrontmatterTier,
   type SchemaPack,
 } from "./schema-pack.ts";
 import {
@@ -56,6 +59,40 @@ export type SchemaMutation =
       readonly op: "set_expert_routing";
       readonly token: string;
       readonly expert: string | null;
+    }
+  | {
+      readonly op: "add_label_dimension";
+      readonly dimension: string;
+      readonly values: ReadonlyArray<string>;
+    }
+  | { readonly op: "remove_label_dimension"; readonly dimension: string }
+  | {
+      readonly op: "add_link_constraint" | "remove_link_constraint";
+      readonly link_type: string;
+      readonly source: string;
+      readonly target: string;
+    }
+  | {
+      readonly op: "set_attribute_field";
+      readonly type: string;
+      readonly field: string;
+      readonly description: string;
+    }
+  | {
+      readonly op: "remove_attribute_field";
+      readonly type: string;
+      readonly field: string;
+    }
+  | {
+      readonly op: "set_frontmatter_tier";
+      readonly kind: string;
+      readonly field: string;
+      readonly tier: FrontmatterTier;
+    }
+  | {
+      readonly op: "remove_frontmatter_tier";
+      readonly kind: string;
+      readonly field: string;
     };
 
 export interface ApplySchemaMutationsOptions {
@@ -78,6 +115,10 @@ interface MutableSchemaPack {
   link_types: string[];
   extractable: string[];
   expert_routing: Record<string, string>;
+  labels: Record<string, string[]>;
+  link_constraints: Record<string, string[]>;
+  attributes: Record<string, Record<string, string>>;
+  frontmatter_tiers: Record<string, Record<string, FrontmatterTier>>;
 }
 
 export async function applySchemaMutations(
@@ -147,6 +188,7 @@ function applyOne(pack: MutableSchemaPack, mutation: SchemaMutation): void {
       }
       removeValue(pack.extractable, token);
       delete pack.expert_routing[token];
+      delete pack.attributes[token];
       return;
     }
     case "update_type": {
@@ -164,6 +206,18 @@ function applyOne(pack: MutableSchemaPack, mutation: SchemaMutation): void {
       if (pack.expert_routing[token]) {
         pack.expert_routing[next] = pack.expert_routing[token]!;
         delete pack.expert_routing[token];
+      }
+      if (pack.attributes[token]) {
+        pack.attributes[next] = pack.attributes[token]!;
+        delete pack.attributes[token];
+      }
+      for (const [linkType, pairs] of Object.entries(pack.link_constraints)) {
+        pack.link_constraints[linkType] = pairs.map((pair) => {
+          const [source, target] = pair.split("->");
+          const nextSource = source === token ? next : source!;
+          const nextTarget = target === token ? next : target!;
+          return `${nextSource}->${nextTarget}`;
+        });
       }
       return;
     }
@@ -200,6 +254,7 @@ function applyOne(pack: MutableSchemaPack, mutation: SchemaMutation): void {
     case "remove_link_type": {
       const token = validateSchemaToken(mutation.token, "schema.link_types");
       removeValue(pack.link_types, token);
+      delete pack.link_constraints[token];
       return;
     }
     case "set_extractable": {
@@ -220,6 +275,87 @@ function applyOne(pack: MutableSchemaPack, mutation: SchemaMutation): void {
       }
       return;
     }
+    case "add_label_dimension": {
+      const dimension = validateSchemaToken(mutation.dimension, "schema.labels");
+      const values = mutation.values.map((value, index) =>
+        validateSchemaToken(value, `schema.labels.${dimension}[${index}]`),
+      );
+      if (values.length === 0) {
+        throw new Error(`schema.labels.${dimension}: at least one value is required`);
+      }
+      pack.labels[dimension] = pack.labels[dimension] ?? [];
+      for (const value of values) addUnique(pack.labels[dimension]!, value);
+      return;
+    }
+    case "remove_label_dimension": {
+      const dimension = validateSchemaToken(mutation.dimension, "schema.labels");
+      delete pack.labels[dimension];
+      return;
+    }
+    case "add_link_constraint": {
+      const linkType = validateSchemaToken(mutation.link_type, "schema.link_constraints");
+      const pair = validateEndpointPair(
+        `${mutation.source}->${mutation.target}`,
+        `schema.link_constraints.${linkType}`,
+      );
+      pack.link_constraints[linkType] = pack.link_constraints[linkType] ?? [];
+      addUnique(pack.link_constraints[linkType]!, pair);
+      return;
+    }
+    case "remove_link_constraint": {
+      const linkType = validateSchemaToken(mutation.link_type, "schema.link_constraints");
+      const pair = validateEndpointPair(
+        `${mutation.source}->${mutation.target}`,
+        `schema.link_constraints.${linkType}`,
+      );
+      removeValue(pack.link_constraints[linkType] ?? [], pair);
+      if ((pack.link_constraints[linkType]?.length ?? 0) === 0) {
+        delete pack.link_constraints[linkType];
+      }
+      return;
+    }
+    case "set_attribute_field": {
+      const type = validateSchemaToken(mutation.type, "schema.attributes");
+      const field = validateSchemaToken(mutation.field, `schema.attributes.${type}`);
+      const description = mutation.description.trim();
+      if (description.length === 0) {
+        throw new Error(`schema.attributes.${type}.${field}: description must not be empty`);
+      }
+      if (/[\r\n]/.test(mutation.description)) {
+        throw new Error(`schema.attributes.${type}.${field}: description must be a single line`);
+      }
+      pack.attributes[type] = pack.attributes[type] ?? {};
+      pack.attributes[type]![field] = description;
+      return;
+    }
+    case "remove_attribute_field": {
+      const type = validateSchemaToken(mutation.type, "schema.attributes");
+      const field = validateSchemaToken(mutation.field, `schema.attributes.${type}`);
+      delete pack.attributes[type]?.[field];
+      if (Object.keys(pack.attributes[type] ?? {}).length === 0) delete pack.attributes[type];
+      return;
+    }
+    case "set_frontmatter_tier": {
+      const kind = validateSchemaToken(mutation.kind, "schema.frontmatter_tiers");
+      const field = validateSchemaToken(mutation.field, `schema.frontmatter_tiers.${kind}`);
+      if (!FRONTMATTER_TIERS.includes(mutation.tier)) {
+        throw new Error(
+          `schema.frontmatter_tiers.${kind}.${field}: tier must be one of ${FRONTMATTER_TIERS.join(", ")}`,
+        );
+      }
+      pack.frontmatter_tiers[kind] = pack.frontmatter_tiers[kind] ?? {};
+      pack.frontmatter_tiers[kind]![field] = mutation.tier;
+      return;
+    }
+    case "remove_frontmatter_tier": {
+      const kind = validateSchemaToken(mutation.kind, "schema.frontmatter_tiers");
+      const field = validateSchemaToken(mutation.field, `schema.frontmatter_tiers.${kind}`);
+      delete pack.frontmatter_tiers[kind]?.[field];
+      if (Object.keys(pack.frontmatter_tiers[kind] ?? {}).length === 0) {
+        delete pack.frontmatter_tiers[kind];
+      }
+      return;
+    }
   }
 }
 
@@ -236,6 +372,10 @@ function clonePack(pack: SchemaPack): MutableSchemaPack {
     link_types: [...pack.link_types],
     extractable: [...pack.extractable],
     expert_routing: { ...pack.expert_routing },
+    labels: mapArrayRecord(pack.labels),
+    link_constraints: mapArrayRecord(pack.link_constraints),
+    attributes: mapNestedRecord(pack.attributes),
+    frontmatter_tiers: mapNestedRecord(pack.frontmatter_tiers),
   };
 }
 
@@ -250,6 +390,10 @@ function freezeMutable(input: MutableSchemaPack): SchemaPack {
       link_types: Object.freeze([...input.link_types]),
       extractable: Object.freeze([...input.extractable]),
       expert_routing: Object.freeze({ ...input.expert_routing }),
+      labels: freezeArrayRecord(input.labels),
+      link_constraints: freezeArrayRecord(input.link_constraints),
+      attributes: freezeNestedRecord(input.attributes),
+      frontmatter_tiers: freezeNestedRecord(input.frontmatter_tiers),
     }),
   );
 }
@@ -270,6 +414,32 @@ function validateSchemaPackReferences(pack: SchemaPack): void {
       throw new Error(`schema.expert_routing.${token}: token is not declared`);
     }
   }
+  for (const linkType of Object.keys(pack.link_constraints)) {
+    if (!pack.link_types.includes(linkType)) {
+      throw new Error(`schema.link_constraints.${linkType}: link type is not declared`);
+    }
+  }
+  for (const type of Object.keys(pack.attributes)) {
+    if (!tokens.has(type)) {
+      throw new Error(`schema.attributes.${type}: token is not declared`);
+    }
+  }
+}
+
+function mapNestedRecord<T extends string>(
+  record: Readonly<Record<string, Readonly<Record<string, T>>>>,
+): Record<string, Record<string, T>> {
+  const out: Record<string, Record<string, T>> = {};
+  for (const [key, inner] of Object.entries(record)) out[key] = { ...inner };
+  return out;
+}
+
+function freezeNestedRecord<T extends string>(
+  record: Record<string, Record<string, T>>,
+): Readonly<Record<string, Readonly<Record<string, T>>>> {
+  const out: Record<string, Readonly<Record<string, T>>> = {};
+  for (const [key, inner] of Object.entries(record)) out[key] = Object.freeze({ ...inner });
+  return Object.freeze(out);
 }
 
 function pruneDeclarations(

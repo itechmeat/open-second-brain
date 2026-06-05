@@ -38,6 +38,9 @@ import {
 } from "./embeddings/signature.ts";
 import { extractLinks } from "./links.ts";
 import { extractFrontmatterRelations } from "../graph/frontmatter-relations.ts";
+import { loadSchemaPack, type SchemaPack } from "../brain/schema-pack.ts";
+import { tieredFieldsForKind } from "../brain/frontmatter-tiers.ts";
+import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { extractEntities } from "./entities.ts";
 import { Store } from "./store.ts";
@@ -78,6 +81,8 @@ interface MutableStats {
   embeddingsComputed: number;
   embeddingsRetries: number;
   errors: Array<{ readonly path: string; readonly message: string }>;
+  relationViolations: IndexStats["relationViolations"];
+  tierDrift: IndexStats["tierDrift"];
 }
 
 function newStats(): MutableStats {
@@ -90,6 +95,8 @@ function newStats(): MutableStats {
     embeddingsComputed: 0,
     embeddingsRetries: 0,
     errors: [],
+    relationViolations: [],
+    tierDrift: [],
   };
 }
 
@@ -103,12 +110,35 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     embeddingsComputed: s.embeddingsComputed,
     embeddingsRetries: s.embeddingsRetries,
     errors: Object.freeze([...s.errors]),
+    relationViolations: Object.freeze([...s.relationViolations]),
+    tierDrift: Object.freeze([...s.tierDrift]),
     durationMs,
   });
 }
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+/** Deep-ish equality for frontmatter scalar/array values. */
+function tierValueEquals(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((v, i) => tierValueEquals(v, right[i]));
+  }
+  return left === right;
+}
+
+/**
+ * The page's declared frontmatter `type` as a normalized token, or
+ * null when undeclared or not a usable scalar. Tolerant by design:
+ * a malformed `type` value never fails indexing, it just leaves the
+ * page untyped for constraint purposes.
+ */
+function pageTypeFromFrontmatter(frontmatter: Record<string, unknown>): string | null {
+  const raw = frontmatter["type"];
+  if (typeof raw !== "string") return null;
+  const normalized = normalizeSchemaToken(raw);
+  return normalized.length > 0 ? normalized : null;
 }
 
 const UTF8_FATAL = new TextDecoder("utf-8", { fatal: true });
@@ -147,6 +177,13 @@ async function indexInto(
   try {
     const existing = store.listDocuments();
     const seen = new Set<string>();
+    // Changed docs declaring a frontmatter `kind`, for the tier-guard
+    // post-pass (write-time-integrity-governance).
+    const tieredDocs: Array<{
+      docId: number;
+      relPath: string;
+      frontmatter: Record<string, unknown>;
+    }> = [];
 
     for (const file of walkVault(config)) {
       // Mark seen FIRST. If anything downstream throws (read fault,
@@ -194,13 +231,24 @@ async function indexInto(
           stats.errors.push({ path: file.relPath, message: w });
         }
 
+        // The document's declared frontmatter `type` is persisted so
+        // the link-constraint post-pass can join endpoint types
+        // without re-reading files (v6).
+        const [frontmatter] = parseFrontmatterText(content);
         const docId = store.upsertDocument({
           path: file.relPath,
           title: chunkResult.title,
           contentHash,
           mtime: mtimeSec,
           size: file.stat.size,
+          pageType: pageTypeFromFrontmatter(frontmatter),
         });
+        // Framework-kind files feed the tier-guard post-pass: keep the
+        // parsed frontmatter of this run's changed docs that declare a
+        // `kind` (bounded - only Brain artifacts carry one).
+        if (typeof frontmatter["kind"] === "string" && frontmatter["kind"].length > 0) {
+          tieredDocs.push({ docId, relPath: file.relPath, frontmatter });
+        }
 
         const chunkInputs: ChunkInput[] = chunkResult.chunks.map((c) => ({
           chunkIndex: c.chunkIndex,
@@ -235,7 +283,6 @@ async function indexInto(
         // (related / extends / contradicts / superseded_by) become typed
         // edges. They belong to the document, not a chunk, so anchor them
         // on the first chunk (or null when the doc produced no chunks).
-        const [frontmatter] = parseFrontmatterText(content);
         const relationChunkId = chunkIds[0] ?? null;
         for (const edge of extractFrontmatterRelations(frontmatter)) {
           links.push({
@@ -272,6 +319,69 @@ async function indexInto(
     }
 
     store.resolveLinkTargets();
+
+    // Link-constraint materialization post-pass
+    // (write-time-integrity-governance): recompute every typed edge's
+    // blocked flag from the current schema pack. Runs every pass - with
+    // no constraints declared it only resets stale flags, so removing a
+    // constraint restores edges without touching files. Fail-soft: an
+    // unparseable pack indexes as if no constraints were declared.
+    let pack: SchemaPack | null = null;
+    try {
+      pack = loadSchemaPack(config.vault);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      stats.errors.push({ path: "Brain/_brain.yaml", message: `schema pack unreadable: ${msg}` });
+    }
+    stats.relationViolations = Object.freeze(
+      store.recomputeRelationConstraintFlags(pack?.link_constraints ?? {}),
+    );
+
+    // Tier-guard post-pass: for each changed framework-kind doc,
+    // compare the new identity-field values against the stored
+    // snapshot. A changed identity value stages a tier_drift finding
+    // (ask_user via `o2b brain tiers check|restore|accept`) and the
+    // snapshot keeps the expected value so repeated reindexes never
+    // absorb the hand-edit; system/business fields update silently -
+    // framework writers mutate them legitimately on every pass.
+    if (pack !== null) {
+      const detectedAt = new Date().toISOString();
+      for (const doc of tieredDocs) {
+        const kind = doc.frontmatter["kind"];
+        if (typeof kind !== "string") continue;
+        const fields = tieredFieldsForKind(pack, kind);
+        if (Object.keys(fields).length === 0) continue;
+        const prev = store.getTierSnapshot(doc.docId);
+        const next: Record<string, unknown> = {};
+        for (const [field, tier] of Object.entries(fields)) {
+          const current = doc.frontmatter[field];
+          if (prev === null || !(field in prev)) {
+            if (current !== undefined) next[field] = current;
+            continue;
+          }
+          const expected = prev[field];
+          // Deleting an identity field is as much a hand-edit as
+          // changing it: `current === undefined` stages drift with a
+          // null actual instead of silently dropping the snapshot.
+          if (tier === "identity" && !tierValueEquals(expected, current)) {
+            const actual = current === undefined ? null : current;
+            store.upsertTierDrift({
+              documentId: doc.docId,
+              field,
+              expected,
+              actual,
+              detectedAt,
+            });
+            stats.tierDrift = [...stats.tierDrift, { path: doc.relPath, field, expected, actual }];
+            next[field] = expected; // the snapshot keeps the truth
+            continue;
+          }
+          store.clearTierDrift(doc.docId, field);
+          if (current !== undefined) next[field] = current;
+        }
+        store.setTierSnapshot(doc.docId, next);
+      }
+    }
 
     if (opts?.embeddings) {
       await populateEmbeddings(store, config, stats, opts?.forceCost === true);

@@ -1,4 +1,5 @@
 import { defaultConfigPath } from "../../../core/config.ts";
+import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { runDoctor } from "../../../core/brain/doctor.ts";
 import {
   applyRemediation,
@@ -21,7 +22,10 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
 
   let result;
   try {
-    result = runDoctor(vault, { strict: Boolean(flags["strict"]) });
+    result = runDoctor(vault, {
+      strict: Boolean(flags["strict"]),
+      dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
+    });
   } catch (exc) {
     return fail(`doctor failed: ${(exc as Error).message ?? exc}`);
   }

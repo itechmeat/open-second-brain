@@ -44,6 +44,11 @@ Brain verbs (observing memory):
   facts               Decompose text into atomic assertions (--ingest to ledger)
   dead-end            Negative-knowledge registry: record and list failed approaches
   foresight           Forward projection: routines coming due, open commitments and questions
+  label               Controlled-vocabulary classification: assign, remove, show note labels
+  attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
+  tiers               Frontmatter tier guard: check identity-field drift, restore or accept
+  secret              Capability-gated secret custody: set, list, rm, run (use w/o exposure)
+  maintenance         Quiet-window, lease-guarded lane for heavy passes (dream, reindex)
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -244,6 +249,46 @@ export const VERB_HELP: Record<string, string> = {
     "recurring routines coming due within the horizon (cadence arithmetic, soonest\n" +
     "first), recent open commitments, and open questions - every item carries\n" +
     "deterministic sources. --write persists Brain/foresight/<date>.md.\n",
+  label:
+    "usage: o2b brain label <path> <dimension>=<value> | --remove <dimension> | --show  [--agent N] [--vault <path>] [--json]\n" +
+    "Controlled-vocabulary classification against the schema pack's labels\n" +
+    "field. Assignments are fail-closed - unknown dimensions and values are\n" +
+    "rejected with the declared vocabulary - single-choice per dimension, and\n" +
+    "persist as a sorted labels frontmatter array plus a canonical label\n" +
+    "entity. Filter recall with: o2b search <q> --property labels=<dim>/<value>.\n",
+  attr:
+    "usage: o2b brain attr <path> <field>=<value> | --remove <field> | --show  [--vault <path>] [--json]\n" +
+    "Per-type attribute fields declared in the schema pack's attributes map.\n" +
+    "The note's own frontmatter type selects the descriptor set; assigning an\n" +
+    "undeclared field is rejected with the declared fields and their\n" +
+    "natural-language descriptions. One value per field, persisted as a sorted\n" +
+    "attributes frontmatter array (filterable via --property attributes=<f>=<v>).\n",
+  tiers:
+    "usage: o2b brain tiers check | restore <path> [--field F] [--apply] | accept <path> [--field F]  [--vault <path>] [--json]\n" +
+    "Frontmatter tier guard over framework-kind files. The index post-pass\n" +
+    "snapshots identity/system fields and stages a finding when an identity\n" +
+    "join key (kind, id, entity_id, category) changes by hand - the snapshot\n" +
+    "keeps the expected value, so reindexes never absorb the edit. check\n" +
+    "lists open findings; restore writes the expected value back (--apply);\n" +
+    "accept adopts the hand-edit as the new baseline. Nothing auto-resolves.\n",
+  secret:
+    "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] | list | rm <name> | run <name> [--agent N] [--vault <path>] [--json] -- <command...>\n" +
+    "Capability-gated secret custody under the vault-local state dir:\n" +
+    "per-value AES-256-GCM ciphertext, 0600 keyfile, no surface ever prints\n" +
+    "the value. set reads the value from stdin or --from-env (never argv);\n" +
+    "run injects it as the declared env var into a subprocess whose command\n" +
+    "matches the allowlist declared at set time, and the captured output is\n" +
+    "redacted before it reaches the caller. Every operation lands a\n" +
+    "no-values record in Brain/log/secret-custody/. Protects against\n" +
+    "context leakage and vault sync exposure - not against root.\n",
+  maintenance:
+    "usage: o2b brain maintenance run [--force] [--window H-H] [--tz ZONE] [--busy-minutes N] [--busy-threshold N] | status [--limit N]  [--vault <path>] [--json]\n" +
+    "Quiet-window, lease-guarded lane for heavy passes. run gates on the\n" +
+    "local-time window (unset = always open), recent interactive query-rate\n" +
+    "from recall telemetry, and an expiring SQLite lease no second worker\n" +
+    "can grab, then executes dream + reindex stale-first. --force bypasses\n" +
+    "the soft gates but never the lease. Every attempt - including gate\n" +
+    "refusals - lands in a bounded journal; status renders lease + journal.\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +
     "Render a preference's full mutation audit trail (create / promote /\n" +

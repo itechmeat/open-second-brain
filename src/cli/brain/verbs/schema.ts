@@ -1,4 +1,5 @@
 import { defaultConfigPath } from "../../../core/config.ts";
+import { resolveSearchConfig } from "../../../core/search/index.ts";
 import {
   applySchemaAdminMutations,
   buildSchemaGraph,
@@ -65,7 +66,13 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
       case "stats":
         return writeResult(buildSchemaStats(vault), Boolean(flags["json"]), renderGenericText);
       case "lint":
-        return writeResult(buildSchemaLint(vault), Boolean(flags["json"]), renderGenericText);
+        return writeResult(
+          buildSchemaLint(vault, {
+            dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
+          }),
+          Boolean(flags["json"]),
+          renderGenericText,
+        );
       case "graph":
         return writeResult(buildSchemaGraph(vault), Boolean(flags["json"]), renderGenericText);
       case "explain": {
@@ -151,6 +158,13 @@ function renderSchemaReportText(report: BrainSchemaReport): string {
 function renderFinding(finding: SchemaReportFinding): string {
   if (finding.kind === "unknown-token") {
     return `[unknown-token] ${finding.category} ${finding.token} (${finding.path})`;
+  }
+  if (finding.kind === "link-constraint-violation") {
+    return (
+      `[link-constraint-violation] ${finding.relation} ` +
+      `${finding.source_type ?? "?"}->${finding.target_type ?? "?"} ` +
+      `(${finding.source} -> ${finding.target})`
+    );
   }
   return `[unused-declaration] ${finding.category} ${finding.token}`;
 }

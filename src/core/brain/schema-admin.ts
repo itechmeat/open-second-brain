@@ -1,10 +1,16 @@
 import { brainConfigPath } from "./paths.ts";
+import { linkConstraintAllows, readBlockedRelationRows } from "../search/link-constraints.ts";
 import {
   buildSchemaReport,
   type BrainSchemaReport,
   type SchemaReportFinding,
 } from "./schema-report.ts";
-import { loadSchemaPack, type SchemaPack } from "./schema-pack.ts";
+import {
+  FRONTMATTER_TIERS,
+  loadSchemaPack,
+  type FrontmatterTier,
+  type SchemaPack,
+} from "./schema-pack.ts";
 import {
   applySchemaMutations,
   type ApplySchemaMutationsResult,
@@ -61,6 +67,12 @@ export interface SchemaExplanation {
   readonly link_type: boolean;
   readonly extractable: boolean;
   readonly expert: string | null;
+  /**
+   * Declared attribute fields for this type with their natural-language
+   * descriptions (write-time-integrity-governance) - the vocabulary an
+   * agent should populate when capturing this type.
+   */
+  readonly attributes: Readonly<Record<string, string>>;
 }
 
 export interface SchemaOrphanReport {
@@ -116,10 +128,37 @@ export function buildSchemaStats(vault: string): SchemaStats {
   };
 }
 
-export function buildSchemaLint(vault: string): {
+export function buildSchemaLint(
+  vault: string,
+  opts: { readonly dbPath?: string } = {},
+): {
   findings: ReadonlyArray<SchemaReportFinding>;
 } {
-  return { findings: buildSchemaReport(vault).findings };
+  const findings: SchemaReportFinding[] = [...buildSchemaReport(vault).findings];
+  if (opts.dbPath !== undefined) {
+    // Link-constraint enforcement happens in the indexer's
+    // materialization post-pass; lint reads the blocked edges back
+    // from the index (fail-soft: no index file = no findings) and
+    // re-checks each one against the CURRENT pack, so a `schema
+    // apply` that removed or relaxed a constraint stops reporting
+    // stale violations immediately - the next index run unblocks the
+    // edges themselves.
+    const constraints = loadSchemaPack(vault).link_constraints;
+    for (const row of readBlockedRelationRows(opts.dbPath)) {
+      if (linkConstraintAllows(constraints, row.relation, row.sourceType, row.targetType)) {
+        continue; // stale flag; the next index run clears it
+      }
+      findings.push({
+        kind: "link-constraint-violation",
+        relation: row.relation,
+        source: row.sourcePath,
+        target: row.targetPath,
+        source_type: row.sourceType,
+        target_type: row.targetType,
+      });
+    }
+  }
+  return { findings };
 }
 
 export function buildSchemaGraph(vault: string): SchemaGraph {
@@ -197,6 +236,7 @@ export function explainSchemaToken(vault: string, rawToken: string): SchemaExpla
     link_type: pack.link_types.includes(token),
     extractable: pack.extractable.includes(token),
     expert: pack.expert_routing[token] ?? null,
+    attributes: pack.attributes[token] ?? {},
   };
 }
 
@@ -294,9 +334,56 @@ function coerceSchemaMutation(value: unknown): SchemaMutation {
         throw new Error("mutation.expert must be a string or null");
       return { op, token: readString(value, "token"), expert };
     }
+    case "add_label_dimension":
+      return {
+        op,
+        dimension: readString(value, "dimension"),
+        values: readStringArray(value, "values"),
+      };
+    case "remove_label_dimension":
+      return { op, dimension: readString(value, "dimension") };
+    case "add_link_constraint":
+    case "remove_link_constraint":
+      return {
+        op,
+        link_type: readString(value, "link_type"),
+        source: readString(value, "source"),
+        target: readString(value, "target"),
+      };
+    case "set_attribute_field":
+      return {
+        op,
+        type: readString(value, "type"),
+        field: readString(value, "field"),
+        description: readString(value, "description"),
+      };
+    case "remove_attribute_field":
+      return { op, type: readString(value, "type"), field: readString(value, "field") };
+    case "set_frontmatter_tier": {
+      const tier = readString(value, "tier");
+      if (!(FRONTMATTER_TIERS as ReadonlyArray<string>).includes(tier)) {
+        throw new Error(`mutation.tier must be one of ${FRONTMATTER_TIERS.join(", ")}`);
+      }
+      return {
+        op,
+        kind: readString(value, "kind"),
+        field: readString(value, "field"),
+        tier: tier as FrontmatterTier,
+      };
+    }
+    case "remove_frontmatter_tier":
+      return { op, kind: readString(value, "kind"), field: readString(value, "field") };
     default:
       throw new Error(`unsupported schema mutation op: ${op}`);
   }
+}
+
+function readStringArray(value: Record<string, unknown>, key: string): string[] {
+  const raw = value[key];
+  if (!Array.isArray(raw) || !raw.every((item): item is string => typeof item === "string")) {
+    throw new Error(`mutation.${key} must be an array of strings`);
+  }
+  return raw;
 }
 
 function readCategory(value: Record<string, unknown>): SchemaVocabularyCategory {

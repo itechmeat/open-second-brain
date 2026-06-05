@@ -45,6 +45,7 @@ import { buildBacklinkIndex } from "./backlinks.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { buildCaptureBoundary } from "./capture-boundary.ts";
 import { verifyContentHash } from "./content-hash.ts";
+import { readTierDriftCount } from "./frontmatter-tiers.ts";
 import { scanDanglingWorkruns } from "./dream-workrun.ts";
 import { parseLogDayFile } from "./log.ts";
 import {
@@ -115,6 +116,12 @@ export interface RunDoctorOptions {
    * Tests pin this for determinism.
    */
   readonly now?: Date;
+  /**
+   * Search-index path for index-backed checks
+   * (write-time-integrity-governance: staged tier-drift findings).
+   * Fail-soft: a missing index or pre-v6 schema simply skips them.
+   */
+  readonly dbPath?: string;
   /**
    * Optional precomputed dream summary (v0.10.16). When supplied,
    * the doctor runs the verification-delta helper and folds the
@@ -250,6 +257,21 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
   checkSignals(vault, issues, idIndex);
   checkPreferences(vault, issues, idIndex, knownBasenames);
   checkRetired(vault, issues, idIndex, knownBasenames);
+
+  // Tier guard (write-time-integrity-governance): staged identity
+  // hand-edits the index post-pass detected. Fail-soft index read.
+  if (opts.dbPath !== undefined) {
+    const driftCount = readTierDriftCount(opts.dbPath);
+    if (driftCount > 0) {
+      issues.push({
+        severity: "warning",
+        code: "tier-drift",
+        message:
+          `${driftCount} identity-field hand-edit(s) staged - ` +
+          "review with: o2b brain tiers check",
+      });
+    }
+  }
 
   // Duplicate-id reporting after every file has been indexed.
   for (const [id, paths] of idIndex.entries()) {

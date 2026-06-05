@@ -197,6 +197,18 @@ o2b brain foresight           [--horizon-days N] [--write] - forward projection:
 
 Claims live as device-sharded append-only JSONL under `Brain/truth/` with a recomputable `state.json` fold - deleting the cache loses nothing. The merge guard rides `o2b brain merge` (an `entity-guard` refusal when the two preferences anchor disjoint people/orgs; `--force` bypasses). `o2b brain apply-evidence` accepts `--outcome success|failure|unknown`; the dream pass stages `outcome_regressions` with a deterministic confidence penalty when applied events carry repeated failures. `brain_review_candidates` annotates inbox signals with `signal_novelty` when the vault has indexed embeddings.
 
+### Write-time integrity and governance (since v0.44.0)
+
+```text
+o2b brain label               <path> <dimension>=<value> | --remove <dimension> | --show - controlled-vocabulary classification; fail-closed against the schema pack's labels field
+o2b brain attr                <path> <field>=<value> | --remove <field> | --show - per-type attribute fields; an undeclared field error lists the declared fields WITH descriptions
+o2b brain tiers               check | restore <path> [--field F] --apply | accept <path> [--field F] - staged repair for identity-tier frontmatter hand-edits
+o2b brain secret              set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] | list | rm <name> | run <name> -- <command...> - capability-gated custody; the value enters via stdin, never argv
+o2b brain maintenance         run [--force] [--window H-H] [--tz ZONE] [--busy-minutes N] [--busy-threshold N] | status [--limit N] - quiet-window lease-guarded lane for dream + reindex
+```
+
+The schema pack gains four additive ontology fields (`labels`, `link_constraints`, `attributes`, `frontmatter_tiers`) with audited mutations through `o2b brain schema apply`. Link constraints enforce at index materialization: a typed edge whose endpoint page types violate the declared pairs falls back to an untyped link, `o2b brain schema lint` lists each violation, and removing the constraint restores the edges on the next index run. Tier drift detection rides the same index pass - the snapshot keeps the expected value, so reindexes never absorb a hand-edit, and `brain_doctor` warns with the open count. Filter labelled recall with `o2b search <q> --property labels=<dim>/<value>`. Secrets protect against context leakage and vault sync exposure, not against root; every custody operation lands a no-values record in `Brain/log/secret-custody/`. A maintenance gate skip exits 0 so cron never alarms on a quiet hour.
+
 ## Vault scope
 
 Single exclusion policy for every vault walker.

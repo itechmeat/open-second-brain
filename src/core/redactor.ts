@@ -145,13 +145,30 @@ export interface RedactRawOutputOptions {
    * secrets.
    */
   readonly maxInput?: number;
+  /**
+   * Known secret values to scrub verbatim (write-time-integrity-
+   * governance, secret custody): every literal occurrence is replaced
+   * before the pattern passes run, so a credential injected into a
+   * subprocess env can never travel back through captured output even
+   * when no key=value shape surrounds it.
+   */
+  readonly literals?: ReadonlyArray<string>;
 }
 
 export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
   if (!text) return text;
 
+  // Scrub known literals BEFORE the truncation guard: a secret value
+  // straddling the cut boundary must not survive as a partial
+  // fragment in the kept prefix.
+  let out = text;
+  for (const literal of opts.literals ?? []) {
+    if (literal.length === 0) continue;
+    out = out.split(literal).join(PLACEHOLDER);
+  }
+
   const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
-  let out = text.length > maxInput ? text.slice(0, maxInput) + TRUNCATION_MARKER : text;
+  if (out.length > maxInput) out = out.slice(0, maxInput) + TRUNCATION_MARKER;
 
   out = stripPrivateRegions(out);
 

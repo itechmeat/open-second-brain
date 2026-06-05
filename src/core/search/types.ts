@@ -123,6 +123,32 @@ export interface IndexStats {
     readonly path: string;
     readonly message: string;
   }>;
+  /**
+   * Typed edges blocked by the schema pack's `link_constraints` during
+   * this run's materialization post-pass
+   * (write-time-integrity-governance). Empty when no constraints are
+   * declared.
+   */
+  readonly relationViolations: ReadonlyArray<{
+    readonly relation: string;
+    readonly sourcePath: string;
+    readonly targetPath: string;
+    readonly sourceType: string;
+    readonly targetType: string;
+    readonly declared: ReadonlyArray<string>;
+  }>;
+  /**
+   * Identity-tier frontmatter fields whose value changed against the
+   * stored snapshot during this run - staged hand-edits awaiting
+   * `o2b brain tiers check|restore|accept`
+   * (write-time-integrity-governance).
+   */
+  readonly tierDrift: ReadonlyArray<{
+    readonly path: string;
+    readonly field: string;
+    readonly expected: unknown;
+    readonly actual: unknown;
+  }>;
   readonly durationMs: number;
 }
 

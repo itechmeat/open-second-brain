@@ -38,6 +38,8 @@ import { basename, dirname, join } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { formatFrontmatter, parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { FrontmatterTierConflictError, mergeFrontmatterTiered } from "./frontmatter-tiers.ts";
+import { loadSchemaPack } from "./schema-pack.ts";
 import { DEFAULT_RELATION_TYPES, type DefaultRelationType } from "../graph/relation-vocab.ts";
 import {
   isKnownSchemaToken,
@@ -274,15 +276,30 @@ export function writePreference(
   const path = preferencePath(vault, slug);
   const id = `pref-${slug}`;
 
-  const metadata = preferenceFrontmatter(input, id);
+  let metadata = preferenceFrontmatter(input, id);
   const body = renderPreferenceBody(input);
 
-  // Content-level idempotency: skip the rename when the file would be
-  // byte-identical. Keeps the dream invariant "a no-op rerun must not
-  // rewrite preference files" even after v0.10.1 expanded what dream
-  // recomputes per pass (evidence slices), and it spares Syncthing
-  // peers from spurious sync events.
   if (options.overwrite && existsSync(path)) {
+    // Tier guard (write-time-integrity-governance): rewrites merge
+    // through the tier model so a user-tier field a human added by
+    // hand survives, framework-owned legacy keys the writer no longer
+    // emits are dropped, and a changed identity join key throws
+    // instead of being silently re-accepted. An unreadable existing
+    // file or schema pack falls back to the plain framework write.
+    try {
+      const [existingMeta] = parseFrontmatter(path);
+      metadata = mergeFrontmatterTiered(existingMeta, metadata, {
+        kind: "brain-preference",
+        pack: loadSchemaPack(vault),
+      });
+    } catch (exc) {
+      if (exc instanceof FrontmatterTierConflictError) throw exc;
+    }
+    // Content-level idempotency: skip the rename when the file would
+    // be byte-identical. Keeps the dream invariant "a no-op rerun
+    // must not rewrite preference files" even after v0.10.1 expanded
+    // what dream recomputes per pass (evidence slices), and it spares
+    // Syncthing peers from spurious sync events.
     try {
       const next = formatFrontmatter(metadata, body);
       const prev = readFileSync(path, "utf8");
