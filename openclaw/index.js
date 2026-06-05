@@ -505,14 +505,14 @@ GFS4: `);
       return close;
     }(fs.close);
     fs.closeSync = function(fs$closeSync) {
-      function closeSync3(fd) {
+      function closeSync(fd) {
         fs$closeSync.apply(fs, arguments);
         resetQueue();
       }
-      Object.defineProperty(closeSync3, previousSymbol, {
+      Object.defineProperty(closeSync, previousSymbol, {
         value: fs$closeSync
       });
-      return closeSync3;
+      return closeSync;
     }(fs.closeSync);
     if (/\bgfs4\b/i.test(process.env.NODE_DEBUG || "")) {
       process.on("exit", function() {
@@ -1478,12 +1478,12 @@ var require_adapter = __commonJS((exports, module) => {
     return newFs;
   }
   function toPromise(method) {
-    return (...args) => new Promise((resolve4, reject) => {
+    return (...args) => new Promise((resolve, reject) => {
       args.push((err, result) => {
         if (err) {
           reject(err);
         } else {
-          resolve4(result);
+          resolve(result);
         }
       });
       method(...args);
@@ -1558,9 +1558,10 @@ import { existsSync as existsSync6 } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 
 // src/core/config.ts
-import { readFileSync } from "node:fs";
+import { mkdirSync as mkdirSync2, readFileSync } from "node:fs";
+var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
 import { homedir } from "node:os";
-import { join as join2 } from "node:path";
+import { dirname as dirname2, join as join2 } from "node:path";
 
 // src/core/fs-atomic.ts
 import {
@@ -1648,14 +1649,15 @@ function stem(filename) {
   return dot > 0 ? filename.slice(0, dot) : filename;
 }
 
+// src/core/brain/link-graph/format-wikilink.ts
+var WIKI_LINK_FORMATS = Object.freeze([
+  "preserve",
+  "full",
+  "short"
+]);
+
 // src/core/config.ts
-var SECRET_KEY_PARTS = [
-  "key",
-  "token",
-  "secret",
-  "password",
-  "credential"
-];
+var SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"];
 function defaultConfigPath() {
   const override = process.env["OPEN_SECOND_BRAIN_CONFIG"];
   if (override)
@@ -1747,18 +1749,18 @@ function expandTilde(p) {
 // src/core/doctor.ts
 import {
   existsSync as existsSync3,
-  mkdirSync as mkdirSync2,
+  mkdirSync as mkdirSync3,
   openSync as openSync2,
   readFileSync as readFileSync2,
   rmSync,
   writeSync as writeSync2,
   closeSync as closeSync2
 } from "node:fs";
-import { dirname as dirname3, join as join4 } from "node:path";
+import { dirname as dirname4, join as join4 } from "node:path";
 
 // src/core/partner/codegraph.ts
 import { existsSync as existsSync2, readdirSync, statSync as statSync2 } from "node:fs";
-import { dirname as dirname2, join as join3, resolve } from "node:path";
+import { dirname as dirname3, join as join3, resolve } from "node:path";
 var CODE_MANIFESTS = [
   "package.json",
   "pyproject.toml",
@@ -1771,7 +1773,6 @@ var CODE_MANIFESTS = [
   "pom.xml"
 ];
 var DEFAULT_LIMIT = 50;
-var CODEGRAPH_REPO = "https://github.com/colbymchenry/codegraph";
 function isDir(path) {
   try {
     return statSync2(path).isDirectory();
@@ -1809,7 +1810,7 @@ function findCodeProjects(opts) {
       found.push(path);
   };
   consider(opts.cwd);
-  const vaultParent = dirname2(resolve(opts.vault));
+  const vaultParent = dirname3(resolve(opts.vault));
   if (isDir(vaultParent)) {
     let entries = [];
     try {
@@ -1875,11 +1876,7 @@ function checkCodegraph(opts, deps) {
   const whichFn = deps?.whichCodegraph ?? defaultWhichCodegraph;
   const cliPath = whichFn();
   if (!cliPath) {
-    return {
-      name: "code_graph",
-      ok: false,
-      message: `code project at ${project}: codegraph not installed (install: ${CODEGRAPH_REPO})`
-    };
+    return null;
   }
   const indexDir = join3(project, ".codegraph");
   if (!isDir(indexDir)) {
@@ -1936,7 +1933,7 @@ function checkVaultWriteable(vault) {
 function checkConfigWriteable(config) {
   let createdForCheck = false;
   try {
-    mkdirSync2(dirname3(config), { recursive: true });
+    mkdirSync3(dirname4(config), { recursive: true });
     if (!existsSync3(config))
       createdForCheck = true;
     const fd = openSync2(config, "a");
@@ -2198,9 +2195,9 @@ function doctor(opts) {
 
 // src/core/identity-reminder.ts
 import { readFileSync as readFileSync3 } from "node:fs";
-import { dirname as dirname4, resolve as resolve2 } from "node:path";
+import { dirname as dirname5, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
-var TEMPLATE_PATH = resolve2(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
+var TEMPLATE_PATH = resolve2(dirname5(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
 var KNOWN_RUNTIME_TARGETS = ["hermes", "openclaw"];
 function isRuntimeTarget(value) {
   return typeof value === "string" && KNOWN_RUNTIME_TARGETS.includes(value);
@@ -2219,7 +2216,7 @@ function loadReminderTemplate() {
     });
   }
 }
-var TEMPLATES_DIR = resolve2(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates");
+var TEMPLATES_DIR = resolve2(dirname5(fileURLToPath(import.meta.url)), "..", "..", "templates");
 var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve2(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
 var TEMPLATE_CACHE = new Map;
 function tryReadTargetTemplate(target) {
@@ -2269,7 +2266,7 @@ import { join as join5, posix as posix2 } from "node:path";
 
 // src/core/path-safety.ts
 import { existsSync as existsSync4, realpathSync } from "node:fs";
-import { dirname as dirname5, posix, relative, resolve as resolve3, sep } from "node:path";
+import { dirname as dirname6, posix, relative, resolve as resolve3, sep } from "node:path";
 function ensureInsideVault(target, vault) {
   const resolvedTarget = resolve3(target);
   const resolvedVault = resolve3(vault);
@@ -2293,7 +2290,7 @@ function isLexicallyInside(target, root) {
 function deepestExistingAncestor(target) {
   let cur = target;
   while (!existsSync4(cur)) {
-    const parent = dirname5(cur);
+    const parent = dirname6(cur);
     if (parent === cur)
       return cur;
     cur = parent;
@@ -2320,7 +2317,15 @@ var BRAIN_INBOX_REL = posix2.join(BRAIN_ROOT_REL, "inbox");
 var BRAIN_PROCESSED_REL = posix2.join(BRAIN_INBOX_REL, "processed");
 var BRAIN_PREFERENCES_REL = posix2.join(BRAIN_ROOT_REL, "preferences");
 var BRAIN_RETIRED_REL = posix2.join(BRAIN_ROOT_REL, "retired");
+var BRAIN_SKILL_PROPOSALS_REL = posix2.join(BRAIN_ROOT_REL, "skill-proposals");
+var BRAIN_SKILL_PROPOSALS_PENDING_REL = posix2.join(BRAIN_SKILL_PROPOSALS_REL, "pending");
+var BRAIN_SKILL_PROPOSALS_ACCEPTED_REL = posix2.join(BRAIN_SKILL_PROPOSALS_REL, "accepted");
+var BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix2.join(BRAIN_SKILL_PROPOSALS_REL, "rejected");
+var BRAIN_PROCEDURES_REL = posix2.join(BRAIN_ROOT_REL, "procedures");
+var BRAIN_PROCEDURAL_MEMORY_REL = posix2.join(BRAIN_ROOT_REL, "procedural-memory");
+var BRAIN_ATTENTION_REL = posix2.join(BRAIN_ROOT_REL, "attention");
 var BRAIN_LOG_REL = posix2.join(BRAIN_ROOT_REL, "log");
+var BRAIN_ENTITIES_REL = posix2.join(BRAIN_ROOT_REL, "entities");
 var BRAIN_SNAPSHOTS_REL = posix2.join(BRAIN_ROOT_REL, ".snapshots");
 var BRAIN_ARTIFACTS_REL = posix2.join(BRAIN_ROOT_REL, ".artifacts");
 var BRAIN_INDEX_FILE = "_INDEX.md";
@@ -2528,8 +2533,15 @@ function stripPrivateRegions(text) {
 function redactRawOutput(text, opts = {}) {
   if (!text)
     return text;
+  let out = text;
+  for (const literal of opts.literals ?? []) {
+    if (literal.length === 0)
+      continue;
+    out = out.split(literal).join(PLACEHOLDER);
+  }
   const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
-  let out = text.length > maxInput ? text.slice(0, maxInput) + TRUNCATION_MARKER : text;
+  if (out.length > maxInput)
+    out = out.slice(0, maxInput) + TRUNCATION_MARKER;
   out = stripPrivateRegions(out);
   out = out.replace(JSON_ENTRY_RE, (_match, keyPart, value) => {
     if (value.startsWith('"'))
@@ -2554,8 +2566,8 @@ function redactRawOutput(text, opts = {}) {
   return out;
 }
 // src/core/pay-memory/policy.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname6 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname7 } from "node:path";
 var DEFAULT_POLICY_TEMPLATE = `# Agent Spending Policy
 
 This file is read by the agent before any paid action. The agent MUST cite
@@ -2610,7 +2622,7 @@ The agent must save:
 function writePolicyIfMissing(vault, opts = {}) {
   const target = policyPath(vault);
   const overwrite = opts.overwrite ?? false;
-  mkdirSync3(dirname6(target), { recursive: true });
+  mkdirSync4(dirname7(target), { recursive: true });
   if (overwrite) {
     const existed = existsSync5(target);
     atomicWriteFileSync(target, DEFAULT_POLICY_TEMPLATE);
@@ -2636,8 +2648,8 @@ function buildPolicyResult(path, status) {
   };
 }
 // src/core/vault.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync2, writeFileSync } from "node:fs";
-import { dirname as dirname7, join as join7, relative as relative2 } from "node:path";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync5, readdirSync as readdirSync2, writeFileSync } from "node:fs";
+import { dirname as dirname8, join as join7, relative as relative2 } from "node:path";
 var FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 var KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
 var PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
@@ -2787,10 +2799,24 @@ function walk(root, dir, skipDirs, skipFiles, out) {
   }
 }
 function stripQuotes(s) {
-  if (s.length >= 2 && (s.startsWith('"') && s.endsWith('"') || s.startsWith("'") && s.endsWith("'"))) {
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    return unescapeDoubleQuoted(s.slice(1, -1));
+  }
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) {
     return s.slice(1, -1);
   }
   return s;
+}
+var DOUBLE_QUOTED_ESCAPES = Object.freeze({
+  "\\": "\\",
+  '"': '"',
+  n: `
+`,
+  r: "\r",
+  t: "\t"
+});
+function unescapeDoubleQuoted(inner) {
+  return inner.replace(/\\([\\"nrt])/g, (_, ch) => DOUBLE_QUOTED_ESCAPES[ch] ?? `\\${ch}`);
 }
 function splitInlineArray(inner) {
   const out = [];
@@ -3432,7 +3458,7 @@ function checkPolicy(vault, request) {
   };
 }
 // src/core/pay-memory/approval.ts
-var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
 import { join as join10 } from "node:path";
 var PENDING_REQUEST_FRONTMATTER_TYPE = "pending-payment-request";
 function pendingDir(vault) {
@@ -3531,7 +3557,7 @@ async function transitionRequest(vault, id, expectedFrom, newStatus, patch) {
   if (!initial) {
     throw new Error(`pending request not found: ${id}`);
   }
-  const release = await import_proper_lockfile.default.lock(lockTarget, {
+  const release = await import_proper_lockfile2.default.lock(lockTarget, {
     retries: { retries: 30, factor: 1.2, minTimeout: 30, maxTimeout: 500 },
     stale: 1e4,
     realpath: false
@@ -3631,7 +3657,7 @@ function parseDecisionStatus(raw) {
   return "allowed";
 }
 // src/openclaw/index.ts
-import { mkdirSync as mkdirSync5 } from "node:fs";
+import { mkdirSync as mkdirSync6 } from "node:fs";
 
 // src/core/agent-identity.ts
 var PLACEHOLDER_AGENT_VALUES = new Set([
@@ -3864,7 +3890,7 @@ var openclaw_default = definePluginEntry({
         const skipped = [];
         for (const dir of [dirs.policies, dirs.payments, dirs.assets, dirs.drafts, dirs.reports]) {
           const existed = existsSync6(dir);
-          mkdirSync5(dir, { recursive: true });
+          mkdirSync6(dir, { recursive: true });
           (existed ? skipped : created).push(vaultRelative(dir, vault));
         }
         const policy = writePolicyIfMissing(vault, { overwrite });
