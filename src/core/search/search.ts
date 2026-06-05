@@ -59,6 +59,7 @@ import type {
   SearchOutcome,
 } from "./types.ts";
 import type { StructuredRecallQueryDocument } from "./structured-query.ts";
+import { expandQuery } from "./query-expansion.ts";
 
 interface SemanticPolicy {
   /** caller asked for semantic on or off (true), or accepted the default (false). */
@@ -206,7 +207,10 @@ export async function search(
   const pathPrefix = assertSafePathPrefix(opts.pathPrefix);
   const policy = resolveSemanticPolicy(config, opts);
   const warnings: string[] = [];
-  const structured = opts.structuredQuery;
+  // Opt-in local expansion (t_2fa95db1): an explicit structured
+  // document always wins; expansion only fills the gap.
+  const structured =
+    opts.structuredQuery ?? (opts.expand === true ? expandQuery(config.vault, query) : undefined);
   const sessionFocus =
     opts.sessionFocus === undefined
       ? readActiveSessionFocus(config, opts.focusSession, Date.now())

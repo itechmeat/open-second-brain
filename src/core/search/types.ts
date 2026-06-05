@@ -253,6 +253,13 @@ export interface SearchOptions {
   readonly visibility?: ReadonlyArray<string>;
   /** Optional parsed structured recall query document. Plain-string search ignores this. */
   readonly structuredQuery?: StructuredRecallQueryDocument;
+  /**
+   * Opt-in deterministic query expansion (link-recall-intelligence,
+   * t_2fa95db1): when true and no `structuredQuery` was supplied, the
+   * bare query is expanded into lex/vec/hyde lanes locally before
+   * retrieval. Never silently active.
+   */
+  readonly expand?: boolean;
   /** Optional per-query or persisted session focus steering. Undefined means load persisted focus. */
   readonly sessionFocus?: SearchSessionFocus | null;
   /**
