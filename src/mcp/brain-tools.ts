@@ -210,6 +210,7 @@ import { writePreference } from "../core/brain/preference.ts";
 import { validateBrainFeedbackInput } from "../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../core/brain/time.ts";
 import { formatLocalTimestamp } from "../core/brain/present-time.ts";
+import { captureReportDelta } from "../core/brain/report-snapshot.ts";
 import { slugify } from "../core/vault.ts";
 import { normalizeAgentArgument } from "../core/agent-identity.ts";
 import {
@@ -1091,11 +1092,41 @@ async function toolBrainDigest(
     linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
   });
 
-  return {
+  const envelope: Record<string, unknown> = {
     format,
     empty: result.empty,
     content: result.content,
   };
+  // Snapshot the structured summary, not the rendered string: render
+  // a JSON digest for the snapshot regardless of the caller's format
+  // so the run-over-run diff keys on data.
+  const digestDate = isoDate(until ?? new Date());
+  const snapshotSource =
+    format === "json"
+      ? result.content
+      : renderDigest(ctx.vault, {
+          ...(since ? { since } : {}),
+          ...(until ? { until } : {}),
+          format: "json",
+          linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
+        }).content;
+  let parsedSnapshot: unknown = null;
+  try {
+    parsedSnapshot = JSON.parse(snapshotSource);
+  } catch {
+    parsedSnapshot = null;
+  }
+  const delta =
+    parsedSnapshot !== null
+      ? captureReportDelta(
+          ctx.vault,
+          "digest",
+          digestDate,
+          parsedSnapshot,
+          ctx.configPath ? { configPath: ctx.configPath } : {},
+        )
+      : null;
+  return delta !== null ? { ...envelope, delta } : envelope;
 }
 
 // ----- brain_query ---------------------------------------------------------
@@ -2964,7 +2995,7 @@ async function toolBrainDailyBrief(
   const brief = buildDailyBrief(index, ctx.vault, date, {
     offsetHours: cfg.daily_window_offset_hours,
   });
-  return {
+  const envelope: Record<string, unknown> = {
     vault_path: ctx.vault,
     date: brief.date,
     window: brief.window,
@@ -2974,6 +3005,16 @@ async function toolBrainDailyBrief(
     source_pointers: brief.sourcePointers,
     generated_at: brief.generatedAt,
   };
+  // Dual-output (t_00eece5d): persist a machine snapshot and report
+  // the run-over-run delta when report snapshots are enabled.
+  const delta = captureReportDelta(
+    ctx.vault,
+    "daily",
+    brief.date,
+    envelope,
+    ctx.configPath ? { configPath: ctx.configPath } : {},
+  );
+  return delta !== null ? { ...envelope, delta } : envelope;
 }
 
 /**
@@ -2995,7 +3036,7 @@ async function toolBrainWeeklySynthesis(
   const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
   const synth = buildWeeklySynthesis(index, ctx.vault, weekEnd, cfg);
-  return {
+  const envelope: Record<string, unknown> = {
     vault_path: ctx.vault,
     window_start: synth.windowStart,
     window_end: synth.windowEnd,
@@ -3007,6 +3048,14 @@ async function toolBrainWeeklySynthesis(
     source_pointers: synth.sourcePointers,
     generated_at: synth.generatedAt,
   };
+  const delta = captureReportDelta(
+    ctx.vault,
+    "weekly",
+    weekEnd,
+    envelope,
+    ctx.configPath ? { configPath: ctx.configPath } : {},
+  );
+  return delta !== null ? { ...envelope, delta } : envelope;
 }
 
 // ----- brain_intention (Agent Surface Suite) --------------------------------

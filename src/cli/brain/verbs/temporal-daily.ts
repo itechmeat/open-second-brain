@@ -3,6 +3,7 @@ import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts"
 import { buildDailyBrief } from "../../../core/brain/temporal/daily-brief.ts";
 import { loadTemporalConfigSafe } from "../../../core/brain/policy.ts";
 import { CliError, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
+import { captureReportDelta, renderReportDelta } from "../../../core/brain/report-snapshot.ts";
 
 const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -33,8 +34,21 @@ export async function cmdBrainDaily(argv: string[]): Promise<number> {
     throw exc;
   }
 
+  const delta = captureReportDelta(
+    vault,
+    "daily",
+    brief.date,
+    brief,
+    config ? { configPath: config } : {},
+  );
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify({ ...brief, ...localTimeFields(config) }, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify(
+        { ...brief, ...(delta !== null ? { delta } : {}), ...localTimeFields(config) },
+        null,
+        2,
+      ) + "\n",
+    );
     return 0;
   }
 
@@ -51,6 +65,7 @@ export async function cmdBrainDaily(argv: string[]): Promise<number> {
   process.stdout.write(`    evidence applied: ${brief.vaultDelta.evidenceApplied}\n`);
   process.stdout.write(`    evidence violated: ${brief.vaultDelta.evidenceViolated}\n`);
   process.stdout.write(`  status transitions: ${brief.statusTransitions.length}\n`);
+  if (delta !== null) process.stdout.write(renderReportDelta(delta) + "\n");
   process.stdout.write(`  source pointers: ${brief.sourcePointers.length}\n`);
   return 0;
 }

@@ -1,4 +1,6 @@
 import { defaultConfigPath, resolveLinkOutputFormat } from "../../../core/config.ts";
+import { captureReportDelta, renderReportDelta } from "../../../core/brain/report-snapshot.ts";
+import { isoDate } from "../../../core/brain/time.ts";
 import { renderDigest, type RenderDigestOptions } from "../../../core/brain/digest.ts";
 import { parse, fail, resolveBrainVault, parseOptionalIsoDate } from "../helpers.ts";
 
@@ -56,7 +58,35 @@ export async function cmdBrainDigest(argv: string[]): Promise<number> {
   }
 
   if (result.empty && flags["silent-if-empty"]) return 2;
+
+  // Dual-output (t_00eece5d): snapshot the structured JSON digest and
+  // report the run-over-run delta when report snapshots are enabled.
+  let delta = null;
+  const digestDate = isoDate(untilDate ?? new Date());
+  const jsonContent = flags["json"]
+    ? result.content
+    : renderDigest(vault, { ...opts, format: "json" }).content;
+  try {
+    delta = captureReportDelta(
+      vault,
+      "digest",
+      digestDate,
+      JSON.parse(jsonContent),
+      config ? { configPath: config } : {},
+    );
+  } catch {
+    // Snapshots are observability, not correctness.
+  }
+
+  if (flags["json"] && delta !== null) {
+    const parsed = JSON.parse(result.content) as Record<string, unknown>;
+    process.stdout.write(JSON.stringify({ ...parsed, delta }, null, 2) + "\n");
+    return 0;
+  }
   process.stdout.write(result.content);
   if (!result.content.endsWith("\n")) process.stdout.write("\n");
+  if (!flags["json"] && delta !== null) {
+    process.stdout.write("\n" + renderReportDelta(delta) + "\n");
+  }
   return 0;
 }
