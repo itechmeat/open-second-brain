@@ -181,6 +181,13 @@ import { collectMaintenanceActions } from "../core/brain/maintenance/collect.ts"
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { renderDigest, type DigestFormat } from "../core/brain/digest.ts";
 import { dream } from "../core/brain/dream.ts";
+import {
+  applyDreamBundle,
+  discardDreamBundle,
+  listDreamBundles,
+  stageDream,
+  validateDreamBundle,
+} from "../core/brain/dream-stage.ts";
 import { buildIntentReview } from "../core/brain/intent-review.ts";
 import { buildRetentionReview } from "../core/brain/retention.ts";
 import { buildMonthlyReview, normalizeMonthlyReviewMonth } from "../core/brain/monthly-review.ts";
@@ -413,10 +420,83 @@ async function toolBrainDream(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  const action = args["action"] ?? "run";
+  if (
+    action !== "run" &&
+    action !== "stage" &&
+    action !== "validate" &&
+    action !== "apply" &&
+    action !== "discard" &&
+    action !== "list"
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_dream: action must be run|stage|validate|apply|discard|list",
+    );
+  }
   const dryRun = coerceBool(args, "dry_run");
   const nowDate = coerceIsoDate(args, "now");
   const agentArg = coerceStr(args, "agent", false);
   const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+
+  if (action !== "run") {
+    // Staged lifecycle (t_ae8a8ec0): stage -> validate -> apply over a
+    // persisted bundle; dream() stays the only promotion engine.
+    const runIdArg = coerceStr(args, "run_id", false);
+    if ((action === "validate" || action === "apply" || action === "discard") && !runIdArg) {
+      throw new MCPError(INVALID_PARAMS, `brain_dream action=${action}: run_id is required`);
+    }
+    const now = nowDate ?? new Date();
+    const stageOpts = { now, ...(agent ? { agentName: agent } : {}) };
+    switch (action) {
+      case "stage": {
+        const bundle = stageDream(ctx.vault, stageOpts);
+        return {
+          action,
+          run_id: bundle.runId,
+          plan: bundle.plan,
+          sources: bundle.sources.length,
+          dir: `Brain/dream/staged/${bundle.runId}`,
+        };
+      }
+      case "validate": {
+        const verdict = validateDreamBundle(ctx.vault, runIdArg!, stageOpts);
+        return { action, run_id: runIdArg, valid: verdict.valid, drift: [...verdict.drift] };
+      }
+      case "apply": {
+        const outcome = applyDreamBundle(ctx.vault, runIdArg!, stageOpts);
+        return {
+          action,
+          run_id: runIdArg,
+          applied: outcome.applied,
+          drift: [...outcome.validation.drift],
+          ...(outcome.summary !== undefined
+            ? {
+                changed: outcome.summary.changed,
+                new_unconfirmed: [...outcome.summary.new_unconfirmed],
+                confirmed: [...outcome.summary.confirmed],
+                retired: outcome.summary.retired.map((r) => ({ id: r.id, reason: r.reason })),
+              }
+            : {}),
+        };
+      }
+      case "discard": {
+        return { action, run_id: runIdArg, removed: discardDreamBundle(ctx.vault, runIdArg!) };
+      }
+      default: {
+        return {
+          action,
+          bundles: listDreamBundles(ctx.vault).map((b) => ({
+            run_id: b.runId,
+            status: b.status,
+            staged_at: b.stagedAt,
+            proposals: b.proposals,
+            sources: b.sources,
+          })),
+        };
+      }
+    }
+  }
 
   const summary = dream(ctx.vault, {
     dryRun,
@@ -4037,13 +4117,23 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_dream",
     description:
-      "Run the deterministic learning pass over `Brain/inbox/` (clusters signals, promotes preferences, retires stale rules). Typically scheduled via cron rather than invoked interactively.",
+      "Deterministic learning pass over `Brain/inbox/`. action=run (default) promotes inline; the staged lifecycle persists a reviewable bundle: stage -> validate -> apply (or discard), plus list. Typically scheduled via cron.",
     inputSchema: {
       type: "object",
       properties: {
+        action: {
+          type: "string",
+          enum: ["run", "stage", "validate", "apply", "discard", "list"],
+          description:
+            "run executes inline; stage persists a proposal bundle; validate/apply/discard manage one bundle by run_id; list shows bundles.",
+        },
+        run_id: {
+          type: "string",
+          description: "Bundle id for validate/apply/discard (from action=stage or list).",
+        },
         dry_run: {
           type: "boolean",
-          description: "When true, compute the plan without writing any files.",
+          description: "action=run only: compute the plan without writing any files.",
         },
         now: {
           type: "string",

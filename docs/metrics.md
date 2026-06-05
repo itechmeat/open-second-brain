@@ -16,7 +16,8 @@ Brain/metrics/
 ├── bridge_discovery.jsonl
 ├── communities.jsonl
 ├── recall_benchmark.jsonl
-└── self_tuning.jsonl
+├── self_tuning.jsonl
+└── dream_stage.jsonl
 ```
 
 Surface names are lowercase snake_case (`[a-z][a-z0-9_]*`, max 64
@@ -61,6 +62,7 @@ writes, and a metric record is a summary, not a report.
 | `communities` | `o2b brain clusters run`, MCP `brain_clusters`, maintenance lane | `communities`, `sizes`, `written`, `removed`, `min_size`, `lane` (lane runs) |
 | `recall_benchmark` | `o2b brain benchmark run`, MCP `brain_benchmark` | `total`, `k`, `expand`, `hit_at_k`, `mrr`, `misses` |
 | `self_tuning` | `o2b brain tune run`, MCP `brain_tune` | `chosen`, `evaluated`, `best_mrr`, `dataset_hash` |
+| `dream_stage` | `o2b brain dream stage|apply`, MCP `brain_dream` (since 1.0.0) | `action` (`stage`/`apply`), `run_id`, `proposals`, `sources`, `changed`; apply adds `new_unconfirmed`, `confirmed`, `retired` counts |
 
 Payload fields marked "(lane runs)" appear only on maintenance-lane
 emissions. All fields are additive-optional from a consumer's point

@@ -87,7 +87,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       [
         command("init", "Bootstrap Brain skeleton"),
         command("feedback", "Record a taste signal"),
-        command("dream", "Run deterministic consolidation"),
+        command(
+          "dream",
+          "Run deterministic consolidation; staged lifecycle via stage/validate/apply",
+        ),
         command("apply-evidence", "Record preference evidence"),
         command("note", "Append a narrative milestone"),
         command("digest", "Render recent Brain transitions"),
