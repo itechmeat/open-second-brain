@@ -166,6 +166,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("source", "Manage read-only recall sources of the active vault"),
         command("links", "Normalize wikilink path format across Brain notes"),
         command("bridges", "Propose, accept, or dismiss embedding-near bridge links"),
+        command("clusters", "Detect link-graph communities and materialize cluster notes"),
         command("profile", "Materialize the compact Brain/profile.md digest"),
         command("sgrep", "Grep-shaped semantic Brain search (path:line: output)"),
         command("continuity", "Export continuity records as ATOF/ATIF trajectories"),

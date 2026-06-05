@@ -46,10 +46,11 @@ Brain verbs (observing memory):
   foresight           Forward projection: routines coming due, open commitments and questions
   label               Controlled-vocabulary classification: assign, remove, show note labels
   bridges             Embedding-near link proposals: discover, list, accept, dismiss
+  clusters            Link-graph communities: detect and materialize cluster notes
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
   tiers               Frontmatter tier guard: check identity-field drift, restore or accept
   secret              Capability-gated secret custody: set, list, rm, run (use w/o exposure)
-  maintenance         Quiet-window, lease-guarded lane for heavy passes (dream, reindex)
+  maintenance         Quiet-window, lease-guarded lane (dream, reindex, bridges, clusters)
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
   codec               Compress/expand session prose with the deterministic codec (stdin/--in)
@@ -265,6 +266,14 @@ export const VERB_HELP: Record<string, string> = {
     "bridge_discovery metric; accept writes a single related: wikilink into the\n" +
     "source note (schema-pack link constraints honored); dismiss silences a\n" +
     "pair across future runs. Fail-soft without an index or embeddings.\n",
+  clusters:
+    "usage: o2b brain clusters run [--min-size N] | list  [--vault <path>] [--json]\n" +
+    "Graph-wide community detection: deterministic label propagation over the\n" +
+    "index's resolved link graph. run materializes one derived note per\n" +
+    "community of size >= min-size (default 4) under Brain/clusters/ - members\n" +
+    "by internal degree, shared entities, density, no LLM prose - removes\n" +
+    "stale generated notes, and records one communities metric. list reads\n" +
+    "the generated notes back. Fail-soft without an index.\n",
   attr:
     "usage: o2b brain attr <path> <field>=<value> | --remove <field> | --show  [--vault <path>] [--json]\n" +
     "Per-type attribute fields declared in the schema pack's attributes map.\n" +
@@ -295,7 +304,8 @@ export const VERB_HELP: Record<string, string> = {
     "Quiet-window, lease-guarded lane for heavy passes. run gates on the\n" +
     "local-time window (unset = always open), recent interactive query-rate\n" +
     "from recall telemetry, and an expiring SQLite lease no second worker\n" +
-    "can grab, then executes dream + reindex stale-first. --force bypasses\n" +
+    "can grab, then executes dream, reindex, bridges, and clusters\n" +
+    "stale-first. --force bypasses\n" +
     "the soft gates but never the lease. Every attempt - including gate\n" +
     "refusals - lands in a bounded journal; status renders lease + journal.\n",
   audit:

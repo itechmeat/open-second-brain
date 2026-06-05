@@ -14,6 +14,18 @@
  */
 
 import { dream } from "../../../core/brain/dream.ts";
+import {
+  discoverBridges,
+  readDismissedBridges,
+  writeBridgeProposals,
+} from "../../../core/brain/link-graph/bridge-discovery.ts";
+import {
+  detectCommunities,
+  materializeClusterNotes,
+} from "../../../core/brain/link-graph/communities.ts";
+import { appendMetric } from "../../../core/brain/metrics.ts";
+import { isoSecond } from "../../../core/brain/time.ts";
+import { Store } from "../../../core/search/store.ts";
 import { currentLease, MAINTENANCE_LEASE_NAME } from "../../../core/brain/maintenance/lease.ts";
 import {
   MAINTENANCE_BUSY_MINUTES,
@@ -118,6 +130,56 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
           name: "reindex",
           run: async () => {
             await indexVault(searchConfig);
+          },
+        },
+        // Link-recall-intelligence passes ride the same lease, after
+        // reindex so they see fresh edges. Both are fail-soft inside:
+        // a vault without embeddings simply proposes nothing.
+        {
+          name: "bridges",
+          run: async () => {
+            const store = await Store.open(searchConfig, { mode: "read" });
+            try {
+              const report = discoverBridges(store, {
+                dismissed: readDismissedBridges(vault),
+              });
+              writeBridgeProposals(vault, report, { now });
+              appendMetric(vault, {
+                surface: "bridge_discovery",
+                runAt: isoSecond(now),
+                payload: {
+                  proposals: report.proposals.length,
+                  scanned_candidates: report.scannedCandidates,
+                  vec_available: report.vecAvailable,
+                  lane: true,
+                },
+              });
+            } finally {
+              await store.close();
+            }
+          },
+        },
+        {
+          name: "clusters",
+          run: async () => {
+            const store = await Store.open(searchConfig, { mode: "read" });
+            try {
+              const communities = detectCommunities(store, {});
+              const materialized = materializeClusterNotes(vault, communities, { store, now });
+              appendMetric(vault, {
+                surface: "communities",
+                runAt: isoSecond(now),
+                payload: {
+                  communities: communities.length,
+                  sizes: communities.map((c) => c.size),
+                  written: materialized.written.length,
+                  removed: materialized.removed.length,
+                  lane: true,
+                },
+              });
+            } finally {
+              await store.close();
+            }
           },
         },
       ],
