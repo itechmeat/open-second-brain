@@ -24,6 +24,7 @@
  */
 
 import { discoverConfig, redactMapping } from "../core/config.ts";
+import { REMOVED_TOOLS } from "../core/removed-surfaces.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { isDir } from "../core/fs-utils.ts";
@@ -299,42 +300,11 @@ export type ToolScope = "full" | "writer" | "catalog";
  * answers INVALID_PARAMS with the exact replacement instead of a
  * generic METHOD_NOT_FOUND, so a stale client learns the migration
  * from the error message itself. Zero token cost: tombstones are
- * never advertised.
+ * never advertised. The canonical map lives in core
+ * (src/core/removed-surfaces.ts) so `brain_doctor` shares it without
+ * importing the MCP layer; re-exported here for the server and tests.
  */
-export const REMOVED_TOOLS: Readonly<
-  Record<string, { readonly removedIn: string; readonly target: string; readonly view: string }>
-> = Object.freeze({
-  brain_digest: { removedIn: "1.0.0", target: "brain_brief", view: "digest" },
-  brain_daily_brief: { removedIn: "1.0.0", target: "brain_brief", view: "daily" },
-  brain_morning_brief: { removedIn: "1.0.0", target: "brain_brief", view: "morning" },
-  brain_weekly_synthesis: { removedIn: "1.0.0", target: "brain_brief", view: "weekly" },
-  brain_monthly_review: { removedIn: "1.0.0", target: "brain_brief", view: "monthly" },
-  brain_operator_summary: { removedIn: "1.0.0", target: "brain_brief", view: "operator" },
-  brain_attention_flows: {
-    removedIn: "1.0.0",
-    target: "brain_analytics",
-    view: "attention_flows",
-  },
-  brain_concept_synthesis: {
-    removedIn: "1.0.0",
-    target: "brain_analytics",
-    view: "concept_synthesis",
-  },
-  brain_timeline: { removedIn: "1.0.0", target: "brain_analytics", view: "timeline" },
-  brain_belief_evolution: {
-    removedIn: "1.0.0",
-    target: "brain_analytics",
-    view: "belief_evolution",
-  },
-  get_active_schema_pack: { removedIn: "1.0.0", target: "schema_inspect", view: "active_pack" },
-  list_schema_packs: { removedIn: "1.0.0", target: "schema_inspect", view: "packs" },
-  schema_stats: { removedIn: "1.0.0", target: "schema_inspect", view: "stats" },
-  schema_lint: { removedIn: "1.0.0", target: "schema_inspect", view: "lint" },
-  schema_graph: { removedIn: "1.0.0", target: "schema_inspect", view: "graph" },
-  schema_explain_type: { removedIn: "1.0.0", target: "schema_inspect", view: "explain_type" },
-  schema_review_orphans: { removedIn: "1.0.0", target: "schema_inspect", view: "orphans" },
-  reload_schema_pack: { removedIn: "1.0.0", target: "schema_inspect", view: "active_pack" },
-});
+export { REMOVED_TOOLS };
 
 // The set is named after the original payload (mutating writers). As
 // of v0.10.10 it also hosts `brain_context`, a *reader* tool that has
