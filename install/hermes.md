@@ -95,6 +95,12 @@ hermes memory status
 `available ✓` once active. Run the daily-identity check described in
 `install/prerequisites.md`.
 
+On a fresh gateway start the log shows
+`Memory provider 'open-second-brain' registered (10 tools)` - the
+provider advertises its curated `brain_*` tool set at registration
+time, before the internal `o2b mcp` bridge starts. A `(0 tools)`
+registration line indicates a version older than 1.0.1.
+
 > A provider-specific `hermes open-second-brain` subcommand is not
 > surfaced on current Hermes. Use `hermes memory status` for provider
 > state and `o2b doctor` for the full readiness suite - together they
