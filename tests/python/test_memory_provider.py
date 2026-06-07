@@ -224,6 +224,71 @@ class ProviderRequiredSurfaceTests(unittest.TestCase):
             self.assertEqual(cfg.resolve_vault(), win)
 
 
+class ProviderStaticSchemaFallbackTests(unittest.TestCase):
+    """Hermes builds its tool routing table BEFORE initialize(); the provider
+    must advertise the curated tool set from the very first
+    get_tool_schemas() call, not only after the bridge is up."""
+
+    def _curated_live_tools(self):
+        return [
+            {"name": name, "description": f"live {name}", "inputSchema": {"type": "object"}}
+            for name in MEMORY_TOOLS
+        ]
+
+    def test_get_tool_schemas_before_initialize_returns_curated_set(self):
+        provider = OpenSecondBrainMemoryProvider(bridge=FakeBrainBridge())
+        schemas = provider.get_tool_schemas()  # no initialize() yet
+        self.assertEqual({s["name"] for s in schemas}, set(MEMORY_TOOLS))
+        for schema in schemas:
+            self.assertTrue(schema["description"])
+            self.assertEqual(schema["inputSchema"].get("type"), "object")
+
+    def test_get_tool_schemas_after_initialize_keeps_name_set(self):
+        bridge = FakeBrainBridge(tools=self._curated_live_tools())
+        provider = OpenSecondBrainMemoryProvider(bridge=bridge)
+        before = {s["name"] for s in provider.get_tool_schemas()}
+        provider.initialize("s", hermes_home="/tmp/hh")
+        after = {s["name"] for s in provider.get_tool_schemas()}
+        self.assertEqual(before, after)
+        # Live schemas win once the bridge is up.
+        self.assertTrue(
+            all(s["description"].startswith("live ") for s in provider.get_tool_schemas())
+        )
+
+    def test_get_tool_schemas_falls_back_to_static_when_listing_fails(self):
+        class _ListingFailsBridge(FakeBrainBridge):
+            def list_tools(self):
+                raise BridgeError("listing failed")
+
+        provider = OpenSecondBrainMemoryProvider(bridge=_ListingFailsBridge())
+        provider.initialize("s", hermes_home="/tmp/hh")
+        names = {s["name"] for s in provider.get_tool_schemas()}
+        self.assertEqual(names, set(MEMORY_TOOLS))
+
+    def test_handle_tool_call_before_initialize_still_raises(self):
+        provider = OpenSecondBrainMemoryProvider(bridge=FakeBrainBridge())
+        with self.assertRaises(BridgeError):
+            provider.handle_tool_call("brain_note", {"text": "early"})
+
+    def test_hermes_registration_ordering_end_to_end(self):
+        # Simulate MemoryManager.add_provider(): the routing table is built
+        # from get_tool_schemas() BEFORE initialize_all() runs.
+        bridge = FakeBrainBridge(
+            tools=self._curated_live_tools(),
+            results={"brain_note": {"ok": True}},
+        )
+        provider = OpenSecondBrainMemoryProvider(bridge=bridge)
+        routing_table = {s["name"]: provider for s in provider.get_tool_schemas()}
+        self.assertGreaterEqual(len(routing_table), 1)  # "registered (N tools)", N >= 1
+        self.assertIn("brain_note", routing_table)
+
+        # initialize_all() runs after registration; the model then calls a tool.
+        provider.initialize("sess-1", hermes_home="/tmp/hh")
+        result = routing_table["brain_note"].handle_tool_call("brain_note", {"text": "hi"})
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(bridge.calls, [("brain_note", {"text": "hi"})])
+
+
 class CliTests(unittest.TestCase):
     _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
 

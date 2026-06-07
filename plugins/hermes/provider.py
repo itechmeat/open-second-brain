@@ -20,6 +20,7 @@ from typing import Any
 
 from . import config
 from ._base import MemoryProvider
+from ._schemas import static_tool_schemas
 from .bridge import BrainBridge, BridgeError, McpBrainBridge
 
 # Curated, memory-relevant subset of the full MCP tool surface. Schemas still
@@ -94,13 +95,20 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             pass
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
-        """Return the memory-relevant subset of the server's advertised tools."""
+        """Return the memory-relevant subset of the server's advertised tools.
+
+        Hermes builds its tool routing table from this method at provider
+        registration time, BEFORE ``initialize()`` starts the bridge. The
+        vendored static schemas cover that window (and a failed live listing),
+        so the provider never registers with zero tools; once the bridge is
+        up, live schemas from ``tools/list`` win.
+        """
         if self._bridge is None:
-            return []
+            return static_tool_schemas()
         try:
             tools = self._bridge.list_tools()
-        except Exception:  # noqa: BLE001 - no tools rather than a crash
-            return []
+        except Exception:  # noqa: BLE001 - static fallback rather than a crash
+            return static_tool_schemas()
         return [t for t in tools if t.get("name") in MEMORY_TOOLS]
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **_kwargs: Any) -> Any:
