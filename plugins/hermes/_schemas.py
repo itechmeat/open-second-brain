@@ -11,6 +11,11 @@ live server's ``tools/list`` output. ``tests/python/test_static_schemas.py``
 compares these copies against the live server (anti-drift), so edits here
 that diverge from the TS core fail CI. To re-vendor after a schema change in
 the TS core, copy the projection from a live ``o2b mcp`` ``tools/list``.
+
+The copies mirror the live server exactly, including spots where the provider
+relies on server-side coercion (e.g. ``brain_pre_compact_extract`` declares
+``turn_start``/``turn_end`` as strings while ``_flush_buffer`` passes ints).
+Do not "fix" such fields here; the server is the source of truth.
 """
 
 from __future__ import annotations

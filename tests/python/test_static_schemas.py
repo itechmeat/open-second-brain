@@ -15,6 +15,7 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
 import unittest
 from pathlib import Path
 
@@ -67,6 +68,10 @@ def _live_memory_tool_projection() -> list[dict]:
         text=True,
         bufsize=1,
     )
+    # Deadline for the whole handshake: if the server stays alive but never
+    # answers, the timer kills it, readline() sees EOF, and the caller skips.
+    watchdog = threading.Timer(_HANDSHAKE_TIMEOUT, proc.kill)
+    watchdog.start()
     try:
         def request(rid: int, method: str, params: dict) -> dict:
             assert proc.stdin is not None and proc.stdout is not None
@@ -100,6 +105,7 @@ def _live_memory_tool_projection() -> list[dict]:
         proc.stdin.flush()
         tools = request(2, "tools/list", {}).get("tools", [])
     finally:
+        watchdog.cancel()
         for stream in (proc.stdin, proc.stdout):
             if stream is not None:
                 stream.close()
