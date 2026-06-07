@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-06-07
+
+Hermes registration fix. The memory provider now advertises its curated
+`brain_*` tool set from the very first `get_tool_schemas()` call, so a fresh
+gateway start registers it with the full tool count instead of zero and tool
+calls route correctly.
+
+### Fixed
+
+- **Hermes registered the provider with 0 tools and `brain_*` calls failed as
+  "Unknown tool"**: Hermes builds its memory-tool routing table at provider
+  registration, before `initialize()` starts the `o2b mcp` bridge, and never
+  rebuilds it - while the provider only produced schemas from the live bridge.
+  `get_tool_schemas()` now falls back to vendored static copies of the curated
+  tool schemas (`plugins/hermes/_schemas.py`) whenever the bridge is not
+  available or the live listing fails; once the bridge is up, live `tools/list`
+  schemas win as before. The `handle_tool_call()` initialization guard is
+  unchanged.
+
+### Notes
+
+- The vendored copies are verbatim (name, description, inputSchema) projections
+  of the live server's `tools/list` and are locked by an anti-drift test
+  (`tests/python/test_static_schemas.py`) that compares them against a live
+  `o2b mcp` in CI, so they cannot silently diverge from the TypeScript core.
+- Lifecycle hooks (prefetch, sync_turn, system prompt block, pre-compress,
+  session end) were unaffected by the bug and are unchanged.
+
 ## [1.0.0] - 2026-06-05
 
 Stability & Trust: the first major release formalizes what eleven
