@@ -39,10 +39,10 @@ preserved for backward compatibility with existing client configs):
                             hook (Cursor, Aider, raw Claude API). Runtimes that
                             already inject active.md via a hook can skip this.
 
-The remaining Brain surface (digest, query, doctor, backlinks, search,
-vault_health, second_brain_status, second_brain_query,
-and the scheduled learning pass) lives on the sibling
-"open-second-brain" MCP server (deferred). Use ToolSearch to reach it.
+The remaining Brain surface lives on the sibling "open-second-brain"
+MCP server (deferred), including additional read-only, analytics,
+maintenance, and workflow tools beyond the always-loaded writer set.
+Use ToolSearch to discover and reach it.
 
 Prefer the writer-server copies of brain_feedback / brain_apply_evidence /
 brain_note / brain_pinned_context over any duplicate exposed by the full server — both call the same
