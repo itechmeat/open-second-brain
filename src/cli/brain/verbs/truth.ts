@@ -164,7 +164,7 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
       case "aggregate": {
         const state = computeTruthStateWithConflicts(readClaimEvents(vault).events);
         const result = aggregateQuantities(state.slots, {
-          action: requireString(flags, "action"),
+          ...(typeof flags["action"] === "string" ? { action: flags["action"] } : {}),
           unit: (flags["unit"] as string | undefined) ?? null,
           ...(typeof flags["entity"] === "string" ? { entity: flags["entity"] } : {}),
         });
@@ -172,7 +172,7 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
           okJson({ ...result });
         } else {
           ok(
-            `${result.action}${result.unit !== null ? ` (${result.unit})` : ""}: ` +
+            `${result.action ?? "all actions"}${result.unit !== null ? ` (${result.unit})` : ""}: ` +
               `total ${result.total} across ${result.count} value(s)`,
           );
           for (const c of result.contributions) {

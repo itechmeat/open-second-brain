@@ -100,9 +100,10 @@ test("the suite composes end to end on one vault", async () => {
   expect(state.conflicts).toHaveLength(1);
   expect(state.conflicts[0]!.resolution).toBe("ask_user");
 
+  // Action is no longer derived from prose; quantities aggregate by
+  // entity + unit. Both "$120"/"42 USD"-shaped spends combine here.
   const spend = aggregateQuantities(state.slots, {
     entity: "operator",
-    action: "spent",
     unit: "usd",
   });
   expect(spend.total).toBe(162);

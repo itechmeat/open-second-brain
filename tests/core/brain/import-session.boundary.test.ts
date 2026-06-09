@@ -65,7 +65,7 @@ function writeClaudeSession(name: string, userTexts: string[]): string {
 describe("session-level boundary at import", () => {
   test("a file matching an ignore glob imports nothing", async () => {
     setSessionsPolicy(["sessions:", "  ignore_patterns:", '    - "*cron-export*"']);
-    const path = writeClaudeSession("cron-export-1.jsonl", ["my name is Ada"]);
+    const path = writeClaudeSession("cron-export-1.jsonl", ["ping ada@example.com"]);
     const result = await importSession(vault, path, {
       agent: "tester",
       now: NOW,
@@ -80,7 +80,7 @@ describe("session-level boundary at import", () => {
 
   test("a stateless file scans but writes nothing", async () => {
     setSessionsPolicy(["sessions:", "  stateless_patterns:", '    - "*probe*"']);
-    const path = writeClaudeSession("probe-2.jsonl", ["my name is Ada"]);
+    const path = writeClaudeSession("probe-2.jsonl", ["ping ada@example.com"]);
     const result = await importSession(vault, path, {
       agent: "tester",
       now: NOW,
@@ -97,8 +97,8 @@ describe("message-level boundary at import", () => {
   test("suppressed turns never reach marker or fact extraction", async () => {
     setSessionsPolicy(["sessions:", "  ignore_message_patterns:", '    - "^\\[heartbeat\\]"']);
     const path = writeClaudeSession("normal.jsonl", [
-      "[heartbeat] my name is Ada",
-      "I prefer dark themes",
+      "[heartbeat] ping ada@example.com",
+      "the project site is https://techmeat.dev",
     ]);
     const result = await importSession(vault, path, {
       agent: "tester",
@@ -107,16 +107,17 @@ describe("message-level boundary at import", () => {
     });
     expect(result.boundary_decision).toBe("capture");
     expect(result.suppressed_turns).toBe(1);
-    expect(result.facts_extracted).toBe(1); // only the preference fact
+    expect(result.facts_extracted).toBe(1); // only the non-suppressed url fact
     const names = inboxSignals();
-    expect(names.some((n) => n.includes("fact-identity"))).toBe(false);
-    expect(names.some((n) => n.includes("fact-preference"))).toBe(true);
+    // the suppressed heartbeat turn never reaches extraction
+    expect(names.some((n) => n.includes("fact-email"))).toBe(false);
+    expect(names.some((n) => n.includes("fact-url"))).toBe(true);
   });
 });
 
 describe("fact extraction at import", () => {
   test("user-turn facts import with dedup across re-imports", async () => {
-    const path = writeClaudeSession("facts.jsonl", ["my email is s@example.dev"]);
+    const path = writeClaudeSession("facts.jsonl", ["contact s@example.dev"]);
     const first = await importSession(vault, path, { agent: "tester", now: NOW, format: "claude" });
     expect(first.facts_extracted).toBe(1);
     const second = await importSession(vault, path, {

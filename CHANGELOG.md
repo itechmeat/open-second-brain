@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-06-09
 
 Removal of the Pay Memory layer. The pay.sh integration and the entire
 payment-memory subsystem it supported have been taken out of Open Second
@@ -33,6 +33,34 @@ are unchanged. Historical records are preserved: this changelog, the dated
   `docs/pay-memory.md` guide, the Hermes payment-digest example and cron
   section, and the `payment` / `asset` surface-group prefixes are deleted. The
   shared `vaultRelativePath` helper now imports from `core/path-safety`.
+
+### Changed
+
+- **Language-agnostic fact extraction**: the real-time fact extractor
+  (`fact-extract.ts`) and the assertion-to-claim ingest (`truth/ingest.ts`) no
+  longer rely on hardcoded English trigger phrases. Extraction now keeps only
+  structurally detectable, language-neutral facts - URLs, e-mail addresses, and
+  quantities bound to a currency glyph, ISO-4217 code, or percent - so a fact
+  extracts identically whatever the surrounding language. This completes the
+  language-agnostic work that made search and classification structural; the
+  extractor was the last component carrying per-language word lists. Prose facts
+  (name, preference, location) are no longer auto-captured by this real-time,
+  LLM-free path: a deliberate, precision-safe recall reduction.
+- **Quantity aggregation by unit**: `parseQuantityFact` no longer derives a
+  prose `action` verb. The quantity claim keeps a nullable `action` for the
+  explicit-label path (MCP ingest `quantity_action`), and `aggregateQuantities`
+  / the `o2b brain truth aggregate` and `brain_truth` `action` argument are now
+  optional - totals combine by entity + unit by default.
+- **README** trimmed to user-facing value: the version-by-version feature
+  catalog and the full CLI command dump moved behind the existing documentation
+  links, leaving a compact "What you get" overview.
+
+### Removed
+
+- **`FactFamily` prose members**: `identity`, `preference`, `possession`,
+  `location`, and `confirmation` are removed from the structural fact extractor;
+  only `url`, `email`, and `quantity` remain. The matching English
+  `STRUCTURERS` and `POSSESSION_RE` in `truth/ingest.ts` are deleted.
 
 ## [1.0.1] - 2026-06-07
 

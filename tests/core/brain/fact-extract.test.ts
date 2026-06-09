@@ -1,11 +1,11 @@
 /**
- * Regex fact extraction (Memory Integrity Suite, t_d0782ab2).
- *
- * Seven precision-first pattern families over USER turn text:
- * identity, preference, possession, location, url, email,
- * confirmation. Deterministic - no LLM, no clock. Negative fixtures
- * pin the precision contract: code blocks, quoted lines, and
- * assistant-shaped prose never extract.
+ * Structural fact extraction. After the language-agnostic refactor the
+ * extractor keeps only families detectable WITHOUT knowing any human
+ * language: url, email, quantity (a number bound to a currency symbol,
+ * an ISO-4217 code, or percent). Prose families that needed an English
+ * frame (identity, preference, possession, location, confirmation) are
+ * gone. Negative fixtures pin precision: code blocks, quoted lines, and
+ * bare numbers never extract.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -16,78 +16,61 @@ function families(text: string): string[] {
   return extractFacts(text).map((f) => f.family);
 }
 
-describe("extractFacts - positive fixtures", () => {
-  test("identity: my name is ...", () => {
-    const out = extractFacts("Hi, my name is Ada Lovelace and I work on the vault.");
-    expect(out.some((f) => f.family === "identity" && f.text.includes("Ada Lovelace"))).toBe(true);
-  });
-
-  test("preference: I prefer / I always use", () => {
-    const out = extractFacts("For diagrams I prefer the vintage blueprint style.");
-    expect(out.some((f) => f.family === "preference")).toBe(true);
-    const out2 = extractFacts("I always use bun for this repository.");
-    expect(out2.some((f) => f.family === "preference")).toBe(true);
-  });
-
-  test("possession: my <thing> is <value>", () => {
-    const out = extractFacts("my editor is Neovim with a custom config");
-    expect(out.some((f) => f.family === "possession" && f.text.includes("Neovim"))).toBe(true);
-  });
-
-  test("location: I live in / I am based in", () => {
-    const out = extractFacts("These days I live in Lisbon most of the year.");
-    expect(out.some((f) => f.family === "location" && f.text.includes("Lisbon"))).toBe(true);
-  });
-
-  test("url: possessively introduced site", () => {
-    const out = extractFacts("my blog is https://techmeat.dev and it runs on a static site");
-    expect(out.some((f) => f.family === "url" && f.text.includes("https://techmeat.dev"))).toBe(
+describe("extractFacts - structural families (language-neutral)", () => {
+  test("url: a bare URL extracts regardless of surrounding language", () => {
+    const en = extractFacts("see the writeup at https://techmeat.dev/post for details");
+    expect(en.some((f) => f.family === "url" && f.text.includes("https://techmeat.dev/post"))).toBe(
+      true,
+    );
+    // Non-Latin wrapper: same structural signal, same extraction.
+    const ru = extractFacts("мой сайт https://techmeat.dev живёт на статике");
+    expect(ru.some((f) => f.family === "url" && f.text.includes("https://techmeat.dev"))).toBe(
       true,
     );
   });
 
-  test("email: my email is ...", () => {
-    const out = extractFacts("my email is ada@example.com for anything urgent");
-    expect(out.some((f) => f.family === "email" && f.text.includes("ada@example.com"))).toBe(true);
+  test("email: a bare address extracts regardless of surrounding language", () => {
+    const en = extractFacts("ping ada@example.com for anything urgent");
+    expect(en.some((f) => f.family === "email" && f.text.includes("ada@example.com"))).toBe(true);
+    const jp = extractFacts("連絡先は ada@example.com です");
+    expect(jp.some((f) => f.family === "email" && f.text.includes("ada@example.com"))).toBe(true);
   });
 
-  test("confirmation: yes, the X is Y", () => {
-    const out = extractFacts("Correct, the production vault is on the VPS at /srv/vault.");
-    expect(out.some((f) => f.family === "confirmation")).toBe(true);
+  test("quantity: currency symbol, ISO code, and percent extract", () => {
+    expect(families("the invoice was $1200 this month")).toContain("quantity");
+    expect(families("стоимость проекта составила $1200")).toContain("quantity");
+    expect(families("budget is 3.5 USD per call")).toContain("quantity");
+    expect(families("conversion improved to 50% last week")).toContain("quantity");
   });
 });
 
 describe("extractFacts - precision (negative fixtures)", () => {
-  test("plain assistant-shaped prose extracts nothing", () => {
-    expect(
-      families(
-        "The function resolves the vault path and returns the merged entries sorted by timestamp.",
-      ),
-    ).toEqual([]);
+  test("English prose frames no longer extract (families removed)", () => {
+    expect(families("Hi, my name is Ada Lovelace and I work here")).toEqual([]);
+    expect(families("For diagrams I prefer the blueprint style")).toEqual([]);
+    expect(families("my editor is Neovim with a custom config")).toEqual([]);
+    expect(families("These days I live in Lisbon")).toEqual([]);
+    expect(families("Correct, the production vault is on the VPS")).toEqual([]);
+  });
+
+  test("bare numbers without a unit never extract", () => {
+    expect(families("we shipped 42 items and ran 7 jobs")).toEqual([]);
+    expect(families("version 3 of the api")).toEqual([]);
   });
 
   test("code blocks never extract", () => {
     const text = [
       "Try this:",
       "```ts",
-      'const x = "my name is Bob";',
-      "// I prefer tabs",
+      'const url = "https://x.dev";',
+      "const n = 50;",
       "```",
     ].join("\n");
     expect(families(text)).toEqual([]);
   });
 
   test("quoted lines never extract", () => {
-    expect(families("> my name is Bob, said the old book")).toEqual([]);
-  });
-
-  test("bare URLs without a possessive introduction never extract", () => {
-    expect(families("see https://example.com/docs for details")).toEqual([]);
-  });
-
-  test("bare 'yes' without a restated fact never extracts", () => {
-    expect(families("yes")).toEqual([]);
-    expect(families("yes, please do that now")).toEqual([]);
+    expect(families("> reach me at ada@example.com, said the old book")).toEqual([]);
   });
 
   test("empty and whitespace input", () => {
@@ -96,21 +79,45 @@ describe("extractFacts - precision (negative fixtures)", () => {
   });
 });
 
+describe("extractFacts - hardening", () => {
+  test("a long digit run does not blow up (no quadratic backtracking)", () => {
+    const huge = "note " + "1".repeat(100_000);
+    const start = performance.now();
+    const out = extractFacts(huge);
+    const elapsedMs = performance.now() - start;
+    // No unit symbol -> not a quantity; and it must finish fast, not hang.
+    expect(out.filter((f) => f.family === "quantity")).toHaveLength(0);
+    expect(elapsedMs).toBeLessThan(2000);
+  });
+
+  test("a URL's userinfo is not extracted as a phantom email", () => {
+    const out = extractFacts("login at https://user:pass@host.example.com/path");
+    expect(out.some((f) => f.family === "url")).toBe(true);
+    expect(out.some((f) => f.family === "email")).toBe(false);
+  });
+
+  test("a number inside a URL is not extracted as a phantom quantity", () => {
+    const out = extractFacts("open https://x.dev/p?q=foo&n=50USD now");
+    expect(out.some((f) => f.family === "url")).toBe(true);
+    expect(out.some((f) => f.family === "quantity")).toBe(false);
+  });
+});
+
 describe("fact dedup hashing", () => {
   test("same fact hashes identically across whitespace and case variants", () => {
-    const a = extractFacts("my name is Ada")[0]!;
-    const b = extractFacts("My name is   ada")[0]!;
+    const a = extractFacts("ping ADA@example.com now")[0]!;
+    const b = extractFacts("ping   ada@example.com   now")[0]!;
     expect(factDedupHash(a)).toBe(factDedupHash(b));
   });
 
   test("different families never collide on the same text", () => {
-    const id = extractFacts("my name is Lisbon")[0]!;
-    const loc = extractFacts("I live in Lisbon")[0]!;
-    expect(factDedupHash(id)).not.toBe(factDedupHash(loc));
+    const url = { family: "url" as const, text: "https://x.dev", line: 1 };
+    const email = { family: "email" as const, text: "https://x.dev", line: 1 };
+    expect(factDedupHash(url)).not.toBe(factDedupHash(email));
   });
 
   test("extraction is deterministic", () => {
-    const text = "my name is Ada. I prefer dark themes. my email is s@e.dev";
+    const text = "site https://x.dev, mail a@b.dev, cost $5";
     expect(extractFacts(text)).toEqual(extractFacts(text));
   });
 });

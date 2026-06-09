@@ -116,7 +116,7 @@ describe("fact extraction at the live seam", () => {
     const payload = {
       hook_event_name: "UserPromptSubmit",
       session_id: "s1",
-      prompt: "By the way, my name is Ada and I prefer dark themes.",
+      prompt: "By the way, reach me at ada@example.com and the repo is https://techmeat.dev.",
     };
     const first = await captureSessionLifecycleEvent(vault, payload, {
       agent: "tester",
@@ -125,8 +125,8 @@ describe("fact extraction at the live seam", () => {
     expect(first.facts_extracted).toBe(2);
     expect(first.facts_deduped).toBe(0);
     const names = inboxSignals();
-    expect(names.some((n) => n.includes("fact-identity"))).toBe(true);
-    expect(names.some((n) => n.includes("fact-preference"))).toBe(true);
+    expect(names.some((n) => n.includes("fact-email"))).toBe(true);
+    expect(names.some((n) => n.includes("fact-url"))).toBe(true);
 
     const second = await captureSessionLifecycleEvent(vault, payload, {
       agent: "tester",
@@ -139,20 +139,25 @@ describe("fact extraction at the live seam", () => {
   test("extracted signals carry source_type extracted", async () => {
     await captureSessionLifecycleEvent(
       vault,
-      { hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: "my name is Ada" },
+      {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "s1",
+        prompt: "reach me at ada@example.com",
+      },
       { agent: "tester", now: NOW },
     );
-    const name = inboxSignals().find((n) => n.includes("fact-identity"))!;
+    const name = inboxSignals().find((n) => n.includes("fact-email"))!;
     const sig = parseSignal(join(brainDirs(vault).inbox, name));
     expect(sig.source_type).toBe("extracted");
-    expect(sig.principle).toContain("Ada");
+    expect(sig.principle).toContain("ada@example.com");
   });
 
   test("a fact naming a registered entity gets the canonical anchor", async () => {
+    // The entity name must appear inside the structural fact's own text; a
+    // URL host carries it without any natural-language framing.
     upsertEntity(vault, {
       category: "projects",
-      name: "Open Second Brain",
-      aliases: ["the vault project"],
+      name: "techmeat",
       agent: "tester",
       now: NOW,
     });
@@ -161,13 +166,13 @@ describe("fact extraction at the live seam", () => {
       {
         hook_event_name: "UserPromptSubmit",
         session_id: "s1",
-        prompt: "I prefer the vault project release diagrams in blueprint style",
+        prompt: "the project site is https://techmeat.dev/blog",
       },
       { agent: "tester", now: NOW },
     );
-    const name = inboxSignals().find((n) => n.includes("fact-preference"))!;
+    const name = inboxSignals().find((n) => n.includes("fact-url"))!;
     const raw = readFileSync(join(brainDirs(vault).inbox, name), "utf8");
-    expect(raw).toContain("ent-projects-open-second-brain");
+    expect(raw).toContain("ent-projects-techmeat");
   });
 
   test("assistant-shaped events without prompt text extract nothing", async () => {
