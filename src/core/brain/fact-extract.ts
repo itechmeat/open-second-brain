@@ -1,20 +1,26 @@
 /**
- * Regex fact extraction (Memory Integrity Suite, t_d0782ab2).
+ * Structural fact extraction (Memory Integrity Suite, t_d0782ab2;
+ * made language-agnostic in t_80cbefa1).
  *
- * Seven precision-first pattern families capture structured facts
- * from USER turns in real time, without an LLM call - complementing
- * the heavier pre-compact extraction. The HANDOFF carve-out from the
- * upstream design is applied at its conservative core: callers only
- * feed user-authored text (role === "user"); bare assistant output is
- * never auto-extracted. The capture boundary runs FIRST - suppressed
- * or ignored input never reaches these patterns.
+ * Captures structured facts from USER turns in real time, without an
+ * LLM call. The families are deliberately limited to signals that can
+ * be recognised WITHOUT knowing any human language: a URL, an e-mail
+ * address, and a quantity bound to a language-neutral symbol (currency
+ * symbol, ISO-4217 code, or percent). Prose-framed families that used
+ * to depend on English trigger phrases ("my name is", "I prefer",
+ * "yes, the X is ...") were removed: we cannot enumerate the world's
+ * languages, so a per-language phrase list is a defect, not a feature
+ * (see PR #84, which applied the same rule to search and classification).
  *
- * Precision beats recall throughout: each family requires an explicit
- * first-person or confirmation frame ("my X is", "I prefer", "yes,
- * the X is ..."), fenced/inline code is stripped, and quoted lines
- * (`> ...`) are dropped before matching. A missed fact costs nothing
- * (the dream pass has other sources); a hallucinated fact pollutes
- * memory.
+ * The HANDOFF carve-out is applied at its conservative core: callers
+ * only feed user-authored text (role === "user"); bare assistant
+ * output is never auto-extracted. The capture boundary runs FIRST -
+ * suppressed or ignored input never reaches these patterns.
+ *
+ * Precision beats recall: fenced/inline code is stripped, quoted lines
+ * (`> ...`) are dropped, and a quantity needs an explicit unit symbol
+ * so arbitrary numbers never match. A missed fact costs nothing (the
+ * dream pass has other sources); a hallucinated fact pollutes memory.
  */
 
 import { createHash } from "node:crypto";
@@ -27,15 +33,7 @@ import { buildEntityIndex } from "./entities/index-builder.ts";
 import { normalizeEntityName } from "./entities/canonical.ts";
 import { BRAIN_ENTITY_STATUS } from "./entities/types.ts";
 
-export type FactFamily =
-  | "identity"
-  | "preference"
-  | "possession"
-  | "location"
-  | "url"
-  | "email"
-  | "confirmation"
-  | "quantity";
+export type FactFamily = "url" | "email" | "quantity";
 
 export interface ExtractedFact {
   readonly family: FactFamily;
@@ -47,96 +45,60 @@ export interface ExtractedFact {
 
 const MAX_FACT_CHARS = 200;
 
-// Possession keys that belong to a more specific family; the generic
-// "my <thing> is <value>" pattern must not double-capture them.
-const POSSESSION_KEY_BLOCKLIST = new Set([
-  "name",
-  "email",
-  "blog",
-  "site",
-  "website",
-  "repo",
-  "repository",
-  "homepage",
-  "page",
-]);
+// ----- Quantity structuring (t_220c313e; language-agnostic in t_80cbefa1) ----
 
-// Family patterns. Every regex is line-scoped (callers split lines)
-// and anchored on an explicit first-person / confirmation frame.
+// A number tied to a language-neutral unit: a leading currency glyph, or a
+// trailing percent sign or ISO-4217-style 3-letter code. The English action
+// verbs and grammar stop-word list that used to frame this were removed.
+const QUANTITY_SPAN_RE = /([$€£¥])\d+(?:\.\d+)?|\d+(?:\.\d+)?\s?(%|[A-Z]{3}\b)/gu;
+
+// Currency glyph -> canonical ISO-4217 code. These are standardised symbols,
+// not natural-language words, so the map is language-neutral.
+const CURRENCY_SYMBOLS: Readonly<Record<string, string>> = Object.freeze({
+  $: "usd",
+  "€": "eur",
+  "£": "gbp",
+  "¥": "jpy",
+});
+
+// Family patterns. Each regex is line-scoped (callers split lines) and
+// recognises a language-neutral structural signal only - no human-language
+// trigger words. Quantity must carry an explicit unit symbol (currency
+// glyph, ISO-4217 code, or percent) so arbitrary numbers never match.
 const FAMILY_PATTERNS: ReadonlyArray<readonly [FactFamily, RegExp]> = Object.freeze([
-  ["identity", /\bmy name is\s+[\w'-]+(?:\s+[A-Z][\w'-]+)*/giu],
-  ["identity", /\bI(?:'m| am) called\s+[A-Z][\w'-]+(?:\s+[A-Z][\w'-]+)*/gu],
-  ["preference", /\bI (?:prefer|always use|never use)\s+[^\n.!?]{3,120}/gu],
-  ["location", /\bI (?:live|'m based|am based) in\s+[A-Z][\w-]+(?:\s+[A-Z][\w-]+)*/gu],
-  [
-    "url",
-    /\b(?:my|our) (?:(?:web)?site|blog|repo(?:sitory)?|homepage|page) is\s+https?:\/\/[^\s)>\]]+/giu,
-  ],
-  ["email", /\b(?:my|our) email(?: address)? is\s+[\w.+-]+@[\w.-]+\.\w{2,}/giu],
-  [
-    "confirmation",
-    /^(?:yes|correct|right|exactly)[,!.]?\s+(?:my|our|the)\s+[^\n]{3,120}\b(?:is|are)\b[^\n]{2,120}/giu,
-  ],
-  ["possession", /\bmy ([a-z][\w -]{1,40}?) is\s+[^\n.!?]{2,100}/giu],
-  // Quantitative family (t_220c313e): actor + measured action +
-  // numeric value (+ unit). First-person framed like every family -
-  // bare numbers without an actor never extract.
-  [
-    "quantity",
-    /\b(?:I|we)\s+(?:spent|paid|earned|saved|billed|ran|completed|logged|worked|shipped)\s+\$?\d+(?:\.\d+)?(?:\s+[a-z][\w-]{0,23})?[^\n.!?]{0,80}/giu,
-  ],
+  ["url", /\bhttps?:\/\/[^\s)>\]]+/giu],
+  ["email", /\b[\w.+-]+@[\w.-]+\.\w{2,}\b/giu],
+  ["quantity", QUANTITY_SPAN_RE],
 ] as const);
 
-// ----- Quantity structuring (t_220c313e) -------------------------------------
-
-/** Words after a number that are grammar, not a measurement unit. */
-const QUANTITY_UNIT_STOPWORDS = new Set([
-  "on",
-  "for",
-  "in",
-  "to",
-  "at",
-  "of",
-  "per",
-  "last",
-  "this",
-  "the",
-  "a",
-  "an",
-]);
-
-const QUANTITY_SPAN_RE =
-  /\b(spent|paid|earned|saved|billed|ran|completed|logged|worked|shipped)\s+(\$)?(\d+(?:\.\d+)?)(?:\s+([a-zA-Z][\w-]{0,23}))?/iu;
-
 export interface ParsedQuantityFact {
-  /** Measured action, lowercased (`spent`, `ran`, ...). */
-  readonly action: string;
   readonly value: number;
-  /** Canonical unit token or null when unitless. */
-  readonly unit: string | null;
+  /** Canonical unit token (`usd`, `eur`, `percent`, lowercased ISO code). */
+  readonly unit: string;
 }
 
 /**
- * Structure a quantity span into (action, value, unit). A `$` prefix
- * normalizes to `usd`; a stop-word after the number ("paid 42 for…")
- * leaves the unit null. Returns null when the text carries no
- * actor-framed quantity - the caller treats that as "not a quantity".
+ * Structure a quantity span into (value, unit). A leading currency glyph
+ * maps to its ISO code; a trailing `%` normalizes to `percent`; a trailing
+ * 3-letter code lowercases to the unit. Returns null when the text carries
+ * no unit-bound number - the caller treats that as "not a quantity".
  */
 export function parseQuantityFact(text: string): ParsedQuantityFact | null {
   if (!text || text.trim() === "") return null;
-  const m = QUANTITY_SPAN_RE.exec(text);
+  const re = new RegExp(QUANTITY_SPAN_RE.source, "u");
+  const m = re.exec(text);
   if (m === null) return null;
-  const action = m[1]!.toLowerCase();
-  const value = Number(m[3]!);
+  const value = Number(m[0].replace(/[^\d.]/g, ""));
   if (!Number.isFinite(value)) return null;
-  let unit: string | null = null;
-  if (m[2] === "$") {
-    unit = "usd";
-  } else if (m[4] !== undefined) {
-    const word = m[4].toLowerCase();
-    unit = QUANTITY_UNIT_STOPWORDS.has(word) ? null : word;
+  let unit: string;
+  if (m[1] !== undefined) {
+    unit = CURRENCY_SYMBOLS[m[1]] ?? m[1];
+  } else if (m[2] === "%") {
+    unit = "percent";
+  } else {
+    unit = m[2]!.toLowerCase();
   }
-  return Object.freeze({ action, value, unit });
+  return Object.freeze({ value, unit });
 }
 
 /** Strip fenced code blocks, inline code, and quoted lines. */
@@ -169,12 +131,8 @@ export function extractFacts(text: string): ExtractedFact[] {
     for (const [family, pattern] of FAMILY_PATTERNS) {
       pattern.lastIndex = 0;
       for (const m of line.matchAll(pattern)) {
-        if (family === "possession") {
-          const key = m[1]?.trim().toLowerCase() ?? "";
-          if (POSSESSION_KEY_BLOCKLIST.has(key)) continue;
-        }
         const span = collapse(m[0]!);
-        if (span.length < 5) continue;
+        if (span.length === 0) continue;
         // NUL separator cannot collide with sanitised span text; written
         // as an escape so the file stays text-diffable.
         const spanKey = `${family}\u0000${span.toLowerCase()}`;

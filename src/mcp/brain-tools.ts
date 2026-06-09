@@ -2722,7 +2722,7 @@ function toolBrainTruth(
     const state = computeTruthStateWithConflicts(events);
     return {
       ...aggregateQuantities(state.slots, {
-        action: requireStr("action"),
+        ...(typeof args["action"] === "string" ? { action: args["action"] as string } : {}),
         unit: typeof args["unit"] === "string" ? (args["unit"] as string) : null,
         ...(typeof args["entity"] === "string" ? { entity: args["entity"] as string } : {}),
       }),

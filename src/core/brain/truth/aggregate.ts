@@ -1,10 +1,15 @@
 /**
- * Exact-match quantity aggregation (t_220c313e): "how much did I
- * spend" answers combine ONLY values whose (entity, action, unit)
- * tuple matches the query exactly after canonical normalization. A
- * number that is merely nearby - a different unit, a different
- * measured action, a text-kind slot - never pollutes a total. That
- * structural exactness is the whole feature.
+ * Exact-match quantity aggregation (t_220c313e): "how much" answers
+ * combine ONLY values whose (entity, unit) tuple matches the query
+ * exactly after canonical normalization, optionally narrowed to a
+ * measured action. A number that is merely nearby - a different unit,
+ * a text-kind slot - never pollutes a total. That structural exactness
+ * is the whole feature.
+ *
+ * `action` is optional: it is no longer derived from prose (it used to
+ * be an English verb), so by default a query aggregates across every
+ * action for the entity+unit. A caller with an explicitly labelled
+ * action can still narrow to it.
  */
 
 import { normalizeEntityName } from "../entities/canonical.ts";
@@ -13,8 +18,8 @@ import type { ClaimSlot } from "./types.ts";
 export interface AggregateQuery {
   /** Optional entity filter; omitted means every entity combines. */
   readonly entity?: string;
-  /** Measured action, exact match after normalization. */
-  readonly action: string;
+  /** Optional measured action; omitted aggregates across all actions. */
+  readonly action?: string;
   /** Unit token; null matches only unitless quantities. */
   readonly unit: string | null;
 }
@@ -28,7 +33,8 @@ export interface AggregateContribution {
 }
 
 export interface AggregateResult {
-  readonly action: string;
+  /** The action filter applied, or null when the query did not narrow by one. */
+  readonly action: string | null;
   readonly unit: string | null;
   readonly total: number;
   readonly count: number;
@@ -51,7 +57,7 @@ export function aggregateQuantities(
   query: AggregateQuery,
 ): AggregateResult {
   const wantEntity = query.entity !== undefined ? normalizeEntityName(query.entity) : null;
-  const wantAction = normalizeEntityName(query.action);
+  const wantAction = query.action !== undefined ? normalizeEntityName(query.action) : null;
   const wantUnit = normalizeUnit(query.unit);
 
   const contributions: AggregateContribution[] = [];
@@ -60,7 +66,14 @@ export function aggregateQuantities(
     const current = slot.current;
     if (current.valueKind !== "quantity" || current.quantity === undefined) continue;
     const q = current.quantity;
-    if (q.action === null || normalizeEntityName(q.action) !== wantAction) continue;
+    // Narrow by action only when the query asked for one; otherwise every
+    // action (including the null actions extraction now produces) combines.
+    if (
+      wantAction !== null &&
+      (q.action === null || normalizeEntityName(q.action) !== wantAction)
+    ) {
+      continue;
+    }
     if (normalizeUnit(q.unit) !== wantUnit) continue;
     contributions.push(
       Object.freeze({

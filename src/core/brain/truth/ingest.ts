@@ -32,18 +32,15 @@ interface FamilyStructurer {
   readonly group: number;
 }
 
-// Deterministic value structurers for the families with a clean
-// (aspect, value) shape. Preference/confirmation spans carry no
-// addressable aspect and never ingest.
+// Deterministic value structurers for the structural fact families.
+// Each regex is language-neutral (a bare e-mail / URL shape) - no
+// human-language trigger words. The English-framed structurers (name,
+// "called", "based in") and the "my X is Y" possession regex were
+// removed in t_80cbefa1; we cannot enumerate the world's languages.
 const STRUCTURERS: ReadonlyArray<FamilyStructurer> = Object.freeze([
-  { re: /\bmy name is\s+([^\n.!?]{2,80})/iu, aspect: "name", group: 1 },
-  { re: /\bI(?:'m| am) called\s+([^\n.!?]{2,80})/u, aspect: "name", group: 1 },
-  { re: /\b(?:live|'m based|am based) in\s+([^\n.!?]{2,80})/iu, aspect: "location", group: 1 },
   { re: /\b([\w.+-]+@[\w.-]+\.\w{2,})\b/u, aspect: "email", group: 1 },
   { re: /\b(https?:\/\/[^\s)>\]]+)/u, aspect: "website", group: 1 },
 ]);
-
-const POSSESSION_RE = /\bmy ([a-z][\w -]{1,40}?) is\s+([^\n.!?]{2,100})/iu;
 
 /**
  * Derive claim inputs from one assertion's facts. Quantity facts use
@@ -68,20 +65,11 @@ export function claimsFromAssertion(
         aspect: normalizeClaimValue(fact.text).slice(0, MAX_ASPECT_CHARS),
         value: String(quantity.value),
         valueKind: "quantity",
-        quantity: { value: quantity.value, unit: quantity.unit, action: quantity.action },
-        source: input.source,
-      });
-      continue;
-    }
-    if (fact.family === "possession") {
-      const m = POSSESSION_RE.exec(fact.text);
-      if (m === null) continue;
-      out.push({
-        ts: input.ts,
-        agent: input.agent,
-        entity: input.entity,
-        aspect: m[1]!.trim().toLowerCase(),
-        value: m[2]!.trim(),
+        // `action` is no longer derived: it used to be an English verb
+        // ("spent", "ran", ...). Quantities now aggregate by unit. The
+        // ledger column stays nullable for back-compat and a future
+        // explicit-label source.
+        quantity: { value: quantity.value, unit: quantity.unit, action: null },
         source: input.source,
       });
       continue;
