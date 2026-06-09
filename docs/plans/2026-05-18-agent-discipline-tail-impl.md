@@ -3136,7 +3136,7 @@ existing `js-yaml` already on the dep tree.
 - Modify: `/root/vault/Projects/OpenSecondBrain/Features/_summary.md`.
 
 - [ ] **Step 1: Update §30 entry** — set to `✅ shipped fully in
-  v0.10.7`. The current entry says `реализовано частично в
+  v0.10.7`. The current entry says `partially implemented in
   v0.10.6 (§A+§C)`. Replace the closing parenthetical with
   shipped-in-full and link to `[[Plan/3. Agent logging discipline]]`.
 
@@ -3152,7 +3152,7 @@ existing `js-yaml` already on the dep tree.
     false-positive/false-negative pairs.
 
 - [ ] **Step 3: Update the Agent-logging-discipline marker** —
-  the line that previously said `реализовано частично в v0.10.6`
+  the line that previously said `partially implemented in v0.10.6`
   becomes `shipped fully in v0.10.7 — §B (writer MCP split), §D
   (daily discipline cron), §E (claude-memory bridge)`.
 
@@ -3167,7 +3167,7 @@ existing `js-yaml` already on the dep tree.
   three open items move into `shipped:` (or rewrite the front-matter
   to remove the `open:` field entirely).
 
-- [ ] **Step 2: Drop the "Триггер на возврат" section** — §30 is
+- [ ] **Step 2: Drop the "return trigger" section** — §30 is
   closed; the trigger is no longer relevant.
 
 - [ ] **Step 3: Add a tail note** — "v0.10.7 closed §B / §D / §E.

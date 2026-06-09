@@ -8,9 +8,10 @@
  * string work plus one read of the vault's entity registry - no local
  * model, no paid call, identical output for identical input.
  *
- *   - lex: query tokens minus stopwords (the FTS lane is implicit AND,
- *     so one stopword absent from the target note kills the match);
- *     falls back to the raw tokens when everything is a stopword.
+ *   - lex: the query tokens (deduped, capped), minus any the caller
+ *     flags as corpus-common via `commonTokens` (high document frequency,
+ *     not a hardcoded stopword list - the FTS lane is implicit AND, so a
+ *     ubiquitous token would otherwise kill the match). Language-agnostic.
  *   - vec: the raw query, plus one entity-context line when registry
  *     entities match a query token - anchors the semantic lane to the
  *     vault's own vocabulary.
@@ -31,53 +32,16 @@ export const EXPANSION_MAX_LEX_TERMS = 8;
 /** Default cap on matched registry entities woven into vec/hyde. */
 export const EXPANSION_MAX_ENTITIES = 3;
 
-/**
- * Small closed-class English stopword set. Deliberately conservative:
- * a missed stopword only leaves one extra AND term, while an
- * over-eager list would silently drop signal.
- */
-const STOPWORDS: ReadonlySet<string> = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "but",
-  "by",
-  "for",
-  "from",
-  "how",
-  "in",
-  "is",
-  "it",
-  "me",
-  "my",
-  "of",
-  "on",
-  "or",
-  "our",
-  "show",
-  "that",
-  "the",
-  "their",
-  "this",
-  "to",
-  "was",
-  "we",
-  "what",
-  "when",
-  "where",
-  "which",
-  "who",
-  "why",
-  "with",
-]);
-
 export interface ExpandQueryOptions {
   readonly maxLexTerms?: number;
   readonly maxEntities?: number;
+  /**
+   * Corpus-common tokens to drop from the implicit-AND lex lane. The
+   * caller derives these from document frequency (a token present in
+   * most documents carries little signal, in ANY language), never from a
+   * hardcoded stopword list. Defaults to none.
+   */
+  readonly commonTokens?: ReadonlySet<string>;
 }
 
 /**
@@ -93,11 +57,16 @@ export function expandQuery(
   const maxEntities = Math.max(0, opts.maxEntities ?? EXPANSION_MAX_ENTITIES);
   const trimmed = query.trim();
 
-  const tokens = [...new Set(tokenizeForExpansion(trimmed))];
-  const meaningful = tokens.filter((t) => !STOPWORDS.has(t));
-  // Fall back to the raw tokens when the whole query is stopwords -
-  // an empty lex lane would turn the FTS lane off entirely.
-  const baseTokens = meaningful.length > 0 ? meaningful : tokens;
+  // Language-agnostic by construction: no stopword list. Corpus-common
+  // tokens (high document frequency, supplied by the caller) are dropped
+  // from the implicit-AND lex lane so one ubiquitous word cannot kill the
+  // match - in ANY language, driven by data rather than an English word
+  // list. Fall back to all tokens when every token is common, so the lex
+  // lane never goes empty.
+  const commonTokens = opts.commonTokens ?? new Set<string>();
+  const allTokens = [...new Set(tokenizeForExpansion(trimmed))];
+  const meaningful = allTokens.filter((t) => !commonTokens.has(t));
+  const baseTokens = meaningful.length > 0 ? meaningful : allTokens;
   const lexTerms = baseTokens.slice(0, maxLexTerms);
 
   const entityNames = matchEntities(vault, baseTokens).slice(0, maxEntities);

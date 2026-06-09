@@ -72,8 +72,29 @@ export interface EvidencePack {
   readonly completeness?: CompletenessReport;
 }
 
-const TERMINAL_STATE_RE =
-  /\b(?:archived|closed|deprecated|done|resolved|retired|superseded|terminal)\b/iu;
+/**
+ * Controlled terminal-status vocabulary. These are accepted values of
+ * the frontmatter `status:` field - a controlled enum the system owns -
+ * NOT words scanned inside a note's prose. A note is terminal when its
+ * DECLARED status is one of these, so the language the note is written
+ * in is irrelevant (the old regex scanned path/title/content for these
+ * English words and false-fired on any note that merely mentioned them).
+ */
+const TERMINAL_STATUS_VALUES: ReadonlySet<string> = new Set([
+  "archived",
+  "closed",
+  "deprecated",
+  "done",
+  "resolved",
+  "retired",
+  "superseded",
+  "terminal",
+]);
+
+/** True when a frontmatter `status` value denotes a terminal state. */
+export function isTerminalStatus(status: unknown): boolean {
+  return typeof status === "string" && TERMINAL_STATUS_VALUES.has(status.trim().toLowerCase());
+}
 
 function includesTerm(result: BrainSearchResult, term: string): boolean {
   return termIncludedIn(`${result.path}\n${result.title ?? ""}\n${result.content}`, term);
@@ -87,12 +108,25 @@ function supportCoverage(
   return matched.length / significant.length;
 }
 
-export function evidenceTerminalState(result: BrainSearchResult): boolean {
-  return TERMINAL_STATE_RE.test(`${result.path}\n${result.title ?? ""}\n${result.content}`);
+/**
+ * Whether a result is in a terminal state for the current query.
+ * Terminality is decided structurally by the caller (reading the
+ * frontmatter `status:` field via {@link isTerminalStatus}) and handed
+ * in as the set of terminal paths - this function never inspects the
+ * note's text.
+ */
+export function evidenceTerminalState(
+  result: BrainSearchResult,
+  terminalPaths: ReadonlySet<string>,
+): boolean {
+  return terminalPaths.has(result.path);
 }
 
-function withTerminalReason(result: BrainSearchResult): BrainSearchResult {
-  if (!evidenceTerminalState(result)) return result;
+function withTerminalReason(
+  result: BrainSearchResult,
+  terminalPaths: ReadonlySet<string>,
+): BrainSearchResult {
+  if (!evidenceTerminalState(result, terminalPaths)) return result;
   if (result.reasons.some((reason) => reason.startsWith("evidence_terminal_downrank:"))) {
     return result;
   }
@@ -104,14 +138,17 @@ function withTerminalReason(result: BrainSearchResult): BrainSearchResult {
 
 export function downrankTerminalEvidenceResults(
   results: ReadonlyArray<BrainSearchResult>,
+  terminalPaths: ReadonlySet<string>,
 ): ReadonlyArray<BrainSearchResult> {
-  return results.map(withTerminalReason).toSorted((left, right) => {
-    const leftTerminal = evidenceTerminalState(left);
-    const rightTerminal = evidenceTerminalState(right);
-    if (leftTerminal !== rightTerminal) return leftTerminal ? 1 : -1;
-    if (right.score !== left.score) return right.score - left.score;
-    return left.chunkId - right.chunkId;
-  });
+  return results
+    .map((result) => withTerminalReason(result, terminalPaths))
+    .toSorted((left, right) => {
+      const leftTerminal = evidenceTerminalState(left, terminalPaths);
+      const rightTerminal = evidenceTerminalState(right, terminalPaths);
+      if (leftTerminal !== rightTerminal) return leftTerminal ? 1 : -1;
+      if (right.score !== left.score) return right.score - left.score;
+      return left.chunkId - right.chunkId;
+    });
 }
 
 function abstentionMessage(
@@ -131,6 +168,7 @@ export function buildEvidencePack(
   query: string,
   results: ReadonlyArray<BrainSearchResult>,
   verification?: EvidenceVerification,
+  terminalPaths: ReadonlySet<string> = new Set(),
 ): EvidencePack {
   const significant = Object.freeze(significantTerms(query));
   const matchedSet = new Set<string>();
@@ -138,7 +176,7 @@ export function buildEvidencePack(
     const matched = significant.filter((term) => includesTerm(result, term));
     for (const term of matched) matchedSet.add(term);
     const missing = significant.filter((term) => !matched.includes(term));
-    const terminalState = evidenceTerminalState(result);
+    const terminalState = evidenceTerminalState(result, terminalPaths);
     const terminalDownranked = result.reasons.some((reason) =>
       reason.startsWith("evidence_terminal_downrank:"),
     );

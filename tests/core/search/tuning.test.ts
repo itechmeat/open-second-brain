@@ -48,16 +48,24 @@ const DATASET = parseRecallBenchmarkDataset({
   ],
 });
 
+// "the" is deliberately seeded into 2 of the 3 notes (canary, other) but
+// NOT into backup.md. It is therefore corpus-common (>= 50% document
+// frequency) and dropped from the implicit-AND lex lane by the
+// language-agnostic, DF-driven common-token filter - which is what lets
+// the "the nightly backup" query reach backup.md only WITH expansion.
 function writeNotes(): void {
   writeFileSync(
     join(vault, "canary.md"),
-    "# Canary rollout\n\nShip one instance first, observe, expand gradually.\n",
+    "# Canary rollout\n\nShip the first instance, observe, then expand the rollout gradually.\n",
   );
   writeFileSync(
     join(vault, "backup.md"),
     "# Nightly backup\n\nSnapshot databases every night, verify checksums offsite.\n",
   );
-  writeFileSync(join(vault, "other.md"), "# Other\n\nNothing relevant whatsoever.\n");
+  writeFileSync(
+    join(vault, "other.md"),
+    "# Other\n\nNothing in the list here is relevant to the task.\n",
+  );
 }
 
 describe("grid + apply", () => {

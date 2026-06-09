@@ -407,7 +407,7 @@ Human format:
 ```
 [1] Brain/preferences/pref-russian-replies.md  •  0.81
     line 12-38  •  hybrid  •  mtime 2026-05-14
-    Правила общения: всегда отвечать по-русски, кроме когда речь о…
+    Communication rules: always reply in the user's language, except when…
 ```
 
 JSON format: object

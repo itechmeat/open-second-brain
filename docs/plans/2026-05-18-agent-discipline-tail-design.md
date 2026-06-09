@@ -625,8 +625,8 @@ for §D`). Each line names the trigger that would bring it back to
 active planning.
 
 `Plan/3. Agent logging discipline.md` status: `shipped`. §B / §D /
-§E sections move from `open:` to `shipped:`. The "Триггер на
-возврат" section is dropped — §30 is closed.
+§E sections move from `open:` to `shipped:`. The "return
+trigger" section is dropped — §30 is closed.
 
 `Plan/2. Improvement.md` and `Plan/4. v0.10.5 review followups.md`
 are untouched.

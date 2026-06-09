@@ -59,9 +59,15 @@ afterEach(() => {
 
 test("the suite composes end to end on one vault", async () => {
   // -- 1. Vault: an alias owner, twin unlinked notes, one community ------
+  // "the" is seeded into the majority of the prose notes below (but NOT
+  // weekly-review.md) so that the DF-driven, language-agnostic common-token
+  // filter treats it as corpus-common and drops it from the implicit-AND
+  // lex lane - the language-neutral replacement for the old English
+  // stopword list. weekly-review.md is the recovery target, so it must
+  // omit "the" for the bare implicit-AND query to miss it.
   writeFileSync(
     join(vault, "project-alpha.md"),
-    '---\ntitle: Project Alpha\naliases: ["PA"]\n---\n\n# Project Alpha\n\nUmbrella initiative: importer, dashboard, billing pipeline.\n',
+    '---\ntitle: Project Alpha\naliases: ["PA"]\n---\n\n# Project Alpha\n\nThe umbrella initiative covers the importer, the dashboard, and the billing pipeline.\n',
   );
   writeFileSync(
     join(vault, "weekly-review.md"),
@@ -81,7 +87,7 @@ test("the suite composes end to end on one vault", async () => {
       .filter((t) => t !== name)
       .map((t) => `[[${t}]]`)
       .join(" ");
-    writeFileSync(join(vault, `${name}.md`), `# ${name}\n\nSee ${others}.\n`);
+    writeFileSync(join(vault, `${name}.md`), `# ${name}\n\nSee the related teams ${others}.\n`);
   }
 
   // -- 2. Alias resolution materializes at index time --------------------
