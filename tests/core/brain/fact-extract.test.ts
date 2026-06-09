@@ -79,6 +79,30 @@ describe("extractFacts - precision (negative fixtures)", () => {
   });
 });
 
+describe("extractFacts - hardening", () => {
+  test("a long digit run does not blow up (no quadratic backtracking)", () => {
+    const huge = "note " + "1".repeat(100_000);
+    const start = performance.now();
+    const out = extractFacts(huge);
+    const elapsedMs = performance.now() - start;
+    // No unit symbol -> not a quantity; and it must finish fast, not hang.
+    expect(out.filter((f) => f.family === "quantity")).toHaveLength(0);
+    expect(elapsedMs).toBeLessThan(2000);
+  });
+
+  test("a URL's userinfo is not extracted as a phantom email", () => {
+    const out = extractFacts("login at https://user:pass@host.example.com/path");
+    expect(out.some((f) => f.family === "url")).toBe(true);
+    expect(out.some((f) => f.family === "email")).toBe(false);
+  });
+
+  test("a number inside a URL is not extracted as a phantom quantity", () => {
+    const out = extractFacts("open https://x.dev/p?q=foo&n=50USD now");
+    expect(out.some((f) => f.family === "url")).toBe(true);
+    expect(out.some((f) => f.family === "quantity")).toBe(false);
+  });
+});
+
 describe("fact dedup hashing", () => {
   test("same fact hashes identically across whitespace and case variants", () => {
     const a = extractFacts("ping ADA@example.com now")[0]!;

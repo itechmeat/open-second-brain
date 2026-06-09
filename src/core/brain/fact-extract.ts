@@ -45,12 +45,24 @@ export interface ExtractedFact {
 
 const MAX_FACT_CHARS = 200;
 
+// Defence-in-depth cap: extractFacts runs on raw user turns, so a single
+// pathologically long line is never scanned in full. A real fact lives well
+// within this bound; anything longer is sliced before matching so the capture
+// hot path can never be turned into a CPU sink by crafted input.
+const MAX_LINE_SCAN_CHARS = 4000;
+
 // ----- Quantity structuring (t_220c313e; language-agnostic in t_80cbefa1) ----
 
 // A number tied to a language-neutral unit: a leading currency glyph, or a
 // trailing percent sign or ISO-4217-style 3-letter code. The English action
 // verbs and grammar stop-word list that used to frame this were removed.
-const QUANTITY_SPAN_RE = /([$€£¥])\d+(?:\.\d+)?|\d+(?:\.\d+)?\s?(%|[A-Z]{3}\b)/gu;
+//
+// The trailing-unit branch is anchored with `(?<![\d.])` so a match can only
+// begin at the start of a number, never mid-run. Without it, a long digit run
+// lets the engine retry the greedy `\d+` at every interior offset (each retry
+// backtracks the whole run before failing the unit assertion), which is
+// quadratic on untrusted input - extractFacts runs on raw user turns.
+const QUANTITY_SPAN_RE = /([$€£¥])\d+(?:\.\d+)?|(?<![\d.])\d+(?:\.\d+)?\s?(%|[A-Z]{3}\b)/gu;
 
 // Currency glyph -> canonical ISO-4217 code. These are standardised symbols,
 // not natural-language words, so the map is language-neutral.
@@ -126,11 +138,20 @@ export function extractFacts(text: string): ExtractedFact[] {
   const seenSpans = new Set<string>();
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (line.trim().length === 0) continue;
+    const raw = lines[i]!;
+    if (raw.trim().length === 0) continue;
+    const line = raw.length > MAX_LINE_SCAN_CHARS ? raw.slice(0, MAX_LINE_SCAN_CHARS) : raw;
+    // URLs are matched first (family-table order); their character ranges are
+    // recorded so the email and quantity passes never re-read inside a URL -
+    // a `user:pass@host` userinfo is not an e-mail, and a `?n=50USD` query is
+    // not a measured quantity.
+    const urlRanges: Array<readonly [number, number]> = [];
     for (const [family, pattern] of FAMILY_PATTERNS) {
       pattern.lastIndex = 0;
       for (const m of line.matchAll(pattern)) {
+        const start = m.index ?? 0;
+        const end = start + m[0]!.length;
+        if (family !== "url" && urlRanges.some(([s, e]) => start < e && end > s)) continue;
         const span = collapse(m[0]!);
         if (span.length === 0) continue;
         // NUL separator cannot collide with sanitised span text; written
@@ -138,6 +159,7 @@ export function extractFacts(text: string): ExtractedFact[] {
         const spanKey = `${family}\u0000${span.toLowerCase()}`;
         if (seenSpans.has(spanKey)) continue;
         seenSpans.add(spanKey);
+        if (family === "url") urlRanges.push([start, end] as const);
         out.push(Object.freeze({ family, text: span, line: i + 1 }));
       }
     }
