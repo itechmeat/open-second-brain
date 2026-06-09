@@ -1,6 +1,5 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { runDoctor } from "../../../core/brain/doctor.ts";
-import { fail, ok, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, parse } from "../helpers.ts";
 
 /**
  * `o2b brain health` - print the semantic-health report (contradictory
@@ -12,8 +11,7 @@ export async function cmdBrainHealth(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   let result;
   try {

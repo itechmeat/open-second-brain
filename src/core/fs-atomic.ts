@@ -31,6 +31,40 @@ export function atomicWriteFileSync(target: string, contents: string): void {
   });
 }
 
+export interface AtomicWriteTextOptions {
+  /** File mode for the new inode. Defaults to private `0o600`. */
+  readonly mode?: number;
+  /**
+   * Pre-write gate: runs against the candidate text BEFORE anything
+   * touches the filesystem. A throw aborts the write and leaves the
+   * existing target untouched — used by config writers that must never
+   * persist a payload their own parser would reject.
+   */
+  readonly validate?: (candidate: string) => void;
+}
+
+/**
+ * Validated atomic overwrite for sensitive text files (configs,
+ * schema documents). Same temp-file + fsync + rename pipeline as
+ * {@link atomicWriteFileSync}, plus a validation hook and a private
+ * default mode.
+ */
+export function atomicWriteText(
+  targetPath: string,
+  candidate: string,
+  opts: AtomicWriteTextOptions = {},
+): void {
+  opts.validate?.(candidate);
+  withTempFile(
+    targetPath,
+    candidate,
+    (tmpPath) => {
+      renameSync(tmpPath, targetPath);
+    },
+    opts.mode ?? 0o600,
+  );
+}
+
 /**
  * Like {@link atomicWriteFileSync} but fails with `EEXIST` if `target`
  * already exists, atomically. Implemented via `link(2)` instead of
@@ -68,7 +102,12 @@ export function atomicCreateFileSyncExclusive(target: string, contents: string):
  * file is unlinked on any failure; durability fsync of the parent directory
  * is best-effort after a successful commit.
  */
-function withTempFile(target: string, contents: string, commit: (tmpPath: string) => void): void {
+function withTempFile(
+  target: string,
+  contents: string,
+  commit: (tmpPath: string) => void,
+  mode: number = 0o644,
+): void {
   const dir = dirname(target);
   mkdirSync(dir, { recursive: true });
 
@@ -84,7 +123,7 @@ function withTempFile(target: string, contents: string, commit: (tmpPath: string
   let fd: number | null = null;
   let committed = false;
   try {
-    fd = openSync(tmpPath, "wx", 0o644);
+    fd = openSync(tmpPath, "wx", mode);
     const buf = Buffer.from(contents, "utf8");
     let written = 0;
     while (written < buf.byteLength) {

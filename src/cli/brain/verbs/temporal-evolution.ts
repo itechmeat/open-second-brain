@@ -1,10 +1,9 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts";
 import {
   buildBeliefEvolution,
   type BeliefEvolutionTarget,
 } from "../../../core/brain/temporal/belief-evolution.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 /**
  * `o2b brain evolution [--vault PATH] (--pref-id ID | --topic SLUG)
@@ -21,8 +20,7 @@ export async function cmdBrainEvolution(argv: string[]): Promise<number> {
     topic: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   const prefId = trimOrUndefined(flags["pref-id"]);
   const topic = trimOrUndefined(flags["topic"]);

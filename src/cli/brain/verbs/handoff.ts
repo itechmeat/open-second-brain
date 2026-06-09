@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { resolveAgentName } from "../../../core/config.ts";
 import { writeHandoffNote } from "../../../core/brain/handoff.ts";
 import {
   detectAdapter,
@@ -14,7 +14,7 @@ import {
   isSessionAdapterId,
 } from "../../../core/brain/sessions/registry.ts";
 import type { SessionTurn } from "../../../core/brain/sessions/types.ts";
-import { fail, normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, normalizeFlagString, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainHandoff(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -28,8 +28,7 @@ export async function cmdBrainHandoff(argv: string[]): Promise<number> {
   const sessionPath = positional[0]!;
   if (!existsSync(sessionPath)) return fail(`session file does not exist: ${sessionPath}`);
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const agent = normalizeFlagString(flags["agent"]) ?? resolveAgentName(config);
   const sessionId = normalizeFlagString(flags["session-id"]) ?? basename(sessionPath);
 

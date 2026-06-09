@@ -1,9 +1,8 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   buildMonthlyReview,
   normalizeMonthlyReviewMonth,
 } from "../../../core/brain/monthly-review.ts";
-import { CliError, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
+import { CliError, brainVerbContext, localTimeFields, parse } from "../helpers.ts";
 
 const MONTH_RE = /^\d{4}-\d{2}$/;
 
@@ -18,8 +17,7 @@ export async function cmdBrainMonthly(argv: string[]): Promise<number> {
     month: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const month = parseMonth(flags["month"]);
   const report = buildMonthlyReview(vault, month ? { month } : {});
 

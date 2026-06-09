@@ -1,14 +1,12 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { buildMcpLandscape } from "../../../core/graph/mcp-config.ts";
-import { parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainMcpLandscape(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   const landscape = buildMcpLandscape(vault);
 

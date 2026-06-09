@@ -1,10 +1,9 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   queryAgentSources,
   type AgentSourceQueryResult,
 } from "../../../core/brain/agent-source/query.ts";
 import type { AgentSourceContributionKind } from "../../../core/brain/agent-source/types.ts";
-import { parse, fail, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 export async function cmdBrainAgentQuery(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -16,8 +15,7 @@ export async function cmdBrainAgentQuery(argv: string[]): Promise<number> {
     limit: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
   const { value: kind, error: kindError } = parseKind(flags["kind"] as string | undefined);
   if (kindError) return fail(kindError);
   const { value: limit, error: limitError } = parseLimit(flags["limit"] as string | undefined);

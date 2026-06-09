@@ -20,7 +20,8 @@
  * normalised (lowercased, whitespace-collapsed, deduped) and frozen.
  */
 
-const WIKILINK_RE = /\[\[([^\]\n|]+?)(?:\|([^\]\n]+))?\]\]/gu;
+import { WIKILINK_ALIAS_RE } from "../brain/wikilink.ts";
+
 const QUOTED_RE = /"([^"\n]{2,})"/gu;
 // One or more consecutive uppercase-initial tokens (covers "Sergey" and
 // "Open Second Brain"). Tokens may carry trailing letters/numbers.
@@ -56,7 +57,7 @@ export function extractEntities(text: string): ReadonlyArray<string> {
     out.push(n);
   };
 
-  for (const m of text.matchAll(WIKILINK_RE)) {
+  for (const m of text.matchAll(WIKILINK_ALIAS_RE)) {
     const target = m[1] ?? "";
     const alias = m[2];
     if (alias) add(alias);

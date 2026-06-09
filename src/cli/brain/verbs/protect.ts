@@ -1,4 +1,3 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   applyProtect,
   BrainProtectError,
@@ -7,7 +6,7 @@ import {
   PROTECT_TARGETS,
   unprotect,
 } from "../../../core/brain/protect.ts";
-import { parse, fail, ok, okJson, info, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, info, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainProtect(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -23,7 +22,7 @@ export async function cmdBrainProtect(argv: string[]): Promise<number> {
     );
   }
   const target = rawTarget;
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
 
   try {
     if (flags["apply"]) {
@@ -73,7 +72,7 @@ export async function cmdBrainUnprotect(argv: string[]): Promise<number> {
     );
   }
   const target = rawTarget;
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
 
   try {
     unprotect({ target, vault });

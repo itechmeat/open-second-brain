@@ -7,7 +7,10 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { computeConfidence, type ConfidenceComputeResult } from "../../src/core/brain/dream.ts";
+import {
+  computeConfidence,
+  type ConfidenceComputeResult,
+} from "../../src/core/brain/confidence.ts";
 import { DEFAULT_BRAIN_CONFIG } from "../../src/core/brain/policy.ts";
 
 const cfg = DEFAULT_BRAIN_CONFIG;

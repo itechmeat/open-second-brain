@@ -1,11 +1,11 @@
-import { defaultConfigPath, resolveTriggerCooldownDays } from "../../../core/config.ts";
+import { resolveTriggerCooldownDays } from "../../../core/config.ts";
 import { buildMorningBrief } from "../../../core/brain/morning-brief.ts";
 import {
   deliverBriefTriggers,
   renderTriggerBriefSection,
 } from "../../../core/brain/triggers/brief.ts";
 import { parseOptionalNumberFlag } from "../../coerce.ts";
-import { fail, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
+import { brainVerbContext, fail, localTimeFields, parse } from "../helpers.ts";
 
 /**
  * `o2b brain morning-brief` - render a read-only session-start summary:
@@ -22,8 +22,7 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
     "max-total-chars": { type: "string" },
   });
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   // Positive-integer validation mirroring the MCP tool's
   // optionalPositiveInt, so the CLI and MCP surfaces share semantics.

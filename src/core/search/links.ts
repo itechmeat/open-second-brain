@@ -12,6 +12,8 @@
  * on the side of stripping too much rather than capturing junk links.
  */
 
+import { WIKILINK_ALIAS_RE } from "../brain/wikilink.ts";
+
 export type LinkType = "wikilink" | "markdown_link" | "tag";
 
 export interface ExtractedLink {
@@ -22,7 +24,6 @@ export interface ExtractedLink {
 
 const CODE_FENCE_RE = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n(?:```|~~~)[^\n]*|$)/g;
 const INLINE_CODE_RE = /`[^`\n]*`/g;
-const WIKILINK_RE = /\[\[([^\]\n|]+?)(?:\|([^\]\n]+))?\]\]/g;
 // Negative lookbehind so `![alt](url)` image embeds are NOT captured as
 // markdown_link. CodeRabbit caught this regression on PR #15.
 const MD_LINK_RE = /(?<!!)\[([^\]\n]*)\]\(([^)\n\s]+)(?:\s+"[^"\n]*")?\)/g;
@@ -60,7 +61,7 @@ export function extractLinks(content: string): ExtractedLink[] {
   const cleaned = stripCode(content);
   const out: ExtractedLink[] = [];
 
-  for (const m of cleaned.matchAll(WIKILINK_RE)) {
+  for (const m of cleaned.matchAll(WIKILINK_ALIAS_RE)) {
     const target = (m[1] ?? "").trim();
     const alt = m[2] ? m[2].trim() : null;
     if (target === "") continue;

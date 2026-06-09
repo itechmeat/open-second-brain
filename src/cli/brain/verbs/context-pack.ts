@@ -6,9 +6,8 @@
  * filter on topic + principle.
  */
 
-import { defaultConfigPath } from "../../../core/config.ts";
 import { packContext } from "../../../core/brain/context-pack.ts";
-import { parse, fail, okJson, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainContextPack(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -26,8 +25,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     "cache-stable": { type: "boolean" },
     "dedup-repeated": { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   const maxTokensRaw = flags["max-tokens"] as string | undefined;
   if (!maxTokensRaw) {

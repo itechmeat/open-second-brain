@@ -1,10 +1,9 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   describeSessionRecall,
   expandSessionRecall,
   searchSessionRecall,
 } from "../../../core/brain/session-recall.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -15,7 +14,7 @@ export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
     limit: { type: "string" },
     "snippet-chars": { type: "string" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const result = searchSessionRecall(vault, {
     query: requiredString(flags["query"], "brain session-grep", "--query"),
     ...(stringOptional(flags["session-id"]) !== undefined
@@ -47,7 +46,7 @@ export async function cmdBrainSessionDescribe(argv: string[]): Promise<number> {
     json: { type: "boolean" },
     "session-id": { type: "string" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const result = describeSessionRecall(vault, {
     sessionId: requiredString(flags["session-id"], "brain session-describe", "--session-id"),
   });
@@ -62,7 +61,7 @@ export async function cmdBrainSessionExpand(argv: string[]): Promise<number> {
     "raw-limit": { type: "string" },
     cursor: { type: "string" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const id = positional[0];
   if (id === undefined) throw new CliError("brain session-expand: record id is required");
   const result = expandSessionRecall(vault, {

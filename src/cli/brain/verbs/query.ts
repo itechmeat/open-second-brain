@@ -1,4 +1,3 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   queryByLogSince,
   queryByPreference,
@@ -6,13 +5,13 @@ import {
   BrainNotFoundError,
 } from "../../../core/brain/query.ts";
 import {
-  parse,
+  brainVerbContext,
   fail,
-  resolveBrainVault,
+  parse,
   parseOptionalIsoDate,
+  renderQueryLogText,
   renderQueryPreferenceText,
   renderQueryTopicText,
-  renderQueryLogText,
 } from "../helpers.ts";
 
 export async function cmdBrainQuery(argv: string[]): Promise<number> {
@@ -23,8 +22,7 @@ export async function cmdBrainQuery(argv: string[]): Promise<number> {
     since: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   const modes = ["preference", "topic", "since"].filter(
     (k) => typeof flags[k] === "string" && (flags[k] as string).trim() !== "",

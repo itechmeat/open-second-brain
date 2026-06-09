@@ -1,9 +1,8 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { captureReportDelta, renderReportDelta } from "../../../core/brain/report-snapshot.ts";
 import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts";
 import { buildWeeklySynthesis } from "../../../core/brain/temporal/weekly-brief.ts";
 import { loadTemporalConfigSafe } from "../../../core/brain/policy.ts";
-import { CliError, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
+import { CliError, brainVerbContext, localTimeFields, parse } from "../helpers.ts";
 
 const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -19,8 +18,7 @@ export async function cmdBrainWeekly(argv: string[]): Promise<number> {
     "week-end": { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const weekEnd = resolveWeekEndArg(flags["week-end"]);
   const cfg = loadTemporalConfigSafe(vault);
   const index = buildTimelineIndex(vault, {});

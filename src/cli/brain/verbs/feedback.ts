@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import { mirrorSignal, resolveSharedNamespace } from "../../../core/brain/shared-namespace.ts";
 import { writeSignal } from "../../../core/brain/signal.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
@@ -11,7 +10,7 @@ import {
   BRAIN_SIGNAL_SIGN,
 } from "../../../core/brain/types.ts";
 import { renderPrefLink } from "../../../core/brain/wikilink.ts";
-import { parse, fail, ok, okJson, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -41,9 +40,8 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     return fail(`--signal must be 'positive' or 'negative'; got ${JSON.stringify(signalSign)}`);
   }
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const { config, vault } = brainVerbContext(flags);
+  const agent = resolveBrainAgent(flags, config);
 
   let raw: string | undefined;
   const rawFile = flags["raw-file"] as string | undefined;

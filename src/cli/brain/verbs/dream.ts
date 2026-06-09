@@ -11,7 +11,7 @@
  * failed validation - scripts gate on it), 2 on usage errors.
  */
 
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { resolveAgentName } from "../../../core/config.ts";
 import { dream } from "../../../core/brain/dream.ts";
 import {
   applyDreamBundle,
@@ -25,7 +25,7 @@ import {
   resolveSafeguardTimeoutMs,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
-import { parse, fail, ok, okJson, resolveBrainVault, parseOptionalIsoDate } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse, parseOptionalIsoDate } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain dream [run] [--dry-run] | stage | validate <run-id> | " +
@@ -52,8 +52,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     process.stderr.write(`${USAGE}\n`);
     return 2;
   }
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   const agentFlag = flags["agent"];
   let agent: string;

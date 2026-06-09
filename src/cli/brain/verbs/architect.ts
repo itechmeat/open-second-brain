@@ -5,10 +5,9 @@
  * operator edits survive every re-scan.
  */
 
-import { defaultConfigPath } from "../../../core/config.ts";
 import { generateArchDocs } from "../../../core/brain/architect/generate.ts";
 import { RegionError } from "../../../core/brain/regions.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainArchitect(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -20,7 +19,7 @@ export async function cmdBrainArchitect(argv: string[]): Promise<number> {
     return fail("usage: o2b brain architect <project-path> [--vault V] [--json]");
   }
   try {
-    const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+    const vault = brainVerbContext(flags).vault;
     const res = generateArchDocs(vault, target);
     if (flags["json"] === true) {
       okJson({

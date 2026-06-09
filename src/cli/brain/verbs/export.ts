@@ -1,8 +1,7 @@
 import { existsSync } from "node:fs";
-import { defaultConfigPath } from "../../../core/config.ts";
 import { atomicWriteFileSync } from "../../../core/fs-atomic.ts";
 import { exportPreferencesJson, exportPreferencesLlmsTxt } from "../../../core/brain/export.ts";
-import { parse, fail, ok, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, parse } from "../helpers.ts";
 
 export async function cmdBrainExport(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -11,8 +10,7 @@ export async function cmdBrainExport(argv: string[]): Promise<number> {
     out: { type: "string" },
     force: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
   const format = flags["format"] as string | undefined;
   if (format !== "json" && format !== "llms-txt") {
     process.stderr.write("error: --format is required and must be one of json|llms-txt\n");

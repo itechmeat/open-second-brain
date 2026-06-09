@@ -1,6 +1,5 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { setPrimaryAgent } from "../../../core/brain/set-primary.ts";
-import { parse, fail, ok, okJson, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainSetPrimary(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -8,8 +7,7 @@ export async function cmdBrainSetPrimary(argv: string[]): Promise<number> {
     clear: { type: "boolean" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   let name: string | null;
   if (flags["clear"]) {

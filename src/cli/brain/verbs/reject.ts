@@ -1,12 +1,12 @@
 import { existsSync } from "node:fs";
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { resolveAgentName } from "../../../core/config.ts";
 import { moveToRetired, parsePreference } from "../../../core/brain/preference.ts";
 import { preferencePath } from "../../../core/brain/paths.ts";
 import { isoDate, isoSecond } from "../../../core/brain/time.ts";
 import { renderPrefLink } from "../../../core/brain/wikilink.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
-import { parse, fail, ok, okJson, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainReject(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -24,8 +24,7 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
       "brain reject missing required flag: --reason (free-form text; persisted on the retired file)",
     );
   }
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const agent = resolveAgentName(config);
 
   const rawId = String(flags["id"]).trim();

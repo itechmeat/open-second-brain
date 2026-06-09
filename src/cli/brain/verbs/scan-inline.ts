@@ -1,9 +1,8 @@
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import { scanInline } from "../../../core/brain/inline-scan.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
-import { parse, fail, ok, okJson, info, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, info, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 export async function cmdBrainScanInline(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -15,9 +14,8 @@ export async function cmdBrainScanInline(argv: string[]): Promise<number> {
     agent: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const { config, vault } = brainVerbContext(flags);
+  const agent = resolveBrainAgent(flags, config);
 
   let result;
   try {

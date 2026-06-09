@@ -1,4 +1,3 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { runDoctor } from "../../../core/brain/doctor.ts";
 import {
@@ -7,7 +6,7 @@ import {
   planRemediation,
 } from "../../../core/brain/health/remediation.ts";
 import { loadBrainConfigDetailed, resolveHealth } from "../../../core/brain/policy.ts";
-import { parse, fail, ok, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, parse } from "../helpers.ts";
 
 export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -17,8 +16,7 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     remediate: { type: "boolean" },
     "dry-run": { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   let result;
   try {

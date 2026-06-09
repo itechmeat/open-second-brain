@@ -1,8 +1,8 @@
-import { defaultConfigPath, resolveLinkOutputFormat } from "../../../core/config.ts";
+import { resolveLinkOutputFormat } from "../../../core/config.ts";
 import { captureReportDelta, renderReportDelta } from "../../../core/brain/report-snapshot.ts";
 import { isoDate } from "../../../core/brain/time.ts";
 import { renderDigest, type RenderDigestOptions } from "../../../core/brain/digest.ts";
-import { parse, fail, resolveBrainVault, parseOptionalIsoDate } from "../helpers.ts";
+import { brainVerbContext, fail, parse, parseOptionalIsoDate } from "../helpers.ts";
 
 export function parseWindow(raw: string): number {
   const m = /^(\d+)(?:d)?$/.exec(raw);
@@ -21,8 +21,7 @@ export async function cmdBrainDigest(argv: string[]): Promise<number> {
     json: { type: "boolean" },
     "silent-if-empty": { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   const { value: parsedSinceDate, error: sinceErr } = parseOptionalIsoDate(flags, "since");
   if (sinceErr) return fail(sinceErr);

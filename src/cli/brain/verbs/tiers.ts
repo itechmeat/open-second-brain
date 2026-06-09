@@ -16,9 +16,8 @@ import { existsSync } from "node:fs";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../../core/vault.ts";
-import { defaultConfigPath } from "../../../core/config.ts";
 import type { FrontmatterMap } from "../../../core/types.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain tiers check | " +
@@ -44,8 +43,7 @@ export async function cmdBrainTiers(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const searchConfig = resolveSearchConfig({ vault, configPath: config ?? undefined });
   const field = (flags["field"] as string | undefined)?.trim();
 

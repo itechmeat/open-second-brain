@@ -1,7 +1,6 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { atomicWriteFileSync } from "../../../core/fs-atomic.ts";
 import { exportVaultGraph } from "../../../core/brain/portability/graph.ts";
-import { fail, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 /**
  * `o2b brain graph-export [--out <file>]` - serialise the user's vault
@@ -10,8 +9,7 @@ import { fail, parse, resolveBrainVault } from "../helpers.ts";
  */
 export async function cmdBrainGraphExport(argv: string[]): Promise<number> {
   const { flags } = parse(argv, { vault: { type: "string" }, out: { type: "string" } });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   let json: string;
   try {

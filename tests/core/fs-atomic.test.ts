@@ -1,9 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import {
+  atomicCreateFileSyncExclusive,
+  atomicWriteFileSync,
+  atomicWriteText,
+} from "../../src/core/fs-atomic.ts";
 
 let tmp: string;
 
@@ -81,5 +93,53 @@ describe("atomicCreateFileSyncExclusive", () => {
     const target = join(tmp, "a", "b", "c.md");
     atomicCreateFileSyncExclusive(target, "deep");
     expect(readFileSync(target, "utf8")).toBe("deep");
+  });
+});
+
+describe("atomicWriteText", () => {
+  test("preserves old content when validation rejects the candidate", () => {
+    const target = join(tmp, "state.yaml");
+    writeFileSync(target, "schema_version: 1\n", "utf8");
+
+    expect(() =>
+      atomicWriteText(target, "broken: true\n", {
+        validate: () => {
+          throw new Error("candidate failed lint");
+        },
+      }),
+    ).toThrow("candidate failed lint");
+
+    expect(readFileSync(target, "utf8")).toBe("schema_version: 1\n");
+    const leakedTemps = readdirSync(tmp).filter(
+      (name) => name.startsWith(".state.yaml.") && name.endsWith(".tmp"),
+    );
+    expect(leakedTemps).toHaveLength(0);
+  });
+
+  test("writes the candidate atomically after validation passes", () => {
+    const target = join(tmp, "Brain", "_brain.yaml");
+
+    atomicWriteText(target, "schema_version: 1\nschema:\n", {
+      validate: (candidate) => expect(candidate).toContain("schema_version"),
+    });
+
+    expect(readFileSync(target, "utf8")).toBe("schema_version: 1\nschema:\n");
+  });
+
+  test("defaults to private 0o600 mode and honors a mode override", () => {
+    const strict = join(tmp, "strict.txt");
+    atomicWriteText(strict, "secret");
+    expect(statSync(strict).mode & 0o777).toBe(0o600);
+
+    const open = join(tmp, "open.txt");
+    atomicWriteText(open, "public", { mode: 0o644 });
+    expect(statSync(open).mode & 0o777).toBe(0o644);
+  });
+
+  test("overwrites an existing target", () => {
+    const target = join(tmp, "x.yaml");
+    atomicWriteText(target, "first\n");
+    atomicWriteText(target, "second\n");
+    expect(readFileSync(target, "utf8")).toBe("second\n");
   });
 });

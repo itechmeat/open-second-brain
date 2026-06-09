@@ -10,10 +10,10 @@
  * operational failure, 2 on usage errors.
  */
 
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { resolveAgentName } from "../../../core/config.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../../core/brain/secrets/exec.ts";
 import { listSecrets, removeSecret, setSecret } from "../../../core/brain/secrets/store.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] [--vault <path>] [--json] | " +
@@ -47,8 +47,7 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const agent = (flags["agent"] as string | undefined)?.trim() || resolveAgentName(config);
   const now = new Date();
 

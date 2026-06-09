@@ -1,11 +1,10 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   acceptSkillProposal,
   learnSkillProposals,
   listPendingSkillProposals,
   rejectSkillProposal,
 } from "../../../core/brain/skill-proposals.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
   const sub = argv[0];
@@ -23,7 +22,7 @@ function learn(argv: string[]): number {
     json: { type: "boolean" },
     "min-support": { type: "string" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const minSupportRaw = trim(flags["min-support"]);
   const minSupport = minSupportRaw
     ? parsePositiveInteger(minSupportRaw, "--min-support")
@@ -50,7 +49,7 @@ function list(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const pending = listPendingSkillProposals(vault);
 
   if (flags["json"]) {
@@ -75,7 +74,7 @@ function accept(argv: string[]): number {
   });
   const slug = trim(positional[0]);
   if (!slug) throw new CliError("brain skill-proposals accept: slug is required");
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const note = trim(flags["note"]);
   const result = note
     ? acceptSkillProposal(vault, slug, { note })
@@ -100,7 +99,7 @@ function reject(argv: string[]): number {
   if (!slug) throw new CliError("brain skill-proposals reject: slug is required");
   const note = trim(flags["note"]);
   if (!note) throw new CliError("brain skill-proposals reject: --note is required");
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const result = rejectSkillProposal(vault, slug, { note });
 
   if (flags["json"]) {

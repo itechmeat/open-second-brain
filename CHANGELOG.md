@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-09
+
+Codebase-wide SOLID/DRY refactor: god modules decomposed into cohesive
+domain modules and duplicated helpers unified, with zero behavior change.
+The public surface is untouched - MCP tool names, CLI verbs, file formats,
+output strings, and exit codes are all byte-identical to 1.1.0, and a new
+frozen-surface parity test now guards the MCP tool-name set mechanically.
+
+### Changed
+
+- **MCP brain tools split by domain**: the 5,614-line `src/mcp/brain-tools.ts`
+  monolith (54 tools, 100+ helpers) is now 16 cohesive modules under
+  `src/mcp/brain/` (feedback, review, context, pack, query, entity, health,
+  brief, analytics, knowledge, admin, recall, workspace, procedure, landscape,
+  shared), mirroring the per-domain split the sibling tool files already used.
+  `brain-tools.ts` remains the aggregation seam exporting `BRAIN_TOOLS`, so
+  every existing import keeps working. Tool registration order within
+  `tools/list` enumeration changed; the name set and each tool's schema,
+  description, and handler are unchanged.
+- **Dream pass decomposed**: `dream.ts` (2,239 lines) now orchestrates four
+  extracted modules - `dream-plan.ts` (scan-record and plan-state shapes),
+  `confidence.ts` (Wilson-bound confidence computation), `dream-refresh.ts`
+  (apply-evidence scan and refresh/promotion planning), and
+  `reconcile-outcomes.ts` (contradiction classification) - each independently
+  unit-tested.
+- **Brain config parser extracted**: the 230-line YAML subset parser moved out
+  of `policy.ts` into `yaml-parse.ts`; `policy.ts` keeps config semantics only.
+  The grammar is unchanged.
+- **One wikilink syntax module**: seven divergent `[[...]]` regex definitions
+  collapsed into named, purpose-documented variants in
+  `src/core/brain/wikilink.ts`, with characterization tests pinning each
+  former call site's contract.
+- **One atomic-write module**: `src/core/reliability/atomic.ts` merged into
+  `src/core/fs-atomic.ts`; the validate-hook and private-mode variant
+  (`atomicWriteText`) now shares the single temp-file + fsync + rename
+  pipeline.
+- **CLI brain verbs share context helpers**: 76 verb files replaced the
+  repeated config/vault/agent resolution boilerplate with
+  `brainVerbContext(flags)` and `resolveBrainAgent(flags, config)` from the
+  helpers barrel, called at the exact position of the former inline code so
+  validation order and error output stay identical.
+
+### Added
+
+- **Frozen-surface parity test**: `tests/mcp/brain-tools-parity.test.ts` pins
+  the exact v1.x Brain tool-name set; any future registry change that drops,
+  duplicates, or renames a tool fails CI.
+- **Core layering guard**: `tests/core/layering.test.ts` fails when anything
+  under `src/core` calls `process.exit`, `process.stdout.write`, or
+  `console.log` - the calls that belong to the CLI layer.
+
+### Removed
+
+- **`scripts/sync-version.py`**: superseded by `scripts/sync-version.ts`
+  (the only version the build invokes) since 0.8.1.
+
 ## [1.1.0] - 2026-06-09
 
 Removal of the Pay Memory layer. The pay.sh integration and the entire
@@ -4989,7 +5045,9 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/itechmeat/open-second-brain/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/itechmeat/open-second-brain/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/itechmeat/open-second-brain/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/itechmeat/open-second-brain/compare/v0.45.0...v1.0.0
 [0.45.0]: https://github.com/itechmeat/open-second-brain/compare/v0.44.0...v0.45.0

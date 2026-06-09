@@ -1,7 +1,7 @@
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { resolveAgentName } from "../../../core/config.ts";
 import { setPinned } from "../../../core/brain/pin.ts";
 import { BrainPreferenceNotFoundError } from "../../../core/brain/apply-evidence.ts";
-import { parse, fail, normalizeFlagString, ok, okJson, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, normalizeFlagString, ok, okJson, parse } from "../helpers.ts";
 
 async function pinOrUnpin(argv: string[], value: boolean): Promise<number> {
   const { flags } = parse(argv, {
@@ -16,8 +16,7 @@ async function pinOrUnpin(argv: string[], value: boolean): Promise<number> {
   if (id === null) {
     return fail(`brain ${value ? "pin" : "unpin"} missing required flag: --id`);
   }
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const agent = resolveAgentName(config);
 
   try {

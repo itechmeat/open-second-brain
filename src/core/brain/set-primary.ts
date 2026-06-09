@@ -29,12 +29,8 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { brainConfigPath } from "./paths.ts";
-import {
-  BrainConfigError,
-  formatPrimaryAgentYamlValue,
-  parseBrainYaml,
-  validateBrainConfig,
-} from "./policy.ts";
+import { parseBrainYaml } from "./yaml-parse.ts";
+import { BrainConfigError, formatPrimaryAgentYamlValue, validateBrainConfig } from "./policy.ts";
 
 /**
  * Result of {@link setPrimaryAgent}. `previous` is the value on disk

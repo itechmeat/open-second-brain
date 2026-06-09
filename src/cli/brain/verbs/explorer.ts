@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { defaultConfigPath } from "../../../core/config.ts";
 import { atomicWriteFileSync } from "../../../core/fs-atomic.ts";
 import {
   buildLiveServer,
@@ -7,7 +6,7 @@ import {
   renderExportedHtml,
   type LiveServerHandle,
 } from "../../../core/brain/explorer.ts";
-import { parse, fail, ok, info, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, info, ok, parse } from "../helpers.ts";
 
 export async function cmdBrainExplorer(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -16,8 +15,7 @@ export async function cmdBrainExplorer(argv: string[]): Promise<number> {
     export: { type: "string" },
     force: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
   const exportPath = flags["export"] as string | undefined;
   const force = flags["force"] === true;
 

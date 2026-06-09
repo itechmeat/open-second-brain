@@ -4,7 +4,7 @@
  * the MCP surface exposes the read-only subset (`brain_entity`).
  */
 
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { resolveAgentName } from "../../../core/config.ts";
 import {
   archiveEntity,
   getEntity,
@@ -13,7 +13,7 @@ import {
   upsertEntity,
 } from "../../../core/brain/entities/registry.ts";
 import { BRAIN_ENTITY_STATUS, type BrainEntity } from "../../../core/brain/entities/types.ts";
-import { parse, fail, ok, okJson, normalizeFlagString, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, normalizeFlagString, ok, okJson, parse } from "../helpers.ts";
 
 function entityPayload(entity: BrainEntity): Record<string, unknown> {
   return {
@@ -70,8 +70,7 @@ function entitySet(argv: string[]): number {
   if (positional.length < 2) {
     return fail("brain entity set requires <category> and <name> arguments");
   }
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const agent = resolveAgentName(config);
   const body = normalizeFlagString(flags["body"]);
   const confidence = normalizeFlagString(flags["confidence"]);
@@ -103,7 +102,7 @@ function entityGet(argv: string[]): number {
     json: { type: "boolean" },
   });
   if (positional.length < 1) return fail("brain entity get requires a <name-or-alias> argument");
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const category = normalizeFlagString(flags["category"]);
   try {
     const entity = getEntity(vault, {
@@ -133,7 +132,7 @@ function entityList(argv: string[]): number {
     status: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const category = normalizeFlagString(flags["category"]);
   const statusRaw = normalizeFlagString(flags["status"]);
   if (
@@ -171,7 +170,7 @@ function entityRelate(argv: string[]): number {
   if (positional.length < 3) {
     return fail("brain entity relate requires <from> <relation> <to> arguments");
   }
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const fromCategory = normalizeFlagString(flags["from-category"]);
   const toCategory = normalizeFlagString(flags["to-category"]);
   try {
@@ -202,7 +201,7 @@ function entityArchive(argv: string[]): number {
   if (positional.length < 1) {
     return fail("brain entity archive requires a <name-or-alias> argument");
   }
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const category = normalizeFlagString(flags["category"]);
   try {
     const entity = archiveEntity(

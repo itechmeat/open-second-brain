@@ -1,6 +1,13 @@
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import { mergePreferences, BrainMergeError } from "../../../core/brain/merge.ts";
-import { parse, fail, ok, okJson, resolveBrainVault, readSingleLine } from "../helpers.ts";
+import {
+  brainVerbContext,
+  fail,
+  ok,
+  okJson,
+  parse,
+  readSingleLine,
+  resolveBrainAgent,
+} from "../helpers.ts";
 
 export async function cmdBrainMerge(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -13,9 +20,8 @@ export async function cmdBrainMerge(argv: string[]): Promise<number> {
   if (positional.length !== 2)
     return fail("brain merge requires exactly two positional ids: <keep-pref-id> <drop-pref-id>");
   const [keepId, dropId] = positional as [string, string];
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
-  const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+  const { config, vault } = brainVerbContext(flags);
+  const agent = resolveBrainAgent(flags, config);
   const dryRun = flags["dry-run"] === true;
   const force = flags["force"] === true;
   const wantJson = flags["json"] === true;

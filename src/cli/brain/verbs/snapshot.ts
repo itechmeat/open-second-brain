@@ -6,16 +6,14 @@ import {
 import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
 import { brainDirs } from "../../../core/brain/paths.ts";
-import { defaultConfigPath } from "../../../core/config.ts";
-import { parse, fail, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 export async function cmdBrainSnapshotDiff(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   if (positional.length < 1 || positional.length > 2) {
     return fail(

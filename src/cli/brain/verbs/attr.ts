@@ -17,9 +17,8 @@ import {
 } from "../../../core/brain/attributes.ts";
 import { loadSchemaPack } from "../../../core/brain/schema-pack.ts";
 import { resolveNotePath } from "../../../core/brain/note-path.ts";
-import { defaultConfigPath } from "../../../core/config.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain attr <path> <field>=<value> | " +
@@ -44,8 +43,7 @@ export async function cmdBrainAttr(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   try {
     if (show) {

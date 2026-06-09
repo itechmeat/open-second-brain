@@ -1,8 +1,7 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts";
 import { buildDailyBrief } from "../../../core/brain/temporal/daily-brief.ts";
 import { loadTemporalConfigSafe } from "../../../core/brain/policy.ts";
-import { CliError, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
+import { CliError, brainVerbContext, localTimeFields, parse } from "../helpers.ts";
 import { captureReportDelta, renderReportDelta } from "../../../core/brain/report-snapshot.ts";
 
 const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -19,8 +18,7 @@ export async function cmdBrainDaily(argv: string[]): Promise<number> {
     date: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const date = resolveDateArg(flags["date"]);
   const cfg = loadTemporalConfigSafe(vault);
   const index = buildTimelineIndex(vault, {});

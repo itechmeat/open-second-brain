@@ -1,10 +1,9 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   listProceduralMemory,
   markProceduralMemoryUsed,
   reconcileProceduralMemory,
 } from "../../../core/brain/procedural-memory.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, brainVerbContext, parse } from "../helpers.ts";
 import { join } from "node:path";
 
 export async function cmdBrainProceduralMemory(argv: string[]): Promise<number> {
@@ -22,7 +21,7 @@ function reconcile(argv: string[]): number {
     json: { type: "boolean" },
     root: { type: "string-array" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const roots = normalizeRoots(vault, flags["root"]);
   const result = reconcileProceduralMemory(vault, { roots });
 
@@ -42,7 +41,7 @@ function list(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const entries = listProceduralMemory(vault);
 
   if (flags["json"]) {
@@ -66,7 +65,7 @@ function markUsed(argv: string[]): number {
   });
   const id = trim(positional[0]);
   if (!id) throw new CliError("brain procedural-memory mark-used: entry id is required");
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const updated = markProceduralMemoryUsed(vault, id);
   if (!updated) throw new CliError(`brain procedural-memory mark-used: unknown entry: ${id}`);
 
