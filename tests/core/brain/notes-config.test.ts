@@ -11,10 +11,10 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { parseBrainYaml } from "../../../src/core/brain/yaml-parse.ts";
 import {
   BrainConfigError,
   BRAIN_NOTES_DEFAULTS,
-  parseBrainYaml,
   resolveNotes,
   validateBrainConfigDetailed,
 } from "../../../src/core/brain/policy.ts";

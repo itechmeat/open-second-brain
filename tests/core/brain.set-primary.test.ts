@@ -5,11 +5,8 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
-import {
-  BrainConfigError,
-  validateBrainConfig,
-  parseBrainYaml,
-} from "../../src/core/brain/policy.ts";
+import { parseBrainYaml } from "../../src/core/brain/yaml-parse.ts";
+import { BrainConfigError, validateBrainConfig } from "../../src/core/brain/policy.ts";
 import { setPrimaryAgent } from "../../src/core/brain/set-primary.ts";
 
 let vault: string;

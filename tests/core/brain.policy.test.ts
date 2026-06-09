@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { parseBrainYaml } from "../../src/core/brain/yaml-parse.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
   BrainConfigError,
@@ -11,7 +12,6 @@ import {
   formatPrimaryAgentYamlValue,
   loadBrainConfig,
   loadBrainConfigDetailed,
-  parseBrainYaml,
   validateBrainConfig,
   validateBrainConfigDetailed,
 } from "../../src/core/brain/policy.ts";

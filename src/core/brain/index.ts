@@ -97,8 +97,8 @@ export {
   loadBrainConfigDetailed,
   validateBrainConfig,
   validateBrainConfigDetailed,
-  parseBrainYaml,
 } from "./policy.ts";
+export { parseBrainYaml } from "./yaml-parse.ts";
 
 export type { BrainConfigLoadWarning, LoadBrainConfigResult, ValidateResult } from "./policy.ts";
 

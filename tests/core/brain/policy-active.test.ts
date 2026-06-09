@@ -3,11 +3,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import {
-  BrainConfigError,
-  parseBrainYaml,
-  validateBrainConfigDetailed,
-} from "../../../src/core/brain/policy.ts";
+import { parseBrainYaml } from "../../../src/core/brain/yaml-parse.ts";
+import { BrainConfigError, validateBrainConfigDetailed } from "../../../src/core/brain/policy.ts";
 
 function validate(yaml: string) {
   return validateBrainConfigDetailed(parseBrainYaml(yaml), "<test>");

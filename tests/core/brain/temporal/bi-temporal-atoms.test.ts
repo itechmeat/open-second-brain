@@ -12,9 +12,9 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { parseBrainYaml } from "../../../../src/core/brain/yaml-parse.ts";
 import {
   BrainConfigError,
-  parseBrainYaml,
   validateBrainConfigDetailed,
 } from "../../../../src/core/brain/policy.ts";
 import { BRAIN_TEMPORAL_DEFAULTS, resolveTemporal } from "../../../../src/core/brain/policy.ts";
