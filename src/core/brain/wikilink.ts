@@ -60,7 +60,13 @@ import type { LinkOutputFormat } from "../config.ts";
 /** Target capture with separate `[#|]suffix` capture; multi-line tolerant. */
 export const WIKILINK_TARGET_RE = /\[\[([^\]|#]+)([#|][^\]]*)?\]\]/g;
 
-/** Target plus optional `|alias` capture; single-line, unicode mode. */
+/**
+ * Target plus optional `|alias` capture; single-line, unicode mode.
+ * The `u` flag is inherited from the entity extractor; the link
+ * extractor formerly ran the same pattern without it - equivalent
+ * here because the pattern only uses negated classes over BMP
+ * delimiters.
+ */
 export const WIKILINK_ALIAS_RE = /\[\[([^\]\n|]+?)(?:\|([^\]\n]+))?\]\]/gu;
 
 /** Whole bracket body in one capture; single-line. */

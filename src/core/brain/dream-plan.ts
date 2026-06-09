@@ -8,7 +8,6 @@
  */
 
 import type { BrainPreference, BrainRetiredReason, BrainSignal, BrainSignalSign } from "./types.ts";
-import type { DreamQuarantinedEntry } from "./dream.ts";
 
 export interface SignalRecord {
   readonly path: string;
@@ -45,6 +44,30 @@ export interface ScanResult {
   readonly preferences: PreferenceRecord[];
   readonly retired: RetiredRecord[];
   readonly corrupted: CorruptedEntry[];
+}
+
+/**
+ * Entry surfacing a signal cluster that the self-approval guardrail
+ * (v0.10.16) held back from promotion because one or more configured
+ * thresholds were not met. Distinct from `suppressed` (which fires
+ * on a user-rejected retired preference); a quarantined cluster
+ * stays inbox-side and may promote on the next dream pass once
+ * more evidence accumulates.
+ */
+export interface DreamQuarantinedEntry {
+  /** Topic slug whose signals are held below the promotion threshold. */
+  readonly topic: string;
+  /** Count of accumulated same-sign signals. */
+  readonly signal_count: number;
+  /** Number of distinct agents that raised same-sign signals. */
+  readonly distinct_agents: number;
+  /** Age (in days) of the earliest signal in the cluster. */
+  readonly age_days: number;
+  /**
+   * Which threshold(s) blocked promotion: any subset of
+   * `min_signals`, `min_distinct_agents`, `min_age_days`.
+   */
+  readonly failed_gates: ReadonlyArray<string>;
 }
 
 export interface PlanState {
