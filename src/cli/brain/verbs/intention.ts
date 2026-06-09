@@ -4,14 +4,14 @@
  * lifecycle.
  */
 
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { resolveAgentName } from "../../../core/config.ts";
 import {
   listIntentions,
   moveIntentionToHistory,
   setIntention,
   showIntention,
 } from "../../../core/brain/intentions.ts";
-import { fail, normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, normalizeFlagString, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainIntention(argv: string[]): Promise<number> {
   const action = argv[0];
@@ -24,8 +24,7 @@ export async function cmdBrainIntention(argv: string[]): Promise<number> {
     text: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const scope = normalizeFlagString(flags["scope"]);
   const json = flags["json"] === true;
 

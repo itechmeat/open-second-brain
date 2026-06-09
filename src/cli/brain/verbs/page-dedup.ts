@@ -8,9 +8,8 @@
  * vault to point at the canonical page.
  */
 
-import { defaultConfigPath } from "../../../core/config.ts";
 import { findDuplicateCandidates, mergePage } from "../../../core/brain/page-dedup.ts";
-import { parse, fail, okJson, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -19,8 +18,7 @@ export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
     json: { type: "boolean" },
     yes: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   const apply = Boolean(flags["apply"]);
   if (apply && !flags["yes"] && (flags["json"] || !process.stdin.isTTY)) {

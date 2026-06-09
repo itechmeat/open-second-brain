@@ -18,9 +18,9 @@ import {
 } from "../../../core/brain/labels.ts";
 import { loadSchemaPack } from "../../../core/brain/schema-pack.ts";
 import { resolveNotePath } from "../../../core/brain/note-path.ts";
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { resolveAgentName } from "../../../core/config.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain label <path> <dimension>=<value> | " +
@@ -46,8 +46,7 @@ export async function cmdBrainLabel(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   try {
     if (show) {

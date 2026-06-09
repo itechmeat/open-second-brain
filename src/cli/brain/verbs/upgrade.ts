@@ -1,4 +1,3 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   planUpgrade,
   applyUpgrade,
@@ -6,14 +5,14 @@ import {
   type UpgradePlan,
 } from "../../../core/brain/upgrade.ts";
 import {
-  parse,
+  brainVerbContext,
   fail,
   ok,
   okJson,
-  resolveBrainVault,
+  parse,
   printUpgradePlanText,
-  renderUpgradePlanJson,
   readSingleLine,
+  renderUpgradePlanJson,
 } from "../helpers.ts";
 
 export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
@@ -25,8 +24,7 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
     check: { type: "boolean" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   if (flags["dry-run"] && flags["apply"])
     return fail("brain upgrade: --dry-run and --apply are mutually exclusive");

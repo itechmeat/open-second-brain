@@ -18,9 +18,8 @@ import {
   type ForesightEnvelope,
 } from "../../../core/brain/temporal/foresight.ts";
 import { isoDate } from "../../../core/brain/time.ts";
-import { defaultConfigPath } from "../../../core/config.ts";
 import { writeFrontmatterAtomic } from "../../../core/vault.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE = "usage: o2b brain foresight [--horizon-days N] [--write] [--vault <path>] [--json]";
 
@@ -46,7 +45,7 @@ export async function cmdBrainForesight(argv: string[]): Promise<number> {
     json: { type: "boolean" },
   });
   const asJson = flags["json"] === true;
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const horizonRaw = flags["horizon-days"] as string | undefined;
   const horizonDays = horizonRaw !== undefined ? Number(horizonRaw) : FORESIGHT_HORIZON_DAYS;
   if (!Number.isInteger(horizonDays) || horizonDays < 1) {

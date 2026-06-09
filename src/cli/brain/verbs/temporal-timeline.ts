@@ -1,8 +1,7 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { isBrainLogEventKind, type BrainLogEventKind } from "../../../core/brain/types.ts";
 import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts";
 import { selectEvents } from "../../../core/brain/temporal/select-events.ts";
-import { CliError, parse, resolveBrainVault, localTimeFields } from "../helpers.ts";
+import { CliError, brainVerbContext, localTimeFields, parse } from "../helpers.ts";
 
 /**
  * `o2b brain timeline [--vault PATH] [--pref-id ID] [--topic SLUG]
@@ -24,8 +23,7 @@ export async function cmdBrainTimeline(argv: string[]): Promise<number> {
     limit: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   const prefId = trimOrUndefined(flags["pref-id"]);
   const topic = trimOrUndefined(flags["topic"]);

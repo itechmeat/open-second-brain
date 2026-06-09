@@ -11,7 +11,6 @@
 
 import { readFileSync } from "node:fs";
 
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import {
   WriteSessionRequestError,
   abandonSession,
@@ -29,8 +28,7 @@ import type {
   WriteSessionEnvelope,
   WriteSessionIntent,
 } from "../../../core/brain/write-session/types.ts";
-import { fail, ok, okJson, parse } from "../helpers.ts";
-import { resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain session <open|submit|approve|abandon|status|list|sweep> " +
@@ -102,8 +100,7 @@ export async function cmdBrainSession(argv: string[]): Promise<number> {
   });
   const op = positional[0];
   const asJson = flags["json"] === true;
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   try {
     switch (op) {
@@ -120,7 +117,7 @@ export async function cmdBrainSession(argv: string[]): Promise<number> {
         }
         const retryCapRaw = flags["retry-cap"] as string | undefined;
         const env = openArtifactSession(vault, {
-          agent: (flags["agent"] as string | undefined) ?? resolveAgentName(config),
+          agent: resolveBrainAgent(flags, config),
           targetPath: target,
           intent: intentRaw as WriteSessionIntent,
           requireReview: flags["require-review"] === true,

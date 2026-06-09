@@ -1,8 +1,7 @@
 import { readFileSync } from "node:fs";
 
-import { defaultConfigPath } from "../../../core/config.ts";
 import { importVaultGraph, type GraphImportMode } from "../../../core/brain/portability/graph.ts";
-import { fail, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 const MODES: ReadonlyArray<GraphImportMode> = ["skip", "overwrite", "merge"];
 
@@ -25,8 +24,7 @@ export async function cmdBrainGraphImport(argv: string[]): Promise<number> {
     return fail(`graph-import: --mode must be one of ${MODES.join(" | ")}; got ${mode}`);
   }
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   let graph: { nodes?: unknown };
   try {

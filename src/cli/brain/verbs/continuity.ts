@@ -13,7 +13,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { defaultConfigPath } from "../../../core/config.ts";
 import { loadNormalizedContinuityRecords } from "../../../core/brain/continuity/read-model.ts";
 import { renderAtofEvents } from "../../../core/brain/continuity/export-atof.ts";
 import {
@@ -21,7 +20,7 @@ import {
   renderAtifTrajectories,
 } from "../../../core/brain/continuity/export-atif.ts";
 import packageJson from "../../../../package.json" with { type: "json" };
-import { fail, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 const CLI_VERSION: string = packageJson.version;
 
@@ -52,7 +51,7 @@ function exportContinuity(argv: string[]): number {
   const session = typeof flags["session"] === "string" ? flags["session"].trim() : undefined;
   const outDir = resolve(typeof flags["out"] === "string" ? flags["out"].trim() : ".");
 
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const records = loadNormalizedContinuityRecords(vault, {
     ...(session !== undefined && session !== "" ? { sessionId: session } : {}),
     ...(month !== undefined ? { since: `${month}-01`, until: `${month}-31T23:59:59.999Z` } : {}),

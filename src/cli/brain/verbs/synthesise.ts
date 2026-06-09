@@ -1,7 +1,6 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { buildConceptCluster } from "../../../core/brain/link-graph/concept-cluster.ts";
 import { normaliseWikilinkTarget } from "../../../core/brain/wikilink.ts";
-import { parse, fail, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 /**
  * `o2b brain synthesise <id> [--include-unlinked] [--vault PATH] [--json]`
@@ -17,8 +16,7 @@ export async function cmdBrainSynthesise(argv: string[]): Promise<number> {
     "include-unlinked": { type: "boolean" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   const id = positional[0];
   if (!id) return fail("brain synthesise requires a target id (e.g. pref-foo)");

@@ -9,8 +9,7 @@
  */
 
 import { DEAD_END_MAX_ACTIVE, listDeadEnds, recordDeadEnd } from "../../../core/brain/dead-ends.ts";
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain dead-end <record|list> " +
@@ -32,8 +31,7 @@ export async function cmdBrainDeadEnd(argv: string[]): Promise<number> {
     return 2;
   }
   const asJson = flags["json"] === true;
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   try {
     if (op === "record") {
@@ -53,7 +51,7 @@ export async function cmdBrainDeadEnd(argv: string[]): Promise<number> {
         approach,
         reason,
         ...(typeof flags["context"] === "string" ? { context: flags["context"] as string } : {}),
-        agent: (flags["agent"] as string | undefined) ?? resolveAgentName(config),
+        agent: resolveBrainAgent(flags, config),
         now: new Date(),
         maxActive,
       });

@@ -1,4 +1,3 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   isRecallTelemetryMode,
   isRecallTelemetryStatus,
@@ -6,7 +5,7 @@ import {
   summarizeRecallTelemetry,
 } from "../../../core/brain/recall-telemetry.ts";
 import { listGateTelemetry, summarizeGateTelemetry } from "../../../core/brain/gate-telemetry.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainRecallTelemetry(argv: string[]): Promise<number> {
   const subcommand = argv[0];
@@ -21,7 +20,7 @@ export async function cmdBrainRecallTelemetry(argv: string[]): Promise<number> {
 
 function listTelemetry(argv: string[]): number {
   const { flags } = parseTelemetryFlags(argv);
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const filter = telemetryFilter(flags, "brain recall-telemetry list");
   const records = listRecallTelemetry(vault, filter);
 
@@ -41,7 +40,7 @@ function listTelemetry(argv: string[]): number {
 
 function summarizeTelemetry(argv: string[]): number {
   const { flags } = parseTelemetryFlags(argv);
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const summary = summarizeRecallTelemetry(
     vault,
     telemetryFilter(flags, "brain recall-telemetry summary"),
@@ -78,7 +77,7 @@ function rejectRecallOnlyFlags(
 function listGate(argv: string[]): number {
   const { flags } = parseTelemetryFlags(argv);
   rejectRecallOnlyFlags(flags, "brain recall-telemetry gate-list");
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const filter = telemetryFilter(flags, "brain recall-telemetry gate-list");
   const records = listGateTelemetry(vault, {
     ...(filter.host !== undefined ? { host: filter.host } : {}),
@@ -102,7 +101,7 @@ function listGate(argv: string[]): number {
 function summarizeGate(argv: string[]): number {
   const { flags } = parseTelemetryFlags(argv);
   rejectRecallOnlyFlags(flags, "brain recall-telemetry gate-summary", ["limit"]);
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const filter = telemetryFilter(flags, "brain recall-telemetry gate-summary");
   const summary = summarizeGateTelemetry(vault, {
     ...(filter.host !== undefined ? { host: filter.host } : {}),

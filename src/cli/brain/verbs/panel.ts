@@ -7,7 +7,6 @@
 
 import { readFileSync } from "node:fs";
 
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import {
   WriteSessionRequestError,
   sessionEnvelope,
@@ -15,7 +14,7 @@ import {
 import { openPanelSession, submitToPanelSession } from "../../../core/brain/write-session/panel.ts";
 import { readWriteSession } from "../../../core/brain/write-session/store.ts";
 import type { WriteSessionEnvelope } from "../../../core/brain/write-session/types.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain panel <open <topic...>|submit <session-id>|status <session-id>> " +
@@ -63,8 +62,7 @@ export async function cmdBrainPanel(argv: string[]): Promise<number> {
   });
   const op = positional[0];
   const asJson = flags["json"] === true;
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   try {
     switch (op) {
@@ -76,7 +74,7 @@ export async function cmdBrainPanel(argv: string[]): Promise<number> {
         }
         const personasFlag = flags["personas"] as string | undefined;
         const env = openPanelSession(vault, {
-          agent: (flags["agent"] as string | undefined) ?? resolveAgentName(config),
+          agent: resolveBrainAgent(flags, config),
           topic,
           requireReview: flags["require-review"] === true,
           ...(personasFlag

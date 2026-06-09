@@ -1,11 +1,10 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   applyRecurrenceEvidence,
   getRecurrenceEntry,
   listRecurrenceEntries,
   purgeRecurrenceSource,
 } from "../../../core/brain/recurrence.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainRecurrence(argv: string[]): Promise<number> {
   const sub = argv[0];
@@ -23,7 +22,7 @@ function list(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const entries = listRecurrenceEntries(vault);
 
   if (flags["json"]) {
@@ -47,7 +46,7 @@ function show(argv: string[]): number {
   });
   const hash = trim(positional[0]);
   if (!hash) throw new CliError("brain recurrence show: content hash is required");
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const entry = getRecurrenceEntry(vault, hash);
   if (!entry) throw new CliError(`brain recurrence show: not found: ${hash}`);
 
@@ -78,7 +77,7 @@ function mutate(argv: string[], action: "learn" | "forget"): number {
     throw new CliError(`brain recurrence ${action}: --hash, --scope, and --source are required`);
   }
 
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const entry = applyRecurrenceEvidence(vault, {
     contentHash: hash,
     scope,
@@ -103,7 +102,7 @@ function purgeSource(argv: string[]): number {
   });
   const source = trim(flags["source"]);
   if (!source) throw new CliError("brain recurrence purge-source: --source is required");
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   purgeRecurrenceSource(vault, source);
 
   if (flags["json"]) {

@@ -35,9 +35,8 @@ import { isoSecond } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
-import { defaultConfigPath } from "../../../core/config.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain bridges discover [--max N] [--min-similarity X] | list | " +
@@ -62,8 +61,7 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   try {
     if (action === "accept") {

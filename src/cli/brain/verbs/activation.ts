@@ -15,8 +15,7 @@ import {
   loadAccessEvents,
   sweepActivationEvents,
 } from "../../../core/search/activation/store.ts";
-import { defaultConfigPath } from "../../../core/config.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain activation <status|sweep> " +
@@ -47,7 +46,7 @@ export async function cmdBrainActivation(argv: string[]): Promise<number> {
     return 2;
   }
   const asJson = flags["json"] === true;
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
 
   try {
     if (op === "status") {

@@ -1,11 +1,10 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   getContextReceipt,
   isContextReceiptTrigger,
   listContextReceipts,
   summarizeContextReceipt,
 } from "../../../core/brain/context-receipts.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainContextReceipts(argv: string[]): Promise<number> {
   const subcommand = argv[0];
@@ -24,7 +23,7 @@ function listReceipts(argv: string[]): number {
     "session-id": { type: "string" },
     limit: { type: "string" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const triggerRaw = trimOrUndefined(flags["trigger"]);
   if (triggerRaw !== undefined && !isContextReceiptTrigger(triggerRaw)) {
     throw new CliError(`brain context-receipts list: unknown trigger '${triggerRaw}'`);
@@ -65,7 +64,7 @@ function showReceipt(argv: string[]): number {
   });
   const id = trimOrUndefined(positional[0]);
   if (id === undefined) throw new CliError("brain context-receipts show: receipt id is required");
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const receipt = getContextReceipt(vault, id);
   if (receipt === null) throw new CliError(`brain context-receipts show: receipt not found: ${id}`);
 

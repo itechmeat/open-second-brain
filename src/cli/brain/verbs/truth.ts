@@ -9,7 +9,6 @@
  * errors.
  */
 
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
 import { aggregateQuantities } from "../../../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../../../core/brain/truth/collision.ts";
 import { computeTruthStateWithConflicts } from "../../../core/brain/truth/conflicts.ts";
@@ -21,7 +20,7 @@ import {
 } from "../../../core/brain/truth/store.ts";
 import { normalizeEntityName } from "../../../core/brain/entities/canonical.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 const OPS = ["ingest", "slots", "conflicts", "aggregate", "collisions", "sweep"] as const;
 type TruthOp = (typeof OPS)[number];
@@ -71,8 +70,7 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
     return 2;
   }
   const asJson = flags["json"] === true;
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   try {
     switch (op) {
@@ -101,7 +99,7 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
         }
         const result = appendClaimEvent(vault, {
           ts: (flags["ts"] as string | undefined) ?? isoSecond(new Date()),
-          agent: (flags["agent"] as string | undefined) ?? resolveAgentName(config),
+          agent: resolveBrainAgent(flags, config),
           entity: requireString(flags, "entity"),
           aspect: requireString(flags, "aspect"),
           value: requireString(flags, "value"),

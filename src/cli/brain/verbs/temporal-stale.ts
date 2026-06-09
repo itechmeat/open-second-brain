@@ -1,8 +1,7 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { buildTimelineIndex } from "../../../core/brain/temporal/build-index.ts";
 import { findStaleEntries } from "../../../core/brain/temporal/stale-watch.ts";
 import { loadTemporalConfigSafe } from "../../../core/brain/policy.ts";
-import { parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, parse } from "../helpers.ts";
 
 /**
  * `o2b brain stale [--vault PATH] [--json]`
@@ -16,8 +15,7 @@ export async function cmdBrainStale(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   const cfg = loadTemporalConfigSafe(vault);
   const index = buildTimelineIndex(vault, {});

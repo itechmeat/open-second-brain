@@ -16,8 +16,7 @@ import { buildEntityIndex } from "../../../core/brain/entities/index-builder.ts"
 import { isoSecond } from "../../../core/brain/time.ts";
 import { claimsFromAssertion } from "../../../core/brain/truth/ingest.ts";
 import { appendClaimEvent } from "../../../core/brain/truth/store.ts";
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain facts decompose (--file <path> | --text <text>) " +
@@ -50,8 +49,7 @@ export async function cmdBrainFacts(argv: string[]): Promise<number> {
     process.stderr.write(`brain facts decompose: --ingest requires --entity\n${USAGE}\n`);
     return 2;
   }
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   try {
     let text: string;
@@ -74,7 +72,7 @@ export async function cmdBrainFacts(argv: string[]): Promise<number> {
 
     let ingested = 0;
     if (ingest) {
-      const agent = (flags["agent"] as string | undefined) ?? resolveAgentName(config);
+      const agent = resolveBrainAgent(flags, config);
       const ts = isoSecond(new Date());
       for (const assertion of assertions) {
         const claims = claimsFromAssertion(assertion, {

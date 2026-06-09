@@ -1,4 +1,3 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   readProceduralGraph,
   rebuildProceduralGraph,
@@ -7,7 +6,7 @@ import {
   readProceduralHints,
   rebuildProceduralHints,
 } from "../../../core/brain/procedural-hints.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainProceduralGraph(argv: string[]): Promise<number> {
   const sub = argv[0];
@@ -23,7 +22,7 @@ function rebuild(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const graph = rebuildProceduralGraph(vault);
   const hintProjection = rebuildProceduralHints(vault, { graph });
 
@@ -60,7 +59,7 @@ function show(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const graph = readProceduralGraph(vault);
   if (!graph) throw new CliError("brain procedural-graph show: graph projection not found");
 
@@ -80,7 +79,7 @@ function hints(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+  const vault = brainVerbContext(flags).vault;
   const projection = readProceduralHints(vault);
   if (!projection) throw new CliError("brain procedural-graph hints: hints projection not found");
 

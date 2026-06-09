@@ -1,7 +1,6 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { auditMoc, MocAuditError } from "../../../core/brain/link-graph/moc-audit.ts";
 import { normaliseWikilinkTarget } from "../../../core/brain/wikilink.ts";
-import { parse, fail, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 /**
  * `o2b brain moc-audit <hub-id> [--vault PATH] [--json]`
@@ -15,8 +14,7 @@ export async function cmdBrainMocAudit(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   const id = positional[0];
   if (!id) return fail("brain moc-audit requires a hub note id");

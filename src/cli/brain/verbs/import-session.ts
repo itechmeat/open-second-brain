@@ -1,9 +1,5 @@
 import { statSync } from "node:fs";
-import {
-  defaultConfigPath,
-  resolveAgentName,
-  resolveSessionCaptureRoles,
-} from "../../../core/config.ts";
+import { resolveAgentName, resolveSessionCaptureRoles } from "../../../core/config.ts";
 import { importSession, importSessionPath } from "../../../core/brain/sessions/import.ts";
 import { SessionImportError, type SessionAdapterId } from "../../../core/brain/sessions/types.ts";
 import {
@@ -14,15 +10,15 @@ import { appendLogEvent } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import {
-  parse,
+  CliError,
+  brainVerbContext,
   fail,
   info,
   normalizeFlagString,
   ok,
   okJson,
-  resolveBrainVault,
+  parse,
   parseOptionalIsoDate,
-  CliError,
 } from "../helpers.ts";
 
 export async function cmdBrainImportSession(argv: string[]): Promise<number> {
@@ -42,8 +38,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
   });
   if (positional.length < 1) return fail("brain import-session requires a <path> argument");
   const sessionPath = positional[0]!;
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const explicitAgent = normalizeFlagString(flags["agent"]);
   if (flags["agent"] !== undefined && explicitAgent === null) {
     return fail("--agent must be a non-empty string when provided");

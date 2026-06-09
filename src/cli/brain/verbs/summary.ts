@@ -7,13 +7,12 @@
  * their notes; `--json` returns the structured envelope for tooling.
  */
 
-import { defaultConfigPath } from "../../../core/config.ts";
 import { dream } from "../../../core/brain/dream.ts";
 import {
   buildOperatorSummary,
   renderOperatorSummaryMarkdown,
 } from "../../../core/brain/trust/operator-summary.ts";
-import { parse, fail, okJson, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainSummary(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -22,8 +21,7 @@ export async function cmdBrainSummary(argv: string[]): Promise<number> {
     "skip-dream": { type: "boolean" },
     "top-actions": { type: "string" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   let topActionsN: number | undefined;
   const topRaw = flags["top-actions"] as string | undefined;

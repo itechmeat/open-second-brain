@@ -16,8 +16,7 @@ import { appendMetric } from "../../../core/brain/metrics.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { SearchError } from "../../../core/search/types.ts";
-import { defaultConfigPath } from "../../../core/config.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain benchmark run --dataset <path> [--k N] [--expand]  [--vault <path>] [--json]";
@@ -42,8 +41,7 @@ export async function cmdBrainBenchmark(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
 
   try {
     let raw: unknown;

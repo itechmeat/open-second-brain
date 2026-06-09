@@ -36,9 +36,9 @@ import {
   type DailyWindow,
 } from "../../../core/brain/maintenance/lane.ts";
 import { listJournal } from "../../../core/brain/maintenance/journal.ts";
-import { defaultConfigPath, resolveAgentName } from "../../../core/config.ts";
+import { resolveAgentName } from "../../../core/config.ts";
 import { indexVault, resolveSearchConfig } from "../../../core/search/index.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain maintenance run [--force] [--window H-H] [--tz ZONE] " +
@@ -63,8 +63,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { config, vault } = brainVerbContext(flags);
   const now = new Date();
 
   try {

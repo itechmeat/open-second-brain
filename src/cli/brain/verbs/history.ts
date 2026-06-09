@@ -1,6 +1,5 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { readEditHistory, renderEditHistory } from "../../../core/brain/health/edit-history.ts";
-import { fail, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 /**
  * `o2b brain history <slug>` - render a preference's edit-history
@@ -16,8 +15,7 @@ export async function cmdBrainHistory(argv: string[]): Promise<number> {
   if (!raw) return fail("usage: o2b brain history <slug>");
   const slug = raw.replace(/^pref-/, "");
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   let entries;
   try {

@@ -1,4 +1,3 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import {
   listSnapshots,
   extractSnapshotToTemp,
@@ -20,12 +19,12 @@ import { appendLogEvent } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import {
-  parse,
+  brainVerbContext,
+  diffSummary,
   fail,
   ok,
   okJson,
-  resolveBrainVault,
-  diffSummary,
+  parse,
   readSingleLine,
 } from "../helpers.ts";
 
@@ -38,8 +37,7 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     "force-rollback": { type: "boolean" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
   const forceRollback = Boolean(flags["force-rollback"]);
 
   if (flags["list"]) {

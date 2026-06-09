@@ -1,6 +1,5 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { buildIntentReview } from "../../../core/brain/intent-review.ts";
-import { CliError, parse, resolveBrainVault } from "../helpers.ts";
+import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 /**
  * `o2b brain intent-review [--vault PATH] [--now ISO] [--json]`
@@ -13,8 +12,7 @@ export async function cmdBrainIntentReview(argv: string[]): Promise<number> {
     now: { type: "string" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
   const now = parseNow(flags["now"]);
   const report = buildIntentReview(vault, now ? { now } : {});
 

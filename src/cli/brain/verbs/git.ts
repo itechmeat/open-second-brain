@@ -7,12 +7,11 @@
  * answers work even when the repo is gone.
  */
 
-import { defaultConfigPath } from "../../../core/config.ts";
 import { mineCommitDecisions } from "../../../core/brain/git/decisions.ts";
 import { GitIngestError, ingestGitHistory } from "../../../core/brain/git/ingest.ts";
 import { listGitCommits, listGitRepos, listGitTags } from "../../../core/brain/git/store.ts";
 import type { GitCommitFilter, GitCommitRecord } from "../../../core/brain/git/store.ts";
-import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE = "usage: o2b brain git <ingest|status|find|mine> [args] [--vault V] [--json]";
 
@@ -34,7 +33,7 @@ async function cmdMine(argv: string[]): Promise<number> {
     repo: { type: "string" },
   });
   try {
-    const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+    const vault = brainVerbContext(flags).vault;
     const repoFilter = flags["repo"] as string | undefined;
     const repos = listGitRepos(vault).filter(
       (entry) => repoFilter === undefined || entry.key === repoFilter,
@@ -89,7 +88,7 @@ async function cmdIngest(argv: string[]): Promise<number> {
     }
   }
   try {
-    const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+    const vault = brainVerbContext(flags).vault;
     const res = ingestGitHistory(vault, target, maxCount !== undefined ? { maxCount } : {});
     if (flags["json"] === true) {
       okJson({
@@ -125,7 +124,7 @@ async function cmdStatus(argv: string[]): Promise<number> {
     json: { type: "boolean" },
   });
   try {
-    const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+    const vault = brainVerbContext(flags).vault;
     const repos = listGitRepos(vault).map((entry) => ({
       key: entry.key,
       repo_path: entry.state?.repoPath ?? null,
@@ -183,7 +182,7 @@ async function cmdFind(argv: string[]): Promise<number> {
     if (!Number.isInteger(limit) || limit < 1) return fail("--limit must be a positive integer");
   }
   try {
-    const vault = resolveBrainVault(flags["vault"] as string | undefined, defaultConfigPath());
+    const vault = brainVerbContext(flags).vault;
     const filter: GitCommitFilter = {
       ...(text !== undefined ? { text } : {}),
       ...(flags["file"] !== undefined ? { file: flags["file"] as string } : {}),

@@ -5,9 +5,8 @@
  * for programmatic consumers (cron digests, dashboards).
  */
 
-import { defaultConfigPath } from "../../../core/config.ts";
 import { computeTokenFootprint } from "../../../core/brain/token-footprint.ts";
-import { parse, fail, okJson, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainTokenFootprint(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -15,8 +14,7 @@ export async function cmdBrainTokenFootprint(argv: string[]): Promise<number> {
     json: { type: "boolean" },
     "warn-threshold": { type: "string" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
   const overrideRaw = flags["warn-threshold"] as string | undefined;
   let warnThreshold: number | undefined;
   if (overrideRaw !== undefined) {

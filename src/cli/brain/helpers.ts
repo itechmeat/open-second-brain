@@ -23,7 +23,12 @@
  * file because they are tiny and called by every verb.
  */
 
-import { resolveTimezone, resolveVault } from "../../core/config.ts";
+import {
+  defaultConfigPath,
+  resolveAgentName,
+  resolveTimezone,
+  resolveVault,
+} from "../../core/config.ts";
 import { formatLocalTimestamp } from "../../core/brain/present-time.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 
@@ -44,6 +49,35 @@ export function resolveBrainVault(flagVal: string | undefined, configPath: strin
     throw new CliError(NO_VAULT_ERROR);
   }
   return vault;
+}
+
+// ── Verb context ────────────────────────────────────────────────────────────
+
+/** Parsed flags shape every Brain verb receives from {@link parse}. */
+export type BrainVerbFlags = Record<string, string | boolean | string[] | undefined>;
+
+export interface BrainVerbContext {
+  readonly config: string;
+  readonly vault: string;
+}
+
+/**
+ * Resolve the (config, vault) pair every Brain verb needs.
+ *
+ * Call it exactly where the verb used to resolve the vault — flag
+ * validation that must precede vault resolution (and its error
+ * output) stays ahead of this call, so verb output is unchanged.
+ * Throws `CliError` for a missing or explicitly empty vault, same as
+ * {@link resolveBrainVault}.
+ */
+export function brainVerbContext(flags: BrainVerbFlags): BrainVerbContext {
+  const config = defaultConfigPath();
+  return { config, vault: resolveBrainVault(flags["vault"] as string | undefined, config) };
+}
+
+/** Acting agent name: an explicit `--agent` flag wins over the config. */
+export function resolveBrainAgent(flags: BrainVerbFlags, config: string): string {
+  return (flags["agent"] as string | undefined) ?? resolveAgentName(config);
 }
 
 // ── Flag-parsing wrapper ────────────────────────────────────────────────────

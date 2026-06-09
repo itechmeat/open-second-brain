@@ -1,6 +1,5 @@
-import { defaultConfigPath } from "../../../core/config.ts";
 import { readPrefAudit, renderPrefAudit } from "../../../core/brain/pref-audit.ts";
-import { fail, parse, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 /**
  * `o2b brain audit <pref-id>` - render a preference's full mutation
@@ -21,8 +20,7 @@ export async function cmdBrainAudit(argv: string[]): Promise<number> {
   }
   const prefId = `pref-${slug}`;
 
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   let result;
   try {

@@ -4,9 +4,8 @@
  * fix per finding.
  */
 
-import { defaultConfigPath } from "../../../core/config.ts";
 import { lintConsolidate } from "../../../core/brain/lint-consolidate.ts";
-import { parse, fail, okJson, resolveBrainVault } from "../helpers.ts";
+import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainLint(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -16,8 +15,7 @@ export async function cmdBrainLint(argv: string[]): Promise<number> {
     yes: { type: "boolean" },
     json: { type: "boolean" },
   });
-  const config = defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const { vault } = brainVerbContext(flags);
 
   if (!flags["consolidate"]) {
     return fail("brain lint requires --consolidate (no other modes yet)");
