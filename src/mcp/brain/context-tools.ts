@@ -7,30 +7,11 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { resolveAgentName, resolveSearchFocusContextPack } from "../../core/config.ts";
-import { resolveSearchConfig } from "../../core/search/index.ts";
-import { readActiveSessionFocus } from "../../core/search/session-focus.ts";
+import { resolveAgentName } from "../../core/config.ts";
 import { brainActivePath, brainDirs } from "../../core/brain/paths.ts";
 import { regenerateActive, type RegenerateActiveResult } from "../../core/brain/active.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { readVaultInstructionFile } from "../../core/brain/vault-instruction-file.ts";
-import { packContext } from "../../core/brain/context-pack.ts";
-import { buildPreCompressPack } from "../../core/brain/pre-compress-pack.ts";
-import {
-  getContextReceipt,
-  isContextReceiptTrigger,
-  listContextReceipts,
-  summarizeContextReceipt,
-  type ContextReceiptOptions,
-} from "../../core/brain/context-receipts.ts";
-import {
-  diffContextPreset,
-  getContextPreset,
-  listContextPresets,
-  suggestContextPreset,
-  type ContextPresetCurrentConfig,
-} from "../../core/brain/context-presets.ts";
-import { extractPreCompactRecords } from "../../core/brain/pre-compact-extract.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import {
   WriteSessionRequestError,
@@ -51,16 +32,8 @@ import {
 } from "../../core/brain/pinned.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
-import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import { coerceStr, coerceStrList, coerceBool, coerceInt } from "../coerce.ts";
-import {
-  coercePositiveInteger,
-  optionalPositiveInt,
-  optionalStringArg,
-  requiredStringArg,
-  telemetryOptionsFromArgs,
-  vaultRelativeSafe,
-} from "./shared.ts";
+import { coerceStr, coerceInt } from "../coerce.ts";
+import { vaultRelativeSafe } from "./shared.ts";
 
 /**
  * One agent-facing surface for the write-session kernel: `op`

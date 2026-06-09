@@ -44,15 +44,16 @@ describe("confidence module", () => {
   });
 });
 
+const mkWindowSignal = (createdAt: string) => ({
+  path: "/tmp/x.md",
+  active: true,
+  signal: { id: "sig-x", topic: "t", signal: "positive", created_at: createdAt },
+});
+
 describe("dream-plan helpers", () => {
   test("filterWithinWindow keeps only signals inside the window", () => {
-    const mk = (createdAt: string) => ({
-      path: "/tmp/x.md",
-      active: true,
-      signal: { id: "sig-x", topic: "t", signal: "positive", created_at: createdAt },
-    });
-    const recent = mk("2026-06-08T12:00:00Z");
-    const old = mk("2026-01-01T00:00:00Z");
+    const recent = mkWindowSignal("2026-06-08T12:00:00Z");
+    const old = mkWindowSignal("2026-01-01T00:00:00Z");
     const filtered = filterWithinWindow(
       // Minimal structural records are enough for the window filter.
       [recent, old] as never,

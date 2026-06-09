@@ -87,7 +87,6 @@ import {
   BRAIN_PREFERENCE_STATUS,
   BRAIN_RETIRED_REASON,
   BRAIN_SIGNAL_SIGN,
-  type BrainConfidence,
   type BrainConfig,
   type BrainPreference,
   type BrainRetiredReason,

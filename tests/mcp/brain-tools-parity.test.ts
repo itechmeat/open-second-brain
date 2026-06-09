@@ -71,7 +71,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
 
 describe("BRAIN_TOOLS frozen surface", () => {
   test("advertises exactly the v1.x tool-name set", () => {
-    const names = [...BRAIN_TOOLS.map((t) => t.name)].sort();
+    const names = BRAIN_TOOLS.map((t) => t.name).toSorted();
     expect(names).toEqual([...FROZEN_BRAIN_TOOL_NAMES]);
   });
 
