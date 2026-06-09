@@ -10,6 +10,7 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
+import { WIKILINK_TARGET_RE } from "./brain/wikilink.ts";
 import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "./fs-atomic.ts";
 import { stem } from "./fs-utils.ts";
 import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
@@ -17,7 +18,6 @@ import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 const KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
 const PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
-const WIKILINK_RE = /\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g;
 const CODE_BLOCK_RE = /```[\s\S]*?```|`[^`]+`/g;
 const SLUG_INVALID_RE = /[^a-z0-9]+/g;
 const SLUG_MAX_LEN = 64;
@@ -217,7 +217,7 @@ export function extractWikilinks(content: string): string[] {
   const masked = content.replace(CODE_BLOCK_RE, " ");
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const m of masked.matchAll(WIKILINK_RE)) {
+  for (const m of masked.matchAll(WIKILINK_TARGET_RE)) {
     const target = m[1]!;
     const dot = target.lastIndexOf(".");
     const ext = dot >= 0 ? target.slice(dot).toLowerCase() : "";

@@ -43,7 +43,7 @@ Consultant variant 2: canonical modules with direct call-site migration. For eve
 New files:
 - `src/mcp/brain/` domain modules (~13 files) plus shared helpers module for coercion/serialization used by several domains.
 - `src/cli/brain/command.ts` - `withBrainCommand` wrapper and `CommandContext` type.
-- `src/core/brain/wikilink.ts` - named regex variants and parse helpers.
+- `src/core/brain/wikilink.ts` - existing helper module extended with the named regex variants (chosen over a new file: search and core layers already import brain modules, and a second `wikilink.ts` would recreate the twin-module problem).
 - `src/core/brain/yaml-parse.ts` - YAML subset parser moved from `policy.ts`.
 - `src/core/brain/dream-refresh.ts`, `src/core/brain/reconcile-outcomes.ts` - extracted from `dream.ts`.
 - `tests/core/layering.test.ts` - layering guard.

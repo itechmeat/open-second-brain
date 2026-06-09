@@ -23,6 +23,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
+import { WIKILINK_TARGET_RE } from "./wikilink.ts";
 import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import {
   PAGE_LIFECYCLE,
@@ -88,15 +89,13 @@ function buildMergeMap(vault: string): MergeMap {
   return Object.freeze({ forward });
 }
 
-const WIKILINK_RE = /\[\[([^\]|#]+)([#|][^\]]*)?\]\]/g;
-
 function scanFileForMergedLinks(
   path: string,
   raw: string,
   merge: MergeMap,
 ): { fixes: LintFix[]; rewritten: string } {
   const fixes: LintFix[] = [];
-  const rewritten = raw.replace(WIKILINK_RE, (match, target, suffix) => {
+  const rewritten = raw.replace(WIKILINK_TARGET_RE, (match, target, suffix) => {
     const canonical = merge.forward.get(target);
     if (!canonical) return match;
     fixes.push({ kind: "fix-merged-link", path, from: target, to: canonical });

@@ -16,6 +16,7 @@
  * out, with no I/O and no clock/random source.
  */
 
+import { WIKILINK_DETECT_RE } from "../brain/wikilink.ts";
 import { extractEntities } from "./entities.ts";
 import type { QueryIntent, QueryPlan, WeightProfile } from "./types.ts";
 
@@ -59,7 +60,6 @@ const PROFILES: Record<QueryIntent, WeightProfile> = Object.freeze({
 
 const QUOTED_PHRASE_RE = /"[^"\n]{2,}"/u;
 const WILDCARD_RE = /\*/u;
-const WIKILINK_RE = /\[\[[^\]\n]+\]\]/u;
 
 /** Lowercase + trim + collapse internal whitespace. No word lists. */
 function normalize(query: string): string {
@@ -96,7 +96,7 @@ function classify(query: string, normalized: string): QueryIntent {
 
   // Rule 2: explicit wikilinks or a query dominated by entity-like
   // tokens is a proper-noun lookup.
-  if (WIKILINK_RE.test(query) || entityShare >= 0.5) return "entity";
+  if (WIKILINK_DETECT_RE.test(query) || entityShare >= 0.5) return "entity";
 
   // Rule 3: a long query with few entities reads as open-ended.
   if (tokens >= 6 && entityShare < 0.2) return "broad";

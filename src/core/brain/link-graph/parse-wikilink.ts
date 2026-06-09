@@ -29,6 +29,8 @@
 
 import { basename } from "node:path";
 
+import { ANCHORED_WIKILINK_RE, RICH_WIKILINK_RE } from "../wikilink.ts";
+
 /**
  * Local regex for the rich extractor. Captures the full bracket
  * body (everything between `[[` and `]]`), so anchor / alias / block
@@ -38,7 +40,6 @@ import { basename } from "node:path";
  * don't collapse two adjacent wikilinks into one match. Anchored to
  * non-newline so a link that spans lines is not silently joined.
  */
-const RICH_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
 
 /**
  * Local mask for fenced and inline code spans. Mirrors the constant
@@ -120,7 +121,7 @@ export function parseWikilinkRich(value: string): WikilinkParse {
   // Strip surrounding wikilink brackets when present. Bare-text input
   // skips this branch and goes straight to the decoration-strip
   // pipeline.
-  const wm = /^\[\[([^\]]+)\]\]/.exec(s);
+  const wm = ANCHORED_WIKILINK_RE.exec(s);
   if (wm) s = wm[1]!.trim();
 
   // Pull alias FIRST. The pipe separator binds tighter than the hash

@@ -30,6 +30,51 @@ import { basename } from "node:path";
 
 import type { LinkOutputFormat } from "../config.ts";
 
+/*
+ * Canonical wikilink regex variants.
+ *
+ * Exactly one definition of the `[[...]]` syntax exists per contract;
+ * every parser in the codebase imports the variant whose edge-case
+ * behavior it needs instead of declaring a local copy:
+ *
+ *   - {@link WIKILINK_TARGET_RE}: target before any `|`/`#` suffix,
+ *     suffix captured separately. Tolerates newlines inside the
+ *     brackets (historical `vault.ts` behavior). For target extraction
+ *     and merged-link rewriting.
+ *   - {@link WIKILINK_ALIAS_RE}: target plus optional `|alias`
+ *     capture, single-line only, `#` stays inside the target. For the
+ *     search link/entity extractors.
+ *   - {@link RICH_WIKILINK_RE}: whole bracket body in one capture,
+ *     single-line only. For the link-graph parser/formatter which
+ *     decomposes the body itself.
+ *   - {@link WIKILINK_DETECT_RE}: presence check, no captures.
+ *   - {@link ANCHORED_WIKILINK_RE} / {@link EXACT_WIKILINK_RE}:
+ *     prefix-strip and whole-string forms used by the normalisers in
+ *     this module.
+ *
+ * The `g`-flagged variants are shared module-level instances: use them
+ * with `matchAll`/`replace` (which do not leak `lastIndex` state);
+ * clone via `new RegExp(re)` before calling `exec`/`test` in a loop.
+ */
+
+/** Target capture with separate `[#|]suffix` capture; multi-line tolerant. */
+export const WIKILINK_TARGET_RE = /\[\[([^\]|#]+)([#|][^\]]*)?\]\]/g;
+
+/** Target plus optional `|alias` capture; single-line, unicode mode. */
+export const WIKILINK_ALIAS_RE = /\[\[([^\]\n|]+?)(?:\|([^\]\n]+))?\]\]/gu;
+
+/** Whole bracket body in one capture; single-line. */
+export const RICH_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
+
+/** Presence check only; no captures, not global. */
+export const WIKILINK_DETECT_RE = /\[\[[^\]\n]+\]\]/u;
+
+/** Leading-wikilink prefix strip; body in one capture. */
+export const ANCHORED_WIKILINK_RE = /^\[\[([^\]]+)\]\]/;
+
+/** Whole-string wikilink form; body in one capture. */
+export const EXACT_WIKILINK_RE = /^\[\[([^\]]+)\]\]$/;
+
 /**
  * Strip wikilink decoration off `value` and return the bare target id.
  *
@@ -46,7 +91,7 @@ import type { LinkOutputFormat } from "../config.ts";
 export function normaliseWikilinkTarget(value: string): string {
   let s = value.trim();
   // Strip surrounding wikilink brackets, retaining only the target.
-  const wm = /^\[\[([^\]]+)\]\]/.exec(s);
+  const wm = ANCHORED_WIKILINK_RE.exec(s);
   if (wm) s = wm[1]!.trim();
   return stripBasenameDecoration(s);
 }
@@ -82,7 +127,7 @@ function stripBasenameDecoration(body: string): string {
  * get a clean id either way.
  */
 export function parseWikilink(value: string): string | null {
-  const m = /^\s*\[\[([^\]]+)\]\]\s*$/.exec(value);
+  const m = EXACT_WIKILINK_RE.exec(value.trim());
   if (!m) return null;
   return normaliseWikilinkTarget(m[1]!);
 }
@@ -143,7 +188,7 @@ export function parseArtifactRef(value: string): ArtifactRefParse {
   // otherwise has its colon swallowed by `path.basename`.
   let body = value.trim();
   let wasWikilink = false;
-  const wm = /^\[\[([^\]]+)\]\]$/.exec(body);
+  const wm = EXACT_WIKILINK_RE.exec(body);
   if (wm) {
     body = wm[1]!.trim();
     wasWikilink = true;
