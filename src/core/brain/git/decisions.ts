@@ -2,9 +2,10 @@
  * Commit-decision miner (Project History Suite, t_93d299bb).
  *
  * Deterministic heuristics over INGESTED commit records (never live
- * git): conventional breaking markers, BREAKING CHANGE footers, a
- * word-boundary decision keyword set, and revert shape. Same store,
- * same candidates, same order - no LLM classification anywhere.
+ * git): conventional breaking markers, BREAKING CHANGE footers, and
+ * revert shape - all fixed commit-protocol tokens, language-agnostic.
+ * Same store, same candidates, same order - no LLM classification
+ * anywhere.
  *
  * Each decision-shaped commit becomes one draft ADR candidate note at
  * `Brain/decisions/candidates/adr-<shortsha>-<slug>.md` with the
@@ -21,20 +22,6 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { listGitCommits } from "./store.ts";
 import type { GitCommitRecord } from "./store.ts";
 
-/** Phrases that mark a commit message as decision-shaped. */
-const DECISION_KEYWORDS = [
-  "decide",
-  "decided",
-  "decision",
-  "adopt",
-  "adopted",
-  "switch to",
-  "migrate to",
-  "instead of",
-  "adr",
-  "rationale",
-] as const;
-
 const CONVENTIONAL_BREAKING_RE = /^[a-z]+(\([^)]*\))?!:/;
 const REVERT_RE = /^revert\b/i;
 const SLUG_MAX = 40;
@@ -48,15 +35,15 @@ const CANDIDATE_SHA_LEN = 12;
  * Empty array = not decision-shaped.
  */
 export function detectDecisionSignals(subject: string, body: string): ReadonlyArray<string> {
+  // Language-agnostic by construction: only structural commit-protocol
+  // markers count as decision signals. The old English keyword set
+  // ("decide", "adopt", ...) never fired on a commit history written in
+  // any other language; conventional-commit and git-native markers
+  // (`type!:`, the `BREAKING CHANGE:` footer, the `Revert` prefix) are
+  // fixed protocol tokens git/tooling emit, not free prose.
   const signals: string[] = [];
   if (CONVENTIONAL_BREAKING_RE.test(subject)) signals.push("conventional_breaking");
   if (/^BREAKING CHANGE\b/m.test(body)) signals.push("breaking_change_footer");
-  const haystack = `${subject}\n${body}`.toLowerCase();
-  for (const keyword of DECISION_KEYWORDS) {
-    // Word-boundary match: 'adopt' must not fire inside 'adoption'.
-    const re = new RegExp(`\\b${keyword.replace(/ /g, "\\s+")}\\b`);
-    if (re.test(haystack)) signals.push(`decision_keyword:${keyword}`);
-  }
   if (REVERT_RE.test(subject)) signals.push("revert");
   return Object.freeze(signals);
 }

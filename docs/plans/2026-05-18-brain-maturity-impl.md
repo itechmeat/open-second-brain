@@ -2039,8 +2039,8 @@ Expected: exit 0.
 **Step 1: Replace the two deferred entries that this PR retires**
 
 Find the deferred-work section, locate the two entries:
-- `§4 — per-runtime steering text для Claude Code и Codex.`
-- `§15 «good vs bad» SKILL-секция.`
+- `§4 — per-runtime steering text for Claude Code and Codex.`
+- `§15 «good vs bad» SKILL section.`
 
 Replace them with one consolidated line:
 

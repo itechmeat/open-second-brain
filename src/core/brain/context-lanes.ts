@@ -30,9 +30,6 @@ export interface ContextLaneInput {
   readonly manualLane?: ContextLaneName | null;
 }
 
-const CONSTRAINT_RE =
-  /\b(?:avoid|do not|don't|must not|never|no longer|forbid|forbidden)\b|\b(?:не делай|никогда|запрещено|избегай)\b/iu;
-
 export function normalizeContextLane(raw: unknown): ContextLaneName | null {
   if (typeof raw !== "string") return null;
   const value = raw.trim().toLowerCase();
@@ -40,10 +37,18 @@ export function normalizeContextLane(raw: unknown): ContextLaneName | null {
   return null;
 }
 
+/**
+ * Classify a source into a context lane.
+ *
+ * Language-agnostic by construction: the lane is never inferred from
+ * the words of the principle/body (an English/Russian "never/forbidden"
+ * prose scan would silently misclassify every other language). The
+ * `constraints` lane is opt-in via the explicit `context_lane:`
+ * frontmatter field (surfaced here as `manualLane`); without it, the
+ * lane follows only the structural page tier.
+ */
 export function classifyContextLane(input: ContextLaneInput): ContextLaneName {
   if (input.manualLane) return input.manualLane;
-  const text = `${input.principle}\n${input.body}`;
-  if (CONSTRAINT_RE.test(text)) return "constraints";
   if (input.tier === "peripheral") return "consider";
   return "directives";
 }

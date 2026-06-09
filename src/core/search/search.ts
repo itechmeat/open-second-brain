@@ -35,7 +35,11 @@ import {
 import { extractEntities } from "./entities.ts";
 import { expandQueryEntities } from "./entity-alias.ts";
 import { buildCoverageReport, significantTerms, termIncludedIn } from "./coverage.ts";
-import { buildEvidencePack, downrankTerminalEvidenceResults } from "./evidence-pack.ts";
+import {
+  buildEvidencePack,
+  downrankTerminalEvidenceResults,
+  isTerminalStatus,
+} from "./evidence-pack.ts";
 import type { EvidenceUnionRecord, EvidenceVerification } from "./evidence-pack.ts";
 import { runFtsQueryDetailed } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
@@ -215,27 +219,16 @@ export async function search(
   const pathPrefix = assertSafePathPrefix(opts.pathPrefix);
   const policy = resolveSemanticPolicy(config, opts);
   const warnings: string[] = [];
-  // Opt-in local expansion (t_2fa95db1): an explicit structured
-  // document always wins; expansion only fills the gap.
-  const structured =
-    opts.structuredQuery ?? (expandActive === true ? expandQuery(config.vault, query) : undefined);
   const sessionFocus =
     opts.sessionFocus === undefined
       ? readActiveSessionFocus(config, opts.focusSession, Date.now())
       : opts.sessionFocus;
-  const keywordQuery = structuredKeywordQuery(query, structured);
-  const semanticLaneQuery = structuredSemanticQuery(structured);
   // Time-aware recall (recall-trust-suite): resolve since/until up front
   // so invalid input fails fast, before any store I/O.
   const timeRange =
     opts.since !== undefined || opts.until !== undefined
       ? resolveTimeRange({ since: opts.since, until: opts.until }, Date.now())
       : null;
-
-  // Query plan (v0.20.0): one structural pass yields the intent weight
-  // profile and the cache key. Pure; no I/O. Expanded terms (if any) are
-  // folded in once they have been derived from the store below.
-  const basePlan = buildQueryPlan(keywordQuery, [], structured?.intent);
 
   // Read-only origins (cross-vault search) disable self-healing: a
   // rebuild would write an index INTO the external vault. Default
@@ -245,6 +238,25 @@ export async function search(
       ? await Store.open(config, { mode: "read" })
       : await openReadOrSelfHeal(config);
   try {
+    // Opt-in local expansion (t_2fa95db1): an explicit structured
+    // document always wins; expansion only fills the gap. The lex lane's
+    // corpus-common tokens are derived from document frequency here
+    // (language-agnostic, no stopword list) so an implicit-AND query is
+    // not killed by a word that is ubiquitous in this vault.
+    const commonTokens =
+      opts.structuredQuery === undefined && expandActive === true
+        ? highFrequencyTokens(store, query)
+        : new Set<string>();
+    const structured =
+      opts.structuredQuery ??
+      (expandActive === true ? expandQuery(config.vault, query, { commonTokens }) : undefined);
+    const keywordQuery = structuredKeywordQuery(query, structured);
+    const semanticLaneQuery = structuredSemanticQuery(structured);
+    // Query plan (v0.20.0): one structural pass yields the intent weight
+    // profile and the cache key. Expanded terms (if any) are folded in
+    // once they have been derived from the store below.
+    const basePlan = buildQueryPlan(keywordQuery, [], structured?.intent);
+
     // Persistent query cache (v0.20.0): opt-in. Keyed by the request +
     // base plan hash + a config fingerprint, gated by the corpus
     // generation and a TTL. A hit returns the previously computed
@@ -785,9 +797,19 @@ export async function search(
             }),
           )
         : withCanonicalReasons;
+    // Terminal-state downrank (recall-trust-suite) is now structural and
+    // language-agnostic: a result is terminal when its frontmatter
+    // `status:` field declares a terminal value (controlled vocabulary),
+    // never because the note's prose happens to contain an English word
+    // like "done". One cached frontmatter read per candidate path, only
+    // in evidence-pack mode.
+    const terminalPaths =
+      opts.evidencePack === true
+        ? buildTerminalPaths(config.vault, withSecondPassReasons)
+        : new Set<string>();
     const finalResults =
       opts.evidencePack === true
-        ? downrankTerminalEvidenceResults(withSecondPassReasons)
+        ? downrankTerminalEvidenceResults(withSecondPassReasons, terminalPaths)
         : withSecondPassReasons;
     const evidencePack =
       opts.evidencePack === true
@@ -795,6 +817,7 @@ export async function search(
             query,
             finalResults,
             buildEvidenceVerification(store, query, finalResults, pathPrefix),
+            terminalPaths,
           )
         : undefined;
 
@@ -892,6 +915,71 @@ function applyTraversal(
     },
     opts,
   );
+}
+
+/** A token in at least this share of the corpus is treated as common. */
+const COMMON_TOKEN_CORPUS_SHARE = 0.5;
+/**
+ * Floor on document frequency before a token can be "common". Below this
+ * a corpus is too small to tell a stopword-like word from a rare one, so
+ * nothing is flagged (a 2-document vault must not call a word that appears
+ * once "ubiquitous").
+ */
+const MIN_COMMON_DOCUMENT_FREQUENCY = 2;
+
+/**
+ * Corpus-common query tokens, derived from document frequency. A token
+ * present in at least {@link COMMON_TOKEN_CORPUS_SHARE} of the indexed
+ * documents (and in at least {@link MIN_COMMON_DOCUMENT_FREQUENCY} of
+ * them) carries little discriminating signal - in ANY language - so the
+ * lex expansion lane drops it rather than letting one ubiquitous word
+ * kill an implicit-AND match. Language-agnostic: no stopword list.
+ *
+ * Note: document frequency is measured through the FTS index, whose
+ * tokenization can differ slightly from `tokenizeForExpansion`. A miss
+ * only fails to flag a token as common (it stays in the lex lane), so the
+ * fallback is always the safe, non-lossy direction.
+ */
+function highFrequencyTokens(store: Store, query: string): ReadonlySet<string> {
+  const tokens = [...new Set(tokenizeForExpansion(query))];
+  if (tokens.length === 0) return new Set();
+  const documentCount = store.counts().documents;
+  if (documentCount === 0) return new Set();
+  const threshold = COMMON_TOKEN_CORPUS_SHARE * documentCount;
+  const df = store.documentFrequencies(tokens);
+  const common = new Set<string>();
+  for (const token of tokens) {
+    const freq = df.get(token) ?? 0;
+    if (freq >= MIN_COMMON_DOCUMENT_FREQUENCY && freq >= threshold) common.add(token);
+  }
+  return common;
+}
+
+/**
+ * Build the set of terminal-state paths for evidence-pack downranking.
+ * Reads each unique candidate path's frontmatter `status:` field once
+ * and includes the path when the declared status is terminal (controlled
+ * vocabulary). A missing or unreadable status is non-terminal. This is
+ * the language-agnostic replacement for scanning note prose for English
+ * status words.
+ */
+function buildTerminalPaths(
+  vault: string,
+  results: ReadonlyArray<BrainSearchResult>,
+): ReadonlySet<string> {
+  const terminal = new Set<string>();
+  const seen = new Set<string>();
+  for (const r of results) {
+    if (seen.has(r.path)) continue;
+    seen.add(r.path);
+    try {
+      const [meta] = parseFrontmatter(join(vault, r.path));
+      if (isTerminalStatus((meta as Record<string, unknown>)["status"])) terminal.add(r.path);
+    } catch {
+      // Unreadable frontmatter is non-terminal.
+    }
+  }
+  return terminal;
 }
 
 /** Cap on extra records fetched per uncovered term (Feature C union). */

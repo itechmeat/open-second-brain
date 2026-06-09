@@ -27,7 +27,9 @@ function writePref(slug: string, principle: string, extra = ""): void {
 
 test("brain context-pack --lanes --json returns polarity lanes", async () => {
   writePref("directive", "Prefer concise answers", "tier: core");
-  writePref("constraint", "Never expose tokens", "tier: core");
+  // The constraints lane is opt-in via the explicit context_lane field,
+  // not inferred from prose words like "Never" (language-agnostic).
+  writePref("constraint", "Never expose tokens", "tier: core\ncontext_lane: constraints");
 
   const out = await runCli(
     ["brain", "context-pack", "--vault", vault, "--max-tokens", "10000", "--lanes", "--json"],

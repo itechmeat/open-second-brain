@@ -36,7 +36,7 @@ function tool(name: string) {
 }
 
 test("default off: the gate emits no telemetry", async () => {
-  const decision = (await tool("brain_recall_gate").handler(ctx(), { prompt: "hello" })) as {
+  const decision = (await tool("brain_recall_gate").handler(ctx(), { prompt: "/help" })) as {
     retrieve: boolean;
   };
   expect(decision.retrieve).toBe(false);
@@ -50,7 +50,7 @@ test("with recall_gate_telemetry on, decisions land as continuity records", asyn
     telemetry_host: "hermes",
     session_id: "sess-1",
   });
-  await tool("brain_recall_gate").handler(ctx(), { prompt: "hi" });
+  await tool("brain_recall_gate").handler(ctx(), { prompt: "/help" });
   const records = listGateTelemetry(vault);
   expect(records).toHaveLength(2);
   expect(records.some((r) => r.payload["decision"] === "retrieve")).toBe(true);

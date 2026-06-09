@@ -27,7 +27,11 @@ beforeEach(async () => {
     join(vault, "canary.md"),
     "# Canary rollout\n\nShip one instance first, observe, expand gradually.\n",
   );
-  writeFileSync(join(vault, "other.md"), "# Other\n\nNothing relevant whatsoever.\n");
+  // "the" is seeded across >= 2 of the other notes (majority of the
+  // corpus) but NOT canary.md, so the DF-driven, language-agnostic
+  // common-token filter drops it from the implicit-AND lex lane.
+  writeFileSync(join(vault, "other.md"), "# Other\n\nNothing in the list is relevant here.\n");
+  writeFileSync(join(vault, "notes.md"), "# Notes\n\nThe team reviewed the plan in the meeting.\n");
   datasetPath = join(tmp, "dataset.json");
   writeFileSync(
     datasetPath,

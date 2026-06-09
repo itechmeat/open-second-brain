@@ -257,6 +257,10 @@ describe("packContext", () => {
       topic: "security",
       principle: "Never expose secret tokens",
       tier: "core",
+      // The constraints lane is opt-in via the explicit context_lane
+      // field - it is no longer inferred from prose words like "Never"
+      // (that only ever worked for English/Russian).
+      context_lane: "constraints",
     });
     writePref("consider", {
       topic: "taste",

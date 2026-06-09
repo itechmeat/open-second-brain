@@ -216,7 +216,13 @@ test("search degrades semantic structured lanes when semantic search is disabled
 });
 
 test("search can return an evidence pack and downrank terminal-state support", async () => {
-  writeMd(vault, "Notes/terminal.md", "# Terminal\n\nalpha beta superseded by active note.");
+  // Terminal state is declared via the controlled frontmatter `status:`
+  // field, not inferred from prose - language-agnostic downranking.
+  writeMd(
+    vault,
+    "Notes/terminal.md",
+    "---\nstatus: superseded\n---\n\n# Terminal\n\nalpha beta old support.",
+  );
   writeMd(vault, "Notes/active.md", "# Active\n\nalpha beta current support.");
   const cfg = makeConfig({ vault, dbPath });
   await indexVault(cfg);

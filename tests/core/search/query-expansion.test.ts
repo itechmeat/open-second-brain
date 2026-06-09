@@ -2,9 +2,10 @@
  * Deterministic query expansion producer (link-recall-intelligence,
  * Task 5 / t_2fa95db1): a bare query becomes a structured lex/vec/hyde
  * document for the EXISTING structured-query consumer - no model, no
- * paid call. Lex strips stopwords for the implicit-AND FTS lane, vec
- * adds an entity-context line when registry entities match, hyde is
- * one template passage. Opt-in via `search(config, {expand: true})`.
+ * paid call. Lex keeps every query token for the implicit-AND FTS lane
+ * (no stopword list - language-agnostic), vec adds an entity-context
+ * line when registry entities match, hyde is one template passage.
+ * Opt-in via `search(config, {expand: true})`.
  */
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
@@ -39,7 +40,9 @@ describe("expandQuery", () => {
     const first = expandQuery(vault, "the canary rollout plan");
     const second = expandQuery(vault, "the canary rollout plan");
     expect(first).toEqual(second);
-    expect(first.lex.include).toEqual(["canary", "rollout", "plan"]);
+    // No stopword list: every token is kept (deduped, capped), in any
+    // language. Common words are deprioritised by ranking, not dropped here.
+    expect(first.lex.include).toEqual(["the", "canary", "rollout", "plan"]);
     expect(first.lex.exclude).toEqual([]);
     expect(first.vec[0]).toBe("the canary rollout plan");
     expect(first.hyde).toHaveLength(1);
@@ -47,7 +50,7 @@ describe("expandQuery", () => {
     expect(first.intent).toBeNull();
   });
 
-  test("keeps the raw tokens when every token is a stopword", () => {
+  test("keeps every token - there is no stopword list to strip", () => {
     const doc = expandQuery(vault, "the and of");
     expect(doc.lex.include).toEqual(["the", "and", "of"]);
   });
@@ -81,7 +84,10 @@ describe("expandQuery", () => {
 });
 
 describe("search --expand", () => {
-  test("stopword stripping recovers a hit the implicit-AND lane misses", async () => {
+  test("--expand annotates the lex lane and preserves real hits", async () => {
+    // Language-agnostic: expansion no longer strips a hardcoded English
+    // stopword list (that recovery only ever worked for English). A query
+    // whose own terms match is still found, with the lex lane annotated.
     writeFileSync(
       join(vault, "canary.md"),
       "# Canary rollout\n\nShip one instance first, observe, expand gradually.\n",
@@ -89,10 +95,7 @@ describe("search --expand", () => {
     writeFileSync(join(vault, "other.md"), "# Other\n\nNothing relevant here at all.\n");
     await indexVault(config);
 
-    const plain = await search(config, { query: "the canary rollout" });
-    expect(plain.results).toHaveLength(0);
-
-    const expanded = await search(config, { query: "the canary rollout", expand: true });
+    const expanded = await search(config, { query: "canary rollout", expand: true });
     expect(expanded.results.some((r) => r.path === "canary.md")).toBe(true);
     expect(
       expanded.results

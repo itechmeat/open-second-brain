@@ -46,7 +46,7 @@ afterEach(() => {
 
 // ── signal detection ────────────────────────────────────────────────────────
 
-test("detectDecisionSignals matches deterministic decision shapes", () => {
+test("detectDecisionSignals matches only structural commit-protocol shapes", () => {
   expect(detectDecisionSignals("feat!: drop legacy index format", "")).toContain(
     "conventional_breaking",
   );
@@ -56,17 +56,16 @@ test("detectDecisionSignals matches deterministic decision shapes", () => {
   expect(detectDecisionSignals("feat: new api", "BREAKING CHANGE: payload renamed")).toContain(
     "breaking_change_footer",
   );
-  expect(detectDecisionSignals("chore: migrate to bun test runner", "")).toContain(
-    "decision_keyword:migrate to",
-  );
-  expect(
-    detectDecisionSignals("docs: explain choice", "We decided to adopt JSONL instead of SQLite."),
-  ).toEqual(expect.arrayContaining(["decision_keyword:decided", "decision_keyword:adopt"]));
   expect(detectDecisionSignals('Revert "feat: bad idea"', "")).toContain("revert");
   // Plain work is NOT decision-shaped.
   expect(detectDecisionSignals("fix: off-by-one in pager", "small fix")).toEqual([]);
-  // Substrings inside words do not match (no false 'adopt' in 'adoption-rate.ts').
-  expect(detectDecisionSignals("chore: update adoption-rate metrics", "")).toEqual([]);
+  // Language-agnostic by construction: prose words ("decided", "adopt",
+  // "migrate to") are NOT decision signals - they only ever fired on
+  // English commit histories. Only structural protocol markers count.
+  expect(detectDecisionSignals("chore: migrate to bun test runner", "")).toEqual([]);
+  expect(
+    detectDecisionSignals("docs: explain choice", "We decided to adopt JSONL instead of SQLite."),
+  ).toEqual([]);
 });
 
 // ── mining ──────────────────────────────────────────────────────────────────
@@ -75,7 +74,7 @@ test("mineCommitDecisions writes candidates for decision commits only, with prov
   appendGitRecords(vault, KEY, [
     commit("a".repeat(40), "feat!: drop legacy index format", "BREAKING CHANGE: rebuild needed"),
     commit("b".repeat(40), "fix: typo"),
-    commit("c".repeat(40), "chore: migrate to bun test runner"),
+    commit("c".repeat(40), 'Revert "feat: half-baked migration"'),
   ]);
   const res = mineCommitDecisions(vault, KEY);
   expect(res.scanned).toBe(3);

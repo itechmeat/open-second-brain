@@ -93,7 +93,7 @@ test("ingest -> find -> mine -> architect -> re-run: one coherent project memory
   expect(mined.created).toBe(1);
   const candidate = readFileSync(mined.notes[0]!, "utf8");
   expect(candidate).toContain("conventional_breaking");
-  expect(candidate).toContain("decision_keyword:adopt");
+  expect(candidate).toContain("breaking_change_footer");
   expect(candidate).toContain("migrate to jsonl store");
 
   // ── Architect: structural notes for the same project. ──

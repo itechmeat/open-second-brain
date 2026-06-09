@@ -23,8 +23,16 @@ import { search } from "../../../src/core/search/search.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 describe("coverage engine (pure)", () => {
-  test("significantTerms drops stopwords and short tokens", () => {
-    expect(significantTerms("what is the alpha zephyr")).toEqual(["alpha", "zephyr"]);
+  test("significantTerms drops short tokens but keeps every word - no stopword list", () => {
+    // Language-agnostic: there is no stopword list. Tokens under length 3
+    // are dropped structurally ("is"); common words like "the"/"what" are
+    // kept here and deprioritised downstream by IDF, in any language.
+    expect(significantTerms("what is the alpha zephyr")).toEqual([
+      "what",
+      "the",
+      "alpha",
+      "zephyr",
+    ]);
   });
 
   test("idf is monotonically decreasing in document frequency", () => {

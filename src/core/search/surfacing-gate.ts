@@ -1,13 +1,10 @@
 export type SurfacingGateReason =
   | "explicit"
-  | "memory_question"
-  | "uncertain_question"
   | "duplicate"
   | "empty"
-  | "greeting"
   | "slash_command"
   | "shell_command"
-  | "no_recall_intent";
+  | "default_retrieve";
 
 export interface SurfacingGateInput {
   readonly prompt: string;
@@ -19,16 +16,6 @@ export interface SurfacingGateDecision {
   readonly retrieve: boolean;
   readonly reason: SurfacingGateReason;
 }
-
-const GREETINGS = new Set([
-  "hello",
-  "hi",
-  "hey",
-  "привет",
-  "здравствуй",
-  "здравствуйте",
-  "добрый день",
-]);
 
 const SHELL_COMMANDS = new Set([
   "awk",
@@ -54,19 +41,8 @@ const SHELL_COMMANDS = new Set([
   "yarn",
 ]);
 
-const MEMORY_PATTERNS = [
-  /\b(remember|recall|memory|context|notes?|decid(?:e|ed)|decision|search|find)\b/iu,
-  /\b(what did we|where did we|when did we|have we|did we)\b/iu,
-  /\b(помнишь|вспомни|найди|контекст|решили|обсуждали|заметки)\b/iu,
-];
-
 function normalizePrompt(prompt: string): string {
   return prompt.trim().replace(/\s+/gu, " ").toLocaleLowerCase();
-}
-
-function isGreeting(normalized: string): boolean {
-  const stripped = normalized.replace(/[!.?]+$/u, "");
-  return GREETINGS.has(stripped);
 }
 
 function isSlashCommand(normalized: string): boolean {
@@ -79,10 +55,18 @@ function isShellOnlyPrompt(normalized: string): boolean {
   return SHELL_COMMANDS.has(firstToken);
 }
 
-function hasMemoryIntent(normalized: string): boolean {
-  return MEMORY_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
+/**
+ * Decide whether a prompt should trigger memory retrieval.
+ *
+ * Language-agnostic by construction: the gate never inspects prompt
+ * words against any natural-language vocabulary, so a prompt in any
+ * language is treated identically. Only structural signals suppress
+ * retrieval — an empty prompt, a verbatim repeat of the previous one, a
+ * slash command, or a single shell command (command names, not human
+ * language). Everything else FAILS OPEN: we retrieve and let ranking
+ * decide relevance, because a missed recall is worse than a cheap
+ * no-result search.
+ */
 export function evaluateSurfacingGate(input: SurfacingGateInput): SurfacingGateDecision {
   if (input.explicit === true) return Object.freeze({ retrieve: true, reason: "explicit" });
 
@@ -93,17 +77,10 @@ export function evaluateSurfacingGate(input: SurfacingGateInput): SurfacingGateD
   if (previous !== null && previous === normalized) {
     return Object.freeze({ retrieve: false, reason: "duplicate" });
   }
-  if (isGreeting(normalized)) return Object.freeze({ retrieve: false, reason: "greeting" });
   if (isSlashCommand(normalized))
     return Object.freeze({ retrieve: false, reason: "slash_command" });
   if (isShellOnlyPrompt(normalized)) {
     return Object.freeze({ retrieve: false, reason: "shell_command" });
   }
-  if (hasMemoryIntent(normalized)) {
-    return Object.freeze({ retrieve: true, reason: "memory_question" });
-  }
-  if (normalized.endsWith("?") && normalized.length >= 60) {
-    return Object.freeze({ retrieve: true, reason: "uncertain_question" });
-  }
-  return Object.freeze({ retrieve: false, reason: "no_recall_intent" });
+  return Object.freeze({ retrieve: true, reason: "default_retrieve" });
 }

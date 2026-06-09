@@ -112,7 +112,9 @@ describe("brain_context_pack tool — round trip", () => {
     );
     writeFileSync(
       join(vault, "Brain", "preferences", "pref-constraint.md"),
-      "---\nid: pref-constraint\ntopic: t\nprinciple: Never expose tokens\ntier: core\n---\n",
+      // Constraints lane is opt-in via the explicit context_lane field,
+      // not inferred from the prose word "Never" (language-agnostic).
+      "---\nid: pref-constraint\ntopic: t\nprinciple: Never expose tokens\ntier: core\ncontext_lane: constraints\n---\n",
     );
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

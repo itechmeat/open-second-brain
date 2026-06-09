@@ -36,20 +36,36 @@ test("buildEvidencePack reports matched and missing significant terms", () => {
   expect(pack.records[0]?.whyRetrieved).toEqual(["fts5_bm25: 1.000"]);
 });
 
-test("buildEvidencePack marks terminal-state records", () => {
-  const pack = buildEvidencePack("alpha", [result("done.md", "alpha superseded by another note")]);
+test("buildEvidencePack marks terminal-state records from the terminal path set", () => {
+  // Terminality is structural (declared frontmatter `status:`), handed in
+  // as the terminal-path set - never inferred from the note's prose.
+  const terminalPaths = new Set(["done.md"]);
+  const pack = buildEvidencePack(
+    "alpha",
+    [result("done.md", "alpha and more")],
+    undefined,
+    terminalPaths,
+  );
 
   expect(pack.records[0]?.terminalState).toBe(true);
   expect(pack.records[0]?.droppedCandidateReasons).toEqual([]);
 });
 
+test("buildEvidencePack does not infer terminal state from prose", () => {
+  // "superseded" / "done" in the body must NOT make a record terminal
+  // when no terminal path set is supplied (the old regex false-fired here).
+  const pack = buildEvidencePack("alpha", [result("notes.md", "alpha superseded by another note")]);
+
+  expect(pack.records[0]?.terminalState).toBe(false);
+});
+
 test("buildEvidencePack reports terminal downrank only when applied", () => {
-  const pack = buildEvidencePack("alpha", [
-    result("done.md", "alpha superseded by another note", [
-      "fts5_bm25: 1.000",
-      "evidence_terminal_downrank: true",
-    ]),
-  ]);
+  const pack = buildEvidencePack(
+    "alpha",
+    [result("done.md", "alpha and more", ["fts5_bm25: 1.000", "evidence_terminal_downrank: true"])],
+    undefined,
+    new Set(["done.md"]),
+  );
 
   expect(pack.records[0]?.droppedCandidateReasons).toContain("terminal_state_downranked");
 });

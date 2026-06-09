@@ -14,34 +14,24 @@
  * in. Deterministic, no LLM, no clock.
  */
 
-const STOPWORDS = new Set([
-  "about",
-  "and",
-  "are",
-  "for",
-  "from",
-  "how",
-  "the",
-  "this",
-  "that",
-  "what",
-  "when",
-  "where",
-  "with",
-]);
-
 /** Share of the corpus a term may appear in and still count as rare. */
 export const RARE_TERM_CORPUS_SHARE = 0.02;
 
 /**
- * Significant query terms: length >= 3, not a stopword, deduplicated,
- * in query order. The same extraction the evidence pack has used since
- * PR #54 — now owned here so every consumer agrees.
+ * Significant query terms: length >= 3, deduplicated, in query order.
+ *
+ * Language-agnostic by construction: there is deliberately NO stopword
+ * list. A per-language stopword set (the old English-only one) would
+ * under-filter every other language while pretending to help. Instead,
+ * corpus-common terms are handled downstream by the IDF weighting in
+ * {@link buildCoverageReport} — a term that appears in most documents
+ * earns near-zero IDF and contributes almost nothing to the weighted
+ * coverage, in any language, without a vocabulary list.
  */
 export function significantTerms(query: string): string[] {
   const terms = new Set<string>();
   for (const token of query.toLocaleLowerCase().split(/[^\p{L}\p{N}_-]+/u)) {
-    if (token.length >= 3 && !STOPWORDS.has(token)) terms.add(token);
+    if (token.length >= 3) terms.add(token);
   }
   return [...terms];
 }
