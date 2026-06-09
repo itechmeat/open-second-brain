@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendAuditRecord } from "../reliability/audit.ts";
-import { atomicWriteText } from "../reliability/atomic.ts";
+import { atomicWriteText } from "../fs-atomic.ts";
 import { withFileLock } from "../reliability/lock.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
 import {

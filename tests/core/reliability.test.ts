@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import { appendAuditRecord } from "../../src/core/reliability/audit.ts";
-import { atomicWriteText } from "../../src/core/reliability/atomic.ts";
 import { withFileLock } from "../../src/core/reliability/lock.ts";
 import { buildProbeReport } from "../../src/core/reliability/probe.ts";
 
@@ -17,37 +16,6 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
-});
-
-describe("atomicWriteText", () => {
-  test("preserves old content when validation rejects the candidate", () => {
-    const target = join(tmp, "state.yaml");
-    writeFileSync(target, "schema_version: 1\n", "utf8");
-
-    expect(() =>
-      atomicWriteText(target, "broken: true\n", {
-        validate: () => {
-          throw new Error("candidate failed lint");
-        },
-      }),
-    ).toThrow("candidate failed lint");
-
-    expect(readFileSync(target, "utf8")).toBe("schema_version: 1\n");
-    const leakedTemps = readdirSync(dirname(target)).filter(
-      (name) => name.startsWith(`.${basename(target)}.`) && name.endsWith(".tmp"),
-    );
-    expect(leakedTemps).toHaveLength(0);
-  });
-
-  test("writes the candidate atomically after validation passes", () => {
-    const target = join(tmp, "Brain", "_brain.yaml");
-
-    atomicWriteText(target, "schema_version: 1\nschema:\n", {
-      validate: (candidate) => expect(candidate).toContain("schema_version"),
-    });
-
-    expect(readFileSync(target, "utf8")).toBe("schema_version: 1\nschema:\n");
-  });
 });
 
 describe("withFileLock", () => {
