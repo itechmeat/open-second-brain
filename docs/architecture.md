@@ -150,11 +150,11 @@ Recommended behavior:
 
 ## Vault layout
 
-The agent owns one directory in the vault: `Brain/`. Pay Memory nests
-under `Brain/payments/` so the write contract stays simple ("agent
-writes only under `Brain/`"). User-authored notes (daily journals,
-weekly notes) live wherever the operator names them; the agent reads
-those paths only when they are listed in `notes.read_paths`.
+The agent owns one directory in the vault: `Brain/`. The write
+contract stays simple ("agent writes only under `Brain/`").
+User-authored notes (daily journals, weekly notes) live wherever the
+operator names them; the agent reads those paths only when they are
+listed in `notes.read_paths`.
 
 ```text
 Brain/
@@ -166,13 +166,6 @@ Brain/
   preferences/             # active rules: pref-<slug>.md, status unconfirmed | confirmed
   retired/                 # ret-<slug>.md with retired_reason
   log/                     # YYYY-MM-DD.md, append-only event log (dream / apply-evidence / etc.)
-  payments/                # Pay Memory (optional, paid-action audit)
-    policies/spending.md   # spending policy + optional spending.json
-    <YYYY-MM-DD>/<slug>.md # dated receipts
-    assets/                # generated-asset notes
-    drafts/                # draft artefacts
-    reports/               # daily reports
-    _pending/              # approval workflow
   .snapshots/              # <run_id>.tar.zst, pre-run snapshots for o2b brain rollback
 ```
 
@@ -195,7 +188,7 @@ Agent runtime
   -> runtime adapter/plugin
     -> skills and commands (brain-memory skill, open-second-brain skill)
       -> CLI/core library (src/core/brain/*)
-        -> vault files: Brain/ (observing memory) + Brain/payments/ (paid-action audit)
+        -> vault files: Brain/ (observing memory)
 ```
 
 Full design: [`docs/plans/2026-05-15-brain-observing-memory.md`](plans/2026-05-15-brain-observing-memory.md).

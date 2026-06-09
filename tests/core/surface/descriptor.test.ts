@@ -41,7 +41,6 @@ test("descriptions are first-line only", () => {
 test("surfaceGroup derives a group from the name prefix", () => {
   expect(surfaceGroup("brain_feedback")).toBe("brain");
   expect(surfaceGroup("schema_inspect")).toBe("schema");
-  expect(surfaceGroup("payment_policy_check")).toBe("payment");
   expect(surfaceGroup("second_brain_status")).toBe("core");
   expect(surfaceGroup("vault_health")).toBe("core");
 });

@@ -37,19 +37,6 @@ import {
 } from "./helpers.ts";
 import { wantsJsonFlag, withJsonFallback } from "./json-helpers.ts";
 import {
-  cmdInitPayMemory,
-  cmdAppendPaymentReceipt,
-  cmdCaptureAsset,
-  cmdPaymentDigest,
-  cmdRequestPaymentApproval,
-  cmdApprovePaymentRequest,
-  cmdRejectPaymentRequest,
-  cmdConsumePaymentRequest,
-  cmdListPendingPayments,
-  cmdCheckPaymentPolicy,
-  cmdPaymentReport,
-} from "./pay-memory/index.ts";
-import {
   installCli,
   renderInstallResult,
   renderUninstallResult,
@@ -682,19 +669,6 @@ Commands:
   help                      Print this help text; --json prints command metadata
   completions               Print shell completions for bash, zsh, fish, elvish, nushell, powershell
 
-Pay Memory:
-  init-pay-memory           Bootstrap policies/, payments/, assets/, drafts/, reports/
-  append-payment-receipt    Save a Markdown receipt for a paid API call
-  capture-asset             Save a Markdown note for an asset produced by a paid call
-  payment-report            Aggregate a date's receipts into a Markdown report
-  check-payment-policy      Evaluate a prospective paid call against policies/spending.json
-  request-payment-approval  Create a pending payment request the user must approve
-  approve-payment-request   Mark a pending request as approved (human action)
-  reject-payment-request    Mark a pending request as rejected (human action)
-  consume-payment-request   Link an approved request to its resulting receipt
-  list-pending-payments     List pending/approved/etc. requests
-  payment-digest            Render a Telegram-friendly 4-line summary for a date (Hermes cron-friendly)
-
 Brain (observing memory):
   brain init                Bootstrap <vault>/Brain/ skeleton (idempotent)
   brain feedback            Record a taste signal into Brain/inbox/
@@ -782,17 +756,6 @@ const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "search",
   "vault",
   "discipline",
-  "init-pay-memory",
-  "append-payment-receipt",
-  "capture-asset",
-  "payment-report",
-  "check-payment-policy",
-  "request-payment-approval",
-  "approve-payment-request",
-  "reject-payment-request",
-  "consume-payment-request",
-  "list-pending-payments",
-  "payment-digest",
 ]);
 
 async function dispatchCommand(command: string, rest: string[]): Promise<number> {
@@ -826,28 +789,6 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return cmdHelp(rest);
       case "completions":
         return cmdCompletions(rest);
-      case "init-pay-memory":
-        return await cmdInitPayMemory(rest);
-      case "append-payment-receipt":
-        return await cmdAppendPaymentReceipt(rest);
-      case "capture-asset":
-        return await cmdCaptureAsset(rest);
-      case "payment-report":
-        return await cmdPaymentReport(rest);
-      case "check-payment-policy":
-        return await cmdCheckPaymentPolicy(rest);
-      case "request-payment-approval":
-        return await cmdRequestPaymentApproval(rest);
-      case "approve-payment-request":
-        return await cmdApprovePaymentRequest(rest);
-      case "reject-payment-request":
-        return await cmdRejectPaymentRequest(rest);
-      case "consume-payment-request":
-        return await cmdConsumePaymentRequest(rest);
-      case "list-pending-payments":
-        return await cmdListPendingPayments(rest);
-      case "payment-digest":
-        return await cmdPaymentDigest(rest);
       case "brain":
         return await handleBrainSubcommand(rest);
       case "discipline":

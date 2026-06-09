@@ -225,17 +225,6 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("uninstall", "Remove discipline cron"),
       ],
     ),
-    command("init-pay-memory", "Bootstrap Pay Memory folders"),
-    command("append-payment-receipt", "Save a payment receipt"),
-    command("capture-asset", "Save an asset note"),
-    command("payment-report", "Aggregate payment receipts"),
-    command("check-payment-policy", "Evaluate paid-call policy"),
-    command("request-payment-approval", "Create payment approval request"),
-    command("approve-payment-request", "Approve payment request"),
-    command("reject-payment-request", "Reject payment request"),
-    command("consume-payment-request", "Consume approved payment request"),
-    command("list-pending-payments", "List payment requests"),
-    command("payment-digest", "Render payment digest"),
   ],
 });
 

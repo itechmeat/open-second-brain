@@ -8,7 +8,6 @@ describe("buildToolTable scope filter", () => {
     expect(names).toContain("brain_feedback");
     expect(names).toContain("brain_apply_evidence");
     expect(names).toContain("brain_dream");
-    expect(names).toContain("payment_memory_init");
     expect(names).toContain("vault_health");
     expect(full.length).toBeGreaterThanOrEqual(15);
   });

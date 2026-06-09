@@ -1,6 +1,6 @@
 /**
  * Best-effort secret redactor + text-field normaliser shared across
- * Pay Memory and Brain writers.
+ * the Brain writers.
  *
  * The redactor catches six secret-bearing keys in four assignment
  * shapes:

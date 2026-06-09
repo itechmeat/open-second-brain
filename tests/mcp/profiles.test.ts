@@ -49,7 +49,6 @@ test("recall profile keeps the memory surface and withholds admin tools", () => 
   expect(names).toContain("brain_context_pack");
   expect(names).toContain("brain_feedback");
   expect(names).not.toContain("schema_apply_mutations");
-  expect(names).not.toContain("payment_memory_init");
   const withheld = evaluated.report.withheld.map((w) => w.name);
   expect(withheld).toContain("schema_apply_mutations");
 });

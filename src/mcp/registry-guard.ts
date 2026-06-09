@@ -88,14 +88,6 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_switch_vault: "write; returns a small profile ack",
   brain_write_session: "lifecycle ops return one fixed-shape envelope; prompts are kernel-bounded",
   schema_apply_mutations: "write; returns a bounded mutation receipt",
-  payment_memory_init: "write; returns a bootstrap receipt",
-  payment_receipt_append: "write; returns a single receipt path",
-  asset_capture: "write; returns a single asset note path",
-  payment_request_approval: "write; returns one pending-request descriptor",
-  payment_request_status: "read of one request; fixed-shape status",
-  payment_request_consume: "write; returns a small link receipt",
-  payment_policy_check: "fixed-shape policy verdict",
-  payment_report_generate: "write; returns one report path plus totals",
 
   // Bounded-by-construction reads.
   second_brain_capabilities: "fixed-size capability report",

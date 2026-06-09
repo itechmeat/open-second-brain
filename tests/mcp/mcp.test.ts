@@ -155,7 +155,7 @@ describe("handshake", () => {
 });
 
 describe("tool listing", () => {
-  test("advertises the core, Brain, and Pay Memory tools (v0.10.8+)", async () => {
+  test("advertises the core and Brain tools (v0.10.8+)", async () => {
     const server = new MCPServer({ vault: tmp });
     await initialize(server);
     const r = (await server.handleRequest({
@@ -230,15 +230,6 @@ describe("tool listing", () => {
         // names above stay registered as deprecated aliases.
         "brain_brief",
         "brain_analytics",
-        // Pay Memory (unchanged).
-        "payment_memory_init",
-        "payment_receipt_append",
-        "asset_capture",
-        "payment_report_generate",
-        "payment_policy_check",
-        "payment_request_approval",
-        "payment_request_status",
-        "payment_request_consume",
         // Search (added in v0.10.0; recall gate added in v0.27.0).
         "brain_recall_feedback",
         "brain_recall_gate",
@@ -502,34 +493,34 @@ describe("stdio loop", () => {
     // brain_stale_scan / brain_daily_brief / brain_weekly_synthesis
     // added v0.10.18; brain_agent_query / brain_agent_diff added in
     // v0.15.0; brain_pinned_context added in v0.16.0; lifecycle review
-    // tools added in v0.17.0) + 8 Pay Memory + 1 Search
-    // + brain_artifact_get (v0.18.0) = 40.
-    // + brain_mcp_landscape (typed graph semantics) = 41.
-    // + brain_pre_compress_pack (v0.20.0) = 42.
-    // + brain_audit (v0.21.0) = 43.
-    // + brain_morning_brief (v0.21.0) = 44.
-    // + brain_sources + brain_switch_vault (v0.22.0) = 46.
-    // + second_brain_capabilities (v0.23.0) = 47.
-    // + 9 schema admin tools + brain_watchdog = 57.
-    // + brain_recall_gate (v0.27.0) = 58.
-    // + 7 context continuity/session recall tools (v0.29.0) = 65.
-    // + 3 procedural-learning tools (v0.30.0) = 68.
-    // + brain_procedural_graph (v0.31.0) = 69.
-    // + brain_attention_flows (v0.31.0) = 70.
-    // + brain_recall_feedback (recall-trust-suite) = 71,
-    // + brain_brief / brain_analytics / schema_inspect (token-diet) = 74
+    // tools added in v0.17.0) + 1 Search
+    // + brain_artifact_get (v0.18.0) = 32.
+    // + brain_mcp_landscape (typed graph semantics) = 33.
+    // + brain_pre_compress_pack (v0.20.0) = 34.
+    // + brain_audit (v0.21.0) = 35.
+    // + brain_morning_brief (v0.21.0) = 36.
+    // + brain_sources + brain_switch_vault (v0.22.0) = 38.
+    // + second_brain_capabilities (v0.23.0) = 39.
+    // + 9 schema admin tools + brain_watchdog = 49.
+    // + brain_recall_gate (v0.27.0) = 50.
+    // + 7 context continuity/session recall tools (v0.29.0) = 57.
+    // + 3 procedural-learning tools (v0.30.0) = 60.
+    // + brain_procedural_graph (v0.31.0) = 61.
+    // + brain_attention_flows (v0.31.0) = 62.
+    // + brain_recall_feedback (recall-trust-suite) = 63,
+    // + brain_brief / brain_analytics / schema_inspect (token-diet) = 66
     // - 18 predecessors hidden as deprecated aliases (callable via
-    //   tools/call, not advertised) = 56 (+1 capability diagnostic = 57).
+    //   tools/call, not advertised) = 48 (+1 capability diagnostic = 49).
     // + list_skills / get_skill / skills_attach / tool_hydrate /
-    //   brain_intention (Agent Surface Suite) = 62.
+    //   brain_intention (Agent Surface Suite) = 54.
     // + brain_trigger / brain_deep_synthesis / brain_idea_discovery
-    //   (Workspace Insight Suite) = 65.
-    // + brain_write_session (Agent Write Contract Suite) = 66.
+    //   (Workspace Insight Suite) = 57.
+    // + brain_write_session (Agent Write Contract Suite) = 58.
     // + brain_truth / brain_dead_ends / brain_foresight
-    //   (Entity Truth & Self-Improving Dream Suite) = 69.
+    //   (Entity Truth & Self-Improving Dream Suite) = 61.
     // + brain_labels / brain_tiers / brain_secrets / brain_maintenance
-    //   (Write-Time Integrity & Governance Suite) = 73.
-    expect(list.result.tools.length).toBe(77);
+    //   (Write-Time Integrity & Governance Suite) = 65.
+    expect(list.result.tools.length).toBe(69);
   });
 
   test("returns parse error for invalid JSON", async () => {
@@ -616,7 +607,6 @@ describe("buildInstructions writer mode", () => {
     expect(text).toContain("brain_feedback");
     expect(text).toContain("brain_apply_evidence");
     expect(text).toContain("open-second-brain"); // points at sibling server
-    expect(text).not.toMatch(/payment_/i);
     expect(text).not.toMatch(/brain_dream/);
   });
 });

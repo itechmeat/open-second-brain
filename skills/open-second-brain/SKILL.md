@@ -1,6 +1,6 @@
 ---
 name: open-second-brain
-description: Use Open Second Brain to read, write, and maintain an agent-owned second brain in an Obsidian-compatible Markdown vault. The agent owns one top-level directory (`Brain/`); Pay Memory nests under `Brain/payments/`. User-authored notes live wherever the operator names them and are read-only inputs when listed in `notes.read_paths`.
+description: Use Open Second Brain to read, write, and maintain an agent-owned second brain in an Obsidian-compatible Markdown vault. The agent owns one top-level directory (`Brain/`). User-authored notes live wherever the operator names them and are read-only inputs when listed in `notes.read_paths`.
 ---
 
 # Open Second Brain
@@ -12,13 +12,12 @@ Use this skill when a user asks an agent to use, configure, inspect, or maintain
 Open Second Brain owns one top-level directory in the vault: `Brain/`. Everything the agent writes lives under it.
 
 - **`Brain/`** - agent-writable observing memory. Taste signals, accreted preferences (unconfirmed → confirmed → retired), evidence log, snapshots. Operations go through MCP tools `brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_brief`, `brain_query`, `brain_doctor` - see the `brain-memory` skill for the calling protocol. CLI counterparts: `o2b brain *`.
-- **`Brain/payments/`** - Pay Memory subtree (optional). Receipts, generated-asset notes, drafts, reports, policies, pending-approval requests. Agents use `payment_*` MCP tools when they make paid API calls. Same write contract as the rest of `Brain/` - one root.
 - **User-authored notes** - the operator's daily journal, weekly notes, project notes, etc. Folder names are operator-chosen. The agent reads these paths only when they appear under `notes.read_paths` in `Brain/_brain.yaml`; the agent never writes to them.
 
 ## Core principles
 
 - Treat the vault as user-owned durable knowledge.
-- Write only into `Brain/` (covers both the observing-memory layer and the optional Pay Memory subtree). Never write to user-authored note folders.
+- Write only into `Brain/`. Never write to user-authored note folders.
 - Keep raw operational evidence separate from synthesized knowledge: per-event records go to `Brain/log/`, preferences live in `Brain/preferences/`.
 - Never write secrets, tokens, passwords, private keys, or credential-bearing connection strings.
 - Prefer deterministic CLI commands (`o2b brain ...`, `o2b doctor`, `o2b status`) over guessing file paths.

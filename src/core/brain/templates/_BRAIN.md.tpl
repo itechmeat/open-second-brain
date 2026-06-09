@@ -116,9 +116,7 @@ Schedule it on a cron with confidence — duplicate runs do not pollute.
 - Do not edit files in `retired/` to undo a retirement. The reason is
   preserved on purpose; a rule that should return becomes a new
   preference with `supersedes: [[ret-...]]`.
-- Brain operations stay scoped to `Brain/`. Pay Memory writes under
-  `Brain/payments/` (receipts, policies, assets, drafts, reports) -
-  the same root, different subtree. User-authored notes (daily
+- Brain operations stay scoped to `Brain/`. User-authored notes (daily
   journals, etc.) are read-only inputs whose folders are listed in
   `_brain.yaml:notes.read_paths`; the agent never writes there.
 - Do not invent topics. Reuse an existing topic slug if the rule space
