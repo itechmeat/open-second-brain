@@ -41,15 +41,6 @@ describe("openclaw bundle", () => {
       "second_brain_status",
       "second_brain_query",
       "vault_health",
-      // Pay Memory
-      "payment_memory_init",
-      "payment_receipt_append",
-      "asset_capture",
-      "payment_report_generate",
-      "payment_policy_check",
-      "payment_request_approval",
-      "payment_request_status",
-      "payment_request_consume",
     ]) {
       expect(bundleText).toContain(tool);
     }

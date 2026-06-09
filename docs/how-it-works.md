@@ -22,9 +22,8 @@ no surprise, no hallucinated memory.
 
 ## Vault layout
 
-The agent owns one top-level directory in the vault: `Brain/`. Pay
-Memory writes nest under `Brain/payments/`, so the agent's entire
-write contract is "I touch only `Brain/`".
+The agent owns one top-level directory in the vault: `Brain/`, so the
+agent's entire write contract is "I touch only `Brain/`".
 
 ```text
 <vault>/
@@ -41,13 +40,6 @@ write contract is "I touch only `Brain/`".
 │   │   └── ret-<slug>.md           # retired_reason: stale-no-evidence | expired-unconfirmed | rebutted | user-rejected | quarantine-violated | superseded-by-context
 │   ├── log/                        # daily event log
 │   │   └── YYYY-MM-DD.md           # append-only, typed events
-│   ├── payments/                   # Pay Memory (optional, paid-action audit)
-│   │   ├── policies/spending.md
-│   │   ├── <YYYY-MM-DD>/<slug>.md  # dated receipts
-│   │   ├── assets/                 # generated-asset notes
-│   │   ├── drafts/                 # draft artefacts
-│   │   ├── reports/                # daily reports
-│   │   └── _pending/               # approval workflow
 │   └── .snapshots/                 # pre-dream snapshots
 │       └── dream-<run-id>.tar.zst
 │
@@ -72,7 +64,6 @@ flowchart LR
     end
 
     Agent -- "brain_* (read + write)" --> Brain
-    Agent -- "payment_* (read + write)" --> Brain
     Agent -- "scan-inline (read-only)" --> Notes
 ```
 
@@ -607,7 +598,7 @@ fresh `_brain.yaml`. The full multi-device walkthrough is in
 Two cheap, deterministic layers keep the data clean.
 
 **Input sanitisation** (v0.9.1). Every Brain writer routes text fields
-through `src/core/redactor.ts` (promoted from Pay Memory) plus a
+through `src/core/redactor.ts` plus a
 `normaliseTextField` / `sanitiseTextField` pair:
 
 - C0 control characters are stripped (except `\t` and `\n`); `U+2028`

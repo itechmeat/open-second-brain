@@ -16,9 +16,9 @@ test("extracts a capitalized multi-word run", () => {
 });
 
 test("extracts wikilink target and alias display text", () => {
-  const e = extractEntities("See [[Pay Memory]] and [[notes/ledger.md|Receipt Ledger]].");
-  expect(e).toContain("pay memory");
-  expect(e).toContain("receipt ledger");
+  const e = extractEntities("See [[Vector Store]] and [[notes/ledger.md|Recall Ledger]].");
+  expect(e).toContain("vector store");
+  expect(e).toContain("recall ledger");
 });
 
 test("extracts CamelCase identifiers", () => {

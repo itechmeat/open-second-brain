@@ -105,11 +105,11 @@ describe("alias-aware search boost", () => {
     mkdirSync(join(tmp.vault, "notes"), { recursive: true });
     writeFileSync(
       join(tmp.vault, "notes", "a.md"),
-      "---\ntitle: A\n---\n\nThe payment flow runs through Pay Memory to pay memory costs.\n",
+      "---\ntitle: A\n---\n\nThe vector flow runs through Vector Store to store vector data.\n",
     );
     const config = makeConfig({ vault: tmp.vault, dbPath: tmp.dbPath, maxHops: 0 });
     await indexVault(config, {});
-    const out = await search(config, { query: "payment Pay Memory", limit: 5 });
+    const out = await search(config, { query: "vector Vector Store", limit: 5 });
     expect(out.results.length).toBeGreaterThan(0);
     expect(out.results[0]!.reasons.some((x) => x.includes("ent-"))).toBe(false);
   });

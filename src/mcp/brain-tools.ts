@@ -735,7 +735,6 @@ async function toolBrainApplyEvidence(
     if (exc instanceof BrainPreferenceNotFoundError) {
       // Re-throw as a non-MCPError so `server.handleToolsCall` packs it
       // into a `toolError` envelope (isError: true, single-text content).
-      // This matches the pay-memory "pending request not found" pattern.
       throw new Error(exc.message, { cause: exc });
     }
     throw exc;
@@ -1695,8 +1694,8 @@ function serializeLogEntry(e: BrainLogEntry): Record<string, unknown> {
 // ----- Misc ----------------------------------------------------------------
 
 /**
- * Produce a vault-relative path, swallowing errors (Pay Memory uses the
- * same defensive pattern for output rendering). Exported for unit tests
+ * Produce a vault-relative path, swallowing errors (a defensive pattern
+ * for output rendering). Exported for unit tests
  * — internal callers stay inside this module.
  *
  * @internal

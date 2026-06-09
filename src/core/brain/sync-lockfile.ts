@@ -1,11 +1,11 @@
 /**
  * Synchronous lockfile primitive for the brain write path.
  *
- * Pay Memory locks through `proper-lockfile` (async). The brain write
- * path is sync end-to-end (`writePreference`, `dream`, `moveToRetired`,
- * `writeFrontmatterAtomic`) and migrating it to async would touch every
- * caller signature for one async-only ingredient. Instead, this module
- * provides a tiny single-attempt sync lock built on `fs.openSync(target
+ * The brain write path is sync end-to-end (`writePreference`, `dream`,
+ * `moveToRetired`, `writeFrontmatterAtomic`) and migrating it to async
+ * would touch every caller signature for one async-only ingredient.
+ * Instead, this module provides a tiny single-attempt sync lock built
+ * on `fs.openSync(target
  * + '.lock', 'wx')`. EEXIST surfaces as `Error` with
  * `.code === 'ELOCKED'`; the brain txn layer maps that to a
  * `BrainCollisionError({ kind: 'SourceLock' })`.

@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Removal of the Pay Memory layer. The pay.sh integration and the entire
+payment-memory subsystem it supported have been taken out of Open Second
+Brain. Brain (observing memory), schema, search, and the rest of the surface
+are unchanged. Historical records are preserved: this changelog, the dated
+`docs/plans/` and `docs/brainstorm/` design notes, and any existing
+`Brain/payments/` content in a vault are left untouched.
+
+### Removed
+
+- **BREAKING - Pay Memory MCP tools**: `payment_memory_init`,
+  `payment_receipt_append`, `asset_capture`, `payment_report_generate`,
+  `payment_policy_check`, `payment_request_approval`, `payment_request_status`,
+  and `payment_request_consume` are no longer advertised or callable on any
+  scope. The advertised full-surface tool count drops from 77 to 69.
+- **BREAKING - Pay Memory CLI verbs**: `init-pay-memory`,
+  `append-payment-receipt`, `capture-asset`, `payment-report`,
+  `check-payment-policy`, `request-payment-approval`, `approve-payment-request`,
+  `reject-payment-request`, `consume-payment-request`, `list-pending-payments`,
+  and `payment-digest` are removed from the `o2b` command surface.
+- **OpenClaw plugin**: the eight payment tool registrations are removed from the
+  native plugin entry; the bundle now exposes `second_brain_status`,
+  `second_brain_query`, and `vault_health` only.
+- **Core modules and docs**: `src/core/pay-memory/`, the payment CLI module, the
+  `docs/pay-memory.md` guide, the Hermes payment-digest example and cron
+  section, and the `payment` / `asset` surface-group prefixes are deleted. The
+  shared `vaultRelativePath` helper now imports from `core/path-safety`.
+
 ## [1.0.1] - 2026-06-07
 
 Hermes registration fix. The memory provider now advertises its curated

@@ -8,7 +8,6 @@
  * the deferred full server.
  */
 
-import { PAY_MEMORY_SPENDING_JSON_REL } from "../core/pay-memory/paths.ts";
 import type { ToolScope } from "./tools.ts";
 
 export interface BuildInstructionsOpts {
@@ -41,7 +40,7 @@ preserved for backward compatibility with existing client configs):
                             already inject active.md via a hook can skip this.
 
 The remaining Brain surface (digest, query, doctor, backlinks, search,
-Pay Memory tools, vault_health, second_brain_status, second_brain_query,
+vault_health, second_brain_status, second_brain_query,
 and the scheduled learning pass) lives on the sibling
 "open-second-brain" MCP server (deferred). Use ToolSearch to reach it.
 
@@ -99,13 +98,6 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
     "Preview budget: a large result may arrive as a JSON envelope with " +
     "`preview_truncated: true` and an `artifact_id`; fetch the full " +
     "payload with brain_artifact_get only when the preview is not " +
-    "enough.\n\n" +
-    "Pay Memory tools persist payment memory, never execute payments. " +
-    "payment_memory_init bootstraps once per vault; approval sequence: " +
-    "payment_policy_check (against " +
-    `\`${PAY_MEMORY_SPENDING_JSON_REL}\`) → payment_request_approval → ` +
-    "poll payment_request_status → run `pay` → payment_receipt_append → " +
-    "asset_capture → payment_request_consume; payment_report_generate " +
-    "aggregates a date's receipts."
+    "enough."
   );
 }

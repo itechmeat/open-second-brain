@@ -255,24 +255,6 @@ o2b discipline uninstall      Remove the cron job; --weekly removes only the wee
 
 See [`hermes-cron.md`](hermes-cron.md) for the cron envelope and Telegram delivery shape.
 
-## Pay Memory
-
-```text
-o2b init-pay-memory           Bootstrap Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)
-o2b append-payment-receipt    Save a Markdown receipt for a paid API call
-o2b capture-asset             Save a Markdown note for a generated asset
-o2b payment-report            Aggregate a date's receipts into a Markdown report
-o2b check-payment-policy      Evaluate a paid call against policies/spending.json
-o2b request-payment-approval  Create a pending payment request (human must approve)
-o2b approve-payment-request   Mark a pending request as approved
-o2b reject-payment-request    Mark a pending request as rejected
-o2b consume-payment-request   Link an approved request to its resulting receipt
-o2b list-pending-payments     List pending / approved / etc. requests
-o2b payment-digest            Render a 4-line digest for a date
-```
-
-Full Pay Memory walkthrough: [`pay-memory.md`](pay-memory.md).
-
 ## Search
 
 ```text

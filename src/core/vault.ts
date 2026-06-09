@@ -125,8 +125,8 @@ export function formatFrontmatter(metadata: FrontmatterMap, body: string): strin
  * This variant is non-atomic — used for non-critical writes where a torn
  * file on crash is acceptable (the regenerated `index.md` would just be
  * rebuilt next run; the bootstrap files are templates that can be
- * re-emitted). For Pay Memory writes that must survive concurrent
- * agents and crashes, use `writeFrontmatterAtomic` instead.
+ * re-emitted). For writes that must survive concurrent agents and
+ * crashes, use `writeFrontmatterAtomic` instead.
  */
 export function writeFrontmatter(path: string, metadata: FrontmatterMap, body: string): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -156,7 +156,7 @@ export interface WriteFrontmatterAtomicOptions {
 /**
  * Atomic frontmatter writer with optional exclusive-create semantics.
  *
- * Used by Pay Memory writers (receipt, asset, report, policy) where:
+ * Used by the Brain writers where:
  *   - the file must not be torn on crash → atomic rename/link;
  *   - "refuse to overwrite" must be race-free across concurrent processes
  *     (CLI + MCP server, multiple agents) → exclusive `link(2)` instead

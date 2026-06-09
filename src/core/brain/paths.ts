@@ -20,8 +20,7 @@
  * Every constructor here funnels through `ensureInsideVault` (re-exported
  * from `../path-safety`) so a malformed slug or a `..` traversal cannot
  * land a file outside the vault root. Slug validation rejects empties,
- * path separators, traversal sequences, and Windows-reserved basenames
- * — same contract as the Pay Memory layer.
+ * path separators, traversal sequences, and Windows-reserved basenames.
  */
 
 import { existsSync } from "node:fs";
@@ -364,8 +363,7 @@ export function artifactPath(vault: string, runId: string, artifactId: string): 
 
 /**
  * Reject slugs that could escape their intended subdirectory or hit a
- * Windows-incompatible filename. Same shape rules as Pay Memory's
- * `validateSlug`, copied here to avoid coupling the two layers.
+ * Windows-incompatible filename.
  */
 export function validateSlug(slug: string): string {
   const trimmed = slug.trim();

@@ -16,8 +16,6 @@
  *     (`SCHEMA_TOOLS`).
  *   - Brain watchdog recovery probes (`brain_watchdog`) —
  *     `./watchdog-tools.ts` (`WATCHDOG_TOOLS`).
- *   - Pay Memory tools (`payment_*`, `asset_capture`) —
- *     `./pay-memory-tools.ts` (`PAY_MEMORY_TOOLS`).
  *
  * Each slice owns its own handlers and tool definitions; this file
  * only assembles them in a stable order and applies scope filtering.
@@ -33,7 +31,6 @@ import { BRAIN_TOOLS } from "./brain-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import { SCHEMA_TOOLS } from "./schema-tools.ts";
 import { WATCHDOG_TOOLS } from "./watchdog-tools.ts";
-import { PAY_MEMORY_TOOLS } from "./pay-memory-tools.ts";
 import { SKILL_TOOLS } from "./skill-tools.ts";
 import { buildHydrateTool, TOOL_HYDRATE_NAME } from "./hydrate-tool.ts";
 import { normalizeAgentArgument, PLACEHOLDER_AGENT_VALUES } from "../core/agent-identity.ts";
@@ -415,7 +412,6 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
     },
     ...SCHEMA_TOOLS,
     ...WATCHDOG_TOOLS,
-    ...PAY_MEMORY_TOOLS,
     ...SKILL_TOOLS,
   ];
   if (scope === "writer") return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));

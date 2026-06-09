@@ -43,12 +43,7 @@ export function firstLine(text: string): string {
   return "";
 }
 
-const GROUP_PREFIXES: ReadonlyArray<string> = Object.freeze([
-  "brain",
-  "schema",
-  "payment",
-  "asset",
-]);
+const GROUP_PREFIXES: ReadonlyArray<string> = Object.freeze(["brain", "schema"]);
 
 /**
  * Derive a coarse group from a tool name. Prefix families map to their

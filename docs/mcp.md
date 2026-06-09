@@ -18,10 +18,10 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 65 tools; 18 further names stay callable
+The full server currently advertises 57 tools; 18 further names stay callable
 through `tools/call` as hidden deprecated aliases (see "Consolidated views and
 deprecated aliases" below). The table highlights the operator-facing core,
-schema, agent-source, health, recovery, and Pay Memory tools; the full surface
+schema, agent-source, health, and recovery tools; the full surface
 also includes Brain writer, review, query, temporal, link-graph, and search
 tools. In Claude Code, the full schema can push MCP definitions beyond 10% of
 the context window, causing `MCPSearch` tool-search deferral; use the writer
@@ -57,14 +57,6 @@ flags for a narrower per-process full server.
 | `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                                    |
 | `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                              |
 | `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                                         |
-| `payment_memory_init`       | Bootstrap `Brain/payments/{policies,assets,drafts,reports}/ (+ dated YYYY-MM-DD receipt subdirs)` and write the spending policy template.      | —                                              |
-| `payment_receipt_append`    | Save a Markdown receipt for one paid API call. `raw_output` is redacted before persisting.                                                     | `service`, `status`, `reason`                  |
-| `asset_capture`             | Save a Markdown note for an asset produced by a paid call, linked to its receipt.                                                              | `title`, `service`, `result_url`               |
-| `payment_report_generate`   | Aggregate a date's receipts into a Markdown report under `Brain/payments/reports/`.                                                            | `date`                                         |
-| `payment_policy_check`      | Evaluate a prospective paid call against `policies/spending.json` (allowed / approval_required / denied).                                      | `service`                                      |
-| `payment_request_approval`  | Create a pending-payment-request the user must approve before the agent runs `pay`.                                                            | `service`, `reason`                            |
-| `payment_request_status`    | Look up a pending request by id; agent uses this to poll for approval.                                                                         | `id`                                           |
-| `payment_request_consume`   | Mark an `approved` request as `consumed` and link the resulting receipt.                                                                       | `id`, `receipt`                                |
 
 ### Consolidated views and deprecated aliases
 
@@ -113,37 +105,9 @@ recall DAG populated by CLI `import-session --recall` or the core API.
 `brain_recall_gate` accepts optional `previous_prompt` and
 `explicit`; `explicit: true` always returns `retrieve: true`.
 
-`payment_memory_init` accepts `agent` (string) and `overwrite` (boolean — to
-refresh the policy template). `payment_receipt_append` accepts the same
-optional fields as the CLI: `agent`, `category`, `endpoint`, `expected_cost`,
-`actual_amount`, `currency`, `payment_proof`, `result_ref`, `result_note`,
-`raw_output`, `slug`, `date` (`YYYY-MM-DD`), `time` (`HH:MM`), `overwrite`.
-`asset_capture` accepts `source_receipt`, `prompt`, `used_in`, `slug`,
-`overwrite`. `payment_report_generate` accepts `title`, `task`, `slug`,
-`overwrite`.
-
-> **Date format note.** Brain and Pay Memory tools use ISO 8601
-> `YYYY-MM-DD` throughout; the `Brain/log/<date>.md` and
-> `Brain/payments/<date>/` subdirectory layouts share that convention.
-
-`payment_policy_check` accepts `expected_amount` (number or numeric
-string), `currency`, `category`, and `date`. `payment_request_approval`
-mirrors `payment_receipt_append` for the descriptive fields plus
-`expected_output`, `vault_files` (array of strings), and `enforce_policy`
-(boolean — refuses to create the request when the policy denies the call
-outright). `payment_request_status` returns the named request's `status`
-plus a curated subset of frontmatter fields (`service`, `reason`,
-`expected_amount`, `currency`, `created`, `approved_by`, `approved_at`,
-`rejected_by`, `rejected_at`, `rejection_reason`, `receipt`,
-`policy_status`, `policy_rule`) — agents poll this to see whether their
-request has moved from `pending` to `approved`. Fields that were not
-captured at request time (e.g. `vault_files`, `endpoint`) are not
-re-derived; read the underlying Markdown file via the path returned in
-the response if you need them.
-
-The Pay Memory tools never execute payments themselves — the agent makes the
-paid call through its own `pay` CLI and passes the resulting metadata into
-these tools, which only persist it as Markdown.
+> **Date format note.** Brain tools use ISO 8601 `YYYY-MM-DD`
+> throughout; the `Brain/log/<date>.md` subdirectory layout shares that
+> convention.
 
 All tool results contain both an unstructured `content` text block (a JSON
 serialization of the structured payload) and a `structuredContent` object so
@@ -334,20 +298,11 @@ mcp_servers:
     timeout: 30
     tools:
       include:
+        # Drop any line below to disable a specific tool, or remove the
+        # whole `tools.include` block to expose every advertised tool.
         - second_brain_status
         - second_brain_query
         - vault_health
-        # Pay Memory tools (v0.8.0+); drop any line below to disable a
-        # specific tool, or remove the whole `tools.include` block to
-        # expose every advertised tool.
-        - payment_memory_init
-        - payment_receipt_append
-        - asset_capture
-        - payment_report_generate
-        - payment_policy_check
-        - payment_request_approval
-        - payment_request_status
-        - payment_request_consume
 ```
 
 If you run Open Second Brain from a checkout instead of an installed package,
@@ -426,7 +381,7 @@ server to your Codex MCP config the same way as Hermes.
 
 The plugin's `.mcp.json` ships **two** MCP-server entries:
 
-- `open-second-brain` - the full surface: 56 advertised tools (including the consolidated `brain_brief`, `brain_analytics`, and `schema_inspect`, plus `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_recall_gate`, `brain_pinned_context`, `brain_pre_compress_pack`, `brain_audit`, `brain_sources`, and `brain_switch_vault`) and 18 hidden deprecated aliases listed under "Consolidated views and deprecated aliases" above; subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
+- `open-second-brain` - the full surface: 48 advertised tools (including the consolidated `brain_brief`, `brain_analytics`, and `schema_inspect`, plus `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_recall_gate`, `brain_pinned_context`, `brain_pre_compress_pack`, `brain_audit`, `brain_sources`, and `brain_switch_vault`) and 18 hidden deprecated aliases listed under "Consolidated views and deprecated aliases" above; subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
 - `open-second-brain-writer` - a minimal always-loaded surface of five tools: `brain_feedback`, `brain_apply_evidence`, `brain_note`, `brain_pinned_context` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md` plus pinned context, v0.16.0). The agent records taste signals, evidence events, milestone notes, and current-task pinned facts - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).
