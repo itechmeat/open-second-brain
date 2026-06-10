@@ -265,6 +265,20 @@ describe("opencode adapter - bundled plugin installation", () => {
     expect(existsSync(pluginPath())).toBe(false);
   });
 
+  test("verify reports drift when the plugin path is a directory", () => {
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    rmSync(pluginPath(), { recursive: true, force: true });
+    mkdirSync(pluginPath(), { recursive: true });
+    expect(opencodeAdapter.verify(env()).status).toBe("drift");
+  });
+
+  test("apply replaces a stray directory at the plugin path", () => {
+    mkdirSync(pluginPath(), { recursive: true });
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const content = readFileSync(pluginPath(), "utf8");
+    expect(content).toContain("export const OpenSecondBrain");
+  });
+
   test("uninstall removes the plugin file", () => {
     opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
     const r = opencodeAdapter.uninstall(env(), applyOpts());

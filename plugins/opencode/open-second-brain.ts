@@ -35,7 +35,7 @@
  */
 
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 const SPOOL_FORMAT = 1;
@@ -187,11 +187,11 @@ function messageList(response: unknown): unknown[] | null {
  * use. Returns null on every failure mode (binary missing, timeout,
  * empty or malformed output) — the caller treats null as "no inject".
  */
-function renderActiveContext(): string | null {
+function renderActiveContext(cwd: string): string | null {
   try {
     const bin = process.env["OSB_HOOK_BIN"] ?? "o2b-hook";
     const proc = Bun.spawnSync([bin, "active-inject"], {
-      stdin: Buffer.from(JSON.stringify({ hook_event_name: "SessionStart", cwd: tmpdir() })),
+      stdin: Buffer.from(JSON.stringify({ hook_event_name: "SessionStart", cwd })),
       stdout: "pipe",
       stderr: "ignore",
       timeout: HOOK_TIMEOUT_MS,
@@ -219,6 +219,9 @@ export const OpenSecondBrain = async (pluginInput: {
   worktree?: string;
 }) => {
   const directory = typeof pluginInput.directory === "string" ? pluginInput.directory : "";
+  const worktree = typeof pluginInput.worktree === "string" ? pluginInput.worktree : "";
+  // Anchor active-inject to the real project scope, not an arbitrary dir.
+  const injectCwd = worktree || directory || process.cwd();
   const client = asRecord(pluginInput.client);
   let activeContextCache: { value: string | null; at: number } | null = null;
 
@@ -254,7 +257,7 @@ export const OpenSecondBrain = async (pluginInput: {
             ? ACTIVE_CONTEXT_NEGATIVE_TTL_MS
             : ACTIVE_CONTEXT_TTL_MS;
         if (activeContextCache === null || now - activeContextCache.at > ttl) {
-          activeContextCache = { value: renderActiveContext(), at: now };
+          activeContextCache = { value: renderActiveContext(injectCwd), at: now };
         }
         if (activeContextCache.value !== null && Array.isArray(output?.system)) {
           output.system.push(activeContextCache.value);

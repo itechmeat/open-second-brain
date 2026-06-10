@@ -15,7 +15,7 @@
  * debugging sessions.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
@@ -98,6 +98,21 @@ function pluginPath(env: InstallEnv): string {
   return join(opencodeDir(env), "plugins", OPENCODE_PLUGIN_FILENAME);
 }
 
+/**
+ * Reads the installed plugin copy, or null when the path is absent,
+ * not a regular file, or unreadable. Callers treat null as "needs
+ * (re)install" / drift instead of letting a stray directory or a
+ * permissions problem abort the whole install flow.
+ */
+function readPluginCopy(path: string): string | null {
+  try {
+    if (!lstatSync(path).isFile()) return null;
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 const base = createJsonMcpAdapter({
   target: "opencode",
   label: "opencode",
@@ -137,8 +152,13 @@ export const opencodeAdapter = {
     let pluginWritten = 0;
     if (!opts.dryRun) {
       const expected = installedPluginContent();
-      const current = existsSync(plugin) ? readFileSync(plugin, "utf8") : null;
+      const current = readPluginCopy(plugin);
       if (current !== expected) {
+        // A stray directory or special file at the plugin path must not
+        // abort the install; clear it before the atomic write.
+        if (current === null && existsSync(plugin)) {
+          rmSync(plugin, { recursive: true, force: true });
+        }
         const dir = dirname(plugin);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         atomicWriteFileSync(plugin, expected);
@@ -163,15 +183,16 @@ export const opencodeAdapter = {
     if (baseResult.status !== "ok") return baseResult;
     const plugin = pluginPath(env);
     const fixHint = "o2b install --target opencode --apply";
-    if (!existsSync(plugin)) {
+    const current = readPluginCopy(plugin);
+    if (current === null) {
       return {
         target: base.target,
         status: "drift",
-        details: [`plugin file missing: ${plugin}`],
+        details: [`plugin file missing, unreadable, or not a regular file: ${plugin}`],
         fix_hint: fixHint,
       };
     }
-    if (readFileSync(plugin, "utf8") !== installedPluginContent()) {
+    if (current !== installedPluginContent()) {
       return {
         target: base.target,
         status: "drift",
@@ -186,8 +207,15 @@ export const opencodeAdapter = {
     const result = base.uninstall(env, opts);
     const plugin = pluginPath(env);
     if (existsSync(plugin)) {
-      if (!opts.dryRun) rmSync(plugin);
-      return { ...result, removed_paths: [...result.removed_paths, plugin] };
+      try {
+        if (!opts.dryRun) rmSync(plugin, { recursive: true, force: true });
+        return { ...result, removed_paths: [...result.removed_paths, plugin] };
+      } catch (e) {
+        return {
+          ...result,
+          skipped: [...result.skipped, [plugin, `could not remove: ${(e as Error).message}`]],
+        };
+      }
     }
     return result;
   },

@@ -85,23 +85,30 @@ export const opencodeAdapter: SessionAdapter = {
   async *iterate(path: string): AsyncIterable<SessionTurn> {
     const text = readFileSync(path, "utf8");
     const lines = text.split("\n");
+    // Hard gate even under explicit `--format opencode`: a file whose
+    // first line is not our meta line must not partially import.
     const meta = lines.length > 0 ? parseMetaLine(lines[0]!.trim()) : null;
-    if (meta !== null) {
-      const format = meta["format"];
-      if (typeof format !== "number") {
-        throw new SessionImportError(
-          "PARSE",
-          `opencode spool meta line carries no numeric format field; ` +
-            `expected format ${SUPPORTED_FORMAT}`,
-        );
-      }
-      if (format > SUPPORTED_FORMAT) {
-        throw new SessionImportError(
-          "PARSE",
-          `opencode spool format ${format} is newer than supported ` +
-            `format ${SUPPORTED_FORMAT}; upgrade Open Second Brain to import it`,
-        );
-      }
+    if (meta === null) {
+      throw new SessionImportError(
+        "PARSE",
+        `opencode spool meta line missing or invalid; expected first line ` +
+          `with originator ${ORIGINATOR}`,
+      );
+    }
+    const format = meta["format"];
+    if (typeof format !== "number") {
+      throw new SessionImportError(
+        "PARSE",
+        `opencode spool meta line carries no numeric format field; ` +
+          `expected format ${SUPPORTED_FORMAT}`,
+      );
+    }
+    if (format > SUPPORTED_FORMAT) {
+      throw new SessionImportError(
+        "PARSE",
+        `opencode spool format ${format} is newer than supported ` +
+          `format ${SUPPORTED_FORMAT}; upgrade Open Second Brain to import it`,
+      );
     }
     for (const line of lines.slice(1)) {
       const trimmed = line.trim();

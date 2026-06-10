@@ -111,6 +111,14 @@ describe("opencode adapter — iterate", () => {
     await expect(collect(path)).rejects.toThrow(/format/);
   });
 
+  test("rejects a file whose first line is not the spool meta", async () => {
+    const path = tmpSpool([
+      '{"type":"turn","turnId":"x1","timestamp":"2026-06-10T09:00:00.000Z","role":"user","text":"hi"}',
+      '{"type":"turn","turnId":"x2","timestamp":"2026-06-10T09:00:01.000Z","role":"user","text":"ok"}',
+    ]);
+    await expect(collect(path)).rejects.toThrow(/meta line missing or invalid/);
+  });
+
   test("turns without text but with toolCalls survive", async () => {
     const path = tmpSpool([
       META,
