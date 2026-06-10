@@ -80,6 +80,8 @@ async function executeFinding(
       const resolver = finding.evidence["resolver"] as { winner_value?: unknown } | undefined;
       const winner = resolver !== undefined ? resolver.winner_value : undefined;
       const slot = finding.targets[0] ?? "";
+      // Entities/aspects are normalized names (no '#'), so the first
+      // '#' is always the slot separator.
       const separator = slot.indexOf("#");
       if (typeof winner !== "string" || winner.length === 0 || separator <= 0) {
         throw new Error("supersede finding lacks a resolver winner or a valid entity#aspect slot");

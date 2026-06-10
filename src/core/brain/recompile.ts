@@ -105,6 +105,15 @@ export function planRecompile(vault: string): RecompilePlan {
   return Object.freeze({ entries: Object.freeze(entries) });
 }
 
+/**
+ * Trust model: transcript paths come from the derived page's own
+ * `source_paths` frontmatter, i.e. from inside the vault trust
+ * boundary (only the operator and their agents write vault pages).
+ * Transcripts legitimately live OUTSIDE the vault (host session
+ * directories), so an inside-vault check would break the feature; the
+ * adapter format detection below bounds what a pointed-at file can be
+ * parsed as.
+ */
 async function readTranscriptTurns(transcript: string): Promise<SessionTurn[] | null> {
   const text = readFileSync(transcript, "utf8");
   const nl = text.indexOf("\n");

@@ -279,7 +279,13 @@ export async function captureSessionLifecycleEvent(
   };
 }
 
-/** Read the recorded transcript via the session adapters and write a handoff note. */
+/**
+ * Read the recorded transcript via the session adapters and write a
+ * handoff note. Trust model: `transcript_path` is produced by the host
+ * runtime itself (Claude Code / Hermes hand their own transcript path
+ * to their own hook); it is not user-typed input, which is why no
+ * inside-vault check applies - transcripts live in host directories.
+ */
 async function writeHandoffNoteFromTranscript(
   vault: string,
   normalized: NormalizedPayload,

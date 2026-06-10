@@ -31,6 +31,7 @@ import {
 } from "../../core/brain/hygiene/types.ts";
 import { executeRecompile, planRecompile } from "../../core/brain/recompile.ts";
 import { coerceBool } from "../coerce.ts";
+import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { vaultRelativeSafe } from "./shared.ts";
@@ -39,7 +40,7 @@ function coerceStringArray(args: Record<string, unknown>, key: string): string[]
   const raw = args[key];
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw) || !raw.every((value) => typeof value === "string")) {
-    throw new Error(`'${key}' must be an array of strings`);
+    throw new MCPError(INVALID_PARAMS, `'${key}' must be an array of strings`);
   }
   return raw;
 }
@@ -89,7 +90,7 @@ async function toolBrainHygiene(
 ): Promise<Record<string, unknown>> {
   const mode = args["mode"] ?? "scan";
   if (mode !== "scan" && mode !== "apply" && mode !== "refresh") {
-    throw new Error("'mode' must be one of: scan, apply, refresh");
+    throw new MCPError(INVALID_PARAMS, "'mode' must be one of: scan, apply, refresh");
   }
   const now = new Date();
   const dryRun = coerceBool(args, "dry_run") === true;
@@ -119,7 +120,10 @@ async function toolBrainHygiene(
   const detectorsRaw = coerceStringArray(args, "detectors");
   const detectors = detectorsRaw?.filter(isHygieneDetectorId);
   if (detectorsRaw !== undefined && detectors!.length !== detectorsRaw.length) {
-    throw new Error("'detectors' entries must be: conflicts, dedup, freshness, usefulness");
+    throw new MCPError(
+      INVALID_PARAMS,
+      "'detectors' entries must be: conflicts, dedup, freshness, usefulness",
+    );
   }
   const report = scanWithResolver(ctx.vault, detectors, now);
 
@@ -136,7 +140,7 @@ async function toolBrainHygiene(
 
   const ids = coerceStringArray(args, "ids");
   if (ids === undefined || ids.length === 0) {
-    throw new Error("apply requires explicit finding 'ids' from a prior scan");
+    throw new MCPError(INVALID_PARAMS, "apply requires explicit finding 'ids' from a prior scan");
   }
   const plan = buildHygienePlan(report, { ids });
   const result = await applyHygienePlan(ctx.vault, plan, {
