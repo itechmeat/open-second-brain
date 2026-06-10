@@ -20,7 +20,7 @@ import { join } from "node:path";
 
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
-import { applyCharBudget } from "./recall-budget.ts";
+import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
 import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
@@ -62,6 +62,12 @@ export interface PreCompressOptions {
   readonly maxCharsPerMemory?: number;
   /** Total character cap across the bundle; <= 0 / undefined disables. */
   readonly maxTotalChars?: number;
+  /**
+   * Per-entry trim strategy (continuity-hygiene-freshness suite):
+   * `staged` degrades an over-budget entry at structural boundaries
+   * instead of cutting mid-sentence. Default keeps the hard cut.
+   */
+  readonly degradation?: CharBudgetDegradationMode;
   /** Opt-in audit receipt for the final emitted addendum. */
   readonly receipt?: ContextReceiptOptions;
   /** Opt-in telemetry for recall coverage and gap diagnostics. */
@@ -146,6 +152,7 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
   const budgeted = applyCharBudget(entries, {
     maxCharsPerEntry: opts.maxCharsPerMemory,
     maxTotalChars: opts.maxTotalChars,
+    ...(opts.degradation !== undefined ? { degradation: opts.degradation } : {}),
   });
 
   let activeText: string | null = null;

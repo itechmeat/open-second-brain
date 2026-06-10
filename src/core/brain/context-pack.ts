@@ -26,7 +26,7 @@ import { brainDirs } from "./paths.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
-import { applyCharBudget } from "./recall-budget.ts";
+import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
 import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
@@ -101,6 +101,12 @@ export interface ContextPackOptions {
    * `over-char-budget` skip reason. <= 0 / undefined disables.
    */
   readonly maxTotalChars?: number;
+  /**
+   * Per-memory trim strategy (continuity-hygiene-freshness suite):
+   * `staged` degrades an over-budget body at structural boundaries
+   * instead of cutting mid-sentence. Default keeps the hard cut.
+   */
+  readonly degradation?: CharBudgetDegradationMode;
   /** Opt-in polarity-aware lanes. Omitted preserves the legacy flat output shape. */
   readonly includeLanes?: boolean;
   /** Opt-in audit receipt for the final emitted context. */
@@ -263,7 +269,10 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // so the token budget charges the emitted text, not the original.
   const budgeted = applyCharBudget(
     candidates.map((c) => ({ item: c, text: c.body })),
-    { maxCharsPerEntry: opts.maxCharsPerMemory },
+    {
+      maxCharsPerEntry: opts.maxCharsPerMemory,
+      ...(opts.degradation !== undefined ? { degradation: opts.degradation } : {}),
+    },
   );
 
   const items: ContextPackItem[] = [];
