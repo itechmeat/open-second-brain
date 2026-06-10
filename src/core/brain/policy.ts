@@ -24,9 +24,12 @@ import { parseBrainYaml, type ParsedBlock } from "./yaml-parse.ts";
 
 import type {
   BrainActiveConfig,
+  BrainAnticipatoryConfig,
   BrainConfig,
   BrainGuardrailConfig,
   BrainHealthConfig,
+  BrainHygieneConfig,
+  BrainRecallConfig,
   BrainLinkGraphConfig,
   BrainNotesConfig,
   BrainSessionsConfig,
@@ -1496,6 +1499,95 @@ export function validateBrainConfigDetailed(
     }
   }
 
+  // Optional `hygiene:` block (continuity-hygiene-freshness suite).
+  let hygiene: BrainHygieneConfig | undefined;
+  if ("hygiene" in obj) {
+    const raw = obj["hygiene"];
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new BrainConfigError(
+        `block must be a map of keys; got ${describe(raw)}`,
+        "hygiene",
+        source,
+      );
+    }
+    const rawMap = raw as Record<string, unknown>;
+    const partial: { resolver_cmd?: string; dedup_threshold?: number } = {};
+    if ("resolver_cmd" in rawMap) {
+      const cmd = rawMap["resolver_cmd"];
+      if (typeof cmd !== "string" || cmd.trim() === "") {
+        throw new BrainConfigError(
+          `must be a non-empty string; got ${describe(cmd)}`,
+          "hygiene.resolver_cmd",
+          source,
+        );
+      }
+      partial.resolver_cmd = cmd;
+    }
+    if ("dedup_threshold" in rawMap) {
+      const threshold = rawMap["dedup_threshold"];
+      if (typeof threshold !== "number" || !(threshold > 0) || threshold > 1) {
+        throw new BrainConfigError(
+          `must be a number in (0, 1]; got ${describe(threshold)}`,
+          "hygiene.dedup_threshold",
+          source,
+        );
+      }
+      partial.dedup_threshold = threshold;
+    }
+    hygiene = Object.freeze(partial);
+  }
+
+  // Optional `anticipatory:` block (continuity-hygiene-freshness suite).
+  let anticipatory: BrainAnticipatoryConfig | undefined;
+  if ("anticipatory" in obj) {
+    const raw = obj["anticipatory"];
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new BrainConfigError(
+        `block must be a map of keys; got ${describe(raw)}`,
+        "anticipatory",
+        source,
+      );
+    }
+    const rawMap = raw as Record<string, unknown>;
+    const partial: { ttl_seconds?: number; max_tokens?: number } = {};
+    if ("ttl_seconds" in rawMap) {
+      requirePositiveInteger("anticipatory.ttl_seconds", rawMap["ttl_seconds"], source);
+      partial.ttl_seconds = rawMap["ttl_seconds"] as number;
+    }
+    if ("max_tokens" in rawMap) {
+      requirePositiveInteger("anticipatory.max_tokens", rawMap["max_tokens"], source);
+      partial.max_tokens = rawMap["max_tokens"] as number;
+    }
+    anticipatory = Object.freeze(partial);
+  }
+
+  // Optional `recall:` block (continuity-hygiene-freshness suite).
+  let recall: BrainRecallConfig | undefined;
+  if ("recall" in obj) {
+    const raw = obj["recall"];
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new BrainConfigError(
+        `block must be a map of keys; got ${describe(raw)}`,
+        "recall",
+        source,
+      );
+    }
+    const rawMap = raw as Record<string, unknown>;
+    const partial: { degradation?: "hard-cut" | "staged" } = {};
+    if ("degradation" in rawMap) {
+      const mode = rawMap["degradation"];
+      if (mode !== "hard-cut" && mode !== "staged") {
+        throw new BrainConfigError(
+          `must be 'hard-cut' or 'staged'; got ${describe(mode)}`,
+          "recall.degradation",
+          source,
+        );
+      }
+      partial.degradation = mode;
+    }
+    recall = Object.freeze(partial);
+  }
+
   const config: BrainConfig = {
     schema_version: schemaVersion,
     primary_agent: primaryAgent,
@@ -1529,6 +1621,9 @@ export function validateBrainConfigDetailed(
     ...(sessions !== undefined ? { sessions } : {}),
     ...(health !== undefined ? { health } : {}),
     ...(schema !== undefined ? { schema } : {}),
+    ...(hygiene !== undefined ? { hygiene } : {}),
+    ...(anticipatory !== undefined ? { anticipatory } : {}),
+    ...(recall !== undefined ? { recall } : {}),
   };
 
   return { config, warnings };

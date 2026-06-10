@@ -12,6 +12,11 @@ import { resolveSearchFocusContextPack } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { readActiveSessionFocus } from "../../core/search/session-focus.ts";
 import { packContext } from "../../core/brain/context-pack.ts";
+import {
+  readAnticipatoryContext,
+  refreshAnticipatoryCache,
+} from "../../core/brain/anticipatory-cache.ts";
+import { loadBrainConfig } from "../../core/brain/policy.ts";
 import { buildPreCompressPack } from "../../core/brain/pre-compress-pack.ts";
 import {
   getContextReceipt,
@@ -331,6 +336,55 @@ async function toolBrainPreCompactExtract(
 
 // ----- session recall DAG --------------------------------------------------
 
+async function toolBrainAnticipatoryContext(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const sessionId = coerceStr(args, "session_id");
+  if (sessionId === null || sessionId === undefined || sessionId.trim() === "") {
+    throw new MCPError(INVALID_PARAMS, "'session_id' is required");
+  }
+  let ttlSeconds: number | undefined;
+  let maxTokens: number | undefined;
+  try {
+    const anticipatory = loadBrainConfig(ctx.vault).anticipatory;
+    ttlSeconds = anticipatory?.ttl_seconds;
+    maxTokens = anticipatory?.max_tokens;
+  } catch {
+    // defaults apply; a broken config never blocks a read
+  }
+  const now = new Date();
+  if (coerceBool(args, "refresh") === true) {
+    const signal = coerceStr(args, "signal_text");
+    refreshAnticipatoryCache(ctx.vault, {
+      sessionId,
+      ...(typeof signal === "string" && signal.trim() !== "" ? { signalText: signal } : {}),
+      now,
+      ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+    });
+  }
+  const result = readAnticipatoryContext(ctx.vault, {
+    sessionId,
+    now,
+    ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+  });
+  return {
+    cache_state: result.cache_state,
+    root_session_id: result.root_session_id,
+    ...(result.generated_at !== undefined ? { generated_at: result.generated_at } : {}),
+    items: result.context.items.map((item) => ({
+      id: item.id,
+      tier: item.tier,
+      tokens: item.tokens,
+      principle: item.principle,
+      body: item.body,
+    })),
+    session_hits: result.context.session_hits,
+  };
+}
+
 export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_context_pack",
@@ -588,5 +642,30 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainPreCompactExtract,
+  },
+  {
+    name: "brain_anticipatory_context",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Turn-specific context bundle kept warm by lifecycle hooks: the active context pack plus session-recall hits, keyed by the session's lineage root. Returns the warm cache inside the TTL or a live fallback, reporting `cache_state`. `refresh: true` forces a refresh first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: {
+          type: "string",
+          description: "Session id (any segment of a compression chain resolves to its root).",
+        },
+        refresh: {
+          type: "boolean",
+          description: "Refresh the cache before reading (TTL debounce still applies).",
+        },
+        signal_text: {
+          type: "string",
+          description: "Latest prompt/signal text steering the refreshed bundle.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainAnticipatoryContext,
   },
 ]);

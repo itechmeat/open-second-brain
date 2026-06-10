@@ -36,6 +36,9 @@ Brain verbs (observing memory):
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
   doctor              Validate Brain invariants (--strict; --remediate [--dry-run])
+  hygiene             Hygiene pipeline: scan findings; apply by ids (--dry-run)
+  refresh             Targeted recompile of stale derived pages (--stale [--dry-run])
+  anticipate          Inspect or refresh the anticipatory context cache (--session)
   watchdog            Probe Brain health and plan safe recovery (--remediate, --restore, --force-restore)
   health              Semantic-health report: contradictions, concept gaps, stale claims
   history             Render a preference's edit-history timeline
@@ -205,6 +208,24 @@ export const VERB_HELP: Record<string, string> = {
     "                              [--vault <path>] [--json]\n" +
     "Read-only diff between two snapshots, or between a snapshot and\n" +
     "the live Brain/ tree (when <run_id_b> is omitted).\n",
+  hygiene:
+    "usage: o2b brain hygiene <scan|apply> [--vault <path>] [--json]\n" +
+    "                          [--detectors conflicts,dedup,freshness,usefulness]\n" +
+    "                          [--ids <finding-id,...>] [--dry-run]\n" +
+    "Scan is read-only: contested truth slots, near-duplicate preferences,\n" +
+    "stale/orphaned derived pages, low-usefulness candidates. Apply executes\n" +
+    "only explicitly selected finding ids; review findings never execute.\n" +
+    "The conflict resolver command comes from _brain.yaml (hygiene.resolver_cmd).\n",
+  refresh:
+    "usage: o2b brain refresh --stale [--vault <path>] [--dry-run] [--json]\n" +
+    "Targeted recompile: re-derive stale pages from their recorded sources\n" +
+    "(handoff notes re-derive in place), archive orphans into Brain/.snapshots,\n" +
+    "report unknown pipelines as manual. --dry-run previews with zero writes.\n",
+  anticipate:
+    "usage: o2b brain anticipate --session <id> [--refresh] [--signal <text>]\n" +
+    "                             [--vault <path>] [--json]\n" +
+    "Read the anticipatory context cache for the session's lineage root\n" +
+    "(warm | stale | miss), or force a refresh first (TTL debounce applies).\n",
   doctor:
     "usage: o2b brain doctor [--vault <path>] [--json] [--strict]\n" +
     "                        [--remediate [--dry-run]]\n" +

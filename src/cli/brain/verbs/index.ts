@@ -97,3 +97,6 @@ export { cmdBrainEvolution } from "./temporal-evolution.ts";
 export { cmdBrainStale } from "./temporal-stale.ts";
 export { cmdBrainDaily } from "./temporal-daily.ts";
 export { cmdBrainWeekly } from "./temporal-weekly.ts";
+export { cmdBrainHygiene } from "./hygiene.ts";
+export { cmdBrainRefresh } from "./refresh.ts";
+export { cmdBrainAnticipate } from "./anticipate.ts";

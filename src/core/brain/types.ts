@@ -1047,6 +1047,48 @@ export interface BrainConfig {
    * consumers resolve built-ins through `resolveSchemaVocabulary`.
    */
   readonly schema?: BrainSchemaConfig;
+  /**
+   * Optional `hygiene:` block (continuity-hygiene-freshness suite).
+   * Tunes the hygiene pipeline: the external conflict-resolver command
+   * (operator-configured only - never accepted from a tool argument)
+   * and the semantic dedup threshold. Absent: no resolver, default
+   * threshold.
+   */
+  readonly hygiene?: BrainHygieneConfig;
+  /**
+   * Optional `anticipatory:` block (continuity-hygiene-freshness
+   * suite). Tunes the anticipatory context cache refreshed by
+   * lifecycle hooks. Absent: built-in TTL and budget defaults.
+   */
+  readonly anticipatory?: BrainAnticipatoryConfig;
+  /**
+   * Optional `recall:` block (continuity-hygiene-freshness suite).
+   * Selects the per-entry budget trim strategy for context-pack and
+   * pre-compress. Absent: the historical hard cut.
+   */
+  readonly recall?: BrainRecallConfig;
+}
+
+/** Optional `hygiene:` block (continuity-hygiene-freshness suite). */
+export interface BrainHygieneConfig {
+  /** External conflict-resolver command (JSON stdin/stdout, fail-open). */
+  readonly resolver_cmd?: string;
+  /** Cosine threshold for semantic dedup, in (0, 1]. Default 0.97. */
+  readonly dedup_threshold?: number;
+}
+
+/** Optional `anticipatory:` block (continuity-hygiene-freshness suite). */
+export interface BrainAnticipatoryConfig {
+  /** Cache freshness/debounce window in seconds. Default 120. */
+  readonly ttl_seconds?: number;
+  /** Token budget of the cached context pack. Default 2000. */
+  readonly max_tokens?: number;
+}
+
+/** Optional `recall:` block (continuity-hygiene-freshness suite). */
+export interface BrainRecallConfig {
+  /** Per-entry trim strategy: historical hard cut or the staged ladder. */
+  readonly degradation?: "hard-cut" | "staged";
 }
 
 /**
