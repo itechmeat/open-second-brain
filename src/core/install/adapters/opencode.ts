@@ -15,12 +15,14 @@
  * debugging sessions.
  */
 
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { createJsonMcpAdapter } from "./_json-mcp.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
+import { recordEntry, readManifest } from "../manifest.ts";
+import { OPENCODE_PLUGIN_FILENAME, installedPluginContent } from "../opencode-plugin-asset.ts";
 import { defaultRegistry } from "../registry.ts";
 import type {
   ApplyOpts,
@@ -29,6 +31,8 @@ import type {
   InstallPlan,
   McpPayload,
   McpServerEntry,
+  UninstallResult,
+  VerifyResult,
 } from "../types.ts";
 
 function opencodeDir(env: InstallEnv): string {
@@ -90,20 +94,82 @@ function migrateLegacyMcpJson(env: InstallEnv, opts: ApplyOpts): void {
   }
 }
 
+function pluginPath(env: InstallEnv): string {
+  return join(opencodeDir(env), "plugins", OPENCODE_PLUGIN_FILENAME);
+}
+
 const base = createJsonMcpAdapter({
   target: "opencode",
   label: "opencode",
   topLevelKey: "mcp",
   resolveConfigPath: configPath,
   serializeEntry: serializeOpencodeEntry,
-  postNotes: ["Restart opencode to load the new MCP servers."],
+  postNotes: ["Restart opencode to load the new MCP servers and the Open Second Brain plugin."],
 });
 
 export const opencodeAdapter = {
   ...base,
+
   apply(plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
     const result = base.apply(plan, payload, env, opts);
     migrateLegacyMcpJson(env, opts);
+
+    const plugin = pluginPath(env);
+    let pluginWritten = 0;
+    if (!opts.dryRun) {
+      const expected = installedPluginContent();
+      const current = existsSync(plugin) ? readFileSync(plugin, "utf8") : null;
+      if (current !== expected) {
+        const dir = dirname(plugin);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        atomicWriteFileSync(plugin, expected);
+        pluginWritten = 1;
+      }
+      // The base body records ownership of the two JSON keys; extend the
+      // entry with the plugin file so verify and uninstall track it too.
+      const stored = readManifest(env.vault).installs[base.target] ?? result.manifest;
+      const manifest = { ...stored, owned_paths: [plugin] };
+      recordEntry(env.vault, manifest);
+      return {
+        ...result,
+        manifest,
+        steps_executed: result.steps_executed + pluginWritten,
+      };
+    }
+    return result;
+  },
+
+  verify(env: InstallEnv): VerifyResult {
+    const baseResult = base.verify(env);
+    if (baseResult.status !== "ok") return baseResult;
+    const plugin = pluginPath(env);
+    const fixHint = "o2b install --target opencode --apply";
+    if (!existsSync(plugin)) {
+      return {
+        target: base.target,
+        status: "drift",
+        details: [`plugin file missing: ${plugin}`],
+        fix_hint: fixHint,
+      };
+    }
+    if (readFileSync(plugin, "utf8") !== installedPluginContent()) {
+      return {
+        target: base.target,
+        status: "drift",
+        details: [`plugin file differs from the bundled version: ${plugin}`],
+        fix_hint: fixHint,
+      };
+    }
+    return baseResult;
+  },
+
+  uninstall(env: InstallEnv, opts: ApplyOpts & { fromSnippet?: boolean }): UninstallResult {
+    const result = base.uninstall(env, opts);
+    const plugin = pluginPath(env);
+    if (existsSync(plugin)) {
+      if (!opts.dryRun) rmSync(plugin);
+      return { ...result, removed_paths: [...result.removed_paths, plugin] };
+    }
     return result;
   },
 };

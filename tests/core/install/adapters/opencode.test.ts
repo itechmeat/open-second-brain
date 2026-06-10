@@ -215,3 +215,60 @@ describe("opencode adapter - legacy mcp.json migration", () => {
     expect(JSON.parse(readFileSync(configPath(), "utf8")).mcp["open-second-brain"]).toBeDefined();
   });
 });
+
+describe("opencode adapter - bundled plugin installation", () => {
+  function pluginPath() {
+    return join(home, ".config", "opencode", "plugins", "open-second-brain.ts");
+  }
+
+  test("apply copies the bundled plugin with a version-stamped header", () => {
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    expect(existsSync(pluginPath())).toBe(true);
+    const content = readFileSync(pluginPath(), "utf8");
+    expect(content.startsWith("// open-second-brain plugin v")).toBe(true);
+    expect(content).toContain("export const OpenSecondBrain");
+  });
+
+  test("manifest records the plugin file as an owned path", () => {
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const entry = readManifest(vault).installs["opencode"];
+    expect(entry?.owned_paths).toContain(pluginPath());
+  });
+
+  test("verify reports drift when the installed plugin is edited", () => {
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    expect(opencodeAdapter.verify(env()).status).toBe("ok");
+    writeFileSync(pluginPath(), "// hand-edited\n");
+    const v = opencodeAdapter.verify(env());
+    expect(v.status).toBe("drift");
+    expect(v.details.join(" ")).toContain("plugin");
+  });
+
+  test("verify reports drift when the plugin file is missing", () => {
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    rmSync(pluginPath());
+    expect(opencodeAdapter.verify(env()).status).toBe("drift");
+  });
+
+  test("re-apply refreshes an outdated plugin copy", () => {
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    writeFileSync(pluginPath(), "// stale copy from an older release\n");
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    expect(readFileSync(pluginPath(), "utf8")).toContain("export const OpenSecondBrain");
+  });
+
+  test("dry-run apply does not write the plugin file", () => {
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), {
+      ...applyOpts(),
+      dryRun: true,
+    });
+    expect(existsSync(pluginPath())).toBe(false);
+  });
+
+  test("uninstall removes the plugin file", () => {
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const r = opencodeAdapter.uninstall(env(), applyOpts());
+    expect(existsSync(pluginPath())).toBe(false);
+    expect(r.removed_paths).toContain(pluginPath());
+  });
+});
