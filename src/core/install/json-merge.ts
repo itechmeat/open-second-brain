@@ -32,6 +32,13 @@ const DEFAULT_TOP_KEY = "mcpServers";
 export interface MergeOpts {
   /** Top-level object key under which MCP servers live. Default `mcpServers`. */
   readonly topLevelKey?: string;
+  /**
+   * Maps the canonical `McpServerEntry` to the runtime's on-disk entry
+   * shape. Default emits `{command, args, env?}` (Cursor, kiro,
+   * Gemini CLI). opencode injects `{type, command: [bin, ...args],
+   * environment?, enabled}` here.
+   */
+  readonly serializeEntry?: (entry: McpServerEntry) => Record<string, unknown>;
 }
 
 export function mergeMcpServers(
@@ -50,10 +57,11 @@ export function mergeMcpServers(
       : {};
 
   // Preserve insertion order: user keys first (without our two), then ours.
+  const serialize = opts.serializeEntry ?? serializeEntry;
   delete block[OSB_KEY_FULL];
   delete block[OSB_KEY_WRITER];
-  block[OSB_KEY_FULL] = serializeEntry(payload.full);
-  block[OSB_KEY_WRITER] = serializeEntry(payload.writer);
+  block[OSB_KEY_FULL] = serialize(payload.full);
+  block[OSB_KEY_WRITER] = serialize(payload.writer);
 
   root[topKey] = block;
 
