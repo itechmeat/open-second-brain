@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord, ContinuitySourceRef } from "./continuity/types.ts";
+import { readLineageLedger } from "./lineage/ledger.ts";
+import type { SessionLineage } from "./lineage/types.ts";
 import type { SessionTurn } from "./sessions/types.ts";
 
 export interface ImportSessionRecallInput {
@@ -9,6 +11,12 @@ export interface ImportSessionRecallInput {
   readonly turns: ReadonlyArray<SessionTurn>;
   readonly createdAt?: string;
   readonly summaryGroupSize?: number;
+  /**
+   * Lineage of the imported segment (continuity-hygiene-freshness
+   * suite). Non-flat lineage is stamped onto every imported record so
+   * recall can stitch the conversation across compression boundaries.
+   */
+  readonly lineage?: SessionLineage;
 }
 
 export interface ImportSessionRecallResult {
@@ -42,11 +50,23 @@ export interface DescribeSessionRecallInput {
   readonly sessionId: string;
 }
 
+export interface SessionLineageSegment {
+  readonly session_id: string;
+  readonly parent_session_id: string | null;
+}
+
 export interface DescribeSessionRecallResult {
   readonly session_id: string;
   readonly raw_turns: number;
   readonly summary_nodes: number;
   readonly depths: Readonly<Record<string, number>>;
+  /**
+   * Lineage fields, present only when the session is part of a
+   * multi-segment compression chain - flat sessions keep the exact
+   * pre-lineage result shape.
+   */
+  readonly lineage_root?: string;
+  readonly segments?: ReadonlyArray<SessionLineageSegment>;
 }
 
 export interface ExpandSessionRecallInput {
@@ -79,8 +99,10 @@ export function importSessionRecall(
   input: ImportSessionRecallInput,
 ): ImportSessionRecallResult {
   const createdAt = input.createdAt ?? new Date().toISOString();
+  const lineage =
+    input.lineage !== undefined && input.lineage.source !== "flat" ? input.lineage : undefined;
   const rawTurns = input.turns.map((turn) =>
-    importRawTurn(vault, input.sessionId, turn, createdAt),
+    importRawTurn(vault, input.sessionId, turn, createdAt, lineage),
   );
   const summaryNodes = [
     ...importSummaryDepth(
@@ -90,6 +112,7 @@ export function importSessionRecall(
       1,
       input.summaryGroupSize ?? DEFAULT_GROUP_SIZE,
       createdAt,
+      lineage,
     ),
   ];
   summaryNodes.push(
@@ -100,6 +123,7 @@ export function importSessionRecall(
       2,
       input.summaryGroupSize ?? DEFAULT_GROUP_SIZE,
       createdAt,
+      lineage,
     ),
   );
   return Object.freeze({
@@ -141,7 +165,43 @@ export function describeSessionRecall(
     raw_turns: rawTurns.length,
     summary_nodes: summaries.length,
     depths: Object.freeze(depths),
+    ...lineageDescription(vault, records, input.sessionId),
   });
+}
+
+/**
+ * Lineage fields for `describeSessionRecall`: present only when the
+ * conversation spans more than one segment. Segments are listed in
+ * chronological order of their first record, each with its immediate
+ * parent so the continuity edge between adjacent segments is explicit.
+ */
+function lineageDescription(
+  vault: string,
+  records: ReadonlyArray<ContinuityRecord>,
+  sessionId: string,
+): { lineage_root?: string; segments?: ReadonlyArray<SessionLineageSegment> } {
+  const links = lineageLinks(vault, records);
+  const rootId = links.get(sessionId)?.rootId ?? sessionId;
+  const seen = new Set<string>();
+  const segments: SessionLineageSegment[] = [];
+  for (const record of records) {
+    const sid = record.payload["session_id"];
+    if (typeof sid !== "string" || seen.has(sid)) continue;
+    seen.add(sid);
+    segments.push(
+      Object.freeze({ session_id: sid, parent_session_id: links.get(sid)?.parentId ?? null }),
+    );
+  }
+  // A root segment can exist without records of its own (the chain was
+  // linked before the root transcript was ever imported); it still
+  // anchors the conversation, so list it first.
+  if (!seen.has(rootId)) {
+    segments.unshift(
+      Object.freeze({ session_id: rootId, parent_session_id: links.get(rootId)?.parentId ?? null }),
+    );
+  }
+  if (segments.length < 2) return {};
+  return { lineage_root: rootId, segments: Object.freeze(segments) };
 }
 
 export function expandSessionRecall(
@@ -168,11 +228,21 @@ export function expandSessionRecall(
   });
 }
 
+function lineagePayloadFields(lineage: SessionLineage | undefined): Record<string, unknown> {
+  if (lineage === undefined) return {};
+  return {
+    root_session_id: lineage.rootId,
+    ...(lineage.parentId !== null ? { parent_session_id: lineage.parentId } : {}),
+    compression_depth: lineage.depth,
+  };
+}
+
 function importRawTurn(
   vault: string,
   sessionId: string,
   turn: SessionTurn,
   createdAt: string,
+  lineage: SessionLineage | undefined,
 ): ContinuityRecord {
   const text = turn.text ?? "";
   const textHash = hash(text);
@@ -191,6 +261,7 @@ function importRawTurn(
       text,
       text_hash: textHash,
       dedupe_key: dedupeKey,
+      ...lineagePayloadFields(lineage),
     },
   });
 }
@@ -202,6 +273,7 @@ function importSummaryDepth(
   depth: number,
   groupSize: number,
   createdAt: string,
+  lineage: SessionLineage | undefined,
 ): ContinuityRecord[] {
   if (sources.length === 0) return [];
   const nodes: ContinuityRecord[] = [];
@@ -237,6 +309,7 @@ function importSummaryDepth(
           source_turn_ids: sourceTurnIds,
           text_hash: hash(summary),
           dedupe_key: dedupeKey,
+          ...lineagePayloadFields(lineage),
         },
       }),
     );
@@ -245,13 +318,69 @@ function importSummaryDepth(
 }
 
 function sessionRecallRecords(vault: string, sessionId?: string): ContinuityRecord[] {
-  return listContinuityRecords(vault)
-    .filter(
-      (record) =>
-        (record.kind === "session_turn" || record.kind === "session_summary_node") &&
-        (sessionId === undefined || record.payload["session_id"] === sessionId),
-    )
-    .sort((left, right) => compareRecords(left, right));
+  const records = listContinuityRecords(vault).filter(
+    (record) => record.kind === "session_turn" || record.kind === "session_summary_node",
+  );
+  let scoped = records;
+  if (sessionId !== undefined) {
+    const scope = lineageScope(vault, records, sessionId);
+    scoped = records.filter((record) => scope.has(String(record.payload["session_id"] ?? "")));
+  }
+  return scoped.sort((left, right) => compareRecords(left, right));
+}
+
+interface LineageLink {
+  readonly rootId: string;
+  readonly parentId: string | null;
+}
+
+/**
+ * Per-session lineage links visible to recall: stamped record payloads
+ * first, then persisted ledger links for captured-but-unimported
+ * segments. Flat sessions never appear in the map.
+ */
+function lineageLinks(
+  vault: string,
+  records: ReadonlyArray<ContinuityRecord>,
+): Map<string, LineageLink> {
+  const links = new Map<string, LineageLink>();
+  for (const record of records) {
+    const sid = record.payload["session_id"];
+    const root = record.payload["root_session_id"];
+    if (typeof sid !== "string" || typeof root !== "string" || links.has(sid)) continue;
+    const parent = record.payload["parent_session_id"];
+    links.set(sid, { rootId: root, parentId: typeof parent === "string" ? parent : null });
+  }
+  try {
+    for (const [sid, entry] of readLineageLedger(vault)) {
+      if (links.has(sid)) continue;
+      if (entry.lineage === undefined || entry.lineage.source === "flat") continue;
+      links.set(sid, { rootId: entry.lineage.rootId, parentId: entry.lineage.parentId });
+    }
+  } catch {
+    // Fail-soft: recall works from record payloads alone.
+  }
+  return links;
+}
+
+/**
+ * Every session id belonging to the same conversation as `sessionId`:
+ * the lineage root, all segments sharing that root, and the id itself.
+ * A flat session resolves to just itself, keeping pre-lineage recall
+ * byte-identical.
+ */
+function lineageScope(
+  vault: string,
+  records: ReadonlyArray<ContinuityRecord>,
+  sessionId: string,
+): Set<string> {
+  const links = lineageLinks(vault, records);
+  const rootId = links.get(sessionId)?.rootId ?? sessionId;
+  const scope = new Set<string>([sessionId, rootId]);
+  for (const [sid, link] of links) {
+    if (link.rootId === rootId) scope.add(sid);
+  }
+  return scope;
 }
 
 function hitFor(
