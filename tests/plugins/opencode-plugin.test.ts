@@ -61,11 +61,20 @@ interface FakeMessage {
 }
 
 function fakeClient(messages: FakeMessage[] | (() => never)) {
+  // Faithful to the real opencode SDK client: `session.messages` is a
+  // method that reads instance state through `this` (the shipped client
+  // dereferences `this._client`). Modeling it as a `this`-dependent
+  // method shorthand - not an arrow - means a detached call
+  // (`const m = session.messages; await m(...)`) throws here exactly as
+  // it does against the real client, so the capture path must invoke it
+  // as a method.
   return {
     session: {
-      messages: async (_opts: unknown) => {
-        if (typeof messages === "function") messages();
-        return { data: messages };
+      messageStore: messages,
+      async messages(this: { messageStore: FakeMessage[] | (() => never) }, _opts: unknown) {
+        const store = this.messageStore;
+        if (typeof store === "function") store();
+        return { data: store };
       },
     },
   };

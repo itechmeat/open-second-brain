@@ -229,9 +229,11 @@ export const OpenSecondBrain = async (pluginInput: {
     const session = client ? asRecord(client["session"]) : null;
     const messages = session ? session["messages"] : null;
     if (typeof messages !== "function") return;
-    const response: unknown = await (messages as (opts: unknown) => Promise<unknown>)({
-      path: { id: sessionId },
-    });
+    // Invoke as a method bound to `session`: the opencode SDK client
+    // dereferences `this._client` internally, so a detached call
+    // (`messages(...)`) throws "undefined is not an object". Reflect.apply
+    // carries the receiver without re-narrowing the SDK's untyped shape.
+    const response: unknown = await Reflect.apply(messages, session, [{ path: { id: sessionId } }]);
     const list = messageList(response);
     if (list === null) return;
     writeSpool(sessionId, directory, list);
