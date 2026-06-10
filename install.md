@@ -26,7 +26,7 @@ in one command:
 |----------------------|----------------------------------------------------|-----------------------------------------------------------------------|
 | Cursor               | `o2b install --target cursor --apply`              | `install/cursor.md` — JSON-merge; restart Cursor after apply         |
 | Aider                | `o2b install --target aider --apply`               | `install/aider.md` — managed block + sidecar context; no native MCP   |
-| opencode             | `o2b install --target opencode --apply`            | `install/opencode.md` — JSON-merge                                    |
+| opencode             | `o2b install --target opencode --apply`            | `install/opencode.md` — MCP servers + native plugin                                    |
 | kiro                 | `o2b install --target kiro --apply`                | `install/kiro.md` — JSON-merge                                        |
 | GitHub Copilot CLI   | `o2b install --target copilot-cli --apply`         | `install/copilot-cli.md` — `copilot mcp add` with JSON fallback       |
 | Google Gemini CLI    | `o2b install --target gemini-cli --apply`          | `install/gemini-cli.md` — JSON-merge in `~/.gemini/settings.json`     |

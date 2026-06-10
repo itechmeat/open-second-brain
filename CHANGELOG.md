@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-06-10
+
+Native opencode integration: the install adapter now writes the config
+opencode actually reads, and a bundled plugin brings the runtime to
+near-parity with the Claude Code and Codex integrations - live active
+context injection, lifecycle-driven session capture, and the post-write
+logging reminder.
+
+### Added
+
+- **Bundled opencode plugin** (`plugins/opencode/open-second-brain.ts`):
+  a single zero-dependency file installed into
+  `~/.config/opencode/plugins/` by `o2b install --target opencode
+  --apply`. On each chat request it appends the rendered
+  `Brain/active.md` digest to the system prompt (via the same
+  `o2b-hook active-inject` shim the Claude Code and Codex hook layers
+  use, cached with a 5 minute TTL); on `session.idle` /
+  `session.compacted` / `session.deleted` it snapshots the session as
+  a deterministic JSONL spool under
+  `${XDG_DATA_HOME:-~/.local/share}/open-second-brain/opencode/`; after
+  file-mutating tools it appends the standard logging nudge to the
+  tool output. Every hook is fail-soft - a missing vault, missing
+  binary, or SDK error never breaks the opencode session.
+- **opencode session adapter** (`src/core/brain/sessions/opencode.ts`):
+  fourth adapter in the session registry. Imports the plugin-owned
+  spool format (`format: 1`, originator
+  `open-second-brain-opencode-plugin`) through the same
+  `o2b brain import-session` flow as Claude, Codex, and Hermes
+  transcripts; a spool written by a newer plugin fails with a
+  versioned error instead of silently dropping fields.
+- **Pluggable MCP entry shape** in the shared JSON-merge install layer:
+  `createJsonMcpAdapter` accepts `serializeEntry` / `entryEquals`, so
+  runtimes whose MCP config schema differs from the default
+  `{command, args, env}` entry reuse the same
+  detect/plan/apply/verify/uninstall body with drift detection intact.
+  Existing targets (Cursor, kiro, Gemini CLI) are byte-identical.
+
+### Fixed
+
+- **opencode install adapter targeted a file opencode does not read.**
+  The adapter now merges the two Open Second Brain servers into
+  `~/.config/opencode/opencode.json` under the `mcp` key using
+  opencode's entry schema (`{type: "local", command: [bin, ...args],
+  environment, enabled: true}`), honouring `XDG_CONFIG_HOME`. Apply
+  also migrates the stale `~/.config/opencode/mcp.json` written by
+  earlier releases: the two Open Second Brain keys are removed, and the
+  file is deleted when nothing else remains.
+
 ## [1.3.0] - 2026-06-10
 
 Continuity, Hygiene & Freshness Suite: one conversation stays one

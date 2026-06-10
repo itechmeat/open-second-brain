@@ -157,19 +157,19 @@ describe("removeMcpServers", () => {
   });
 });
 
-describe("mergeMcpServers serializeEntry injection", () => {
-  // opencode-style entry shape: `{type, command: [bin, ...args], environment, enabled}`.
-  const opencodeShape = (e: {
-    command: string;
-    args: readonly string[];
-    env?: Record<string, string>;
-  }) => ({
-    type: "local",
-    command: [e.command, ...e.args],
-    ...(e.env && Object.keys(e.env).length > 0 ? { environment: { ...e.env } } : {}),
-    enabled: true,
-  });
+// opencode-style entry shape: `{type, command: [bin, ...args], environment, enabled}`.
+const opencodeShape = (e: {
+  command: string;
+  args: readonly string[];
+  env?: Record<string, string>;
+}) => ({
+  type: "local",
+  command: [e.command, ...e.args],
+  ...(e.env && Object.keys(e.env).length > 0 ? { environment: { ...e.env } } : {}),
+  enabled: true,
+});
 
+describe("mergeMcpServers serializeEntry injection", () => {
   test("custom serializeEntry controls the on-disk entry shape", () => {
     const out = mergeMcpServers("", OSB_PAYLOAD, {
       topLevelKey: "mcp",

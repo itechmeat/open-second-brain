@@ -21,7 +21,7 @@
  *    SDK client and snapshotted as a deterministic JSONL spool under
  *    `${XDG_DATA_HOME:-~/.local/share}/open-second-brain/opencode/`
  *    (override: `OSB_OPENCODE_SPOOL_DIR`). The spool format is owned
- *    by Open Second Brain (`format: 1`); `o2b brain import-sessions`
+ *    by Open Second Brain (`format: 1`); `o2b brain import-session`
  *    pointed at the spool dir ingests it via the `opencode` session
  *    adapter. Snapshot-rewrite, not append: idempotent and
  *    self-healing after crashes.
@@ -206,14 +206,14 @@ function renderActiveContext(): string | null {
  * Plugin entry point. opencode calls this once at startup with the SDK
  * client and project info, and wires the returned hooks.
  */
-export const OpenSecondBrain = async (input: {
+export const OpenSecondBrain = async (pluginInput: {
   client: unknown;
   project?: unknown;
   directory?: string;
   worktree?: string;
 }) => {
-  const directory = typeof input.directory === "string" ? input.directory : "";
-  const client = asRecord(input.client);
+  const directory = typeof pluginInput.directory === "string" ? pluginInput.directory : "";
+  const client = asRecord(pluginInput.client);
   let activeContextCache: { value: string | null; at: number } | null = null;
 
   async function captureSession(sessionId: string): Promise<void> {
