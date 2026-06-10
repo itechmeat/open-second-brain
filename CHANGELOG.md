@@ -5,7 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.4.0] - 2026-06-10
+## [1.3.0] - 2026-06-10
+
+Continuity, Hygiene & Freshness Suite: one conversation stays one
+session across host context compressions, and the Brain gains a
+remediation pipeline for the entropy it accumulates - contested facts,
+near-duplicate rules, stale derived pages, never-recalled memories.
+Two kernels carry the release: a session-lineage resolver consumed by
+capture, recall, and the new anticipatory cache, and a hygiene
+findings pipeline composing pure detectors behind one scan/apply
+surface.
 
 Native opencode integration: the install adapter now writes the config
 opencode actually reads, and a bundled plugin brings the runtime to
@@ -41,30 +50,6 @@ logging reminder.
   `{command, args, env}` entry reuse the same
   detect/plan/apply/verify/uninstall body with drift detection intact.
   Existing targets (Cursor, kiro, Gemini CLI) are byte-identical.
-
-### Fixed
-
-- **opencode install adapter targeted a file opencode does not read.**
-  The adapter now merges the two Open Second Brain servers into
-  `~/.config/opencode/opencode.json` under the `mcp` key using
-  opencode's entry schema (`{type: "local", command: [bin, ...args],
-  environment, enabled: true}`), honouring `XDG_CONFIG_HOME`. Apply
-  also migrates the stale `~/.config/opencode/mcp.json` written by
-  earlier releases: the two Open Second Brain keys are removed, and the
-  file is deleted when nothing else remains.
-
-## [1.3.0] - 2026-06-10
-
-Continuity, Hygiene & Freshness Suite: one conversation stays one
-session across host context compressions, and the Brain gains a
-remediation pipeline for the entropy it accumulates - contested facts,
-near-duplicate rules, stale derived pages, never-recalled memories.
-Two kernels carry the release: a session-lineage resolver consumed by
-capture, recall, and the new anticipatory cache, and a hygiene
-findings pipeline composing pure detectors behind one scan/apply
-surface.
-
-### Added
 
 - **Session lineage kernel** (`src/core/brain/lineage/`): every session
   id resolves to a lineage (root id, parent segment, compression
@@ -129,6 +114,18 @@ surface.
   name-list, and count guards were updated in the same change.
 - `HookPayloadBase` gains optional lineage fields and the SessionStart
   `source` discriminator; hosts without them behave byte-identically.
+
+### Fixed
+
+
+- **opencode install adapter targeted a file opencode does not read.**
+  The adapter now merges the two Open Second Brain servers into
+  `~/.config/opencode/opencode.json` under the `mcp` key using
+  opencode's entry schema (`{type: "local", command: [bin, ...args],
+  environment, enabled: true}`), honouring `XDG_CONFIG_HOME`. Apply
+  also migrates the stale `~/.config/opencode/mcp.json` written by
+  earlier releases: the two Open Second Brain keys are removed, and the
+  file is deleted when nothing else remains.
 
 ## [1.2.0] - 2026-06-09
 
@@ -5170,7 +5167,6 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[1.4.0]: https://github.com/itechmeat/open-second-brain/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/itechmeat/open-second-brain/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/itechmeat/open-second-brain/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/itechmeat/open-second-brain/compare/v1.0.1...v1.1.0
