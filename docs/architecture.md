@@ -167,6 +167,10 @@ Brain/
   retired/                 # ret-<slug>.md with retired_reason
   log/                     # YYYY-MM-DD.md, append-only event log (dream / apply-evidence / etc.)
   .snapshots/              # <run_id>.tar.zst, pre-run snapshots for o2b brain rollback
+                           # plus hygiene-<date>/ archives (pages moved, never deleted)
+  .state/                  # machine state, excluded from indexing (since v1.3.0):
+                           #   session-lineage.jsonl (compression-chain ledger)
+                           #   anticipatory/<root>.json (hook-warmed context cache)
 ```
 
 This layout is intentionally agent-owned: every artefact Open Second
@@ -178,7 +182,7 @@ the vault is read-only to the agent and stays under operator control.
 Three architectural invariants:
 
 - **Filesystem-first.** No database, no daemon. Every artifact is plain Markdown with YAML frontmatter; backup is `cp -r` or `tar`.
-- **Deterministic core.** The `dream` algorithm is a pure function of inputs (signals, preferences, log, configuration, current time). No LLM calls inside the core. Semantic merging, if needed, is delegated to external agents via the same CLI / MCP surface.
+- **Deterministic core.** The `dream` algorithm is a pure function of inputs (signals, preferences, log, configuration, current time). No LLM calls inside the core. Semantic merging, if needed, is delegated to external agents via the same CLI / MCP surface. External judgment (the bench judge, the hygiene conflict resolver) goes through one sanctioned fail-open boundary: the operator-configured command bridge (`src/core/reliability/command-bridge.ts`).
 - **Pre-run snapshot + atomic per-file writes.** Each `dream` run takes a `.snapshots/<run_id>.tar.zst` before any state change; per-file writes go through `fs-atomic` (temp + rename). Combined with retention of the most-recent N snapshots, this gives reversible, audit-friendly mutation.
 
 The layered diagram from the top of this document still holds — `Brain/` sits at the same level as the vault files in the bottom layer:

@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-10
+
+Continuity, Hygiene & Freshness Suite: one conversation stays one
+session across host context compressions, and the Brain gains a
+remediation pipeline for the entropy it accumulates - contested facts,
+near-duplicate rules, stale derived pages, never-recalled memories.
+Two kernels carry the release: a session-lineage resolver consumed by
+capture, recall, and the new anticipatory cache, and a hygiene
+findings pipeline composing pure detectors behind one scan/apply
+surface.
+
+### Added
+
+- **Session lineage kernel** (`src/core/brain/lineage/`): every session
+  id resolves to a lineage (root id, parent segment, compression
+  depth). Native path reads the new optional `parent_session_id` /
+  `root_session_id` / `compression_depth` hook-payload fields (ready
+  for upstream Hermes PR #42940); until the deployed host emits them,
+  a conservative interim inference - isolated in one file and marked
+  `CRUTCH(t_1459706f)` - links a brand-new session to a predecessor
+  only on compression evidence plus same cwd inside a bounded window.
+  Time proximity alone never stitches; every ambiguous case stays flat.
+- **Compression-aware session recall**: imported session records carry
+  additive lineage payload fields, and `brain_session_grep` /
+  `brain_session_describe` resolve any segment id to the whole stitched
+  conversation. Describe exposes the segment chain with its continuity
+  edges; never-compacted sessions keep the exact pre-lineage shapes.
+- **Staged degradation ladder** for over-budget recall entries:
+  `recall.degradation: staged` in `_brain.yaml` trims at the last
+  sentence terminator (structural multi-script punctuation), then whole
+  leading lines, then the historical hard cut - which stays the
+  byte-identical default.
+- **Anticipatory context cache**: lifecycle hooks keep a small
+  turn-specific bundle (active context pack + session-recall hits for
+  the latest prompt) warm under `Brain/.state/`, keyed by the lineage
+  root, TTL-debounced, atomically written - no daemon, no watcher. New
+  `brain_anticipatory_context` MCP tool and `o2b brain anticipate` verb
+  read it cache-or-live with an explicit `cache_state`.
+- **Source-freshness contract**: derived pages record `source_paths` +
+  `source_hashes` at derivation (handoff notes stamp their transcript
+  automatically); freshness computes on demand as fresh / stale /
+  orphaned with no background jobs.
+- **Hygiene findings pipeline** (`src/core/brain/hygiene/`): pure
+  detectors - truth-layer value conflicts, semantic near-duplicate
+  preferences (embedding cosine with a labeled lexical fallback),
+  freshness, never-recalled low-usefulness candidates - compose into a
+  read-only scan digest; apply executes only explicitly selected
+  finding ids through existing primitives (preference merge, claim
+  append, targeted recompile, archive-never-delete) with an audit
+  record per run. New `brain_hygiene` MCP tool and `o2b brain hygiene
+  scan|apply` verbs.
+- **Advisory conflict resolution** through the shared external-command
+  bridge: when the operator configures `hygiene.resolver_cmd`, contested
+  truth slots get supersede / merge / flag verdicts with recorded
+  rationale; without it (or on any failure) every conflict stays
+  flagged for review. The command comes exclusively from operator
+  config - never from tool arguments.
+- **Targeted recompile**: `o2b brain refresh --stale [--dry-run]`
+  re-derives only pages whose recorded sources changed (handoff notes
+  re-derive in place from their transcript), archives orphans into
+  `Brain/.snapshots/`, and reports unknown pipelines as manual.
+- **Config blocks** `hygiene` (resolver_cmd, dedup_threshold),
+  `anticipatory` (ttl_seconds, max_tokens), and `recall` (degradation)
+  parse through the existing YAML subset with hard shape errors.
+- **Shared external-command JSON bridge**
+  (`src/core/reliability/command-bridge.ts`) extracted from the bench
+  judge: one sanctioned fail-open boundary for every external-judgment
+  consumer.
+
+### Changed
+
+- The frozen Brain MCP tool surface grows deliberately from 54 to 56
+  names (`brain_hygiene`, `brain_anticipatory_context`); the parity,
+  name-list, and count guards were updated in the same change.
+- `HookPayloadBase` gains optional lineage fields and the SessionStart
+  `source` discriminator; hosts without them behave byte-identically.
+
 ## [1.2.0] - 2026-06-09
 
 Codebase-wide SOLID/DRY refactor: god modules decomposed into cohesive
