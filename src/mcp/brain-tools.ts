@@ -25,6 +25,7 @@ import { RECALL_TOOLS } from "./brain/recall-tools.ts";
 import { WORKSPACE_TOOLS } from "./brain/workspace-tools.ts";
 import { PROCEDURE_TOOLS } from "./brain/procedure-tools.ts";
 import { LANDSCAPE_TOOLS } from "./brain/landscape-tools.ts";
+import { HYGIENE_TOOLS } from "./brain/hygiene-tools.ts";
 import type { ToolDefinition } from "./tools.ts";
 
 export { vaultRelativeSafe } from "./brain/shared.ts";
@@ -45,4 +46,5 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...WORKSPACE_TOOLS,
   ...PROCEDURE_TOOLS,
   ...LANDSCAPE_TOOLS,
+  ...HYGIENE_TOOLS,
 ]);

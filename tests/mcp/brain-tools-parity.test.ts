@@ -6,6 +6,9 @@
  * future registry change) is provably name-set-preserving. A failure
  * here means the public surface changed - that requires a deliberate
  * major/minor release decision, not a refactor.
+ *
+ * Deliberate surface changes so far: v1.3.0 added `brain_hygiene` and
+ * `brain_anticipatory_context` (continuity-hygiene-freshness suite).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -16,6 +19,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_agent_diff",
   "brain_agent_query",
   "brain_analytics",
+  "brain_anticipatory_context",
   "brain_apply_evidence",
   "brain_audit",
   "brain_backlinks",
@@ -35,6 +39,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_feedback",
   "brain_foresight",
   "brain_health",
+  "brain_hygiene",
   "brain_idea_discovery",
   "brain_intent_review",
   "brain_intention",

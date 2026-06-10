@@ -44,6 +44,9 @@ import {
 import { validateBrainFeedbackInput } from "./validate-feedback.ts";
 import { buildCaptureBoundary, type SessionCaptureDecision } from "../capture-boundary.ts";
 import { extractFacts, routeExtractedFacts } from "../fact-extract.ts";
+import { readLineageLedger } from "../lineage/ledger.ts";
+import { resolveSessionLineage } from "../lineage/resolve.ts";
+import type { SessionLineage } from "../lineage/types.ts";
 
 export interface ImportSessionOptions {
   /** Agent identity stamped on signals when the turn has no own agent. */
@@ -73,6 +76,12 @@ export interface ImportSessionOptions {
   readonly recall?: boolean;
   readonly recallSessionId?: string;
   readonly recallSummaryGroupSize?: number;
+  /**
+   * Lineage of the imported segment (continuity-hygiene-freshness
+   * suite). When omitted, a link persisted in the lineage ledger for
+   * the recall session id is used; flat sessions import unchanged.
+   */
+  readonly recallLineage?: SessionLineage;
   /** Optional ingest scope label stamped into imported signal notes. */
   readonly ingestScope?: string;
   /** Optional role filter for write-side extraction. */
@@ -345,13 +354,20 @@ export async function importSession(
   let recallSummaryNodes = 0;
   if (opts.recall === true && opts.dryRun !== true && recallTurns.length > 0) {
     try {
+      const recallSessionId = opts.recallSessionId ?? basename(absPath);
+      // Persisted-link resolution only: without a clock the crutch
+      // never infers a new link, so an unknown session imports flat.
+      const lineage =
+        opts.recallLineage ??
+        resolveSessionLineage({ sessionId: recallSessionId }, { ledger: readLineageLedger(vault) });
       const recalled = importSessionRecall(vault, {
-        sessionId: opts.recallSessionId ?? basename(absPath),
+        sessionId: recallSessionId,
         turns: recallTurns,
         createdAt: isoSecond(now),
         ...(opts.recallSummaryGroupSize !== undefined
           ? { summaryGroupSize: opts.recallSummaryGroupSize }
           : {}),
+        ...(lineage.source !== "flat" ? { lineage } : {}),
       });
       recallTurnsImported = recalled.rawTurns.length;
       recallSummaryNodes = recalled.summaryNodes.length;

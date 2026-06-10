@@ -29,6 +29,9 @@ import {
   cmdBrainUnprotect,
   cmdBrainRollback,
   cmdBrainDoctor,
+  cmdBrainHygiene,
+  cmdBrainRefresh,
+  cmdBrainAnticipate,
   cmdBrainWatchdog,
   cmdBrainHealth,
   cmdBrainHistory,
@@ -172,6 +175,12 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainRollback(rest);
       case "doctor":
         return await cmdBrainDoctor(rest);
+      case "hygiene":
+        return await cmdBrainHygiene(rest);
+      case "refresh":
+        return await cmdBrainRefresh(rest);
+      case "anticipate":
+        return await cmdBrainAnticipate(rest);
       case "watchdog":
         return await cmdBrainWatchdog(rest);
       case "health":

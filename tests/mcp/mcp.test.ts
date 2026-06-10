@@ -198,6 +198,7 @@ describe("tool listing", () => {
         "brain_agent_diff",
         "brain_doctor",
         "brain_health",
+        "brain_hygiene",
         "brain_mcp_landscape",
         // Canonical entity registry read surface (Memory Integrity Suite).
         "brain_entity",
@@ -230,6 +231,7 @@ describe("tool listing", () => {
         // names above stay registered as deprecated aliases.
         "brain_brief",
         "brain_analytics",
+        "brain_anticipatory_context",
         // Search (added in v0.10.0; recall gate added in v0.27.0).
         "brain_recall_feedback",
         "brain_recall_gate",
@@ -520,7 +522,9 @@ describe("stdio loop", () => {
     //   (Entity Truth & Self-Improving Dream Suite) = 61.
     // + brain_labels / brain_tiers / brain_secrets / brain_maintenance
     //   (Write-Time Integrity & Governance Suite) = 65.
-    expect(list.result.tools.length).toBe(69);
+    // + brain_hygiene / brain_anticipatory_context
+    //   (continuity-hygiene-freshness suite, v1.3.0) = 71.
+    expect(list.result.tools.length).toBe(71);
   });
 
   test("returns parse error for invalid JSON", async () => {

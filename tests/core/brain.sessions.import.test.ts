@@ -111,6 +111,43 @@ describe("importSession", () => {
     );
   });
 
+  test("recall import stamps explicit lineage and stitches with the parent segment", async () => {
+    const res = await importSession(tmp, CLAUDE, {
+      agent: "test",
+      recall: true,
+      recallSessionId: "import-child",
+      recallLineage: {
+        rootId: "import-root",
+        parentId: "import-root",
+        depth: 1,
+        source: "payload",
+      },
+    });
+    expect(res.recall_turns_imported).toBeGreaterThan(0);
+    // Recall over the ROOT id reaches the child-segment turns.
+    const described = describeSessionRecall(tmp, { sessionId: "import-root" });
+    expect(described.raw_turns).toBe(res.recall_turns_imported);
+    expect(described.lineage_root).toBe("import-root");
+  });
+
+  test("recall import resolves persisted ledger lineage when no explicit lineage is given", async () => {
+    const { recordLineageObservation } = await import("../../src/core/brain/lineage/ledger.ts");
+    recordLineageObservation(tmp, {
+      sessionId: "ledger-child",
+      at: "2026-06-10T09:00:00Z",
+      event: "SessionStart",
+      lineage: { rootId: "ledger-root", parentId: "ledger-root", depth: 1, source: "crutch" },
+    });
+    const res = await importSession(tmp, CLAUDE, {
+      agent: "test",
+      recall: true,
+      recallSessionId: "ledger-child",
+    });
+    expect(res.recall_turns_imported).toBeGreaterThan(0);
+    const described = describeSessionRecall(tmp, { sessionId: "ledger-root" });
+    expect(described.raw_turns).toBe(res.recall_turns_imported);
+  });
+
   test("supports filtered write mode by role", async () => {
     const res = await importSession(tmp, CLAUDE, {
       agent: "test",

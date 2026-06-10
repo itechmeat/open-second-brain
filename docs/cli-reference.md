@@ -114,6 +114,9 @@ o2b brain session-grep        --query <text> [--session-id <id>] [--limit <n>] [
 o2b brain session-describe    --session-id <id> [--json]
 o2b brain session-expand      <record-id> [--raw-limit <n>] [--cursor <offset>] [--json]
 o2b brain handoff             <session-file> [--session-id <id>] [--format auto|claude|codex|hermes] [--json] - write Brain/handoffs/<date>-<scope>.md (since v0.37.0)
+o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts,dedup,freshness,usefulness] [--dry-run] [--json] - hygiene findings pipeline; review findings never execute (since v1.3.0)
+o2b brain refresh             --stale [--dry-run] [--json] - targeted recompile of stale derived pages; orphans archive into Brain/.snapshots (since v1.3.0)
+o2b brain anticipate          --session <id> [--refresh] [--signal <text>] [--json] - read or warm the anticipatory context cache for the session's lineage root (since v1.3.0)
 o2b brain intention           set|show|list|move [--scope S] [--text T] [--json] - scoped current-intention chains under Brain/intentions/ (since v0.37.0)
 ```
 
