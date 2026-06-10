@@ -115,7 +115,12 @@ async function readTranscriptTurns(transcript: string): Promise<SessionTurn[] | 
   return turns.length > 0 ? turns : null;
 }
 
-function archivePage(vault: string, page: string, now: Date): string {
+/**
+ * Move a vault page into a dated hygiene snapshot directory - the
+ * shared "archive, never delete" primitive for recompile cleanups and
+ * hygiene `archive` / `forget` actions.
+ */
+export function archivePage(vault: string, page: string, now: Date): string {
   const dir = join(vault, BRAIN_SNAPSHOTS_REL, `hygiene-${isoDate(now)}`);
   mkdirSync(dir, { recursive: true });
   let target = join(dir, basename(page));
