@@ -110,6 +110,25 @@ const base = createJsonMcpAdapter({
 export const opencodeAdapter = {
   ...base,
 
+  plan(payload: McpPayload, env: InstallEnv): InstallPlan {
+    const basePlan = base.plan(payload, env);
+    const steps = [...basePlan.steps];
+    steps.push({
+      kind: "file-copy",
+      path: pluginPath(env),
+      preview: `copy the bundled Open Second Brain plugin to ${pluginPath(env)}`,
+    });
+    const legacy = legacyConfigPath(env);
+    if (existsSync(legacy)) {
+      steps.push({
+        kind: "json-merge",
+        path: legacy,
+        preview: `remove Open Second Brain keys from the legacy ${legacy} (delete when empty)`,
+      });
+    }
+    return { ...basePlan, steps };
+  },
+
   apply(plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
     const result = base.apply(plan, payload, env, opts);
     migrateLegacyMcpJson(env, opts);

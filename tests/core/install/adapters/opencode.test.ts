@@ -272,3 +272,23 @@ describe("opencode adapter - bundled plugin installation", () => {
     expect(r.removed_paths).toContain(pluginPath());
   });
 });
+
+describe("opencode adapter - plan completeness", () => {
+  test("plan lists the plugin copy step", () => {
+    const plan = opencodeAdapter.plan(payload(), env());
+    const kinds = plan.steps.map((s) => s.kind);
+    expect(kinds).toContain("json-merge");
+    expect(kinds).toContain("file-copy");
+    expect(plan.steps.find((s) => s.kind === "file-copy")?.path).toContain(
+      "plugins/open-second-brain.ts",
+    );
+  });
+
+  test("plan lists the legacy migration step only when mcp.json exists", () => {
+    const without = opencodeAdapter.plan(payload(), env());
+    expect(without.steps.some((s) => s.path === legacyPath())).toBe(false);
+    writeJson(legacyPath(), { mcpServers: {} });
+    const withLegacy = opencodeAdapter.plan(payload(), env());
+    expect(withLegacy.steps.some((s) => s.path === legacyPath())).toBe(true);
+  });
+});

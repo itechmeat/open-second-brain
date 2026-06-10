@@ -44,9 +44,10 @@ Restart `opencode` to load the MCP servers and the plugin.
   ```
 
 - **Post-write reminder** - after file-mutating tools (`write`,
-  `edit`, `patch`) the standard logging nudge is appended to the tool
-  output so the agent considers `brain_feedback` /
-  `brain_apply_evidence` / `brain_note` before its final reply.
+  `edit`, `multiedit`, `patch`, `apply_patch`) the standard logging
+  nudge is appended to the tool output so the agent considers
+  `brain_feedback` / `brain_apply_evidence` / `brain_note` before its
+  final reply.
 
 Every plugin hook is fail-soft: a missing vault, missing `o2b-hook`
 binary, or SDK error never breaks the opencode session.

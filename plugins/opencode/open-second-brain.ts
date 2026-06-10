@@ -43,7 +43,12 @@ const SPOOL_ORIGINATOR = "open-second-brain-opencode-plugin";
 const CAPTURE_EVENTS = new Set(["session.idle", "session.compacted", "session.deleted"]);
 const MUTATING_TOOLS = new Set(["write", "edit", "multiedit", "patch", "apply_patch"]);
 const ACTIVE_CONTEXT_TTL_MS = 5 * 60 * 1000;
+/** A failed render retries sooner than a successful one expires. */
+const ACTIVE_CONTEXT_NEGATIVE_TTL_MS = 30 * 1000;
 const HOOK_TIMEOUT_MS = 10_000;
+
+/** Disambiguates concurrent spool writes within one process. */
+let spoolWriteSeq = 0;
 
 const POST_WRITE_NUDGE =
   "Open Second Brain: artifact written. If a taste signal or scoped " +
@@ -162,7 +167,8 @@ function writeSpool(sessionId: string, directory: string, messages: unknown[]): 
   const dir = spoolDir();
   mkdirSync(dir, { recursive: true });
   const target = join(dir, `${name}.jsonl`);
-  const tmp = join(dir, `.${name}.jsonl.tmp-${process.pid}`);
+  spoolWriteSeq += 1;
+  const tmp = join(dir, `.${name}.jsonl.tmp-${process.pid}-${spoolWriteSeq}`);
   writeFileSync(tmp, lines.join("\n") + "\n", "utf8");
   renameSync(tmp, target);
 }
@@ -243,7 +249,11 @@ export const OpenSecondBrain = async (pluginInput: {
     "experimental.chat.system.transform": async (_input: unknown, output: { system: string[] }) => {
       try {
         const now = Date.now();
-        if (activeContextCache === null || now - activeContextCache.at > ACTIVE_CONTEXT_TTL_MS) {
+        const ttl =
+          activeContextCache?.value === null
+            ? ACTIVE_CONTEXT_NEGATIVE_TTL_MS
+            : ACTIVE_CONTEXT_TTL_MS;
+        if (activeContextCache === null || now - activeContextCache.at > ttl) {
           activeContextCache = { value: renderActiveContext(), at: now };
         }
         if (activeContextCache.value !== null && Array.isArray(output?.system)) {

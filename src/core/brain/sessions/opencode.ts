@@ -88,10 +88,17 @@ export const opencodeAdapter: SessionAdapter = {
     const meta = lines.length > 0 ? parseMetaLine(lines[0]!.trim()) : null;
     if (meta !== null) {
       const format = meta["format"];
-      if (typeof format !== "number" || format > SUPPORTED_FORMAT) {
+      if (typeof format !== "number") {
         throw new SessionImportError(
           "PARSE",
-          `opencode spool format ${String(format)} is newer than supported ` +
+          `opencode spool meta line carries no numeric format field; ` +
+            `expected format ${SUPPORTED_FORMAT}`,
+        );
+      }
+      if (format > SUPPORTED_FORMAT) {
+        throw new SessionImportError(
+          "PARSE",
+          `opencode spool format ${format} is newer than supported ` +
             `format ${SUPPORTED_FORMAT}; upgrade Open Second Brain to import it`,
         );
       }
