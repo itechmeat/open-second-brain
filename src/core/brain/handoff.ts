@@ -34,6 +34,13 @@ export interface WriteHandoffNoteInput extends HandoffNoteOptions {
    * (continuity-hygiene-freshness suite).
    */
   readonly sourcePaths?: ReadonlyArray<string>;
+  /**
+   * Exact page path to (over)write instead of the default
+   * `Brain/handoffs/<date>-<scope>.md` - the targeted-recompile
+   * executor re-derives a stale note IN PLACE so its identity and
+   * backlinks survive.
+   */
+  readonly targetPath?: string;
 }
 
 export interface HandoffNoteResult {
@@ -134,7 +141,7 @@ export function writeHandoffNote(vault: string, input: WriteHandoffNoteInput): H
   const scope = resolveSessionScope(input.sessionId);
   const dir = join(vault, "Brain", "handoffs");
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${isoDate(now)}-${scope}.md`);
+  const path = input.targetPath ?? join(dir, `${isoDate(now)}-${scope}.md`);
   const body = buildHandoffNote(input.turns, input);
   // JSON.stringify-quote the caller-supplied scalars: YAML-significant
   // characters or newlines in a session id / agent name must not be
