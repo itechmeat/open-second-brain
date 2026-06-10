@@ -60,6 +60,20 @@ describe("resolveSessionLineage — native payload path", () => {
     });
   });
 
+  test("a parent-only payload inherits the parent's root from the ledger (A -> B -> C)", () => {
+    recordLineageObservation(tmp, {
+      sessionId: "s-b",
+      at: new Date(T0).toISOString(),
+      event: "SessionStart",
+      lineage: { rootId: "s-a", parentId: "s-a", depth: 1, source: "payload" },
+    });
+    const lineage = resolveSessionLineage(
+      { sessionId: "s-c", parentSessionId: "s-b" },
+      { ledger: readLineageLedger(tmp), nowMs: T0 + 1_000 },
+    );
+    expect(lineage).toEqual({ rootId: "s-a", parentId: "s-b", depth: 2, source: "payload" });
+  });
+
   test("ignores a parent equal to the session itself (flat)", () => {
     const lineage = resolveSessionLineage({ sessionId: "s-1", parentSessionId: "s-1" });
     expect(lineage.source).toBe("flat");

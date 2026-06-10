@@ -38,15 +38,24 @@ export function resolveSessionLineage(
   const parentId = parentRaw !== null && parentRaw !== sessionId ? parentRaw : null;
   const rootFromPayload = rootRaw !== null && rootRaw !== sessionId ? rootRaw : null;
   if (parentId !== null || rootFromPayload !== null) {
+    // A payload that names only its direct parent must not promote
+    // that parent to root blindly - in a chain A -> B -> C the parent
+    // B itself descends from A. When the ledger knows the parent's own
+    // lineage, inherit its root (and continue its depth count).
+    const parentLineage = parentId !== null ? opts.ledger?.get(parentId)?.lineage : undefined;
+    const inheritedRoot =
+      parentLineage !== undefined && parentLineage.source !== "flat" ? parentLineage.rootId : null;
     const depthRaw = hints.compressionDepth;
     const depth =
       typeof depthRaw === "number" && Number.isInteger(depthRaw) && depthRaw >= 0
         ? depthRaw
         : parentId !== null
-          ? 1
+          ? (parentLineage !== undefined && parentLineage.source !== "flat"
+              ? parentLineage.depth
+              : 0) + 1
           : 0;
     return Object.freeze({
-      rootId: rootFromPayload ?? parentId ?? sessionId,
+      rootId: rootFromPayload ?? inheritedRoot ?? parentId ?? sessionId,
       parentId,
       depth,
       source: "payload" as const,

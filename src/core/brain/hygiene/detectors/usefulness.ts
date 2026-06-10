@@ -47,7 +47,7 @@ export function detectUsefulness(
   const recalled = recalledArtifactIds(vault);
   const cutoffMs = ctx.now.getTime() - USEFULNESS_MIN_AGE_DAYS * DAY_MS;
   const findings: HygieneFinding[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of readdirSync(dir).toSorted()) {
     if (!name.endsWith(".md")) continue;
     let pref;
     try {

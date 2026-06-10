@@ -99,6 +99,21 @@ describe("checkPageFreshness", () => {
     expect(freshness?.missing_sources).toEqual(["notes/b.md"]);
   });
 
+  test("an unreadable source is stale, never orphaned", () => {
+    const src = writeSource("notes/locked.md", "alpha");
+    const page = writeDerivedPage("Brain/derived/page.md", ["notes/locked.md"]);
+    const { chmodSync } = require("node:fs") as typeof import("node:fs");
+    chmodSync(src, 0o000);
+    try {
+      const freshness = checkPageFreshness(vault, page);
+      expect(freshness?.status).toBe("stale");
+      expect(freshness?.unreadable_sources).toEqual(["notes/locked.md"]);
+      expect(freshness?.missing_sources).toEqual([]);
+    } finally {
+      chmodSync(src, 0o644);
+    }
+  });
+
   test("returns null for a page without the contract", () => {
     const page = writeSource("Brain/plain.md", "---\ntitle: x\n---\nNo sources here.");
     expect(checkPageFreshness(vault, page)).toBeNull();

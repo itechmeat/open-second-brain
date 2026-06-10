@@ -190,7 +190,10 @@ export async function executeRecompile(
     }
   }
 
-  if (!dryRun && (rederived.length > 0 || archived.length > 0 || errors.length > 0)) {
+  if (
+    !dryRun &&
+    (rederived.length > 0 || archived.length > 0 || manual.length > 0 || errors.length > 0)
+  ) {
     appendAuditRecord(join(brainDirs(vault).log, "hygiene"), {
       timestamp: opts.now.toISOString(),
       actor: opts.agent,

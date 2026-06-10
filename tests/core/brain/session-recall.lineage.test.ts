@@ -101,6 +101,37 @@ describe("stitched recall across the compression boundary", () => {
   });
 });
 
+describe("deep chains stitch transitively", () => {
+  test("three segments with per-segment parent links resolve to one conversation", () => {
+    importSessionRecall(vault, {
+      sessionId: "seg-a",
+      turns: [turn("t1", "user", "first segment text", 1)],
+      createdAt: "2026-06-10T10:00:10Z",
+    });
+    importSessionRecall(vault, {
+      sessionId: "seg-b",
+      turns: [turn("t2", "user", "second segment text", 11)],
+      createdAt: "2026-06-10T10:01:10Z",
+      lineage: { rootId: "seg-a", parentId: "seg-a", depth: 1, source: "payload" },
+    });
+    // seg-c recorded only its direct parent (parent promoted to root
+    // by an older writer) - the scope must still reach seg-a.
+    importSessionRecall(vault, {
+      sessionId: "seg-c",
+      turns: [turn("t3", "user", "third segment text", 21)],
+      createdAt: "2026-06-10T10:02:10Z",
+      lineage: { rootId: "seg-b", parentId: "seg-b", depth: 2, source: "payload" },
+    });
+    const fromTip = describeSessionRecall(vault, { sessionId: "seg-c" });
+    expect(fromTip.raw_turns).toBe(3);
+    expect(fromTip.lineage_root).toBe("seg-a");
+    const hits = searchSessionRecall(vault, { query: "first segment", sessionId: "seg-c" });
+    expect(hits.hits.length).toBeGreaterThan(0);
+    const fromRoot = describeSessionRecall(vault, { sessionId: "seg-a" });
+    expect(fromRoot.raw_turns).toBe(3);
+  });
+});
+
 describe("flat sessions regress nothing", () => {
   test("a never-compacted session keeps the exact flat result shape", () => {
     importSessionRecall(vault, {

@@ -28,6 +28,8 @@ import { listVaultPages, parseFrontmatter } from "../vault.ts";
 
 /** Hash value recorded for a source that did not exist at derivation. */
 export const MISSING_SOURCE_HASH = "missing";
+/** Sentinel for a source that exists but cannot be read right now. */
+export const UNREADABLE_SOURCE_HASH = "unreadable";
 
 export interface SourceStamp {
   readonly source_paths: ReadonlyArray<string>;
@@ -43,6 +45,8 @@ export interface PageFreshness {
   readonly changed_sources: ReadonlyArray<string>;
   /** Recorded sources that no longer exist. */
   readonly missing_sources: ReadonlyArray<string>;
+  /** Sources that exist but could not be read (transient I/O). */
+  readonly unreadable_sources: ReadonlyArray<string>;
 }
 
 export interface FreshnessReport {
@@ -69,7 +73,10 @@ function hashSource(vault: string, source: string): string {
     if (!existsSync(path)) return MISSING_SOURCE_HASH;
     return sha256(readFileSync(path, "utf8"));
   } catch {
-    return MISSING_SOURCE_HASH; // unreadable counts as gone, fail-soft
+    // A transient permission / I/O failure is NOT a deleted source -
+    // it must never feed orphan detection (and the cleanup/archive
+    // path behind it).
+    return UNREADABLE_SOURCE_HASH;
   }
 }
 
@@ -125,6 +132,7 @@ export function checkPageFreshness(vault: string, pagePath: string): PageFreshne
 function freshnessOf(vault: string, pagePath: string, contract: SourceStamp): PageFreshness {
   const changed: string[] = [];
   const missing: string[] = [];
+  const unreadable: string[] = [];
   for (let i = 0; i < contract.source_paths.length; i++) {
     const source = contract.source_paths[i]!;
     const recorded = contract.source_hashes[i]!;
@@ -135,12 +143,18 @@ function freshnessOf(vault: string, pagePath: string, contract: SourceStamp): Pa
       missing.push(source);
       continue;
     }
+    if (current === UNREADABLE_SOURCE_HASH) {
+      // Cannot verify right now: report it, classify the page stale at
+      // worst, and keep it OUT of orphan detection.
+      unreadable.push(source);
+      continue;
+    }
     if (current !== recorded) changed.push(source);
   }
   const status: FreshnessStatus =
     missing.length === contract.source_paths.length
       ? "orphaned"
-      : changed.length > 0 || missing.length > 0
+      : changed.length > 0 || missing.length > 0 || unreadable.length > 0
         ? "stale"
         : "fresh";
   return Object.freeze({
@@ -148,6 +162,7 @@ function freshnessOf(vault: string, pagePath: string, contract: SourceStamp): Pa
     status,
     changed_sources: Object.freeze(changed),
     missing_sources: Object.freeze(missing),
+    unreadable_sources: Object.freeze(unreadable),
   });
 }
 

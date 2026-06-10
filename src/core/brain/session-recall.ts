@@ -181,7 +181,7 @@ function lineageDescription(
   sessionId: string,
 ): { lineage_root?: string; segments?: ReadonlyArray<SessionLineageSegment> } {
   const links = lineageLinks(vault, records);
-  const rootId = links.get(sessionId)?.rootId ?? sessionId;
+  const rootId = transitiveRootOf(sessionId, links);
   const seen = new Set<string>();
   const segments: SessionLineageSegment[] = [];
   for (const record of records) {
@@ -364,10 +364,28 @@ function lineageLinks(
 }
 
 /**
+ * Transitive root of one session id: follow recorded roots and parents
+ * until a fixpoint, so a chain whose segments each recorded only their
+ * direct predecessor (A -> B -> C with per-segment links) still
+ * resolves every segment to the SAME root. Cycle-guarded.
+ */
+function transitiveRootOf(sessionId: string, links: ReadonlyMap<string, LineageLink>): string {
+  let current = sessionId;
+  const seen = new Set<string>([current]);
+  for (;;) {
+    const link = links.get(current);
+    const next = link === undefined ? null : link.rootId !== current ? link.rootId : link.parentId;
+    if (next === null || seen.has(next)) return current;
+    seen.add(next);
+    current = next;
+  }
+}
+
+/**
  * Every session id belonging to the same conversation as `sessionId`:
- * the lineage root, all segments sharing that root, and the id itself.
- * A flat session resolves to just itself, keeping pre-lineage recall
- * byte-identical.
+ * the lineage root, all segments resolving to that root (transitively),
+ * and the id itself. A flat session resolves to just itself, keeping
+ * pre-lineage recall byte-identical.
  */
 function lineageScope(
   vault: string,
@@ -375,10 +393,10 @@ function lineageScope(
   sessionId: string,
 ): Set<string> {
   const links = lineageLinks(vault, records);
-  const rootId = links.get(sessionId)?.rootId ?? sessionId;
+  const rootId = transitiveRootOf(sessionId, links);
   const scope = new Set<string>([sessionId, rootId]);
-  for (const [sid, link] of links) {
-    if (link.rootId === rootId) scope.add(sid);
+  for (const sid of links.keys()) {
+    if (transitiveRootOf(sid, links) === rootId) scope.add(sid);
   }
   return scope;
 }

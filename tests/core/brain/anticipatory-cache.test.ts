@@ -76,6 +76,31 @@ describe("refreshAnticipatoryCache", () => {
     expect(third.refreshed).toBe(true);
   });
 
+  test("distinct roots that sanitize identically never share a cache file", () => {
+    const pathA = anticipatoryCachePath(vault, "a/b");
+    const pathB = anticipatoryCachePath(vault, "a:b");
+    expect(pathA).not.toBe(pathB);
+    const longA = anticipatoryCachePath(vault, "x".repeat(150) + "A");
+    const longB = anticipatoryCachePath(vault, "x".repeat(150) + "B");
+    expect(longA).not.toBe(longB);
+  });
+
+  test("a token-budget change bypasses the TTL debounce and is never served warm", () => {
+    refreshAnticipatoryCache(vault, { sessionId: "s-budget", now: T0, maxTokens: 2000 });
+    const rebuilt = refreshAnticipatoryCache(vault, {
+      sessionId: "s-budget",
+      now: new Date(T0.getTime() + 5_000),
+      maxTokens: 500,
+    });
+    expect(rebuilt.refreshed).toBe(true);
+    const read = readAnticipatoryContext(vault, {
+      sessionId: "s-budget",
+      now: new Date(T0.getTime() + 10_000),
+      maxTokens: 4000,
+    });
+    expect(read.cache_state).not.toBe("warm");
+  });
+
   test("sanitizes hostile session ids into safe cache filenames", () => {
     const result = refreshAnticipatoryCache(vault, { sessionId: "../../etc/passwd", now: T0 });
     expect(result.refreshed).toBe(true);

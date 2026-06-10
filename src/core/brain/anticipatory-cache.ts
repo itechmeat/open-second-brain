@@ -17,6 +17,7 @@
  * block a hook.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 
@@ -80,14 +81,22 @@ interface CacheFile {
   readonly root_session_id: string;
   readonly session_id: string;
   readonly generated_at: string;
+  /** Token budget the cached pack was built under (variant field). */
+  readonly max_tokens: number;
   readonly signal?: string;
   readonly context: AnticipatoryContext;
 }
 
-/** Replace every path-hostile code point so any session id maps to one flat filename. */
+/**
+ * Collision-resistant flat filename for any root id: a readable
+ * sanitized prefix plus a content digest, so distinct roots that
+ * sanitize identically (`a/b` vs `a:b`) or differ only past the
+ * prefix never share a cache file.
+ */
 function safeCacheKey(rootId: string): string {
-  const safe = rootId.replace(/[^A-Za-z0-9_-]/g, "_");
-  return safe.length > 0 ? safe.slice(0, 120) : "_";
+  const prefix = rootId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80) || "_";
+  const digest = createHash("sha256").update(rootId).digest("hex").slice(0, 16);
+  return `${prefix}-${digest}`;
 }
 
 export function anticipatoryCachePath(vault: string, rootSessionId: string): string {
@@ -113,6 +122,7 @@ function readCacheFile(path: string): CacheFile | null {
     const cache = parsed as CacheFile;
     if (cache.schema !== ANTICIPATORY_SCHEMA_VERSION) return null;
     if (typeof cache.generated_at !== "string") return null;
+    if (typeof cache.max_tokens !== "number") return null;
     if (cache.context === null || typeof cache.context !== "object") return null;
     if (!Array.isArray(cache.context.items) || !Array.isArray(cache.context.session_hits)) {
       return null;
@@ -149,26 +159,28 @@ export function refreshAnticipatoryCache(
   const rootId = resolveRootId(vault, input.sessionId);
   const path = anticipatoryCachePath(vault, rootId);
   const ttlMs = (input.ttlSeconds ?? DEFAULT_ANTICIPATORY_TTL_SECONDS) * 1_000;
+  const maxTokens = input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS;
   try {
     const existing = readCacheFile(path);
-    if (existing !== null) {
+    // TTL debounce applies only to a cache built under the same token
+    // budget; a budget change always rebuilds. The signal text is
+    // deliberately NOT part of the cache identity - it changes every
+    // prompt, and invalidating on it would defeat the debounce that
+    // makes hook-driven refresh affordable.
+    if (existing !== null && existing.max_tokens === maxTokens) {
       const age = input.now.getTime() - Date.parse(existing.generated_at);
       if (Number.isFinite(age) && age >= 0 && age < ttlMs) {
         return Object.freeze({ refreshed: false, rootSessionId: rootId, path });
       }
     }
-    const context = buildContext(
-      vault,
-      input.sessionId,
-      input.signalText,
-      input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS,
-    );
+    const context = buildContext(vault, input.sessionId, input.signalText, maxTokens);
     const signal = input.signalText?.trim();
     const cache: CacheFile = {
       schema: ANTICIPATORY_SCHEMA_VERSION,
       root_session_id: rootId,
       session_id: input.sessionId,
       generated_at: input.now.toISOString(),
+      max_tokens: maxTokens,
       ...(signal !== undefined && signal.length > 0 ? { signal } : {}),
       context,
     };
@@ -191,10 +203,11 @@ export function readAnticipatoryContext(
   const rootId = resolveRootId(vault, input.sessionId);
   const path = anticipatoryCachePath(vault, rootId);
   const ttlMs = (input.ttlSeconds ?? DEFAULT_ANTICIPATORY_TTL_SECONDS) * 1_000;
+  const requestedTokens = input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS;
   const cached = readCacheFile(path);
   if (cached !== null) {
     const age = input.now.getTime() - Date.parse(cached.generated_at);
-    if (Number.isFinite(age) && age >= 0 && age < ttlMs) {
+    if (cached.max_tokens === requestedTokens && Number.isFinite(age) && age >= 0 && age < ttlMs) {
       return Object.freeze({
         cache_state: "warm" as const,
         root_session_id: rootId,

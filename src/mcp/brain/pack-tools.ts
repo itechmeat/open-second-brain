@@ -679,6 +679,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description: "Latest prompt/signal text steering the refreshed bundle.",
         },
       },
+      required: ["session_id"],
       additionalProperties: false,
     },
     handler: toolBrainAnticipatoryContext,
