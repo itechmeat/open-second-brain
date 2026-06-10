@@ -1,10 +1,12 @@
 /**
- * Smoke tests for opencode / kiro / gemini-cli adapters.
+ * Smoke tests for kiro / gemini-cli adapters.
  *
  * They share the same JSON-merge body as cursor (deeply tested in
  * `cursor.test.ts`). Here we only assert that each adapter
  * resolves the expected per-target config path and that a
- * clean install+uninstall cycle works end-to-end.
+ * clean install+uninstall cycle works end-to-end. opencode has its
+ * own file (`opencode.test.ts`) since it uses a custom entry shape
+ * plus legacy-config migration.
  */
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
@@ -13,7 +15,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 
-import { opencodeAdapter } from "../../../../src/core/install/adapters/opencode.ts";
 import { kiroAdapter } from "../../../../src/core/install/adapters/kiro.ts";
 import { geminiCliAdapter } from "../../../../src/core/install/adapters/gemini-cli.ts";
 import { buildPayload } from "../../../../src/core/install/payload.ts";
@@ -65,34 +66,6 @@ function applyOpts() {
 function payload() {
   return buildPayload({ vault, agent_name: "a", timezone: "UTC" });
 }
-
-describe("opencode adapter — config path resolution", () => {
-  test("default path is ~/.config/opencode/mcp.json", () => {
-    const r = opencodeAdapter.detect(env());
-    expect(r.configPath).toBe(join(home, ".config", "opencode", "mcp.json"));
-  });
-
-  test("XDG_CONFIG_HOME override is honoured", () => {
-    const xdg = mkdtempSync(join(tmpdir(), "osb-xdg-"));
-    const r = opencodeAdapter.detect(env({ XDG_CONFIG_HOME: xdg }));
-    expect(r.configPath).toBe(join(xdg, "opencode", "mcp.json"));
-    try {
-      rmSync(xdg, { recursive: true, force: true });
-    } catch {}
-  });
-
-  test("install + uninstall round-trip", () => {
-    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
-    const path = opencodeAdapter.detect(env()).configPath!;
-    expect(existsSync(path)).toBe(true);
-    expect(readManifest(vault).installs.opencode).toBeDefined();
-
-    opencodeAdapter.uninstall(env(), applyOpts());
-    expect(readManifest(vault).installs.opencode).toBeUndefined();
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.mcpServers["open-second-brain"]).toBeUndefined();
-  });
-});
 
 describe("kiro adapter — config path resolution", () => {
   test("default path is ~/.kiro/settings.json", () => {

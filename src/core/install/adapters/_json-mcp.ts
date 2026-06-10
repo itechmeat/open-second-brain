@@ -1,7 +1,8 @@
 /**
  * Shared adapter body for runtimes that consume MCP servers via a JSON
  * config file with a top-level object (default `mcpServers`). Cursor,
- * opencode, kiro, Gemini CLI — all four follow this pattern.
+ * kiro, Gemini CLI follow the default shape; opencode reuses the same
+ * body with a custom top-level key and entry shape.
  *
  * Per-target specifics (config path, top-level key, post-install notes,
  * optional MCP probe) are injected via `JsonMcpAdapterSpec`. The body
@@ -15,7 +16,7 @@ import { dirname } from "node:path";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { recordEntry, readManifest, removeEntry } from "../manifest.ts";
-import { expectedPayloadFromEnv, payloadKeyEquals } from "../payload-equals.ts";
+import { deepJsonEquals, expectedPayloadFromEnv, payloadKeyEquals } from "../payload-equals.ts";
 import {
   InstallError,
   type ApplyOpts,
@@ -26,6 +27,7 @@ import {
   type InstallPlan,
   type ManifestEntry,
   type McpPayload,
+  type McpServerEntry,
   type UninstallResult,
   type VerifyResult,
 } from "../types.ts";
@@ -35,6 +37,23 @@ export interface JsonMcpAdapterSpec {
   readonly label: string;
   /** Top-level key under which MCP servers live. Default `mcpServers`. */
   readonly topLevelKey?: string;
+  /**
+   * Maps the canonical `McpServerEntry` to the runtime's on-disk entry
+   * shape. Default emits `{command, args, env?}`. Adapters whose runtime
+   * uses a different schema (opencode: `{type, command: [bin, ...args],
+   * environment?, enabled}`) inject the mapping here.
+   */
+  readonly serializeEntry?: (entry: McpServerEntry) => Record<string, unknown>;
+  /**
+   * Compares an on-disk entry against the canonical payload for
+   * idempotency and drift detection. Defaults to `payloadKeyEquals`
+   * when `serializeEntry` is absent, and to strict structural equality
+   * against `serializeEntry(expected)` when it is present.
+   */
+  readonly entryEquals?: (
+    current: Record<string, unknown> | undefined,
+    expected: McpServerEntry,
+  ) => boolean;
   /** Resolves the absolute path to the runtime's config file. */
   resolveConfigPath(env: InstallEnv): string;
   /** Extra notes attached to `detect.notes` / plan output. */
@@ -135,9 +154,28 @@ function readOnDisk(spec: JsonMcpAdapterSpec, env: InstallEnv, payload: McpPaylo
   }
   const full = block[OSB_KEY_FULL] as Record<string, unknown> | undefined;
   const writer = block[OSB_KEY_WRITER] as Record<string, unknown> | undefined;
-  const canonical =
-    payloadKeyEquals(full, payload.full) && payloadKeyEquals(writer, payload.writer);
+  const equals = resolveEntryEquals(spec);
+  const canonical = equals(full, payload.full) && equals(writer, payload.writer);
   return { exists: true, canonical, full, writer, raw, mtimeMs: fileMtimeMs(path) };
+}
+
+/**
+ * Resolution order for the entry comparator: explicit `entryEquals`
+ * wins; a spec with only `serializeEntry` gets strict structural
+ * equality against the re-serialized canonical entry; the default
+ * shape keeps the historical `payloadKeyEquals` semantics (extra
+ * top-level entry keys tolerated).
+ */
+function resolveEntryEquals(
+  spec: JsonMcpAdapterSpec,
+): (current: Record<string, unknown> | undefined, expected: McpServerEntry) => boolean {
+  if (spec.entryEquals) return spec.entryEquals;
+  const serialize = spec.serializeEntry;
+  if (serialize) {
+    return (current, expected) =>
+      current !== undefined && deepJsonEquals(current, serialize(expected));
+  }
+  return payloadKeyEquals;
 }
 
 export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
@@ -252,7 +290,10 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
         }
       }
 
-      const merged = mergeMcpServers(onDisk.raw, payload, { topLevelKey: topKey });
+      const merged = mergeMcpServers(onDisk.raw, payload, {
+        topLevelKey: topKey,
+        ...(spec.serializeEntry ? { serializeEntry: spec.serializeEntry } : {}),
+      });
       const contentChanged = merged !== onDisk.raw;
       if (!opts.dryRun && contentChanged) {
         ensureParent(path);
@@ -367,15 +408,10 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
         };
       }
       const expected = expectedPayloadFromEnv(env);
+      const equals = resolveEntryEquals(spec);
       if (
-        !payloadKeyEquals(
-          block[OSB_KEY_FULL] as Record<string, unknown> | undefined,
-          expected.full,
-        ) ||
-        !payloadKeyEquals(
-          block[OSB_KEY_WRITER] as Record<string, unknown> | undefined,
-          expected.writer,
-        )
+        !equals(block[OSB_KEY_FULL] as Record<string, unknown> | undefined, expected.full) ||
+        !equals(block[OSB_KEY_WRITER] as Record<string, unknown> | undefined, expected.writer)
       ) {
         return {
           target: spec.target,

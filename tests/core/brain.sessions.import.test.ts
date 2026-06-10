@@ -21,6 +21,7 @@ import { describeSessionRecall } from "../../src/core/brain/session-recall.ts";
 const CLAUDE = resolve("tests/fixtures/sessions/claude-minimal.jsonl");
 const CODEX = resolve("tests/fixtures/sessions/codex-minimal.jsonl");
 const HERMES = resolve("tests/fixtures/sessions/hermes-minimal.jsonl");
+const OPENCODE = resolve("tests/fixtures/sessions/opencode-minimal.jsonl");
 
 let tmp: string;
 
@@ -178,6 +179,12 @@ describe("importSession", () => {
   test("handles the hermes fixture and stamps agent from session profile", async () => {
     const res = await importSession(tmp, HERMES, { agent: "test" });
     expect(res.format).toBe("hermes");
+    expect(res.signals_created).toBeGreaterThan(0);
+  });
+
+  test("handles the opencode spool fixture", async () => {
+    const res = await importSession(tmp, OPENCODE, { agent: "test" });
+    expect(res.format).toBe("opencode");
     expect(res.signals_created).toBeGreaterThan(0);
   });
 

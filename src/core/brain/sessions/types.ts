@@ -1,8 +1,9 @@
 /**
  * Public contract for `o2b brain import-session` adapters (§16).
  *
- * Each runtime (Claude Code, Codex CLI, Hermes) stores chat
- * transcripts in its own JSONL schema. An adapter normalises one
+ * Each runtime (Claude Code, Codex CLI, Hermes, opencode) stores
+ * chat transcripts in its own JSONL schema (opencode via the spool
+ * the bundled plugin writes). An adapter normalises one
  * such schema into the `SessionTurn` shape so the orchestrator
  * (`sessions/import.ts`) can extract `@osb` markers from text and
  * replay `brain_feedback` tool-use calls without caring which
@@ -13,7 +14,7 @@
  * entry — no other code path needs to change.
  */
 
-export type SessionAdapterId = "claude" | "codex" | "hermes";
+export type SessionAdapterId = "claude" | "codex" | "hermes" | "opencode";
 
 export interface SessionToolCall {
   /** Tool name as emitted by the runtime, e.g. `brain_feedback`. */

@@ -156,3 +156,69 @@ describe("removeMcpServers", () => {
     expect(parsed.mcp_servers.other.command).toBe("x");
   });
 });
+
+// opencode-style entry shape: `{type, command: [bin, ...args], environment, enabled}`.
+const opencodeShape = (e: {
+  command: string;
+  args: readonly string[];
+  env?: Record<string, string>;
+}) => ({
+  type: "local",
+  command: [e.command, ...e.args],
+  ...(e.env && Object.keys(e.env).length > 0 ? { environment: { ...e.env } } : {}),
+  enabled: true,
+});
+
+describe("mergeMcpServers serializeEntry injection", () => {
+  test("custom serializeEntry controls the on-disk entry shape", () => {
+    const out = mergeMcpServers("", OSB_PAYLOAD, {
+      topLevelKey: "mcp",
+      serializeEntry: opencodeShape,
+    });
+    const parsed = JSON.parse(out);
+    const full = parsed.mcp["open-second-brain"];
+    expect(full.type).toBe("local");
+    expect(full.command).toEqual(["o2b", "mcp", "--vault", "/home/u/vault"]);
+    expect(full.environment).toEqual({
+      VAULT_AGENT_NAME: "claude-vps-agent",
+      VAULT_TIMEZONE: "Europe/Belgrade",
+    });
+    expect(full.enabled).toBe(true);
+    expect(full.args).toBeUndefined();
+    expect(full.env).toBeUndefined();
+  });
+
+  test("custom serializeEntry preserves user-authored sibling entries", () => {
+    const before = `{
+  "mcp": { "other": { "type": "remote", "url": "https://x" } },
+  "theme": "dark"
+}
+`;
+    const out = mergeMcpServers(before, OSB_PAYLOAD, {
+      topLevelKey: "mcp",
+      serializeEntry: opencodeShape,
+    });
+    const parsed = JSON.parse(out);
+    expect(parsed.theme).toBe("dark");
+    expect(parsed.mcp.other).toEqual({ type: "remote", url: "https://x" });
+    expect(parsed.mcp["open-second-brain-writer"].command).toEqual([
+      "o2b",
+      "mcp",
+      "--writer-only",
+      "--vault",
+      "/home/u/vault",
+    ]);
+  });
+
+  test("omitting serializeEntry keeps the default shape byte-identical", () => {
+    const explicit = mergeMcpServers("", OSB_PAYLOAD, { serializeEntry: undefined });
+    const implicit = mergeMcpServers("", OSB_PAYLOAD);
+    expect(explicit).toBe(implicit);
+    const parsed = JSON.parse(implicit);
+    expect(parsed.mcpServers["open-second-brain"]).toEqual({
+      command: "o2b",
+      args: ["mcp", "--vault", "/home/u/vault"],
+      env: { VAULT_AGENT_NAME: "claude-vps-agent", VAULT_TIMEZONE: "Europe/Belgrade" },
+    });
+  });
+});

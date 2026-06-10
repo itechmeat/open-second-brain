@@ -1,0 +1,4 @@
+{"type":"session_meta","originator":"open-second-brain-opencode-plugin","format":1,"session_id":"ses_oc_0001","directory":"/tmp/project"}
+{"type":"turn","turnId":"msg_user_1","timestamp":"2026-06-10T09:00:00.000Z","role":"user","text":"How should I handle DB mocking?\n@osb feedback negative topic=mocking principle=\"don't mock DB in integration tests\" scope=testing"}
+{"type":"turn","turnId":"msg_asst_1","timestamp":"2026-06-10T09:00:05.000Z","role":"assistant","text":"I'll record that as a preference."}
+{"type":"turn","turnId":"msg_asst_2","timestamp":"2026-06-10T09:00:06.000Z","role":"assistant","toolCalls":[{"name":"brain_feedback","id":"call_oc_1","input":{"topic":"mocking","signal":"negative","principle":"avoid mocking the database in integration tests","scope":"testing"}}]}
