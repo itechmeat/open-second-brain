@@ -21,6 +21,7 @@ import type { SessionTurn } from "./sessions/types.ts";
 import { readLineageLedger, recordLineageObservation } from "./lineage/ledger.ts";
 import { resolveSessionLineage } from "./lineage/resolve.ts";
 import { isCompressionEvidenceEvent, type SessionLineage } from "./lineage/types.ts";
+import { refreshAnticipatoryCache } from "./anticipatory-cache.ts";
 
 export interface CaptureSessionLifecycleOptions {
   readonly agent: string;
@@ -207,6 +208,27 @@ export async function captureSessionLifecycleEvent(
         ?.path;
     } catch {
       // ignore - a malformed transcript never blocks lifecycle capture
+    }
+  }
+
+  // Anticipatory context cache (continuity-hygiene-freshness,
+  // t_4cee9df5): piggyback on events that already fire - no daemon, no
+  // watcher. TTL debounce lives inside the refresh; suppressed prompt
+  // text never reaches the cache (promptText is already cleared above).
+  if (
+    mayWrite &&
+    !opts.dryRun &&
+    normalized.sessionId !== undefined &&
+    (normalized.event === "UserPromptSubmit" || normalized.event === "PostToolUse")
+  ) {
+    try {
+      refreshAnticipatoryCache(vault, {
+        sessionId: normalized.sessionId,
+        ...(promptText !== undefined ? { signalText: promptText } : {}),
+        now,
+      });
+    } catch {
+      // The cache is an enhancement, never a capture blocker.
     }
   }
 
