@@ -12,6 +12,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { computeSourceStamp, formatSourceStampFrontmatter } from "./freshness.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { resolveSessionScope } from "./session-scope.ts";
 import type { SessionTurn } from "./sessions/types.ts";
@@ -25,6 +26,14 @@ export interface HandoffNoteOptions {
 
 export interface WriteHandoffNoteInput extends HandoffNoteOptions {
   readonly turns: ReadonlyArray<SessionTurn>;
+  /**
+   * On-disk artifacts this note derives from (the recorded transcript,
+   * typically). When present, the source-freshness contract
+   * (`source_paths` / `source_hashes`) is stamped into the frontmatter
+   * so the note participates in stale/orphaned detection
+   * (continuity-hygiene-freshness suite).
+   */
+  readonly sourcePaths?: ReadonlyArray<string>;
 }
 
 export interface HandoffNoteResult {
@@ -137,6 +146,9 @@ export function writeHandoffNote(vault: string, input: WriteHandoffNoteInput): H
     `agent: ${JSON.stringify(input.agent)}`,
     `created_at: ${isoSecond(now)}`,
     `turns: ${input.turns.length}`,
+    ...(input.sourcePaths !== undefined && input.sourcePaths.length > 0
+      ? [formatSourceStampFrontmatter(computeSourceStamp(vault, input.sourcePaths))]
+      : []),
     "---",
     "",
     body,

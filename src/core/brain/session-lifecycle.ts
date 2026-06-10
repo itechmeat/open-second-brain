@@ -300,6 +300,7 @@ async function writeHandoffNoteFromTranscript(
     sessionId: normalized.sessionId ?? basename(path),
     agent,
     now,
+    sourcePaths: [path],
   });
 }
 
