@@ -108,6 +108,9 @@ async function toolBrainContextPack(
       : {}),
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+    ...(configuredDegradation(ctx.vault) !== undefined
+      ? { degradation: configuredDegradation(ctx.vault)! }
+      : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
     ...(attentionFlowIds.length > 0 ? { attentionFlowIds } : {}),
   });
@@ -288,6 +291,9 @@ async function toolBrainPreCompressPack(
     topK,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+    ...(configuredDegradation(ctx.vault) !== undefined
+      ? { degradation: configuredDegradation(ctx.vault)! }
+      : {}),
     ...(receipt !== undefined ? { receipt } : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
   });
@@ -335,6 +341,15 @@ async function toolBrainPreCompactExtract(
 }
 
 // ----- session recall DAG --------------------------------------------------
+
+/** Operator-configured trim strategy (`recall.degradation` in `_brain.yaml`). */
+function configuredDegradation(vault: string): "staged" | undefined {
+  try {
+    return loadBrainConfig(vault).recall?.degradation === "staged" ? "staged" : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 async function toolBrainAnticipatoryContext(
   ctx: ServerContext,
