@@ -17,6 +17,19 @@ export async function readHookInput(): Promise<unknown> {
 
 export interface HookPayloadBase {
   readonly session_id?: string;
+  /**
+   * Native session-lineage fields (continuity-hygiene-freshness
+   * suite). Hosts that rotate the session id across a context
+   * compression report the predecessor here; upstream Hermes PR
+   * NousResearch/hermes-agent#42940 adds `parent_session_id` to the
+   * shell-hook payload. All optional - a host without lineage simply
+   * omits them and capture degrades to flat-id behavior.
+   */
+  readonly parent_session_id?: string | null;
+  readonly root_session_id?: string | null;
+  readonly compression_depth?: number | null;
+  /** SessionStart discriminator (`startup|resume|clear|compact`). */
+  readonly source?: string;
   readonly transcript_path?: string | null;
   readonly cwd?: string;
   readonly hook_event_name?: string;

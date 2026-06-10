@@ -18,6 +18,9 @@ import { resolveSessionHandoff } from "../config.ts";
 import { writeHandoffNote, type HandoffNoteResult } from "./handoff.ts";
 import { detectAdapter } from "./sessions/registry.ts";
 import type { SessionTurn } from "./sessions/types.ts";
+import { readLineageLedger, recordLineageObservation } from "./lineage/ledger.ts";
+import { resolveSessionLineage } from "./lineage/resolve.ts";
+import { isCompressionEvidenceEvent, type SessionLineage } from "./lineage/types.ts";
 
 export interface CaptureSessionLifecycleOptions {
   readonly agent: string;
@@ -44,6 +47,12 @@ export interface CaptureSessionLifecycleResult {
   readonly focus_cleared?: boolean;
   /** Path of the handoff note a SessionEnd event produced (gated). */
   readonly handoff_path?: string;
+  /**
+   * Session lineage when the session is part of a compression chain
+   * (continuity-hygiene-freshness suite). Absent for flat sessions so
+   * the pre-lineage result shape stays byte-identical.
+   */
+  readonly lineage?: SessionLineage;
 }
 
 interface NormalizedPayload {
@@ -53,6 +62,12 @@ interface NormalizedPayload {
   readonly promptText?: string;
   readonly toolName?: string;
   readonly toolInput?: unknown;
+  readonly cwd?: string;
+  readonly parentSessionId?: string;
+  readonly rootSessionId?: string;
+  readonly compressionDepth?: number;
+  /** SessionStart discriminator (`startup|resume|clear|compact`). */
+  readonly sessionStartSource?: string;
   readonly malformed: number;
 }
 
@@ -85,6 +100,48 @@ export async function captureSessionLifecycleEvent(
   const boundary = buildCaptureBoundary(vault);
   const decision = boundary.sessionDecision(normalized.sessionId, normalized.transcriptPath);
   const mayWrite = decision === "capture";
+
+  // Session lineage (continuity-hygiene-freshness): resolve BEFORE
+  // recording this session's own ledger observation - the crutch
+  // treats prior unlinked history as proof of a parallel session.
+  // Read-only resolution runs for every session; the ledger only
+  // grows for captured, non-dry runs. Fail-soft throughout.
+  let lineage: SessionLineage | undefined;
+  if (normalized.sessionId !== undefined) {
+    try {
+      lineage = resolveSessionLineage(
+        {
+          sessionId: normalized.sessionId,
+          ...(normalized.parentSessionId !== undefined
+            ? { parentSessionId: normalized.parentSessionId }
+            : {}),
+          ...(normalized.rootSessionId !== undefined
+            ? { rootSessionId: normalized.rootSessionId }
+            : {}),
+          ...(normalized.compressionDepth !== undefined
+            ? { compressionDepth: normalized.compressionDepth }
+            : {}),
+          ...(normalized.cwd !== undefined ? { cwd: normalized.cwd } : {}),
+        },
+        { ledger: readLineageLedger(vault), nowMs: now.getTime() },
+      );
+      if (mayWrite && !opts.dryRun) {
+        recordLineageObservation(vault, {
+          sessionId: normalized.sessionId,
+          at: now.toISOString(),
+          ...(normalized.cwd !== undefined ? { cwd: normalized.cwd } : {}),
+          event: normalized.event,
+          ...(isCompressionEvidenceEvent(normalized.event, normalized.sessionStartSource)
+            ? { compressionEvidence: true }
+            : {}),
+          ...(lineage.source !== "flat" ? { lineage } : {}),
+        });
+      }
+    } catch {
+      lineage = undefined; // lineage is an enhancement, never a blocker
+    }
+  }
+  const chainLineage = lineage !== undefined && lineage.source !== "flat" ? lineage : undefined;
 
   let promptText = normalized.promptText;
   if (mayWrite && promptText !== undefined && boundary.suppressMessage(promptText)) {
@@ -169,6 +226,14 @@ export async function captureSessionLifecycleEvent(
       ...(normalized.sessionId ? { session_id: normalized.sessionId } : {}),
       dry_run: opts.dryRun === true,
       boundary_decision: decision,
+      ...(chainLineage !== undefined
+        ? {
+            lineage_root: chainLineage.rootId,
+            ...(chainLineage.parentId !== null ? { lineage_parent: chainLineage.parentId } : {}),
+            lineage_depth: chainLineage.depth,
+            lineage_source: chainLineage.source,
+          }
+        : {}),
       ...counters,
     },
   });
@@ -188,6 +253,7 @@ export async function captureSessionLifecycleEvent(
     ...(logPath ? { log_path: logPath } : {}),
     ...(focusCleared ? { focus_cleared: true } : {}),
     ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
+    ...(chainLineage !== undefined ? { lineage: chainLineage } : {}),
   };
 }
 
@@ -226,10 +292,26 @@ function normalizePayload(payload: unknown): NormalizedPayload {
     "unknown";
   const sessionId = readNonEmptyString(record["session_id"]);
   const transcriptPath = readNonEmptyString(record["transcript_path"]);
+  const cwd = readNonEmptyString(record["cwd"]);
+  const parentSessionId = readNonEmptyString(record["parent_session_id"]);
+  const rootSessionId = readNonEmptyString(record["root_session_id"]);
+  const compressionDepthRaw = record["compression_depth"];
+  const compressionDepth =
+    typeof compressionDepthRaw === "number" &&
+    Number.isInteger(compressionDepthRaw) &&
+    compressionDepthRaw >= 0
+      ? compressionDepthRaw
+      : undefined;
+  const sessionStartSource = readNonEmptyString(record["source"]);
   return {
     event,
     ...(sessionId ? { sessionId } : {}),
     ...(transcriptPath ? { transcriptPath } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(parentSessionId ? { parentSessionId } : {}),
+    ...(rootSessionId ? { rootSessionId } : {}),
+    ...(compressionDepth !== undefined ? { compressionDepth } : {}),
+    ...(sessionStartSource ? { sessionStartSource } : {}),
     ...(extractPromptText(record) ? { promptText: extractPromptText(record)! } : {}),
     ...(readNonEmptyString(record["tool_name"])
       ? { toolName: readNonEmptyString(record["tool_name"])! }
