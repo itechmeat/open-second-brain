@@ -19,6 +19,7 @@ const FIXTURES = {
   claude: resolve("tests/fixtures/sessions/claude-minimal.jsonl"),
   codex: resolve("tests/fixtures/sessions/codex-minimal.jsonl"),
   hermes: resolve("tests/fixtures/sessions/hermes-minimal.jsonl"),
+  opencode: resolve("tests/fixtures/sessions/opencode-minimal.jsonl"),
 };
 
 function firstLine(path: string): string {
@@ -26,16 +27,17 @@ function firstLine(path: string): string {
 }
 
 describe("registry — single source of adapters", () => {
-  test("exposes all three adapters", () => {
+  test("exposes all four adapters", () => {
     const ids = SESSION_ADAPTERS.map((a) => a.id).toSorted();
-    expect(ids).toEqual(["claude", "codex", "hermes"]);
+    expect(ids).toEqual(["claude", "codex", "hermes", "opencode"]);
   });
 
   test("owns runtime validation and help choices", () => {
-    expect(sessionAdapterFormatChoices()).toBe("auto|claude|codex|hermes");
+    expect(sessionAdapterFormatChoices()).toBe("auto|claude|codex|hermes|opencode");
     expect(isSessionAdapterId("claude")).toBe(true);
     expect(isSessionAdapterId("codex")).toBe(true);
     expect(isSessionAdapterId("hermes")).toBe(true);
+    expect(isSessionAdapterId("opencode")).toBe(true);
     expect(isSessionAdapterId("copilot")).toBe(false);
   });
 
@@ -45,6 +47,7 @@ describe("registry — single source of adapters", () => {
       claude: "claude",
       codex: "codex",
       hermes: "hermes",
+      opencode: "opencode",
     });
   });
 
@@ -52,6 +55,7 @@ describe("registry — single source of adapters", () => {
     expect(getAdapter("claude").id).toBe("claude");
     expect(getAdapter("codex").id).toBe("codex");
     expect(getAdapter("hermes").id).toBe("hermes");
+    expect(getAdapter("opencode").id).toBe("opencode");
   });
 });
 
@@ -64,6 +68,21 @@ describe("detectAdapter — autodetect across all three formats", () => {
   });
   test("picks hermes on the hermes fixture", () => {
     expect(detectAdapter(firstLine(FIXTURES.hermes))?.id).toBe("hermes");
+  });
+  test("picks opencode on the opencode fixture", () => {
+    expect(detectAdapter(firstLine(FIXTURES.opencode))?.id).toBe("opencode");
+  });
+
+  test("no adapter claims a foreign fixture (full cross-table)", () => {
+    for (const [name, path] of Object.entries(FIXTURES)) {
+      const detected = detectAdapter(firstLine(path));
+      expect(detected?.id).toBe(name as never);
+      for (const adapter of SESSION_ADAPTERS) {
+        if (adapter.id !== name) {
+          expect(adapter.detect(firstLine(path))).toBe(false);
+        }
+      }
+    }
   });
 
   test("returns null on unknown JSON", () => {
