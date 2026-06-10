@@ -1,7 +1,8 @@
 /**
  * Shared adapter body for runtimes that consume MCP servers via a JSON
  * config file with a top-level object (default `mcpServers`). Cursor,
- * opencode, kiro, Gemini CLI — all four follow this pattern.
+ * kiro, Gemini CLI follow the default shape; opencode reuses the same
+ * body with a custom top-level key and entry shape.
  *
  * Per-target specifics (config path, top-level key, post-install notes,
  * optional MCP probe) are injected via `JsonMcpAdapterSpec`. The body
