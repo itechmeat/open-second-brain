@@ -12,8 +12,6 @@ export function hygieneFindingId(
   detector: HygieneDetectorId,
   targets: ReadonlyArray<string>,
 ): string {
-  const digest = createHash("sha256")
-    .update([...targets].sort().join("\n"))
-    .digest("hex");
+  const digest = createHash("sha256").update(targets.toSorted().join("\n")).digest("hex");
   return `${detector}:${digest.slice(0, 12)}`;
 }

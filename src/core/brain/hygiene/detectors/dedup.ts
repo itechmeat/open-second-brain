@@ -68,7 +68,7 @@ function listPreferenceCandidates(vault: string): PrefCandidate[] {
   const dir = brainDirs(vault).preferences;
   if (!existsSync(dir)) return [];
   const out: PrefCandidate[] = [];
-  for (const name of readdirSync(dir).sort()) {
+  for (const name of readdirSync(dir).toSorted()) {
     if (!name.endsWith(".md")) continue;
     try {
       const pref = parsePreference(join(dir, name));
@@ -156,7 +156,7 @@ export async function detectSemanticDedup(
           detector: "dedup" as const,
           severity: "warning" as const,
           title: `Near-duplicate preferences ${a.id} and ${b.id} (cosine ${similarity.toFixed(3)})`,
-          targets: Object.freeze([a.id, b.id].sort()),
+          targets: Object.freeze([a.id, b.id].toSorted()),
           proposed_action: "merge" as const,
           evidence: Object.freeze({
             method: "embedding",

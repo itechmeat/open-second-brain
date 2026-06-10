@@ -181,7 +181,7 @@ export function recordLineageObservation(vault: string, obs: LineageObservation)
       lines.push(toLine(obs));
       const state = buildState(lines);
       const retained = [...state.values()]
-        .sort((a, b) => b.lastSeenMs - a.lastSeenMs)
+        .toSorted((a, b) => b.lastSeenMs - a.lastSeenMs)
         .slice(0, RETAIN_SESSIONS);
       // One summary line per retained session, oldest first so a
       // future append keeps chronological order readable.

@@ -110,16 +110,16 @@ export function resolveConflictFindings(
       if (finding.detector !== "conflicts") return finding;
       const verdict = parseVerdict(verdicts[finding.id]);
       if (verdict === null || verdict.action === "flag") {
-        return withResolverEvidence(finding, "review", {
-          ...(verdict !== null
+        const flagEvidence =
+          verdict !== null
             ? {
                 resolver: {
                   action: "flag",
                   ...(verdict.rationale ? { rationale: verdict.rationale } : {}),
                 },
               }
-            : {}),
-        });
+            : {};
+        return withResolverEvidence(finding, "review", flagEvidence);
       }
       return withResolverEvidence(finding, verdict.action, {
         resolver: {
