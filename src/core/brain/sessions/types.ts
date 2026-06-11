@@ -14,7 +14,7 @@
  * entry — no other code path needs to change.
  */
 
-export type SessionAdapterId = "claude" | "codex" | "hermes" | "opencode";
+export type SessionAdapterId = "claude" | "codex" | "hermes" | "opencode" | "grok";
 
 export interface SessionToolCall {
   /** Tool name as emitted by the runtime, e.g. `brain_feedback`. */
