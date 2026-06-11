@@ -105,7 +105,7 @@ export function stopGuardrailReason(runtime: HookRuntime = "unknown"): string {
   const cadence = stopGuardrailCadenceLine(runtime);
   const parts: string[] = [
     "Open Second Brain hook: this turn touched files",
-    "(Write / Edit / MultiEdit / apply_patch) but did not call any of:",
+    "(Write / Edit / MultiEdit / apply_patch / search_replace) but did not call any of:",
     "",
     "- `brain_feedback` — new taste correction the user expressed in this",
     "  turn (one signal per file, see the `brain-memory` skill)",

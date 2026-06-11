@@ -196,7 +196,10 @@ export const grokAdapter = {
           // Not empty (operator files) or already gone - leave it.
         }
       }
-      removeEntry(env.vault, TARGET);
+      // Keep the manifest entry if any owned file could not be removed: dropping
+      // ownership while artifacts remain would orphan them from future
+      // cleanup/update flows. Re-running uninstall clears it once removal succeeds.
+      if (skipped.length === 0) removeEntry(env.vault, TARGET);
     }
     return { target: TARGET, removed_keys: [], removed_paths: removed, skipped };
   },
