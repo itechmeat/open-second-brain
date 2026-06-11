@@ -7,7 +7,7 @@
 
 import { resolveAgentName, resolveVault } from "../src/core/config.ts";
 import { captureSessionLifecycleEvent } from "../src/core/brain/session-lifecycle.ts";
-import { readHookInput } from "./lib/stdin.ts";
+import { normalizeHookPayload, readHookInput } from "./lib/stdin.ts";
 
 async function main(): Promise<void> {
   const vault = resolveVault();
@@ -18,7 +18,9 @@ async function main(): Promise<void> {
   } catch {
     payload = null;
   }
-  await captureSessionLifecycleEvent(vault, payload, {
+  // Normalize grok's camelCase payload to the internal snake_case shape so the
+  // lifecycle capture reads the same fields it does for Claude Code and Codex.
+  await captureSessionLifecycleEvent(vault, normalizeHookPayload(payload), {
     agent: resolveAgentName(),
   });
 }

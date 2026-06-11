@@ -42,6 +42,13 @@ function postWriteCadenceLine(runtime: HookRuntime): string {
         "_or `brain_apply_evidence` before this exec returns; there is_",
         "_no second turn._",
       ].join("\n");
+    case "grok":
+      return [
+        "_Grok Build session: many turns ahead — capture the signal or_",
+        "_evidence now rather than batching to end-of-session; long_",
+        "_sessions risk forgetting the context that distinguishes one_",
+        "_artifact from the next._",
+      ].join("\n");
     case "unknown":
       return "";
   }
@@ -87,6 +94,8 @@ function stopGuardrailCadenceLine(runtime: HookRuntime): string {
       return "_This guardrail fires at most once per turn — send another reply (with or without a brain-event call) to clear it._";
     case "codex":
       return "_This `codex exec` is about to end — call `brain_feedback` / `brain_apply_evidence` / `brain_note` now or finish silently; no further guardrail will fire._";
+    case "grok":
+      return "_This guardrail fires at most once per turn — send another reply (with or without a brain-event call) to clear it._";
     case "unknown":
       return "";
   }

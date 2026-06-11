@@ -103,13 +103,16 @@ async function main(): Promise<void> {
   const runtime = detectHookRuntime(payload);
 
   // Session cadence (token-diet, t_9cc4f400): the full reminder
-  // teaches the contract once per Claude Code session; afterwards a
-  // <= 200-char nudge keeps the per-edit cost negligible. Codex
+  // teaches the contract once per session; afterwards a <= 200-char
+  // nudge keeps the per-edit cost negligible. Applies to the
+  // multi-turn interactive runtimes (Claude Code, Grok Build). Codex
   // `codex exec` is one-shot, so steady state never applies there;
   // unknown runtimes and absent session ids stay on the full text.
   const sessionId = typeof payload.session_id === "string" ? payload.session_id : "";
   const steadyState =
-    runtime === "claudecode" && sessionId.length > 0 && sessionAlreadyReminded(sessionId);
+    (runtime === "claudecode" || runtime === "grok") &&
+    sessionId.length > 0 &&
+    sessionAlreadyReminded(sessionId);
 
   const text = steadyState ? postWriteNudge() : postWriteReminder({ toolName, filePath, runtime });
 

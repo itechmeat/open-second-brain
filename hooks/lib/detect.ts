@@ -14,16 +14,25 @@
 
 import type { ToolCall } from "./transcript.ts";
 
-// Canonical tool names that mutate files in either runtime.
+// Canonical tool names that mutate files across runtimes.
 //   Claude Code: `Write`, `Edit`, `MultiEdit` (native tools — no
 //   `mcp__…__` prefix in transcripts).
 //   Codex:       `apply_patch` (custom_tool_call wrapping diffs).
+//   Grok Build:  `search_replace` (grok's own file-edit tool, the name
+//                it aliases Claude's Edit/Write/MultiEdit to and the name
+//                that appears in its hook payload and session transcript).
 //
 // Codex also supports Edit/Write *aliases* in matchers, but the actual
 // `name` field in the transcript is always `apply_patch` for file
 // edits done through it; we still accept Edit/Write to defend against
 // a future runtime that mirrors the matcher alias into the call name.
-const NATIVE_ARTIFACT_NAMES = new Set<string>(["Write", "Edit", "MultiEdit", "apply_patch"]);
+const NATIVE_ARTIFACT_NAMES = new Set<string>([
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "apply_patch",
+  "search_replace",
+]);
 
 // Tool-name suffixes that count as "the agent logged this turn",
 // regardless of any runtime-injected MCP prefix.
@@ -162,7 +171,7 @@ export function summarizeTurn(
  * renders byte-identical reminder text to the v0.10.4 baseline, so
  * a future runtime that breaks both signals never crashes the hook.
  */
-export type HookRuntime = "claudecode" | "codex" | "unknown";
+export type HookRuntime = "claudecode" | "codex" | "grok" | "unknown";
 
 const CLAUDE_TRANSCRIPT_NEEDLES = ["/.claude/projects/", "/.claude/sessions/"] as const;
 const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
@@ -171,20 +180,34 @@ const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
  * Infer the runtime from a hook payload by shape. First-hit wins,
  * order matches the design doc:
  *
- *   1. `transcript_path` substring (`/.claude/projects/`, `/.claude/sessions/`).
- *   2. `transcript_path` substring (`/.codex/sessions/`).
- *   3. Claude Code distinctive triple (`session_id` + `cwd` + `tool_use_id`).
- *   4. Codex apply_patch shape (`tool_name === "apply_patch"` with
+ *   1. Grok: camelCase payload shape (`hookEventName` / `workspaceRoot`) or a
+ *      `GROK_*` hook env var. Grok ships no `transcript_path` and uses
+ *      camelCase keys Claude/Codex never send, so this is unambiguous.
+ *   2. `transcript_path` substring (`/.claude/projects/`, `/.claude/sessions/`).
+ *   3. `transcript_path` substring (`/.codex/sessions/`).
+ *   4. Claude Code distinctive triple (`session_id` + `cwd` + `tool_use_id`).
+ *   5. Codex apply_patch shape (`tool_name === "apply_patch"` with
  *      a patch body in `tool_input.input`).
- *   5. `"unknown"`.
+ *   6. `"unknown"`.
  *
- * Malformed payloads (`null`, primitives, missing fields, wrong types)
- * resolve to `"unknown"` without throwing — the hook never crashes on
- * detection.
+ * `normalizeHookPayload` preserves grok's original camelCase keys, so this
+ * works whether it runs before or after normalization. Malformed payloads
+ * (`null`, primitives, missing fields, wrong types) resolve to `"unknown"`
+ * without throwing — the hook never crashes on detection.
  */
-export function detectHookRuntime(payload: unknown): HookRuntime {
+export function detectHookRuntime(
+  payload: unknown,
+  env: Record<string, string | undefined> = process.env,
+): HookRuntime {
   if (payload === null || typeof payload !== "object") return "unknown";
   const p = payload as Record<string, unknown>;
+
+  if (typeof p["hookEventName"] === "string" || typeof p["workspaceRoot"] === "string") {
+    return "grok";
+  }
+  if (env["GROK_HOOK_EVENT"] || env["GROK_SESSION_ID"] || env["GROK_WORKSPACE_ROOT"]) {
+    return "grok";
+  }
 
   const tp = p["transcript_path"];
   if (typeof tp === "string") {
