@@ -77,19 +77,18 @@ The `grok` install adapter (`src/core/install/adapters/grok.ts`) does NOT use th
 factory for MCP (MCP ships inside the plugin, not in a grok config file). Its plan/apply/verify/
 uninstall manage the plugin tree:
 
-- `apply`: copy the bundled plugin tree into `~/.grok/plugins/open-second-brain/` (creating dirs), record
-  every written path under the manifest `owned_paths`, refresh an outdated copy, and ensure the
-  plugin is enabled. Enabling: `~/.grok/plugins/` is auto-trusted, but grok disables plugins by
-  default, so the adapter ensures a `[plugins] enabled = ["open-second-brain"]` entry in
-  `~/.grok/config.toml` via a minimal, focused, offline-testable TOML section/array helper
-  (`src/core/install/grok-config.ts`) - it ensures the `[plugins]` table exists and the name is
-  present in the `enabled` array, idempotently, without a full TOML parser and without disturbing
-  other sections. `GROK_HOME` overrides the base dir; honor it.
-- `verify`: flag a missing/edited plugin file or a missing `[plugins] enabled` entry as drift,
-  with a `o2b install --target grok --apply` fix hint.
-- `uninstall`: remove exactly the `owned_paths` and drop our name from the `enabled` array
-  (removing the now-empty `[plugins]` shell only if we created it), leaving unrelated grok config
-  untouched.
+- `apply`: copy the bundled plugin tree into `~/.grok/plugins/open-second-brain/` (creating dirs),
+  record every written path under the manifest `owned_paths`, and refresh an outdated copy.
+  `GROK_HOME` overrides the base dir; honor it. NO `config.toml` touch is needed: verified
+  against live grok 0.2.45 that a user-scope plugin under `~/.grok/plugins/<name>/` is
+  auto-enabled and auto-trusted (`grok inspect` shows `enabled: true` with its MCP servers and
+  hooks active, `grok mcp doctor` starts the server and discovers its tools), with config.toml
+  carrying only `[cli]`. The docs' "plugins disabled by default" applies to marketplace and
+  project-scope plugins, not user-scope ones. This drops the planned TOML enable helper entirely.
+- `verify`: flag a missing, edited, or non-file (stray directory) plugin file as drift, with a
+  `o2b install --target grok --apply` fix hint.
+- `uninstall`: remove exactly the `owned_paths` and the now-empty plugin directory, leaving
+  unrelated grok config untouched.
 
 The `grok` session adapter (`src/core/brain/sessions/grok.ts`) detects on the ACP `updates.jsonl`
 structure, yields `SessionTurn`-shaped turns, and resolves lineage from a sibling `summary.json`
@@ -103,8 +102,8 @@ the code branches explicitly rather than faking a default.
 
 ## Design decisions
 
-- **Plugin is the MCP vehicle, not config.toml.** `.mcp.json` is standard JSON - zero TOML for
-  the MCP payload. The only TOML touch is the one-line `[plugins] enabled` entry.
+- **Plugin is the MCP vehicle, not config.toml.** `.mcp.json` is standard JSON - zero TOML, and
+  (per the verified enable finding below) zero `config.toml` touch at all.
 - **Reuse the Claude plugin artifacts; the whole plugin tree is static and vault-agnostic.** The
   grok `.mcp.json` and `hooks/hooks.json` mirror the repo's existing `./.mcp.json` and
   `./hooks/hooks.json`. Grok sets `CLAUDE_PLUGIN_ROOT` as an alias for `GROK_PLUGIN_ROOT` and
@@ -113,12 +112,10 @@ the code branches explicitly rather than faking a default.
   asserts the grok artifacts stay in sync with their Claude-plugin sources (the only allowed
   divergences are the documented grok adjustments: lifecycle-event matchers removed, `SessionEnd`
   capture), so the two never drift.
-- **File-based enable, not `grok plugin install --trust`.** Keeps the adapter offline-unit-
-  testable and free of an apply-time grok-binary dependency, consistent with every other adapter.
-  The minimal TOML helper is unit-tested in isolation; live grok confirms behavior in QA.
-- **Minimal TOML helper, not a TOML library.** The project ships `dependencies = []`. The helper
-  only needs to ensure one table and one string-array membership idempotently; a focused
-  string-level editor is enough and stays dependency-free.
+- **File-copy install, no `config.toml` touch, no `grok plugin install --trust` shell.** Verified
+  on live grok: dropping the tree into `~/.grok/plugins/<name>/` is sufficient (auto-enabled and
+  auto-trusted). The adapter stays offline-unit-testable and free of an apply-time grok-binary
+  dependency, and the planned TOML enable helper proved unnecessary and was dropped.
 - **Hook env vars over payload fields where grok provides both.** `GROK_SESSION_ID` /
   `GROK_WORKSPACE_ROOT` / `CLAUDE_PROJECT_DIR` are stable; the parser prefers them and falls back
   to payload fields, matching how the Claude layer already reads env first.
@@ -133,16 +130,14 @@ the code branches explicitly rather than faking a default.
 ## File changes
 
 New:
-- `plugins/grok/open-second-brain/plugin.json`, `.mcp.json`, `hooks/hooks.json`, `hooks/bin/*` -
-  the bundled plugin tree.
-- `src/core/install/grok-plugin-asset.ts` - resolves bundled plugin content + version stamp.
-- `src/core/install/grok-config.ts` - minimal offline TOML `[plugins] enabled` ensure/remove
-  helper.
+- `plugins/grok/open-second-brain/plugin.json`, `.mcp.json`, `hooks/hooks.json` - the bundled
+  plugin tree (hooks use inline `o2b-hook` commands; no `hooks/bin/` scripts needed).
+- `src/core/install/grok-plugin-asset.ts` - renders the grok artifacts from the Claude sources +
+  exposes the committed bytes for the adapter.
 - `src/core/install/adapters/grok.ts` - the install adapter (plugin-tree lifecycle).
 - `src/core/brain/sessions/grok.ts` - the ACP session adapter.
-- `tests/core/install/adapters/grok.test.ts`, `tests/core/install/grok-config.test.ts`,
-  `tests/core/brain.sessions.grok.test.ts`, `tests/plugins/grok-plugin.test.ts`,
-  `tests/hooks/grok-stdin.test.ts` - per-unit tests.
+- `tests/core/install/adapters/grok.test.ts`, `tests/core/brain.sessions.grok.test.ts`,
+  `tests/plugins/grok-plugin.test.ts`, `tests/hooks/grok-stdin.test.ts` - per-unit tests.
 - `tests/fixtures/sessions/grok-minimal.jsonl` (real `updates.jsonl` captured from live grok),
   `tests/fixtures/install/grok/` fixtures.
 - `install/grok.md` - install guide.
@@ -158,15 +153,15 @@ Modified:
 
 ## Risks and open questions
 
-- Enable semantics: docs say `~/.grok/plugins/` is auto-trusted but plugins are disabled by
-  default. Implementation MUST confirm against live grok 0.2.45 (`grok inspect --json` after
-  install) that a `[plugins] enabled` entry actually activates the plugin's MCP + hooks; if grok
-  also needs the plugin listed by ID (`<scope>/<hash>/<name>`) rather than bare name, the helper
-  adjusts. This is the highest-risk unknown; verify FIRST in Phase 2.
+- Enable semantics: RESOLVED in Phase 2 against live grok 0.2.45. A user-scope plugin under
+  `~/.grok/plugins/<name>/` is auto-enabled and auto-trusted with no `config.toml` entry
+  (`grok inspect` reports `enabled: true`, MCP + hooks active; `grok mcp doctor` handshakes and
+  discovers 71 tools). The planned `[plugins] enabled` TOML helper was therefore dropped.
 - `updates.jsonl` ACP event schema: typed from grok's ACP docs but must be pinned to a real
   captured session; the `format`/version gate surfaces a shape mismatch as a versioned error,
   not silent corruption.
 - Whether grok applies matcher tool-name aliasing before or after matcher evaluation: the matcher
   lists both spellings to be safe; QA confirms which fires.
-- `plugin.json` version mirroring: confirm whether the version-sync script should own
-  `plugins/grok/open-second-brain/plugin.json` so it never drifts from `package.json`.
+- `plugin.json` version mirroring: RESOLVED. `plugins/grok/open-second-brain/plugin.json` was
+  added to `scripts/sync-version.ts` JSON_TARGETS (and the CLAUDE.md mirrored-manifest list), so
+  CI gates it against `package.json`.

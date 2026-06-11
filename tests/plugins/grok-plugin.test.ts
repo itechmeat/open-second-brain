@@ -86,7 +86,7 @@ describe("grok plugin hooks.json transform", () => {
   });
 
   test("keeps the PostToolUse matcher and adds grok's search_replace alias", () => {
-    const post = (expectedHooks()["hooks"] as Record<string, HookGroup[]>)["PostToolUse"];
+    const post = (expectedHooks()["hooks"] as Record<string, HookGroup[]>)["PostToolUse"] ?? [];
     const fileMutating = post.find((g) => (g.matcher ?? "").includes("Write"));
     expect(fileMutating?.matcher).toContain("search_replace");
     expect(fileMutating?.matcher).toContain("Write");

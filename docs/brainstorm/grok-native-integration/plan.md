@@ -15,19 +15,17 @@ enable-semantics against live grok 0.2.45 before the rest depends on it.
   unit-tested offline with stub stdin + stub `o2b-hook`.
 - **Depends on**: none.
 
-### Task 2: Grok install adapter + minimal TOML enable helper (kanban t_8fdd6077)
-- **Files**: `src/core/install/grok-config.ts`; `src/core/install/adapters/grok.ts`; registry
-  registration; target-id union if present; `tests/core/install/grok-config.test.ts`,
-  `tests/core/install/adapters/grok.test.ts`, `tests/fixtures/install/grok/`.
+### Task 2: Grok install adapter (kanban t_8fdd6077) - DONE
+- **Files**: `src/core/install/adapters/grok.ts`; registry registration in the four import
+  sites; `tests/core/install/adapters/grok.test.ts`.
 - **Acceptance**: `o2b install --target grok --apply` copies the plugin tree into
-  `~/.grok/plugins/open-second-brain/` (honoring `GROK_HOME`), ensures `[plugins] enabled`
-  idempotently, records `owned_paths`; `verify` flags a missing/edited file or missing enable
-  entry as drift; `uninstall` removes exactly what was installed and drops the enable entry;
-  dry-run plan matches apply. `grok-config.ts` ensures/removes the table + array membership
-  without a TOML lib and without disturbing other sections.
-- **VERIFY FIRST against live grok**: after a real `apply`, `grok inspect --json` must show the
-  plugin's MCP servers and hooks active. If grok needs an ID form (`<scope>/<hash>/<name>`)
-  rather than the bare name in `enabled`, adjust `grok-config.ts` accordingly.
+  `~/.grok/plugins/open-second-brain/` (honoring `GROK_HOME`), records `owned_paths`; `verify`
+  flags a missing/edited/non-file plugin file as drift; `uninstall` removes exactly what was
+  installed and the now-empty plugin dir; dry-run writes nothing.
+- **VERIFIED against live grok 0.2.45**: after a real `apply`, `grok inspect --json` shows the
+  plugin `enabled: true` with MCP servers + hooks; `o2b install --target grok --check` reports
+  `ok`; `grok mcp doctor` handshakes and discovers the tools. A user-scope plugin is auto-enabled
+  and auto-trusted, so no `config.toml` enable helper is needed (planned `grok-config.ts` dropped).
 - **Depends on**: Task 1.
 
 ### Task 3: Grok hook-payload compatibility (kanban t_23cd40bc)
