@@ -179,8 +179,37 @@ class ProviderRequiredSurfaceTests(unittest.TestCase):
         provider = self._provider(bridge)
         provider.initialize("s", hermes_home="/tmp/hh")
         result = provider.handle_tool_call("brain_note", {"text": "hi"})
-        self.assertEqual(result, {"ok": True})
+        # Hermes feeds the return back as tool-message content, so the
+        # contract is str, not dict. The MCP result is serialized losslessly.
+        self.assertIsInstance(result, str)
+        self.assertEqual(json.loads(result), {"ok": True})
         self.assertEqual(bridge.calls, [("brain_note", {"text": "hi"})])
+
+    def test_handle_tool_call_always_returns_string_for_dict_results(self):
+        # The base-class contract types handle_tool_call as -> str. A raw dict
+        # reaching the model as tool content breaks strict providers (DeepSeek
+        # HTTP 400) while passing on lenient ones (Anthropic), so the boundary
+        # must coerce regardless of the tool's result shape.
+        shapes = {
+            "brain_note": {"content": [{"type": "text", "text": "ok"}], "structuredContent": {"ok": True}},
+            "brain_query": {"structuredContent": {"hits": [1, 2, 3]}},
+            "brain_search": {},
+        }
+        bridge = FakeBrainBridge(results=shapes)
+        provider = self._provider(bridge)
+        provider.initialize("s", hermes_home="/tmp/hh")
+        for tool, shape in shapes.items():
+            result = provider.handle_tool_call(tool, {})
+            self.assertIsInstance(result, str, f"{tool} must return a string")
+            # Lossless: both the content and structuredContent envelopes survive.
+            self.assertEqual(json.loads(result), shape)
+
+    def test_handle_tool_call_passes_through_string_result(self):
+        # A bridge that already yields a string must not be double-encoded.
+        bridge = FakeBrainBridge(results={"brain_note": "plain text"})
+        provider = self._provider(bridge)
+        provider.initialize("s", hermes_home="/tmp/hh")
+        self.assertEqual(provider.handle_tool_call("brain_note", {}), "plain text")
 
     def test_get_config_schema_shape(self):
         schema = self._provider(FakeBrainBridge()).get_config_schema()
@@ -285,7 +314,8 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
         # initialize_all() runs after registration; the model then calls a tool.
         provider.initialize("sess-1", hermes_home="/tmp/hh")
         result = routing_table["brain_note"].handle_tool_call("brain_note", {"text": "hi"})
-        self.assertEqual(result, {"ok": True})
+        self.assertIsInstance(result, str)
+        self.assertEqual(json.loads(result), {"ok": True})
         self.assertEqual(bridge.calls, [("brain_note", {"text": "hi"})])
 
 

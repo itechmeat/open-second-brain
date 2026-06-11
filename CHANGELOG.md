@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-06-11
+
+### Fixed
+
+- **Hermes provider returned a dict where the contract requires a string**
+  (`plugins/hermes/provider.py`): `handle_tool_call` forwarded the raw MCP
+  `tools/call` result dict straight back to Hermes, which feeds it to the
+  model as tool-message content. Lenient providers (Anthropic) accept a
+  dict, so the bug stayed hidden; strict ones (DeepSeek) reject it with
+  HTTP 400 (`content should be a string or a list`) on the next API call.
+  The bridge result is now serialized at the boundary through a single
+  `_as_tool_content` seam (lossless JSON, `default=str`, string results
+  passed through), and `handle_tool_call` is typed `-> str` to match the
+  base-class contract. Contract tests now assert the return type against
+  every result shape, closing the gap that let the leak through unnoticed.
+  Reported in #82.
+
 ## [1.3.0] - 2026-06-10
 
 Continuity, Hygiene & Freshness Suite: one conversation stays one
@@ -5167,6 +5184,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.3.1]: https://github.com/itechmeat/open-second-brain/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/itechmeat/open-second-brain/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/itechmeat/open-second-brain/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/itechmeat/open-second-brain/compare/v1.0.1...v1.1.0
