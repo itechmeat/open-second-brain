@@ -111,14 +111,23 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             return static_tool_schemas()
         return [t for t in tools if t.get("name") in MEMORY_TOOLS]
 
-    def handle_tool_call(self, tool_name: str, args: dict[str, Any], **_kwargs: Any) -> Any:
-        """Forward an agent tool invocation to the TS core over the bridge."""
+    def handle_tool_call(self, tool_name: str, args: dict[str, Any], **_kwargs: Any) -> str:
+        """Forward an agent tool invocation to the TS core over the bridge.
+
+        Hermes feeds the return value back to the model as tool-message
+        content, and the chat-completions contract requires that content to
+        be a string. The bridge yields the MCP ``tools/call`` result dict, so
+        it is serialized here. Lenient providers (Anthropic) tolerate a raw
+        dict, which is why this leaked undetected; strict ones (DeepSeek)
+        reject it with HTTP 400. Coercing at this boundary - not in the
+        caller - is what makes the provider portable across both.
+        """
         if self._bridge is None:
             raise BridgeError("memory provider not initialized")
         if tool_name not in MEMORY_TOOLS:
             # Enforce the curated surface at execution time, not just discovery.
             raise BridgeError(f"unsupported memory tool: {tool_name}")
-        return self._bridge.call_tool(tool_name, args or {})
+        return self._as_tool_content(self._bridge.call_tool(tool_name, args or {}))
 
     def get_config_schema(self) -> list[dict[str, Any]]:
         return [
@@ -262,6 +271,21 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             return self._bridge.call_tool(name, args)
         except Exception:  # noqa: BLE001 - lifecycle hooks must not raise into Hermes
             return None
+
+    @staticmethod
+    def _as_tool_content(result: Any) -> str:
+        """Coerce a bridge result into tool-message content (always a string).
+
+        The Hermes memory contract types ``handle_tool_call`` as ``-> str``,
+        but the bridge yields an MCP result dict. Serialize losslessly so the
+        model still sees both the ``content`` and ``structuredContent``
+        envelopes. ``default=str`` keeps non-JSON-native values (datetimes,
+        Paths) from raising at the boundary; an already-string result passes
+        through untouched.
+        """
+        if isinstance(result, str):
+            return result
+        return json.dumps(result, ensure_ascii=False, default=str)
 
     @staticmethod
     def _structured(result: Any) -> dict[str, Any]:
