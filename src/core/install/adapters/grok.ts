@@ -16,7 +16,7 @@
  * payload the file-config adapters write.
  */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
@@ -178,14 +178,23 @@ export const grokAdapter = {
         skipped.push([path, `could not remove: ${(e as Error).message}`]);
       }
     }
-    // The plugin directory is entirely ours; drop it (and its now-empty hooks/
-    // subdir) so no empty shell is left behind. Best-effort: a non-empty dir
-    // (operator added files) is left in place rather than force-removed.
+    // Drop the directories we own, deepest first (the hooks/ subdir before the
+    // plugin root), so no empty shell is left behind. Each remove is
+    // non-recursive and best-effort: a directory that still holds
+    // operator-added files raises ENOTEMPTY and is left in place rather than
+    // force-removed.
     if (!opts.dryRun) {
-      try {
-        rmSync(pluginDir(env), { recursive: false });
-      } catch {
-        // Not empty or already gone - leave it.
+      const ownedDirs = [
+        ...new Set(readGrokPluginFiles().map((f) => dirname(installedPath(env, f.relPath)))),
+      ].toSorted((a, b) => b.length - a.length);
+      for (const dir of ownedDirs) {
+        try {
+          // rmdirSync removes only an empty directory (ENOTEMPTY otherwise),
+          // which is exactly the "leave operator files in place" semantics.
+          rmdirSync(dir);
+        } catch {
+          // Not empty (operator files) or already gone - leave it.
+        }
       }
       removeEntry(env.vault, TARGET);
     }
@@ -193,7 +202,11 @@ export const grokAdapter = {
   },
 };
 
-/** Read a path only when it is a regular file; null for missing or non-file. */
+/**
+ * Read a path only when it is a regular file; null for missing or non-file. A
+ * symlink counts as non-file, so `verify` reports drift and `apply` replaces it
+ * with the canonical regular file rather than following the link.
+ */
 function readFileIfRegular(path: string): string | null {
   try {
     if (!lstatSync(path).isFile()) return null;

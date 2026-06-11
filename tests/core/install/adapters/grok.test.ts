@@ -157,13 +157,16 @@ describe("grok adapter - lifecycle", () => {
     expect(grokAdapter.verify(env()).status).toBe("drift");
   });
 
-  test("uninstall removes the plugin files and clears the manifest", () => {
+  test("uninstall removes the plugin files, leaves no empty shell, clears the manifest", () => {
     apply();
     const r = grokAdapter.uninstall(env(), applyOpts());
     for (const f of readGrokPluginFiles()) {
       expect(existsSync(join(pluginDir(), f.relPath))).toBe(false);
       expect(r.removed_paths).toContain(join(pluginDir(), f.relPath));
     }
+    // No empty directory shell is left behind (hooks/ then the plugin root).
+    expect(existsSync(join(pluginDir(), "hooks"))).toBe(false);
+    expect(existsSync(pluginDir())).toBe(false);
     expect(readManifest(vault).installs["grok"]).toBeUndefined();
   });
 });
