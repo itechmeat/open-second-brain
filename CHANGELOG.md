@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-06-11
+
+### Added
+
+- **Native Grok Build (xAI `grok`) integration.** `o2b install --target grok
+  --apply` installs a self-contained Grok plugin into
+  `${GROK_HOME:-~/.grok}/plugins/open-second-brain/` (`plugin.json`,
+  `.mcp.json`, `hooks/hooks.json`). A user-scope plugin is auto-enabled and
+  auto-trusted, so grok loads the two Open Second Brain MCP servers and the
+  lifecycle hooks (active-context inject, post-write reminder, session capture,
+  stop-log guardrail) with no `config.toml` change. The shared hook layer now
+  normalizes grok's camelCase stdin payload (`hookEventName` / `sessionId` /
+  `toolName` / `toolInput`) into the internal shape, detects the `grok`
+  runtime, and counts grok's `search_replace` as a file-mutating tool. A new
+  `grok` session adapter imports grok's ACP `updates.jsonl` stream into the
+  Brain via `o2b brain import-session` (autodetected). The plugin's `.mcp.json`
+  and `hooks/hooks.json` are rendered from the Claude Code plugin sources so
+  the two never drift, and `plugin.json` is version-synced from `package.json`.
+  See [`install/grok.md`](install/grok.md). Verified against grok 0.2.45.
+
 ## [1.3.1] - 2026-06-11
 
 ### Fixed

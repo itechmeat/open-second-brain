@@ -11,7 +11,7 @@ Open Second Brain plugs into [Hermes Agent](https://github.com/NousResearch/herm
 - **Lives in your Obsidian vault.** Open `Brain/preferences/pref-no-internal-abbrev.md` in Obsidian and you literally see what your agent learned about you - title, status, evidence count, confidence band, body text. Wikilinks, backlinks, graph view all work.
 - **You own the data.** Plain Markdown on your filesystem. No service to cancel, no cloud account, no schema migration when a vendor pivots. Syncthing to your other machines if you want.
 - **Memory that learns deterministically.** A `dream` pass turns repeat signals into rules and retires the ones nothing applies any more. Counters and atomic file moves - no LLM inside the algorithm, no surprise hallucinations in your memory.
-- **One vault, every agent.** Hermes Agent is the primary integration. Claude Code, OpenAI Codex, Cursor, Aider, OpenClaw, opencode, kiro, Copilot CLI, Gemini CLI, and Pi all plug into the same Brain through MCP.
+- **One vault, every agent.** Hermes Agent is the primary integration. Claude Code, OpenAI Codex, Cursor, Aider, OpenClaw, opencode, Grok Build, kiro, Copilot CLI, Gemini CLI, and Pi all plug into the same Brain through MCP.
 
 ## One vault, many runtimes
 
@@ -21,7 +21,7 @@ flowchart LR
     Hermes["**Hermes Agent**<br/>(primary)"]
     CC[Claude Code]
     Codex[OpenAI Codex]
-    Others["Cursor · Aider · OpenClaw<br/>opencode · kiro · Copilot CLI<br/>Gemini CLI · Pi · any MCP host"]
+    Others["Cursor · Aider · OpenClaw<br/>opencode · Grok Build · kiro · Copilot CLI<br/>Gemini CLI · Pi · any MCP host"]
 
     Hermes <==> Vault
     CC <--> Vault
@@ -70,6 +70,7 @@ Enable Open Second Brain as the memory provider in `~/.hermes/config.yaml` (`mem
 | OpenAI Codex                                                     | `codex plugin marketplace add ...` - [`install/codex.md`](install/codex.md)                         |
 | OpenClaw                                                         | Native JS plugin, no MCP needed - [`install/openclaw.md`](install/openclaw.md)                      |
 | opencode                                                         | `o2b install --target opencode --apply` (MCP servers + native plugin) - [`install/opencode.md`](install/opencode.md) |
+| Grok Build                                                       | `o2b install --target grok --apply` (bundled plugin: MCP + hooks) - [`install/grok.md`](install/grok.md) |
 | Cursor · Aider · kiro · Copilot CLI · Gemini CLI · Pi            | `o2b install --target <name> --apply` - see [`install/`](install/)                                  |
 | Any other MCP host                                               | `o2b install --target generic --apply` - [`install/generic.md`](install/generic.md)                 |
 
