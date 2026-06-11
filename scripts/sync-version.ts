@@ -28,6 +28,7 @@ const JSON_TARGETS = [
   ".claude-plugin/plugin.json",
   ".codex-plugin/plugin.json",
   "plugins/codex/.codex-plugin/plugin.json",
+  "plugins/grok/open-second-brain/plugin.json",
   "openclaw.plugin.json",
 ] as const;
 const PYPROJECT = "pyproject.toml";
