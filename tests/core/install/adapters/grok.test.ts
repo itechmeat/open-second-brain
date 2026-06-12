@@ -16,16 +16,10 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 
 import { grokAdapter } from "../../../../src/core/install/adapters/grok.ts";
-import {
-  grokAgentName,
-  grokMcpServers,
-  grokHooksJson,
-} from "../../../../src/core/install/grok-asset.ts";
+import { grokMcpServers, grokHooksJson } from "../../../../src/core/install/grok-asset.ts";
 import { hasMcpServers } from "../../../../src/core/install/grok-config.ts";
 import { buildPayload } from "../../../../src/core/install/payload.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
-
-const GROK_AGENT = grokAgentName("claude-dev-agent"); // -> "grok-dev-agent"
 
 let vault: string;
 let home: string;
@@ -101,7 +95,7 @@ describe("grok adapter - apply", () => {
   test("writes both MCP servers into config.toml with an absolute bun command", () => {
     apply();
     const toml = readFileSync(configPath(), "utf8");
-    expect(hasMcpServers(toml, grokMcpServers(payload(), GROK_AGENT))).toBe(true);
+    expect(hasMcpServers(toml, grokMcpServers(payload()))).toBe(true);
     expect(toml).toContain("[mcp_servers.open-second-brain]");
     expect(toml).toContain("[mcp_servers.open-second-brain-writer]");
     // absolute command (the running bun), the repo entry point, and the vault.
@@ -115,16 +109,15 @@ describe("grok adapter - apply", () => {
     apply();
     const toml = readFileSync(configPath(), "utf8");
     const hooks = readFileSync(hooksPath(), "utf8");
-    expect(GROK_AGENT).toBe("grok-dev-agent");
-    expect(toml).toContain('VAULT_AGENT_NAME = "grok-dev-agent"');
+    expect(toml).toContain('VAULT_AGENT_NAME = "grok"');
     expect(toml).not.toContain('VAULT_AGENT_NAME = "claude-dev-agent"');
-    expect(hooks).toContain('"VAULT_AGENT_NAME": "grok-dev-agent"');
+    expect(hooks).toContain('"VAULT_AGENT_NAME": "grok"');
     expect(hooks).not.toContain("claude-dev-agent");
   });
 
   test("writes the lifecycle hooks file verbatim", () => {
     apply();
-    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(GROK_AGENT));
+    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson());
   });
 
   test("manifest records the mcp keys and the hooks path", () => {
@@ -162,7 +155,7 @@ describe("grok adapter - apply", () => {
     apply();
     writeFileSync(hooksPath(), "{}\n");
     apply();
-    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(GROK_AGENT));
+    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson());
   });
 });
 

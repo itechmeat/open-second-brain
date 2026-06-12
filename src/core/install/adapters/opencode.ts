@@ -119,6 +119,7 @@ const base = createJsonMcpAdapter({
   topLevelKey: "mcp",
   resolveConfigPath: configPath,
   serializeEntry: serializeOpencodeEntry,
+  runtimeIdentity: true,
   postNotes: ["Restart opencode to load the new MCP servers and the Open Second Brain plugin."],
 });
 

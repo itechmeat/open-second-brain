@@ -38,10 +38,15 @@ o2b brain init --vault /path/to/vault
 
 ```bash
 codex mcp add open-second-brain \
-    --env VAULT_AGENT_NAME=<chosen-agent-name> \
+    --env VAULT_AGENT_NAME=codex \
     --env VAULT_TIMEZONE=<chosen-tz> \
     -- o2b mcp --vault /path/to/vault
 ```
+
+`VAULT_AGENT_NAME=codex` makes Codex attribute its Brain writes to its own
+name (matching the `codex` session-import identity), rather than the shared
+operator name - so Codex activity is distinguishable and never logs under
+another runtime's identity.
 
 ## 5. Verify
 

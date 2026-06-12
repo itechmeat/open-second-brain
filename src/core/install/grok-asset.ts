@@ -19,6 +19,7 @@
 
 import { join } from "node:path";
 
+import { payloadWithRuntimeIdentity } from "./identity.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "./json-merge.ts";
 import type { GrokMcpEntry } from "./grok-config.ts";
 import type { McpPayload } from "./types.ts";
@@ -33,45 +34,30 @@ function bunBin(): string {
 
 export const GROK_HOOKS_FILENAME = "open-second-brain.json";
 
-/**
- * Derive a grok-specific Brain identity from the operator's configured agent
- * name, so grok's writes are attributable to grok rather than silently logged
- * under the shared (Claude) identity. The vendor token of the
- * `<vendor>-<host>-agent` convention is swapped to `grok`
- * (`claude-dev-agent` -> `grok-dev-agent`); a name that does not fit the
- * convention is prefixed with `grok-`. The default `agent` becomes
- * `grok-agent`.
- */
-export function grokAgentName(base: string | undefined): string {
-  const name = base && base.trim().length > 0 ? base.trim() : "agent";
-  const parts = name.split("-");
-  if (parts.length >= 2) {
-    parts[0] = "grok";
-    return parts.join("-");
-  }
-  return `grok-${name}`;
-}
+/** grok's Brain identity: its own runtime id (see identity.ts - own name, no derivation). */
+export const GROK_RUNTIME_ID = "grok";
 
 /**
  * The two MCP server tables to write into `config.toml`, derived from the
  * canonical payload: same `args`, but the command becomes
  * `bun run <repo>/src/cli/main.ts` (absolute) instead of the PATH-resolved
- * `o2b` (so grok can spawn it in a session), and `VAULT_AGENT_NAME` is forced
- * to `grokAgent` so the server's identity instruction and any Brain writes
- * attribute to grok, not the shared identity.
+ * `o2b` (so grok can spawn it in a session), and `VAULT_AGENT_NAME` is set to
+ * grok's own id so the server's identity instruction and any Brain write say
+ * `@grok`, not the shared operator name.
  */
-export function grokMcpServers(
-  payload: McpPayload,
-  grokAgent: string,
-): Record<string, GrokMcpEntry> {
-  const toEntry = (args: ReadonlyArray<string>, env?: Readonly<Record<string, string>>) => ({
+export function grokMcpServers(payload: McpPayload): Record<string, GrokMcpEntry> {
+  const identified = payloadWithRuntimeIdentity(payload, GROK_RUNTIME_ID);
+  const toEntry = (entry: {
+    args: ReadonlyArray<string>;
+    env?: Readonly<Record<string, string>>;
+  }) => ({
     command: bunBin(),
-    args: ["run", MAIN_TS, ...args],
-    env: { ...env, VAULT_AGENT_NAME: grokAgent },
+    args: ["run", MAIN_TS, ...entry.args],
+    env: { ...entry.env },
   });
   return {
-    [OSB_KEY_FULL]: toEntry(payload.full.args, payload.full.env),
-    [OSB_KEY_WRITER]: toEntry(payload.writer.args, payload.writer.env),
+    [OSB_KEY_FULL]: toEntry(identified.full),
+    [OSB_KEY_WRITER]: toEntry(identified.writer),
   };
 }
 
@@ -111,12 +97,12 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
 
 /**
  * The `~/.grok/hooks/open-second-brain.json` content, with absolute bun
- * commands. Each hook carries `env.VAULT_AGENT_NAME = grokAgent` so the
- * session-capture / guardrail writes attribute to grok's own identity, not the
- * shared one. Generated at install time (machine-specific paths + identity),
- * so `verify` compares the installed file against this exact output.
+ * commands. Each hook carries `env.VAULT_AGENT_NAME = GROK_RUNTIME_ID` so the
+ * session-capture / guardrail writes attribute to grok's own id, not the shared
+ * operator name. Generated at install time (machine-specific paths), so
+ * `verify` compares the installed file against this exact output.
  */
-export function grokHooksJson(grokAgent: string): string {
+export function grokHooksJson(): string {
   const hooks: Record<string, unknown[]> = {};
   for (const { event, groups } of HOOK_SPEC) {
     hooks[event] = groups.map((g) => ({
@@ -124,7 +110,7 @@ export function grokHooksJson(grokAgent: string): string {
       hooks: g.hooks.map((name) => ({
         type: "command",
         command: hookCommand(name),
-        env: { VAULT_AGENT_NAME: grokAgent },
+        env: { VAULT_AGENT_NAME: GROK_RUNTIME_ID },
         timeout: 10,
       })),
     }));

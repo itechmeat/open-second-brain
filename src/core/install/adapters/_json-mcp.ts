@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { payloadWithRuntimeIdentity } from "../identity.ts";
 import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { recordEntry, readManifest, removeEntry } from "../manifest.ts";
 import { deepJsonEquals, expectedPayloadFromEnv, payloadKeyEquals } from "../payload-equals.ts";
@@ -68,6 +69,18 @@ export interface JsonMcpAdapterSpec {
   probeMcp?(env: InstallEnv): boolean | null;
   /** Fix-hint text for `verify` when drift detected. */
   readonly fixHintForDrift?: string;
+  /**
+   * When set, stamp this runtime's own id (`target`) as `VAULT_AGENT_NAME` so
+   * its Brain writes attribute to itself rather than inheriting the shared
+   * operator name. Opt-in: only real runtime integrations set it; the generic
+   * "other MCP host" adapters leave the operator name untouched.
+   */
+  readonly runtimeIdentity?: boolean;
+}
+
+/** Apply the runtime-identity rule to the payload when the spec opted in. */
+function identifyPayload(spec: JsonMcpAdapterSpec, payload: McpPayload): McpPayload {
+  return spec.runtimeIdentity ? payloadWithRuntimeIdentity(payload, spec.target) : payload;
 }
 
 function readFileOrEmpty(path: string): string {
@@ -257,8 +270,14 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       };
     },
 
-    apply(_plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
+    apply(
+      _plan: InstallPlan,
+      rawPayload: McpPayload,
+      env: InstallEnv,
+      opts: ApplyOpts,
+    ): ApplyResult {
       const path = spec.resolveConfigPath(env);
+      const payload = identifyPayload(spec, rawPayload);
       const onDisk = readOnDisk(spec, env, payload);
       const manifestEntry = readManifest(env.vault).installs[spec.target];
 
@@ -407,7 +426,7 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
           fix_hint: spec.fixHintForDrift ?? `o2b install --target ${spec.target} --apply`,
         };
       }
-      const expected = expectedPayloadFromEnv(env);
+      const expected = identifyPayload(spec, expectedPayloadFromEnv(env));
       const equals = resolveEntryEquals(spec);
       if (
         !equals(block[OSB_KEY_FULL] as Record<string, unknown> | undefined, expected.full) ||

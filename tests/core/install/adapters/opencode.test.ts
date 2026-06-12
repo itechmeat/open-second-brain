@@ -101,7 +101,8 @@ describe("opencode adapter - apply", () => {
     expect(full).toEqual({
       type: "local",
       command: ["o2b", "mcp", "--vault", vault],
-      environment: { VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC" },
+      // opencode attributes to its own id, not the inherited operator name "a".
+      environment: { VAULT_AGENT_NAME: "opencode", VAULT_TIMEZONE: "UTC" },
       enabled: true,
     });
     const writer = parsed.mcp["open-second-brain-writer"];
