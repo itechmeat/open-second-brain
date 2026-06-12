@@ -1,9 +1,39 @@
-# Grok Build native integration - bundled plugin, session import, hook-payload compat
+# Grok Build native integration - config.toml MCP, native hooks, session import, hook-payload compat
 
-**Status:** draft
+**Status:** implemented (superseded MCP/hooks delivery; see Correction below)
 **Author:** claude-dev-agent (via feature-release-playbook)
 **Audience:** implementation
 **Kanban:** t_0eda929d (epic) with children t_fc98eef2, t_23cd40bc, t_b69deebd, t_8fdd6077, t_f7111278
+
+## Correction (2026-06-12) - the bundled-plugin approach did NOT work; superseded
+
+The original design (below) shipped MCP and hooks as a bundled grok plugin under
+`~/.grok/plugins/open-second-brain/`. Validated against live grok 0.2.45 (session debug
+log), that does NOT deliver working tools/hooks in a real session:
+
+- The plugin's `.mcp.json` used a bare `o2b` command. grok spawns MCP servers with a
+  restricted PATH that excludes `~/.local/bin`, so `o2b` fails with ENOENT and zero tools
+  load. (The earlier "verified, 71 tools" was a false positive: `grok mcp doctor` runs with
+  the interactive shell PATH, masking the session-spawn failure.)
+- Plugin-provided hooks are not discovered in a session (`hooks: discovery complete
+  total_hooks=0`); the plugin `.mcp.json` is also lower priority than `config.toml`.
+
+The shipped, working design (implemented; proven in a real session: 71 + 5 MCP tools
+registered, 10 hooks discovered and dispatched):
+
+- **MCP** -> `~/.grok/config.toml` `[mcp_servers.open-second-brain]` /
+  `[mcp_servers.open-second-brain-writer]` (grok's primary, highest-priority source), with an
+  ABSOLUTE command `bun run <repo>/src/cli/main.ts mcp …` (bun = `process.execPath`, repo and
+  vault resolved at install). `src/core/install/grok-config.ts` is a minimal, dependency-free
+  TOML editor that ensures/removes only these two tables, preserving all other config.
+- **Hooks** -> `~/.grok/hooks/open-second-brain.json` (grok's native, always-trusted hooks
+  dir), absolute `bun run <repo>/hooks/<name>.ts` commands. `src/core/install/grok-asset.ts`
+  renders both artifacts.
+- The bundled plugin (`plugins/grok/`, `grok-plugin-asset.ts`) is removed. The session-import
+  adapter (`sessions/grok.ts`) and the hook-payload compat (`hooks/lib/*`) are unchanged - they
+  were correct independent of the delivery mechanism.
+
+The sections below are the original (superseded) plugin design, kept for the audit trail.
 
 ## Problem statement
 

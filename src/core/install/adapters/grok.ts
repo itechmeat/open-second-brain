@@ -1,27 +1,32 @@
 /**
- * grok adapter - installs the bundled Grok Build plugin tree.
+ * grok adapter - native MCP + hooks registration for Grok Build.
  *
- * Unlike the JSON-MCP adapters, grok does NOT take an MCP config file: the
- * two Open Second Brain servers ship inside the plugin's own `.mcp.json`
- * (vault-agnostic, see `grok-plugin-asset.ts`). Verified against live grok
- * 0.2.45: a user-scope plugin under `${GROK_HOME:-~/.grok}/plugins/<name>/`
- * is auto-enabled and auto-trusted - `grok inspect` reports its MCP servers
- * and hooks active with no `config.toml` entry, and `grok mcp doctor` starts
- * the server and discovers its tools. So the adapter only copies the committed
- * plugin tree and records it in the install manifest; `verify` compares the
- * installed copy against the committed bytes, and `uninstall` removes it.
+ * Verified against live grok 0.2.45 (debug log of a real session): grok loads
+ * MCP from `~/.grok/config.toml` `[mcp_servers.*]` (its primary, highest-
+ * priority source) and hooks from `~/.grok/hooks/*.json` (its native,
+ * always-trusted dir), spawning each with a restricted PATH. A bundled plugin
+ * was tried first but does NOT work: its `.mcp.json` is lower priority and a
+ * bare `o2b` command is not on grok's session-spawn PATH (ENOENT, zero tools),
+ * and plugin-provided hooks are not discovered in-session. So this adapter:
  *
- * The `McpPayload` argument is unused: grok's MCP entries are the plugin's
- * vault-agnostic form, intentionally different from the `--vault`-bearing
- * payload the file-config adapters write.
+ *   - writes the two Open Second Brain servers into `~/.grok/config.toml`
+ *     with an absolute command (`bun run <repo>/src/cli/main.ts mcp …`);
+ *   - writes the lifecycle hooks into `~/.grok/hooks/open-second-brain.json`
+ *     with absolute bun commands.
+ *
+ * Both are grok-native sources (not Claude-compat). `GROK_HOME` overrides the
+ * `~/.grok` base dir.
  */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import { GROK_PLUGIN_DIR_NAME, readGrokPluginFiles } from "../grok-plugin-asset.ts";
-import { recordEntry, removeEntry } from "../manifest.ts";
+import { GROK_HOOKS_FILENAME, grokHooksJson, grokMcpServers } from "../grok-asset.ts";
+import { hasMcpServers, removeMcpServers, upsertMcpServers } from "../grok-config.ts";
+import { OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
+import { readManifest, recordEntry, removeEntry } from "../manifest.ts";
+import { expectedPayloadFromEnv } from "../payload-equals.ts";
 import { defaultRegistry } from "../registry.ts";
 import type {
   ApplyOpts,
@@ -38,48 +43,57 @@ import type {
 const TARGET = "grok";
 const LABEL = "Grok Build";
 const FIX_HINT = "o2b install --target grok --apply";
+const SERVER_NAMES = [OSB_KEY_FULL, OSB_KEY_WRITER] as const;
 
 function grokHome(env: InstallEnv): string {
   const override = env.env["GROK_HOME"];
   return override && override.length > 0 ? override : join(env.home, ".grok");
 }
 
-function pluginDir(env: InstallEnv): string {
-  return join(grokHome(env), "plugins", GROK_PLUGIN_DIR_NAME);
+function configPath(env: InstallEnv): string {
+  return join(grokHome(env), "config.toml");
 }
 
-function installedPath(env: InstallEnv, relPath: string): string {
-  return join(pluginDir(env), relPath);
+function hooksPath(env: InstallEnv): string {
+  return join(grokHome(env), "hooks", GROK_HOOKS_FILENAME);
 }
 
-type FileStatus = "match" | "differs" | "missing" | "not-file";
-
-interface FileState {
-  readonly relPath: string;
-  readonly path: string;
-  readonly status: FileStatus;
+function readFileOrEmpty(path: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
 }
 
-/**
- * Compare every committed plugin file to its installed copy. A regular file
- * with identical bytes is `match`; anything else is drift the caller reports
- * verbatim (missing, differing, or a non-file such as a stray directory).
- */
-function fileStates(env: InstallEnv): FileState[] {
-  return readGrokPluginFiles().map((f) => {
-    const path = installedPath(env, f.relPath);
-    let status: FileStatus;
-    try {
-      status = !lstatSync(path).isFile()
-        ? "not-file"
-        : readFileSync(path, "utf8") === f.content
-          ? "match"
-          : "differs";
-    } catch {
-      status = "missing";
-    }
-    return { relPath: f.relPath, path, status };
-  });
+interface DesiredState {
+  readonly nextToml: string;
+  readonly currentToml: string;
+  readonly hooksContent: string;
+  readonly currentHooks: string;
+}
+
+/** Compute the target config.toml + hooks content for the current env/payload. */
+function desired(payload: McpPayload, env: InstallEnv): DesiredState {
+  const currentToml = readFileOrEmpty(configPath(env));
+  const currentHooks = readFileOrEmpty(hooksPath(env));
+  return {
+    currentToml,
+    nextToml: upsertMcpServers(currentToml, grokMcpServers(payload)),
+    hooksContent: grokHooksJson(),
+    currentHooks,
+  };
+}
+
+/** mcp = in sync when our tables are present verbatim; hooks = file matches. */
+function syncState(env: InstallEnv): { mcpOk: boolean; hooksOk: boolean; anyPresent: boolean } {
+  const toml = readFileOrEmpty(configPath(env));
+  const hooks = readFileOrEmpty(hooksPath(env));
+  const entries = grokMcpServers(expectedPayloadFromEnv(env));
+  const mcpOk = hasMcpServers(toml, entries);
+  const hooksOk = hooks === grokHooksJson();
+  const anyMcp = SERVER_NAMES.some((n) => toml.includes(`[mcp_servers.${n}]`));
+  return { mcpOk, hooksOk, anyPresent: anyMcp || hooks.length > 0 };
 }
 
 export const grokAdapter = {
@@ -87,136 +101,104 @@ export const grokAdapter = {
   label: LABEL,
 
   detect(env: InstallEnv): DetectResult {
-    const states = fileStates(env);
-    const present = states.filter((s) => s.status !== "missing");
-    const status =
-      present.length === 0
-        ? "not-installed"
-        : states.every((s) => s.status === "match")
-          ? "installed"
-          : "drift";
-    return { target: TARGET, status, configPath: pluginDir(env), notes: [] };
+    const { mcpOk, hooksOk, anyPresent } = syncState(env);
+    const status = !anyPresent ? "not-installed" : mcpOk && hooksOk ? "installed" : "drift";
+    return { target: TARGET, status, configPath: configPath(env), notes: [] };
   },
 
-  plan(_payload: McpPayload, env: InstallEnv): InstallPlan {
-    const steps = readGrokPluginFiles().map((f) => ({
-      kind: "file-copy" as const,
-      path: installedPath(env, f.relPath),
-      preview: `copy ${f.relPath} into the grok plugin at ${pluginDir(env)}`,
-    }));
+  plan(payload: McpPayload, env: InstallEnv): InstallPlan {
     return {
       target: TARGET,
-      steps,
+      steps: [
+        {
+          kind: "managed-block",
+          path: configPath(env),
+          preview: `register the open-second-brain MCP servers in ${configPath(env)} (absolute bun command)`,
+        },
+        {
+          kind: "file-copy",
+          path: hooksPath(env),
+          preview: `write the lifecycle hooks to ${hooksPath(env)}`,
+        },
+      ],
       postNotes: [
-        "grok loads the plugin on the next session start, or press r in the /plugins modal to reload now.",
+        "grok loads the MCP servers and hooks on the next session start (or press r in the /mcps and /hooks modals).",
       ],
     };
   },
 
-  apply(_plan: InstallPlan, _payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
-    const files = readGrokPluginFiles();
-    const ownedPaths = files.map((f) => installedPath(env, f.relPath));
+  apply(_plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
+    const state = desired(payload, env);
     const entry: ManifestEntry = {
       target: TARGET,
       applied_at: env.now.toISOString(),
-      operation: "file-copy",
-      config_path: pluginDir(env),
-      owned_paths: ownedPaths,
+      operation: "managed-block",
+      config_path: configPath(env),
+      owned_keys: [...SERVER_NAMES],
+      owned_paths: [hooksPath(env)],
     };
-
     if (opts.dryRun) {
       return { target: TARGET, manifest: entry, steps_executed: 0 };
     }
 
-    let stepsExecuted = 0;
-    for (const f of files) {
-      const path = installedPath(env, f.relPath);
-      const current = readFileIfRegular(path);
-      if (current === f.content) continue;
-      // A stray directory or special file at the path must not abort the
-      // install; clear it before the atomic write.
-      if (current === null && existsSync(path)) {
-        rmSync(path, { recursive: true, force: true });
-      }
-      const dir = dirname(path);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      atomicWriteFileSync(path, f.content);
-      stepsExecuted += 1;
+    let steps = 0;
+    if (state.nextToml !== state.currentToml) {
+      const cfg = configPath(env);
+      if (!existsSync(dirname(cfg))) mkdirSync(dirname(cfg), { recursive: true });
+      atomicWriteFileSync(cfg, state.nextToml);
+      steps += 1;
     }
-
+    if (state.hooksContent !== state.currentHooks) {
+      const hp = hooksPath(env);
+      if (!existsSync(dirname(hp))) mkdirSync(dirname(hp), { recursive: true });
+      atomicWriteFileSync(hp, state.hooksContent);
+      steps += 1;
+    }
     recordEntry(env.vault, entry);
-    return { target: TARGET, manifest: entry, steps_executed: stepsExecuted };
+    return { target: TARGET, manifest: entry, steps_executed: steps };
   },
 
   verify(env: InstallEnv): VerifyResult {
-    const states = fileStates(env);
-    if (states.every((s) => s.status === "missing")) {
+    const installed = TARGET in readManifest(env.vault).installs;
+    const { mcpOk, hooksOk, anyPresent } = syncState(env);
+    if (!installed && !anyPresent) {
       return { target: TARGET, status: "not-installed", details: [], fix_hint: FIX_HINT };
     }
-    const drift = states.filter((s) => s.status !== "match");
-    if (drift.length === 0) {
-      return { target: TARGET, status: "ok", details: [], fix_hint: null };
+    const details: string[] = [];
+    if (!mcpOk) details.push(`config.toml is missing or differs from the canonical MCP servers`);
+    if (!hooksOk) details.push(`${hooksPath(env)} is missing or differs from the bundled hooks`);
+    if (details.length > 0) {
+      return { target: TARGET, status: "drift", details, fix_hint: FIX_HINT };
     }
-    return {
-      target: TARGET,
-      status: "drift",
-      details: drift.map((s) => `${s.relPath}: ${s.status}`),
-      fix_hint: FIX_HINT,
-    };
+    return { target: TARGET, status: "ok", details: [], fix_hint: null };
   },
 
   uninstall(env: InstallEnv, opts: ApplyOpts & { fromSnippet?: boolean }): UninstallResult {
-    const removed: string[] = [];
+    const removedKeys: string[] = [];
+    const removedPaths: string[] = [];
     const skipped: Array<readonly [string, string]> = [];
-    for (const f of readGrokPluginFiles()) {
-      const path = installedPath(env, f.relPath);
-      if (!existsSync(path)) continue;
+
+    const cfg = configPath(env);
+    const currentToml = readFileOrEmpty(cfg);
+    if (SERVER_NAMES.some((n) => currentToml.includes(`[mcp_servers.${n}]`))) {
+      const next = removeMcpServers(currentToml, [...SERVER_NAMES]).replace(/\s*$/, "") + "\n";
+      if (!opts.dryRun) atomicWriteFileSync(cfg, next === "\n" ? "" : next);
+      removedKeys.push(...SERVER_NAMES);
+    }
+
+    const hp = hooksPath(env);
+    if (existsSync(hp)) {
       try {
-        if (!opts.dryRun) rmSync(path, { force: true });
-        removed.push(path);
+        if (!opts.dryRun) rmSync(hp, { force: true });
+        removedPaths.push(hp);
       } catch (e) {
-        skipped.push([path, `could not remove: ${(e as Error).message}`]);
+        skipped.push([hp, `could not remove: ${(e as Error).message}`]);
       }
     }
-    // Drop the directories we own, deepest first (the hooks/ subdir before the
-    // plugin root), so no empty shell is left behind. Each remove is
-    // non-recursive and best-effort: a directory that still holds
-    // operator-added files raises ENOTEMPTY and is left in place rather than
-    // force-removed.
-    if (!opts.dryRun) {
-      const ownedDirs = [
-        ...new Set(readGrokPluginFiles().map((f) => dirname(installedPath(env, f.relPath)))),
-      ].toSorted((a, b) => b.length - a.length);
-      for (const dir of ownedDirs) {
-        try {
-          // rmdirSync removes only an empty directory (ENOTEMPTY otherwise),
-          // which is exactly the "leave operator files in place" semantics.
-          rmdirSync(dir);
-        } catch {
-          // Not empty (operator files) or already gone - leave it.
-        }
-      }
-      // Keep the manifest entry if any owned file could not be removed: dropping
-      // ownership while artifacts remain would orphan them from future
-      // cleanup/update flows. Re-running uninstall clears it once removal succeeds.
-      if (skipped.length === 0) removeEntry(env.vault, TARGET);
-    }
-    return { target: TARGET, removed_keys: [], removed_paths: removed, skipped };
+
+    if (!opts.dryRun && skipped.length === 0) removeEntry(env.vault, TARGET);
+    return { target: TARGET, removed_keys: removedKeys, removed_paths: removedPaths, skipped };
   },
 };
-
-/**
- * Read a path only when it is a regular file; null for missing or non-file. A
- * symlink counts as non-file, so `verify` reports drift and `apply` replaces it
- * with the canonical regular file rather than following the link.
- */
-function readFileIfRegular(path: string): string | null {
-  try {
-    if (!lstatSync(path).isFile()) return null;
-    return readFileSync(path, "utf8");
-  } catch {
-    return null;
-  }
-}
 
 defaultRegistry.register(grokAdapter);

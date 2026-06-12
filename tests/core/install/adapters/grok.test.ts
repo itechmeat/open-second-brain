@@ -1,13 +1,12 @@
 /**
  * grok adapter tests.
  *
- * The grok integration is a static plugin tree copied into
- * `${GROK_HOME:-~/.grok}/plugins/open-second-brain/`. Verified against live
- * grok 0.2.45: a user-scope plugin dropped there is auto-enabled and
- * auto-trusted (its MCP servers and hooks load) with no config.toml entry, so
- * the adapter only copies the committed tree and tracks it in the manifest. No
- * config file is written, so there is nothing to merge and the canonical MCP
- * payload is not used (the plugin ships its own vault-agnostic `.mcp.json`).
+ * The grok integration registers MCP into `~/.grok/config.toml`
+ * `[mcp_servers.*]` (grok's primary source) with an absolute `bun run
+ * <repo>/src/cli/main.ts mcp …` command, and lifecycle hooks into
+ * `~/.grok/hooks/open-second-brain.json`. Verified against live grok 0.2.45
+ * that this is the form grok actually spawns in a session (a bundled plugin
+ * with a bare `o2b` command does not load). `GROK_HOME` overrides the base dir.
  */
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
@@ -17,7 +16,8 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 
 import { grokAdapter } from "../../../../src/core/install/adapters/grok.ts";
-import { readGrokPluginFiles } from "../../../../src/core/install/grok-plugin-asset.ts";
+import { grokMcpServers, grokHooksJson } from "../../../../src/core/install/grok-asset.ts";
+import { hasMcpServers } from "../../../../src/core/install/grok-config.ts";
 import { buildPayload } from "../../../../src/core/install/payload.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
 
@@ -42,7 +42,7 @@ function env(extraEnv: Record<string, string> = {}) {
     home,
     cwd: home,
     env: { VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC", ...extraEnv },
-    now: new Date("2026-06-11T12:00:00.000Z"),
+    now: new Date("2026-06-12T12:00:00.000Z"),
   };
 }
 
@@ -64,8 +64,14 @@ function payload() {
   return buildPayload({ vault, agent_name: "a", timezone: "UTC" });
 }
 
-function pluginDir(base = join(home, ".grok")) {
-  return join(base, "plugins", "open-second-brain");
+function grokDir(base = join(home, ".grok")) {
+  return base;
+}
+function configPath(base = join(home, ".grok")) {
+  return join(base, "config.toml");
+}
+function hooksPath(base = join(home, ".grok")) {
+  return join(base, "hooks", "open-second-brain.json");
 }
 
 function apply(e = env()) {
@@ -73,13 +79,12 @@ function apply(e = env()) {
 }
 
 describe("grok adapter - config path", () => {
-  test("default plugin dir is ~/.grok/plugins/open-second-brain", () => {
-    expect(grokAdapter.detect(env()).configPath).toBe(pluginDir());
+  test("default config is ~/.grok/config.toml", () => {
+    expect(grokAdapter.detect(env()).configPath).toBe(configPath());
   });
-
   test("GROK_HOME override is honoured", () => {
     const gh = mkdtempSync(join(tmpdir(), "osb-grokhome-"));
-    expect(grokAdapter.detect(env({ GROK_HOME: gh })).configPath).toBe(pluginDir(gh));
+    expect(grokAdapter.detect(env({ GROK_HOME: gh })).configPath).toBe(configPath(gh));
     try {
       rmSync(gh, { recursive: true, force: true });
     } catch {}
@@ -87,26 +92,44 @@ describe("grok adapter - config path", () => {
 });
 
 describe("grok adapter - apply", () => {
-  test("clean home: writes the full plugin tree verbatim", () => {
+  test("writes both MCP servers into config.toml with an absolute bun command", () => {
     apply();
-    for (const f of readGrokPluginFiles()) {
-      expect(readFileSync(join(pluginDir(), f.relPath), "utf8")).toBe(f.content);
-    }
-    expect(readManifest(vault).installs["grok"]).toBeDefined();
+    const toml = readFileSync(configPath(), "utf8");
+    expect(hasMcpServers(toml, grokMcpServers(payload()))).toBe(true);
+    expect(toml).toContain("[mcp_servers.open-second-brain]");
+    expect(toml).toContain("[mcp_servers.open-second-brain-writer]");
+    // absolute command (the running bun), the repo entry point, and the vault.
+    expect(toml).toContain(process.execPath);
+    expect(toml).toContain("src/cli/main.ts");
+    expect(toml).toContain(vault);
+    expect(toml).not.toContain('command = "o2b"'); // not the bare PATH form
   });
 
-  test("manifest records every plugin file as an owned path", () => {
+  test("writes the lifecycle hooks file verbatim", () => {
     apply();
-    const owned = readManifest(vault).installs["grok"]?.owned_paths ?? [];
-    for (const f of readGrokPluginFiles()) {
-      expect(owned).toContain(join(pluginDir(), f.relPath));
-    }
+    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson());
+  });
+
+  test("manifest records the mcp keys and the hooks path", () => {
+    apply();
+    const entry = readManifest(vault).installs["grok"];
+    expect(entry?.owned_keys).toEqual(["open-second-brain", "open-second-brain-writer"]);
+    expect(entry?.owned_paths).toContain(hooksPath());
+  });
+
+  test("preserves pre-existing config.toml content", () => {
+    mkdirSync(grokDir(), { recursive: true });
+    writeFileSync(configPath(), '[cli]\ninstaller = "internal"\n');
+    apply();
+    const toml = readFileSync(configPath(), "utf8");
+    expect(toml).toContain("[cli]");
+    expect(toml).toContain('installer = "internal"');
+    expect(toml).toContain("[mcp_servers.open-second-brain]");
   });
 
   test("idempotent re-apply executes no steps", () => {
     apply();
-    const second = apply();
-    expect(second.steps_executed).toBe(0);
+    expect(apply().steps_executed).toBe(0);
   });
 
   test("dry-run writes nothing", () => {
@@ -114,70 +137,69 @@ describe("grok adapter - apply", () => {
       ...applyOpts(),
       dryRun: true,
     });
-    expect(existsSync(pluginDir())).toBe(false);
+    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(hooksPath())).toBe(false);
   });
 
-  test("re-apply refreshes an outdated file", () => {
+  test("re-apply refreshes a tampered hooks file", () => {
     apply();
-    writeFileSync(join(pluginDir(), "plugin.json"), '{ "stale": true }\n');
+    writeFileSync(hooksPath(), "{}\n");
     apply();
-    const expected = readGrokPluginFiles().find((f) => f.relPath === "plugin.json")!.content;
-    expect(readFileSync(join(pluginDir(), "plugin.json"), "utf8")).toBe(expected);
+    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson());
   });
 });
 
 describe("grok adapter - lifecycle", () => {
-  test("detect installed and verify ok after apply", () => {
+  test("detect/verify report installed+ok after apply", () => {
     apply();
     expect(grokAdapter.detect(env()).status).toBe("installed");
     expect(grokAdapter.verify(env()).status).toBe("ok");
   });
 
-  test("detect not-installed on a clean home", () => {
+  test("clean home is not-installed", () => {
     expect(grokAdapter.detect(env()).status).toBe("not-installed");
     expect(grokAdapter.verify(env()).status).toBe("not-installed");
   });
 
-  test("verify reports drift when an installed file is edited", () => {
+  test("verify reports drift when the MCP servers are edited", () => {
     apply();
-    writeFileSync(join(pluginDir(), "hooks", "hooks.json"), "{}\n");
+    const toml = readFileSync(configPath(), "utf8").replace(vault, "/somewhere/else");
+    writeFileSync(configPath(), toml);
     expect(grokAdapter.verify(env()).status).toBe("drift");
   });
 
-  test("verify reports drift when a file is missing", () => {
+  test("verify reports drift when the hooks file is missing", () => {
     apply();
-    rmSync(join(pluginDir(), ".mcp.json"));
+    rmSync(hooksPath());
     expect(grokAdapter.verify(env()).status).toBe("drift");
   });
 
-  test("verify reports drift when a plugin file is a directory", () => {
-    apply();
-    rmSync(join(pluginDir(), ".mcp.json"));
-    mkdirSync(join(pluginDir(), ".mcp.json"), { recursive: true });
-    expect(grokAdapter.verify(env()).status).toBe("drift");
-  });
-
-  test("uninstall removes the plugin files, leaves no empty shell, clears the manifest", () => {
+  test("uninstall removes our MCP tables and hooks, keeps foreign config, clears manifest", () => {
+    mkdirSync(grokDir(), { recursive: true });
+    writeFileSync(
+      configPath(),
+      '[cli]\ninstaller = "internal"\n\n[mcp_servers.other]\nurl = "x"\n',
+    );
     apply();
     const r = grokAdapter.uninstall(env(), applyOpts());
-    for (const f of readGrokPluginFiles()) {
-      expect(existsSync(join(pluginDir(), f.relPath))).toBe(false);
-      expect(r.removed_paths).toContain(join(pluginDir(), f.relPath));
-    }
-    // No empty directory shell is left behind (hooks/ then the plugin root).
-    expect(existsSync(join(pluginDir(), "hooks"))).toBe(false);
-    expect(existsSync(pluginDir())).toBe(false);
+    const toml = readFileSync(configPath(), "utf8");
+    expect(toml).toContain("[mcp_servers.other]"); // foreign server kept
+    expect(toml).toContain("[cli]");
+    expect(toml).not.toContain("[mcp_servers.open-second-brain]");
+    expect(existsSync(hooksPath())).toBe(false);
+    expect(r.removed_keys).toContain("open-second-brain");
+    expect(r.removed_paths).toContain(hooksPath());
     expect(readManifest(vault).installs["grok"]).toBeUndefined();
   });
 });
 
 describe("grok adapter - plan", () => {
-  test("plan lists a file-copy step for every plugin file", () => {
+  test("plan lists the config.toml managed-block and the hooks file-copy", () => {
     const plan = grokAdapter.plan(payload(), env());
-    expect(plan.steps.every((s) => s.kind === "file-copy")).toBe(true);
-    const paths = plan.steps.map((s) => s.path);
-    for (const f of readGrokPluginFiles()) {
-      expect(paths).toContain(join(pluginDir(), f.relPath));
-    }
+    const kinds = plan.steps.map((s) => s.kind);
+    expect(kinds).toContain("managed-block");
+    expect(kinds).toContain("file-copy");
+    expect(plan.steps.map((s) => s.path)).toContain(configPath());
+    expect(plan.steps.map((s) => s.path)).toContain(hooksPath());
   });
 });

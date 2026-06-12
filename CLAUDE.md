@@ -7,8 +7,7 @@ Guidance for agents working in this repository.
 `package.json` `version` is the single source of truth. The version is
 mirrored into several manifests (`plugin.yaml`, `plugins/hermes/plugin.yaml`,
 `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
-`plugins/codex/.codex-plugin/plugin.json`,
-`plugins/grok/open-second-brain/plugin.json`, `openclaw.plugin.json`) and
+`plugins/codex/.codex-plugin/plugin.json`, `openclaw.plugin.json`) and
 `pyproject.toml`.
 
 Never hand-edit the version in those mirrored files. To bump the version,
