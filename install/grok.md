@@ -47,11 +47,12 @@ Every hook is fail-soft: a missing vault or runtime error never breaks the grok
 session.
 
 grok's Brain writes (hook captures and tool calls) attribute to a **grok-specific
-identity** derived from your configured `agent_name`: the vendor token is swapped
-to `grok` (`claude-dev-agent` -> `grok-dev-agent`; a name that does not fit the
-`<vendor>-<host>-agent` shape is prefixed with `grok-`). So grok activity is
-distinguishable from other runtimes in the Brain log rather than logged under the
-shared identity.
+identity** derived from your configured `agent_name`: the host segment is kept and
+the vendor token is swapped to `grok` (`claude-vps-agent` -> `grok-vps-agent`; a
+name that does not fit the `<vendor>-<host>-agent` shape is prefixed with `grok-`).
+So grok activity is distinguishable per runtime - and, in a shared multi-device
+vault, per device - rather than logged under the shared identity. Both the MCP
+env (`config.toml`) and the hooks file carry this same derived name.
 
 ## Importing grok sessions
 

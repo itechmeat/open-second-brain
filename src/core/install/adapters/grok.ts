@@ -80,7 +80,7 @@ function desired(payload: McpPayload, env: InstallEnv): DesiredState {
   return {
     currentToml,
     nextToml: upsertMcpServers(currentToml, grokMcpServers(payload)),
-    hooksContent: grokHooksJson(),
+    hooksContent: grokHooksJson(payload),
     currentHooks,
   };
 }
@@ -89,8 +89,9 @@ function desired(payload: McpPayload, env: InstallEnv): DesiredState {
 function syncState(env: InstallEnv): { mcpOk: boolean; hooksOk: boolean; anyPresent: boolean } {
   const toml = readFileOrEmpty(configPath(env));
   const hooks = readFileOrEmpty(hooksPath(env));
-  const mcpOk = hasMcpServers(toml, grokMcpServers(expectedPayloadFromEnv(env)));
-  const hooksOk = hooks === grokHooksJson();
+  const payload = expectedPayloadFromEnv(env);
+  const mcpOk = hasMcpServers(toml, grokMcpServers(payload));
+  const hooksOk = hooks === grokHooksJson(payload);
   const anyMcp = SERVER_NAMES.some((n) => toml.includes(`[mcp_servers.${n}]`));
   return { mcpOk, hooksOk, anyPresent: anyMcp || hooks.length > 0 };
 }

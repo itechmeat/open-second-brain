@@ -2370,6 +2370,16 @@ function normalizeAgentArgument(value) {
     return null;
   return cleaned;
 }
+var HOST_QUALIFIED_NAME_RE = /^[^-]+-(.+)-agent$/;
+function deriveRuntimeAgentName(runtimeId, operatorName) {
+  const base = (operatorName ?? "").trim();
+  if (base.length === 0)
+    return runtimeId;
+  const match = HOST_QUALIFIED_NAME_RE.exec(base);
+  if (match)
+    return `${runtimeId}-${match[1]}-agent`;
+  return `${runtimeId}-${base}`;
+}
 
 // src/core/path-safety.ts
 import { dirname as dirname6, posix, relative as relative2, resolve as resolve3, sep } from "node:path";
@@ -2387,9 +2397,10 @@ var openclaw_default = definePluginEntry({
   register(api) {
     api.on("before_prompt_build", () => {
       const cfg = api.pluginConfig ?? {};
-      const agent = normalizeAgentArgument(cfg.agentName ?? null) ?? process.env["VAULT_AGENT_NAME"] ?? resolveAgentName();
-      if (agent === "agent")
+      const operator = normalizeAgentArgument(cfg.agentName ?? null) ?? process.env["VAULT_AGENT_NAME"] ?? resolveAgentName();
+      if (operator === "agent")
         return;
+      const agent = deriveRuntimeAgentName("openclaw", operator);
       return { prependContext: buildReminder(agent, "openclaw") };
     });
     api.registerTool({

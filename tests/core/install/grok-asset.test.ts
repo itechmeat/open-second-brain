@@ -1,7 +1,8 @@
 /**
  * grok install-artifact helpers: grok attributes its Brain writes to its OWN
- * id ("grok") in both the MCP env and the hooks file - it never inherits the
- * shared operator name.
+ * host-qualified id (vendor `grok` + the operator host, e.g. `grok-dev-agent`)
+ * in both the MCP env and the hooks file - it never inherits the operator's
+ * vendor token, and both artifacts agree on one derived name.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -34,15 +35,23 @@ describe("grokMcpServers", () => {
       "--vault",
       "/v",
     ]);
-    // grok writes under its own name, not the inherited operator name.
-    expect(full.env).toEqual({ VAULT_AGENT_NAME: "grok", VAULT_TIMEZONE: "UTC" });
-    expect(servers["open-second-brain-writer"]!.env?.["VAULT_AGENT_NAME"]).toBe("grok");
+    // grok keeps the operator host ("dev") but swaps the vendor to its own.
+    expect(full.env).toEqual({ VAULT_AGENT_NAME: "grok-dev-agent", VAULT_TIMEZONE: "UTC" });
+    expect(servers["open-second-brain-writer"]!.env?.["VAULT_AGENT_NAME"]).toBe("grok-dev-agent");
+  });
+
+  test("falls back to the bare vendor id when no operator name is configured", () => {
+    const servers = grokMcpServers({
+      full: { command: "o2b", args: ["mcp", "--vault", "/v"] },
+      writer: { command: "o2b", args: ["mcp", "--writer-only", "--vault", "/v"] },
+    });
+    expect(servers["open-second-brain"]!.env).toEqual({ VAULT_AGENT_NAME: "grok" });
   });
 });
 
 describe("grokHooksJson", () => {
-  test("stamps grok's own id on every hook command's env", () => {
-    const parsed = JSON.parse(grokHooksJson());
+  test("stamps grok's host-qualified id on every hook command's env", () => {
+    const parsed = JSON.parse(grokHooksJson(PAYLOAD));
     const commands = Object.values(
       parsed.hooks as Record<string, Array<{ hooks: Array<{ env: Record<string, string> }> }>>,
     )
@@ -50,7 +59,7 @@ describe("grokHooksJson", () => {
       .flatMap((g) => g.hooks);
     expect(commands.length).toBeGreaterThan(0);
     for (const h of commands) {
-      expect(h.env["VAULT_AGENT_NAME"]).toBe("grok");
+      expect(h.env["VAULT_AGENT_NAME"]).toBe("grok-dev-agent");
     }
   });
 });

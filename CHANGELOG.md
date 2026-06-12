@@ -24,11 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sessionId` / `toolName` / `toolInput`) into the internal shape, detects the
   `grok` runtime, and counts grok's `search_replace` as a file-mutating tool. A
   new `grok` session adapter imports grok's ACP `updates.jsonl` stream into the
-  Brain via `o2b brain import-session` (autodetected). grok's Brain writes
-  attribute to a grok-specific identity derived from the configured agent name
-  (`claude-dev-agent` -> `grok-dev-agent`), so grok activity is distinguishable
-  from other runtimes. The integration uses grok's own config, not the
-  `~/.claude/` namespace. See [`install/grok.md`](install/grok.md).
+  Brain via `o2b brain import-session` (autodetected). The integration uses grok's
+  own config, not the `~/.claude/` namespace. See
+  [`install/grok.md`](install/grok.md).
+- **Per-runtime host-qualified Brain identity.** Every runtime that registers
+  the MCP servers (grok, opencode, openclaw, and Codex via `codex mcp add`) now
+  attributes its Brain writes to its OWN host-qualified name rather than the
+  shared operator `agent_name`. The host segment of the operator name is kept and
+  the vendor token is swapped to the runtime's own id (`claude-vps-agent` ->
+  `grok-vps-agent` / `opencode-vps-agent`; a name outside the
+  `<vendor>-<host>-agent` shape is prefixed with `<runtime>-`). This keeps a
+  shared multi-device vault (e.g. Syncthing across a VPS, a dev box, and a Mac)
+  able to tell the same runtime apart both across runtimes and across devices.
+  The derived name is read from the payload's operator name, so `apply` and
+  `verify` produce the identical value and `o2b install --check` reports no drift
+  after an apply. For grok, both the `config.toml` MCP env and the hooks file
+  carry the same derived name.
 
 ## [1.3.1] - 2026-06-11
 

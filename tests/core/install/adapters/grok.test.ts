@@ -109,15 +109,15 @@ describe("grok adapter - apply", () => {
     apply();
     const toml = readFileSync(configPath(), "utf8");
     const hooks = readFileSync(hooksPath(), "utf8");
-    expect(toml).toContain('VAULT_AGENT_NAME = "grok"');
+    expect(toml).toContain('VAULT_AGENT_NAME = "grok-dev-agent"');
     expect(toml).not.toContain('VAULT_AGENT_NAME = "claude-dev-agent"');
-    expect(hooks).toContain('"VAULT_AGENT_NAME": "grok"');
+    expect(hooks).toContain('"VAULT_AGENT_NAME": "grok-dev-agent"');
     expect(hooks).not.toContain("claude-dev-agent");
   });
 
   test("writes the lifecycle hooks file verbatim", () => {
     apply();
-    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson());
+    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(payload()));
   });
 
   test("manifest records the mcp keys and the hooks path", () => {
@@ -155,7 +155,7 @@ describe("grok adapter - apply", () => {
     apply();
     writeFileSync(hooksPath(), "{}\n");
     apply();
-    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson());
+    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(payload()));
   });
 });
 

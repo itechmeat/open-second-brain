@@ -19,7 +19,7 @@
 
 import { join } from "node:path";
 
-import { payloadWithRuntimeIdentity } from "./identity.ts";
+import { payloadWithRuntimeIdentity, runtimeAgentNameFromPayload } from "./identity.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "./json-merge.ts";
 import type { GrokMcpEntry } from "./grok-config.ts";
 import type { McpPayload } from "./types.ts";
@@ -34,7 +34,8 @@ function bunBin(): string {
 
 export const GROK_HOOKS_FILENAME = "open-second-brain.json";
 
-/** grok's Brain identity: its own runtime id (see identity.ts - own name, no derivation). */
+/** grok's vendor token; combined with the operator's host into a host-qualified
+ * identity by {@link runtimeAgentNameFromPayload} (see identity.ts). */
 export const GROK_RUNTIME_ID = "grok";
 
 /**
@@ -42,8 +43,8 @@ export const GROK_RUNTIME_ID = "grok";
  * canonical payload: same `args`, but the command becomes
  * `bun run <repo>/src/cli/main.ts` (absolute) instead of the PATH-resolved
  * `o2b` (so grok can spawn it in a session), and `VAULT_AGENT_NAME` is set to
- * grok's own id so the server's identity instruction and any Brain write say
- * `@grok`, not the shared operator name.
+ * grok's own host-qualified id (e.g. `grok-vps-agent`) so the server's identity
+ * instruction and any Brain write say it was grok, not the shared operator name.
  */
 export function grokMcpServers(payload: McpPayload): Record<string, GrokMcpEntry> {
   const identified = payloadWithRuntimeIdentity(payload, GROK_RUNTIME_ID);
@@ -97,12 +98,15 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
 
 /**
  * The `~/.grok/hooks/open-second-brain.json` content, with absolute bun
- * commands. Each hook carries `env.VAULT_AGENT_NAME = GROK_RUNTIME_ID` so the
- * session-capture / guardrail writes attribute to grok's own id, not the shared
- * operator name. Generated at install time (machine-specific paths), so
- * `verify` compares the installed file against this exact output.
+ * commands. Each hook carries `env.VAULT_AGENT_NAME` set to grok's own
+ * host-qualified id (the same value the MCP env gets, derived from the payload's
+ * operator name) so the session-capture / guardrail writes attribute to grok,
+ * not the shared operator name. Generated at install time (machine-specific
+ * paths and identity), so `verify` compares the installed file against this
+ * exact output.
  */
-export function grokHooksJson(): string {
+export function grokHooksJson(payload: McpPayload): string {
+  const agentName = runtimeAgentNameFromPayload(payload, GROK_RUNTIME_ID);
   const hooks: Record<string, unknown[]> = {};
   for (const { event, groups } of HOOK_SPEC) {
     hooks[event] = groups.map((g) => ({
@@ -110,7 +114,7 @@ export function grokHooksJson(): string {
       hooks: g.hooks.map((name) => ({
         type: "command",
         command: hookCommand(name),
-        env: { VAULT_AGENT_NAME: GROK_RUNTIME_ID },
+        env: { VAULT_AGENT_NAME: agentName },
         timeout: 10,
       })),
     }));
