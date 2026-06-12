@@ -34,16 +34,40 @@ function bunBin(): string {
 export const GROK_HOOKS_FILENAME = "open-second-brain.json";
 
 /**
- * The two MCP server tables to write into `config.toml`, derived from the
- * canonical payload: same `args` and `env`, but the command becomes
- * `bun run <repo>/src/cli/main.ts` (absolute) instead of the PATH-resolved
- * `o2b`, so grok can spawn it in a session.
+ * Derive a grok-specific Brain identity from the operator's configured agent
+ * name, so grok's writes are attributable to grok rather than silently logged
+ * under the shared (Claude) identity. The vendor token of the
+ * `<vendor>-<host>-agent` convention is swapped to `grok`
+ * (`claude-dev-agent` -> `grok-dev-agent`); a name that does not fit the
+ * convention is prefixed with `grok-`. The default `agent` becomes
+ * `grok-agent`.
  */
-export function grokMcpServers(payload: McpPayload): Record<string, GrokMcpEntry> {
+export function grokAgentName(base: string | undefined): string {
+  const name = base && base.trim().length > 0 ? base.trim() : "agent";
+  const parts = name.split("-");
+  if (parts.length >= 2) {
+    parts[0] = "grok";
+    return parts.join("-");
+  }
+  return `grok-${name}`;
+}
+
+/**
+ * The two MCP server tables to write into `config.toml`, derived from the
+ * canonical payload: same `args`, but the command becomes
+ * `bun run <repo>/src/cli/main.ts` (absolute) instead of the PATH-resolved
+ * `o2b` (so grok can spawn it in a session), and `VAULT_AGENT_NAME` is forced
+ * to `grokAgent` so the server's identity instruction and any Brain writes
+ * attribute to grok, not the shared identity.
+ */
+export function grokMcpServers(
+  payload: McpPayload,
+  grokAgent: string,
+): Record<string, GrokMcpEntry> {
   const toEntry = (args: ReadonlyArray<string>, env?: Readonly<Record<string, string>>) => ({
     command: bunBin(),
     args: ["run", MAIN_TS, ...args],
-    ...(env && Object.keys(env).length > 0 ? { env: { ...env } } : {}),
+    env: { ...env, VAULT_AGENT_NAME: grokAgent },
   });
   return {
     [OSB_KEY_FULL]: toEntry(payload.full.args, payload.full.env),
@@ -87,10 +111,12 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
 
 /**
  * The `~/.grok/hooks/open-second-brain.json` content, with absolute bun
- * commands. Generated at install time (machine-specific paths), so `verify`
- * compares the installed file against this exact output.
+ * commands. Each hook carries `env.VAULT_AGENT_NAME = grokAgent` so the
+ * session-capture / guardrail writes attribute to grok's own identity, not the
+ * shared one. Generated at install time (machine-specific paths + identity),
+ * so `verify` compares the installed file against this exact output.
  */
-export function grokHooksJson(): string {
+export function grokHooksJson(grokAgent: string): string {
   const hooks: Record<string, unknown[]> = {};
   for (const { event, groups } of HOOK_SPEC) {
     hooks[event] = groups.map((g) => ({
@@ -98,6 +124,7 @@ export function grokHooksJson(): string {
       hooks: g.hooks.map((name) => ({
         type: "command",
         command: hookCommand(name),
+        env: { VAULT_AGENT_NAME: grokAgent },
         timeout: 10,
       })),
     }));

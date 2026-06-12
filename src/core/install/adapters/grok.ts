@@ -22,7 +22,12 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import { GROK_HOOKS_FILENAME, grokHooksJson, grokMcpServers } from "../grok-asset.ts";
+import {
+  GROK_HOOKS_FILENAME,
+  grokAgentName,
+  grokHooksJson,
+  grokMcpServers,
+} from "../grok-asset.ts";
 import { hasMcpServers, removeMcpServers, upsertMcpServers } from "../grok-config.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { readManifest, recordEntry, removeEntry } from "../manifest.ts";
@@ -73,14 +78,20 @@ interface DesiredState {
   readonly currentHooks: string;
 }
 
+/** The grok-specific Brain identity for a payload (swaps the vendor token). */
+function agentFor(payload: McpPayload): string {
+  return grokAgentName(payload.full.env?.["VAULT_AGENT_NAME"]);
+}
+
 /** Compute the target config.toml + hooks content for the current env/payload. */
 function desired(payload: McpPayload, env: InstallEnv): DesiredState {
   const currentToml = readFileOrEmpty(configPath(env));
   const currentHooks = readFileOrEmpty(hooksPath(env));
+  const grokAgent = agentFor(payload);
   return {
     currentToml,
-    nextToml: upsertMcpServers(currentToml, grokMcpServers(payload)),
-    hooksContent: grokHooksJson(),
+    nextToml: upsertMcpServers(currentToml, grokMcpServers(payload, grokAgent)),
+    hooksContent: grokHooksJson(grokAgent),
     currentHooks,
   };
 }
@@ -89,9 +100,10 @@ function desired(payload: McpPayload, env: InstallEnv): DesiredState {
 function syncState(env: InstallEnv): { mcpOk: boolean; hooksOk: boolean; anyPresent: boolean } {
   const toml = readFileOrEmpty(configPath(env));
   const hooks = readFileOrEmpty(hooksPath(env));
-  const entries = grokMcpServers(expectedPayloadFromEnv(env));
-  const mcpOk = hasMcpServers(toml, entries);
-  const hooksOk = hooks === grokHooksJson();
+  const payload = expectedPayloadFromEnv(env);
+  const grokAgent = agentFor(payload);
+  const mcpOk = hasMcpServers(toml, grokMcpServers(payload, grokAgent));
+  const hooksOk = hooks === grokHooksJson(grokAgent);
   const anyMcp = SERVER_NAMES.some((n) => toml.includes(`[mcp_servers.${n}]`));
   return { mcpOk, hooksOk, anyPresent: anyMcp || hooks.length > 0 };
 }

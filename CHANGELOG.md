@@ -24,9 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sessionId` / `toolName` / `toolInput`) into the internal shape, detects the
   `grok` runtime, and counts grok's `search_replace` as a file-mutating tool. A
   new `grok` session adapter imports grok's ACP `updates.jsonl` stream into the
-  Brain via `o2b brain import-session` (autodetected). The integration uses
-  grok's own config, not the `~/.claude/` namespace. See
-  [`install/grok.md`](install/grok.md).
+  Brain via `o2b brain import-session` (autodetected). grok's Brain writes
+  attribute to a grok-specific identity derived from the configured agent name
+  (`claude-dev-agent` -> `grok-dev-agent`), so grok activity is distinguishable
+  from other runtimes. The integration uses grok's own config, not the
+  `~/.claude/` namespace. See [`install/grok.md`](install/grok.md).
 
 ## [1.3.1] - 2026-06-11
 

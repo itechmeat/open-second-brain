@@ -16,10 +16,16 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 
 import { grokAdapter } from "../../../../src/core/install/adapters/grok.ts";
-import { grokMcpServers, grokHooksJson } from "../../../../src/core/install/grok-asset.ts";
+import {
+  grokAgentName,
+  grokMcpServers,
+  grokHooksJson,
+} from "../../../../src/core/install/grok-asset.ts";
 import { hasMcpServers } from "../../../../src/core/install/grok-config.ts";
 import { buildPayload } from "../../../../src/core/install/payload.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
+
+const GROK_AGENT = grokAgentName("claude-dev-agent"); // -> "grok-dev-agent"
 
 let vault: string;
 let home: string;
@@ -41,7 +47,7 @@ function env(extraEnv: Record<string, string> = {}) {
     vault,
     home,
     cwd: home,
-    env: { VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC", ...extraEnv },
+    env: { VAULT_AGENT_NAME: "claude-dev-agent", VAULT_TIMEZONE: "UTC", ...extraEnv },
     now: new Date("2026-06-12T12:00:00.000Z"),
   };
 }
@@ -61,7 +67,7 @@ function applyOpts() {
 }
 
 function payload() {
-  return buildPayload({ vault, agent_name: "a", timezone: "UTC" });
+  return buildPayload({ vault, agent_name: "claude-dev-agent", timezone: "UTC" });
 }
 
 function grokDir(base = join(home, ".grok")) {
@@ -95,7 +101,7 @@ describe("grok adapter - apply", () => {
   test("writes both MCP servers into config.toml with an absolute bun command", () => {
     apply();
     const toml = readFileSync(configPath(), "utf8");
-    expect(hasMcpServers(toml, grokMcpServers(payload()))).toBe(true);
+    expect(hasMcpServers(toml, grokMcpServers(payload(), GROK_AGENT))).toBe(true);
     expect(toml).toContain("[mcp_servers.open-second-brain]");
     expect(toml).toContain("[mcp_servers.open-second-brain-writer]");
     // absolute command (the running bun), the repo entry point, and the vault.
@@ -105,9 +111,20 @@ describe("grok adapter - apply", () => {
     expect(toml).not.toContain('command = "o2b"'); // not the bare PATH form
   });
 
+  test("attributes to a grok-specific identity, not the shared one", () => {
+    apply();
+    const toml = readFileSync(configPath(), "utf8");
+    const hooks = readFileSync(hooksPath(), "utf8");
+    expect(GROK_AGENT).toBe("grok-dev-agent");
+    expect(toml).toContain('VAULT_AGENT_NAME = "grok-dev-agent"');
+    expect(toml).not.toContain('VAULT_AGENT_NAME = "claude-dev-agent"');
+    expect(hooks).toContain('"VAULT_AGENT_NAME": "grok-dev-agent"');
+    expect(hooks).not.toContain("claude-dev-agent");
+  });
+
   test("writes the lifecycle hooks file verbatim", () => {
     apply();
-    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson());
+    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(GROK_AGENT));
   });
 
   test("manifest records the mcp keys and the hooks path", () => {
@@ -145,7 +162,7 @@ describe("grok adapter - apply", () => {
     apply();
     writeFileSync(hooksPath(), "{}\n");
     apply();
-    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson());
+    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(GROK_AGENT));
   });
 });
 
