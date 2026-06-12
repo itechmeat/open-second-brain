@@ -20,6 +20,7 @@ const FIXTURES = {
   codex: resolve("tests/fixtures/sessions/codex-minimal.jsonl"),
   hermes: resolve("tests/fixtures/sessions/hermes-minimal.jsonl"),
   opencode: resolve("tests/fixtures/sessions/opencode-minimal.jsonl"),
+  grok: resolve("tests/fixtures/sessions/grok-minimal.jsonl"),
 };
 
 function firstLine(path: string): string {
@@ -27,17 +28,18 @@ function firstLine(path: string): string {
 }
 
 describe("registry — single source of adapters", () => {
-  test("exposes all four adapters", () => {
+  test("exposes all five adapters", () => {
     const ids = SESSION_ADAPTERS.map((a) => a.id).toSorted();
-    expect(ids).toEqual(["claude", "codex", "hermes", "opencode"]);
+    expect(ids).toEqual(["claude", "codex", "grok", "hermes", "opencode"]);
   });
 
   test("owns runtime validation and help choices", () => {
-    expect(sessionAdapterFormatChoices()).toBe("auto|claude|codex|hermes|opencode");
+    expect(sessionAdapterFormatChoices()).toBe("auto|claude|codex|hermes|opencode|grok");
     expect(isSessionAdapterId("claude")).toBe(true);
     expect(isSessionAdapterId("codex")).toBe(true);
     expect(isSessionAdapterId("hermes")).toBe(true);
     expect(isSessionAdapterId("opencode")).toBe(true);
+    expect(isSessionAdapterId("grok")).toBe(true);
     expect(isSessionAdapterId("copilot")).toBe(false);
   });
 
@@ -48,6 +50,7 @@ describe("registry — single source of adapters", () => {
       codex: "codex",
       hermes: "hermes",
       opencode: "opencode",
+      grok: "grok",
     });
   });
 
@@ -56,6 +59,7 @@ describe("registry — single source of adapters", () => {
     expect(getAdapter("codex").id).toBe("codex");
     expect(getAdapter("hermes").id).toBe("hermes");
     expect(getAdapter("opencode").id).toBe("opencode");
+    expect(getAdapter("grok").id).toBe("grok");
   });
 });
 
@@ -71,6 +75,9 @@ describe("detectAdapter — autodetect across all three formats", () => {
   });
   test("picks opencode on the opencode fixture", () => {
     expect(detectAdapter(firstLine(FIXTURES.opencode))?.id).toBe("opencode");
+  });
+  test("picks grok on the grok fixture", () => {
+    expect(detectAdapter(firstLine(FIXTURES.grok))?.id).toBe("grok");
   });
 
   test("no adapter claims a foreign fixture (full cross-table)", () => {

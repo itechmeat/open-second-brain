@@ -672,6 +672,7 @@ graph LR
     Hermes -- "mcp_servers.yaml" --> Stdio["o2b mcp (stdio)"]
     ClaudeCode["Claude Code"] -- "bundled .mcp.json" --> Stdio
     Codex -- "codex mcp add" --> Stdio
+    GrokBuild["Grok Build"] -- "config.toml [mcp_servers]" --> Stdio
     OpenClaw -- "native JS plugin" --> InProc["in-process tools"]
     Stdio --> Vault[(Brain/ on disk)]
     InProc --> Vault
@@ -686,6 +687,14 @@ graph LR
   plugin-shipped `brain-memory/SKILL.md` automatically.
 - **Codex** registers the MCP server with `codex mcp add`; the same
   skill bundle is loaded automatically.
+- **Grok Build** registers MCP in `~/.grok/config.toml` `[mcp_servers.*]`
+  (grok's primary source) and lifecycle hooks in `~/.grok/hooks/` (its native
+  hooks dir), both with an absolute `bun run …/main.ts` command, via
+  `o2b install --target grok`. Verified against live grok 0.2.45: the bare
+  `o2b` command does not resolve on grok's session-spawn PATH, so the absolute
+  form is required. grok sessions (`~/.grok/sessions/.../updates.jsonl`, an ACP
+  stream) import via the `grok` session adapter. See
+  [`install/grok.md`](../install/grok.md).
 - **OpenClaw** runs tools natively in the plugin's Node.js process
   (no subprocess, by security-scanner requirement).
 

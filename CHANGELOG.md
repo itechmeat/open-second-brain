@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-06-12
+
+### Added
+
+- **Native Grok Build (xAI `grok`) integration.** `o2b install --target grok
+  --apply` registers the two Open Second Brain MCP servers in
+  `${GROK_HOME:-~/.grok}/config.toml` under `[mcp_servers.*]` (grok's
+  highest-priority MCP source) and writes lifecycle hooks to
+  `${GROK_HOME:-~/.grok}/hooks/open-second-brain.json` (grok's native hooks
+  dir), each with an absolute `bun run <repo>/src/cli/main.ts …` command.
+  Verified against live grok 0.2.45 (session debug log): grok spawns MCP and
+  hook processes with a restricted PATH that excludes `~/.local/bin`, so a bare
+  `o2b` command fails to spawn - the absolute form is what actually handshakes
+  in a session (71 + 5 MCP tools registered; active-context inject, post-write
+  reminder, session capture, and the stop-log guardrail dispatched). The shared
+  hook layer normalizes grok's camelCase stdin payload (`hookEventName` /
+  `sessionId` / `toolName` / `toolInput`) into the internal shape, detects the
+  `grok` runtime, and counts grok's `search_replace` as a file-mutating tool. A
+  new `grok` session adapter imports grok's ACP `updates.jsonl` stream into the
+  Brain via `o2b brain import-session` (autodetected). The integration uses grok's
+  own config, not the `~/.claude/` namespace. See
+  [`install/grok.md`](install/grok.md).
+- **Per-runtime host-qualified Brain identity.** Every runtime that registers
+  the MCP servers (grok, opencode, openclaw, and Codex via `codex mcp add`) now
+  attributes its Brain writes to its OWN host-qualified name rather than the
+  shared operator `agent_name`. The host segment of the operator name is kept and
+  the vendor token is swapped to the runtime's own id (`claude-vps-agent` ->
+  `grok-vps-agent` / `opencode-vps-agent`; a name outside the
+  `<vendor>-<host>-agent` shape is prefixed with `<runtime>-`). This keeps a
+  shared multi-device vault (e.g. Syncthing across a VPS, a dev box, and a Mac)
+  able to tell the same runtime apart both across runtimes and across devices.
+  The derived name is read from the payload's operator name, so `apply` and
+  `verify` produce the identical value and `o2b install --check` reports no drift
+  after an apply. For grok, both the `config.toml` MCP env and the hooks file
+  carry the same derived name.
+
 ## [1.3.1] - 2026-06-11
 
 ### Fixed

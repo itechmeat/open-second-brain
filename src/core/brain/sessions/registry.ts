@@ -11,6 +11,7 @@
 
 import { claudeAdapter } from "./claude.ts";
 import { codexAdapter } from "./codex.ts";
+import { grokAdapter } from "./grok.ts";
 import { hermesAdapter } from "./hermes.ts";
 import { opencodeAdapter } from "./opencode.ts";
 import type { SessionAdapter, SessionAdapterId } from "./types.ts";
@@ -20,6 +21,7 @@ export const SESSION_ADAPTERS: ReadonlyArray<SessionAdapter> = Object.freeze([
   codexAdapter,
   hermesAdapter,
   opencodeAdapter,
+  grokAdapter,
 ]);
 
 export function isSessionAdapterId(value: string): value is SessionAdapterId {

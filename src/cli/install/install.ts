@@ -31,6 +31,7 @@ import "../../core/install/adapters/copilot-cli.ts";
 import "../../core/install/adapters/cursor.ts";
 import "../../core/install/adapters/gemini-cli.ts";
 import "../../core/install/adapters/generic.ts";
+import "../../core/install/adapters/grok.ts";
 import "../../core/install/adapters/kiro.ts";
 import "../../core/install/adapters/opencode.ts";
 import "../../core/install/adapters/pi.ts";

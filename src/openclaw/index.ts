@@ -16,7 +16,7 @@ import { discoverConfig, redactMapping, resolveAgentName } from "../core/config.
 import { doctor } from "../core/doctor.ts";
 import { buildReminder } from "../core/identity-reminder.ts";
 import { listVaultPages } from "../core/vault.ts";
-import { normalizeAgentArgument } from "../core/agent-identity.ts";
+import { deriveRuntimeAgentName, normalizeAgentArgument } from "../core/agent-identity.ts";
 import { vaultRelative as vaultRelativePath } from "../core/path-safety.ts";
 
 interface PluginConfig {
@@ -45,11 +45,15 @@ export default definePluginEntry({
     // stops paying attention to it as the conversation grows.
     api.on("before_prompt_build", () => {
       const cfg = (api.pluginConfig ?? {}) as PluginConfig;
-      const agent =
+      const operator =
         normalizeAgentArgument(cfg.agentName ?? null) ??
         process.env["VAULT_AGENT_NAME"] ??
         resolveAgentName();
-      if (agent === "agent") return undefined;
+      if (operator === "agent") return undefined;
+      // OpenClaw writes under its OWN host-qualified identity (vendor `openclaw`
+      // + the operator's host), not the operator's name - so its Brain activity
+      // is distinguishable per runtime and per device, matching grok/opencode.
+      const agent = deriveRuntimeAgentName("openclaw", operator);
       return { prependContext: buildReminder(agent, "openclaw") };
     });
 

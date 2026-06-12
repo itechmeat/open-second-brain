@@ -70,4 +70,11 @@ describe("openclaw bundle", () => {
     expect(bundleText).toContain("before_prompt_build");
     expect(bundleText).toContain("prependContext");
   });
+
+  test("derives OpenClaw's own host-qualified identity for the reminder", () => {
+    // The reminder must attribute to OpenClaw's own vendor token, not the
+    // operator name - it routes the operator name through the shared deriver
+    // with its own id. (Bundle is not minified, so the call survives verbatim.)
+    expect(bundleText).toContain('deriveRuntimeAgentName("openclaw", operator)');
+  });
 });

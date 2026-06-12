@@ -64,6 +64,14 @@ The values are stored as JSON, so string values must be valid JSON
 escaping so bash does not consume the doubles. That's why the
 arguments look like `'"...".`
 
+The configured `agentName` is the operator base name; OpenClaw does not log
+under it verbatim. The per-turn identity reminder derives an
+**openclaw-specific identity** from it: the host segment is kept and the vendor
+token is swapped to `openclaw` (`claude-vps-agent` -> `openclaw-vps-agent`; a
+name outside the `<vendor>-<host>-agent` shape is prefixed with `openclaw-`).
+So OpenClaw activity is distinguishable per runtime - and, in a shared
+multi-device vault, per device.
+
 ## 5. Verify
 
 ```bash

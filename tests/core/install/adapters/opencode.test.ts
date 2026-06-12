@@ -41,7 +41,7 @@ function env(extraEnv: Record<string, string> = {}) {
     vault,
     home,
     cwd: home,
-    env: { VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC", ...extraEnv },
+    env: { VAULT_AGENT_NAME: "claude-dev-agent", VAULT_TIMEZONE: "UTC", ...extraEnv },
     now: new Date("2026-06-10T12:00:00.000Z"),
   };
 }
@@ -61,7 +61,7 @@ function applyOpts() {
 }
 
 function payload() {
-  return buildPayload({ vault, agent_name: "a", timezone: "UTC" });
+  return buildPayload({ vault, agent_name: "claude-dev-agent", timezone: "UTC" });
 }
 
 function configPath() {
@@ -101,7 +101,9 @@ describe("opencode adapter - apply", () => {
     expect(full).toEqual({
       type: "local",
       command: ["o2b", "mcp", "--vault", vault],
-      environment: { VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC" },
+      // opencode keeps the operator host ("dev") but swaps the vendor to its
+      // own, rather than inheriting the operator name "claude-dev-agent".
+      environment: { VAULT_AGENT_NAME: "opencode-dev-agent", VAULT_TIMEZONE: "UTC" },
       enabled: true,
     });
     const writer = parsed.mcp["open-second-brain-writer"];
@@ -170,7 +172,7 @@ describe("opencode adapter - legacy mcp.json migration", () => {
     return {
       command: "o2b",
       args: writerOnly ? ["mcp", "--writer-only", "--vault", vault] : ["mcp", "--vault", vault],
-      env: { VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC" },
+      env: { VAULT_AGENT_NAME: "claude-dev-agent", VAULT_TIMEZONE: "UTC" },
     };
   }
 

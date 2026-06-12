@@ -38,10 +38,22 @@ o2b brain init --vault /path/to/vault
 
 ```bash
 codex mcp add open-second-brain \
-    --env VAULT_AGENT_NAME=<chosen-agent-name> \
+    --env VAULT_AGENT_NAME=codex-<host>-agent \
     --env VAULT_TIMEZONE=<chosen-tz> \
     -- o2b mcp --vault /path/to/vault
 ```
+
+`VAULT_AGENT_NAME` makes Codex attribute its Brain writes to its OWN
+host-qualified identity rather than the shared operator name - so Codex
+activity is distinguishable per runtime, and in a shared multi-device vault
+also per device.
+
+Build the value by keeping the host segment of your configured `agent_name`
+and substituting `codex` as the vendor token: if `agent_name` is
+`claude-vps-agent`, use `codex-vps-agent`; on a Mac box named
+`claude-mac-agent`, use `codex-mac-agent`. A name that does not fit the
+`<vendor>-<host>-agent` shape is prefixed with `codex-` instead. This mirrors
+what the `grok` and `opencode` adapters derive automatically.
 
 ## 5. Verify
 

@@ -25,6 +25,15 @@ o2b install --target opencode --apply
 
 Restart `opencode` to load the MCP servers and the plugin.
 
+opencode's Brain writes attribute to an **opencode-specific identity** derived
+from your configured `agent_name`: the host segment is kept and the vendor
+token is swapped to `opencode` (`claude-vps-agent` -> `opencode-vps-agent`; a
+name that does not fit the `<vendor>-<host>-agent` shape is prefixed with
+`opencode-`). So opencode activity is distinguishable per runtime - and, in a
+shared multi-device vault, per device - rather than logged under the shared
+identity. `apply` stamps this on `VAULT_AGENT_NAME` in `opencode.json`; no
+manual step is needed.
+
 ## What the plugin does
 
 - **Active context inject** - appends the rendered `Brain/active.md`
