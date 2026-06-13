@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-06-13
+
+### Added
+
+- **Vault Integrity & Trust Suite.** Five language-agnostic units that harden
+  the trust and identity boundaries of the vault. Every behavioural unit is
+  opt-in, so a vault that enables nothing keeps byte-identical results and
+  output shape; the one unconditional change (NFC path identity) is idempotent
+  on already-NFC input, so the dominant platform is unaffected.
+  - **Untrusted-source containment.** A new guardrail flag
+    `untrusted_source_delimiting` (default off) wraps each untrusted memory body
+    surfaced into an agent-facing context pack in a provenance-carrying
+    `<untrusted_source path="..." sha256="...">` delimiter and structurally
+    neutralizes it (invisible/control characters stripped, delimiter breakouts
+    escaped) instead of matching it against an English-only injection blocklist
+    and blanking it. Lossless and identical across every language: neutralization
+    keys off structure, never a natural-language word list.
+  - **Canonical NFC note-path identity.** The vault walker funnels every note's
+    vault-relative identity through `canonicalNotePath` (POSIX + Unicode NFC), so
+    the same note has one identity across a macOS (NFD) / Linux (NFC) Syncthing
+    peer set. Kills the cross-device re-index churn and phantom duplicates that a
+    byte-different path produced. Idempotent on already-NFC input.
+  - **File-watcher index sync.** `o2b search watch` watches the vault for `.md`
+    edits and incrementally re-indexes after a debounced quiet window, reusing
+    the existing incremental `indexVault` fastpath. A single-flight guard
+    prevents overlapping passes; recursive `fs.watch` unavailability fails loudly
+    with guidance rather than silently no-op-ing. No new dependency.
+  - **O(1) graph stats/queries.** A precomputed link-graph side-index (resolved
+    adjacency, degree, top-degree) is memoized on the store and invalidated on
+    the index revision, so community detection and the new `brain clusters` graph
+    summary stop rebuilding the adjacency on every call. Byte-identical community
+    output; in-memory only, never persisted.
+  - **Agent-scoped recall isolation.** `brain_search` accepts an `agent_scope`
+    input: a page that declares an `owner:` frontmatter token is returned only to
+    its own owner, while shared (ownerless) pages always match. Absent scope = no
+    ownership filtering, so existing callers are byte-identical. Fails closed on
+    an unparseable page under an active scope.
+
 ## [1.5.0] - 2026-06-13
 
 ### Added
@@ -5265,6 +5303,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.6.0]: https://github.com/itechmeat/open-second-brain/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/itechmeat/open-second-brain/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/itechmeat/open-second-brain/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/itechmeat/open-second-brain/compare/v1.3.0...v1.3.1
