@@ -28,6 +28,7 @@ import { LANDSCAPE_TOOLS } from "./brain/landscape-tools.ts";
 import { HYGIENE_TOOLS } from "./brain/hygiene-tools.ts";
 import { NER_TOOLS } from "./brain/ner-tools.ts";
 import { INGEST_TOOLS } from "./brain/ingest-tools.ts";
+import { RESEARCH_TOOLS } from "./brain/research-tools.ts";
 import type { ToolDefinition } from "./tools.ts";
 
 export { vaultRelativeSafe } from "./brain/shared.ts";
@@ -51,4 +52,5 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...HYGIENE_TOOLS,
   ...NER_TOOLS,
   ...INGEST_TOOLS,
+  ...RESEARCH_TOOLS,
 ]);

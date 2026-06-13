@@ -9,8 +9,8 @@
  *
  * Deliberate surface changes so far: v1.3.0 added `brain_hygiene` and
  * `brain_anticipatory_context` (continuity-hygiene-freshness suite); v1.7.0
- * added `brain_intake_entities` and `brain_ingest_source` (Knowledge
- * Provenance suite).
+ * added `brain_intake_entities`, `brain_ingest_source`, and
+ * `brain_research_report` (Knowledge Provenance suite).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -60,6 +60,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_query",
   "brain_recall_telemetry",
   "brain_recurrence",
+  "brain_research_report",
   "brain_retention",
   "brain_review_candidates",
   "brain_secrets",
