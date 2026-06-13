@@ -130,9 +130,13 @@ export function deriveTrust(input: DeriveTrustInput): TrustMetadata {
 export function rerankByRelevance(
   results: ReadonlyArray<BrainSearchResult>,
 ): ReadonlyArray<BrainSearchResult> {
-  const relevance = (r: BrainSearchResult): number => r.keywordScore + r.semanticScore;
   return results
     .map((r, i) => ({ r, i }))
-    .toSorted((a, b) => relevance(b.r) - relevance(a.r) || a.i - b.i)
+    .toSorted((a, b) => coreRelevance(b.r) - coreRelevance(a.r) || a.i - b.i)
     .map((x) => x.r);
+}
+
+/** Core textual relevance: the keyword + semantic lane contributions. */
+function coreRelevance(r: BrainSearchResult): number {
+  return r.keywordScore + r.semanticScore;
 }
