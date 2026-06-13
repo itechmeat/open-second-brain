@@ -47,6 +47,7 @@ import {
   type BrainSchemaVocabulary,
 } from "./schema-vocab.ts";
 import { brainDirs, preferencePath, retiredPath, validateSlug } from "./paths.ts";
+import { asProvenanceLevel, type ProvenanceLevel } from "./provenance/provenance.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import {
   BRAIN_CONFIDENCE,
@@ -109,6 +110,13 @@ export interface WritePreferenceInput {
    * comparison by the shared owner-visibility model.
    */
   readonly owner?: string;
+  /**
+   * Optional provenance trust level (Knowledge Provenance suite, v1.7).
+   * Absent reads as `stated` (operator-asserted) for every existing
+   * preference. A derived fact is written `deduced` or `inferred` with its
+   * premise links in `evidenced_by`.
+   */
+  readonly provenance?: ProvenanceLevel;
   readonly applied_count?: number;
   readonly violated_count?: number;
   readonly last_evidence_at?: string | null;
@@ -409,6 +417,11 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   if (input.content_hash) metadata["_content_hash"] = input.content_hash;
   if (input.scope?.trim()) metadata["scope"] = input.scope.trim();
   if (input.owner?.trim()) metadata["owner"] = input.owner.trim();
+  // Only emit a non-default provenance; absent reads as `stated`, so an
+  // existing preference stays byte-identical.
+  if (input.provenance !== undefined && input.provenance !== "stated") {
+    metadata["provenance"] = input.provenance;
+  }
   if (input.supersedes?.trim()) metadata["supersedes"] = input.supersedes.trim();
   if (input.aliases && input.aliases.length > 0) {
     metadata["aliases"] = [...input.aliases];
@@ -633,6 +646,8 @@ export function parsePreference(
   const evidenced_by = optionalStringArray(meta, "evidenced_by");
   const confirmed_at = optionalNullableString(meta, "confirmed_at");
   const last_evidence_at = optionalNullableString(meta, "last_evidence_at");
+  // Provenance level: validated through the shared narrowing guard, never cast.
+  const provenance = asProvenanceLevel(meta["provenance"]);
 
   const result: BrainPreference = {
     kind: "brain-preference",
@@ -661,6 +676,7 @@ export function parsePreference(
     ...(optionalScalarString(meta, "owner") !== undefined
       ? { owner: optionalScalarString(meta, "owner") }
       : {}),
+    ...(provenance !== null ? { provenance } : {}),
     ...(optionalScalarString(meta, "freshness_trend") !== undefined
       ? { freshness_trend: optionalScalarString(meta, "freshness_trend") }
       : {}),

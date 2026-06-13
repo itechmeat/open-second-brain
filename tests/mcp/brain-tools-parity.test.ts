@@ -9,8 +9,9 @@
  *
  * Deliberate surface changes so far: v1.3.0 added `brain_hygiene` and
  * `brain_anticipatory_context` (continuity-hygiene-freshness suite); v1.7.0
- * added `brain_intake_entities`, `brain_ingest_source`, and
- * `brain_research_report` (Knowledge Provenance suite).
+ * added `brain_intake_entities`, `brain_ingest_source`,
+ * `brain_research_report`, and `brain_derive_fact` (Knowledge Provenance
+ * suite).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -35,6 +36,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_context_receipts",
   "brain_dead_ends",
   "brain_deep_synthesis",
+  "brain_derive_fact",
   "brain_doctor",
   "brain_dream",
   "brain_entity",

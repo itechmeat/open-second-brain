@@ -271,6 +271,7 @@ describe("tool listing", () => {
         "brain_intake_entities",
         "brain_ingest_source",
         "brain_research_report",
+        "brain_derive_fact",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -531,8 +532,8 @@ describe("stdio loop", () => {
     //   (continuity-hygiene-freshness suite, v1.3.0) = 71.
     // + brain_eval (Search & Recall Quality Suite) = 72.
     // + brain_intake_entities / brain_ingest_source / brain_research_report
-    //   (Knowledge Provenance Suite, v1.7.0) = 75.
-    expect(list.result.tools.length).toBe(75);
+    //   / brain_derive_fact (Knowledge Provenance Suite, v1.7.0) = 76.
+    expect(list.result.tools.length).toBe(76);
   });
 
   test("returns parse error for invalid JSON", async () => {

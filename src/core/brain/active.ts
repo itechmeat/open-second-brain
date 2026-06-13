@@ -41,10 +41,12 @@ import {
   MOST_APPLIED_LIMIT_DEFAULT,
   MOST_APPLIED_WINDOW_DAYS_DEFAULT,
   loadBrainConfig,
+  loadGuardrailsConfigSafe,
 } from "./policy.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
+import { sortByProvenanceTrust } from "./provenance/trust-order.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainPreference, type BrainRetired } from "./types.ts";
 
 const RECENTLY_RETIRED_COUNT = 3;
@@ -99,9 +101,17 @@ export function regenerateActive(
   const preferences = readActivePreferences(vault);
   const retiredRecent = readRecentlyRetired(vault, RECENTLY_RETIRED_COUNT);
 
-  const confirmed = preferences
+  // Confirmed prefs sort by confidence then id. When provenance trust
+  // ordering is on, re-rank stated > deduced > inferred as the primary key
+  // (stable, so the confidence order is preserved within a trust band). Off
+  // by default -> byte-identical.
+  const confirmedByConfidence = preferences
     .filter((p) => p.status === BRAIN_PREFERENCE_STATUS.confirmed)
     .toSorted(sortByConfidenceThenId);
+  const confirmed = sortByProvenanceTrust(
+    confirmedByConfidence,
+    loadGuardrailsConfigSafe(vault).provenance_trust_ordering,
+  );
   const quarantine = preferences
     .filter((p) => p.status === BRAIN_PREFERENCE_STATUS.quarantine)
     .toSorted(sortByIdAscending);

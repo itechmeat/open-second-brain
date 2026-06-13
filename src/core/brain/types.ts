@@ -420,6 +420,11 @@ export interface BrainPreference {
   readonly scope?: string;
   /** Optional owner token (v1.7); owner-scoped recall hides it from others. */
   readonly owner?: string;
+  /**
+   * Provenance trust level (v1.7). Absent reads as `stated`; a derived fact
+   * is `deduced` or `inferred` with its premise links in `evidenced_by`.
+   */
+  readonly provenance?: "stated" | "deduced" | "inferred";
   readonly status: BrainPreferenceStatus;
   readonly principle: string;
   /** Origin signals; fixed at creation. Wikilinks (`[[sig-...]]`). */
