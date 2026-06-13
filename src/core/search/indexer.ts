@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import {
   accessSync,
   constants,
+  existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -46,6 +47,7 @@ import { appendMetric } from "../brain/metrics.ts";
 import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
 import { Store } from "./store.ts";
+import { LATEST_SCHEMA_VERSION } from "./schema.ts";
 import { SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
 import { withTimeout } from "./with-timeout.ts";
@@ -596,14 +598,36 @@ export async function reindexVault(
   const bakPath = config.dbPath + ".bak";
 
   mkdirSync(dirname(config.dbPath), { recursive: true });
-  tryUnlink(newPath);
 
   // Build into the temp file with an override config.
   const tempConfig: ResolvedSearchConfig = Object.freeze({
     ...config,
     dbPath: newPath,
   });
-  const stats = await indexVault(tempConfig, { ...opts, force: true });
+
+  // Resumable staging (opt-in). A compatible in-progress `.new` from an
+  // interrupted run is resumed via the incremental fastpath instead of
+  // rebuilt from scratch; an incompatible or unreadable one is
+  // discarded. With the flag off, the temp file is always rebuilt fresh
+  // (today's behaviour, byte-identical).
+  const signature = reindexStagingSignature(config, opts?.embeddings === true);
+  let resume = false;
+  if (config.resumeReindex && existsSync(newPath)) {
+    resume = await stagingSignatureMatches(tempConfig, signature);
+  }
+  if (!resume) tryUnlink(newPath);
+
+  // Stamp the signature so an interruption leaves a build a later run
+  // can recognise and resume.
+  await withStagingStore(tempConfig, (store) => store.setState(REINDEX_SIGNATURE_KEY, signature));
+
+  // `force: false` on resume lets the fastpath skip the files the
+  // partial build already committed; a fresh build forces every file.
+  const stats = await indexVault(tempConfig, { ...opts, force: !resume });
+
+  // Clear the marker so the swapped-in live index carries no staging
+  // state.
+  await withStagingStore(tempConfig, (store) => store.deleteState(REINDEX_SIGNATURE_KEY));
 
   // Same-directory rename swap. The two renames are each atomic on
   // POSIX; the gap between them is the only crash window, which the
@@ -612,6 +636,56 @@ export async function reindexVault(
   tryRename(config.dbPath, bakPath); // no-op (ENOENT) on fresh reindex
   renameSync(newPath, config.dbPath); // must succeed — `newPath` was just built
   return stats;
+}
+
+/** index_state key carrying the staging-build compatibility signature. */
+const REINDEX_SIGNATURE_KEY = "reindex_signature";
+
+/**
+ * Compatibility signature for a staging rebuild: a resume is safe only
+ * when the schema version, chunk parameters, and (when embeddings are
+ * computed) the active embedding signature all match the partial build.
+ * Any drift invalidates the staging DB and forces a fresh rebuild.
+ */
+function reindexStagingSignature(config: ResolvedSearchConfig, embeddings: boolean): string {
+  const embedding = embeddings ? (activeEmbeddingSignature(config) ?? "active") : "off";
+  return JSON.stringify({
+    schema: LATEST_SCHEMA_VERSION,
+    chunkSize: config.chunkSize,
+    chunkOverlap: config.chunkOverlap,
+    embedding,
+  });
+}
+
+/** Read the staging signature from an existing `.new`; false on any
+ * read error (a corrupt or partial staging DB is rebuilt, not trusted). */
+async function stagingSignatureMatches(
+  tempConfig: ResolvedSearchConfig,
+  signature: string,
+): Promise<boolean> {
+  try {
+    const store = await Store.open(tempConfig, { mode: "write", loadVec: false });
+    try {
+      return store.getState(REINDEX_SIGNATURE_KEY) === signature;
+    } finally {
+      await store.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** Run a short write against the staging DB (set/clear the marker). */
+async function withStagingStore(
+  tempConfig: ResolvedSearchConfig,
+  fn: (store: Store) => void,
+): Promise<void> {
+  const store = await Store.open(tempConfig, { mode: "write", loadVec: false });
+  try {
+    fn(store);
+  } finally {
+    await store.close();
+  }
 }
 
 /** `unlinkSync` that tolerates ENOENT (file already absent). */
