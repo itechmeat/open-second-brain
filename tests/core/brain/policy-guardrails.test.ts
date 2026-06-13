@@ -130,3 +130,41 @@ describe("guardrails config block", () => {
     expect(warnings.some((w) => w.message.includes("guardrails.unknown_field"))).toBe(true);
   });
 });
+
+describe("Knowledge Provenance opt-in flags (v1.7)", () => {
+  const FLAGS = [
+    "derived_fact_synthesis",
+    "provenance_trust_ordering",
+    "owner_scoped_facts",
+  ] as const;
+
+  test("all three default to false (byte-identical when absent)", () => {
+    const resolved = resolveGuardrails(validate(HEAD).config);
+    for (const flag of FLAGS) {
+      expect(resolved[flag]).toBe(false);
+    }
+  });
+
+  test("each flag parses true from _brain.yaml and resolves true", () => {
+    for (const flag of FLAGS) {
+      const { config } = validate(HEAD + `guardrails:\n  ${flag}: true\n`);
+      expect(config.guardrails?.[flag]).toBe(true);
+      expect(resolveGuardrails(config)[flag]).toBe(true);
+    }
+  });
+
+  test("a non-boolean flag value is rejected", () => {
+    for (const flag of FLAGS) {
+      expect(() => validate(HEAD + `guardrails:\n  ${flag}: yes-please\n`)).toThrow(
+        BrainConfigError,
+      );
+    }
+  });
+
+  test("each flag is a known key (no forward-compat warning)", () => {
+    for (const flag of FLAGS) {
+      const { warnings } = validate(HEAD + `guardrails:\n  ${flag}: true\n`);
+      expect(warnings.some((w) => w.message.includes(`guardrails.${flag}`))).toBe(false);
+    }
+  });
+});

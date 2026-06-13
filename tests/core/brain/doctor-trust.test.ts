@@ -88,6 +88,9 @@ describe("runDoctor - trust integration", () => {
         promotion_min_age_days: 0,
         instruction_file_max_lines: 30,
         untrusted_source_delimiting: false,
+        derived_fact_synthesis: false,
+        provenance_trust_ordering: false,
+        owner_scoped_facts: false,
       },
     });
     expect(result.instruction_file_warnings ?? []).toHaveLength(1);

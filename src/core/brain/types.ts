@@ -955,6 +955,29 @@ export interface BrainGuardrailConfig {
    * legacy blocklist behaviour bit-identical.
    */
   readonly untrusted_source_delimiting?: boolean;
+  /**
+   * Opt-in derived-fact synthesis (Knowledge Provenance suite, v1.7). When
+   * `true`, the dream pass runs a `derive` phase that surfaces premise sets
+   * eligible for second-order derivation; an agent supplies the derived fact
+   * through `brain_derive_fact`, committed with premise links and a
+   * `provenance: inferred` label. Defaults to `false`, leaving the dream
+   * summary byte-identical.
+   */
+  readonly derived_fact_synthesis?: boolean;
+  /**
+   * Opt-in provenance trust ordering (Knowledge Provenance suite, v1.7).
+   * When `true`, recall orders an operator-stated rule above a machine-
+   * inferred one (stated > deduced > inferred) as a stable tiebreak.
+   * Defaults to `false`, leaving recall ordering byte-identical.
+   */
+  readonly provenance_trust_ordering?: boolean;
+  /**
+   * Opt-in owner-scoped fact recall (Knowledge Provenance suite, v1.7). When
+   * `true`, a fact declaring an `owner:` token is returned only to a matching
+   * requested scope; ownerless facts stay shared. Defaults to `false`, so
+   * recall is byte-identical when no scope is requested.
+   */
+  readonly owner_scoped_facts?: boolean;
 }
 
 /**
@@ -1152,6 +1175,9 @@ export interface ResolvedBrainGuardrailConfig {
   readonly promotion_min_age_days: number;
   readonly instruction_file_max_lines: number;
   readonly untrusted_source_delimiting: boolean;
+  readonly derived_fact_synthesis: boolean;
+  readonly provenance_trust_ordering: boolean;
+  readonly owner_scoped_facts: boolean;
 }
 
 /**

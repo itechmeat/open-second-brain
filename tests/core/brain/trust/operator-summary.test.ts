@@ -62,6 +62,9 @@ describe("buildOperatorSummary - structural envelope", () => {
         promotion_min_age_days: 0,
         instruction_file_max_lines: 100,
         untrusted_source_delimiting: false,
+        derived_fact_synthesis: false,
+        provenance_trust_ordering: false,
+        owner_scoped_facts: false,
       },
     });
     expect(r.instruction_file_warnings).toHaveLength(1);
@@ -105,6 +108,9 @@ describe("renderOperatorSummaryMarkdown", () => {
         promotion_min_age_days: 0,
         instruction_file_max_lines: 100,
         untrusted_source_delimiting: false,
+        derived_fact_synthesis: false,
+        provenance_trust_ordering: false,
+        owner_scoped_facts: false,
       },
     });
     const md = renderOperatorSummaryMarkdown(r);
