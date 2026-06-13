@@ -84,4 +84,14 @@ describe("brain_eval", () => {
       tool().handler(ctx as any, { dataset: { queries: [] } }),
     ).rejects.toBeDefined();
   });
+
+  test("rejects a per-query k above the MCP cap", async () => {
+    const dataset = {
+      queries: [{ id: "deep", query: "canary", expected: ["notes/canary.md"], k: 1000 }],
+    };
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tool().handler(ctx as any, { dataset }),
+    ).rejects.toBeDefined();
+  });
 });

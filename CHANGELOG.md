@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Search & Recall Quality Suite.** Seven opt-in, language-agnostic
-  enhancements to the retrieval core. Every new behaviour is gated behind its
-  own flag, so a `brain_search` call that sets none of them returns
-  byte-identical results, ordering, and shape to before.
+- **Search & Recall Quality Suite.** Seven language-agnostic enhancements to
+  the retrieval core. The five `brain_search` enhancements are each gated behind
+  their own flag, so a call that sets none of them returns byte-identical
+  results, ordering, and shape to before; the hybrid-degrade warning fires only
+  in a genuinely degraded state, and `brain_eval` is a new read-only tool.
   - **Structured score breakdown.** `brain_search` accepts `explain: true` and
     returns a per-result `score_breakdown` object (keyword, semantic, rrf,
     entity, activation, coAccess, link, recency, tier, trend, sessionFocus)
@@ -5264,6 +5265,8 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.5.0]: https://github.com/itechmeat/open-second-brain/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/itechmeat/open-second-brain/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/itechmeat/open-second-brain/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/itechmeat/open-second-brain/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/itechmeat/open-second-brain/compare/v1.1.0...v1.2.0

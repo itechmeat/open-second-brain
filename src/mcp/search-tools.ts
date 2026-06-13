@@ -696,7 +696,7 @@ const EVAL_INPUT_SCHEMA: Record<string, unknown> = {
               id: { type: "string", minLength: 1 },
               query: { type: "string", minLength: 1 },
               expected: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-              k: { type: "integer", minimum: 1 },
+              k: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
               answer: { type: "string", minLength: 1 },
             },
           },
@@ -769,6 +769,15 @@ async function toolBrainEval(
   } catch (e) {
     if (e instanceof SearchError) throw searchErrorToMcp(e);
     throw new MCPError(INVALID_PARAMS, e instanceof Error ? e.message : String(e));
+  }
+  // Bound per-query rank depth at the untrusted MCP boundary. The library
+  // accepts any positive `k`, but an over-MCP caller must not bypass the
+  // top-level `k <= MCP_LIMIT_MAX` guard with a deep per-query override and
+  // trigger expensive searches.
+  for (const q of dataset.queries) {
+    if (q.k !== undefined && q.k > MCP_LIMIT_MAX) {
+      throw new MCPError(INVALID_PARAMS, `query '${q.id}' k must not exceed ${MCP_LIMIT_MAX}`);
+    }
   }
   let k: number | undefined;
   if ("k" in args && args["k"] !== undefined && args["k"] !== null) {

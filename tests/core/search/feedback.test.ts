@@ -169,6 +169,30 @@ describe("learned-weight fold", () => {
     expect(c.entity).toBeCloseTo(0.02, 5);
     expect(c.recency).toBeCloseTo(0.05, 5);
   });
+
+  test("contributionsFromResult reports zero entity when no breakdown is present", () => {
+    // A synthetic result (e.g. a traversal expansion) carries no breakdown;
+    // the entity layer is honestly zero, not a parse artifact.
+    const result = {
+      documentId: 1,
+      chunkId: 11,
+      path: "y.md",
+      title: null,
+      content: "",
+      startLine: 1,
+      endLine: 1,
+      score: 0.4,
+      keywordScore: 0.4,
+      semanticScore: 0,
+      linkBoost: 0,
+      recencyBoost: 0,
+      searchType: "keyword",
+      reasons: ["fts5_bm25: 0.400"],
+    } as unknown as BrainSearchResult;
+    const c = contributionsFromResult(result);
+    expect(c.entity).toBe(0);
+    expect(c.keyword).toBeCloseTo(0.4, 5);
+  });
 });
 
 describe("derived weights file", () => {

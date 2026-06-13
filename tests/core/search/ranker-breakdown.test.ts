@@ -45,6 +45,7 @@ test("keyword-only hit breakdown mirrors the first-class lane fields", () => {
   );
   const r = ranked.find((x) => x.chunkId === 1)!;
   expect(r.breakdown).toBeDefined();
+  expect(typeof r.breakdown).toBe("object");
   // The normalized lane components equal the first-class fields the
   // result already exposes - no divergent computation.
   expect(r.breakdown!.keyword).toBe(r.keywordScore);
@@ -91,5 +92,8 @@ test("breakdown is frozen", () => {
     },
     { keywordWeight: 0.6, semanticWeight: 0.4, limit: 10, nowMs: NOW },
   );
+  // Assert presence before freeze: Object.isFrozen(undefined) is true, so a
+  // missing breakdown would otherwise pass this test silently.
+  expect(ranked[0]!.breakdown).toBeDefined();
   expect(Object.isFrozen(ranked[0]!.breakdown)).toBe(true);
 });
