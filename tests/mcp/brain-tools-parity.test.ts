@@ -8,7 +8,8 @@
  * major/minor release decision, not a refactor.
  *
  * Deliberate surface changes so far: v1.3.0 added `brain_hygiene` and
- * `brain_anticipatory_context` (continuity-hygiene-freshness suite).
+ * `brain_anticipatory_context` (continuity-hygiene-freshness suite); v1.7.0
+ * added `brain_intake_entities` (Knowledge Provenance suite).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -41,6 +42,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_health",
   "brain_hygiene",
   "brain_idea_discovery",
+  "brain_intake_entities",
   "brain_intent_review",
   "brain_intention",
   "brain_labels",
