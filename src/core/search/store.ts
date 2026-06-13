@@ -18,6 +18,8 @@ import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import lockfile from "proper-lockfile";
 
+import { registerWriterDb, unregisterWriterDb } from "./store-exit.ts";
+
 import { computeCorpusGeneration } from "./corpus-generation.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
@@ -382,6 +384,9 @@ export class Store {
       const vecLoaded = loadVec && tryLoadVecExtension(db);
       const store = new Store(db, config, vecLoaded, release);
       store.ensureEmbeddingModel(config.semantic.model, config.semantic.dimension);
+      // Belt-and-suspenders: consolidate this writer's WAL on a
+      // bypassed close (process.exit / signal-driven exit).
+      registerWriterDb(db);
       return store;
     } catch (e) {
       try {
@@ -405,6 +410,8 @@ export class Store {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // Orderly close owns consolidation below; drop the exit-hook entry.
+    unregisterWriterDb(this.db);
     try {
       // Writer mode: consolidate WAL into the main file and switch back to
       // DELETE journal mode so the `-wal`/`-shm` siblings are removed. This
