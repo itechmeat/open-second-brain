@@ -107,7 +107,7 @@ test("no signal indexes the whole vault unchanged", async () => {
   await store.close();
 });
 
-test("aborting between embed batches stops further embedding, keeps committed vectors", async () => {
+test("aborting between embed batches stops further embedding but keeps committed vectors", async () => {
   if (!sqliteVecLoadable()) return;
   const server: FakeHttp = await startFakeHttp();
   try {
@@ -129,14 +129,34 @@ test("aborting between embed batches stops further embedding, keeps committed ve
       },
     });
     // Index documents first (no embeddings), so the abort isolates the
-    // embed phase.
+    // embed phase: each batch is one chunk -> one HTTP call.
     await indexVault(cfg);
 
     const ac = new AbortController();
-    ac.abort();
+    // Serve the first batch normally, then abort - the populateEmbeddings
+    // loop trips at the NEXT batch boundary, after batch 0 is committed.
+    server.setHandler((req, callIndex) => {
+      const body = (req.body ?? {}) as { input?: string[]; model?: string };
+      const inputs = Array.isArray(body.input) ? body.input : [];
+      const data = inputs.map((text, index) => ({
+        object: "embedding",
+        embedding: [text.length, index, 1, 1],
+        index,
+      }));
+      if (callIndex === 0) ac.abort();
+      return { status: 200, body: { data, model: body.model ?? "fake-model" } };
+    });
+
     await expect(indexVault(cfg, { embeddings: true, signal: ac.signal })).rejects.toBeInstanceOf(
       SafeguardAbortError,
     );
+
+    // The first batch committed; the rest did not. Partial, not all-or-nothing.
+    const store = await Store.open(cfg, { mode: "write" });
+    const counts = store.counts();
+    await store.close();
+    expect(counts.embeddings).toBeGreaterThanOrEqual(1);
+    expect(counts.embeddings).toBeLessThan(counts.chunks);
   } finally {
     await server.close();
   }

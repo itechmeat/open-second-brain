@@ -56,11 +56,16 @@ test("flush consolidates the WAL of a registered writer", () => {
 });
 
 test("an unregistered writer is left untouched by the flush", () => {
-  const { db } = walDb("b.sqlite");
+  const { db, path } = walDb("b.sqlite");
   registerWriterDb(db);
   unregisterWriterDb(db);
-  // No throw, and nothing to flush.
-  expect(() => flushRegisteredWriters()).not.toThrow();
+  expect(existsSync(`${path}-wal`)).toBe(true);
+  const before = statSync(`${path}-wal`).size;
+  expect(before).toBeGreaterThan(0);
+  flushRegisteredWriters();
+  // The flush must NOT consolidate a DB that unregistered: its WAL is
+  // still populated (no checkpoint ran against it).
+  expect(statSync(`${path}-wal`).size).toBe(before);
   db.close();
 });
 

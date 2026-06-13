@@ -16,6 +16,11 @@
  * `exit` event cannot await async work): every operation is wrapped so
  * the hook can never throw. A hard kill (SIGKILL) fires no `exit`
  * event; that case relies on SQLite's own WAL replay on the next open.
+ *
+ * The registry holds a strong reference until `Store.close()`
+ * unregisters it. Every code path that opens a writer closes it in a
+ * `finally`, so handles do not accumulate over a long-lived process;
+ * the set holds only the writers currently open.
  */
 
 import type { Database } from "bun:sqlite";

@@ -608,26 +608,32 @@ export async function reindexVault(
   // Resumable staging (opt-in). A compatible in-progress `.new` from an
   // interrupted run is resumed via the incremental fastpath instead of
   // rebuilt from scratch; an incompatible or unreadable one is
-  // discarded. With the flag off, the temp file is always rebuilt fresh
-  // (today's behaviour, byte-identical).
-  const signature = reindexStagingSignature(config, opts?.embeddings === true);
+  // discarded. With the flag OFF, the temp file is always rebuilt fresh
+  // and no staging marker is written or read - byte-identical to the
+  // pre-suite path (no extra staging-DB open/close cycles).
   let resume = false;
-  if (config.resumeReindex && existsSync(newPath)) {
-    resume = await stagingSignatureMatches(tempConfig, signature);
+  if (config.resumeReindex) {
+    const signature = reindexStagingSignature(config, opts?.embeddings === true);
+    if (existsSync(newPath)) {
+      resume = await stagingSignatureMatches(tempConfig, signature);
+    }
+    if (!resume) tryUnlink(newPath);
+    // Stamp the signature so an interruption leaves a build a later run
+    // can recognise and resume.
+    await withStagingStore(tempConfig, (store) => store.setState(REINDEX_SIGNATURE_KEY, signature));
+  } else {
+    tryUnlink(newPath);
   }
-  if (!resume) tryUnlink(newPath);
-
-  // Stamp the signature so an interruption leaves a build a later run
-  // can recognise and resume.
-  await withStagingStore(tempConfig, (store) => store.setState(REINDEX_SIGNATURE_KEY, signature));
 
   // `force: false` on resume lets the fastpath skip the files the
   // partial build already committed; a fresh build forces every file.
   const stats = await indexVault(tempConfig, { ...opts, force: !resume });
 
   // Clear the marker so the swapped-in live index carries no staging
-  // state.
-  await withStagingStore(tempConfig, (store) => store.deleteState(REINDEX_SIGNATURE_KEY));
+  // state. Only present when resume was enabled.
+  if (config.resumeReindex) {
+    await withStagingStore(tempConfig, (store) => store.deleteState(REINDEX_SIGNATURE_KEY));
+  }
 
   // Same-directory rename swap. The two renames are each atomic on
   // POSIX; the gap between them is the only crash window, which the
