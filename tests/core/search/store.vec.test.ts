@@ -61,6 +61,8 @@ function semanticConfig(
       poolMultiplier: 3,
       selfTuningEnabled: false,
     }),
+    shutdownGraceMs: 5_000,
+    resumeReindex: false,
     ...overrides,
   });
 }
