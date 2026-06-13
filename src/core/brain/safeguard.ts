@@ -42,6 +42,31 @@ export class SafeguardTimeoutError extends Error {
   }
 }
 
+/**
+ * Thrown when an operation's `AbortSignal` is aborted on demand (not a
+ * deadline). Distinct from `SafeguardTimeoutError` so callers - notably
+ * the watch shutdown coordinator - can treat an intentional abort as a
+ * clean stop rather than a failure.
+ */
+export class SafeguardAbortError extends Error {
+  readonly operation: string;
+
+  constructor(operation: string) {
+    super(`${operation} was aborted at a checkpoint`);
+    this.name = "SafeguardAbortError";
+    this.operation = operation;
+  }
+}
+
+/**
+ * Cooperative abort check for hot loops that hold a signal but not a
+ * full `Safeguard`. Throws `SafeguardAbortError` when the signal is
+ * aborted; a no-op for a live or absent signal.
+ */
+export function throwIfAborted(signal?: AbortSignal, operation = "operation"): void {
+  if (signal?.aborted === true) throw new SafeguardAbortError(operation);
+}
+
 export interface Safeguard {
   /** Throws `SafeguardTimeoutError` when the deadline has passed. */
   checkpoint(): void;
@@ -57,6 +82,13 @@ export interface CreateSafeguardOptions {
   readonly timeoutMs?: number | null;
   /** Injected clock (tests). Defaults to `Date.now`. */
   readonly now?: () => number;
+  /**
+   * Optional on-demand cancellation. When aborted, the next
+   * `checkpoint()` throws `SafeguardAbortError` - checked in priority
+   * over the deadline. A signal with no deadline still produces a live
+   * guard (no downgrade to noop).
+   */
+  readonly signal?: AbortSignal;
 }
 
 /** A no-deadline guard for callers that need a Safeguard-shaped arg. */
@@ -73,14 +105,21 @@ export function createSafeguard(opts: CreateSafeguardOptions): Safeguard {
     opts.timeoutMs === undefined || opts.timeoutMs === null || opts.timeoutMs <= 0
       ? null
       : opts.timeoutMs;
-  if (budget === null) return noopSafeguard(opts.operation);
+  const signal = opts.signal;
+  // No deadline AND no signal: nothing to guard.
+  if (budget === null && signal === undefined) return noopSafeguard(opts.operation);
   const now = opts.now ?? Date.now;
-  const deadline = now() + budget;
+  const deadline = budget === null ? null : now() + budget;
   return Object.freeze({
     operation: opts.operation,
     timeoutMs: budget,
     checkpoint: () => {
-      if (now() > deadline) throw new SafeguardTimeoutError(opts.operation, budget);
+      // Abort wins over the deadline: an intentional cancellation is
+      // reported as such, not masked as a timeout.
+      if (signal?.aborted === true) throw new SafeguardAbortError(opts.operation);
+      if (budget !== null && deadline !== null && now() > deadline) {
+        throw new SafeguardTimeoutError(opts.operation, budget);
+      }
     },
   });
 }
