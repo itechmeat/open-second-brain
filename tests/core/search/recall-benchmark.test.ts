@@ -32,6 +32,11 @@ const FIXTURE = join(import.meta.dir, "..", "..", "fixtures", "recall-benchmark"
  */
 const MIN_HIT_AT_5 = 0.9;
 const MIN_MRR = 0.85;
+// Answer-containment floor over the answer-bearing fixture queries. The
+// three answers are verbatim substrings of their source notes, so a
+// correct retrieval contains them; the pin sits one failing-direction
+// margin below the measured 1.0.
+const MIN_ANSWER_CONTAINMENT_AT_5 = 0.99;
 
 let vault: string;
 let config: ResolvedSearchConfig;
@@ -80,6 +85,11 @@ describe("parseRecallBenchmarkDataset", () => {
     expect(() =>
       parseRecallBenchmarkDataset({ queries: [{ id: "x", query: "q", expected: ["a.md"], k: 0 }] }),
     ).toThrow(/k must be/);
+    expect(() =>
+      parseRecallBenchmarkDataset({
+        queries: [{ id: "x", query: "q", expected: ["a.md"], answer: "  " }],
+      }),
+    ).toThrow(/answer must be/);
   });
 });
 
@@ -89,6 +99,47 @@ describe("runRecallBenchmark", () => {
     expect(report.total).toBe(12);
     expect(report.hitAtK).toBeGreaterThanOrEqual(MIN_HIT_AT_5);
     expect(report.mrr).toBeGreaterThanOrEqual(MIN_MRR);
+  });
+
+  test("answer-containment@k scores the answer-bearing queries and holds the pinned floor", async () => {
+    const report = await runRecallBenchmark(config, loadDataset(), { k: 5 });
+    expect(report.answerQueries).toBe(3);
+    expect(report.answerContainmentAtK).toBeGreaterThanOrEqual(MIN_ANSWER_CONTAINMENT_AT_5);
+    // Queries without an answer report null containment, not a false miss.
+    const noAnswer = report.perQuery.find((q) => q.id === "style")!;
+    expect(noAnswer.answerContained).toBeNull();
+  });
+
+  test("an answer absent from the retrieved content scores a containment miss", async () => {
+    const report = await runRecallBenchmark(
+      config,
+      parseRecallBenchmarkDataset({
+        queries: [
+          {
+            id: "miss",
+            query: "canary rollout",
+            expected: ["deploy-canary.md"],
+            answer: "this phrase appears in no note",
+          },
+        ],
+      }),
+      { k: 5 },
+    );
+    expect(report.answerQueries).toBe(1);
+    expect(report.answerContainmentAtK).toBe(0);
+    expect(report.perQuery[0]!.answerContained).toBe(false);
+  });
+
+  test("answer-containment is vacuously 1 for a dataset with no answers", async () => {
+    const report = await runRecallBenchmark(
+      config,
+      parseRecallBenchmarkDataset({
+        queries: [{ id: "plain", query: "canary rollout", expected: ["deploy-canary.md"] }],
+      }),
+      { k: 5 },
+    );
+    expect(report.answerQueries).toBe(0);
+    expect(report.answerContainmentAtK).toBe(1);
   });
 
   test("the benchmark is deterministic across runs", async () => {

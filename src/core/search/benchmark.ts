@@ -33,6 +33,13 @@ export interface RecallBenchmarkQuery {
   readonly expected: ReadonlyArray<string>;
   /** Per-query rank depth override. */
   readonly k?: number;
+  /**
+   * Optional expected answer text. When present, the query also scores
+   * answer-containment@k: whether this substring appears (folded) in the
+   * retrieved content within the top k. Absent leaves the query measuring
+   * hit@k / MRR only, so existing datasets stay valid.
+   */
+  readonly answer?: string;
 }
 
 export interface RecallBenchmarkDataset {
@@ -53,6 +60,11 @@ export interface RecallBenchmarkQueryResult {
   /** 1-based rank of the first expected path, null on a miss. */
   readonly rank: number | null;
   readonly reciprocalRank: number;
+  /**
+   * Whether the declared answer appeared (folded) in the retrieved
+   * content within the top k. `null` when the query declares no answer.
+   */
+  readonly answerContained: boolean | null;
 }
 
 export interface RecallBenchmarkReport {
@@ -63,7 +75,25 @@ export interface RecallBenchmarkReport {
   readonly hitAtK: number;
   /** Mean reciprocal rank over all queries (misses contribute 0). */
   readonly mrr: number;
+  /**
+   * Number of queries that declared an answer (the answer-containment
+   * denominator). 0 when the dataset uses no answers.
+   */
+  readonly answerQueries: number;
+  /**
+   * Fraction of answer-bearing queries whose answer appeared in the
+   * top-k content. Vacuously 1 when no query declares an answer, so a CI
+   * floor never fails a dataset that does not use the metric.
+   */
+  readonly answerContainmentAtK: number;
   readonly perQuery: ReadonlyArray<RecallBenchmarkQueryResult>;
+}
+
+/** Folded substring containment, language-agnostic (no word lists). */
+function answerContainedIn(answer: string, contents: ReadonlyArray<string>): boolean {
+  const needle = answer.replace(/\s+/gu, " ").trim().toLowerCase();
+  if (needle.length === 0) return false;
+  return contents.some((c) => c.replace(/\s+/gu, " ").toLowerCase().includes(needle));
 }
 
 /**
@@ -83,7 +113,13 @@ export function parseRecallBenchmarkDataset(raw: unknown): RecallBenchmarkDatase
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       throw new SearchError("INVALID_INPUT", `benchmark query #${i} must be an object`);
     }
-    const q = entry as { id?: unknown; query?: unknown; expected?: unknown; k?: unknown };
+    const q = entry as {
+      id?: unknown;
+      query?: unknown;
+      expected?: unknown;
+      k?: unknown;
+      answer?: unknown;
+    };
     if (typeof q.id !== "string" || q.id.trim().length === 0) {
       throw new SearchError("INVALID_INPUT", `benchmark query #${i} needs a non-empty string id`);
     }
@@ -107,11 +143,18 @@ export function parseRecallBenchmarkDataset(raw: unknown): RecallBenchmarkDatase
     if (q.k !== undefined && (!Number.isInteger(q.k) || (q.k as number) < 1)) {
       throw new SearchError("INVALID_INPUT", `benchmark query '${q.id}' k must be a positive int`);
     }
+    if (q.answer !== undefined && (typeof q.answer !== "string" || q.answer.trim().length === 0)) {
+      throw new SearchError(
+        "INVALID_INPUT",
+        `benchmark query '${q.id}' answer must be a non-empty string when present`,
+      );
+    }
     return Object.freeze({
       id: q.id,
       query: q.query,
       expected: Object.freeze([...(q.expected as string[])]) as ReadonlyArray<string>,
       ...(q.k !== undefined ? { k: q.k as number } : {}),
+      ...(q.answer !== undefined ? { answer: q.answer as string } : {}),
     });
   });
   return Object.freeze({ queries: Object.freeze(parsed) });
@@ -144,31 +187,44 @@ export async function runRecallBenchmark(
         ...(expand ? { expand: true } : {}),
       });
       const expected = new Set(q.expected);
+      const topK = outcome.results.slice(0, depth);
       let rank: number | null = null;
-      for (let i = 0; i < outcome.results.length && i < depth; i++) {
-        if (expected.has(outcome.results[i]!.path)) {
+      for (let i = 0; i < topK.length; i++) {
+        if (expected.has(topK[i]!.path)) {
           rank = i + 1;
           break;
         }
       }
+      const answerContained =
+        q.answer === undefined
+          ? null
+          : answerContainedIn(
+              q.answer,
+              topK.map((r) => r.content),
+            );
       return Object.freeze({
         id: q.id,
         query: q.query,
         hit: rank !== null,
         rank,
         reciprocalRank: rank === null ? 0 : 1 / rank,
+        answerContained,
       });
     }),
   );
 
   const hits = perQuery.filter((r) => r.hit).length;
   const mrr = perQuery.reduce((sum, r) => sum + r.reciprocalRank, 0) / perQuery.length;
+  const answerScored = perQuery.filter((r) => r.answerContained !== null);
+  const answerHits = answerScored.filter((r) => r.answerContained === true).length;
   return Object.freeze({
     total: perQuery.length,
     k,
     expand,
     hitAtK: hits / perQuery.length,
     mrr,
+    answerQueries: answerScored.length,
+    answerContainmentAtK: answerScored.length === 0 ? 1 : answerHits / answerScored.length,
     perQuery: Object.freeze(perQuery),
   });
 }
