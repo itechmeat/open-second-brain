@@ -13,12 +13,12 @@ import { describe, expect, test } from "bun:test";
 
 import { canonicalNotePath } from "../../src/core/path-safety.ts";
 
-// "e-acute" two ways, spelled with explicit escapes so the bytes are
-// unambiguous regardless of how this source file is normalized on disk:
-// NFC is a single precomposed U+00E9; NFD is "e" + U+0301 combining
-// acute. macOS stores the NFD form on disk; Linux stores NFC.
-const E_NFC = "é";
-const E_NFD = "é";
+// "e-acute" two ways, derived with String#normalize so the two byte
+// sequences are unambiguous regardless of how this source file is itself
+// normalized on disk: NFC is a single precomposed U+00E9, NFD is "e" +
+// U+0301 combining acute. macOS stores the NFD form on disk; Linux NFC.
+const E_NFC = "é".normalize("NFC");
+const E_NFD = "é".normalize("NFD");
 const NFC_NAME = `caf${E_NFC}.md`;
 const NFD_NAME = `caf${E_NFD}.md`;
 
