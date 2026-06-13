@@ -49,6 +49,7 @@ import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from ".
 import { filterByProperties } from "./property-filter.ts";
 import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
+import { detectHybridDegrade } from "./enrich.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
 import { applyTemporalBridge } from "./temporal-bridge.ts";
 import { resolveTimeRange } from "./time-range.ts";
@@ -379,6 +380,20 @@ export async function search(
       semanticAttempted = semOutcome.attempted;
       semHits = semOutcome.hits;
       for (const w of semOutcome.warnings) warnings.push(w);
+    }
+
+    // Hybrid-degrade signal (Search & Recall Quality Suite): one
+    // structural warning when the caller wanted the semantic lane but it
+    // did not run, so the query was served keyword-only. The granular
+    // runSemanticPhase warnings above explain WHY; this is the single
+    // greppable flag a caller can test for.
+    {
+      const degrade = detectHybridDegrade({
+        wantSemantic: policy.wantSemantic,
+        semanticAttempted,
+        keywordHitCount: kwHits.length,
+      });
+      if (degrade !== null) warnings.push(degrade);
     }
 
     // Hydrate.

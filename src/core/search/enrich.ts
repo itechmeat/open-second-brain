@@ -42,3 +42,35 @@ export function projectScoreBreakdown(result: BrainSearchResult): ScoreBreakdown
     sessionFocus: 0,
   });
 }
+
+export interface HybridDegradeInput {
+  /** Did the caller's resolved policy want the semantic lane at all? */
+  readonly wantSemantic: boolean;
+  /** Did the semantic lane actually run and return (vs degrade out)? */
+  readonly semanticAttempted: boolean;
+  /** Number of keyword (FTS5) candidates the query produced. */
+  readonly keywordHitCount: number;
+}
+
+/**
+ * Detect the genuine silent single-lane fallback: the caller wanted
+ * hybrid (semantic + keyword) but the semantic lane did not run, so the
+ * query was served keyword-only without the caller being told. Returns a
+ * single greppable `hybrid_degraded:` warning, or null when retrieval
+ * matched the caller's hybrid intent.
+ *
+ * Scope note: in this engine the keyword (FTS5) lane is always available,
+ * so the realistic silent degrade is the loss of the semantic lane
+ * (missing embeddings, unloaded vec extension, unconfigured key). A query
+ * with simply no keyword match is NOT flagged - that is an empty lexical
+ * result, not a configuration fallback, and flagging it would be
+ * misleading noise. The granular `runSemanticPhase` warnings still
+ * explain WHY the lane dropped; this is the one structural signal a
+ * caller can test for.
+ */
+export function detectHybridDegrade(input: HybridDegradeInput): string | null {
+  if (input.wantSemantic && !input.semanticAttempted && input.keywordHitCount > 0) {
+    return "hybrid_degraded: semantic lane unavailable, served keyword-only";
+  }
+  return null;
+}

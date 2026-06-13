@@ -5,9 +5,9 @@
  * trust-metadata and hybrid-degrade cases live alongside as the suite lands.
  */
 
-import { test, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
 
-import { projectScoreBreakdown } from "../../../src/core/search/enrich.ts";
+import { detectHybridDegrade, projectScoreBreakdown } from "../../../src/core/search/enrich.ts";
 import type { BrainSearchResult, ScoreBreakdown } from "../../../src/core/search/types.ts";
 
 function result(over: Partial<BrainSearchResult>): BrainSearchResult {
@@ -70,4 +70,36 @@ test("derives a faithful breakdown from first-class fields when breakdown is abs
 
 test("projection is frozen", () => {
   expect(Object.isFrozen(projectScoreBreakdown(result({})))).toBe(true);
+});
+
+describe("detectHybridDegrade", () => {
+  test("flags a keyword-only degrade when semantic was wanted but did not run", () => {
+    const w = detectHybridDegrade({
+      wantSemantic: true,
+      semanticAttempted: false,
+      keywordHitCount: 5,
+    });
+    expect(w).not.toBeNull();
+    expect(w!.startsWith("hybrid_degraded:")).toBe(true);
+  });
+
+  test("no warning when both lanes ran (genuine hybrid)", () => {
+    expect(
+      detectHybridDegrade({ wantSemantic: true, semanticAttempted: true, keywordHitCount: 5 }),
+    ).toBeNull();
+  });
+
+  test("no warning when the caller did not want semantic (keyword-only by choice)", () => {
+    expect(
+      detectHybridDegrade({ wantSemantic: false, semanticAttempted: false, keywordHitCount: 5 }),
+    ).toBeNull();
+  });
+
+  test("no warning when there are no keyword candidates to serve", () => {
+    // Nothing was served, so there is no degraded result set to flag - that
+    // is an empty query, not a silent single-lane fallback.
+    expect(
+      detectHybridDegrade({ wantSemantic: true, semanticAttempted: false, keywordHitCount: 0 }),
+    ).toBeNull();
+  });
 });
