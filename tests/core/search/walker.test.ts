@@ -106,3 +106,21 @@ test("empty directories produce zero files", () => {
   const cfg = makeConfig({ vault, dbPath: join(vault, "x.sqlite") });
   expect(collect(cfg)).toEqual([]);
 });
+
+test("yields the NFC identity for an NFD filename on disk (cross-device stability)", () => {
+  // Write a file whose name is decomposed (NFD: "e" + combining acute),
+  // the form macOS stores. The walker must report the precomposed NFC
+  // identity so the stored index key matches a Linux/Android peer that
+  // produced the same note - otherwise change detection re-indexes it on
+  // every device and phantom duplicates appear.
+  // Derive the two forms programmatically so the on-disk name is
+  // genuinely decomposed regardless of how this source file is itself
+  // normalised by the editor.
+  const nfcName = "café.md".normalize("NFC");
+  const nfdName = nfcName.normalize("NFD");
+  expect(nfdName).not.toBe(nfcName); // fixture sanity: forms differ on the wire
+  writeMd(vault, nfdName, "# cafe");
+  const cfg = makeConfig({ vault, dbPath: join(vault, "x.sqlite") });
+  const relPaths = collect(cfg);
+  expect(relPaths).toContain(nfcName);
+});

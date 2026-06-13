@@ -14,7 +14,7 @@
 import { readdirSync, statSync, realpathSync, type Dirent, type Stats } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-import { toPosix } from "../path-safety.ts";
+import { canonicalNotePath } from "../path-safety.ts";
 import { matchIgnore } from "../vault-scope/index.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 
@@ -71,7 +71,12 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
       const absPath = join(dir, entry.name);
       const relPathRaw = relative(vaultReal, absPath);
       if (relPathRaw === "" || relPathRaw.startsWith("..")) continue;
-      const relPath = toPosix(relPathRaw);
+      // Canonical note identity (POSIX + NFC). `absPath` stays in the
+      // on-disk form for I/O (APFS lookup is normalisation-insensitive),
+      // but the vault-relative key that identifies the note - matched
+      // against the stored index path and against ignore rules - must be
+      // one value across a macOS (NFD) / Linux (NFC) Syncthing peer set.
+      const relPath = canonicalNotePath(relPathRaw);
 
       const isLinkHint = entry.isSymbolicLink();
 
