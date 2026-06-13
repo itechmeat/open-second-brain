@@ -7,7 +7,11 @@
 
 import { describe, test, expect } from "bun:test";
 
-import { detectHybridDegrade, projectScoreBreakdown } from "../../../src/core/search/enrich.ts";
+import {
+  deriveTrust,
+  detectHybridDegrade,
+  projectScoreBreakdown,
+} from "../../../src/core/search/enrich.ts";
 import type { BrainSearchResult, ScoreBreakdown } from "../../../src/core/search/types.ts";
 
 function result(over: Partial<BrainSearchResult>): BrainSearchResult {
@@ -101,5 +105,57 @@ describe("detectHybridDegrade", () => {
     expect(
       detectHybridDegrade({ wantSemantic: true, semanticAttempted: false, keywordHitCount: 0 }),
     ).toBeNull();
+  });
+});
+
+describe("deriveTrust", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const NOW = 1_750_000_000_000;
+
+  test("age_days is the whole-day distance from mtime, floored at zero", () => {
+    const t = deriveTrust({ mtimeMs: NOW - 10 * DAY_MS, nowMs: NOW });
+    expect(t.age_days).toBe(10);
+    // A future mtime never reports a negative age.
+    expect(deriveTrust({ mtimeMs: NOW + 5 * DAY_MS, nowMs: NOW }).age_days).toBe(0);
+  });
+
+  test("superseded and conflict default false with no relations", () => {
+    const t = deriveTrust({ mtimeMs: NOW, nowMs: NOW });
+    expect(t.superseded).toBe(false);
+    expect(t.conflict).toBe(false);
+  });
+
+  test("superseded_by relation marks the hit superseded", () => {
+    const t = deriveTrust({
+      mtimeMs: NOW,
+      nowMs: NOW,
+      relations: [{ relation: "superseded_by", target: "newer.md" }],
+    });
+    expect(t.superseded).toBe(true);
+    expect(t.conflict).toBe(false);
+  });
+
+  test("contradicts relation marks the hit conflicted", () => {
+    const t = deriveTrust({
+      mtimeMs: NOW,
+      nowMs: NOW,
+      relations: [{ relation: "contradicts", target: "other.md" }],
+    });
+    expect(t.conflict).toBe(true);
+    expect(t.superseded).toBe(false);
+  });
+
+  test("unrelated relation types leave both flags false", () => {
+    const t = deriveTrust({
+      mtimeMs: NOW,
+      nowMs: NOW,
+      relations: [{ relation: "related", target: "x.md" }],
+    });
+    expect(t.superseded).toBe(false);
+    expect(t.conflict).toBe(false);
+  });
+
+  test("result is frozen", () => {
+    expect(Object.isFrozen(deriveTrust({ mtimeMs: NOW, nowMs: NOW }))).toBe(true);
   });
 });

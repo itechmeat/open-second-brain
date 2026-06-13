@@ -49,7 +49,7 @@ import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from ".
 import { filterByProperties } from "./property-filter.ts";
 import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
-import { detectHybridDegrade } from "./enrich.ts";
+import { deriveTrust, detectHybridDegrade } from "./enrich.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
 import { applyTemporalBridge } from "./temporal-bridge.ts";
 import { resolveTimeRange } from "./time-range.ts";
@@ -858,11 +858,18 @@ export async function search(
       }
     }
 
+    // Inline trust metadata (Search & Recall Quality Suite): opt-in,
+    // computed at read time from the document mtime and the surfaced
+    // typed relations, never stored. Off by default keeps the result
+    // shape byte-identical.
+    const resultsOut =
+      opts.trust === true ? attachTrustMetadata(config.vault, finalResults) : finalResults;
+
     return finalize(
       Object.freeze({
-        results: Object.freeze(finalResults),
+        results: Object.freeze(resultsOut),
         warnings: Object.freeze(warnings),
-        total: finalResults.length,
+        total: resultsOut.length,
         ...(evidencePack !== undefined ? { evidencePack } : {}),
         ...(secondPass !== undefined ? { secondPass } : {}),
       }),
@@ -1126,6 +1133,33 @@ function applyPropertyFilter(
     }
   };
   return filterByProperties(ranked, filters, reader);
+}
+
+/**
+ * Stamp inline trust metadata (Search & Recall Quality Suite) onto each
+ * result: age from the document mtime, plus the superseded / conflict
+ * flags from the typed relations the result already carries. Read-time
+ * and never stored. One `statSync` per surfaced result (≤ limit); a path
+ * that cannot be stat'd is left without trust rather than reporting a
+ * bogus age.
+ */
+function attachTrustMetadata(
+  vault: string,
+  results: ReadonlyArray<BrainSearchResult>,
+): ReadonlyArray<BrainSearchResult> {
+  const nowMs = Date.now();
+  return results.map((r) => {
+    let mtimeMs: number;
+    try {
+      mtimeMs = statSync(join(vault, r.path)).mtimeMs;
+    } catch {
+      return r;
+    }
+    return Object.freeze({
+      ...r,
+      trust: deriveTrust({ mtimeMs, nowMs, ...(r.relations ? { relations: r.relations } : {}) }),
+    });
+  });
 }
 
 function applyVisibilityScope(

@@ -15,7 +15,14 @@
  * table, consistent with the project's single-authoring-language stance.
  */
 
-import type { BrainSearchResult, ScoreBreakdown } from "./types.ts";
+import type { BrainSearchResult, ScoreBreakdown, TrustMetadata } from "./types.ts";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Typed relations that mark a hit superseded by a successor. */
+const SUPERSEDED_RELATION = "superseded_by";
+/** Typed relations that mark a hit as declaring a contradiction. */
+const CONFLICT_RELATION = "contradicts";
 
 /**
  * Project a result's structured score breakdown. A primary ranked result
@@ -73,4 +80,39 @@ export function detectHybridDegrade(input: HybridDegradeInput): string | null {
     return "hybrid_degraded: semantic lane unavailable, served keyword-only";
   }
   return null;
+}
+
+export interface DeriveTrustInput {
+  /** Document modification time in unix-ms. */
+  readonly mtimeMs: number;
+  /** Reference time in unix-ms (injected for deterministic tests). */
+  readonly nowMs: number;
+  /**
+   * Typed relations the hit's page declares (the same array surfaced on
+   * the result). `superseded_by` marks the hit superseded; `contradicts`
+   * marks it conflicted. Absent = neither.
+   */
+  readonly relations?: ReadonlyArray<{ readonly relation: string; readonly target: string }>;
+}
+
+/**
+ * Inline per-hit trust metadata (Search & Recall Quality Suite): the
+ * validity signals recall already computes, projected onto a hit so the
+ * agent weights stale or contested memories without a second audit pass.
+ *
+ * Scope: this is note-level validity, derived from the typed relation
+ * edges the search pipeline surfaces (`superseded_by`, `contradicts`) and
+ * the document mtime - NOT the entity/aspect claim-ledger truth fold,
+ * which is a different granularity (facts, not notes) and is not
+ * well-defined per recall hit. Read-time and never stored, like the
+ * recall hint. Language-agnostic: a whole-day count plus two booleans.
+ */
+export function deriveTrust(input: DeriveTrustInput): TrustMetadata {
+  const ageDays = Math.max(0, Math.floor((input.nowMs - input.mtimeMs) / DAY_MS));
+  const relations = input.relations ?? [];
+  return Object.freeze({
+    age_days: ageDays,
+    superseded: relations.some((r) => r.relation === SUPERSEDED_RELATION),
+    conflict: relations.some((r) => r.relation === CONFLICT_RELATION),
+  });
 }

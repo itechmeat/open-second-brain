@@ -83,4 +83,23 @@ describe("brain_search explain", () => {
       expect(r.score_breakdown!.keyword).toBeGreaterThan(0);
     }
   });
+
+  test("no trust key when trust is absent; structured trust when trust is true", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const off = (await tool().handler(ctx as any, { query: "quick fox" })) as {
+      results: Array<Record<string, unknown>>;
+    };
+    for (const r of off.results) expect("trust" in r).toBe(false);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const on = (await tool().handler(ctx as any, { query: "quick fox", trust: true })) as {
+      results: Array<{ trust?: { age_days: number; superseded: boolean; conflict: boolean } }>;
+    };
+    for (const r of on.results) {
+      expect(r.trust).toBeDefined();
+      expect(typeof r.trust!.age_days).toBe("number");
+      expect(typeof r.trust!.superseded).toBe("boolean");
+      expect(typeof r.trust!.conflict).toBe("boolean");
+    }
+  });
 });

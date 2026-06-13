@@ -62,6 +62,19 @@ export interface ScoreBreakdown {
   readonly sessionFocus: number;
 }
 
+/**
+ * Inline per-hit trust metadata (Search & Recall Quality Suite). Computed
+ * at read time, never stored. `age_days` is the whole-day distance from
+ * the document mtime; `superseded` / `conflict` are derived from the
+ * typed relation edges the recall pipeline surfaces (`superseded_by` /
+ * `contradicts`). Present on a result only when the caller set `trust`.
+ */
+export interface TrustMetadata {
+  readonly age_days: number;
+  readonly superseded: boolean;
+  readonly conflict: boolean;
+}
+
 export interface BrainSearchResult {
   readonly documentId: number;
   readonly chunkId: number;
@@ -104,6 +117,12 @@ export interface BrainSearchResult {
    * output unless the caller sets `explain`.
    */
   readonly breakdown?: ScoreBreakdown;
+  /**
+   * Inline trust metadata (Search & Recall Quality Suite). Present only
+   * when the caller set `trust`; computed at read time from the document
+   * mtime and the surfaced typed relations, never stored.
+   */
+  readonly trust?: TrustMetadata;
   /**
    * Kind-namespaced origin label (Workspace Insight Suite, cross-vault
    * search): "local", "profile/<name>", or "source/<alias>". Only set
@@ -333,6 +352,14 @@ export interface SearchOptions {
    */
   readonly since?: string;
   readonly until?: string;
+  /**
+   * Inline trust metadata (Search & Recall Quality Suite). When true,
+   * each surfaced result carries a computed-at-read-time `trust` object
+   * (age in days, superseded, conflict) derived from the document mtime
+   * and the surfaced typed relations. Off by default; absent leaves the
+   * result shape byte-identical.
+   */
+  readonly trust?: boolean;
   /**
    * Self-healing index policy (Workspace Insight Suite). Default true:
    * a missing or schema-stale index is rebuilt once and the search

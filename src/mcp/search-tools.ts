@@ -74,7 +74,12 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     explain: {
       type: "boolean",
       description:
-        "Include a structured score_breakdown (per-layer numeric components) on each result. Default false; the legacy reasons[] strings are always present.",
+        "Include a structured score_breakdown (per-layer numeric components) on each result. Default false.",
+    },
+    trust: {
+      type: "boolean",
+      description:
+        "Stamp each result with inline trust metadata (age_days, superseded, conflict), computed at read time. Default false.",
     },
     record_access: {
       type: "boolean",
@@ -165,6 +170,14 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
                 relation: { type: "string" },
                 target: { type: "string" },
               },
+            },
+          },
+          trust: {
+            type: "object",
+            properties: {
+              age_days: { type: "integer" },
+              superseded: { type: "boolean" },
+              conflict: { type: "boolean" },
             },
           },
         },
@@ -310,6 +323,7 @@ async function toolBrainSearch(
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const explain = coerceBoolOptional(args, "explain") ?? false;
+  const trust = coerceBoolOptional(args, "trust") ?? false;
   const globalSearch = coerceBoolOptional(args, "global") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
@@ -359,6 +373,7 @@ async function toolBrainSearch(
     ...(focusSession !== undefined ? { focusSession } : {}),
     ...(evidencePack ? { evidencePack: true } : {}),
     ...(includeSuperseded ? { includeSuperseded: true } : {}),
+    ...(trust ? { trust: true } : {}),
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
     // Access recording (Time-Aware Recall & Activation Suite): the MCP
@@ -442,6 +457,7 @@ async function toolBrainSearch(
       searchType: r.searchType,
       reasons: r.reasons,
       ...(explain ? { score_breakdown: projectScoreBreakdown(r) } : {}),
+      ...(r.trust !== undefined ? { trust: r.trust } : {}),
       ...(r.origin !== undefined ? { origin: r.origin } : {}),
       ...(outcome.evidencePack ? { why_retrieved: r.reasons } : {}),
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
