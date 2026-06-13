@@ -202,6 +202,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("query", "Search the vault index"),
         command("index", "Incrementally update the search index"),
         command("reindex", "Rebuild the search index"),
+        command("watch", "Watch the vault and incrementally sync the index on .md edits"),
         command("status", "Print search index status"),
         command("check", "Run search pre-flight diagnostics"),
         command("provider", "Manage embedding provider profiles"),
