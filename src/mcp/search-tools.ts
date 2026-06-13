@@ -29,6 +29,7 @@ import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
 import { projectScoreBreakdown } from "../core/search/enrich.ts";
+import { recordReinforce } from "../core/search/reinforce.ts";
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
 import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
 import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
@@ -92,6 +93,13 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
       type: "boolean",
       description:
         "Re-order the threshold-qualified results by core textual relevance (keyword + semantic). Default false.",
+    },
+    reinforce: {
+      type: "array",
+      maxItems: 50,
+      items: { type: "string", minLength: 1, maxLength: 512 },
+      description:
+        "Paths proven useful: recorded to the reinforce ledger and lifted (bounded) before the top_k cut. Default absent.",
     },
     record_access: {
       type: "boolean",
@@ -280,6 +288,21 @@ function parseVisibilityArgument(raw: unknown): string[] | undefined {
   return out;
 }
 
+function parseReinforceArgument(raw: unknown): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new MCPError(INVALID_PARAMS, "argument 'reinforce' must be an array of strings");
+  }
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") {
+      throw new MCPError(INVALID_PARAMS, "argument 'reinforce' must contain only strings");
+    }
+    if (item.length > 0) out.push(item);
+  }
+  return out;
+}
+
 function truncateContent(c: string, max: number): string {
   if (c.length <= max) return c;
   return c.slice(0, max - 1) + "…";
@@ -373,11 +396,25 @@ async function toolBrainSearch(
   const focusSession = coerceStringOptional(args, "focus_session", 128);
   const properties = parsePropertiesArgument(args["properties"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
+  const reinforce = parseReinforceArgument(args["reinforce"]);
 
   const config = resolveSearchConfig({
     vault: ctx.vault,
     configPath: ctx.configPath ?? undefined,
   });
+
+  // Self-tuning reinforce (Search & Recall Quality Suite): the ledger
+  // write is the surface's side effect, recorded BEFORE the query so the
+  // just-named paths participate in this query's bounded boost. The pure
+  // re-rank lives in core. Best-effort: a failed write never breaks the
+  // search.
+  if (reinforce !== undefined && reinforce.length > 0) {
+    try {
+      recordReinforce(ctx.vault, reinforce);
+    } catch {
+      // Ledger persistence is best-effort.
+    }
+  }
 
   let outcome: SearchOutcome;
   const startedAtMs = Date.now();
@@ -397,6 +434,7 @@ async function toolBrainSearch(
     ...(trust ? { trust: true } : {}),
     ...(threshold !== undefined ? { threshold } : {}),
     ...(rerank ? { rerank: true } : {}),
+    ...(reinforce !== undefined ? { reinforce } : {}),
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
     // Access recording (Time-Aware Recall & Activation Suite): the MCP

@@ -50,6 +50,7 @@ import { filterByProperties } from "./property-filter.ts";
 import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
 import { deriveTrust, detectHybridDegrade, rerankByRelevance } from "./enrich.ts";
+import { applyReinforceBoost, loadReinforceStrengths, reinforceFingerprint } from "./reinforce.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
 import { applyTemporalBridge } from "./temporal-bridge.ts";
 import { resolveTimeRange } from "./time-range.ts";
@@ -301,10 +302,15 @@ export async function search(
           ? activationStateFingerprint(config.vault)
           : "off";
         const tuneFp = tuned !== null ? JSON.stringify(tuned) : "off";
+        // The reinforce ledger changes results only when the caller opted
+        // in (Search & Recall Quality Suite); its fingerprint joins the
+        // key just for those calls so an unrelated ledger write never
+        // invalidates ordinary searches.
+        const reinfFp = opts.reinforce !== undefined ? reinforceFingerprint(config.vault) : "off";
         cacheKey = buildCacheKey(
           keyOpts,
           basePlan.planHash,
-          `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}|tune:${tuneFp}`,
+          `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}|tune:${tuneFp}|reinf:${reinfFp}`,
         );
         const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
         if (hit) return hit;
@@ -783,7 +789,16 @@ export async function search(
     const polarized = config.recall.relationPolarityEnabled
       ? applyRelationPolarityPhase(store, excluded, opts.includeSuperseded === true)
       : excluded;
-    const sliced = polarized.slice(0, limit);
+    // Self-tuning reinforce (Search & Recall Quality Suite): opt-in. When
+    // the caller passes a reinforce set, the persisted ledger lifts
+    // proven-useful memories by a bounded boost BEFORE the top_k cut, so
+    // a reinforced hit can enter the window. Absent leaves the pool
+    // untouched; an empty ledger is a no-op either way.
+    const reinforced =
+      opts.reinforce !== undefined
+        ? applyReinforceBoost(polarized, loadReinforceStrengths(config.vault))
+        : polarized;
+    const sliced = reinforced.slice(0, limit);
     // Explainability: when learned weights affected this ranking, every
     // surfaced result says so (acceptance: "search explanations show
     // when learned weights affected a result").

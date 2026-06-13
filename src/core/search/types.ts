@@ -379,6 +379,14 @@ export interface SearchOptions {
    */
   readonly rerank?: boolean;
   /**
+   * Self-tuning reinforce (Search & Recall Quality Suite). When present
+   * (even empty), the persisted reinforce ledger lifts proven-useful
+   * memories by a bounded boost before the top_k cut. A non-empty list is
+   * also recorded to the ledger by the calling surface. Absent leaves
+   * ranking byte-identical; surfaced-only frequency never boosts.
+   */
+  readonly reinforce?: ReadonlyArray<string>;
+  /**
    * Self-healing index policy (Workspace Insight Suite). Default true:
    * a missing or schema-stale index is rebuilt once and the search
    * retried. `searchAcrossVaults` passes false for non-active origins
