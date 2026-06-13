@@ -65,6 +65,10 @@ export interface RecallBenchmarkQueryResult {
    * content within the top k. `null` when the query declares no answer.
    */
   readonly answerContained: boolean | null;
+  /** Expected paths that surfaced in the top k for this query. */
+  readonly expectedFound: number;
+  /** Total expected paths declared for this query. */
+  readonly expectedTotal: number;
 }
 
 export interface RecallBenchmarkReport {
@@ -86,6 +90,24 @@ export interface RecallBenchmarkReport {
    * floor never fails a dataset that does not use the metric.
    */
   readonly answerContainmentAtK: number;
+  /**
+   * Source utilization: fraction of all declared expected paths (summed
+   * across queries) that surfaced in their query's top k. Measures source
+   * coverage rather than per-query hit; equals hitAtK when every query
+   * declares exactly one expected path.
+   */
+  readonly sourceUtilizationAtK: number;
+  /**
+   * Citation depth: mean 1-based rank of the first expected hit over the
+   * queries that hit (lower is better). 0 when no query hit.
+   */
+  readonly citationDepth: number;
+  /**
+   * Source warnings: queries where NO expected path surfaced in the top
+   * k - an expected source the retrieval failed to use. The CI gate caps
+   * this with `source_warnings_max`.
+   */
+  readonly sourceWarnings: number;
   readonly perQuery: ReadonlyArray<RecallBenchmarkQueryResult>;
 }
 
@@ -188,6 +210,8 @@ export async function runRecallBenchmark(
       });
       const expected = new Set(q.expected);
       const topK = outcome.results.slice(0, depth);
+      const topKPaths = new Set(topK.map((r) => r.path));
+      const expectedFound = [...expected].filter((p) => topKPaths.has(p)).length;
       let rank: number | null = null;
       for (let i = 0; i < topK.length; i++) {
         if (expected.has(topK[i]!.path)) {
@@ -209,6 +233,8 @@ export async function runRecallBenchmark(
         rank,
         reciprocalRank: rank === null ? 0 : 1 / rank,
         answerContained,
+        expectedFound,
+        expectedTotal: expected.size,
       });
     }),
   );
@@ -217,6 +243,9 @@ export async function runRecallBenchmark(
   const mrr = perQuery.reduce((sum, r) => sum + r.reciprocalRank, 0) / perQuery.length;
   const answerScored = perQuery.filter((r) => r.answerContained !== null);
   const answerHits = answerScored.filter((r) => r.answerContained === true).length;
+  const expectedFoundTotal = perQuery.reduce((sum, r) => sum + r.expectedFound, 0);
+  const expectedDeclaredTotal = perQuery.reduce((sum, r) => sum + r.expectedTotal, 0);
+  const hitRanks = perQuery.filter((r) => r.rank !== null).map((r) => r.rank!);
   return Object.freeze({
     total: perQuery.length,
     k,
@@ -225,6 +254,11 @@ export async function runRecallBenchmark(
     mrr,
     answerQueries: answerScored.length,
     answerContainmentAtK: answerScored.length === 0 ? 1 : answerHits / answerScored.length,
+    sourceUtilizationAtK:
+      expectedDeclaredTotal === 0 ? 1 : expectedFoundTotal / expectedDeclaredTotal,
+    citationDepth:
+      hitRanks.length === 0 ? 0 : hitRanks.reduce((sum, r) => sum + r, 0) / hitRanks.length,
+    sourceWarnings: perQuery.length - hits,
     perQuery: Object.freeze(perQuery),
   });
 }

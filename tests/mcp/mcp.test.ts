@@ -236,6 +236,7 @@ describe("tool listing", () => {
         "brain_recall_feedback",
         "brain_recall_gate",
         "brain_search",
+        "brain_eval",
         // Schema admin + watchdog recovery probes.
         "schema_apply_mutations",
         "schema_inspect",
@@ -524,7 +525,8 @@ describe("stdio loop", () => {
     //   (Write-Time Integrity & Governance Suite) = 65.
     // + brain_hygiene / brain_anticipatory_context
     //   (continuity-hygiene-freshness suite, v1.3.0) = 71.
-    expect(list.result.tools.length).toBe(71);
+    // + brain_eval (Search & Recall Quality Suite) = 72.
+    expect(list.result.tools.length).toBe(72);
   });
 
   test("returns parse error for invalid JSON", async () => {
