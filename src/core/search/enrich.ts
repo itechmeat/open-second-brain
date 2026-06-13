@@ -116,3 +116,23 @@ export function deriveTrust(input: DeriveTrustInput): TrustMetadata {
     conflict: relations.some((r) => r.relation === CONFLICT_RELATION),
   });
 }
+
+/**
+ * Opt-in relevance rerank (Search & Recall Quality Suite): re-order an
+ * already-ranked, threshold-qualified set by core textual relevance - the
+ * keyword + semantic lane contributions only, ignoring the recency /
+ * usage / link boosts that shaped the primary `score`. This surfaces the
+ * genuinely-most-relevant hit among qualifying results, the
+ * deeper-relevance ordering a threshold query expects. Deterministic and
+ * stable (equal relevance preserves input order); does not mutate the
+ * input array.
+ */
+export function rerankByRelevance(
+  results: ReadonlyArray<BrainSearchResult>,
+): ReadonlyArray<BrainSearchResult> {
+  const relevance = (r: BrainSearchResult): number => r.keywordScore + r.semanticScore;
+  return results
+    .map((r, i) => ({ r, i }))
+    .toSorted((a, b) => relevance(b.r) - relevance(a.r) || a.i - b.i)
+    .map((x) => x.r);
+}

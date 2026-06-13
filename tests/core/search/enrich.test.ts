@@ -11,6 +11,7 @@ import {
   deriveTrust,
   detectHybridDegrade,
   projectScoreBreakdown,
+  rerankByRelevance,
 } from "../../../src/core/search/enrich.ts";
 import type { BrainSearchResult, ScoreBreakdown } from "../../../src/core/search/types.ts";
 
@@ -157,5 +158,25 @@ describe("deriveTrust", () => {
 
   test("result is frozen", () => {
     expect(Object.isFrozen(deriveTrust({ mtimeMs: NOW, nowMs: NOW }))).toBe(true);
+  });
+});
+
+describe("rerankByRelevance", () => {
+  test("orders by core lexical+semantic relevance, ignoring boosts", () => {
+    // `a` wins on final score thanks to a recency/usage boost, but `b` is
+    // the more textually relevant hit; a relevance rerank surfaces `b`.
+    const a = result({ path: "a.md", score: 0.9, keywordScore: 0.2, semanticScore: 0.1 });
+    const b = result({ path: "b.md", score: 0.6, keywordScore: 0.7, semanticScore: 0.2 });
+    const out = rerankByRelevance([a, b]);
+    expect(out.map((r) => r.path)).toEqual(["b.md", "a.md"]);
+  });
+
+  test("stable for equal relevance and does not mutate the input", () => {
+    const a = result({ path: "a.md", keywordScore: 0.5, semanticScore: 0.1 });
+    const b = result({ path: "b.md", keywordScore: 0.5, semanticScore: 0.1 });
+    const input = [a, b];
+    const out = rerankByRelevance(input);
+    expect(out.map((r) => r.path)).toEqual(["a.md", "b.md"]);
+    expect(input.map((r) => r.path)).toEqual(["a.md", "b.md"]);
   });
 });

@@ -81,6 +81,18 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
       description:
         "Stamp each result with inline trust metadata (age_days, superseded, conflict), computed at read time. Default false.",
     },
+    threshold: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description:
+        "Relevance floor in [0,1] on the final score; drops weaker hits so an irrelevant query returns no match. Default 0 (disabled).",
+    },
+    rerank: {
+      type: "boolean",
+      description:
+        "Re-order the threshold-qualified results by core textual relevance (keyword + semantic). Default false.",
+    },
     record_access: {
       type: "boolean",
       description:
@@ -324,6 +336,15 @@ async function toolBrainSearch(
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
   const explain = coerceBoolOptional(args, "explain") ?? false;
   const trust = coerceBoolOptional(args, "trust") ?? false;
+  const rerank = coerceBoolOptional(args, "rerank") ?? false;
+  let threshold: number | undefined;
+  if ("threshold" in args && args["threshold"] !== undefined && args["threshold"] !== null) {
+    const raw = args["threshold"];
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > 1) {
+      throw new MCPError(INVALID_PARAMS, "argument 'threshold' must be a number between 0 and 1");
+    }
+    threshold = raw;
+  }
   const globalSearch = coerceBoolOptional(args, "global") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
@@ -374,6 +395,8 @@ async function toolBrainSearch(
     ...(evidencePack ? { evidencePack: true } : {}),
     ...(includeSuperseded ? { includeSuperseded: true } : {}),
     ...(trust ? { trust: true } : {}),
+    ...(threshold !== undefined ? { threshold } : {}),
+    ...(rerank ? { rerank: true } : {}),
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
     // Access recording (Time-Aware Recall & Activation Suite): the MCP

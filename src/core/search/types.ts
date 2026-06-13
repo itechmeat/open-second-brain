@@ -361,6 +361,24 @@ export interface SearchOptions {
    */
   readonly trust?: boolean;
   /**
+   * Relevance floor (Search & Recall Quality Suite). When > 0, results
+   * whose final normalized score is below this value are dropped before
+   * the diversity rerank, so a query with no sufficiently relevant memory
+   * returns no match instead of weak noise. Absent / 0 disables the
+   * filter and keeps results byte-identical. Applied against the clamped
+   * [0, 1] final score, so it is meaningful in both linear and rrf
+   * fusion.
+   */
+  readonly threshold?: number;
+  /**
+   * Relevance rerank (Search & Recall Quality Suite). When true, the
+   * threshold-qualified candidates are re-ordered by core textual
+   * relevance (keyword + semantic lanes) before the final slice - a
+   * deeper-relevance second pass. Off by default; absent leaves ordering
+   * unchanged.
+   */
+  readonly rerank?: boolean;
+  /**
    * Self-healing index policy (Workspace Insight Suite). Default true:
    * a missing or schema-stale index is rebuilt once and the search
    * retried. `searchAcrossVaults` passes false for non-active origins

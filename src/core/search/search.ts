@@ -49,7 +49,7 @@ import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from ".
 import { filterByProperties } from "./property-filter.ts";
 import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
-import { deriveTrust, detectHybridDegrade } from "./enrich.ts";
+import { deriveTrust, detectHybridDegrade, rerankByRelevance } from "./enrich.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
 import { applyTemporalBridge } from "./temporal-bridge.ts";
 import { resolveTimeRange } from "./time-range.ts";
@@ -217,6 +217,9 @@ export async function search(
   if (tuned !== null) config = applyTunedParameters(config, tuned);
   const expandActive = opts.expand ?? (tuned !== null && tuned.expansion);
   const limit = Math.max(1, Math.min(100, opts.limit ?? 10));
+  if (opts.threshold !== undefined && (!Number.isFinite(opts.threshold) || opts.threshold < 0)) {
+    throw new SearchError("INVALID_INPUT", "threshold must be a finite number >= 0");
+  }
   const pathPrefix = assertSafePathPrefix(opts.pathPrefix);
   const policy = resolveSemanticPolicy(config, opts);
   const warnings: string[] = [];
@@ -641,6 +644,13 @@ export async function search(
     const hasStructuredExclusions = (structured?.lex.exclude.length ?? 0) > 0;
     const mmrLambda = opts.mmrLambda ?? config.recall.mmrLambda;
     const mmrActive = mmrLambda < 1;
+    // Relevance floor + rerank (Search & Recall Quality Suite). The floor
+    // drops sub-threshold candidates before the diversity rerank so a
+    // query with no sufficiently relevant memory returns no match; the
+    // rerank re-orders the qualified set by core textual relevance. Both
+    // off by default keep results byte-identical.
+    const scoreFloor = opts.threshold ?? 0;
+    const rerankActive = opts.rerank === true;
     const maxHops = opts.maxHops ?? config.recall.maxHops;
     const traversalActive = maxHops > 0;
     const baseRankLimit =
@@ -720,9 +730,21 @@ export async function search(
           });
         }
       }
+      // Relevance floor (Search & Recall Quality Suite): drop
+      // sub-threshold candidates BEFORE diversity so the rerank works over
+      // the qualified set only. No-op when the floor is 0.
+      if (scoreFloor > 0) {
+        ranked = ranked.filter((r) => r.score >= scoreFloor);
+      }
       // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
       if (mmrActive) {
         ranked = mmrRerank(ranked, { lambda: mmrLambda });
+      }
+      // Relevance rerank (Search & Recall Quality Suite): re-order the
+      // qualified set by core textual relevance, a deeper-relevance second
+      // pass. Opt-in; replaces the diversity ordering when requested.
+      if (rerankActive) {
+        ranked = rerankByRelevance(ranked).slice();
       }
       // Optional post-rank property filter (v0.10.17). Reads each
       // result's source frontmatter and drops rows whose scalars do not
