@@ -102,6 +102,13 @@ export interface WritePreferenceInput {
   readonly evidenced_by: ReadonlyArray<string>;
   readonly confirmed_at?: string | null;
   readonly scope?: string;
+  /**
+   * Optional owner token (Knowledge Provenance suite, v1.7). When set, the
+   * fact is owner-private: owner-scoped recall returns it only to its owner,
+   * while ownerless facts stay shared. Stored verbatim; normalized for
+   * comparison by the shared owner-visibility model.
+   */
+  readonly owner?: string;
   readonly applied_count?: number;
   readonly violated_count?: number;
   readonly last_evidence_at?: string | null;
@@ -401,6 +408,7 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   if (input.revision !== undefined) metadata["_revision"] = input.revision;
   if (input.content_hash) metadata["_content_hash"] = input.content_hash;
   if (input.scope?.trim()) metadata["scope"] = input.scope.trim();
+  if (input.owner?.trim()) metadata["owner"] = input.owner.trim();
   if (input.supersedes?.trim()) metadata["supersedes"] = input.supersedes.trim();
   if (input.aliases && input.aliases.length > 0) {
     metadata["aliases"] = [...input.aliases];
@@ -649,6 +657,9 @@ export function parsePreference(
       : {}),
     ...(optionalScalarString(meta, "scope") !== undefined
       ? { scope: optionalScalarString(meta, "scope") }
+      : {}),
+    ...(optionalScalarString(meta, "owner") !== undefined
+      ? { owner: optionalScalarString(meta, "owner") }
       : {}),
     ...(optionalScalarString(meta, "freshness_trend") !== undefined
       ? { freshness_trend: optionalScalarString(meta, "freshness_trend") }

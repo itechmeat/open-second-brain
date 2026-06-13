@@ -418,6 +418,8 @@ export interface BrainPreference {
   readonly tags: ReadonlyArray<string>;
   readonly topic: string;
   readonly scope?: string;
+  /** Optional owner token (v1.7); owner-scoped recall hides it from others. */
+  readonly owner?: string;
   readonly status: BrainPreferenceStatus;
   readonly principle: string;
   /** Origin signals; fixed at creation. Wikilinks (`[[sig-...]]`). */
