@@ -55,6 +55,9 @@ import type {
   SearchOutcome,
 } from "../core/search/index.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
+import { IndexWatchPlanner } from "../core/search/index-watch.ts";
+import { canonicalNotePath } from "../core/path-safety.ts";
+import { watch, type FSWatcher } from "node:fs";
 import { CliError, parseFlags } from "./argparse.ts";
 import { CronTemplateError, renderCronTemplate } from "./search-cron-template.ts";
 
@@ -68,6 +71,7 @@ const KNOWN_VERBS = new Set([
   "feedback",
   "weights",
   "provider",
+  "watch",
 ]);
 
 export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promise<number> {
@@ -88,6 +92,8 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
         return await cmdSearchIndex(rest);
       case "reindex":
         return await cmdSearchReindex(rest);
+      case "watch":
+        return await cmdSearchWatch(rest);
       case "status":
         return await cmdSearchStatus(rest);
       case "check":
@@ -699,6 +705,99 @@ async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
   }
   process.stdout.write(renderStatsHuman(stats, cfg));
   return 0;
+}
+
+// ─── watch ──────────────────────────────────────────────────────────────────
+
+/**
+ * Long-running file-watcher (Unit 3): watch the vault for `.md` edits and
+ * incrementally re-index after a quiet window. Reuses the existing
+ * incremental `indexVault` (mtime/hash fastpath skips unchanged files),
+ * so a debounced flush only does work for the files that actually
+ * changed. A single-flight guard prevents overlapping passes; the
+ * command runs until SIGINT/SIGTERM and shuts the watcher down cleanly.
+ */
+async function cmdSearchWatch(argv: ReadonlyArray<string>): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    db: { type: "string" },
+    embeddings: { type: "boolean" },
+    "debounce-ms": { type: "string", default: "800" },
+  });
+  const cfg = resolveConfig(flags);
+  const debounceMs = Number(flags["debounce-ms"]);
+  if (!Number.isFinite(debounceMs) || debounceMs < 0) {
+    throw new CliError(`--debounce-ms must be a non-negative number, got ${flags["debounce-ms"]}`);
+  }
+  const planner = new IndexWatchPlanner({ debounceMs });
+
+  let watcher: FSWatcher;
+  try {
+    watcher = watch(cfg.vault, { recursive: true, persistent: true });
+  } catch (e) {
+    // Fail loudly, not as a silent no-op: recursive fs.watch is not
+    // available on every platform/filesystem.
+    throw new CliError(
+      `cannot start a recursive watch on ${cfg.vault}: ${e instanceof Error ? e.message : String(e)}. ` +
+        "Recursive fs.watch is unsupported here; schedule `o2b search index` on a timer instead.",
+    );
+  }
+
+  let running = false;
+  let stopped = false;
+
+  const flush = async (): Promise<void> => {
+    if (running || stopped) return;
+    const due = planner.take(Date.now());
+    if (due.length === 0) return;
+    running = true;
+    try {
+      const stats = await indexVault(cfg, { embeddings: flags["embeddings"] === true });
+      process.stderr.write(
+        `synced ${due.length} change(s): +${stats.added} ~${stats.updated} =${stats.unchanged}` +
+          (stats.errors.length > 0 ? ` (${stats.errors.length} error(s))` : "") +
+          "\n",
+      );
+    } catch (e) {
+      // A failed pass must not kill the watcher; report and keep watching.
+      process.stderr.write(`index sync failed: ${e instanceof Error ? e.message : String(e)}\n`);
+    } finally {
+      running = false;
+    }
+  };
+
+  watcher.on("error", (e) => {
+    process.stderr.write(`watch error: ${e instanceof Error ? e.message : String(e)}\n`);
+  });
+  watcher.on("change", (_eventType, filename) => {
+    if (typeof filename !== "string") return;
+    if (!filename.toLowerCase().endsWith(".md")) return;
+    planner.record(canonicalNotePath(filename), Date.now());
+  });
+
+  const timer = setInterval(
+    () => {
+      void flush();
+    },
+    Math.max(50, debounceMs),
+  );
+
+  return await new Promise<number>((resolve) => {
+    const shutdown = (): void => {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+      watcher.close();
+      process.stderr.write("watch stopped\n");
+      resolve(0);
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+    process.stderr.write(
+      `watching ${cfg.vault} for .md changes (debounce ${debounceMs}ms); Ctrl-C to stop\n`,
+    );
+  });
 }
 
 function jsonForStats(stats: IndexStats, cfg: ResolvedSearchConfig): unknown {

@@ -106,6 +106,27 @@ export function toPosix(p: string): string {
 }
 
 /**
+ * Canonical vault-relative note identity: forward-slash POSIX form plus
+ * Unicode NFC.
+ *
+ * The same note has byte-different vault-relative paths across devices:
+ * macOS (APFS/HFS+) stores filenames decomposed (NFD), while Linux and
+ * Android store them precomposed (NFC). On a Syncthing peer set that
+ * splits one note into two identities, defeating incremental-index
+ * change detection (constant re-index churn) and surfacing phantom
+ * cross-device duplicates. Funnelling every path that keys a note's
+ * identity (the index change-detection key, provenance stamping)
+ * through this helper collapses both forms to one NFC identity.
+ *
+ * Idempotent: an already-POSIX, already-NFC path - the Linux common
+ * case - returns byte-identical, so the normalisation is invisible on
+ * the dominant platform and only the macOS NFD path actually converges.
+ */
+export function canonicalNotePath(p: string): string {
+  return toPosix(p).normalize("NFC");
+}
+
+/**
  * Vault-relative path with forward slashes.
  *
  * Markdown rendering and Obsidian wikilinks both want forward slashes

@@ -944,6 +944,17 @@ export interface BrainGuardrailConfig {
    * surface a doctor warning.
    */
   readonly instruction_file_max_lines?: number;
+  /**
+   * Opt-in language-agnostic prompt-injection containment (Unit 1).
+   * When `true`, untrusted memory bodies surfaced into an agent-facing
+   * context pack are wrapped in a provenance-carrying `<untrusted_source>`
+   * delimiter and structurally neutralized (invisible/control characters
+   * stripped, delimiter breakouts escaped) instead of being matched
+   * against the English-only injection blocklist and blanked. Lossless
+   * and identical across languages. Defaults to `false`, leaving the
+   * legacy blocklist behaviour bit-identical.
+   */
+  readonly untrusted_source_delimiting?: boolean;
 }
 
 /**
@@ -1140,6 +1151,7 @@ export interface ResolvedBrainGuardrailConfig {
   readonly promotion_min_distinct_agents: number;
   readonly promotion_min_age_days: number;
   readonly instruction_file_max_lines: number;
+  readonly untrusted_source_delimiting: boolean;
 }
 
 /**

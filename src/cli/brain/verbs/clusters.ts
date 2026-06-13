@@ -18,6 +18,7 @@ import {
   materializeClusterNotes,
   COMMUNITY_DEFAULT_MIN_SIZE,
 } from "../../../core/brain/link-graph/communities.ts";
+import { graphStats } from "../../../core/brain/link-graph/graph-index.ts";
 import { appendMetric } from "../../../core/brain/metrics.ts";
 import {
   createSafeguard,
@@ -115,6 +116,9 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
         ...(minSize !== undefined ? { minSize } : {}),
         safeguard,
       });
+      // O(1) from the snapshot detectCommunities just built (same index
+      // revision -> cache hit, no second graph rebuild).
+      const stats = graphStats(store, { top: 5 });
       const result = materializeClusterNotes(vault, communities, { store, now });
       try {
         appendMetric(vault, {
@@ -139,16 +143,24 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
             density: c.density,
             members: c.members.map((m) => m.path),
           })),
+          graph: {
+            documents: stats.documentCount,
+            linked_nodes: stats.nodeCount,
+            edges: stats.edgeCount,
+            top_degree: stats.topByDegree,
+          },
           written: result.written,
           removed: result.removed,
         });
       } else if (communities.length === 0) {
         ok("clusters run: no communities at the current threshold");
+        ok(`  graph: ${stats.nodeCount} linked nodes, ${stats.edgeCount} edges`);
       } else {
         ok(`clusters run: ${communities.length} communit${communities.length === 1 ? "y" : "ies"}`);
         for (const c of communities) {
           ok(`  ${c.id}: ${c.size} notes, density ${c.density.toFixed(2)}`);
         }
+        ok(`  graph: ${stats.nodeCount} linked nodes, ${stats.edgeCount} edges`);
         if (result.removed.length > 0) ok(`  removed stale: ${result.removed.join(", ")}`);
       }
       return 0;

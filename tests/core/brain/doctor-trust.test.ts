@@ -87,6 +87,7 @@ describe("runDoctor - trust integration", () => {
         promotion_min_distinct_agents: 1,
         promotion_min_age_days: 0,
         instruction_file_max_lines: 30,
+        untrusted_source_delimiting: false,
       },
     });
     expect(result.instruction_file_warnings ?? []).toHaveLength(1);

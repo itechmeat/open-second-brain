@@ -56,10 +56,15 @@ test("run materializes the community, records the metric, list reads it back", a
   const parsed = JSON.parse(run.stdout) as {
     communities: Array<{ id: string; size: number }>;
     written: string[];
+    graph: { documents: number; linked_nodes: number; edges: number };
   };
   expect(parsed.communities).toHaveLength(1);
   expect(parsed.communities[0]!.size).toBe(4);
   expect(parsed.written).toHaveLength(1);
+  // Unit 4: O(1) graph stats from the precomputed snapshot. The seeded
+  // 4-clique has 4 linked nodes and 6 undirected edges.
+  expect(parsed.graph.linked_nodes).toBe(4);
+  expect(parsed.graph.edges).toBe(6);
 
   const metrics = listMetrics(vault, { surface: "communities" });
   expect(metrics).toHaveLength(1);

@@ -85,6 +85,7 @@ export function buildCacheKey(
     evidencePack: opts.evidencePack === true,
     properties: canonicalProperties(opts.properties),
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
+    agentScope: opts.agentScope ?? null,
     structuredQuery: canonicalStructuredQuery(opts),
     sessionFocus: canonicalSessionFocus(opts),
     plan: planHash,
