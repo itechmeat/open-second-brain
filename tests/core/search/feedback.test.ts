@@ -149,6 +149,19 @@ describe("learned-weight fold", () => {
       recencyBoost: 0.05,
       searchType: "hybrid",
       reasons: ["fts5_bm25: 0.600", "semantic_cos: 0.200", "entity_match: 0.020"],
+      breakdown: {
+        keyword: 0.6,
+        semantic: 0.2,
+        rrf: 0,
+        entity: 0.02,
+        activation: 0,
+        coAccess: 0,
+        link: 0,
+        recency: 0.05,
+        tier: 1,
+        trend: 1,
+        sessionFocus: 0,
+      },
     } as unknown as BrainSearchResult;
     const c = contributionsFromResult(result);
     expect(c.keyword).toBeCloseTo(0.6, 5);

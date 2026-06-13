@@ -28,6 +28,7 @@ import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
+import { projectScoreBreakdown } from "../core/search/enrich.ts";
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
 import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
 import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
@@ -70,6 +71,11 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
+    explain: {
+      type: "boolean",
+      description:
+        "Include a structured score_breakdown (per-layer numeric components) on each result. Default false; the legacy reasons[] strings are always present.",
+    },
     record_access: {
       type: "boolean",
       description:
@@ -132,6 +138,22 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
           endLine: { type: "integer" },
           searchType: { type: "string" },
           reasons: { type: "array", items: { type: "string" } },
+          score_breakdown: {
+            type: "object",
+            properties: {
+              keyword: { type: "number" },
+              semantic: { type: "number" },
+              rrf: { type: "number" },
+              entity: { type: "number" },
+              activation: { type: "number" },
+              coAccess: { type: "number" },
+              link: { type: "number" },
+              recency: { type: "number" },
+              tier: { type: "number" },
+              trend: { type: "number" },
+              sessionFocus: { type: "number" },
+            },
+          },
           origin: { type: "string" },
           why_retrieved: { type: "array", items: { type: "string" } },
           relations: {
@@ -287,6 +309,7 @@ async function toolBrainSearch(
 
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
+  const explain = coerceBoolOptional(args, "explain") ?? false;
   const globalSearch = coerceBoolOptional(args, "global") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
@@ -418,6 +441,7 @@ async function toolBrainSearch(
       endLine: r.endLine,
       searchType: r.searchType,
       reasons: r.reasons,
+      ...(explain ? { score_breakdown: projectScoreBreakdown(r) } : {}),
       ...(r.origin !== undefined ? { origin: r.origin } : {}),
       ...(outcome.evidencePack ? { why_retrieved: r.reasons } : {}),
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),

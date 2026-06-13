@@ -36,6 +36,32 @@ export class SearchError extends Error {
   }
 }
 
+/**
+ * Structured per-layer score components (Search & Recall Quality Suite).
+ * The numeric sibling of `reasons[]`: where `reasons` formats only the
+ * layers that fired as strings, `breakdown` carries every component of
+ * the final score as a number, zero for a layer that did not fire and 1
+ * for a neutral multiplier. Additive layers (keyword, semantic, rrf,
+ * entity, activation, coAccess, link, recency, sessionFocus) are the raw
+ * contributions; `tier` and `trend` are the relevance-portion multipliers
+ * (1.0 = neutral). The ranker emits it for every primary result; the MCP
+ * `explain` projection and `feedback.ts` read it directly instead of
+ * re-parsing reason strings.
+ */
+export interface ScoreBreakdown {
+  readonly keyword: number;
+  readonly semantic: number;
+  readonly rrf: number;
+  readonly entity: number;
+  readonly activation: number;
+  readonly coAccess: number;
+  readonly link: number;
+  readonly recency: number;
+  readonly tier: number;
+  readonly trend: number;
+  readonly sessionFocus: number;
+}
+
 export interface BrainSearchResult {
   readonly documentId: number;
   readonly chunkId: number;
@@ -68,6 +94,16 @@ export interface BrainSearchResult {
     readonly relation: string;
     readonly target: string;
   }>;
+  /**
+   * Structured per-layer score components (Search & Recall Quality
+   * Suite). Always present on a primary ranked result; absent on
+   * synthetic results (link-traversal expansions, relation-polarity
+   * successor pull-ins) whose score is not a per-layer sum - the
+   * `explain` projection derives a faithful breakdown from the
+   * first-class lane/boost fields for those. Never serialized to the MCP
+   * output unless the caller sets `explain`.
+   */
+  readonly breakdown?: ScoreBreakdown;
   /**
    * Kind-namespaced origin label (Workspace Insight Suite, cross-vault
    * search): "local", "profile/<name>", or "source/<alias>". Only set
