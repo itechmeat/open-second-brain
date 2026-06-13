@@ -64,24 +64,30 @@ const DELIMITER_CLOSING = new RegExp(`</(${UNTRUSTED_SOURCE_TAG})`, "gi");
 /**
  * Neutralize an untrusted text span without altering its visible prose.
  *
- * Three structural transforms, in order:
- *   1. Defuse any closing delimiter `</untrusted_source` by escaping its
+ * Three structural transforms, in this exact order:
+ *   1. Strip invisible / control characters (see INJECTION_CONTROL_CHARS).
+ *      This MUST run first: an attacker can split the delimiter tag name
+ *      with a stripped character (e.g. `</unt<U+200B>rusted_source>`) so
+ *      that the delimiter regex does not match, then rely on a later
+ *      strip to reconstitute a live `</untrusted_source>`. Stripping
+ *      before escaping closes that reassembly bypass.
+ *   2. Defuse any closing delimiter `</untrusted_source` by escaping its
  *      leading `<` to `&lt;`, so embedded content cannot close the real
  *      wrapper early (delimiter-injection breakout).
- *   2. Defuse any forged opening delimiter `<untrusted_source` the same
+ *   3. Defuse any forged opening delimiter `<untrusted_source` the same
  *      way, so content cannot inject a second, attacker-controlled
  *      provenance frame.
- *   3. Strip invisible / control characters (see INJECTION_CONTROL_CHARS).
  *
  * Visible characters - in any language - pass through unchanged, so the
  * function is a no-op on clean prose and idempotent on its own output
- * (the escaped `&lt;` no longer matches the delimiter patterns).
+ * (the escaped `&lt;` no longer matches the delimiter patterns, and a
+ * second strip finds no control characters to remove).
  */
 export function neutralizeUntrustedText(text: string): string {
   return text
+    .replace(INJECTION_CONTROL_CHARS, "")
     .replace(DELIMITER_CLOSING, "&lt;/$1")
-    .replace(DELIMITER_OPENING, "&lt;$1")
-    .replace(INJECTION_CONTROL_CHARS, "");
+    .replace(DELIMITER_OPENING, "&lt;$1");
 }
 
 /** Escape a value for safe inclusion in a double-quoted XML attribute. */

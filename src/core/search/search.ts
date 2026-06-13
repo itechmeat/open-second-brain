@@ -1235,20 +1235,30 @@ function applyAgentScope(
   scope: string,
   vault: string,
 ): ReadonlyArray<BrainSearchResult> {
-  const cache = new Map<string, string | null>();
-  const ownerFor = (path: string): string | null => {
-    if (cache.has(path)) return cache.get(path) ?? null;
-    let owner: string | null = null;
+  // Fail-closed sentinel: a page whose frontmatter cannot be parsed has
+  // an unknowable owner, so under an active scope it is dropped rather
+  // than leaked. This is stricter than visibility scoping's fail-open
+  // default - deliberate, because agent-scope is an isolation boundary.
+  const UNPARSEABLE = " unparseable-owner";
+  const cache = new Map<string, string>();
+  const ownerFor = (path: string): string => {
+    const cached = cache.get(path);
+    if (cached !== undefined) return cached;
+    let owner: string;
     try {
       const [meta] = parseFrontmatter(join(vault, path));
-      owner = pageOwner(meta);
+      owner = pageOwner(meta) ?? "";
     } catch {
-      owner = null;
+      owner = UNPARSEABLE;
     }
     cache.set(path, owner);
     return owner;
   };
-  return ranked.filter((r) => isOwnerVisible(ownerFor(r.path), scope));
+  return ranked.filter((r) => {
+    const owner = ownerFor(r.path);
+    if (owner === UNPARSEABLE) return false; // fail closed
+    return isOwnerVisible(owner === "" ? null : owner, scope);
+  });
 }
 
 interface SemanticPhaseOutcome {
