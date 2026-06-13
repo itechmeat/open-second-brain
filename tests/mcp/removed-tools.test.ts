@@ -138,5 +138,5 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
     method: "tools/list",
     params: {},
   })) as { result: { tools: Array<{ name: string }> } };
-  expect(list.result.tools.length).toBe(72);
+  expect(list.result.tools.length).toBe(76);
 });

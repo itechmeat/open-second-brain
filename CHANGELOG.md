@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-06-13
+
+### Added
+
+- **Knowledge Provenance Suite.** Six features share one theme: every piece of
+  knowledge in the brain carries its origin (which source, which premises, which
+  owner, whether stated or inferred), and the operator can steer what surfaces.
+  All generation lives on the agent side of the MCP boundary - Open Second Brain
+  is provider-agnostic and bundles no model. Every behavioural change is opt-in;
+  a vault that enables nothing is byte-identical in results, ordering, and shape.
+  - **Source-ingest pipeline (`brain_ingest_source`).** One text-bearing source
+    (document / note / URL text) becomes entity and concept pages plus a
+    per-source summary page that backlinks the source, lists the entities it
+    introduced, and lists its connections to pre-existing material. Idempotent on
+    the source path. No OCR or binary/media path.
+  - **Parameterized research pipeline (`brain_research_report`).** N consulted
+    sources plus an agent synthesis become one dated report page where each
+    finding cites the source that flagged it. A finding with no source, or one
+    citing an unconsulted source, is rejected - no uncited claims.
+  - **Model-based entity intake (`brain_intake_entities`).** The agent extracts
+    entities from note text (it owns the recognition; no ML model is bundled) and
+    submits them; Open Second Brain validates the typed payload and commits it
+    through one shared, idempotent intake into the entity registry. Opt-in and
+    non-blocking: a plain note write never triggers it.
+  - **Derived-fact synthesis (`brain_derive_fact`).** The agent reasons a
+    second-order conclusion from existing premises; Open Second Brain validates
+    each premise exists and commits an unconfirmed preference carrying a
+    `deduced`/`inferred` provenance level and premise links. Opt-in behind the
+    `derived_fact_synthesis` guardrail. Recall trust ordering
+    (`provenance_trust_ordering` guardrail) ranks stated > deduced > inferred in
+    the active digest.
+  - **Owner-scoped canonical facts.** A preference may declare an `owner:` token;
+    `brain_query` gains an `agent_scope` argument (gated by the
+    `owner_scoped_facts` guardrail) that returns an owner-private fact only to its
+    owner and keeps shared facts visible. Reuses the v1.6 owner-visibility model;
+    fails closed.
+  - **Operator-editable standing-query attention layer.** The attention-flows
+    mechanism gains a `standing_query` action: an operator declares scope tokens
+    in a flow doc and the matching confirmed preferences always surface into the
+    assembled context. Structural selector, language-agnostic.
+
 ## [1.6.0] - 2026-06-13
 
 ### Added
@@ -5303,6 +5344,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.7.0]: https://github.com/itechmeat/open-second-brain/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/itechmeat/open-second-brain/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/itechmeat/open-second-brain/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/itechmeat/open-second-brain/compare/v1.3.1...v1.4.0

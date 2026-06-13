@@ -40,6 +40,9 @@ import {
 } from "../coerce.ts";
 import { emitGatedTelemetry } from "../../core/brain/continuity/emit.ts";
 import { emitRecallTelemetry } from "../../core/brain/recall-telemetry.ts";
+import { loadGuardrailsConfigSafe } from "../../core/brain/policy.ts";
+import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
+import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
 
 async function toolBrainQuery(
   ctx: ServerContext,
@@ -76,6 +79,15 @@ async function toolBrainQuery(
   const telemetrySessionId = coerceStringOptional(args, "session_id", 512);
   const telemetryTurnId = coerceStringOptional(args, "turn_id", 512);
   const queryKind = preference !== null ? "preference" : topic !== null ? "topic" : "since";
+
+  // Owner-scoped fact recall (Knowledge Provenance suite, v1.7). Off by
+  // default: when the guardrail flag is off (or no scope is requested) the
+  // scope is null and every fact is visible exactly as before.
+  const requestedScope = coerceStr(args, "agent_scope", false);
+  const ownerScope = loadGuardrailsConfigSafe(ctx.vault).owner_scoped_facts
+    ? normalizeAgentScope(requestedScope ?? undefined)
+    : null;
+
   const startedAtMs = Date.now();
   const emitQueryTelemetry = (status: "ok" | "empty" | "error", resultCount: number): void => {
     // Lazy emit kernel (t_5d7aa7c5): gate off = thunk never runs; a
@@ -100,6 +112,14 @@ async function toolBrainQuery(
     if (preference !== null) {
       try {
         const res = queryByPreference(ctx.vault, preference);
+        // Fail closed: an owner-private fact outside the requested scope is
+        // indistinguishable from absent, so it cannot leak across owners.
+        // Only active preferences carry an owner; a retired record is shared.
+        const prefOwner =
+          res.preference.kind === "brain-preference" ? res.preference.owner : undefined;
+        if (ownerScope !== null && !isPreferenceVisible({ owner: prefOwner }, ownerScope)) {
+          throw new BrainNotFoundError(`preference not found: ${preference}`);
+        }
         emitQueryTelemetry(res.evidence.length > 0 ? "ok" : "empty", res.evidence.length);
         return {
           mode: "preference",
@@ -118,11 +138,19 @@ async function toolBrainQuery(
       const res = queryByTopic(ctx.vault, topic);
       const resultCount = res.signals.length + res.all_log_events.length;
       emitQueryTelemetry(resultCount > 0 ? "ok" : "empty", resultCount);
+      const topicPrefOwner =
+        res.preference && res.preference.kind === "brain-preference"
+          ? res.preference.owner
+          : undefined;
+      const topicPrefVisible =
+        res.preference !== null &&
+        res.preference !== undefined &&
+        (ownerScope === null || isPreferenceVisible({ owner: topicPrefOwner }, ownerScope));
       return {
         mode: "topic",
         topic,
         signals: res.signals.map(serializeSignal),
-        preference: res.preference ? serializePreference(res.preference) : null,
+        preference: topicPrefVisible ? serializePreference(res.preference!) : null,
         all_log_events: res.all_log_events.map(serializeLogEntry),
       };
     }
@@ -469,6 +497,11 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         telemetry_host: { type: "string", maxLength: 200 },
         session_id: { type: "string", maxLength: 512 },
         turn_id: { type: "string", maxLength: 512 },
+        agent_scope: {
+          type: "string",
+          description:
+            "Optional owner scope: with owner_scoped_facts on, an owner-tagged fact returns only to its own scope; ownerless facts always match. Absent = no filtering.",
+        },
       },
       additionalProperties: false,
     },

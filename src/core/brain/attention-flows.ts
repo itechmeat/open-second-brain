@@ -2,17 +2,30 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
-import { attentionFlowsDir } from "./paths.ts";
+import { attentionFlowsDir, brainDirs } from "./paths.ts";
 import { listProceduralMemory } from "./procedural-memory.ts";
 import { listPendingSkillProposals } from "./skill-proposals.ts";
 import { listRecurrenceEntries } from "./recurrence.ts";
+import { parsePreference } from "./preference.ts";
+import { BRAIN_PREFERENCE_STATUS } from "./types.ts";
 
-export type AttentionFlowAction = "open_proposals" | "high_recurrence" | "active_procedures";
+export type AttentionFlowAction =
+  | "open_proposals"
+  | "high_recurrence"
+  | "active_procedures"
+  | "standing_query";
 
 export interface AttentionFlowRecipe {
   readonly id: string;
   readonly title: string;
   readonly actions: ReadonlyArray<AttentionFlowAction>;
+  /**
+   * Operator-declared scope tokens for the `standing_query` action. A
+   * confirmed preference whose `scope` is in this set always surfaces into
+   * the assembled context. Structural selector - never a natural-language
+   * phrase - so the attention layer stays language-agnostic.
+   */
+  readonly standingQueryScopes: ReadonlyArray<string>;
   readonly sourcePath: string;
 }
 
@@ -73,6 +86,7 @@ export function listAttentionFlows(vault: string): ReadonlyArray<AttentionFlowRe
         id: typeof fm["id"] === "string" ? fm["id"] : name.replace(/\.md$/, ""),
         title: typeof fm["title"] === "string" ? fm["title"] : name.replace(/\.md$/, ""),
         actions,
+        standingQueryScopes: normalizeStandingQueryScopes(fm["standing_queries"]),
         sourcePath: path,
       });
     } catch {
@@ -107,6 +121,11 @@ export function evaluateAttentionFlow(vault: string, flowId: string): AttentionF
         .filter((entry) => entry.kind === "procedure" || entry.kind === "skill")
         .map((entry) => `${entry.title} [${entry.kind}]`);
       sections.push({ action, items: Object.freeze(items) });
+      continue;
+    }
+    if (action === "standing_query") {
+      const items = listConfirmedPreferencesByScope(vault, flow.standingQueryScopes);
+      sections.push({ action, items: Object.freeze(items) });
     }
   }
 
@@ -137,6 +156,7 @@ function normalizeActions(value: unknown): ReadonlyArray<AttentionFlowAction> {
     "open_proposals",
     "high_recurrence",
     "active_procedures",
+    "standing_query",
   ]);
   const out: AttentionFlowAction[] = [];
   if (Array.isArray(value)) {
@@ -148,6 +168,50 @@ function normalizeActions(value: unknown): ReadonlyArray<AttentionFlowAction> {
   }
   if (out.length === 0) return Object.freeze(["open_proposals", "high_recurrence"]);
   return Object.freeze([...new Set(out)]);
+}
+
+/** Parse the operator-declared `standing_queries` scope tokens. */
+function normalizeStandingQueryScopes(value: unknown): ReadonlyArray<string> {
+  if (!Array.isArray(value)) return Object.freeze([]);
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const scope = item.trim();
+    if (scope.length > 0) out.push(scope);
+  }
+  return Object.freeze([...new Set(out)]);
+}
+
+/**
+ * Confirmed preferences whose `scope` is one the flow declared. Structural
+ * match on the frontmatter scope token; no natural-language matching. Returns
+ * `id (scope)` items, sorted for deterministic output.
+ */
+function listConfirmedPreferencesByScope(
+  vault: string,
+  scopes: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  if (scopes.length === 0) return Object.freeze([]);
+  const wanted = new Set(scopes);
+  const dir = brainDirs(vault).preferences;
+  if (!existsSync(dir)) return Object.freeze([]);
+  const out: string[] = [];
+  for (const name of readdirSync(dir).toSorted()) {
+    if (!name.endsWith(".md")) continue;
+    try {
+      const pref = parsePreference(join(dir, name));
+      if (
+        pref.status === BRAIN_PREFERENCE_STATUS.confirmed &&
+        pref.scope !== undefined &&
+        wanted.has(pref.scope)
+      ) {
+        out.push(`${pref.id} (${pref.scope})`);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return Object.freeze(out);
 }
 
 export function buildAttentionContextBlock(

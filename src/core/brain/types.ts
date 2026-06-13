@@ -418,6 +418,13 @@ export interface BrainPreference {
   readonly tags: ReadonlyArray<string>;
   readonly topic: string;
   readonly scope?: string;
+  /** Optional owner token (v1.7); owner-scoped recall hides it from others. */
+  readonly owner?: string;
+  /**
+   * Provenance trust level (v1.7). Absent reads as `stated`; a derived fact
+   * is `deduced` or `inferred` with its premise links in `evidenced_by`.
+   */
+  readonly provenance?: "stated" | "deduced" | "inferred";
   readonly status: BrainPreferenceStatus;
   readonly principle: string;
   /** Origin signals; fixed at creation. Wikilinks (`[[sig-...]]`). */
@@ -955,6 +962,30 @@ export interface BrainGuardrailConfig {
    * legacy blocklist behaviour bit-identical.
    */
   readonly untrusted_source_delimiting?: boolean;
+  /**
+   * Opt-in derived-fact synthesis (Knowledge Provenance suite, v1.7). When
+   * `true`, the `brain_derive_fact` tool is enabled: an agent supplies a
+   * second-order conclusion plus its premise preference ids, and it is
+   * committed as an unconfirmed preference carrying premise links and a
+   * `deduced`/`inferred` provenance level. Synthesis is agent-driven (OSB runs
+   * no model); the flag gates the tool, not an automatic dream phase. Defaults
+   * to `false`, so the tool refuses and no derived facts are produced.
+   */
+  readonly derived_fact_synthesis?: boolean;
+  /**
+   * Opt-in provenance trust ordering (Knowledge Provenance suite, v1.7).
+   * When `true`, recall orders an operator-stated rule above a machine-
+   * inferred one (stated > deduced > inferred) as a stable tiebreak.
+   * Defaults to `false`, leaving recall ordering byte-identical.
+   */
+  readonly provenance_trust_ordering?: boolean;
+  /**
+   * Opt-in owner-scoped fact recall (Knowledge Provenance suite, v1.7). When
+   * `true`, a fact declaring an `owner:` token is returned only to a matching
+   * requested scope; ownerless facts stay shared. Defaults to `false`, so
+   * recall is byte-identical when no scope is requested.
+   */
+  readonly owner_scoped_facts?: boolean;
 }
 
 /**
@@ -1152,6 +1183,9 @@ export interface ResolvedBrainGuardrailConfig {
   readonly promotion_min_age_days: number;
   readonly instruction_file_max_lines: number;
   readonly untrusted_source_delimiting: boolean;
+  readonly derived_fact_synthesis: boolean;
+  readonly provenance_trust_ordering: boolean;
+  readonly owner_scoped_facts: boolean;
 }
 
 /**
