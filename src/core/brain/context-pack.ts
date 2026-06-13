@@ -14,9 +14,11 @@
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import { canonicalNotePath } from "../path-safety.ts";
+import { loadGuardrailsConfigSafe } from "./policy.ts";
 import {
   contextSafetyReport,
   guardBrainContextSnippet,
@@ -161,7 +163,7 @@ function withOptionalLanes(
   };
 }
 
-function collectCandidates(vault: string): Candidate[] {
+function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[] {
   const dirs = brainDirs(vault);
   const out: Candidate[] = [];
   for (const dir of [dirs.preferences, dirs.retired]) {
@@ -195,6 +197,9 @@ function collectCandidates(vault: string): Candidate[] {
         source: { id, path: full, metadata: meta },
         ...(meta["context_safety"] === "trusted-instruction"
           ? { trust: "trusted-instruction" as const }
+          : {}),
+        ...(delimitUntrusted
+          ? { delimitUntrusted: true, provenancePath: canonicalNotePath(relative(vault, full)) }
           : {}),
       });
       // Token budget is computed against the body the pack actually
@@ -236,7 +241,11 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     );
   }
   const query = opts.query ? normalizeForDedup(opts.query) : null;
-  const candidates = collectCandidates(vault);
+  // Opt-in language-agnostic prompt-injection containment (Unit 1).
+  // Default off, so the surfaced bodies are byte-identical to the legacy
+  // blocklist guard unless the vault enables the flag.
+  const delimitUntrusted = loadGuardrailsConfigSafe(vault).untrusted_source_delimiting;
+  const candidates = collectCandidates(vault, delimitUntrusted);
 
   // Focus boost (within-tier only): computed once per candidate, 0 for
   // every candidate when no active focus is supplied, so the default
@@ -310,6 +319,9 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     if (attentionBody && attentionBody.trim()) {
       const guarded = guardBrainContextSnippet(attentionBody, {
         source: { id: "attention-flows", path: join(vault, "Brain", "attention", "flows") },
+        ...(delimitUntrusted
+          ? { delimitUntrusted: true, provenancePath: "Brain/attention/flows" }
+          : {}),
       });
       const safeAttentionBody = guarded.safeText;
       const tokens = estimateTokens(safeAttentionBody);

@@ -118,6 +118,7 @@ export const BRAIN_GUARDRAIL_DEFAULTS: ResolvedBrainGuardrailConfig = Object.fre
   promotion_min_distinct_agents: 1,
   promotion_min_age_days: 0,
   instruction_file_max_lines: 200,
+  untrusted_source_delimiting: false,
 }) as ResolvedBrainGuardrailConfig;
 
 /**
@@ -137,6 +138,8 @@ export function resolveGuardrails(cfg: BrainConfig): ResolvedBrainGuardrailConfi
       g.promotion_min_age_days ?? BRAIN_GUARDRAIL_DEFAULTS.promotion_min_age_days,
     instruction_file_max_lines:
       g.instruction_file_max_lines ?? BRAIN_GUARDRAIL_DEFAULTS.instruction_file_max_lines,
+    untrusted_source_delimiting:
+      g.untrusted_source_delimiting ?? BRAIN_GUARDRAIL_DEFAULTS.untrusted_source_delimiting,
   };
 }
 
@@ -336,6 +339,21 @@ export function loadTemporalConfigSafe(vault: string): ResolvedBrainTemporalConf
     return resolveTemporal(loadBrainConfig(vault));
   } catch {
     return BRAIN_TEMPORAL_DEFAULTS;
+  }
+}
+
+/**
+ * Load + resolve the `guardrails:` block, falling back to
+ * `BRAIN_GUARDRAIL_DEFAULTS` when the config file is missing, malformed,
+ * or otherwise unreadable. Used by agent-facing surfaces (e.g. the
+ * context pack) that must work on a vault without a full `brain init`;
+ * the opt-in toggles therefore default off rather than throwing.
+ */
+export function loadGuardrailsConfigSafe(vault: string): ResolvedBrainGuardrailConfig {
+  try {
+    return resolveGuardrails(loadBrainConfig(vault));
+  } catch {
+    return BRAIN_GUARDRAIL_DEFAULTS;
   }
 }
 
@@ -973,6 +991,7 @@ export function validateBrainConfigDetailed(
       promotion_min_distinct_agents?: number;
       promotion_min_age_days?: number;
       instruction_file_max_lines?: number;
+      untrusted_source_delimiting?: boolean;
     } = {};
 
     if ("promotion_min_signals" in rawMap) {
@@ -1015,6 +1034,17 @@ export function validateBrainConfigDetailed(
       }
       partial.instruction_file_max_lines = v;
     }
+    if ("untrusted_source_delimiting" in rawMap) {
+      const flag = rawMap["untrusted_source_delimiting"];
+      if (typeof flag !== "boolean") {
+        throw new BrainConfigError(
+          `must be a boolean; got ${describe(flag)}`,
+          "guardrails.untrusted_source_delimiting",
+          source,
+        );
+      }
+      partial.untrusted_source_delimiting = flag;
+    }
 
     // Forward-compat: unknown sub-keys under `guardrails:` → warning.
     const knownGuardrailKeys = new Set([
@@ -1022,6 +1052,7 @@ export function validateBrainConfigDetailed(
       "promotion_min_distinct_agents",
       "promotion_min_age_days",
       "instruction_file_max_lines",
+      "untrusted_source_delimiting",
     ]);
     for (const key of Object.keys(rawMap)) {
       if (!knownGuardrailKeys.has(key)) {

@@ -1,3 +1,5 @@
+import { wrapUntrustedSource } from "../untrusted-source.ts";
+
 export const CONTEXT_GUARD_PLACEHOLDER =
   "[Open Second Brain context withheld: prompt-injection-like content]";
 
@@ -30,6 +32,24 @@ export interface ContextGuardSource {
 export interface ContextGuardOptions {
   readonly source?: ContextGuardSource;
   readonly trust?: "trusted-instruction";
+  /**
+   * Language-agnostic structural containment (Unit 1). When true, an
+   * untrusted snippet is wrapped in a provenance-carrying
+   * `<untrusted_source>` delimiter and structurally neutralized instead
+   * of being matched against the English-only injection blocklist and
+   * blanked to a placeholder. Lossless: the content survives as
+   * delimited data the model is told to treat as untrusted, and the
+   * treatment is identical for every human language. Default off, so a
+   * caller that does not opt in is byte-identical to the legacy guard.
+   */
+  readonly delimitUntrusted?: boolean;
+  /**
+   * Vault-relative provenance path stamped into the delimiter when
+   * {@link delimitUntrusted} is set. Separate from `source.path` (which
+   * may be an absolute on-disk path used in safety reasons) so enabling
+   * structural mode never alters the legacy reason payload.
+   */
+  readonly provenancePath?: string;
 }
 
 export interface GuardedContextSnippet {
@@ -107,6 +127,18 @@ export function guardBrainContextSnippet(
       safeText: text,
       filtered: false,
       trusted: true,
+      reasons: Object.freeze([]),
+    });
+  }
+
+  // Structural containment (Unit 1): wrap-and-neutralize instead of the
+  // English-only blocklist. Language-agnostic and lossless - the content
+  // is preserved as delimited data rather than blanked out.
+  if (opts.delimitUntrusted) {
+    return Object.freeze({
+      safeText: wrapUntrustedSource(text, { path: opts.provenancePath ?? opts.source?.path ?? "" }),
+      filtered: false,
+      trusted: false,
       reasons: Object.freeze([]),
     });
   }
