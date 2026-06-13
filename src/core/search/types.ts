@@ -306,6 +306,14 @@ export interface SearchOptions {
    * untagged pages only). See src/core/graph/visibility.ts.
    */
   readonly visibility?: ReadonlyArray<string>;
+  /**
+   * Requested agent-ownership scope (Unit 5). When set, a page that
+   * declares an `owner:` frontmatter token is returned only if its owner
+   * equals this scope; ownerless (shared) pages are always returned.
+   * Absent/empty = no ownership filtering at all, so results are
+   * byte-identical to today. See src/core/graph/agent-scope.ts.
+   */
+  readonly agentScope?: string;
   /** Optional parsed structured recall query document. Plain-string search ignores this. */
   readonly structuredQuery?: StructuredRecallQueryDocument;
   /**

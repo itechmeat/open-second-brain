@@ -132,6 +132,11 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
         "Optional content-visibility scope; untagged pages always match, tagged pages only when this scope includes one of their values.",
       items: { type: "string" },
     },
+    agent_scope: {
+      type: "string",
+      description:
+        "Optional agent-ownership scope; shared (ownerless) pages always match, owner-tagged pages only their owner. Absent = no ownership filtering.",
+    },
   },
   required: ["query"],
   additionalProperties: false,
@@ -397,6 +402,7 @@ async function toolBrainSearch(
   const focusSession = coerceStringOptional(args, "focus_session", 128);
   const properties = parsePropertiesArgument(args["properties"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
+  const agentScope = coerceStringOptional(args, "agent_scope", 128);
   const reinforce = parseReinforceArgument(args["reinforce"]);
 
   const config = resolveSearchConfig({
@@ -427,6 +433,7 @@ async function toolBrainSearch(
     pathPrefix,
     ...(properties !== undefined ? { properties } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
+    ...(agentScope !== undefined ? { agentScope } : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
     ...(sessionFocus !== undefined ? { sessionFocus } : {}),
     ...(focusSession !== undefined ? { focusSession } : {}),

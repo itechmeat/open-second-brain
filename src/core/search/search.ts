@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
+import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../graph/agent-scope.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   composeWeightProfiles,
@@ -640,7 +641,11 @@ export async function search(
     // window.
     const visibilityScope = normalizeVisibilityScope(opts.visibility ?? []);
     const hasVisibilityRequest = (opts.visibility?.length ?? 0) > 0;
-    const hasFrontmatterFilter = hasPropertyFilter || hasVisibilityRequest;
+    // Agent-ownership scope (Unit 5): null means "no scope requested" -
+    // no ownership filtering, so untagged vaults stay byte-identical.
+    const agentScope = normalizeAgentScope(opts.agentScope);
+    const hasAgentScopeRequest = agentScope !== null;
+    const hasFrontmatterFilter = hasPropertyFilter || hasVisibilityRequest || hasAgentScopeRequest;
 
     // MMR and traversal both need a candidate pool wider than `limit`:
     // MMR diversifies from it, and traversal seeds expansion from it (a
@@ -761,7 +766,11 @@ export async function search(
         ? applyPropertyFilter(ranked, opts.properties!, config.vault)
         : ranked;
       const visible = applyVisibilityScope(propFiltered, visibilityScope, config.vault);
-      return { preVisibility: propFiltered.length, visible, capHit };
+      // Agent-ownership isolation (Unit 5): only when a scope is requested;
+      // a null scope skips the filter entirely (byte-identical default).
+      const scoped =
+        agentScope !== null ? applyAgentScope(visible, agentScope, config.vault) : visible;
+      return { preVisibility: propFiltered.length, visible: scoped, capHit };
     };
 
     let assembled = assemble(rankLimit);
@@ -1219,6 +1228,27 @@ function applyVisibilityScope(
     return tags;
   };
   return ranked.filter((r) => isVisible(tagsFor(r.path), scope));
+}
+
+function applyAgentScope(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  scope: string,
+  vault: string,
+): ReadonlyArray<BrainSearchResult> {
+  const cache = new Map<string, string | null>();
+  const ownerFor = (path: string): string | null => {
+    if (cache.has(path)) return cache.get(path) ?? null;
+    let owner: string | null = null;
+    try {
+      const [meta] = parseFrontmatter(join(vault, path));
+      owner = pageOwner(meta);
+    } catch {
+      owner = null;
+    }
+    cache.set(path, owner);
+    return owner;
+  };
+  return ranked.filter((r) => isOwnerVisible(ownerFor(r.path), scope));
 }
 
 interface SemanticPhaseOutcome {
