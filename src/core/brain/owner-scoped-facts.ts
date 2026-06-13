@@ -6,7 +6,9 @@
  * (ownerless) facts stay visible to all. This module is the fact-layer
  * application of the v1.6 owner-visibility model - it REUSES
  * `src/core/graph/agent-scope.ts` (pageOwner / isOwnerVisible) rather than
- * reimplementing the rule, so search and facts share one definition.
+ * reimplementing the rule, so the fact layer and the v1.6 search agent-scope
+ * share one visibility definition. It is wired into `brain_query` (the
+ * per-request fact-recall surface); only preferences carry an `owner`.
  *
  * The default is byte-identical: when no scope is requested (null), every fact
  * is visible exactly as today.

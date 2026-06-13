@@ -58,7 +58,7 @@ export const NER_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Intake entities the calling agent extracted from note text into the Brain/entities/ registry. The agent owns the recognition (OSB never runs a model); OSB validates the typed payload and commits it idempotently. Supply `entities` (each: category, name, optional aliases/confidence), optional typed `relations` (from, relation, to), and an optional `source` wikilink cited on newly created pages.",
+      "Intake entities the agent extracted from note text into the entity registry (OSB runs no model). Supply `entities` (category, name, optional aliases/confidence), optional typed `relations` (from, relation, to), and an optional `source` wikilink cited on new pages. Validated and idempotent.",
     inputSchema: {
       type: "object",
       properties: {

@@ -964,11 +964,12 @@ export interface BrainGuardrailConfig {
   readonly untrusted_source_delimiting?: boolean;
   /**
    * Opt-in derived-fact synthesis (Knowledge Provenance suite, v1.7). When
-   * `true`, the dream pass runs a `derive` phase that surfaces premise sets
-   * eligible for second-order derivation; an agent supplies the derived fact
-   * through `brain_derive_fact`, committed with premise links and a
-   * `provenance: inferred` label. Defaults to `false`, leaving the dream
-   * summary byte-identical.
+   * `true`, the `brain_derive_fact` tool is enabled: an agent supplies a
+   * second-order conclusion plus its premise preference ids, and it is
+   * committed as an unconfirmed preference carrying premise links and a
+   * `deduced`/`inferred` provenance level. Synthesis is agent-driven (OSB runs
+   * no model); the flag gates the tool, not an automatic dream phase. Defaults
+   * to `false`, so the tool refuses and no derived facts are produced.
    */
   readonly derived_fact_synthesis?: boolean;
   /**

@@ -17,7 +17,7 @@
  * an unprovenanced claim.
  */
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
@@ -145,17 +145,10 @@ export function writeResearchReport(
 
   mkdirSync(dirname(absPath), { recursive: true });
   // Idempotent on date+title: a re-run rewrites the same report page in place.
-  // existsSync drives the `created` flag without a second stat race.
-  let created = true;
-  try {
-    writeFrontmatterAtomic(absPath, meta, body, {
-      overwrite: false,
-      existsErrorKind: "report",
-    });
-  } catch {
-    writeFrontmatterAtomic(absPath, meta, body, { overwrite: true });
-    created = false;
-  }
+  // existsSync drives the `created` flag; an overwrite write then surfaces a
+  // real I/O error directly instead of a catch masking it as a re-run.
+  const created = !existsSync(absPath);
+  writeFrontmatterAtomic(absPath, meta, body, { overwrite: true });
 
   return {
     reportPath: canonicalNotePath(relative(vault, absPath)),

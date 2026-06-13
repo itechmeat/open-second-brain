@@ -88,6 +88,10 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_switch_vault: "write; returns a small profile ack",
   brain_write_session: "lifecycle ops return one fixed-shape envelope; prompts are kernel-bounded",
   schema_apply_mutations: "write; returns a bounded mutation receipt",
+  brain_intake_entities: "write; returns created/updated id lists and a relation count",
+  brain_ingest_source: "write; returns the summary path plus bounded id lists",
+  brain_research_report: "write; returns the report path and a finding count",
+  brain_derive_fact: "write; returns one derived preference id, its level and premises",
 
   // Bounded-by-construction reads.
   second_brain_capabilities: "fixed-size capability report",

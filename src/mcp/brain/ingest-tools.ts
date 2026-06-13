@@ -58,7 +58,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Ingest one text-bearing source (document / note / URL text) into the brain. The agent supplies `source_path` (vault path or URL), a `summary`, the extracted `entities` (each: category, name, optional aliases/confidence), and optional typed `relations`. OSB creates/updates the entity pages and writes a per-source summary page that backlinks the source, lists its entities, and lists its connections to pre-existing notes. Idempotent on source_path. OSB never runs a model; no OCR or binary sources.",
+      "Ingest one text-bearing source into the brain. Supply `source_path` (vault path or URL), a `summary`, the extracted `entities`, and optional `relations`. OSB creates/updates entity pages and a per-source summary page that backlinks the source and lists its connections. Idempotent; no model, no OCR.",
     inputSchema: {
       type: "object",
       properties: {

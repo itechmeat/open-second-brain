@@ -93,7 +93,7 @@ export const RESEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Write a dated, cited research report into the vault. The agent supplies a `title`, the consulted `sources`, and `findings` (each: statement + the sources that flagged it). OSB validates that every finding cites at least one consulted source (no uncited claims), then writes one report page per date+title (idempotent). OSB never runs a model.",
+      "Write a dated, cited research report. Supply `title`, consulted `sources`, and `findings` (each citing its source). OSB rejects uncited findings, then writes one report page per date+title (idempotent). OSB runs no model.",
     inputSchema: {
       type: "object",
       properties: {

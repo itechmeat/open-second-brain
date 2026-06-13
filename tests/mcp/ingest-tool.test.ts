@@ -5,15 +5,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listEntities } from "../../src/core/brain/entities/registry.ts";
-import { sourcePagePath } from "../../src/core/brain/paths.ts";
-import { slugify } from "../../src/core/vault.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tools.ts";
@@ -51,10 +49,12 @@ describe("brain_ingest_source", () => {
     });
     expect(res).toMatchObject({ created: true, summary_path: expect.any(String) });
     expect(listEntities(vault, { category: "concept" })).toHaveLength(2);
-    // Summary page content is asserted in the core ingest test; here we
-    // confirm the deterministic path exists and carries the source backlink.
-    const summaryAbs = sourcePagePath(vault, slugify("Articles/eth.md"));
-    const md = readFileSync(summaryAbs, "utf8");
+    // Summary page content is asserted in the core ingest test; here we read
+    // the single summary file the ingest produced and confirm the backlink.
+    const sourcesDir = join(vault, "Brain", "sources");
+    const summaryFiles = readdirSync(sourcesDir).filter((n) => n.endsWith(".md"));
+    expect(summaryFiles).toHaveLength(1);
+    const md = readFileSync(join(sourcesDir, summaryFiles[0]!), "utf8");
     expect(md).toContain("[[Articles/eth.md]]");
     expect(md).toContain("Ethereum scaling overview.");
   });

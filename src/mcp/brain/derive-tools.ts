@@ -65,7 +65,7 @@ export const DERIVE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Commit a derived fact (a second-order conclusion the agent reasoned from existing premises) as an unconfirmed preference with premise provenance. Supply `slug`, `topic`, `principle`, `premises` (premise preference ids), and `level` ('deduced' or 'inferred'). OSB validates each premise exists and stamps the provenance level; recall trusts operator-stated rules above derived ones. Opt-in: requires guardrails.derived_fact_synthesis.",
+      "Commit a derived fact (a conclusion the agent reasoned from premises) as an unconfirmed preference with premise provenance. Supply `slug`, `topic`, `principle`, `premises` (ids), and `level` (deduced/inferred). OSB validates each premise exists. Opt-in: requires guardrails.derived_fact_synthesis.",
     inputSchema: {
       type: "object",
       properties: {

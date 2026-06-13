@@ -91,7 +91,13 @@ export function ingestSource(
   const connections = intake.entitiesUpdated;
   const allEntities = [...intake.entitiesCreated, ...intake.entitiesUpdated];
 
-  const absPath = sourcePagePath(vault, slugify(canonicalSource));
+  // The page filename keys on the source-identity hash, not just the slug:
+  // two distinct non-ASCII / symbol-only source paths can slugify to the same
+  // fallback, which would silently clobber one summary with another. A hash
+  // suffix keeps distinct sources distinct while staying idempotent (the same
+  // source path always yields the same hash, hence the same file).
+  const sourceHash = sourceIdentityHash([canonicalSource]);
+  const absPath = sourcePagePath(vault, `${slugify(canonicalSource)}-${sourceHash.slice(0, 12)}`);
   const existed = existsSync(absPath);
   const stamp = isoSecond(opts.now);
   // Preserve the original created_at on a re-ingest; bump updated_at.
@@ -100,7 +106,7 @@ export function ingestSource(
   const meta: FrontmatterMap = {
     kind: BRAIN_SOURCE_KIND,
     source_path: canonicalSource,
-    source_hash: sourceIdentityHash([canonicalSource]),
+    source_hash: sourceHash,
     provenance: provenance.level,
     created_at: createdAt,
     updated_at: stamp,

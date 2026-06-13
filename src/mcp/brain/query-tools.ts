@@ -500,7 +500,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agent_scope: {
           type: "string",
           description:
-            "Optional owner scope (Knowledge Provenance suite). When the owner_scoped_facts guardrail is on, an owner-tagged fact is returned only to its own scope; shared (ownerless) facts always match. Absent scope or flag off = no ownership filtering.",
+            "Optional owner scope: with owner_scoped_facts on, an owner-tagged fact returns only to its own scope; ownerless facts always match. Absent = no filtering.",
         },
       },
       additionalProperties: false,
