@@ -27,6 +27,7 @@ import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import type { Store } from "../../search/store.ts";
+import { getGraphSnapshot } from "./graph-index.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isoSecond } from "../time.ts";
 import { formatFrontmatter, parseFrontmatter } from "../../vault.ts";
@@ -76,23 +77,17 @@ export function detectCommunities(store: Store, opts: DetectCommunitiesOptions =
   const maxIterations = Math.max(1, opts.maxIterations ?? COMMUNITY_MAX_ITERATIONS);
   opts.safeguard?.checkpoint();
 
-  const pathById = new Map<number, string>();
-  for (const [path, summary] of store.listDocuments()) pathById.set(summary.id, path);
-
-  // Undirected adjacency over resolved pairs, self-loops dropped.
-  const adjacency = new Map<number, Set<number>>();
-  for (const { source, target } of store.resolvedDocLinkPairs()) {
-    if (source === target || !pathById.has(source) || !pathById.has(target)) continue;
-    let a = adjacency.get(source);
-    if (!a) adjacency.set(source, (a = new Set()));
-    a.add(target);
-    let b = adjacency.get(target);
-    if (!b) adjacency.set(target, (b = new Set()));
-    b.add(source);
-  }
+  // Resolved undirected adjacency + pathById come from the memoized
+  // graph snapshot (Unit 4): identical structure to the previous
+  // per-call rebuild, but O(1) on repeat reads against an unchanged
+  // index. Label propagation below is unchanged - the options vary per
+  // call, so only the option-independent graph is shared.
+  const snapshot = getGraphSnapshot(store);
+  const pathById = snapshot.pathById;
+  const adjacency = snapshot.adjacency;
 
   // Synchronous sweeps in sorted-id order; lowest label wins ties.
-  const nodes = [...adjacency.keys()].toSorted((a, b) => a - b);
+  const nodes = snapshot.nodesSorted;
   const labels = new Map<number, number>(nodes.map((n) => [n, n]));
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Cooperative deadline: abort between sweeps (read-only pass).
