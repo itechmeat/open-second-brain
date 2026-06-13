@@ -43,6 +43,7 @@ import { tieredFieldsForKind } from "../brain/frontmatter-tiers.ts";
 import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { appendMetric } from "../brain/metrics.ts";
+import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -76,6 +77,14 @@ export interface IndexVaultOptions {
    * file, so a tripped guard aborts between files - never mid-write.
    */
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
+  /**
+   * On-demand cancellation (Indexer Durability suite). Checked at the
+   * same boundaries the deadline uses - between files and between embed
+   * batches, never mid-write. An aborted signal throws
+   * `SafeguardAbortError`; the deletion sweep runs only on full
+   * completion, so an aborted run leaves a consistent partial index.
+   */
+  readonly signal?: AbortSignal;
 }
 
 interface MutableStats {
@@ -210,6 +219,8 @@ async function indexInto(
       // Per-file document upserts are transactional, so a tripped
       // guard leaves a consistent (partially refreshed) index.
       opts?.safeguard?.checkpoint();
+      // On-demand cancellation, same boundary as the deadline.
+      throwIfAborted(opts?.signal, "index");
       // Mark seen FIRST. If anything downstream throws (read fault,
       // chunker bug, transient FS error), the file must not look
       // "missing" to the deletion sweep below — that would wipe a
@@ -415,7 +426,14 @@ async function indexInto(
     }
 
     if (opts?.embeddings) {
-      await populateEmbeddings(store, config, stats, opts?.forceCost === true, opts?.safeguard);
+      await populateEmbeddings(
+        store,
+        config,
+        stats,
+        opts?.forceCost === true,
+        opts?.safeguard,
+        opts?.signal,
+      );
     }
 
     const now = new Date().toISOString();
@@ -480,6 +498,7 @@ async function populateEmbeddings(
   stats: MutableStats,
   forceCost: boolean,
   safeguard?: import("../brain/safeguard.ts").Safeguard,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!config.semantic.enabled) {
     throw new SearchError(
@@ -535,6 +554,7 @@ async function populateEmbeddings(
     // Cooperative deadline: embedding batches are the other long
     // phase of an index run - abort between batches, never mid-batch.
     safeguard?.checkpoint();
+    throwIfAborted(signal, "index");
     const batch = pending.slice(i, i + superBatch);
     const texts = batch.map((p) => p.content);
     const vectors = await provider.embed(texts);
