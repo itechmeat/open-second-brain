@@ -51,8 +51,14 @@ class JsonRpcStdioClient:
     """Newline-delimited JSON-RPC 2.0 client over a writer/reader pair.
 
     ``writer`` needs ``write`` (and optionally ``flush``); ``reader`` needs
-    ``readline`` returning ``str`` (``""`` at EOF). Responses are correlated by
-    id; notifications and stale ids are skipped.
+    ``readline`` returning ``bytes`` (``b""`` at EOF). Responses are correlated
+    by id; notifications and stale ids are skipped.
+
+    Popen with ``bufsize=0`` (no ``text=True``) gives raw byte streams; the
+    client decodes UTF-8 itself. This avoids the line-buffering deadlock that
+    ``text=True, bufsize=1`` classically triggers with Popen pipes: a fast
+    child writer + a slow parent reader fills the kernel buffer and both
+    block, surfacing as a silent EOF on the JSON-RPC channel.
     """
 
     def __init__(self, writer: Any, reader: Any) -> None:
@@ -77,7 +83,8 @@ class JsonRpcStdioClient:
 
     def _write(self, frame: dict[str, Any]) -> None:
         try:
-            self._writer.write(json.dumps(frame) + "\n")
+            payload = (json.dumps(frame) + "\n").encode("utf-8")
+            self._writer.write(payload)
             flush = getattr(self._writer, "flush", None)
             if callable(flush):
                 flush()
@@ -87,8 +94,13 @@ class JsonRpcStdioClient:
     def _read_response(self, rid: int) -> Any:
         while True:
             line = self._reader.readline()
-            if line == "":
+            # EOF arrives as b"" from a bytes reader, as "" from a str reader
+            # (e.g. the StringIO-based _ScriptedReader in test_memory_provider),
+            # and as None from a closed pipe. All three terminate the read.
+            if line is None or line == b"" or line == "":
                 raise BridgeTransportError("unexpected EOF from MCP server")
+            if isinstance(line, bytes):
+                line = line.decode("utf-8", errors="replace")
             line = line.strip()
             if not line:
                 continue
@@ -135,15 +147,51 @@ class McpBrainBridge:
         return argv
 
     def _default_spawn(self, argv: list[str]) -> Any:
-        return subprocess.Popen(  # noqa: S603 - argv is a fixed command + config path
+        # Use a small thread to drain stderr continuously; otherwise the child
+        # can block on a full stderr pipe after logging init warnings and
+        # silently die before its first stdout write - surfacing as
+        # "unexpected EOF" on the JSON-RPC read. `bufsize=0` on the pipes
+        # avoids the line-buffering deadlock that `text=True, bufsize=1`
+        # classically triggers with Popen pipes: a fast child writer +
+        # a slow parent reader fills the kernel buffer and both block.
+        import threading
+        process = subprocess.Popen(  # noqa: S603 - argv is a fixed command + config path
             argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
+            stderr=subprocess.PIPE,
+            bufsize=0,
             cwd=self._cwd,
         )
+        stderr_thread = threading.Thread(
+            target=self._drain_stderr,
+            args=(process,),
+            daemon=True,
+            name="o2b-mcp-stderr-drain",
+        )
+        stderr_thread.start()
+        return process
+
+    @staticmethod
+    def _drain_stderr(process: Any) -> None:
+        """Read stderr line-by-line until the child exits; discard contents.
+
+        Runs in a daemon thread so a misbehaving child (one that floods
+        stderr) cannot wedge the parent. Without this, a `stderr=PIPE` child
+        that writes more than the kernel pipe buffer (~64 KiB on Linux) will
+        block on its next stderr write, which surfaces in the parent as a
+        silent death of the JSON-RPC channel.
+        """
+        try:
+            stream = getattr(process, "stderr", None)
+            if stream is None:
+                return
+            for _line in iter(stream.readline, b""):
+                # Drain and discard; we do not currently surface stderr to
+                # the agent, but a future diagnostic flag could log it.
+                pass
+        except Exception:  # noqa: BLE001 - drain must never raise
+            pass
 
     def start(self) -> None:
         if self._started:
@@ -173,18 +221,56 @@ class McpBrainBridge:
         return self._tools
 
     def call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        self._ensure_started()
-        assert self._client is not None
-        try:
-            result = self._client.request("tools/call", {"name": name, "arguments": args})
-        except BridgeTransportError:
-            # The channel died: restart once and retry. A JSON-RPC error
-            # (plain BridgeError, e.g. invalid arguments) is a server-level
-            # rejection and propagates unchanged - restarting would only repeat it.
-            self._restart()
+        # Hard cap on restarts: o2b mcp can flake under load (e.g. bun runtime
+        # SIGPIPE on a parent process briefly holding the pipe). One restart is
+        # not enough; a bounded retry with backoff turns a transient subproc
+        # death into a successful call instead of an EOF error to the agent.
+        # A plain BridgeError (JSON-RPC rejection) is server-level and never
+        # triggers a restart - it would only repeat.
+        max_attempts = 3
+        backoff_seconds = 0.1
+        last_transport_error: BridgeTransportError | None = None
+        for attempt in range(max_attempts):
+            self._ensure_started()
             assert self._client is not None
-            result = self._client.request("tools/call", {"name": name, "arguments": args})
-        return result or {}
+            if self._is_proc_dead():
+                # Subprocess died between the last call and now: restart, then try.
+                self._restart()
+                assert self._client is not None
+            try:
+                result = self._client.request(
+                    "tools/call", {"name": name, "arguments": args}
+                )
+                return result or {}
+            except BridgeTransportError as exc:
+                last_transport_error = exc
+                if attempt + 1 >= max_attempts:
+                    break
+                # Restart and back off briefly before the next attempt.
+                self._restart()
+                if backoff_seconds > 0:
+                    import time as _time
+                    _time.sleep(backoff_seconds)
+                backoff_seconds *= 2
+        assert last_transport_error is not None  # for type-checkers
+        raise last_transport_error
+
+    def _is_proc_dead(self) -> bool:
+        """poll() the owned subprocess; return True if it has exited.
+
+        Cheap health check that catches the case where the child died between
+        the last successful call and this one (e.g. parent process briefly held
+        the stdin pipe, child got SIGPIPE). Without this guard, the next write
+        surfaces as a BrokenPipe that the EOF handler would otherwise see as a
+        one-off flake and restart from - slow and noisy.
+        """
+        proc = self._proc
+        if proc is None:
+            return True
+        poll = getattr(proc, "poll", None)
+        if not callable(poll):
+            return False
+        return poll() is not None
 
     def stop(self) -> None:
         proc = self._proc
