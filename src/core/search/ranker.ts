@@ -14,7 +14,7 @@ import { weibullDecay, DEFAULT_RECENCY, type WeibullRecencyOptions } from "./rec
 import { scoreSessionFocusTarget, type SearchSessionFocus } from "./session-focus.ts";
 import { rrfFuse, DEFAULT_RRF_K, type FusionMode } from "./fusion.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "./store.ts";
-import type { BrainSearchResult, WeightProfile } from "./types.ts";
+import type { BrainSearchResult, ScoreBreakdown, WeightProfile } from "./types.ts";
 
 export interface RankerInputs {
   readonly keyword: ReadonlyArray<KeywordHit>;
@@ -202,6 +202,41 @@ function buildReasons(parts: {
     reasons.push(`session_focus: ${parts.sessionFocus >= 0 ? "+" : ""}${fmt(parts.sessionFocus)}`);
   }
   return Object.freeze(reasons);
+}
+
+/**
+ * Structured sibling of {@link buildReasons} over the same per-layer
+ * values. Every component is a number: zero for an additive layer that
+ * did not fire, 1 for a neutral multiplier. No omission and no
+ * formatting, so callers (the MCP `explain` projection, `feedback.ts`)
+ * read the contributions without re-parsing the reason strings.
+ */
+function buildBreakdown(parts: {
+  keywordScore: number;
+  semanticScore: number;
+  linkBoost: number;
+  recency: number;
+  tierMul: number;
+  entityBoost?: number;
+  activationBoost?: number;
+  coAccessBoost?: number;
+  trendMul?: number;
+  sessionFocus?: number;
+  rrf?: number;
+}): ScoreBreakdown {
+  return Object.freeze({
+    keyword: parts.keywordScore,
+    semantic: parts.semanticScore,
+    rrf: parts.rrf ?? 0,
+    entity: parts.entityBoost ?? 0,
+    activation: parts.activationBoost ?? 0,
+    coAccess: parts.coAccessBoost ?? 0,
+    link: parts.linkBoost,
+    recency: parts.recency,
+    tier: parts.tierMul,
+    trend: parts.trendMul ?? 1,
+    sessionFocus: parts.sessionFocus ?? 0,
+  });
 }
 
 export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSearchResult[] {
@@ -403,6 +438,19 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           activationBoost,
           coAccessBoost,
           ...(trend !== undefined ? { trend, trendMul } : {}),
+          sessionFocus,
+          rrf: rrfByChunk !== null ? rrf : 0,
+        }),
+        breakdown: buildBreakdown({
+          keywordScore: c.keywordScore,
+          semanticScore: semanticEnabled ? c.semanticScore : 0,
+          linkBoost,
+          recency,
+          tierMul,
+          entityBoost,
+          activationBoost,
+          coAccessBoost,
+          trendMul,
           sessionFocus,
           rrf: rrfByChunk !== null ? rrf : 0,
         }),

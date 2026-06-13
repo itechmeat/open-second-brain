@@ -1,14 +1,29 @@
 {
   "queries": [
-    { "id": "canary", "query": "canary rollout", "expected": ["deploy-canary.md"] },
+    {
+      "id": "canary",
+      "query": "canary rollout",
+      "expected": ["deploy-canary.md"],
+      "answer": "expand the rollout gradually"
+    },
     {
       "id": "bluegreen",
       "query": "blue green deployment swap",
       "expected": ["deploy-bluegreen.md"]
     },
-    { "id": "oauth", "query": "oauth token refresh", "expected": ["auth-oauth.md"] },
+    {
+      "id": "oauth",
+      "query": "oauth token refresh",
+      "expected": ["auth-oauth.md"],
+      "answer": "exchanges the refresh token"
+    },
     { "id": "passwords", "query": "password hashing salts", "expected": ["auth-passwords.md"] },
-    { "id": "backups", "query": "nightly backup strategy", "expected": ["db-backups.md"] },
+    {
+      "id": "backups",
+      "query": "nightly backup strategy",
+      "expected": ["db-backups.md"],
+      "answer": "rotates the last fourteen backup archives offsite"
+    },
     { "id": "indexing", "query": "slow queries missing index", "expected": ["db-indexing.md"] },
     { "id": "incident", "query": "outage root cause timeout", "expected": ["incident-2026-05.md"] },
     { "id": "alias-hop", "query": "PA importer progress", "expected": ["project-alpha.md"] },

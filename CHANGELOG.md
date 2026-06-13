@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-06-13
+
+### Added
+
+- **Search & Recall Quality Suite.** Seven language-agnostic enhancements to
+  the retrieval core. The five `brain_search` enhancements are each gated behind
+  their own flag, so a call that sets none of them returns byte-identical
+  results, ordering, and shape to before; the hybrid-degrade warning fires only
+  in a genuinely degraded state, and `brain_eval` is a new read-only tool.
+  - **Structured score breakdown.** `brain_search` accepts `explain: true` and
+    returns a per-result `score_breakdown` object (keyword, semantic, rrf,
+    entity, activation, coAccess, link, recency, tier, trend, sessionFocus)
+    alongside the existing human-readable `reasons[]`. The ranker now emits the
+    breakdown first-class, and the learned-weights fold reads it directly
+    instead of re-parsing reason strings.
+  - **Hybrid-degrade warning.** When a caller wants the semantic lane but it
+    cannot run (missing embeddings, unloaded vec extension, unconfigured key),
+    the result set carries one greppable `hybrid_degraded:` warning instead of
+    silently serving keyword-only. A keyword-only-by-choice query and a
+    semantic-disabled vault never carry it.
+  - **Inline trust metadata.** `brain_search` accepts `trust: true` and stamps
+    each hit with a computed-at-read-time `trust` object: `age_days` from the
+    document mtime, plus `superseded` and `conflict` derived from the
+    `superseded_by` / `contradicts` typed relations the recall path already
+    surfaces. Never stored.
+  - **Relevance threshold and rerank.** `threshold` (a `[0,1]` score floor
+    applied before the diversity rerank) drops weak hits so an irrelevant query
+    returns no match instead of noise; `rerank` re-orders the qualified set by
+    core textual relevance. Both off by default.
+  - **Self-tuning reinforce.** `reinforce: [paths]` records proven-useful
+    memories to a conflict-free one-file-per-signal ledger under
+    `Brain/search/reinforce/` and lifts ledger-strong memories by a bounded
+    boost before the top_k cut. Surfaced-only frequency is never recorded and
+    never boosts; the ledger is resettable.
+  - **Answer-containment@k benchmark metric.** The recall benchmark accepts an
+    optional per-query `answer` and reports `answerContainmentAtK` - whether the
+    answer text appears (folded substring) in the retrieved content within the
+    top k. The committed fixture gains answer-bearing queries with a CI floor;
+    datasets without `answer` keep hit@k / MRR behaviour unchanged.
+  - **`brain_eval` MCP tool.** A read-only tool that scores retrieval quality
+    over a caller-supplied dataset against the active vault, returning hit@k,
+    MRR, answer-containment@k, source-utilization@k, citation-depth, and a
+    source-warnings count a CI gate can cap. The fast path needs no embedding
+    key.
+
 ## [1.4.0] - 2026-06-12
 
 ### Added
@@ -5220,6 +5265,8 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.5.0]: https://github.com/itechmeat/open-second-brain/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/itechmeat/open-second-brain/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/itechmeat/open-second-brain/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/itechmeat/open-second-brain/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/itechmeat/open-second-brain/compare/v1.1.0...v1.2.0

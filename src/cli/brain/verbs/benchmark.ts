@@ -70,6 +70,11 @@ export async function cmdBrainBenchmark(argv: string[]): Promise<number> {
           expand: report.expand,
           hit_at_k: report.hitAtK,
           mrr: report.mrr,
+          answer_queries: report.answerQueries,
+          answer_containment_at_k: report.answerContainmentAtK,
+          source_utilization_at_k: report.sourceUtilizationAtK,
+          citation_depth: report.citationDepth,
+          source_warnings: report.sourceWarnings,
           misses: report.perQuery.filter((q) => !q.hit).map((q) => q.id),
         },
       });
@@ -83,12 +88,20 @@ export async function cmdBrainBenchmark(argv: string[]): Promise<number> {
         expand: report.expand,
         hit_at_k: report.hitAtK,
         mrr: report.mrr,
+        answer_queries: report.answerQueries,
+        answer_containment_at_k: report.answerContainmentAtK,
+        source_utilization_at_k: report.sourceUtilizationAtK,
+        citation_depth: report.citationDepth,
+        source_warnings: report.sourceWarnings,
         per_query: report.perQuery,
       });
     } else {
       ok(
         `benchmark: ${report.total} queries, hit@${report.k} ${report.hitAtK.toFixed(3)}, ` +
-          `MRR ${report.mrr.toFixed(3)}${report.expand ? " (expanded)" : ""}`,
+          `MRR ${report.mrr.toFixed(3)}, ` +
+          `answer@${report.k} ${report.answerContainmentAtK.toFixed(3)} (${report.answerQueries}), ` +
+          `src-util ${report.sourceUtilizationAtK.toFixed(3)}, warnings ${report.sourceWarnings}` +
+          `${report.expand ? " (expanded)" : ""}`,
       );
       for (const q of report.perQuery) {
         ok(`  ${q.hit ? "hit " : "MISS"} ${q.id} rank=${q.rank ?? "-"}`);

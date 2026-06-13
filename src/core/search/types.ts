@@ -36,6 +36,45 @@ export class SearchError extends Error {
   }
 }
 
+/**
+ * Structured per-layer score components (Search & Recall Quality Suite).
+ * The numeric sibling of `reasons[]`: where `reasons` formats only the
+ * layers that fired as strings, `breakdown` carries every component of
+ * the final score as a number, zero for a layer that did not fire and 1
+ * for a neutral multiplier. Additive layers (keyword, semantic, rrf,
+ * entity, activation, coAccess, link, recency, sessionFocus) are the raw
+ * contributions; `tier` and `trend` are the relevance-portion multipliers
+ * (1.0 = neutral). The ranker emits it for every primary result; the MCP
+ * `explain` projection and `feedback.ts` read it directly instead of
+ * re-parsing reason strings.
+ */
+export interface ScoreBreakdown {
+  readonly keyword: number;
+  readonly semantic: number;
+  readonly rrf: number;
+  readonly entity: number;
+  readonly activation: number;
+  readonly coAccess: number;
+  readonly link: number;
+  readonly recency: number;
+  readonly tier: number;
+  readonly trend: number;
+  readonly sessionFocus: number;
+}
+
+/**
+ * Inline per-hit trust metadata (Search & Recall Quality Suite). Computed
+ * at read time, never stored. `age_days` is the whole-day distance from
+ * the document mtime; `superseded` / `conflict` are derived from the
+ * typed relation edges the recall pipeline surfaces (`superseded_by` /
+ * `contradicts`). Present on a result only when the caller set `trust`.
+ */
+export interface TrustMetadata {
+  readonly age_days: number;
+  readonly superseded: boolean;
+  readonly conflict: boolean;
+}
+
 export interface BrainSearchResult {
   readonly documentId: number;
   readonly chunkId: number;
@@ -68,6 +107,22 @@ export interface BrainSearchResult {
     readonly relation: string;
     readonly target: string;
   }>;
+  /**
+   * Structured per-layer score components (Search & Recall Quality
+   * Suite). Always present on a primary ranked result; absent on
+   * synthetic results (link-traversal expansions, relation-polarity
+   * successor pull-ins) whose score is not a per-layer sum - the
+   * `explain` projection derives a faithful breakdown from the
+   * first-class lane/boost fields for those. Never serialized to the MCP
+   * output unless the caller sets `explain`.
+   */
+  readonly breakdown?: ScoreBreakdown;
+  /**
+   * Inline trust metadata (Search & Recall Quality Suite). Present only
+   * when the caller set `trust`; computed at read time from the document
+   * mtime and the surfaced typed relations, never stored.
+   */
+  readonly trust?: TrustMetadata;
   /**
    * Kind-namespaced origin label (Workspace Insight Suite, cross-vault
    * search): "local", "profile/<name>", or "source/<alias>". Only set
@@ -297,6 +352,40 @@ export interface SearchOptions {
    */
   readonly since?: string;
   readonly until?: string;
+  /**
+   * Inline trust metadata (Search & Recall Quality Suite). When true,
+   * each surfaced result carries a computed-at-read-time `trust` object
+   * (age in days, superseded, conflict) derived from the document mtime
+   * and the surfaced typed relations. Off by default; absent leaves the
+   * result shape byte-identical.
+   */
+  readonly trust?: boolean;
+  /**
+   * Relevance floor (Search & Recall Quality Suite). When > 0, results
+   * whose final normalized score is below this value are dropped before
+   * the diversity rerank, so a query with no sufficiently relevant memory
+   * returns no match instead of weak noise. Absent / 0 disables the
+   * filter and keeps results byte-identical. Applied against the clamped
+   * [0, 1] final score, so it is meaningful in both linear and rrf
+   * fusion.
+   */
+  readonly threshold?: number;
+  /**
+   * Relevance rerank (Search & Recall Quality Suite). When true, the
+   * threshold-qualified candidates are re-ordered by core textual
+   * relevance (keyword + semantic lanes) before the final slice - a
+   * deeper-relevance second pass. Off by default; absent leaves ordering
+   * unchanged.
+   */
+  readonly rerank?: boolean;
+  /**
+   * Self-tuning reinforce (Search & Recall Quality Suite). When present
+   * (even empty), the persisted reinforce ledger lifts proven-useful
+   * memories by a bounded boost before the top_k cut. A non-empty list is
+   * also recorded to the ledger by the calling surface. Absent leaves
+   * ranking byte-identical; surfaced-only frequency never boosts.
+   */
+  readonly reinforce?: ReadonlyArray<string>;
   /**
    * Self-healing index policy (Workspace Insight Suite). Default true:
    * a missing or schema-stale index is rebuilt once and the search

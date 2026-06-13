@@ -91,22 +91,17 @@ function round6(x: number): number {
 
 /**
  * Read the per-layer contributions off a search result. Keyword,
- * semantic, and recency are first-class fields; the entity layer only
- * surfaces through its `entity_match:` reason, so it is parsed back out.
+ * semantic, and recency are first-class fields; the entity layer is read
+ * from the structured `breakdown` the ranker emits. A result without a
+ * breakdown (a synthetic traversal expansion or relation-polarity
+ * pull-in) genuinely has no entity contribution, so 0 is correct - not a
+ * lossy fallback.
  */
 export function contributionsFromResult(result: BrainSearchResult): LayerContributions {
-  let entity = 0;
-  for (const reason of result.reasons) {
-    if (reason.startsWith("entity_match: ")) {
-      const parsed = Number(reason.slice("entity_match: ".length));
-      if (Number.isFinite(parsed)) entity = parsed;
-      break;
-    }
-  }
   return Object.freeze({
     keyword: result.keywordScore,
     semantic: result.semanticScore,
-    entity,
+    entity: result.breakdown?.entity ?? 0,
     recency: result.recencyBoost,
   });
 }

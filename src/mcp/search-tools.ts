@@ -28,6 +28,9 @@ import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
+import { projectScoreBreakdown } from "../core/search/enrich.ts";
+import { recordReinforce } from "../core/search/reinforce.ts";
+import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../core/search/benchmark.ts";
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
 import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
 import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
@@ -70,6 +73,35 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
+    explain: {
+      type: "boolean",
+      description:
+        "Include a structured score_breakdown (per-layer numeric components) on each result. Default false.",
+    },
+    trust: {
+      type: "boolean",
+      description:
+        "Stamp each result with inline trust metadata (age_days, superseded, conflict), computed at read time. Default false.",
+    },
+    threshold: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description:
+        "Relevance floor in [0,1] on the final score; drops weaker hits so an irrelevant query returns no match. Default 0 (disabled).",
+    },
+    rerank: {
+      type: "boolean",
+      description:
+        "Re-order the threshold-qualified results by core textual relevance (keyword + semantic). Default false.",
+    },
+    reinforce: {
+      type: "array",
+      maxItems: 50,
+      items: { type: "string", minLength: 1, maxLength: 512 },
+      description:
+        "Paths proven useful: recorded to the reinforce ledger and lifted (bounded) before the top_k cut. Default absent.",
+    },
     record_access: {
       type: "boolean",
       description:
@@ -132,6 +164,22 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
           endLine: { type: "integer" },
           searchType: { type: "string" },
           reasons: { type: "array", items: { type: "string" } },
+          score_breakdown: {
+            type: "object",
+            properties: {
+              keyword: { type: "number" },
+              semantic: { type: "number" },
+              rrf: { type: "number" },
+              entity: { type: "number" },
+              activation: { type: "number" },
+              coAccess: { type: "number" },
+              link: { type: "number" },
+              recency: { type: "number" },
+              tier: { type: "number" },
+              trend: { type: "number" },
+              sessionFocus: { type: "number" },
+            },
+          },
           origin: { type: "string" },
           why_retrieved: { type: "array", items: { type: "string" } },
           relations: {
@@ -143,6 +191,14 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
                 relation: { type: "string" },
                 target: { type: "string" },
               },
+            },
+          },
+          trust: {
+            type: "object",
+            properties: {
+              age_days: { type: "integer" },
+              superseded: { type: "boolean" },
+              conflict: { type: "boolean" },
             },
           },
         },
@@ -233,6 +289,21 @@ function parseVisibilityArgument(raw: unknown): string[] | undefined {
   return out;
 }
 
+function parseReinforceArgument(raw: unknown): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new MCPError(INVALID_PARAMS, "argument 'reinforce' must be an array of strings");
+  }
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") {
+      throw new MCPError(INVALID_PARAMS, "argument 'reinforce' must contain only strings");
+    }
+    if (item.length > 0) out.push(item);
+  }
+  return out;
+}
+
 function truncateContent(c: string, max: number): string {
   if (c.length <= max) return c;
   return c.slice(0, max - 1) + "…";
@@ -287,6 +358,17 @@ async function toolBrainSearch(
 
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
+  const explain = coerceBoolOptional(args, "explain") ?? false;
+  const trust = coerceBoolOptional(args, "trust") ?? false;
+  const rerank = coerceBoolOptional(args, "rerank") ?? false;
+  let threshold: number | undefined;
+  if ("threshold" in args && args["threshold"] !== undefined && args["threshold"] !== null) {
+    const raw = args["threshold"];
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > 1) {
+      throw new MCPError(INVALID_PARAMS, "argument 'threshold' must be a number between 0 and 1");
+    }
+    threshold = raw;
+  }
   const globalSearch = coerceBoolOptional(args, "global") ?? false;
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
@@ -315,11 +397,25 @@ async function toolBrainSearch(
   const focusSession = coerceStringOptional(args, "focus_session", 128);
   const properties = parsePropertiesArgument(args["properties"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
+  const reinforce = parseReinforceArgument(args["reinforce"]);
 
   const config = resolveSearchConfig({
     vault: ctx.vault,
     configPath: ctx.configPath ?? undefined,
   });
+
+  // Self-tuning reinforce (Search & Recall Quality Suite): the ledger
+  // write is the surface's side effect, recorded BEFORE the query so the
+  // just-named paths participate in this query's bounded boost. The pure
+  // re-rank lives in core. Best-effort: a failed write never breaks the
+  // search.
+  if (reinforce !== undefined && reinforce.length > 0) {
+    try {
+      recordReinforce(ctx.vault, reinforce);
+    } catch {
+      // Ledger persistence is best-effort.
+    }
+  }
 
   let outcome: SearchOutcome;
   const startedAtMs = Date.now();
@@ -336,6 +432,10 @@ async function toolBrainSearch(
     ...(focusSession !== undefined ? { focusSession } : {}),
     ...(evidencePack ? { evidencePack: true } : {}),
     ...(includeSuperseded ? { includeSuperseded: true } : {}),
+    ...(trust ? { trust: true } : {}),
+    ...(threshold !== undefined ? { threshold } : {}),
+    ...(rerank ? { rerank: true } : {}),
+    ...(reinforce !== undefined ? { reinforce } : {}),
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
     // Access recording (Time-Aware Recall & Activation Suite): the MCP
@@ -418,6 +518,8 @@ async function toolBrainSearch(
       endLine: r.endLine,
       searchType: r.searchType,
       reasons: r.reasons,
+      ...(explain ? { score_breakdown: projectScoreBreakdown(r) } : {}),
+      ...(r.trust !== undefined ? { trust: r.trust } : {}),
       ...(r.origin !== undefined ? { origin: r.origin } : {}),
       ...(outcome.evidencePack ? { why_retrieved: r.reasons } : {}),
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
@@ -576,6 +678,155 @@ async function toolBrainRecallFeedback(
   };
 }
 
+const EVAL_INPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    dataset: {
+      type: "object",
+      description:
+        "Eval dataset: { queries: [{ id, query, expected[], k?, answer? }] }. Scored against the active vault.",
+      properties: {
+        queries: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            required: ["id", "query", "expected"],
+            properties: {
+              id: { type: "string", minLength: 1 },
+              query: { type: "string", minLength: 1 },
+              expected: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+              k: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
+              answer: { type: "string", minLength: 1 },
+            },
+          },
+        },
+      },
+      required: ["queries"],
+    },
+    k: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
+    expand: { type: "boolean" },
+  },
+  required: ["dataset"],
+  additionalProperties: false,
+};
+
+const EVAL_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  required: [
+    "total",
+    "k",
+    "hit_at_k",
+    "mrr",
+    "answer_queries",
+    "answer_containment_at_k",
+    "source_utilization_at_k",
+    "citation_depth",
+    "source_warnings",
+  ],
+  properties: {
+    total: { type: "integer" },
+    k: { type: "integer" },
+    expand: { type: "boolean" },
+    hit_at_k: { type: "number" },
+    mrr: { type: "number" },
+    answer_queries: { type: "integer" },
+    answer_containment_at_k: { type: "number" },
+    source_utilization_at_k: { type: "number" },
+    citation_depth: { type: "number" },
+    source_warnings: { type: "integer" },
+    per_query: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          hit: { type: "boolean" },
+          rank: { type: "integer" },
+          answer_contained: { type: "boolean" },
+        },
+      },
+    },
+  },
+};
+
+const EVAL_TIMEOUT_MS = 60_000;
+
+/**
+ * `brain_eval` (Search & Recall Quality Suite): run the recall benchmark
+ * over a caller-supplied dataset against the active vault and return the
+ * quality metrics - hit@k, MRR, answer-containment@k, source-utilization,
+ * citation-depth, and the source-warnings count a CI gate can cap.
+ * Read-only; the fast path needs no embedding key.
+ */
+async function toolBrainEval(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  let dataset;
+  try {
+    dataset = parseRecallBenchmarkDataset(args["dataset"]);
+  } catch (e) {
+    if (e instanceof SearchError) throw searchErrorToMcp(e);
+    throw new MCPError(INVALID_PARAMS, e instanceof Error ? e.message : String(e));
+  }
+  // Bound per-query rank depth at the untrusted MCP boundary. The library
+  // accepts any positive `k`, but an over-MCP caller must not bypass the
+  // top-level `k <= MCP_LIMIT_MAX` guard with a deep per-query override and
+  // trigger expensive searches.
+  for (const q of dataset.queries) {
+    if (q.k !== undefined && q.k > MCP_LIMIT_MAX) {
+      throw new MCPError(INVALID_PARAMS, `query '${q.id}' k must not exceed ${MCP_LIMIT_MAX}`);
+    }
+  }
+  let k: number | undefined;
+  if ("k" in args && args["k"] !== undefined && args["k"] !== null) {
+    const raw = args["k"];
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > MCP_LIMIT_MAX) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `argument 'k' must be an integer between 1 and ${MCP_LIMIT_MAX}`,
+      );
+    }
+    k = raw;
+  }
+  const expand = coerceBoolOptional(args, "expand") ?? false;
+  const config = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+  let report;
+  try {
+    report = await withTimeout(
+      runRecallBenchmark(config, dataset, { ...(k !== undefined ? { k } : {}), expand }),
+      EVAL_TIMEOUT_MS,
+      searchTimeoutError,
+    );
+  } catch (e) {
+    if (e instanceof SearchError) throw searchErrorToMcp(e);
+    if (e instanceof MCPError) throw e;
+    throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
+  }
+  return {
+    total: report.total,
+    k: report.k,
+    expand: report.expand,
+    hit_at_k: report.hitAtK,
+    mrr: report.mrr,
+    answer_queries: report.answerQueries,
+    answer_containment_at_k: report.answerContainmentAtK,
+    source_utilization_at_k: report.sourceUtilizationAtK,
+    citation_depth: report.citationDepth,
+    source_warnings: report.sourceWarnings,
+    per_query: report.perQuery.map((q) => ({
+      id: q.id,
+      hit: q.hit,
+      ...(q.rank !== null ? { rank: q.rank } : {}),
+      ...(q.answerContained !== null ? { answer_contained: q.answerContained } : {}),
+    })),
+  };
+}
+
 export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_recall_feedback",
@@ -601,6 +852,15 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     outputSchema: SEARCH_OUTPUT_SCHEMA,
     previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainSearch,
+  },
+  {
+    name: "brain_eval",
+    description:
+      "Score retrieval quality over a dataset against the active vault: hit@k, MRR, answer-containment@k, source-utilization, citation-depth, source warnings. Read-only.",
+    inputSchema: EVAL_INPUT_SCHEMA,
+    outputSchema: EVAL_OUTPUT_SCHEMA,
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainEval,
   },
 ]);
 
