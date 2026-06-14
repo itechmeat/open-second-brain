@@ -240,6 +240,10 @@ describe("tool listing", () => {
         "brain_search",
         "brain_eval",
         "brain_file_context",
+        // Session Knowledge Synthesis Suite (v1.11.0).
+        "brain_session_summary",
+        "brain_idea_lineage",
+        "brain_note_history",
         // Schema admin + watchdog recovery probes.
         "schema_apply_mutations",
         "schema_inspect",
@@ -538,7 +542,9 @@ describe("stdio loop", () => {
     //   / brain_derive_fact (Knowledge Provenance Suite, v1.7.0) = 76.
     // + brain_create_note (Brain Portability & Interop Suite) = 77.
     // + brain_file_context (Recall & Working-Memory Quality Suite) = 78.
-    expect(list.result.tools.length).toBe(78);
+    // + brain_session_summary / brain_idea_lineage / brain_note_history
+    //   (Session Knowledge Synthesis Suite, v1.11.0) = 81.
+    expect(list.result.tools.length).toBe(81);
   });
 
   test("returns parse error for invalid JSON", async () => {
