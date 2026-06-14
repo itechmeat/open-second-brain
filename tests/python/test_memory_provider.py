@@ -516,12 +516,12 @@ class _ScriptedReader:
     """Readline source that yields pre-built JSON-RPC frames in order."""
 
     def __init__(self, frames):
-        self._lines = [json.dumps(f) + "\n" for f in frames]
+        self._lines = [(json.dumps(f) + "\n").encode("utf-8") for f in frames]
         self._i = 0
 
     def readline(self):
         if self._i >= len(self._lines):
-            return ""
+            return b""
         line = self._lines[self._i]
         self._i += 1
         return line
@@ -531,7 +531,7 @@ class _FakeProcess:
     """Minimal Popen stand-in: captures stdin writes, scripts stdout reads."""
 
     def __init__(self, responses):
-        self.stdin = io.StringIO()
+        self.stdin = io.BytesIO()
         self.stdout = _ScriptedReader(responses)
         self.terminated = False
         self._returncode = None
@@ -553,7 +553,7 @@ class _FakeProcess:
 
 class JsonRpcStdioClientTests(unittest.TestCase):
     def test_request_correlates_by_id_and_skips_noise(self):
-        writer = io.StringIO()
+        writer = io.BytesIO()
         # A notification (no id) and a mismatched id must be skipped before
         # the matching response is returned.
         reader = _ScriptedReader(
@@ -574,12 +574,12 @@ class JsonRpcStdioClientTests(unittest.TestCase):
         reader = _ScriptedReader(
             [{"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "nope"}}]
         )
-        client = JsonRpcStdioClient(io.StringIO(), reader)
+        client = JsonRpcStdioClient(io.BytesIO(), reader)
         with self.assertRaises(BridgeError):
             client.request("missing", {})
 
     def test_eof_raises(self):
-        client = JsonRpcStdioClient(io.StringIO(), _ScriptedReader([]))
+        client = JsonRpcStdioClient(io.BytesIO(), _ScriptedReader([]))
         with self.assertRaises(BridgeError):
             client.request("ping", {})
 
@@ -675,6 +675,23 @@ class McpBrainBridgeTests(unittest.TestCase):
         result = bridge.call_tool("brain_query", {"topic": "x"})
         self.assertEqual(result, {"ok": True})
         self.assertEqual(spawn.state["n"], 2)
+
+    def test_transport_error_retries_through_failed_restart(self):
+        # Regression: a restart whose OWN handshake dies must not abort the
+        # retry loop. dead-on-call -> dead-on-handshake -> good. The middle
+        # child EOFs during initialize, so _restart() raises; the loop must
+        # capture that and still reach the third, healthy child.
+        first = _FakeProcess(self._handshake_frames())  # no id-3 -> EOF on the call
+        broken = _FakeProcess([])  # EOF during handshake -> _restart() raises
+        good = _FakeProcess(
+            self._handshake_frames([{"jsonrpc": "2.0", "id": 3, "result": {"ok": True}}])
+        )
+        spawn = self._counting_spawn(first, broken, good)
+        bridge = McpBrainBridge(vault="/v", spawn=spawn)
+        bridge.start()
+        result = bridge.call_tool("brain_query", {"topic": "x"})
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(spawn.state["n"], 3)
 
 
 class FakeBrainBridgeTests(unittest.TestCase):
