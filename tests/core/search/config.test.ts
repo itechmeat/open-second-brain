@@ -33,6 +33,8 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS",
   "OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED",
   "OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL",
+  "OPEN_SECOND_BRAIN_SEARCH_SHUTDOWN_GRACE",
+  "OPEN_SECOND_BRAIN_SEARCH_RESUME_REINDEX",
 ];
 
 beforeEach(() => {
@@ -279,4 +281,45 @@ test("overrides are validated after merging", () => {
       overrides: { semantic: { batchSize: 0 } },
     }),
   ).toThrow(/embedding_batch_size/);
+});
+
+// ── Indexer Durability suite: shutdown grace + resume flag ──────────────────
+
+test("durability keys default to a 5s grace and no resume", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  expect(cfg.shutdownGraceMs).toBe(5_000);
+  expect(cfg.resumeReindex).toBe(false);
+});
+
+test("config keys override the durability defaults", () => {
+  writeFileSync(
+    configPath,
+    `vault: "${tmp}"\nsearch_shutdown_grace_seconds: 12\nsearch_resume_reindex: true\n`,
+  );
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  expect(cfg.shutdownGraceMs).toBe(12_000);
+  expect(cfg.resumeReindex).toBe(true);
+});
+
+test("env mirrors override the durability config", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_shutdown_grace_seconds: 12\n`);
+  process.env["OPEN_SECOND_BRAIN_SEARCH_SHUTDOWN_GRACE"] = "3";
+  process.env["OPEN_SECOND_BRAIN_SEARCH_RESUME_REINDEX"] = "true";
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  expect(cfg.shutdownGraceMs).toBe(3_000);
+  expect(cfg.resumeReindex).toBe(true);
+});
+
+test("an invalid grace is rejected loudly (no silent fallback)", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_shutdown_grace_seconds: soon\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(
+    /search_shutdown_grace_seconds/,
+  );
+});
+
+test("grace of 0 disables the await window", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_shutdown_grace_seconds: 0\n`);
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  expect(cfg.shutdownGraceMs).toBe(0);
 });

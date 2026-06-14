@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import {
   accessSync,
   constants,
+  existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -43,8 +44,10 @@ import { tieredFieldsForKind } from "../brain/frontmatter-tiers.ts";
 import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { appendMetric } from "../brain/metrics.ts";
+import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
 import { Store } from "./store.ts";
+import { LATEST_SCHEMA_VERSION } from "./schema.ts";
 import { SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
 import { withTimeout } from "./with-timeout.ts";
@@ -76,6 +79,14 @@ export interface IndexVaultOptions {
    * file, so a tripped guard aborts between files - never mid-write.
    */
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
+  /**
+   * On-demand cancellation (Indexer Durability suite). Checked at the
+   * same boundaries the deadline uses - between files and between embed
+   * batches, never mid-write. An aborted signal throws
+   * `SafeguardAbortError`; the deletion sweep runs only on full
+   * completion, so an aborted run leaves a consistent partial index.
+   */
+  readonly signal?: AbortSignal;
 }
 
 interface MutableStats {
@@ -210,6 +221,8 @@ async function indexInto(
       // Per-file document upserts are transactional, so a tripped
       // guard leaves a consistent (partially refreshed) index.
       opts?.safeguard?.checkpoint();
+      // On-demand cancellation, same boundary as the deadline.
+      throwIfAborted(opts?.signal, "index");
       // Mark seen FIRST. If anything downstream throws (read fault,
       // chunker bug, transient FS error), the file must not look
       // "missing" to the deletion sweep below — that would wipe a
@@ -415,7 +428,14 @@ async function indexInto(
     }
 
     if (opts?.embeddings) {
-      await populateEmbeddings(store, config, stats, opts?.forceCost === true, opts?.safeguard);
+      await populateEmbeddings(
+        store,
+        config,
+        stats,
+        opts?.forceCost === true,
+        opts?.safeguard,
+        opts?.signal,
+      );
     }
 
     const now = new Date().toISOString();
@@ -480,6 +500,7 @@ async function populateEmbeddings(
   stats: MutableStats,
   forceCost: boolean,
   safeguard?: import("../brain/safeguard.ts").Safeguard,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!config.semantic.enabled) {
     throw new SearchError(
@@ -535,6 +556,7 @@ async function populateEmbeddings(
     // Cooperative deadline: embedding batches are the other long
     // phase of an index run - abort between batches, never mid-batch.
     safeguard?.checkpoint();
+    throwIfAborted(signal, "index");
     const batch = pending.slice(i, i + superBatch);
     const texts = batch.map((p) => p.content);
     const vectors = await provider.embed(texts);
@@ -576,14 +598,42 @@ export async function reindexVault(
   const bakPath = config.dbPath + ".bak";
 
   mkdirSync(dirname(config.dbPath), { recursive: true });
-  tryUnlink(newPath);
 
   // Build into the temp file with an override config.
   const tempConfig: ResolvedSearchConfig = Object.freeze({
     ...config,
     dbPath: newPath,
   });
-  const stats = await indexVault(tempConfig, { ...opts, force: true });
+
+  // Resumable staging (opt-in). A compatible in-progress `.new` from an
+  // interrupted run is resumed via the incremental fastpath instead of
+  // rebuilt from scratch; an incompatible or unreadable one is
+  // discarded. With the flag OFF, the temp file is always rebuilt fresh
+  // and no staging marker is written or read - byte-identical to the
+  // pre-suite path (no extra staging-DB open/close cycles).
+  let resume = false;
+  if (config.resumeReindex) {
+    const signature = reindexStagingSignature(config, opts?.embeddings === true);
+    if (existsSync(newPath)) {
+      resume = await stagingSignatureMatches(tempConfig, signature);
+    }
+    if (!resume) tryUnlink(newPath);
+    // Stamp the signature so an interruption leaves a build a later run
+    // can recognise and resume.
+    await withStagingStore(tempConfig, (store) => store.setState(REINDEX_SIGNATURE_KEY, signature));
+  } else {
+    tryUnlink(newPath);
+  }
+
+  // `force: false` on resume lets the fastpath skip the files the
+  // partial build already committed; a fresh build forces every file.
+  const stats = await indexVault(tempConfig, { ...opts, force: !resume });
+
+  // Clear the marker so the swapped-in live index carries no staging
+  // state. Only present when resume was enabled.
+  if (config.resumeReindex) {
+    await withStagingStore(tempConfig, (store) => store.deleteState(REINDEX_SIGNATURE_KEY));
+  }
 
   // Same-directory rename swap. The two renames are each atomic on
   // POSIX; the gap between them is the only crash window, which the
@@ -592,6 +642,56 @@ export async function reindexVault(
   tryRename(config.dbPath, bakPath); // no-op (ENOENT) on fresh reindex
   renameSync(newPath, config.dbPath); // must succeed — `newPath` was just built
   return stats;
+}
+
+/** index_state key carrying the staging-build compatibility signature. */
+const REINDEX_SIGNATURE_KEY = "reindex_signature";
+
+/**
+ * Compatibility signature for a staging rebuild: a resume is safe only
+ * when the schema version, chunk parameters, and (when embeddings are
+ * computed) the active embedding signature all match the partial build.
+ * Any drift invalidates the staging DB and forces a fresh rebuild.
+ */
+function reindexStagingSignature(config: ResolvedSearchConfig, embeddings: boolean): string {
+  const embedding = embeddings ? (activeEmbeddingSignature(config) ?? "active") : "off";
+  return JSON.stringify({
+    schema: LATEST_SCHEMA_VERSION,
+    chunkSize: config.chunkSize,
+    chunkOverlap: config.chunkOverlap,
+    embedding,
+  });
+}
+
+/** Read the staging signature from an existing `.new`; false on any
+ * read error (a corrupt or partial staging DB is rebuilt, not trusted). */
+async function stagingSignatureMatches(
+  tempConfig: ResolvedSearchConfig,
+  signature: string,
+): Promise<boolean> {
+  try {
+    const store = await Store.open(tempConfig, { mode: "write", loadVec: false });
+    try {
+      return store.getState(REINDEX_SIGNATURE_KEY) === signature;
+    } finally {
+      await store.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** Run a short write against the staging DB (set/clear the marker). */
+async function withStagingStore(
+  tempConfig: ResolvedSearchConfig,
+  fn: (store: Store) => void,
+): Promise<void> {
+  const store = await Store.open(tempConfig, { mode: "write", loadVec: false });
+  try {
+    fn(store);
+  } finally {
+    await store.close();
+  }
 }
 
 /** `unlinkSync` that tolerates ENOENT (file already absent). */

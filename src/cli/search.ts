@@ -56,6 +56,8 @@ import type {
 } from "../core/search/index.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { IndexWatchPlanner } from "../core/search/index-watch.ts";
+import { IndexWatchRunner } from "../core/search/watch-runner.ts";
+import { SafeguardAbortError } from "../core/brain/safeguard.ts";
 import { canonicalNotePath } from "../core/path-safety.ts";
 import { watch, type FSWatcher } from "node:fs";
 import { CliError, parseFlags } from "./argparse.ts";
@@ -744,28 +746,32 @@ async function cmdSearchWatch(argv: ReadonlyArray<string>): Promise<number> {
     );
   }
 
-  let running = false;
-  let stopped = false;
-
-  const flush = async (): Promise<void> => {
-    if (running || stopped) return;
-    const due = planner.take(Date.now());
-    if (due.length === 0) return;
-    running = true;
-    try {
-      const stats = await indexVault(cfg, { embeddings: flags["embeddings"] === true });
-      process.stderr.write(
-        `synced ${due.length} change(s): +${stats.added} ~${stats.updated} =${stats.unchanged}` +
-          (stats.errors.length > 0 ? ` (${stats.errors.length} error(s))` : "") +
-          "\n",
-      );
-    } catch (e) {
-      // A failed pass must not kill the watcher; report and keep watching.
-      process.stderr.write(`index sync failed: ${e instanceof Error ? e.message : String(e)}\n`);
-    } finally {
-      running = false;
-    }
-  };
+  // Single-flight + graceful-shutdown coordinator (Indexer Durability
+  // suite). A SIGINT/SIGTERM aborts the in-flight pass at its next file
+  // boundary and waits for it to settle (bounded by the configured
+  // grace window) before exiting, so a signal never kills a run
+  // mid-write. indexInto closes its store in a finally, so the aborted
+  // pass still consolidates the WAL and releases the writer lock.
+  const runner = new IndexWatchRunner({
+    graceMs: cfg.shutdownGraceMs,
+    index: async (signal): Promise<void> => {
+      const due = planner.take(Date.now());
+      if (due.length === 0) return;
+      try {
+        const stats = await indexVault(cfg, { embeddings: flags["embeddings"] === true, signal });
+        process.stderr.write(
+          `synced ${due.length} change(s): +${stats.added} ~${stats.updated} =${stats.unchanged}` +
+            (stats.errors.length > 0 ? ` (${stats.errors.length} error(s))` : "") +
+            "\n",
+        );
+      } catch (e) {
+        // An abort is the expected stop on shutdown - let the runner
+        // observe it. Any other failure must not kill the watcher.
+        if (e instanceof SafeguardAbortError) throw e;
+        process.stderr.write(`index sync failed: ${e instanceof Error ? e.message : String(e)}\n`);
+      }
+    },
+  });
 
   watcher.on("error", (e) => {
     process.stderr.write(`watch error: ${e instanceof Error ? e.message : String(e)}\n`);
@@ -778,22 +784,25 @@ async function cmdSearchWatch(argv: ReadonlyArray<string>): Promise<number> {
 
   const timer = setInterval(
     () => {
-      void flush();
+      void runner.flush();
     },
     Math.max(50, debounceMs),
   );
 
   return await new Promise<number>((resolve) => {
-    const shutdown = (): void => {
-      if (stopped) return;
-      stopped = true;
+    const shutdown = async (): Promise<void> => {
+      if (runner.isStopped) return;
       clearInterval(timer);
       watcher.close();
+      // Drain the in-flight pass (aborted) within the grace window.
+      // A second SIGINT/SIGTERM bypasses this (process.once consumed
+      // the first), falling back to the default terminate = force exit.
+      await runner.shutdown();
       process.stderr.write("watch stopped\n");
       resolve(0);
     };
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
+    process.once("SIGINT", () => void shutdown());
+    process.once("SIGTERM", () => void shutdown());
     process.stderr.write(
       `watching ${cfg.vault} for .md changes (debounce ${debounceMs}ms); Ctrl-C to stop\n`,
     );

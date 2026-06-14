@@ -18,6 +18,8 @@ import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import lockfile from "proper-lockfile";
 
+import { registerWriterDb, unregisterWriterDb } from "./store-exit.ts";
+
 import { computeCorpusGeneration } from "./corpus-generation.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
@@ -204,13 +206,32 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Stale window for the writer lock (ms). A lock whose mtime is older
+ * than this is treated as abandoned (crashed holder) and taken over by
+ * the next writer, so a SIGKILL never wedges the index for longer than
+ * this window.
+ */
+export const WRITER_LOCK_STALE_MS = 60_000;
+
+/**
+ * Heartbeat interval (ms): the async writer lock refreshes its mtime
+ * this often so a legitimate long-running index is never mistaken for
+ * a stale lock. Must stay below {@link WRITER_LOCK_STALE_MS}. NOTE: the
+ * per-file document walk is synchronous, so this timer only fires
+ * across the await points (embed batches); a multi-minute fully
+ * synchronous walk still relies on the stale window, which 60s amply
+ * covers for real vaults.
+ */
+export const WRITER_LOCK_HEARTBEAT_MS = 30_000;
+
 function acquireWriterLockSync(path: string): () => void {
   const maxAttempts = 10;
   const sleepMs = 50;
   let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      return lockfile.lockSync(path, { stale: 60_000, realpath: false });
+      return lockfile.lockSync(path, { stale: WRITER_LOCK_STALE_MS, realpath: false });
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ELOCKED") throw err;
@@ -336,7 +357,10 @@ export class Store {
     try {
       release = await lockfile.lock(config.dbPath, {
         retries: { retries: 3, factor: 1, minTimeout: 1000, maxTimeout: 1000 },
-        stale: 60_000,
+        stale: WRITER_LOCK_STALE_MS,
+        // Explicit heartbeat: refresh the lock mtime mid-run so a long
+        // index is never mistaken for a stale lock and taken over.
+        update: WRITER_LOCK_HEARTBEAT_MS,
         realpath: false,
       });
     } catch (e) {
@@ -360,6 +384,9 @@ export class Store {
       const vecLoaded = loadVec && tryLoadVecExtension(db);
       const store = new Store(db, config, vecLoaded, release);
       store.ensureEmbeddingModel(config.semantic.model, config.semantic.dimension);
+      // Belt-and-suspenders: consolidate this writer's WAL on a
+      // bypassed close (process.exit / signal-driven exit).
+      registerWriterDb(db);
       return store;
     } catch (e) {
       try {
@@ -383,6 +410,8 @@ export class Store {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // Orderly close owns consolidation below; drop the exit-hook entry.
+    unregisterWriterDb(this.db);
     try {
       // Writer mode: consolidate WAL into the main file and switch back to
       // DELETE journal mode so the `-wal`/`-shm` siblings are removed. This

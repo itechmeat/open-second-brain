@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-06-13
+
+### Added
+
+- **Indexer Durability & Resilience Suite.** Interrupting a long index run no
+  longer risks losing work or wedging the index. The suite makes cancellation
+  cooperative, the watcher shutdown graceful, and a full rebuild resumable -
+  reusing the existing `Safeguard` and per-vault lock rather than adding a new
+  lifecycle subsystem. Every behavioural change defaults to today's behaviour;
+  a vault that sets nothing is byte-identical.
+  - **Cooperative abort (`Safeguard` + `AbortSignal`).** The cooperative
+    deadline gains an optional `AbortSignal`: one `checkpoint()` now trips on
+    either an aborted signal (a new `SafeguardAbortError`, checked first) or the
+    existing timeout. The signal threads through `indexVault` and
+    `populateEmbeddings`, checked at the same boundaries the deadline uses -
+    between files and between embed batches, never mid-write - so a run can be
+    cancelled on demand. Bun's SQLite is synchronous, so abort stays
+    cooperative; the deletion sweep runs only on full completion, so an aborted
+    run leaves a consistent, partially-refreshed index.
+  - **Graceful `o2b search watch` shutdown.** SIGINT/SIGTERM now stops accepting
+    new flushes, aborts the in-flight pass, and awaits it to settle at a
+    cooperative boundary before exiting - bounded by `search_shutdown_grace_seconds`
+    (default 5). A signal no longer kills a pass mid-write. The flush/shutdown
+    coordination lives in a testable `IndexWatchRunner`; a second signal falls
+    back to the default terminate. `0` grace exits immediately after signalling.
+  - **Opt-in resumable reindex (`search_resume_reindex`).** An interrupted full
+    `reindexVault` rebuild no longer discards all progress: a compatible
+    in-progress `brain.sqlite.new` staging build is resumed via the incremental
+    fastpath instead of rebuilt from scratch. Resume is gated on a signature
+    marker (schema version + chunk parameters + embedding signature) stored in
+    the staging DB's `index_state` KV - no schema migration - so a drifted or
+    unreadable staging DB is discarded and rebuilt, never trusted. The marker is
+    cleared before the atomic swap, so the live index never carries staging
+    state. Default off keeps the always-fresh rebuild.
+  - **Writer-lock heartbeat + WAL-flush-on-exit.** The async writer lock refreshes
+    its mtime mid-run (explicit heartbeat below the 60s stale window) so a long
+    index is never mistaken for a stale lock. A process-exit registry consolidates
+    each open writer's WAL on a bypassed `close()`, mirroring the existing
+    sync-lock cleanup hook.
+- Honest multi-instance story (no new daemon): the MCP server is stdio-only, so
+  isolation comes from the per-`dbPath` writer lock. Two instances on different
+  vaults run conflict-free; a second writer on the same vault gets a typed
+  `INDEX_LOCKED`. Pinned by tests; no `--port`/`--instance` model was fabricated.
+
 ## [1.7.0] - 2026-06-13
 
 ### Added
@@ -5344,6 +5388,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.8.0]: https://github.com/itechmeat/open-second-brain/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/itechmeat/open-second-brain/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/itechmeat/open-second-brain/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/itechmeat/open-second-brain/compare/v1.4.0...v1.5.0

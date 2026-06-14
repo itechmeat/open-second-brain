@@ -127,5 +127,7 @@ export function makeConfig(opts: {
       poolMultiplier: 3,
       selfTuningEnabled: opts.selfTuningEnabled ?? false,
     }),
+    shutdownGraceMs: 5_000,
+    resumeReindex: false,
   });
 }

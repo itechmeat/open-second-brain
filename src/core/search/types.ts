@@ -568,4 +568,18 @@ export interface ResolvedSearchConfig {
   readonly rrfK: number;
   readonly semantic: ResolvedEmbeddingConfig;
   readonly recall: ResolvedRecallConfig;
+  /**
+   * Grace window (ms) the `o2b search watch` shutdown waits for an
+   * in-flight index pass to settle at a cooperative boundary before
+   * exiting (Indexer Durability suite). `0` exits immediately after
+   * signalling the abort, without awaiting. Default 5000.
+   */
+  readonly shutdownGraceMs: number;
+  /**
+   * When true, an interrupted full `reindexVault` rebuild resumes a
+   * compatible `brain.sqlite.new` staging build instead of discarding
+   * it. Opt-in; default false keeps the always-fresh rebuild. Resume is
+   * gated on a signature marker, so a drifted staging DB is rebuilt.
+   */
+  readonly resumeReindex: boolean;
 }

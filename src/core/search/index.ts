@@ -115,6 +115,8 @@ const DEFAULTS = {
   cacheTtlSeconds: 300,
   fusionMode: "linear" as const,
   rrfK: DEFAULT_RRF_K,
+  shutdownGraceSeconds: 5,
+  resumeReindex: false,
 };
 
 function parseFusionMode(raw: string | null): "linear" | "rrf" {
@@ -508,6 +510,22 @@ export function resolveSearchConfig(opts: {
     false,
     "search_self_tuning_enabled",
   );
+  const shutdownGraceSeconds = parseInteger(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_SHUTDOWN_GRACE",
+      "search_shutdown_grace_seconds",
+    ),
+    DEFAULTS.shutdownGraceSeconds,
+    "search_shutdown_grace_seconds",
+    { min: 0 },
+  );
+  const resumeReindex = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RESUME_REINDEX", "search_resume_reindex"),
+    DEFAULTS.resumeReindex,
+    "search_resume_reindex",
+  );
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
@@ -541,6 +559,8 @@ export function resolveSearchConfig(opts: {
     rrfK,
     semantic,
     recall,
+    shutdownGraceMs: shutdownGraceSeconds * 1000,
+    resumeReindex,
   });
 
   if (!opts.overrides) {
