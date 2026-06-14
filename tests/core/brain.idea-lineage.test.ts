@@ -71,6 +71,32 @@ describe("traceIdeaLineage over the continuity source graph", () => {
     expect(result.truncated).toBe(false);
   });
 
+  test("a turn ref resolves within the digest's own session when turn ids collide", () => {
+    // Two sessions reuse turn_id "t1". The digest in session A must link to
+    // A's turn, never B's.
+    const turnA = appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-06-14T09:00:00.000Z",
+      payload: { session_id: "A", turn_id: "t1", role: "user", text: "in A" },
+    });
+    appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-06-14T09:30:00.000Z",
+      payload: { session_id: "B", turn_id: "t1", role: "user", text: "in B" },
+    });
+    const digestA = appendSessionSummary(vault, {
+      sessionId: "A",
+      decisions: ["decided in A"],
+      sourceTurnIds: ["t1"],
+      createdAt: "2026-06-14T10:00:00.000Z",
+    });
+
+    const result = traceIdeaLineage(vault, { id: digestA.id });
+    const turnNodes = result.nodes.filter((n) => n.kind === "session_turn");
+    expect(turnNodes.length).toBe(1);
+    expect(turnNodes[0]!.id).toBe(turnA.id);
+  });
+
   test("an unknown id is a typed error, not a silent empty chain", () => {
     expect(() => traceIdeaLineage(vault, { id: "ctn_does_not_exist" })).toThrow(IdeaLineageError);
   });

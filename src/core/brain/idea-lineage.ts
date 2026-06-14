@@ -93,13 +93,21 @@ function continuityLineage(vault: string, id: string, maxDepth: number): IdeaLin
   const records = listContinuityRecords(vault);
   const byId = new Map<string, ContinuityRecord>();
   const byTurnId = new Map<string, ContinuityRecord>();
+  const bySessionTurnId = new Map<string, ContinuityRecord>();
   for (const record of records) {
     byId.set(record.id, record);
     if (record.kind === "session_turn") {
       const turnId = String(record.payload["turn_id"] ?? "");
-      if (turnId.length > 0 && !byTurnId.has(turnId)) byTurnId.set(turnId, record);
+      if (turnId.length === 0) continue;
+      if (!byTurnId.has(turnId)) byTurnId.set(turnId, record);
+      const sessionId = String(record.payload["session_id"] ?? "");
+      if (sessionId.length > 0) {
+        const scoped = sessionTurnKey(sessionId, turnId);
+        if (!bySessionTurnId.has(scoped)) bySessionTurnId.set(scoped, record);
+      }
     }
   }
+  const lookup: Lookup = { byId, byTurnId, bySessionTurnId };
 
   const root = byId.get(id);
   if (root === undefined) throw new IdeaLineageError(`no continuity record with id ${id}`);
@@ -114,13 +122,12 @@ function continuityLineage(vault: string, id: string, maxDepth: number): IdeaLin
   let depth = 0;
   while (frontier.length > 0) {
     if (depth >= maxDepth) {
-      if (frontier.some((record) => hasUnseenSource(record, byId, byTurnId, seen)))
-        truncated = true;
+      if (frontier.some((record) => hasUnseenSource(record, lookup, seen))) truncated = true;
       break;
     }
     const next: ContinuityRecord[] = [];
     for (const record of frontier) {
-      for (const source of resolveSources(record, byId, byTurnId)) {
+      for (const source of resolveSources(record, lookup)) {
         const edgeKey = `${record.id}->${source.record.id}`;
         if (!edgeKeys.has(edgeKey)) {
           edgeKeys.add(edgeKey);
@@ -152,17 +159,37 @@ interface ResolvedSource {
   readonly relation: string;
 }
 
-function resolveSources(
-  record: ContinuityRecord,
-  byId: ReadonlyMap<string, ContinuityRecord>,
-  byTurnId: ReadonlyMap<string, ContinuityRecord>,
-): ResolvedSource[] {
+/**
+ * Record lookups for source resolution. `bySessionTurnId` is keyed
+ * `<session_id>:<turn_id>` so a turn reference resolves within the
+ * referring record's own session first, preventing a cross-session
+ * mislink when two sessions reuse the same `turn_id`.
+ */
+interface Lookup {
+  readonly byId: ReadonlyMap<string, ContinuityRecord>;
+  readonly byTurnId: ReadonlyMap<string, ContinuityRecord>;
+  readonly bySessionTurnId: ReadonlyMap<string, ContinuityRecord>;
+}
+
+function sessionTurnKey(sessionId: string, turnId: string): string {
+  return `${sessionId}:${turnId}`;
+}
+
+function resolveSources(record: ContinuityRecord, lookup: Lookup): ResolvedSource[] {
   const sources: ResolvedSource[] = [];
   const claimed = new Set<string>();
+  const recordSessionId = String(record.payload["session_id"] ?? "");
   for (const ref of record.sourceRefs) {
     const refId = typeof ref.id === "string" ? ref.id : "";
     if (refId.length === 0 || refId === record.id) continue;
-    const candidate = byId.get(refId) ?? byTurnId.get(refId);
+    // A record-id edge wins; otherwise a turn id resolves within the
+    // referring record's own session before falling back to the global
+    // turn index (only reachable when the session is unknown).
+    const scoped =
+      recordSessionId.length > 0
+        ? lookup.bySessionTurnId.get(sessionTurnKey(recordSessionId, refId))
+        : undefined;
+    const candidate = lookup.byId.get(refId) ?? scoped ?? lookup.byTurnId.get(refId);
     if (candidate === undefined || candidate.id === record.id || claimed.has(candidate.id))
       continue;
     claimed.add(candidate.id);
@@ -173,11 +200,10 @@ function resolveSources(
 
 function hasUnseenSource(
   record: ContinuityRecord,
-  byId: ReadonlyMap<string, ContinuityRecord>,
-  byTurnId: ReadonlyMap<string, ContinuityRecord>,
+  lookup: Lookup,
   seen: ReadonlySet<string>,
 ): boolean {
-  return resolveSources(record, byId, byTurnId).some((source) => !seen.has(source.record.id));
+  return resolveSources(record, lookup).some((source) => !seen.has(source.record.id));
 }
 
 function refRelation(ref: { readonly kind?: string }): string {
