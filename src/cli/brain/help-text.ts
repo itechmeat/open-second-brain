@@ -50,6 +50,7 @@ Brain verbs (observing memory):
   label               Controlled-vocabulary classification: assign, remove, show note labels
   bridges             Embedding-near link proposals: discover, list, accept, dismiss
   clusters            Link-graph communities: detect and materialize cluster notes
+  co-occurrence       Suggest edges between entities co-referenced from the same notes
   benchmark           Recall quality benchmark: hit@k and MRR over a fixed dataset
   tune                Self-tuning recall: grid-evaluate, persist, inspect, reset
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
@@ -303,6 +304,14 @@ export const VERB_HELP: Record<string, string> = {
     "by internal degree, shared entities, density, no LLM prose - removes\n" +
     "stale generated notes, and records one communities metric. list reads\n" +
     "the generated notes back. Fail-soft without an index.\n",
+  "co-occurrence":
+    "usage: o2b brain co-occurrence [--min-co N] [--min-score X] [--limit N] [--write]  [--vault <path>] [--json]\n" +
+    "Suggest relationship edges between entities repeatedly co-referenced from\n" +
+    "the same notes, scored by a structural PMI / document-frequency metric over\n" +
+    "the wikilink graph (no natural-language word list, any script). Read-only\n" +
+    "by default; --write persists the Brain/link-graph/co-occurrence.json\n" +
+    "artifact. Already directly-linked pairs are never re-suggested; notes are\n" +
+    "never mutated.\n",
   benchmark:
     "usage: o2b brain benchmark run --dataset <path> [--k N] [--expand]  [--vault <path>] [--json]\n" +
     "Score the vault's live hybrid recall against a fixed query/expected-result\n" +
