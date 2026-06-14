@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 from typing import Any, Protocol, runtime_checkable
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -154,7 +156,6 @@ class McpBrainBridge:
         # avoids the line-buffering deadlock that `text=True, bufsize=1`
         # classically triggers with Popen pipes: a fast child writer +
         # a slow parent reader fills the kernel buffer and both block.
-        import threading
         process = subprocess.Popen(  # noqa: S603 - argv is a fixed command + config path
             argv,
             stdin=subprocess.PIPE,
@@ -231,13 +232,18 @@ class McpBrainBridge:
         backoff_seconds = 0.1
         last_transport_error: BridgeTransportError | None = None
         for attempt in range(max_attempts):
-            self._ensure_started()
-            assert self._client is not None
-            if self._is_proc_dead():
-                # Subprocess died between the last call and now: restart, then try.
-                self._restart()
-                assert self._client is not None
             try:
+                # Spawn / handshake / restart all live inside the try: a
+                # transport failure while bringing a replacement child up is
+                # just as retryable as one on the request itself. Otherwise a
+                # dead -> dead -> good sequence would abort on the second dead
+                # child and collapse back to single-restart behaviour.
+                self._ensure_started()
+                assert self._client is not None
+                if self._is_proc_dead():
+                    # Subprocess died between the last call and now: restart, then try.
+                    self._restart()
+                    assert self._client is not None
                 result = self._client.request(
                     "tools/call", {"name": name, "arguments": args}
                 )
@@ -246,11 +252,15 @@ class McpBrainBridge:
                 last_transport_error = exc
                 if attempt + 1 >= max_attempts:
                     break
-                # Restart and back off briefly before the next attempt.
-                self._restart()
+                # Restart and back off briefly before the next attempt. A
+                # restart that itself fails to hand-shake is captured, not
+                # raised, so the remaining attempts still run.
+                try:
+                    self._restart()
+                except BridgeTransportError as restart_exc:
+                    last_transport_error = restart_exc
                 if backoff_seconds > 0:
-                    import time as _time
-                    _time.sleep(backoff_seconds)
+                    time.sleep(backoff_seconds)
                 backoff_seconds *= 2
         assert last_transport_error is not None  # for type-checkers
         raise last_transport_error

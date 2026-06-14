@@ -676,6 +676,23 @@ class McpBrainBridgeTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         self.assertEqual(spawn.state["n"], 2)
 
+    def test_transport_error_retries_through_failed_restart(self):
+        # Regression: a restart whose OWN handshake dies must not abort the
+        # retry loop. dead-on-call -> dead-on-handshake -> good. The middle
+        # child EOFs during initialize, so _restart() raises; the loop must
+        # capture that and still reach the third, healthy child.
+        first = _FakeProcess(self._handshake_frames())  # no id-3 -> EOF on the call
+        broken = _FakeProcess([])  # EOF during handshake -> _restart() raises
+        good = _FakeProcess(
+            self._handshake_frames([{"jsonrpc": "2.0", "id": 3, "result": {"ok": True}}])
+        )
+        spawn = self._counting_spawn(first, broken, good)
+        bridge = McpBrainBridge(vault="/v", spawn=spawn)
+        bridge.start()
+        result = bridge.call_tool("brain_query", {"topic": "x"})
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(spawn.state["n"], 3)
+
 
 class FakeBrainBridgeTests(unittest.TestCase):
     def test_records_calls_and_returns_canned_results(self):
