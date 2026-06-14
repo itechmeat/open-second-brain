@@ -138,6 +138,14 @@ export function deleteIngestedSource(vault: string, id: string): boolean {
     return false;
   }
   if (meta["kind"] !== BRAIN_SOURCE_KIND) return false;
-  rmSync(abs);
+  try {
+    rmSync(abs);
+  } catch (err) {
+    // A concurrent delete (ENOENT after the existence check) means the page
+    // is already gone - honestly report "not removed by us". Any other error
+    // (permissions, I/O) is a real fault and must surface, not be hidden.
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+    throw err;
+  }
   return true;
 }

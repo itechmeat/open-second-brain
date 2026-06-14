@@ -102,6 +102,9 @@ export function importBankBundle(
   bundle: BankBundleInput,
   opts: { mode?: GraphImportMode } = {},
 ): BankImportResult {
+  if (bundle === null || typeof bundle !== "object") {
+    throw new BankImportError("invalid bank bundle payload: expected an object");
+  }
   if (bundle.schema !== BANK_BUNDLE_SCHEMA_VERSION) {
     throw new BankImportError(
       `unsupported bank bundle schema: expected ${BANK_BUNDLE_SCHEMA_VERSION}, got ${String(bundle.schema)}`,

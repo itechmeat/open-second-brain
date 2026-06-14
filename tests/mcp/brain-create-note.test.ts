@@ -72,6 +72,16 @@ describe("brain_create_note", () => {
     ).rejects.toThrow(MCPError);
   });
 
+  test("a prototype-mutating frontmatter key is rejected, never assigned", async () => {
+    // JSON.parse creates an OWN "__proto__" key (the real JSON-RPC vector),
+    // unlike an object literal where __proto__ sets the prototype.
+    const frontmatter = JSON.parse('{"__proto__": ["polluted"]}');
+    await expect(
+      handler(ctx, { path: "Notes/Proto.md", frontmatter, content: "x" }),
+    ).rejects.toThrow(MCPError);
+    expect(existsSync(join(vault, "Notes/Proto.md"))).toBe(false);
+  });
+
   test("clobbering an existing note is rejected", async () => {
     await handler(ctx, { path: "Notes/Once.md", content: "first" });
     await expect(handler(ctx, { path: "Notes/Once.md", content: "second" })).rejects.toThrow(

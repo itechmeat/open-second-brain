@@ -18,9 +18,10 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 57 tools; 18 further names stay callable
-through `tools/call` as hidden deprecated aliases (see "Consolidated views and
-deprecated aliases" below). The table highlights the operator-facing core,
+The full server currently advertises 77 tools; the 18 deprecated predecessor
+names were removed in 1.0.0 and now answer a precise INVALID_PARAMS tombstone
+(see "Consolidated views and deprecated aliases" below). The table highlights
+the operator-facing core,
 schema, agent-source, health, and recovery tools; the full surface
 also includes Brain writer, review, query, temporal, link-graph, and search
 tools. In Claude Code, the full schema can push MCP definitions beyond 10% of

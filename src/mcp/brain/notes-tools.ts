@@ -26,8 +26,14 @@ function parseFrontmatterArg(value: unknown): FrontmatterMap | undefined {
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new MCPError(INVALID_PARAMS, "brain_create_note: frontmatter must be an object");
   }
-  const out: FrontmatterMap = {};
+  // Prototype-free target + explicit rejection of prototype-mutating keys:
+  // `frontmatter` is untrusted, and a `__proto__`/`constructor`/`prototype`
+  // key with an array value would otherwise pollute the object prototype.
+  const out: FrontmatterMap = Object.create(null) as FrontmatterMap;
   for (const [key, raw] of Object.entries(value)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") {
+      throw new MCPError(INVALID_PARAMS, `brain_create_note: invalid frontmatter key "${key}"`);
+    }
     let coerced: FrontmatterValue;
     if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
       coerced = raw;
@@ -86,7 +92,7 @@ export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "object",
           description:
             "Optional frontmatter map; values are strings, numbers, booleans, or string arrays.",
-          additionalProperties: true,
+          additionalProperties: { type: ["string", "number", "boolean", "array"] },
         },
         content: {
           type: "string",

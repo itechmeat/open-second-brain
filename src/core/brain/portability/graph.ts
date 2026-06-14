@@ -211,7 +211,11 @@ export function importVaultGraph(
   };
 
   const vaultMap = loadVaultMap(vault);
-  for (const node of graph.nodes ?? []) {
+  // Guard the container shape: a non-array `nodes` (string, object, scalar)
+  // from untrusted JSON would otherwise throw or mis-iterate. Per-entry
+  // validation below still rejects each malformed element.
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  for (const node of nodes) {
     // Validate the node shape per entry: a single malformed JSON node is
     // rejected and the import continues, instead of throwing and aborting
     // the whole run. `graph` arrives from untrusted JSON, so the static

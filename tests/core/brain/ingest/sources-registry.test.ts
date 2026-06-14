@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -87,7 +87,8 @@ describe("ingested-source registry", () => {
     writeFileSync(join(vault, "Outside.md"), "important user note");
     expect(deleteIngestedSource(vault, "Outside.md")).toBe(false);
     expect(getIngestedSource(vault, "Outside.md")).toBeNull();
-    // The unrelated file is untouched.
+    // The unrelated file must remain on disk - the guard never deletes it.
+    expect(existsSync(join(vault, "Outside.md"))).toBe(true);
     expect(deleteIngestedSource(vault, "../escape.md")).toBe(false);
   });
 });

@@ -101,6 +101,20 @@ describe("importBankBundle", () => {
     );
   });
 
+  test("rejects a null or scalar payload with the typed error, not a raw throw", () => {
+    expect(() => importBankBundle(vault, null as never)).toThrow(BankImportError);
+    expect(() => importBankBundle(vault, 42 as never)).toThrow(BankImportError);
+  });
+
+  test("tolerates a non-array nodes container without throwing", () => {
+    const result = importBankBundle(vault, {
+      schema: BANK_BUNDLE_SCHEMA_VERSION,
+      graph: { nodes: "not-an-array" as never },
+    });
+    expect(result.graph.created).toEqual([]);
+    expect(result.graph.rejected).toEqual([]);
+  });
+
   test("a malformed graph node is rejected per-entry, not thrown", () => {
     const bundle = {
       schema: BANK_BUNDLE_SCHEMA_VERSION,

@@ -20,11 +20,17 @@ export async function cmdBrainBankImport(argv: string[]): Promise<number> {
     mode: { type: "string" },
   });
   const file = positional[0];
-  if (!file) return fail("usage: o2b brain bank-import <file> [--mode skip|overwrite|merge]");
+  if (!file) {
+    process.stderr.write("usage: o2b brain bank-import <file> [--mode skip|overwrite|merge]\n");
+    return 2;
+  }
 
   const mode = (flags["mode"] as string | undefined) ?? "skip";
   if (!MODES.includes(mode as GraphImportMode)) {
-    return fail(`bank-import: --mode must be one of ${MODES.join(" | ")}; got ${mode}`);
+    process.stderr.write(
+      `error: bank-import: --mode must be one of ${MODES.join(" | ")}; got ${mode}\n`,
+    );
+    return 2;
   }
 
   const { vault } = brainVerbContext(flags);
