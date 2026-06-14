@@ -31,6 +31,7 @@ import { INGEST_TOOLS } from "./brain/ingest-tools.ts";
 import { RESEARCH_TOOLS } from "./brain/research-tools.ts";
 import { DERIVE_TOOLS } from "./brain/derive-tools.ts";
 import { NOTES_TOOLS } from "./brain/notes-tools.ts";
+import { SYNTHESIS_TOOLS } from "./brain/synthesis-tools.ts";
 import type { ToolDefinition } from "./tools.ts";
 
 export { vaultRelativeSafe } from "./brain/shared.ts";
@@ -57,4 +58,5 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...RESEARCH_TOOLS,
   ...DERIVE_TOOLS,
   ...NOTES_TOOLS,
+  ...SYNTHESIS_TOOLS,
 ]);

@@ -70,6 +70,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_session_describe",
   "brain_session_expand",
   "brain_session_grep",
+  "brain_session_summary",
   "brain_skill_proposals",
   "brain_sources",
   "brain_stale_scan",

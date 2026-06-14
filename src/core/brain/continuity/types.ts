@@ -16,6 +16,7 @@ export type ContinuityRecordKind =
   | "pre_compact_extract"
   | "session_turn"
   | "session_summary_node"
+  | "session_summary_digest"
   | "source_invalidation";
 
 export type ContinuityPayload = Readonly<Record<string, unknown>>;

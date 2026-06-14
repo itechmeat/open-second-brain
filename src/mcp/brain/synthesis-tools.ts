@@ -1,0 +1,156 @@
+/**
+ * Session Knowledge Synthesis tools (t_325a7e4a, t_635a3ea5, t_6a201155).
+ *
+ * Registered through the brain-tools.ts aggregator. Every tool here is
+ * agent-driven or read-only: the kernel validates and stores already-
+ * extracted structure or reads existing edges, and never calls an LLM.
+ */
+
+import {
+  appendSessionSummary,
+  getSessionSummary,
+  listSessionSummaries,
+  SessionSummaryError,
+  type SessionSummaryDigest,
+} from "../../core/brain/session-summary.ts";
+import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import type { ServerContext, ToolDefinition } from "../tools.ts";
+import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
+
+const SUMMARY_TOOL = "brain_session_summary";
+
+function requiredSessionId(args: Record<string, unknown>): string {
+  const value = args["session_id"];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new MCPError(INVALID_PARAMS, `${SUMMARY_TOOL}: session_id is required`);
+  }
+  return value.trim();
+}
+
+function stringArrayArg(
+  args: Record<string, unknown>,
+  name: string,
+): ReadonlyArray<string> | undefined {
+  const value = args[name];
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new MCPError(INVALID_PARAMS, `${SUMMARY_TOOL}: ${name} must be an array of strings`);
+  }
+  return value as ReadonlyArray<string>;
+}
+
+function serializeDigest(digest: SessionSummaryDigest): Record<string, unknown> {
+  return {
+    id: digest.id,
+    session_id: digest.sessionId,
+    request: digest.request,
+    decisions: digest.decisions,
+    learnings: digest.learnings,
+    next_steps: digest.nextSteps,
+    created_at: digest.createdAt,
+    ...(digest.host !== undefined ? { host: digest.host } : {}),
+  };
+}
+
+async function toolBrainSessionSummary(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = args["operation"];
+  if (operation !== "write" && operation !== "get" && operation !== "list") {
+    throw new MCPError(INVALID_PARAMS, `${SUMMARY_TOOL}: operation must be write|get|list`);
+  }
+
+  if (operation === "write") {
+    const sessionId = requiredSessionId(args);
+    const request = args["request"];
+    const decisions = stringArrayArg(args, "decisions");
+    const learnings = stringArrayArg(args, "learnings");
+    const nextSteps = stringArrayArg(args, "next_steps");
+    const host = args["host"];
+    const sourceTurnIds = stringArrayArg(args, "source_turn_ids");
+    try {
+      const digest = appendSessionSummary(ctx.vault, {
+        sessionId,
+        ...(typeof request === "string" ? { request } : {}),
+        ...(decisions !== undefined ? { decisions } : {}),
+        ...(learnings !== undefined ? { learnings } : {}),
+        ...(nextSteps !== undefined ? { nextSteps } : {}),
+        ...(typeof host === "string" ? { host } : {}),
+        ...(sourceTurnIds !== undefined ? { sourceTurnIds } : {}),
+      });
+      return { written: true, digest: serializeDigest(digest) };
+    } catch (error) {
+      if (error instanceof SessionSummaryError) {
+        throw new MCPError(INVALID_PARAMS, error.message);
+      }
+      throw error;
+    }
+  }
+
+  if (operation === "get") {
+    const sessionId = requiredSessionId(args);
+    const digest = getSessionSummary(ctx.vault, sessionId);
+    return digest === null ? { found: false } : { found: true, digest: serializeDigest(digest) };
+  }
+
+  // operation === "list"
+  const sessionIdRaw = args["session_id"];
+  const sessionId =
+    typeof sessionIdRaw === "string" && sessionIdRaw.trim().length > 0
+      ? sessionIdRaw.trim()
+      : undefined;
+  const digests = listSessionSummaries(ctx.vault, sessionId !== undefined ? { sessionId } : {});
+  return { count: digests.length, digests: digests.map(serializeDigest) };
+}
+
+export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: SUMMARY_TOOL,
+    description:
+      "Session-scoped structured digest over four categories - request, decisions, learnings, next_steps. write stores agent-extracted categories for a session (kernel never parses prose); get returns a session's latest digest; list returns all digests, optionally scoped to one session. Append-only, deduped by content; an all-empty digest is rejected.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["write", "get", "list"],
+          description: "Tool operation.",
+        },
+        session_id: {
+          type: "string",
+          description: "Session id (required for write/get; optional scope for list).",
+        },
+        request: {
+          type: "string",
+          description: "write: one-line statement of the session's goal.",
+        },
+        decisions: {
+          type: "array",
+          items: { type: "string" },
+          description: "write: decisions made this session.",
+        },
+        learnings: {
+          type: "array",
+          items: { type: "string" },
+          description: "write: things learned this session.",
+        },
+        next_steps: {
+          type: "array",
+          items: { type: "string" },
+          description: "write: follow-up actions.",
+        },
+        source_turn_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "write: turn ids the digest was distilled from (lineage edges).",
+        },
+        host: { type: "string", description: "write: originating runtime (claude, codex, ...)." },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSessionSummary,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+]);

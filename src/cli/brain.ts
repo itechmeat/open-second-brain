@@ -79,6 +79,7 @@ import {
   cmdBrainProfile,
   cmdBrainSgrep,
   cmdBrainContinuity,
+  cmdBrainSessionSummary,
   cmdBrainBench,
   cmdBrainGit,
   cmdBrainArchitect,
@@ -267,6 +268,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainSgrep(rest);
       case "continuity":
         return await cmdBrainContinuity(rest);
+      case "session-summary":
+        return await cmdBrainSessionSummary(rest);
       case "bench":
         return await cmdBrainBench(rest);
       case "git":
