@@ -24,7 +24,7 @@ import {
   renderAtifTrajectories,
 } from "../../../core/brain/continuity/export-atif.ts";
 import packageJson from "../../../../package.json" with { type: "json" };
-import { brainVerbContext, fail, parse } from "../helpers.ts";
+import { brainVerbContext, fail, parse, usageError } from "../helpers.ts";
 
 const CLI_VERSION: string = packageJson.version;
 
@@ -129,7 +129,7 @@ function rankContinuity(argv: string[]): number {
   if (typeof flags["limit"] === "string") {
     const parsed = Number(flags["limit"]);
     if (!Number.isInteger(parsed) || parsed < 1) {
-      return fail("brain continuity rank: --limit must be a positive integer");
+      return usageError("brain continuity rank: --limit must be a positive integer");
     }
     limit = parsed;
   }

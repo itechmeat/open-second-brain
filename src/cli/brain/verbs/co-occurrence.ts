@@ -2,7 +2,7 @@ import {
   computeCoOccurrenceSuggestions,
   writeCoOccurrenceSuggestions,
 } from "../../../core/brain/link-graph/co-occurrence.ts";
-import { brainVerbContext, fail, parse } from "../helpers.ts";
+import { brainVerbContext, parse, usageError } from "../helpers.ts";
 
 /**
  * `o2b brain co-occurrence [--min-co N] [--min-score X] [--limit N] [--write] [--json]`
@@ -27,17 +27,17 @@ export async function cmdBrainCoOccurrence(argv: string[]): Promise<number> {
 
   const minCoDocuments = parsePositiveInt(flags["min-co"]);
   if (minCoDocuments === "invalid") {
-    return fail("brain co-occurrence: --min-co must be a positive integer");
+    return usageError("brain co-occurrence: --min-co must be a positive integer");
   }
   const limit = parsePositiveInt(flags["limit"]);
   if (limit === "invalid") {
-    return fail("brain co-occurrence: --limit must be a positive integer");
+    return usageError("brain co-occurrence: --limit must be a positive integer");
   }
   let minScore: number | undefined;
   if (typeof flags["min-score"] === "string") {
     const parsed = Number(flags["min-score"]);
     if (!Number.isFinite(parsed)) {
-      return fail("brain co-occurrence: --min-score must be a finite number");
+      return usageError("brain co-occurrence: --min-score must be a finite number");
     }
     minScore = parsed;
   }

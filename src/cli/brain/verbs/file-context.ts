@@ -1,6 +1,6 @@
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { fileContextRecall } from "../../../core/brain/file-recall.ts";
-import { brainVerbContext, fail, parse } from "../helpers.ts";
+import { brainVerbContext, parse, usageError } from "../helpers.ts";
 
 /**
  * `o2b brain file-context <file-path> [--limit N] [--min-bytes N] [--vault PATH] [--json]`
@@ -21,15 +21,15 @@ export async function cmdBrainFileContext(argv: string[]): Promise<number> {
 
   const filePath = positional[0];
   if (!filePath) {
-    return fail("brain file-context requires a file path (e.g. src/foo.ts)");
+    return usageError("brain file-context requires a file path (e.g. src/foo.ts)");
   }
   const limit = parsePositiveInt(flags["limit"]);
   if (limit === "invalid") {
-    return fail("brain file-context: --limit must be a positive integer");
+    return usageError("brain file-context: --limit must be a positive integer");
   }
   const minBytes = parseNonNegativeInt(flags["min-bytes"]);
   if (minBytes === "invalid") {
-    return fail("brain file-context: --min-bytes must be a non-negative integer");
+    return usageError("brain file-context: --min-bytes must be a non-negative integer");
   }
 
   const searchConfig = resolveSearchConfig({ vault, configPath: config ?? undefined });

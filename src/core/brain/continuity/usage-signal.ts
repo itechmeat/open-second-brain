@@ -35,6 +35,11 @@ export interface DecayWeightOptions {
   readonly minWeight?: number;
 }
 
+// Working-memory continuity decays faster than search activation
+// (`src/core/search/activation/decay.ts` uses 60 days): a decision or
+// commitment that has gone un-recalled for a month is already a weak
+// working-memory signal, whereas search activation tracks longer-lived
+// document relevance. The two half-lives are intentionally independent.
 const DEFAULT_HALF_LIFE_DAYS = 30;
 const DEFAULT_FREQUENCY_GAIN = 0.25;
 const DEFAULT_MIN_WEIGHT = 0.02;

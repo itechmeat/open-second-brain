@@ -97,6 +97,21 @@ describe("computeCoOccurrenceSuggestions", () => {
     expect(JSON.stringify(first.suggestions)).toBe(JSON.stringify(second.suggestions));
   });
 
+  test("multi-word entity names round-trip through the pair key intact", () => {
+    // Canonical keys keep internal spaces; the pair key/split must not
+    // corrupt them (regression: a single-space separator split at the first
+    // space and mangled multi-word titles).
+    writeNote("notes/m1.md", "# M1\n\nSee [[Project Alpha]] and [[Meeting Notes]].\n");
+    writeNote("notes/m2.md", "# M2\n\nAlso [[Project Alpha]] with [[Meeting Notes]].\n");
+    writeNote("notes/m3.md", "# M3\n\nDifferent [[gamma]] and [[delta]].\n");
+    const result = computeCoOccurrenceSuggestions(vault, { minCoDocuments: 2 });
+    const pair = result.suggestions.find(
+      (s) => s.left === "meeting notes" && s.right === "project alpha",
+    );
+    expect(pair).toBeDefined();
+    expect(pair!.coDocumentCount).toBe(2);
+  });
+
   test("the limit caps the number of suggestions", () => {
     writeNote("notes/m1.md", "# M1\n\n[[a]] [[b]] [[c]] [[d]]\n");
     writeNote("notes/m2.md", "# M2\n\n[[a]] [[b]] [[c]] [[d]]\n");

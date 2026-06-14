@@ -240,13 +240,20 @@ function isDirectlyLinked(
   );
 }
 
+// Canonical keys are lowercase NFC text and may contain spaces (a
+// multi-word note title like "Project Alpha" canonicalizes to
+// "project alpha"), so the pair separator must be a character that can
+// never appear in a key. The unit separator (U+001F) never occurs in a
+// note title or path, so it round-trips multi-word keys unambiguously.
+const PAIR_SEPARATOR = String.fromCharCode(0x1f);
+
 function pairKey(a: string, b: string): string {
-  return a < b ? `${a} ${b}` : `${b} ${a}`;
+  return a < b ? `${a}${PAIR_SEPARATOR}${b}` : `${b}${PAIR_SEPARATOR}${a}`;
 }
 
 function splitPairKey(key: string): readonly [string, string] {
-  const idx = key.indexOf(" ");
-  return [key.slice(0, idx), key.slice(idx + 1)];
+  const idx = key.indexOf(PAIR_SEPARATOR);
+  return [key.slice(0, idx), key.slice(idx + PAIR_SEPARATOR.length)];
 }
 
 function round6(value: number): number {
