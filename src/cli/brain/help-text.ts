@@ -63,6 +63,8 @@ Brain verbs (observing memory):
   schema              Inspect resolved schema vocabulary and artifact token usage
   graph-export        Serialise the vault knowledge graph to graph.json
   graph-import        Reconstruct vault pages from graph.json (--mode skip|overwrite|merge)
+  bank-export         Serialise a whole-vault bank bundle (prefs + graph + pages + sources)
+  bank-import         Reconstruct the page graph from a bank bundle (--mode skip|overwrite|merge)
   backlinks           List inbound references to a Brain artifact id
   semantics-backfill  Preview deterministic typed preference-edge backfill proposals
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
@@ -382,6 +384,15 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain graph-import <file> [--mode skip|overwrite|merge] [--vault <path>] [--json]\n" +
     "Reconstruct vault page stubs from a graph.json. skip (default) never\n" +
     "overwrites; merge unions wikilinks/relations; writes are vault-guarded.\n",
+  "bank-export":
+    "usage: o2b brain bank-export [--vault <path>] [--out <file>]\n" +
+    "Serialise a whole-vault bank bundle (preferences + page graph + page\n" +
+    "contracts + sources dashboard) to a schema-versioned JSON. Read-only.\n",
+  "bank-import":
+    "usage: o2b brain bank-import <file> [--mode skip|overwrite|merge] [--vault <path>] [--json]\n" +
+    "Reconstruct the page graph from a bank bundle. Preferences, page\n" +
+    "contracts, and the sources dashboard are reported as carried-not-restored;\n" +
+    "an unsupported bundle schema fails loudly.\n",
   "morning-brief":
     "usage: o2b brain morning-brief [--vault <path>] [--json] [--top-k <n>]\n" +
     "  [--lookback-days <n>] [--max-chars-per-memory <n>] [--max-total-chars <n>]\n" +

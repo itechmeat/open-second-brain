@@ -18,9 +18,10 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 57 tools; 18 further names stay callable
-through `tools/call` as hidden deprecated aliases (see "Consolidated views and
-deprecated aliases" below). The table highlights the operator-facing core,
+The full server currently advertises 77 tools; the 18 deprecated predecessor
+names were removed in 1.0.0 and now answer a precise INVALID_PARAMS tombstone
+(see "Consolidated views and deprecated aliases" below). The table highlights
+the operator-facing core,
 schema, agent-source, health, and recovery tools; the full surface
 also includes Brain writer, review, query, temporal, link-graph, and search
 tools. In Claude Code, the full schema can push MCP definitions beyond 10% of
@@ -55,6 +56,7 @@ flags for a narrower per-process full server.
 | `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
 | `brain_session_expand`      | Expand a raw or summary session recall node to immediate sources and paginated raw turn content.                                               | `id`                                           |
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                              |
+| `brain_create_note`         | Write an actual vault note file (path + frontmatter + content) atomically inside the vault. Distinct from `brain_note` (log append); refuses traversal, the Brain root, excluded paths, and clobbering. | `path`                                         |
 | `schema_inspect`            | Read-only schema inspection for any view: `view: graph \| lint \| stats \| orphans \| explain_type \| active_pack \| packs`.                   | `view` (`token` for `explain_type`)            |
 | `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                                    |
 | `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                              |

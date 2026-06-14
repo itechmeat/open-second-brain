@@ -195,7 +195,10 @@ function readExisting(path: string): { links: string[]; relations: Record<string
  */
 export function importVaultGraph(
   vault: string,
-  graph: { nodes?: ReadonlyArray<GraphNodeInput> },
+  // Untrusted input (JSON from a graph.json or a bank bundle); every node
+  // is shape-guarded per entry below, so the element type is `unknown`
+  // rather than a structural promise the runtime does not enforce.
+  graph: { nodes?: ReadonlyArray<unknown> },
   opts: { mode?: GraphImportMode } = {},
 ): GraphImportResult {
   const mode: GraphImportMode = opts.mode ?? "skip";
@@ -208,7 +211,11 @@ export function importVaultGraph(
   };
 
   const vaultMap = loadVaultMap(vault);
-  for (const node of graph.nodes ?? []) {
+  // Guard the container shape: a non-array `nodes` (string, object, scalar)
+  // from untrusted JSON would otherwise throw or mis-iterate. Per-entry
+  // validation below still rejects each malformed element.
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  for (const node of nodes) {
     // Validate the node shape per entry: a single malformed JSON node is
     // rejected and the import continues, instead of throwing and aborting
     // the whole run. `graph` arrives from untrusted JSON, so the static

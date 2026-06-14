@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-06-14
+
+### Added
+
+- **Brain Portability & Interop Suite.** Brain content becomes portable in and
+  out of a vault, with provenance, and programmatically writable - composing the
+  existing portability helpers rather than adding a new subsystem. Every unit is
+  an additive new surface; no existing exporter, importer, CLI verb, or MCP tool
+  changes behaviour.
+  - **Whole-vault bank export/import (`o2b brain bank-export` / `bank-import`).**
+    `exportBankBundle` composes the existing exporters - preferences, the page
+    link-graph, the page interchange contract, and the read-only sources
+    dashboard - into one deterministic, schema-versioned envelope for backup,
+    cross-instance migration, or downstream-tool ingest. `importBankBundle`
+    reconstructs the part that round-trips (the page graph, delegated to
+    `importVaultGraph` under a conflict mode) and reports preferences, page
+    contracts, and the sources dashboard as carried-not-restored - no silent
+    partial restore. An unsupported bundle schema fails loudly with a typed
+    `BankImportError`.
+  - **Page interchange contract (`projectPageContracts`).** A pure, read-only
+    projection of every user vault page to a stable, schema-versioned record
+    (`path`, `kind`, advisory `confidence`/`provenance`, flattened `citations`,
+    `aliases`, `freshness`) a downstream importer can consume without knowing
+    Open Second Brain internals. Derivation is structural only (frontmatter
+    fields, body wikilinks, typed-relation targets, file mtime); an absent
+    advisory field is reported as `null`, never synthesised.
+  - **`brain_create_note` MCP tool.** Writes an actual vault note file (path +
+    frontmatter + content) atomically through `ensureInsideVault` - distinct
+    from `brain_note`, which only appends a log line. Refuses path traversal, the
+    Brain machinery root, vault-scope-excluded paths, and overwriting an existing
+    note, each with a typed error mapped to INVALID_PARAMS.
+  - **In-process SDK (`createBrain(vault)`).** A thin façade over the existing
+    core functions - bank export/import, graph export/import, preference export,
+    `ingestSource`, and `createNote` - plus source-backed reads
+    (`listSources`/`getSource`/`deleteSource`) over the `kind: brain-source`
+    summary pages. Every method is a one-line delegation; the upstream
+    `writeStatus` maps to `ingestSource` (Open Second Brain has no separate
+    source status lifecycle). A source id that resolves outside `Brain/sources`
+    is treated as not-found and never deleted.
+
 ## [1.8.0] - 2026-06-13
 
 ### Added
@@ -5388,6 +5428,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.9.0]: https://github.com/itechmeat/open-second-brain/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/itechmeat/open-second-brain/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/itechmeat/open-second-brain/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/itechmeat/open-second-brain/compare/v1.5.0...v1.6.0

@@ -191,6 +191,8 @@ describe("tool listing", () => {
         "brain_review_candidates",
         "brain_apply_evidence",
         "brain_note",
+        // Brain Portability & Interop suite: write an actual vault note file.
+        "brain_create_note",
         "brain_pinned_context",
         "brain_context",
         "brain_query",
@@ -533,7 +535,8 @@ describe("stdio loop", () => {
     // + brain_eval (Search & Recall Quality Suite) = 72.
     // + brain_intake_entities / brain_ingest_source / brain_research_report
     //   / brain_derive_fact (Knowledge Provenance Suite, v1.7.0) = 76.
-    expect(list.result.tools.length).toBe(76);
+    // + brain_create_note (Brain Portability & Interop Suite) = 77.
+    expect(list.result.tools.length).toBe(77);
   });
 
   test("returns parse error for invalid JSON", async () => {
