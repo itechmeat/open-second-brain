@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
+import { emitRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -96,5 +97,46 @@ describe("o2b brain continuity export", () => {
       { env: env() },
     );
     expect(badMonth.returncode).not.toBe(0);
+  });
+});
+
+describe("o2b brain continuity rank", () => {
+  test("ranks records by usage decay, recalled source above untouched", async () => {
+    // A surfaced artifact gives its receipt a usage signal; an equally-aged
+    // receipt whose source was never surfaced has none and ranks lower.
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-06-13T00:00:00.000Z",
+      host: "t",
+      mode: "search",
+      status: "ok",
+      durationMs: 1,
+      resultCount: 1,
+      topArtifacts: [{ id: "fresh", path: "Brain/notes/fresh.md", score: 0.9 }],
+    });
+    appendContinuityRecord(vault, {
+      kind: "context_receipt",
+      createdAt: "2026-05-01T00:00:00.000Z",
+      sourceRefs: [{ id: "fresh", path: "Brain/notes/fresh.md" }],
+    });
+    appendContinuityRecord(vault, {
+      kind: "context_receipt",
+      createdAt: "2026-05-01T00:00:00.000Z",
+      sourceRefs: [{ id: "stale", path: "Brain/notes/stale.md" }],
+    });
+    const out = await runCli(["brain", "continuity", "rank", "--all", "--json"], { env: env() });
+    expect(out.returncode).toBe(0);
+    const parsed = JSON.parse(out.stdout) as {
+      scope: string;
+      ranked: Array<{ id: string; weight: number; access_count: number }>;
+    };
+    expect(parsed.scope).toBe("all");
+    const fresh = parsed.ranked.find((r) => r.access_count === 1)!;
+    const stale = parsed.ranked.find((r) => r.access_count === 0 && r.id !== fresh.id)!;
+    expect(fresh.weight).toBeGreaterThan(stale.weight);
+  });
+
+  test("a bad --limit fails with a usage error", async () => {
+    const bad = await runCli(["brain", "continuity", "rank", "--limit", "0"], { env: env() });
+    expect(bad.returncode).not.toBe(0);
   });
 });

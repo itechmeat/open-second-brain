@@ -139,5 +139,6 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
     params: {},
   })) as { result: { tools: Array<{ name: string }> } };
   // 76 + brain_create_note (Brain Portability & Interop Suite) = 77.
-  expect(list.result.tools.length).toBe(77);
+  // + brain_file_context (Recall & Working-Memory Quality Suite) = 78.
+  expect(list.result.tools.length).toBe(78);
 });

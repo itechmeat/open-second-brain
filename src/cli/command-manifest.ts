@@ -173,6 +173,11 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("links", "Normalize wikilink path format across Brain notes"),
         command("bridges", "Propose, accept, or dismiss embedding-near bridge links"),
         command("clusters", "Detect link-graph communities and materialize cluster notes"),
+        command(
+          "co-occurrence",
+          "Suggest edges between entities co-referenced from the same notes",
+        ),
+        command("file-context", "Surface prior vault work that mentions a file path"),
         command("benchmark", "Score recall quality against a fixed query dataset"),
         command("tune", "Grid-evaluate and persist self-tuning recall parameters"),
         command("profile", "Materialize the compact Brain/profile.md digest"),

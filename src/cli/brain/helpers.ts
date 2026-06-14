@@ -96,6 +96,17 @@ export function parse(
 
 export { CliError } from "../argparse.ts";
 export { fail, info, ok, okJson } from "../output.ts";
+
+/**
+ * Usage / argument error: plain message to stderr, exit code 2. Distinct
+ * from `fail()` (exit 1), which is reserved for operational/runtime
+ * failures. Mirrors the exit-2 usage-error contract the brain verbs use
+ * (e.g. `tune`, `bridges`).
+ */
+export function usageError(message: string): number {
+  process.stderr.write(`error: ${message}\n`);
+  return 2;
+}
 export { ISO_8601_RE, parseOptionalIsoDate } from "../coerce.ts";
 export { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
 

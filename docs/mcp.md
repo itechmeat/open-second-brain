@@ -18,7 +18,7 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Tool Highlights
 
-The full server currently advertises 77 tools; the 18 deprecated predecessor
+The full server currently advertises 78 tools; the 18 deprecated predecessor
 names were removed in 1.0.0 and now answer a precise INVALID_PARAMS tombstone
 (see "Consolidated views and deprecated aliases" below). The table highlights
 the operator-facing core,
@@ -42,7 +42,7 @@ flags for a narrower per-process full server.
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
 | `brain_brief`               | Read-only Brain summary for any window: `view: morning \| daily \| weekly \| monthly \| operator \| digest`.                                   | `view`                                         |
 | `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis`.                          | `view`                                         |
-| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, and evidence-pack diagnostics.                  | `query`                                        |
+| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, and a selectable recall `profile` (`fast \| balanced \| thorough`). | `query`                                        |
 | `brain_recall_feedback`     | Record explicit up/down recall feedback for one search result; feeds the deterministic learned-weight fold.                                     | `query`, `result_path`, `verdict`              |
 | `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason.                              | `prompt`                                       |
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`.     | `max_tokens`                                   |
@@ -57,6 +57,7 @@ flags for a narrower per-process full server.
 | `brain_session_expand`      | Expand a raw or summary session recall node to immediate sources and paginated raw turn content.                                               | `id`                                           |
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                              |
 | `brain_create_note`         | Write an actual vault note file (path + frontmatter + content) atomically inside the vault. Distinct from `brain_note` (log append); refuses traversal, the Brain root, excluded paths, and clobbering. | `path`                                         |
+| `brain_file_context`        | Given a file path, surface prior vault work that mentions it (decisions, bug notes, refactor history) by querying the index with path-derived terms. Size gate skips trivial files. Read-only; no LLM. | `file_path`                                    |
 | `schema_inspect`            | Read-only schema inspection for any view: `view: graph \| lint \| stats \| orphans \| explain_type \| active_pack \| packs`.                   | `view` (`token` for `explain_type`)            |
 | `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                                    |
 | `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                              |
