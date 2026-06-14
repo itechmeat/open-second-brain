@@ -79,7 +79,7 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
       type: "string",
       enum: [...RECALL_PROFILE_NAMES],
       description:
-        "Named recall profile: fast | balanced | thorough, expanding to a fixed knob tuple. Takes precedence over persisted self-tuning. Absent leaves ranking byte-identical to the default config.",
+        "Named recall profile (fast|balanced|thorough): a fixed knob preset, preferred over persisted self-tuning. Absent leaves ranking unchanged.",
     },
     explain: {
       type: "boolean",
