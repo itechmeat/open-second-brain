@@ -34,6 +34,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_context_pack",
   "brain_context_presets",
   "brain_context_receipts",
+  "brain_create_note",
   "brain_dead_ends",
   "brain_deep_synthesis",
   "brain_derive_fact",
