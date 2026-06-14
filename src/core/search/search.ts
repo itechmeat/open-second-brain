@@ -68,6 +68,7 @@ import type {
 import type { StructuredRecallQueryDocument } from "./structured-query.ts";
 import { expandQuery } from "./query-expansion.ts";
 import { applyTunedParameters, loadTunedParameters } from "./tuning.ts";
+import { resolveRecallProfile } from "./profiles.ts";
 
 interface SemanticPolicy {
   /** caller asked for semantic on or off (true), or accepted the default (false). */
@@ -211,11 +212,16 @@ export async function search(
   if (!query) {
     throw new SearchError("INVALID_INPUT", "missing required argument: query");
   }
-  // Opt-in self-tuning (t_ae973491): apply the persisted, re-validated
-  // grid point. applyTunedParameters disarms selfTuningEnabled, so the
-  // applied config can never recurse. An explicit opts.expand always
-  // wins over the tuned expansion default.
-  const tuned = config.recall.selfTuningEnabled ? loadTunedParameters(config.vault) : null;
+  // Recall profile (Recall & Working-Memory Quality Suite, t_98c39dd6) and
+  // opt-in self-tuning (t_ae973491) resolve to the SAME knob tuple, applied
+  // through applyTunedParameters (which disarms selfTuningEnabled so the
+  // applied config can never recurse). An explicitly selected profile is an
+  // operator choice and takes precedence over the persisted grid point; with
+  // no profile, behaviour is unchanged - self-tuning applies iff enabled. An
+  // explicit opts.expand always wins over the resolved expansion default.
+  const profileParams = opts.profile !== undefined ? resolveRecallProfile(opts.profile) : null;
+  const tuned =
+    profileParams ?? (config.recall.selfTuningEnabled ? loadTunedParameters(config.vault) : null);
   if (tuned !== null) config = applyTunedParameters(config, tuned);
   const expandActive = opts.expand ?? (tuned !== null && tuned.expansion);
   const limit = Math.max(1, Math.min(100, opts.limit ?? 10));

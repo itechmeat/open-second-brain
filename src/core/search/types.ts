@@ -323,6 +323,15 @@ export interface SearchOptions {
    * retrieval. Never silently active.
    */
   readonly expand?: boolean;
+  /**
+   * Optional named recall profile (Recall & Working-Memory Quality Suite,
+   * t_98c39dd6): `fast | balanced | thorough` expand to a fixed knob tuple
+   * applied through the same machinery as the self-tuning grid. An explicit
+   * profile takes precedence over a persisted self-tuning grid point. Absent
+   * leaves ranking on the existing config path, byte-for-byte. An unknown
+   * name fails loud (`SearchError("INVALID_INPUT")`). See `profiles.ts`.
+   */
+  readonly profile?: string;
   /** Optional per-query or persisted session focus steering. Undefined means load persisted focus. */
   readonly sessionFocus?: SearchSessionFocus | null;
   /**

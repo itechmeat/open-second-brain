@@ -21,6 +21,7 @@ import {
 import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
+import { RECALL_PROFILE_NAMES } from "../core/search/profiles.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
 import { defaultConfigPath, resolveRecallGateTelemetry } from "../core/config.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
@@ -73,6 +74,12 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
+    profile: {
+      type: "string",
+      enum: [...RECALL_PROFILE_NAMES],
+      description:
+        "Named recall profile: fast | balanced | thorough, expanding to a fixed knob tuple. Takes precedence over persisted self-tuning. Absent leaves ranking byte-identical to the default config.",
+    },
     explain: {
       type: "boolean",
       description:
@@ -375,6 +382,7 @@ async function toolBrainSearch(
     threshold = raw;
   }
   const globalSearch = coerceBoolOptional(args, "global") ?? false;
+  const profile = coerceStringOptional(args, "profile", 32);
   const pathPrefix = coerceStringOptional(args, "path_prefix", 256);
   const evidencePack = coerceBoolOptional(args, "evidence_pack") ?? false;
   const includeSuperseded = coerceBoolOptional(args, "include_superseded") ?? false;
@@ -431,6 +439,7 @@ async function toolBrainSearch(
     semantic: semantic ?? null,
     keywordOnly,
     pathPrefix,
+    ...(profile !== undefined ? { profile } : {}),
     ...(properties !== undefined ? { properties } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
     ...(agentScope !== undefined ? { agentScope } : {}),
