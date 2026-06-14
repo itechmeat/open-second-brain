@@ -73,6 +73,9 @@ o2b brain pre-compact-extract Extract decision/commitment/outcome/rule/open-ques
 o2b brain session-grep        Search imported session recall raw turns and summary nodes (since v0.29.0)
 o2b brain session-describe    Count raw turns and deterministic summary depths for one session recall DAG (since v0.29.0)
 o2b brain session-expand      Expand a session recall node to immediate sources and paginated raw turn content (since v0.29.0)
+o2b brain session-summary     write|get|list a session-scoped structured digest (request/decisions/learnings/next_steps) (since v1.11.0)
+o2b brain idea-lineage        Trace how a derived artifact was reached: observation -> synthesis -> conclusion over continuity sourceRefs or belief-evolution (since v1.11.0)
+o2b brain note-history        Decompose a note's git history into episodic phases split on a commit-time gap (since v1.11.0)
 o2b brain import-claude-memory (CLI-only) Import metadata.type=feedback entries from a Claude Code memory directory into Brain/preferences/. --dry-run / --apply, sidecar manifest for idempotency, UPDATE preserves accumulated evidence
 ```
 

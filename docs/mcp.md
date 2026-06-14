@@ -58,6 +58,9 @@ flags for a narrower per-process full server.
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                              |
 | `brain_create_note`         | Write an actual vault note file (path + frontmatter + content) atomically inside the vault. Distinct from `brain_note` (log append); refuses traversal, the Brain root, excluded paths, and clobbering. | `path`                                         |
 | `brain_file_context`        | Given a file path, surface prior vault work that mentions it (decisions, bug notes, refactor history) by querying the index with path-derived terms. Size gate skips trivial files. Read-only; no LLM. | `file_path`                                    |
+| `brain_session_summary`     | Session-scoped structured digest over request/decisions/learnings/next_steps: `write` stores agent-extracted categories, `get` returns a session's latest digest, `list` returns all. Append-only, deduped; an all-empty digest is rejected. | `operation`                                    |
+| `brain_idea_lineage`        | Read-only provenance tracer: reconstruct how a derived artifact was reached as an observation -> synthesis -> conclusion graph. A `ctn_` id walks the sourceRefs graph; a `pref-`/`ret-` id adapts belief-evolution. Cycle-guarded, depth-bounded; unknown id errors. | `id`                                           |
+| `brain_note_history`        | Decompose a note's git history into recallable episodic phases split on a deterministic commit-time gap (default 72h, language-agnostic). Each phase carries subjects/dates/authors. Missing repo → `available: false`; no commits → zero phases. Read-only. | `path`                                         |
 | `schema_inspect`            | Read-only schema inspection for any view: `view: graph \| lint \| stats \| orphans \| explain_type \| active_pack \| packs`.                   | `view` (`token` for `explain_type`)            |
 | `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                                    |
 | `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                              |
@@ -107,6 +110,11 @@ and `telemetry`. `brain_context_receipts` supports `operation: "list"|"show"`;
 deterministic media/base64 sanitization. `brain_session_grep`,
 `brain_session_describe`, and `brain_session_expand` inspect the opt-in session
 recall DAG populated by CLI `import-session --recall` or the core API.
+`brain_session_summary` accepts `operation: "write"|"get"|"list"` (write takes
+`session_id` plus any of `request`, `decisions`, `learnings`, `next_steps`,
+`source_turn_ids`, `host`). `brain_idea_lineage` accepts `id` and optional
+`max_depth`. `brain_note_history` accepts `path` and optional `gap_hours` /
+`max_count`.
 `brain_recall_gate` accepts optional `previous_prompt` and
 `explicit`; `explicit: true` always returns `retrieve: true`.
 

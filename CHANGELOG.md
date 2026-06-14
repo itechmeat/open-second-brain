@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-06-14
+
+### Added
+
+- **Session Knowledge Synthesis Suite.** Three additive, deterministic,
+  language-agnostic units that turn temporal activity into structured,
+  queryable, provenance-traced knowledge. Every unit is a new surface; with no
+  new surface in use, reads are byte-identical to before, and the kernel never
+  calls an LLM (agent-extracted data is stored verbatim; everything else is a
+  pure read).
+  - **Structured session summary (`o2b brain session-summary`,
+    `brain_session_summary`).** A session-scoped digest over four canonical
+    categories - request, decisions, learnings, next_steps - stored as one
+    append-only continuity record (`session_summary_digest`), distinct from the
+    `session_summary_node` recall rollup and the per-line `pre_compact_extract`.
+    The agent supplies the already-extracted categories; the kernel validates,
+    dedupes by content hash, and appends, never parsing prose into categories.
+    An all-empty digest is rejected; absent a write, reads return null.
+  - **Idea-lineage provenance tracer (`o2b brain idea-lineage`,
+    `brain_idea_lineage`).** A read-only tracer reconstructing how a derived
+    artifact was reached as an observation -> synthesis -> conclusion graph. A
+    continuity id walks the `sourceRefs` graph (raw turns are observations,
+    summaries/extracts/digests synthesis, the queried record the conclusion),
+    resolving edges by record id or turn id, cycle-guarded and depth-bounded; a
+    preference id adapts the existing `buildBeliefEvolution` lifecycle into the
+    same shape. Unknown ids fail with a typed error rather than a silent empty
+    chain.
+  - **Episodic note-history decomposition (`o2b brain note-history`,
+    `brain_note_history`).** Splits a note's git commit chain into recallable
+    episodic phases on a deterministic commit-time gap (default 72h) - a
+    language-agnostic rule that never depends on commit-message wording. Each
+    phase carries the commit subjects, dates, and authors. A missing repo
+    reports `available: false` (no fabricated phase); a path with no commits
+    reports `available: true` with zero phases (empty is distinct from broken).
+    The sanitized read-only git reader gains an additive `path` pathspec filter.
+
 ## [1.10.0] - 2026-06-14
 
 ### Added
@@ -5468,6 +5504,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.11.0]: https://github.com/itechmeat/open-second-brain/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/itechmeat/open-second-brain/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/itechmeat/open-second-brain/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/itechmeat/open-second-brain/compare/v1.7.0...v1.8.0
