@@ -187,7 +187,7 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: SUMMARY_TOOL,
     description:
-      "Session-scoped structured digest over four categories - request, decisions, learnings, next_steps. write stores agent-extracted categories for a session (kernel never parses prose); get returns a session's latest digest; list returns all digests, optionally scoped to one session. Append-only, deduped by content; an all-empty digest is rejected.",
+      "Session-scoped structured digest over request/decisions/learnings/next_steps. write stores agent-extracted categories; get returns a session's latest digest; list returns all (optionally one session). Append-only, deduped; an all-empty digest is rejected.",
     inputSchema: {
       type: "object",
       properties: {
@@ -235,7 +235,7 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: LINEAGE_TOOL,
     description:
-      "Read-only provenance tracer: reconstruct how a derived artifact was reached as an observation -> synthesis -> conclusion graph. A ctn_ continuity id walks the sourceRefs graph (raw turns are observations, summaries/extracts/digests synthesis); a pref-/ret- id adapts the belief-evolution lifecycle. Cycle-guarded and depth-bounded; an unknown id is an error.",
+      "Read-only provenance tracer: how a derived artifact was reached, as an observation -> synthesis -> conclusion graph. A ctn_ id walks the sourceRefs graph; a pref-/ret- id adapts belief-evolution. Cycle-guarded, depth-bounded; an unknown id errors.",
     inputSchema: {
       type: "object",
       properties: {
@@ -258,7 +258,7 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: HISTORY_TOOL,
     description:
-      "Decompose a note's git history into recallable episodic phases. A new phase starts when the gap between consecutive commits exceeds gap_hours (default 72) - a deterministic, language-agnostic split. Each phase carries the commit subjects, dates, and authors. A missing repo reports available=false; a path with no commits reports available=true with zero phases. Read-only.",
+      "Decompose a note's git history into episodic phases, split when the gap between commits exceeds gap_hours (default 72) - deterministic and language-agnostic. Each phase carries subjects, dates, authors. Missing repo: available=false; no commits: zero phases. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
