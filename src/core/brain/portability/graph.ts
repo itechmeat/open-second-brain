@@ -195,7 +195,10 @@ function readExisting(path: string): { links: string[]; relations: Record<string
  */
 export function importVaultGraph(
   vault: string,
-  graph: { nodes?: ReadonlyArray<GraphNodeInput> },
+  // Untrusted input (JSON from a graph.json or a bank bundle); every node
+  // is shape-guarded per entry below, so the element type is `unknown`
+  // rather than a structural promise the runtime does not enforce.
+  graph: { nodes?: ReadonlyArray<unknown> },
   opts: { mode?: GraphImportMode } = {},
 ): GraphImportResult {
   const mode: GraphImportMode = opts.mode ?? "skip";

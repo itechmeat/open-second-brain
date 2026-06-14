@@ -40,6 +40,8 @@ export { cmdBrainSources } from "./sources.ts";
 export { cmdBrainSchema } from "./schema.ts";
 export { cmdBrainGraphExport } from "./graph-export.ts";
 export { cmdBrainGraphImport } from "./graph-import.ts";
+export { cmdBrainBankExport } from "./bank-export.ts";
+export { cmdBrainBankImport } from "./bank-import.ts";
 export { cmdBrainBacklinks } from "./backlinks.ts";
 export { cmdBrainSemanticsBackfill } from "./semantics-backfill.ts";
 export { cmdBrainMcpLandscape } from "./mcp-landscape.ts";

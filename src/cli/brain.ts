@@ -56,6 +56,8 @@ import {
   cmdBrainSchema,
   cmdBrainGraphExport,
   cmdBrainGraphImport,
+  cmdBrainBankExport,
+  cmdBrainBankImport,
   cmdBrainBacklinks,
   cmdBrainSemanticsBackfill,
   cmdBrainMcpLandscape,
@@ -229,6 +231,10 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainGraphExport(rest);
       case "graph-import":
         return await cmdBrainGraphImport(rest);
+      case "bank-export":
+        return await cmdBrainBankExport(rest);
+      case "bank-import":
+        return await cmdBrainBankImport(rest);
       case "backlinks":
         return await cmdBrainBacklinks(rest);
       case "semantics-backfill":
