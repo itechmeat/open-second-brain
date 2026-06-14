@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-06-14
+
+### Added
+
+- **Recall & Working-Memory Quality Suite.** Four additive, deterministic,
+  language-agnostic units on top of the mature search/recall subsystem. Every
+  unit is flag- or surface-gated; with no profile, flag, or new surface in use,
+  search and continuity reads are byte-identical to before.
+  - **Selectable recall profiles (`o2b search --profile`, `brain_search`
+    `profile` field).** Named presets `fast | balanced | thorough` expand to a
+    fixed knob tuple over the same bounded axes the self-tuning grid ranges over
+    (candidate pool, traversal depth, learned weights, query expansion) and are
+    applied through the same `applyTunedParameters` machinery, so a profile and
+    a learned grid point stay coherent. An explicitly selected profile takes
+    precedence over a persisted self-tuning grid point; an unknown profile name
+    fails loud with a typed `SearchError`. No profile selected leaves ranking on
+    the existing config path, bit-for-bit.
+  - **Usage-driven working-memory decay (`o2b brain continuity rank`).**
+    Continuity records are append-only and immutable, so decay is a pure
+    read-side weight in `(0, 1]`, never a mutation. `decayWeight` combines
+    record age (exponential half-life) with a usage signal derived only from
+    existing `recall_telemetry` surfaced-artifact references; a record whose
+    sources were never surfaced - such as a session-scoped `pre_compact_extract`
+    decision - has no usage and decays by age alone, with no fabricated coupling.
+    `rank` lists working-memory records freshest and most-recalled first.
+  - **Language-agnostic co-occurrence auto-relate (`o2b brain co-occurrence`).**
+    Entities repeatedly co-referenced from the same notes are scored with a
+    structural PMI / document-frequency metric over the wikilink graph - link
+    incidence only, no natural-language word list in any language, so a
+    non-Latin vault scores identically for the same structure. Output is a
+    derived, schema-versioned, hashed suggestion artifact (re-validated on read,
+    fail-soft); notes are never mutated and an already directly-linked pair is
+    never re-suggested. `--write` persists `Brain/link-graph/co-occurrence.json`.
+  - **File-context recall (`o2b brain file-context`, `brain_file_context` MCP
+    tool).** Given a file path, surface prior vault work that mentions it by
+    querying the existing index with terms derived structurally from the path
+    (basename + stem, no natural-language processing, no LLM). A size gate skips
+    trivial files (default 1500 bytes) and returns an explicit reason rather
+    than a fabricated empty hit.
+
 ## [1.9.0] - 2026-06-14
 
 ### Added
@@ -5428,6 +5468,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.10.0]: https://github.com/itechmeat/open-second-brain/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/itechmeat/open-second-brain/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/itechmeat/open-second-brain/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/itechmeat/open-second-brain/compare/v1.6.0...v1.7.0
