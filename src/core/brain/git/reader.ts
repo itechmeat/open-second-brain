@@ -52,6 +52,12 @@ export interface ReadCommitsOptions {
   readonly sinceSha?: string;
   /** Bound the walk; git keeps the NEWEST `maxCount` commits. */
   readonly maxCount?: number;
+  /**
+   * Restrict the walk to commits that touched this repo-relative path
+   * (a git pathspec). Passed after a `--` separator so it can never be
+   * mistaken for a flag. Empty/whitespace is ignored (no restriction).
+   */
+  readonly path?: string;
 }
 
 // Output-side separators. argv strings cannot carry raw NUL bytes
@@ -112,6 +118,8 @@ export function readCommits(
     args.push(`--max-count=${Math.max(1, Math.floor(opts.maxCount))}`);
   }
   if (opts.sinceSha !== undefined) args.push(`${opts.sinceSha}..HEAD`);
+  const pathspec = opts.path?.trim();
+  if (pathspec !== undefined && pathspec.length > 0) args.push("--", pathspec);
   const raw = runGit(repoPath, args);
   if (raw === null) {
     // `git log` exits non-zero on a repo with zero commits; report that
