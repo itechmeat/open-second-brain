@@ -46,6 +46,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_health",
   "brain_hygiene",
   "brain_idea_discovery",
+  "brain_idea_lineage",
   "brain_ingest_source",
   "brain_intake_entities",
   "brain_intent_review",

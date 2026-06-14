@@ -13,6 +13,11 @@ import {
   SessionSummaryError,
   type SessionSummaryDigest,
 } from "../../core/brain/session-summary.ts";
+import {
+  traceIdeaLineage,
+  IdeaLineageError,
+  type IdeaLineageResult,
+} from "../../core/brain/idea-lineage.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -104,6 +109,45 @@ async function toolBrainSessionSummary(
   return { count: digests.length, digests: digests.map(serializeDigest) };
 }
 
+const LINEAGE_TOOL = "brain_idea_lineage";
+
+function serializeLineage(result: IdeaLineageResult): Record<string, unknown> {
+  return {
+    root: result.root,
+    nodes: result.nodes,
+    edges: result.edges,
+    truncated: result.truncated,
+  };
+}
+
+function toolBrainIdeaLineage(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const idRaw = args["id"];
+  if (typeof idRaw !== "string" || idRaw.trim().length === 0) {
+    throw new MCPError(INVALID_PARAMS, `${LINEAGE_TOOL}: id is required`);
+  }
+  const maxDepthRaw = args["max_depth"];
+  let maxDepth: number | undefined;
+  if (maxDepthRaw !== undefined && maxDepthRaw !== null) {
+    if (typeof maxDepthRaw !== "number" || !Number.isInteger(maxDepthRaw) || maxDepthRaw < 1) {
+      throw new MCPError(INVALID_PARAMS, `${LINEAGE_TOOL}: max_depth must be a positive integer`);
+    }
+    maxDepth = maxDepthRaw;
+  }
+  try {
+    return serializeLineage(
+      traceIdeaLineage(ctx.vault, { id: idRaw.trim() }, maxDepth !== undefined ? { maxDepth } : {}),
+    );
+  } catch (error) {
+    if (error instanceof IdeaLineageError) {
+      throw new MCPError(INVALID_PARAMS, error.message);
+    }
+    throw error;
+  }
+}
+
 export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: SUMMARY_TOOL,
@@ -151,6 +195,29 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainSessionSummary,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+  {
+    name: LINEAGE_TOOL,
+    description:
+      "Read-only provenance tracer: reconstruct how a derived artifact was reached as an observation -> synthesis -> conclusion graph. A ctn_ continuity id walks the sourceRefs graph (raw turns are observations, summaries/extracts/digests synthesis); a pref-/ret- id adapts the belief-evolution lifecycle. Cycle-guarded and depth-bounded; an unknown id is an error.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "Continuity record id (ctn_...) or preference id (pref-.../ret-...).",
+        },
+        max_depth: {
+          type: "integer",
+          minimum: 1,
+          description: "Maximum backward hops from the artifact (default 8).",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainIdeaLineage,
     previewBudget: MCP_PREVIEW_BUDGET,
   },
 ]);
