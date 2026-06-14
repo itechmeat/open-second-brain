@@ -239,6 +239,7 @@ describe("tool listing", () => {
         "brain_recall_gate",
         "brain_search",
         "brain_eval",
+        "brain_file_context",
         // Schema admin + watchdog recovery probes.
         "schema_apply_mutations",
         "schema_inspect",
@@ -536,7 +537,8 @@ describe("stdio loop", () => {
     // + brain_intake_entities / brain_ingest_source / brain_research_report
     //   / brain_derive_fact (Knowledge Provenance Suite, v1.7.0) = 76.
     // + brain_create_note (Brain Portability & Interop Suite) = 77.
-    expect(list.result.tools.length).toBe(77);
+    // + brain_file_context (Recall & Working-Memory Quality Suite) = 78.
+    expect(list.result.tools.length).toBe(78);
   });
 
   test("returns parse error for invalid JSON", async () => {

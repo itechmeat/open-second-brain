@@ -22,6 +22,7 @@ import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../co
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { RECALL_PROFILE_NAMES } from "../core/search/profiles.ts";
+import { fileContextRecall } from "../core/brain/file-recall.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
 import { defaultConfigPath, resolveRecallGateTelemetry } from "../core/config.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
@@ -843,6 +844,101 @@ async function toolBrainEval(
   };
 }
 
+const FILE_CONTEXT_INPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    file_path: { type: "string", minLength: 1, maxLength: 1024 },
+    limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
+    min_bytes: { type: "integer", minimum: 0, maximum: 10_000_000 },
+  },
+  required: ["file_path"],
+  additionalProperties: false,
+};
+
+const FILE_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  properties: {
+    file_path: { type: "string" },
+    skipped: { type: "boolean" },
+    // reason and title are string-or-null; the contract type is a single
+    // value, so the type check is omitted (both nullable shapes pass).
+    reason: {},
+    query: { type: "string" },
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          title: {},
+          score: { type: "number" },
+        },
+      },
+    },
+  },
+  required: ["file_path", "skipped", "reason", "query", "results"],
+};
+
+async function toolBrainFileContext(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const filePath = coerceStr(args, "file_path");
+  if (filePath === null || filePath.length > 1024) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "argument 'file_path' must be a non-empty string up to 1024 characters",
+    );
+  }
+  const limit = coerceIntInRange(args, "limit", 1, MCP_LIMIT_MAX);
+  const minBytes = coerceIntInRange(args, "min_bytes", 0, 10_000_000);
+
+  const config = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+
+  try {
+    const outcome = await fileContextRecall(config, {
+      filePath,
+      ...(limit !== undefined ? { limit } : {}),
+      ...(minBytes !== undefined ? { minBytes } : {}),
+    });
+    return {
+      file_path: outcome.filePath,
+      skipped: outcome.skipped,
+      reason: outcome.reason,
+      query: outcome.query,
+      results: outcome.results.map((r) => ({
+        path: r.path,
+        title: r.title,
+        score: r.score,
+      })),
+    };
+  } catch (e) {
+    if (e instanceof SearchError) throw searchErrorToMcp(e);
+    if (e instanceof MCPError) throw e;
+    throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
+  }
+}
+
+function coerceIntInRange(
+  args: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+): number | undefined {
+  if (!(key in args) || args[key] === undefined || args[key] === null) return undefined;
+  const raw = args[key];
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < min || raw > max) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument '${key}' must be an integer between ${min} and ${max}`,
+    );
+  }
+  return raw;
+}
+
 export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_recall_feedback",
@@ -877,6 +973,15 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     outputSchema: EVAL_OUTPUT_SCHEMA,
     previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainEval,
+  },
+  {
+    name: "brain_file_context",
+    description:
+      "Given a file path, surface prior vault work that mentions it (decisions, bug notes, refactor history) by querying the index with terms derived from the path. A size gate skips trivial files. Read-only; no LLM.",
+    inputSchema: FILE_CONTEXT_INPUT_SCHEMA,
+    outputSchema: FILE_CONTEXT_OUTPUT_SCHEMA,
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainFileContext,
   },
 ]);
 

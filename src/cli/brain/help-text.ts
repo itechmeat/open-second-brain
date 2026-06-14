@@ -51,6 +51,7 @@ Brain verbs (observing memory):
   bridges             Embedding-near link proposals: discover, list, accept, dismiss
   clusters            Link-graph communities: detect and materialize cluster notes
   co-occurrence       Suggest edges between entities co-referenced from the same notes
+  file-context        Surface prior vault work that mentions a file path
   benchmark           Recall quality benchmark: hit@k and MRR over a fixed dataset
   tune                Self-tuning recall: grid-evaluate, persist, inspect, reset
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
@@ -312,6 +313,12 @@ export const VERB_HELP: Record<string, string> = {
     "by default; --write persists the Brain/link-graph/co-occurrence.json\n" +
     "artifact. Already directly-linked pairs are never re-suggested; notes are\n" +
     "never mutated.\n",
+  "file-context":
+    "usage: o2b brain file-context <file-path> [--limit N] [--min-bytes N]  [--vault <path>] [--json]\n" +
+    "Surface prior vault work that mentions a file (decisions, bug notes, refactor\n" +
+    "history) by querying the existing index with terms derived structurally from\n" +
+    "the path (basename + stem, no natural-language processing). A size gate skips\n" +
+    "trivial files (default 1500 bytes) with an explicit reason. Read-only; no LLM.\n",
   benchmark:
     "usage: o2b brain benchmark run --dataset <path> [--k N] [--expand]  [--vault <path>] [--json]\n" +
     "Score the vault's live hybrid recall against a fixed query/expected-result\n" +
