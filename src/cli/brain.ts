@@ -81,6 +81,7 @@ import {
   cmdBrainContinuity,
   cmdBrainSessionSummary,
   cmdBrainIdeaLineage,
+  cmdBrainNoteHistory,
   cmdBrainBench,
   cmdBrainGit,
   cmdBrainArchitect,
@@ -273,6 +274,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainSessionSummary(rest);
       case "idea-lineage":
         return await cmdBrainIdeaLineage(rest);
+      case "note-history":
+        return await cmdBrainNoteHistory(rest);
       case "bench":
         return await cmdBrainBench(rest);
       case "git":

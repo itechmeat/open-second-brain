@@ -64,6 +64,7 @@ export { cmdBrainSgrep } from "./sgrep.ts";
 export { cmdBrainContinuity } from "./continuity.ts";
 export { cmdBrainSessionSummary } from "./session-summary.ts";
 export { cmdBrainIdeaLineage } from "./idea-lineage.ts";
+export { cmdBrainNoteHistory } from "./note-history.ts";
 export { cmdBrainBench } from "./bench.ts";
 export { cmdBrainGit } from "./git.ts";
 export { cmdBrainArchitect } from "./architect.ts";

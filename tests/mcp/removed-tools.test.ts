@@ -140,6 +140,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   })) as { result: { tools: Array<{ name: string }> } };
   // 76 + brain_create_note (Brain Portability & Interop Suite) = 77.
   // + brain_file_context (Recall & Working-Memory Quality Suite) = 78.
-  // + brain_session_summary, brain_idea_lineage (Session Knowledge Synthesis Suite) = 80.
-  expect(list.result.tools.length).toBe(80);
+  // + brain_session_summary, brain_idea_lineage, brain_note_history
+  //   (Session Knowledge Synthesis Suite) = 81.
+  expect(list.result.tools.length).toBe(81);
 });

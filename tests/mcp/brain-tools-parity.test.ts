@@ -56,6 +56,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_mcp_landscape",
   "brain_moc_audit",
   "brain_note",
+  "brain_note_history",
   "brain_pinned_context",
   "brain_pre_compact_extract",
   "brain_pre_compress_pack",

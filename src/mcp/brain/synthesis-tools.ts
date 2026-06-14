@@ -18,6 +18,7 @@ import {
   IdeaLineageError,
   type IdeaLineageResult,
 } from "../../core/brain/idea-lineage.ts";
+import { decomposeNoteHistory } from "../../core/brain/note-history.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -148,6 +149,40 @@ function toolBrainIdeaLineage(
   }
 }
 
+const HISTORY_TOOL = "brain_note_history";
+
+function toolBrainNoteHistory(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const pathRaw = args["path"];
+  if (typeof pathRaw !== "string" || pathRaw.trim().length === 0) {
+    throw new MCPError(INVALID_PARAMS, `${HISTORY_TOOL}: path is required`);
+  }
+  const gapHours = positiveIntArg(args, "gap_hours");
+  const maxCount = positiveIntArg(args, "max_count");
+  const result = decomposeNoteHistory(ctx.vault, pathRaw.trim(), {
+    ...(gapHours !== undefined ? { gapHours } : {}),
+    ...(maxCount !== undefined ? { maxCount } : {}),
+  });
+  return {
+    note_path: result.notePath,
+    available: result.available,
+    ...(result.reason !== undefined ? { reason: result.reason } : {}),
+    commit_count: result.commitCount,
+    phases: result.phases,
+  };
+}
+
+function positiveIntArg(args: Record<string, unknown>, name: string): number | undefined {
+  const value = args[name];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new MCPError(INVALID_PARAMS, `${HISTORY_TOOL}: ${name} must be a positive integer`);
+  }
+  return value;
+}
+
 export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: SUMMARY_TOOL,
@@ -218,6 +253,31 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainIdeaLineage,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+  {
+    name: HISTORY_TOOL,
+    description:
+      "Decompose a note's git history into recallable episodic phases. A new phase starts when the gap between consecutive commits exceeds gap_hours (default 72) - a deterministic, language-agnostic split. Each phase carries the commit subjects, dates, and authors. A missing repo reports available=false; a path with no commits reports available=true with zero phases. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Repo-relative note path (git pathspec)." },
+        gap_hours: {
+          type: "integer",
+          minimum: 1,
+          description: "Inter-commit gap that starts a new phase (default 72).",
+        },
+        max_count: {
+          type: "integer",
+          minimum: 1,
+          description: "Bound the walk to the newest N commits touching the path.",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    handler: toolBrainNoteHistory,
     previewBudget: MCP_PREVIEW_BUDGET,
   },
 ]);
