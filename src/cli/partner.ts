@@ -8,6 +8,7 @@
  * index or the vault.
  */
 
+import { CliError, parseFlags } from "./argparse.ts";
 import { defaultConfigPath, resolveVault } from "../core/config.ts";
 import { buildCodegraphReport, type CodegraphReport } from "../core/partner/codegraph-report.ts";
 
@@ -43,16 +44,14 @@ function renderCodegraphReport(report: CodegraphReport): string {
 }
 
 function codegraphReportVerb(argv: ReadonlyArray<string>): number {
-  let vaultFlag: string | undefined;
-  let asJson = false;
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--vault" && argv[i + 1]) {
-      vaultFlag = argv[i + 1];
-      i++;
-    } else if (argv[i] === "--json") {
-      asJson = true;
-    }
+  const { flags, positional } = parseFlags(argv, { vault: { type: "string" } });
+  if (positional.length > 0) {
+    throw new CliError(
+      `partner codegraph report does not accept positional arguments: ${positional.join(" ")}`,
+    );
   }
+  const vaultFlag = flags["vault"] as string | undefined;
+  const asJson = Boolean(flags["json"]);
   const report = buildCodegraphReport({ cwd: process.cwd(), vault: resolveScopeVault(vaultFlag) });
   if (asJson) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");

@@ -61,7 +61,7 @@ We agree with the consultant recommendation. The two cards are about operational
 
 ## Report contracts
 
-The CodeGraph report should be stable enough for MCP consumers to branch on without scraping prose. Required top-level fields: `schema_version`, `projects`, and `generated_at`. Each project entry reports `path`, `is_code_project`, `codegraph` status (`cli_missing`, `not_indexed`, `status_unavailable`, or `indexed` with available count fields), and `cargo_workspace` (`null` plus `reason`, or `{ root, members }`). Do not expose `crate_depends_on` unless a future release adds that graph schema deliberately.
+The CodeGraph report should be stable enough for MCP consumers to branch on without scraping prose. It reports a single in-scope project. Required top-level fields: `schema_version`, `project` (the resolved project path, or `null` when none is in scope), `cli` (`{ available, path }`), `index` (`{ state, ... }` where `state` is `no_project`, `absent`, `not_indexed`, `indexed`, or `error`, plus optional `node_count`, `file_count`, `edge_count`, and `reason`), `cargo_workspace` (`null`, or `{ root, members, memberCount }`), and `cargo_workspace_reason`. Do not expose `crate_depends_on` unless a future release adds that graph schema deliberately.
 
 Batched cluster mode should be explicit in both CLI and MCP inputs as `batch_size` / `--batch-size`. In batched mode, return the same community summaries as the default run plus a `batches` array containing `index`, `start`, `end`, `written`, `removed`, and optional `error`. Without `batch_size`, do not include `batches` and keep the existing output shape.
 

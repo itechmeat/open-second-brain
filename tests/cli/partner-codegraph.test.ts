@@ -83,3 +83,21 @@ test("unknown partner subcommand exits 2 with usage", async () => {
   expect(res.returncode).toBe(2);
   expect(res.stderr).toContain("usage: o2b partner codegraph report");
 });
+
+test("unknown flag exits 2 instead of being silently ignored", async () => {
+  const res = await runCli(["partner", "codegraph", "report", "--bogus"], { cwd: tmp });
+  expect(res.returncode).toBe(2);
+  expect(res.stderr).toContain("unknown flag: --bogus");
+});
+
+test("--vault without a value exits 2", async () => {
+  const res = await runCli(["partner", "codegraph", "report", "--vault"], { cwd: tmp });
+  expect(res.returncode).toBe(2);
+  expect(res.stderr).toContain("--vault requires a value");
+});
+
+test("positional arguments are rejected", async () => {
+  const res = await runCli(["partner", "codegraph", "report", "extra"], { cwd: tmp });
+  expect(res.returncode).toBe(2);
+  expect(res.stderr).toContain("does not accept positional arguments");
+});

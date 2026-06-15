@@ -259,7 +259,10 @@ export function materializeClusterNotes(
   if (opts.batchSize === undefined) {
     for (const community of communities) written.push(writeOne(community));
   } else {
-    const size = Math.max(1, Math.floor(opts.batchSize));
+    if (!Number.isInteger(opts.batchSize) || opts.batchSize < 1) {
+      throw new Error("materializeClusterNotes: batchSize must be a positive integer");
+    }
+    const size = opts.batchSize;
     batches = [];
     for (let start = 0, index = 0; start < communities.length; start += size, index++) {
       const end = Math.min(start + size, communities.length);
