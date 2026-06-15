@@ -35,6 +35,7 @@ import { isoSecond } from "../../core/brain/time.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import { normalizeEntityName } from "../../core/brain/entities/canonical.ts";
 import { listDeadEnds, recordDeadEnd } from "../../core/brain/dead-ends.ts";
+import { buildCodegraphReport } from "../../core/partner/codegraph-report.ts";
 import { buildForesight, FORESIGHT_HORIZON_DAYS } from "../../core/brain/temporal/foresight.ts";
 import { aggregateQuantities } from "../../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../../core/brain/truth/collision.ts";
@@ -532,9 +533,37 @@ function toolBrainDeadEnds(
   return { ok: true, id: result.entry.id, path: result.entry.path, archived: result.archived };
 }
 
+// ----- brain_codegraph_report (t_a1e76788) -----------------------------------
+
+/**
+ * Read-only codegraph partner report: index status plus structural Cargo
+ * workspace membership. Never installs, initializes, extracts, or mutates a
+ * partner index or the vault - a missing CLI, missing index, or non-Rust
+ * project are honest report states, not errors.
+ */
+function toolBrainCodegraphReport(
+  ctx: ServerContext,
+  _args: Record<string, unknown>,
+): Record<string, unknown> {
+  const report = buildCodegraphReport({ cwd: process.cwd(), vault: ctx.vault });
+  return report as unknown as Record<string, unknown>;
+}
+
 // ----- brain_truth (Entity Truth & Self-Improving Dream Suite) ---------------
 
 export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: "brain_codegraph_report",
+    description:
+      "Read-only codegraph partner report: resolves the in-scope code project, reports index state (no_project|absent|not_indexed|indexed|error, with counts), and structurally parses Cargo.toml for workspace members. Non-Rust projects report cargo_workspace: null. Never installs or mutates.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: toolBrainCodegraphReport,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
   {
     name: "brain_foresight",
     description:

@@ -11,7 +11,8 @@
  * `brain_anticipatory_context` (continuity-hygiene-freshness suite); v1.7.0
  * added `brain_intake_entities`, `brain_ingest_source`,
  * `brain_research_report`, and `brain_derive_fact` (Knowledge Provenance
- * suite).
+ * suite); the codegraph-and-MCP operational-readability release added
+ * `brain_codegraph_report` (read-only codegraph partner report).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -30,6 +31,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_bridges",
   "brain_brief",
   "brain_clusters",
+  "brain_codegraph_report",
   "brain_context",
   "brain_context_pack",
   "brain_context_presets",

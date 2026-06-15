@@ -261,6 +261,14 @@ o2b discipline uninstall      Remove the cron job; --weekly removes only the wee
 
 See [`hermes-cron.md`](hermes-cron.md) for the cron envelope and Telegram delivery shape.
 
+## Partner (read-only, since v1.12.0)
+
+Reports on external code-project partners. Strictly read-only: never installs, initializes, extracts, or mutates a partner index or the vault.
+
+```text
+o2b partner codegraph report  Resolve the in-scope code project and report the codegraph index state (no_project | absent | not_indexed | indexed with node/file/edge counts | error) plus a structural Cargo.toml workspace-member list. Non-Rust projects report cargo_workspace: null with a reason. --vault sharpens the scan scope; --json emits the schema-versioned report
+```
+
 ## Search
 
 ```text

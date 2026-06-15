@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator surfaces over the optional Codegraph partner and vault community
   detection. With no new option in use, existing reads stay byte-identical and
   the kernel never calls an LLM.
+  - **CodeGraph report surface (`o2b partner codegraph report`,
+    `brain_codegraph_report`).** A read-only report that resolves the in-scope
+    code project, reports the partner index state (`no_project`, `absent`,
+    `not_indexed`, `indexed` with node/file/edge counts, or `error`), and
+    structurally parses `Cargo.toml` for Rust workspace members. It never
+    installs, initializes, extracts, or mutates a codegraph or Graphify index:
+    a missing CLI, a missing `.codegraph/` index, and a non-Rust project are all
+    honest report states (the latter returns `cargo_workspace: null` with an
+    explicit reason) rather than failures or silent no-ops. The report is
+    schema-versioned (`schema_version: 1`) and the same shape backs both the CLI
+    (`--json`) and the MCP tool. This surfaces the operationally useful kernel of
+    Graphify's Cargo workspace work (workspace membership) without adopting the
+    extraction binary as a dependency or adding a `crate_depends_on` edge type to
+    the Open Second Brain graph schema.
   - **Batched community materialization (`o2b brain clusters run --batch-size N`,
     `brain_clusters` `batch_size`).** Borrowing Graphify's multi-batch labeling
     for large graphs, cluster note materialization can now run in fixed-size,

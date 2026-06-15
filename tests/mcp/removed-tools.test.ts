@@ -142,5 +142,6 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   // + brain_file_context (Recall & Working-Memory Quality Suite) = 78.
   // + brain_session_summary, brain_idea_lineage, brain_note_history
   //   (Session Knowledge Synthesis Suite) = 81.
-  expect(list.result.tools.length).toBe(81);
+  // + brain_codegraph_report (CodeGraph & MCP Operational Readability) = 82.
+  expect(list.result.tools.length).toBe(82);
 });
