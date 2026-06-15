@@ -56,7 +56,7 @@ export function readCargoWorkspace(projectDir: string): CargoWorkspaceResult {
   }
 
   const lines = text.split(/\r?\n/);
-  let inWorkspace = false;
+  let currentTable: string | null = null;
   let members: string[] | null = null;
 
   for (let i = 0; i < lines.length; i++) {
@@ -64,26 +64,23 @@ export function readCargoWorkspace(projectDir: string): CargoWorkspaceResult {
     const stripped = stripComment(line).trim();
     if (stripped.length === 0) continue;
 
-    const header = matchTableHeader(stripped);
-    if (header !== null) {
-      // Enter only on the exact top-level `[workspace]` table. Sub-tables such
-      // as `[workspace.package]` keep us "in" the workspace context; any other
-      // top-level table ends it (so a stray `members =` elsewhere is ignored).
-      inWorkspace = header === "workspace" || header.startsWith("workspace.");
+    if (stripped.startsWith("[")) {
+      // Any table header changes scope, including `[[array-of-tables]]`
+      // (matchTableHeader returns null for those, never "workspace"). The
+      // `members` key is only valid directly under the top-level `[workspace]`
+      // table, so sub-tables like `[workspace.package]` must not collect it.
+      currentTable = matchTableHeader(stripped);
       continue;
     }
 
-    if (!inWorkspace) continue;
+    if (currentTable !== "workspace") continue;
 
     const key = matchKey(stripped);
     if (key !== "members") continue;
 
-    const { values, complete } = collectArray(lines, i);
-    members = values;
-    if (!complete) {
-      // Defensive: an unterminated array means a malformed manifest; treat what
-      // we parsed as the member set rather than scanning the rest of the file.
-    }
+    // An unterminated array (malformed manifest) yields what we parsed so far
+    // rather than scanning the rest of the file.
+    members = collectArray(lines, i).values;
     break;
   }
 

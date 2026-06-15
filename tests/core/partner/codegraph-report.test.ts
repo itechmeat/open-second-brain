@@ -80,6 +80,22 @@ describe("readCargoWorkspace", () => {
     expect(r.workspace!.memberCount).toBe(0);
   });
 
+  test("members under [workspace.package] sub-table are not collected", () => {
+    const body = '[workspace]\nresolver = "2"\n\n[workspace.package]\nmembers = ["nope"]\n';
+    const repo = makeRepo(join(tmp, "ws-sub"), "Cargo.toml", body);
+    const r = readCargoWorkspace(repo);
+    expect(r.workspace).not.toBeNull();
+    expect(r.workspace!.members).toEqual([]);
+  });
+
+  test("members under an array-of-tables after [workspace] are not collected", () => {
+    const body = '[workspace]\nresolver = "2"\n\n[[bin]]\nmembers = ["nope"]\n';
+    const repo = makeRepo(join(tmp, "ws-aot"), "Cargo.toml", body);
+    const r = readCargoWorkspace(repo);
+    expect(r.workspace).not.toBeNull();
+    expect(r.workspace!.members).toEqual([]);
+  });
+
   test("members of a later table are not mistaken for workspace members", () => {
     const body = '[workspace]\nresolver = "2"\n\n[some.other]\nmembers = ["nope"]\n';
     const repo = makeRepo(join(tmp, "ws4"), "Cargo.toml", body);
