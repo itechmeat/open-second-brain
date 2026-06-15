@@ -172,9 +172,51 @@ function communityId(relPath: string): string {
 
 const GENERATED_KIND = "brain-cluster";
 
+/**
+ * Per-batch outcome from a batched materialization run (t_a286135c,
+ * Graphify-inspired). Present only when `batchSize` is supplied; the
+ * unbatched path stays byte-identical and omits it.
+ */
+export interface ClusterBatch {
+  /** 0-based batch position. */
+  readonly index: number;
+  /** Inclusive community offset this batch starts at. */
+  readonly start: number;
+  /** Exclusive community offset this batch ends at. */
+  readonly end: number;
+  /** Relative paths written by this batch (partial if it failed midway). */
+  readonly written: ReadonlyArray<string>;
+  /**
+   * Stale notes removed. Removal is a single global reconciliation run
+   * after all writes, attributed to the final batch.
+   */
+  readonly removed: ReadonlyArray<string>;
+  /** Failure detail; present only when the batch threw. */
+  readonly error?: string;
+}
+
 export interface MaterializeClusterNotesResult {
   readonly written: ReadonlyArray<string>;
   readonly removed: ReadonlyArray<string>;
+  /** Per-batch results; present only when `batchSize` was supplied. */
+  readonly batches?: ReadonlyArray<ClusterBatch>;
+}
+
+export interface MaterializeClusterNotesOptions {
+  readonly store: Store;
+  readonly now: Date;
+  /**
+   * Opt-in batching for large graphs (t_a286135c): materialize
+   * communities in fixed-size, order-preserving chunks so one failed
+   * batch is isolated and reported instead of dropping the whole pass.
+   * Unset => single pass, errors propagate, byte-identical to before.
+   */
+  readonly batchSize?: number;
+  /**
+   * Injection seam for the per-note writer (defaults to the atomic
+   * write); lets callers and tests force a deterministic batch fault.
+   */
+  readonly writeNote?: (path: string, content: string) => void;
 }
 
 function clustersDir(vault: string): string {
@@ -185,26 +227,65 @@ function clustersDir(vault: string): string {
  * Regenerate one derived note per community and remove generated
  * notes whose community vanished. Hand-written files (no
  * `kind: brain-cluster`) are never touched.
+ *
+ * With `batchSize` set, communities are written in fixed-size chunks
+ * and each batch is isolated: a batch that throws is recorded with an
+ * `error` and the remaining batches continue. The stale sweep keys off
+ * the full detected set, so a failed batch leaves its prior note in
+ * place rather than deleting it.
  */
 export function materializeClusterNotes(
   vault: string,
   communities: ReadonlyArray<Community>,
-  opts: { readonly store: Store; readonly now: Date },
+  opts: MaterializeClusterNotesOptions,
 ): MaterializeClusterNotesResult {
   const dir = clustersDir(vault);
   mkdirSync(dir, { recursive: true });
+  const writeNote = opts.writeNote ?? atomicWriteFileSync;
+
+  // The full detected set protects every community note from the stale
+  // sweep regardless of batch success: a failed batch keeps its prior
+  // note instead of having it deleted.
+  const expected = new Set<string>(communities.map((c) => `cluster-${c.id}.md`));
+
+  const writeOne = (community: Community): string => {
+    const fileName = `cluster-${community.id}.md`;
+    writeNote(join(dir, fileName), renderClusterNote(community, opts));
+    return `Brain/clusters/${fileName}`;
+  };
 
   const written: string[] = [];
-  const expected = new Set<string>();
-  for (const community of communities) {
-    const fileName = `cluster-${community.id}.md`;
-    expected.add(fileName);
-    const path = join(dir, fileName);
-    atomicWriteFileSync(path, renderClusterNote(community, opts));
-    written.push(`Brain/clusters/${fileName}`);
+  let batches: ClusterBatch[] | undefined;
+  if (opts.batchSize === undefined) {
+    for (const community of communities) written.push(writeOne(community));
+  } else {
+    const size = Math.max(1, Math.floor(opts.batchSize));
+    batches = [];
+    for (let start = 0, index = 0; start < communities.length; start += size, index++) {
+      const end = Math.min(start + size, communities.length);
+      const batchWritten: string[] = [];
+      let error: string | undefined;
+      try {
+        for (let i = start; i < end; i++) batchWritten.push(writeOne(communities[i]!));
+      } catch (exc) {
+        // Independent batches keep going; record stable bounds + detail.
+        error = (exc as Error).message ?? String(exc);
+      }
+      written.push(...batchWritten);
+      batches.push(
+        Object.freeze({
+          index,
+          start,
+          end,
+          written: Object.freeze([...batchWritten]),
+          removed: Object.freeze([] as string[]),
+          ...(error !== undefined ? { error } : {}),
+        }),
+      );
+    }
   }
 
-  // Stale sweep: only generated notes are eligible for removal.
+  // Single global stale sweep: only generated notes are eligible.
   const removed: string[] = [];
   for (const file of readdirSync(dir).toSorted()) {
     if (!file.endsWith(".md") || expected.has(file)) continue;
@@ -215,7 +296,18 @@ export function materializeClusterNotes(
     removed.push(`Brain/clusters/${file}`);
   }
 
-  return Object.freeze({ written: Object.freeze(written), removed: Object.freeze(removed) });
+  // Attribute the single global sweep to the final batch so the
+  // per-batch `removed` contract carries a real value.
+  if (batches && batches.length > 0) {
+    const last = batches[batches.length - 1]!;
+    batches[batches.length - 1] = Object.freeze({ ...last, removed: Object.freeze([...removed]) });
+  }
+
+  return Object.freeze({
+    written: Object.freeze(written),
+    removed: Object.freeze(removed),
+    ...(batches ? { batches: Object.freeze(batches) } : {}),
+  });
 }
 
 function renderClusterNote(

@@ -217,6 +217,10 @@ async function toolBrainClusters(
   if (minSize !== undefined && (!Number.isInteger(minSize) || (minSize as number) < 2)) {
     throw new MCPError(INVALID_PARAMS, "brain_clusters run: min_size must be an integer >= 2");
   }
+  const batchSize = args["batch_size"];
+  if (batchSize !== undefined && (!Number.isInteger(batchSize) || (batchSize as number) < 1)) {
+    throw new MCPError(INVALID_PARAMS, "brain_clusters run: batch_size must be an integer >= 1");
+  }
   const searchConfig = resolveSearchConfig({
     vault: ctx.vault,
     configPath: ctx.configPath ?? undefined,
@@ -231,7 +235,11 @@ async function toolBrainClusters(
       store,
       minSize !== undefined ? { minSize: minSize as number } : {},
     );
-    const materialized = materializeClusterNotes(ctx.vault, communities, { store, now });
+    const materialized = materializeClusterNotes(ctx.vault, communities, {
+      store,
+      now,
+      ...(batchSize !== undefined ? { batchSize: batchSize as number } : {}),
+    });
     try {
       appendMetric(ctx.vault, {
         surface: "communities",
@@ -241,6 +249,12 @@ async function toolBrainClusters(
           sizes: communities.map((c) => c.size),
           written: materialized.written.length,
           removed: materialized.removed.length,
+          ...(materialized.batches
+            ? {
+                batches: materialized.batches.length,
+                failed_batches: materialized.batches.filter((b) => b.error !== undefined).length,
+              }
+            : {}),
         },
       });
     } catch {
@@ -255,6 +269,7 @@ async function toolBrainClusters(
       })),
       written: materialized.written,
       removed: materialized.removed,
+      ...(materialized.batches ? { batches: materialized.batches } : {}),
     };
   } finally {
     await store.close();
@@ -569,7 +584,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_clusters",
     description:
-      "Graph-wide community detection: run applies deterministic label propagation over the resolved link graph, materializes one derived note per community of size >= min_size under Brain/clusters/, removes stale generated notes, and records a metric; list reads the generated notes back.",
+      "Graph-wide community detection: run applies deterministic label propagation, materializes one note per community of size >= min_size under Brain/clusters/, removes stale notes, records a metric; list reads them back. Optional batch_size chunks work with isolated, reported per-batch failures.",
     inputSchema: {
       type: "object",
       properties: {
@@ -578,6 +593,12 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 2,
           description: "Smallest community that materializes (run, default 4).",
+        },
+        batch_size: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Materialize communities in chunks of this size (run); each batch is isolated and reported in the batches array. Default: single pass.",
         },
       },
       required: ["operation"],

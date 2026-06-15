@@ -32,12 +32,14 @@ import { SearchError } from "../../../core/search/types.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
-const USAGE = "usage: o2b brain clusters run [--min-size N] | list  [--vault <path>] [--json]";
+const USAGE =
+  "usage: o2b brain clusters run [--min-size N] [--batch-size N] | list  [--vault <path>] [--json]";
 
 export async function cmdBrainClusters(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
     vault: { type: "string" },
     "min-size": { type: "string" },
+    "batch-size": { type: "string" },
     json: { type: "boolean" },
   });
   const asJson = flags["json"] === true;
@@ -89,6 +91,11 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
       process.stderr.write("brain clusters run: --min-size must be a positive integer\n");
       return 2;
     }
+    const batchSize = parsePositiveInt(flags["batch-size"] as string | undefined);
+    if (batchSize === false) {
+      process.stderr.write("brain clusters run: --batch-size must be a positive integer\n");
+      return 2;
+    }
 
     const searchConfig = resolveSearchConfig({ vault, configPath: config ?? undefined });
     let store: Store;
@@ -119,7 +126,12 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
       // O(1) from the snapshot detectCommunities just built (same index
       // revision -> cache hit, no second graph rebuild).
       const stats = graphStats(store, { top: 5 });
-      const result = materializeClusterNotes(vault, communities, { store, now });
+      const result = materializeClusterNotes(vault, communities, {
+        store,
+        now,
+        ...(batchSize !== undefined ? { batchSize } : {}),
+      });
+      const failedBatches = result.batches?.filter((b) => b.error !== undefined) ?? [];
       try {
         appendMetric(vault, {
           surface: "communities",
@@ -130,6 +142,9 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
             written: result.written.length,
             removed: result.removed.length,
             min_size: minSize ?? COMMUNITY_DEFAULT_MIN_SIZE,
+            ...(result.batches
+              ? { batches: result.batches.length, failed_batches: failedBatches.length }
+              : {}),
           },
         });
       } catch {
@@ -151,6 +166,7 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
           },
           written: result.written,
           removed: result.removed,
+          ...(result.batches ? { batches: result.batches } : {}),
         });
       } else if (communities.length === 0) {
         ok("clusters run: no communities at the current threshold");
@@ -161,6 +177,14 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
           ok(`  ${c.id}: ${c.size} notes, density ${c.density.toFixed(2)}`);
         }
         ok(`  graph: ${stats.nodeCount} linked nodes, ${stats.edgeCount} edges`);
+        if (result.batches) {
+          ok(
+            `  batches: ${result.batches.length} (${failedBatches.length} failed)` +
+              (failedBatches.length > 0
+                ? ` - failed: ${failedBatches.map((b) => `#${b.index} (${b.error})`).join(", ")}`
+                : ""),
+          );
+        }
         if (result.removed.length > 0) ok(`  removed stale: ${result.removed.join(", ")}`);
       }
       return 0;

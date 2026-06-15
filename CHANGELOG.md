@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-06-15
+
+### Added
+
+- **CodeGraph and MCP Operational Readability.** Additive, deterministic
+  operator surfaces over the optional Codegraph partner and vault community
+  detection. With no new option in use, existing reads stay byte-identical and
+  the kernel never calls an LLM.
+  - **Batched community materialization (`o2b brain clusters run --batch-size N`,
+    `brain_clusters` `batch_size`).** Borrowing Graphify's multi-batch labeling
+    for large graphs, cluster note materialization can now run in fixed-size,
+    order-preserving chunks. Batched mode returns the same community summaries
+    plus a `batches` array, each entry carrying `index`, `start`, `end`,
+    `written`, `removed`, and an optional `error`; a batch that fails is isolated
+    and reported instead of dropping the whole pass. The stale sweep keys off the
+    full detected set, so a failed batch leaves its prior note in place rather
+    than deleting it, and the single global sweep is attributed to the final
+    batch. Detection stays deterministic and label-free (no LLM labeling, no
+    natural-language classification, no Graphify dependency). Without
+    `--batch-size`/`batch_size` the run is byte-identical to before, and invalid
+    sizes are rejected with the usual usage/`INVALID_PARAMS` errors.
+
 ## [1.11.0] - 2026-06-14
 
 ### Added
