@@ -27,6 +27,7 @@ import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { handleBrainSubcommand } from "./brain.ts";
 import { handleDisciplineSubcommand } from "./discipline.ts";
+import { handlePartnerSubcommand } from "./partner.ts";
 import { handleSearchSubcommand } from "./search.ts";
 import { handleVaultSubcommand } from "./vault.ts";
 import {
@@ -696,6 +697,9 @@ Search:
 Vault scope:
   vault status              Show how many files/dirs the active policy includes and which rules excluded
   vault inspect <relpath>   Point-check one vault-relative path against the policy
+
+Partner (read-only):
+  partner codegraph report  Report codegraph index status + structural Cargo workspace members (--json)
 `;
 
 export async function main(argv: ReadonlyArray<string>): Promise<number> {
@@ -756,6 +760,7 @@ const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "search",
   "vault",
   "discipline",
+  "partner",
 ]);
 
 async function dispatchCommand(command: string, rest: string[]): Promise<number> {
@@ -797,6 +802,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await handleSearchSubcommand(rest);
       case "vault":
         return await handleVaultSubcommand(rest);
+      case "partner":
+        return await handlePartnerSubcommand(rest);
       default:
         process.stderr.write(`error: unknown command: ${command}\n`);
         process.stderr.write(HELP);

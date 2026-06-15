@@ -111,9 +111,52 @@ test("maintenance lane executes the bridges and clusters tasks", async () => {
   expect(listMetrics(vault, { surface: "communities" })).toHaveLength(1);
 });
 
+test("run --batch-size returns per-batch results", async () => {
+  await index();
+  const run = await runCli([
+    "brain",
+    "clusters",
+    "run",
+    "--batch-size",
+    "1",
+    "--vault",
+    vault,
+    "--json",
+  ]);
+  expect(run.returncode).toBe(0);
+  const parsed = JSON.parse(run.stdout) as {
+    communities: unknown[];
+    batches: Array<{ index: number; start: number; end: number; error?: string }>;
+  };
+  expect(parsed.communities).toHaveLength(1);
+  expect(parsed.batches).toHaveLength(1);
+  expect(parsed.batches[0]).toMatchObject({ index: 0, start: 0, end: 1 });
+  expect(parsed.batches[0]!.error).toBeUndefined();
+  expect(listMetrics(vault, { surface: "communities" })[0]!.payload).toMatchObject({
+    batches: 1,
+    failed_batches: 0,
+  });
+});
+
+test("run without --batch-size omits the batches field", async () => {
+  await index();
+  const run = await runCli(["brain", "clusters", "run", "--vault", vault, "--json"]);
+  expect(JSON.parse(run.stdout)).not.toHaveProperty("batches");
+});
+
 test("usage errors exit 2", async () => {
   const r = await runCli(["brain", "clusters", "nope", "--vault", vault]);
   expect(r.returncode).toBe(2);
   const bad = await runCli(["brain", "clusters", "run", "--min-size", "0", "--vault", vault]);
   expect(bad.returncode).toBe(2);
+  const badBatch = await runCli([
+    "brain",
+    "clusters",
+    "run",
+    "--batch-size",
+    "0",
+    "--vault",
+    vault,
+  ]);
+  expect(badBatch.returncode).toBe(2);
 });

@@ -133,7 +133,7 @@ export interface CodegraphCheckOptions {
   readonly disabled?: boolean;
 }
 
-function defaultWhichCodegraph(): string | null {
+export function defaultWhichCodegraph(): string | null {
   if (typeof Bun !== "undefined" && typeof (Bun as { which?: unknown }).which === "function") {
     const found = (Bun as unknown as { which: (cmd: string) => string | null }).which("codegraph");
     return found ?? null;
@@ -141,7 +141,7 @@ function defaultWhichCodegraph(): string | null {
   return null;
 }
 
-function defaultRunStatusJson(projectPath: string): CodegraphStatusResult {
+export function defaultRunStatusJson(projectPath: string): CodegraphStatusResult {
   try {
     const proc = Bun.spawnSync({
       cmd: ["codegraph", "status", "-j", projectPath],

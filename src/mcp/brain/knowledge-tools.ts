@@ -35,6 +35,7 @@ import { isoSecond } from "../../core/brain/time.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import { normalizeEntityName } from "../../core/brain/entities/canonical.ts";
 import { listDeadEnds, recordDeadEnd } from "../../core/brain/dead-ends.ts";
+import { buildCodegraphReport } from "../../core/partner/codegraph-report.ts";
 import { buildForesight, FORESIGHT_HORIZON_DAYS } from "../../core/brain/temporal/foresight.ts";
 import { aggregateQuantities } from "../../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../../core/brain/truth/collision.ts";
@@ -217,6 +218,10 @@ async function toolBrainClusters(
   if (minSize !== undefined && (!Number.isInteger(minSize) || (minSize as number) < 2)) {
     throw new MCPError(INVALID_PARAMS, "brain_clusters run: min_size must be an integer >= 2");
   }
+  const batchSize = args["batch_size"];
+  if (batchSize !== undefined && (!Number.isInteger(batchSize) || (batchSize as number) < 1)) {
+    throw new MCPError(INVALID_PARAMS, "brain_clusters run: batch_size must be an integer >= 1");
+  }
   const searchConfig = resolveSearchConfig({
     vault: ctx.vault,
     configPath: ctx.configPath ?? undefined,
@@ -231,7 +236,11 @@ async function toolBrainClusters(
       store,
       minSize !== undefined ? { minSize: minSize as number } : {},
     );
-    const materialized = materializeClusterNotes(ctx.vault, communities, { store, now });
+    const materialized = materializeClusterNotes(ctx.vault, communities, {
+      store,
+      now,
+      ...(batchSize !== undefined ? { batchSize: batchSize as number } : {}),
+    });
     try {
       appendMetric(ctx.vault, {
         surface: "communities",
@@ -241,6 +250,12 @@ async function toolBrainClusters(
           sizes: communities.map((c) => c.size),
           written: materialized.written.length,
           removed: materialized.removed.length,
+          ...(materialized.batches
+            ? {
+                batches: materialized.batches.length,
+                failed_batches: materialized.batches.filter((b) => b.error !== undefined).length,
+              }
+            : {}),
         },
       });
     } catch {
@@ -255,6 +270,7 @@ async function toolBrainClusters(
       })),
       written: materialized.written,
       removed: materialized.removed,
+      ...(materialized.batches ? { batches: materialized.batches } : {}),
     };
   } finally {
     await store.close();
@@ -517,9 +533,37 @@ function toolBrainDeadEnds(
   return { ok: true, id: result.entry.id, path: result.entry.path, archived: result.archived };
 }
 
+// ----- brain_codegraph_report (t_a1e76788) -----------------------------------
+
+/**
+ * Read-only codegraph partner report: index status plus structural Cargo
+ * workspace membership. Never installs, initializes, extracts, or mutates a
+ * partner index or the vault - a missing CLI, missing index, or non-Rust
+ * project are honest report states, not errors.
+ */
+function toolBrainCodegraphReport(
+  ctx: ServerContext,
+  _args: Record<string, unknown>,
+): Record<string, unknown> {
+  const report = buildCodegraphReport({ cwd: process.cwd(), vault: ctx.vault });
+  return report as unknown as Record<string, unknown>;
+}
+
 // ----- brain_truth (Entity Truth & Self-Improving Dream Suite) ---------------
 
 export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: "brain_codegraph_report",
+    description:
+      "Read-only codegraph partner report: resolves the in-scope code project, reports index state (no_project|absent|not_indexed|indexed|error, with counts), and structurally parses Cargo.toml for workspace members. Non-Rust projects report cargo_workspace: null. Never installs or mutates.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: toolBrainCodegraphReport,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
   {
     name: "brain_foresight",
     description:
@@ -569,7 +613,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_clusters",
     description:
-      "Graph-wide community detection: run applies deterministic label propagation over the resolved link graph, materializes one derived note per community of size >= min_size under Brain/clusters/, removes stale generated notes, and records a metric; list reads the generated notes back.",
+      "Graph-wide community detection: run applies deterministic label propagation, materializes one note per community of size >= min_size under Brain/clusters/, removes stale notes, records a metric; list reads them back. Optional batch_size chunks work with isolated, reported per-batch failures.",
     inputSchema: {
       type: "object",
       properties: {
@@ -578,6 +622,12 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 2,
           description: "Smallest community that materializes (run, default 4).",
+        },
+        batch_size: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Materialize communities in chunks of this size (run); each batch is isolated and reported in the batches array. Default: single pass.",
         },
       },
       required: ["operation"],

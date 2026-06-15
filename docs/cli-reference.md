@@ -219,7 +219,7 @@ The schema pack gains four additive ontology fields (`labels`, `link_constraints
 
 ```text
 o2b brain bridges             discover [--max N] [--min-similarity X] | list | accept <source> <target> | dismiss <source> <target> - embedding-near link proposals over the vec index, reviewable artifact, accept writes one related: wikilink
-o2b brain clusters            run [--min-size N] | list - graph-wide community detection; derived digests under Brain/clusters/, regenerated per run
+o2b brain clusters            run [--min-size N] [--batch-size N] | list - graph-wide community detection; derived digests under Brain/clusters/, regenerated per run; --batch-size materializes in chunks with isolated, reported per-batch failures
 o2b brain benchmark           run --dataset <path> [--k N] [--expand] - hit@k + MRR against the live hybrid recall; records the recall_benchmark metric
 o2b brain tune                run --dataset <path> [--k N] | status | reset - bounded self-tuning grid judged by the benchmark; persisted to Brain/search/tuning.json
 o2b search <query> --expand   deterministic lex/vec/hyde expansion of a bare query (stopword-stripped lex, entity-context vec line, template hyde passage)
@@ -260,6 +260,14 @@ o2b discipline uninstall      Remove the cron job; --weekly removes only the wee
 ```
 
 See [`hermes-cron.md`](hermes-cron.md) for the cron envelope and Telegram delivery shape.
+
+## Partner (read-only, since v1.12.0)
+
+Reports on external code-project partners. Strictly read-only: never installs, initializes, extracts, or mutates a partner index or the vault.
+
+```text
+o2b partner codegraph report  Resolve the in-scope code project and report the codegraph index state (no_project | absent | not_indexed | indexed with node/file/edge counts | error) plus a structural Cargo.toml workspace-member list. Non-Rust projects report cargo_workspace: null with a reason. --vault sharpens the scan scope; --json emits the schema-versioned report
+```
 
 ## Search
 

@@ -272,6 +272,8 @@ describe("tool listing", () => {
         "brain_clusters",
         "brain_benchmark",
         "brain_tune",
+        // CodeGraph & MCP Operational Readability (v1.12.0).
+        "brain_codegraph_report",
         // Agent Write Contract Suite: provider-agnostic write sessions.
         "brain_write_session",
         // Knowledge Provenance Suite (v1.7.0).
@@ -544,7 +546,9 @@ describe("stdio loop", () => {
     // + brain_file_context (Recall & Working-Memory Quality Suite) = 78.
     // + brain_session_summary / brain_idea_lineage / brain_note_history
     //   (Session Knowledge Synthesis Suite, v1.11.0) = 81.
-    expect(list.result.tools.length).toBe(81);
+    // + brain_codegraph_report (CodeGraph & MCP Operational Readability,
+    //   v1.12.0) = 82.
+    expect(list.result.tools.length).toBe(82);
   });
 
   test("returns parse error for invalid JSON", async () => {

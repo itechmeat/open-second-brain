@@ -186,6 +186,36 @@ test("brain_clusters run materializes derived notes and the metric", async () =>
   expect(bad.code).toBe(-32602);
 });
 
+test("brain_clusters run without batch_size has no batches field", async () => {
+  writeGroup();
+  await indexDefaultLocation();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  const run = await call(server, "brain_clusters", { operation: "run" });
+  expect(run["batches"]).toBeUndefined();
+});
+
+test("brain_clusters run with batch_size returns per-batch results", async () => {
+  writeGroup();
+  await indexDefaultLocation();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  const run = await call(server, "brain_clusters", { operation: "run", batch_size: 1 });
+  const batches = run["batches"] as Array<{ index: number; start: number; end: number }>;
+  expect(batches).toHaveLength(1);
+  expect(batches[0]).toMatchObject({ index: 0, start: 0, end: 1 });
+
+  const badZero = await callError(server, "brain_clusters", { operation: "run", batch_size: 0 });
+  expect(badZero.code).toBe(-32602);
+  const badFraction = await callError(server, "brain_clusters", {
+    operation: "run",
+    batch_size: 1.5,
+  });
+  expect(badFraction.code).toBe(-32602);
+});
+
 test("brain_benchmark run scores an inline dataset and records the metric", async () => {
   writeGroup();
   await indexDefaultLocation();
