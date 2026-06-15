@@ -35,6 +35,9 @@ export interface NormalizedContinuityRecord {
   /** Correlation ids lifted out of the payload when present. */
   readonly sessionId?: string;
   readonly turnId?: string;
+  /** Generation-report handoff lifted to a first-class join field. */
+  readonly handoffKind?: string;
+  readonly handoffRef?: string;
 }
 
 export interface ContinuityReadModelFilter {
@@ -63,6 +66,9 @@ export function normalizeContinuityRecord(raw: unknown): NormalizedContinuityRec
     : [];
   const sessionId = readString(payload["session_id"]);
   const turnId = readString(payload["turn_id"]);
+  const handoff = isPlainObject(payload["handoff"]) ? payload["handoff"] : undefined;
+  const handoffKind = handoff !== undefined ? readString(handoff["kind"]) : undefined;
+  const handoffRef = handoff !== undefined ? readString(handoff["ref"]) : undefined;
   return Object.freeze({
     schema: schema ?? CONTINUITY_SCHEMA_VERSION,
     legacy: schema === undefined,
@@ -75,6 +81,8 @@ export function normalizeContinuityRecord(raw: unknown): NormalizedContinuityRec
     redacted: record["redacted"] === true,
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(turnId !== undefined ? { turnId } : {}),
+    ...(handoffKind !== undefined ? { handoffKind } : {}),
+    ...(handoffRef !== undefined ? { handoffRef } : {}),
   });
 }
 

@@ -130,6 +130,17 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("secret", "Capability-gated secret custody: set, list, rm, run"),
         command("maintenance", "Quiet-window, lease-guarded heavy maintenance lane"),
         command("audit", "Render mutation audit trail"),
+        command(
+          "generation-reports",
+          "Record/list/summarize opt-in inbound LLM generation traces",
+          [],
+          [
+            command("record", "Record one gated inbound generation report"),
+            command("list", "List generation report records"),
+            command("summary", "Summarize generation usage with memory linkage"),
+            command("show", "Show one generation report record"),
+          ],
+        ),
         command("morning-brief", "Render session-start summary"),
         command("codec", "Compress or expand session prose"),
         command("sources", "Show signal source dashboard"),

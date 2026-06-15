@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Per-handoff LLM generation tracing (`generation_report`).** An
+  additive, opt-in, fail-open way to record the real LLM usage an agent
+  performs on behalf of a brain handoff, without the kernel ever calling
+  an LLM. Open Second Brain owns sequencing and the atomic commit; the
+  calling agent owns generation, so tracing is an INBOUND path: after the
+  agent fulfils a write-session step, a context-pack consume, or a
+  dream-stage proposal, it optionally reports back the usage and Open
+  Second Brain stores it as a `generation_report` continuity record.
+  - **Inbound report surface (`brain_generation_reports` action `record`,
+    `o2b brain generation-reports record`).** Gated (default off) by a
+    per-call `enable` flag or the `generation_trace_enabled` config /
+    `OPEN_SECOND_BRAIN_GENERATION_TRACE_ENABLED` env. With the gate off no
+    payload is built and nothing is written; a throwing build is swallowed
+    so tracing never fails the primary operation (`emitGatedTelemetry`).
+  - **Payload-safe by construction.** The handoff prompt is hashed and
+    counted but never persisted - only `prompt_hash` (SHA-256 hex) and
+    `prompt_chars`, plus token counts, reach disk, and the whole payload
+    still passes `safeContinuityPayload` redaction. The local token
+    estimate (`local_estimate.input_tokens`) is always present; the
+    agent-reported `usage` block is present only when supplied and absent
+    is reported as absent, never fabricated.
+  - **Memory to trace linkage.** `sourceRefs` join each report to the
+    handoff ref (write-session session id, context-receipt id, or dream
+    run id) and the memory paths involved, lifted to first-class
+    `handoffKind` / `handoffRef` read-model fields. The `summary` read
+    (`brain_generation_reports` action `summary`,
+    `o2b brain generation-reports summary`) rolls up call counts,
+    per-handoff-kind breakdown, the local estimate, reported usage, and a
+    per-path map so a memory path resolves back to the reports that
+    produced or consumed it.
+  - **Read surfaces.** `o2b brain generation-reports list|summary|show`
+    and the matching `brain_generation_reports` actions. The kernel never
+    adds an outbound `fetch`/provider HTTP call - a grep-guarded
+    regression test pins this, and a persisted-file assertion confirms no
+    raw prompt survives. Default behaviour is byte-identical: the
+    write-session envelope, context_receipt, dream_stage metric, and
+    recall_telemetry keep their current shapes when the gate is off.
+    Documented in `docs/observability.md`, `docs/cli-reference.md`, and
+    `docs/mcp.md`.
+
 ## [1.12.0] - 2026-06-15
 
 ### Added

@@ -49,6 +49,7 @@ flags for a narrower per-process full server.
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`.     | `max_tokens`                                   |
 | `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
 | `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls.                                            | `operation`                                    |
+| `brain_generation_reports`  | Inbound, opt-in LLM generation tracing: `record` posts a generation's usage for a handoff (gated, default off; stores prompt hash + token counts only); `list`/`summary` read records and join them to memory paths. Kernel never calls an LLM. | `action`                                       |
 | `brain_context_presets`     | Show, suggest, or diff read-only context budget presets (`tight-context`, `long-context`) without writing config.                              | `operation`                                    |
 | `brain_pre_compact_extract` | Extract decision/commitment/outcome/rule/open-question records from bounded text into continuity storage.                                      | `session_id`, `turn_start`, `turn_end`, `text` |
 | `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness), `apply` selected ids, `refresh` stale pages. Resolver command comes from `_brain.yaml` only. | `mode`                                         |
@@ -105,8 +106,12 @@ weights (applied to ranking only when `search_learned_weights_enabled` is on).
 `brain_context_pack` accepts opt-in `receipt`, `telemetry`, `cache_stable`, and
 `dedup_repeated` diagnostics; `brain_pre_compress_pack` accepts opt-in `receipt`
 and `telemetry`. `brain_context_receipts` supports `operation: "list"|"show"`;
-`brain_recall_telemetry` supports `operation: "list"|"summary"`; and
-`brain_context_presets` supports `operation: "show"|"suggest"|"diff"`.
+`brain_recall_telemetry` supports `operation: "list"|"summary"`;
+`brain_context_presets` supports `operation: "show"|"suggest"|"diff"`; and
+`brain_generation_reports` supports `action: "record"|"list"|"summary"` -
+`record` is gated (default off) by a per-call `enable` flag or the
+`generation_trace_enabled` config and persists only `prompt_hash` plus token
+counts, never the prompt.
 `brain_pre_compact_extract` writes idempotent typed continuity records after
 deterministic media/base64 sanitization. `brain_session_grep`,
 `brain_session_describe`, and `brain_session_expand` inspect the opt-in session

@@ -33,6 +33,7 @@ Every continuity record shares one envelope: `schema`, `id`, `kind`, `createdAt`
 | `recall_telemetry` | opt-in per call (`telemetry` option/param) | `packContext` (`mode: context_pack`), `buildPreCompressPack` (`mode: pre_compress`), `brain_search` MCP handler (`mode: search`), `brain_query` MCP handler (`mode: query`, since v0.40.0 - payload carries the query kind only, never the supplied preference id / topic / timestamp) |
 | `context_receipt` | opt-in per call (`receipt` option/param) | `packContext`, `buildPreCompressPack` |
 | `gate_telemetry` | config key `recall_gate_telemetry` (default off) | `brain_recall_gate` MCP handler |
+| `generation_report` | opt-in per call (`enable`) or config key `generation_trace_enabled` (default off) | inbound agent report after a generation handoff (`brain_generation_reports` action `record`, `o2b brain generation-reports record`) |
 | `session_turn`, `session_summary_node` | always-on within its operation | session-recall import (`src/core/brain/session-recall.ts`) - the write IS the operation |
 | `pre_compact_extract` | always-on within its operation | explicit pre-compact extraction (`src/core/brain/pre-compact-extract.ts`) |
 | `source_invalidation` | always-on within its operation | source drift detection (`appendContinuitySourceInvalidation`) |
@@ -56,6 +57,7 @@ Since v0.39.0 every new continuity record is stamped `schema: "o2b.continuity.v1
 | `createdAt` | every continuity record | ordering key (store sorts by `createdAt`, then `id`) |
 | `sourceRefs[].id` / `.path` | continuity records | joins records to vault artifacts |
 | `session_id`, `turn_id` | payloads of session-scoped kinds; lifted by the read-model | yes - the cross-surface session join |
+| `handoffKind`, `handoffRef` | `generation_report` payload `handoff`; lifted by the read-model | yes - joins a generation report to the write-session / context-receipt / dream run it traced |
 | `timestamp` + `agent` | Brain log events | per-event attribution |
 
 Multi-agent vaults attribute writers via per-agent identity (`brain_agent_query`); continuity records do not yet thread parent/child agent ids - if delegated-subagent correlation becomes needed, it lands as an additive payload field (no version bump).
@@ -68,6 +70,7 @@ Every continuity payload passes `safeContinuityPayload()` (`src/core/brain/conti
 - Secret-shaped tokens are redacted to `***REDACTED***`; the record is flagged `redacted: true`.
 - The sanitized payload is deep-frozen; nothing mutates it after the flags are computed.
 - `gate_telemetry` never stores the raw prompt by construction - only a SHA-256 prefix (`prompt_hash`) and the length (`prompt_chars`). The test suite asserts this against the persisted files, not just returned values.
+- `generation_report` follows the same rule: the handoff prompt is hashed and counted but never persisted - only `prompt_hash` (full SHA-256 hex) and `prompt_chars` land on disk, plus token counts. The kernel never calls an LLM; the report is the agent's INBOUND record after it performed a generation for a brain handoff, so the local token estimate (`local_estimate.input_tokens`) is always present while the agent-reported `usage` block is present only when supplied - absent is reported as absent, never fabricated. A grep-guarded regression test pins that no `fetch`/provider HTTP call exists under `src/core` for this feature, and a persisted-file assertion confirms no raw prompt survives.
 - Read-side consumers (trajectory export, bench) get the masking policy from the read-model: records flagged `private` are dropped by default and kept only on explicit request; masked text is never un-masked.
 
 ## Fail-open rules
@@ -83,6 +86,7 @@ No-consumer regression tests cover each gated surface, so a future call site can
 
 - `brain_recall_telemetry` (MCP) and `o2b brain recall-telemetry list|summary|gate-list|gate-summary` aggregate recall and gate records.
 - `brain_context_receipts` and `o2b brain context-receipts` inspect served-context receipts.
+- `brain_generation_reports` (MCP, actions `record`/`list`/`summary`) and `o2b brain generation-reports record|list|summary|show` post and read inbound LLM generation traces. `summary` rolls up call counts, the always-present local token estimate, agent-reported usage where present, and a per-path linkage map so a memory path resolves back to the generation reports that produced or consumed it.
 - `o2b brain continuity export --format atof|atif` renders the store as standard trajectory formats (ATOF JSONL event stream; ATIF v1.7 one document per session) for replay and eval tooling. Read-only; `private` records never reach an export file. Mapping decisions: `docs/brainstorm/memory-observability-suite/atof-atif-mapping.md`.
 - `o2b brain bench memory` measures recall quality over disposable fixture vaults and reports quality, latency, and context cost as separate families (`o2b.bench.v1` report schema).
 

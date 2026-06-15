@@ -68,6 +68,7 @@ o2b brain import-session      Replay signals from a registered agent session .js
 o2b brain session-hook        Internal hook bridge: read one lifecycle payload from stdin, capture prompt markers / brain_feedback, append lifecycle audit/log rows
 o2b brain context-receipts    List/show opt-in prompt context receipt continuity records (since v0.29.0)
 o2b brain recall-telemetry    List/summarise opt-in recall telemetry continuity records (since v0.29.0)
+o2b brain generation-reports  Record/list/summarise opt-in inbound LLM generation traces (prompt hash + token counts only; kernel never calls an LLM)
 o2b brain context-presets     Show/suggest/diff read-only context budget presets (since v0.29.0)
 o2b brain pre-compact-extract Extract decision/commitment/outcome/rule/open-question continuity records from bounded text (since v0.29.0)
 o2b brain session-grep        Search imported session recall raw turns and summary nodes (since v0.29.0)
@@ -110,6 +111,7 @@ o2b brain unlinked            Raw-text mentions outside `[[...]]` (Unicode-aware
 o2b brain context-pack        Existing budgeted context pack; add --receipt to emit a context receipt, --telemetry to emit redacted recall telemetry, --cache-stable for stable ordering diagnostics, and --dedup-repeated for repeated-context reference hints
 o2b brain context-receipts    list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--json]; show <receipt-id> [--json]
 o2b brain recall-telemetry    list|summary [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json]
+o2b brain generation-reports  record <write_session|context_pack|dream_stage> --ref <id> --agent <name> --prompt <text> [--enable] [--provider <p>] [--model <m>] [--finish-reason <r>] [--latency-ms <n>] [--input-tokens <n>] [--output-tokens <n>] [--cached-tokens <n>] [--total-tokens <n>] [--scope <s>] [--source <id[=path]>...] [--created-at <iso>] [--json]; list|summary [--handoff <kind>] [--agent <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json]; show <report-id> [--json] - record is gated (default off) by --enable or generation_trace_enabled; stores prompt_hash + counts only
 o2b brain context-presets     show [tight-context|long-context] --json; suggest --model <name> --context-window <tokens> --json; diff <preset-id> [current-value flags] [--override <path>...] --json
 o2b brain pre-compact-extract --session-id <id> --turn-start <id> --turn-end <id> --text <bounded-text> [--host <name>] [--max-chars <n>] [--json]
 o2b brain import-session      <path> --recall [--recall-session-id <id>] [--recall-summary-group-size <n>] [--json]

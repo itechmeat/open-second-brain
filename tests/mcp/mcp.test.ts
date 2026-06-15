@@ -262,6 +262,8 @@ describe("tool listing", () => {
         "brain_truth",
         "brain_dead_ends",
         "brain_foresight",
+        // Hindsight brain-loop ops: inbound, opt-in LLM generation tracing.
+        "brain_generation_reports",
         // Write-Time Integrity & Governance Suite.
         "brain_labels",
         "brain_tiers",
@@ -548,7 +550,8 @@ describe("stdio loop", () => {
     //   (Session Knowledge Synthesis Suite, v1.11.0) = 81.
     // + brain_codegraph_report (CodeGraph & MCP Operational Readability,
     //   v1.12.0) = 82.
-    expect(list.result.tools.length).toBe(82);
+    // + brain_generation_reports (Hindsight brain-loop ops) = 83.
+    expect(list.result.tools.length).toBe(83);
   });
 
   test("returns parse error for invalid JSON", async () => {

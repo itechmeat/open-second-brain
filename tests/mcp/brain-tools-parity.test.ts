@@ -12,7 +12,9 @@
  * added `brain_intake_entities`, `brain_ingest_source`,
  * `brain_research_report`, and `brain_derive_fact` (Knowledge Provenance
  * suite); the codegraph-and-MCP operational-readability release added
- * `brain_codegraph_report` (read-only codegraph partner report).
+ * `brain_codegraph_report` (read-only codegraph partner report); the
+ * Hindsight brain-loop ops release added `brain_generation_reports`
+ * (inbound, opt-in LLM generation tracing).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -45,6 +47,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_entity",
   "brain_feedback",
   "brain_foresight",
+  "brain_generation_reports",
   "brain_health",
   "brain_hygiene",
   "brain_idea_discovery",
