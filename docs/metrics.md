@@ -63,6 +63,7 @@ writes, and a metric record is a summary, not a report.
 | `recall_benchmark` | `o2b brain benchmark run`, MCP `brain_benchmark` | `total`, `k`, `expand`, `hit_at_k`, `mrr`, `misses` |
 | `self_tuning` | `o2b brain tune run`, MCP `brain_tune` | `chosen`, `evaluated`, `best_mrr`, `dataset_hash` |
 | `dream_stage` | `o2b brain dream stage` / `apply`, MCP `brain_dream` (since 1.0.0) | `action` (`stage`/`apply`), `run_id`, `proposals`, `sources`, `changed`; apply adds `new_unconfirmed`, `confirmed`, `retired` counts |
+| `prompt_prefix` | decision-panel commit (opt-in `promptPrefixMetric`), context-pack consume (opt-in `promptPrefix`) | `kind` (`write_session`/`context_pack`), `prefix_hash` (sha-256 of the stable preamble), `prefix_chars`, `call_count`, `stable_count` |
 
 Payload fields marked "(lane runs)" appear only on maintenance-lane
 emissions. All fields are additive-optional from a consumer's point
@@ -80,3 +81,22 @@ of view: render what is present, ignore what is unknown.
 - Metric emission is fail-soft everywhere: a metrics-layer problem
   never fails the pass that produced the numbers, so gaps in a file
   mean the run failed or predates the layer - not data corruption.
+
+## `prompt_prefix`: stability, not provider cache-hit rate
+
+The `prompt_prefix` surface measures STRUCTURAL prefix stability - how
+many generation handoffs in one pass led with byte-identical preamble
+bytes (`stable_count` of `call_count`). It deliberately does NOT claim
+to measure a provider's cache-hit rate: the kernel never calls an LLM,
+so it cannot observe whether a provider actually reused a cached prefix.
+What it can guarantee, and what this metric reports, is that the kernel
+handed the agent a stable, cache-eligible prefix across the pass - the
+precondition a provider prefix cache rewards. The raw prompt is never
+stored; only the sha-256 hash and the code-point length of the prefix.
+
+The genuine multi-call pass is the decision panel (every persona step
+and the synthesis share the `Decision topic:` frame, so a fully stable
+pass reports `stable_count == call_count == personas + 1`). A
+context-pack consume is a single-call pass over its stable request
+preamble. Both surfaces are opt-in and default off; the pass output is
+byte-identical when the gate is unset.

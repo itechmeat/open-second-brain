@@ -28,6 +28,13 @@ import { createWriteSession, saveWriteSession } from "./store.ts";
 import { loadPersonas } from "./personas.ts";
 import { inspectExistingTarget, validateTargetPath } from "./validate.ts";
 import { formatFrontmatter, slugify } from "../../vault.ts";
+import {
+  deterministicPrefix,
+  emitPromptPrefixMetric,
+  summarizePrefixPass,
+  type PromptPrefix,
+} from "../prompt-prefix.ts";
+import { isoSecond } from "../time.ts";
 import type {
   WriteSessionEnvelope,
   WriteSessionError,
@@ -107,6 +114,12 @@ export interface SubmitPanelStepInput {
   readonly sessionId: string;
   readonly text: string;
   readonly now?: string;
+  /**
+   * Opt-in: when the synthesis step commits, emit one run-level
+   * `prompt_prefix` metric for the whole panel pass. Omitted/false keeps
+   * the commit byte-identical and writes no metric.
+   */
+  readonly promptPrefixMetric?: boolean;
 }
 
 /** Submit the current panel step (persona answer or synthesis). */
@@ -148,6 +161,10 @@ export function submitToPanelSession(
       );
     }
     const note = renderPanelNote(session, text, now);
+    // The synthesis is the last generation handoff of the pass; every
+    // persona step and the synthesis shared `panelPrefix(topic)`, so the
+    // pass is byte-stable by construction. Record it (opt-in, fail-soft).
+    emitPanelPrefixMetric(vault, session, now, input.promptPrefixMetric);
     if (session.requireReview) {
       const parked: WriteSessionRecord = Object.freeze({
         ...session,
@@ -199,6 +216,8 @@ export interface DispatchSubmitInput {
   readonly sessionId: string;
   readonly text: string;
   readonly now?: string;
+  /** Forwarded to the panel flow; ignored for artifact sessions. */
+  readonly promptPrefixMetric?: boolean;
 }
 
 /**
@@ -210,12 +229,42 @@ export function dispatchSubmit(vault: string, input: DispatchSubmitInput): Write
   const now = resolveNow(input.now);
   const session = loadLiveSession(vault, input.sessionId, now);
   if (session.kind === "panel") {
-    return submitToPanelSession(vault, { sessionId: input.sessionId, text: input.text, now });
+    return submitToPanelSession(vault, {
+      sessionId: input.sessionId,
+      text: input.text,
+      now,
+      promptPrefixMetric: input.promptPrefixMetric,
+    });
   }
   return submitToSession(vault, { sessionId: input.sessionId, artifact: input.text, now });
 }
 
 // ----- internals -------------------------------------------------------------
+
+/**
+ * Emit one run-level `prompt_prefix` metric for a completed panel pass.
+ * Every step (persona answers + synthesis) shared `panelPrefix(topic)`,
+ * so the pass is fully stable by construction: `call_count` and
+ * `stable_count` both equal personas + 1. Opt-in and fail-soft.
+ */
+function emitPanelPrefixMetric(
+  vault: string,
+  session: WriteSessionRecord,
+  now: string,
+  gate: boolean | undefined,
+): void {
+  if (!gate) return;
+  const prefix = panelPrefix(session.topic);
+  const prefixes = Array.from({ length: session.personas.length + 1 }, () => prefix);
+  emitPromptPrefixMetric(
+    vault,
+    {
+      runAt: isoSecond(new Date(now)),
+      summary: summarizePrefixPass({ kind: "write_session", prefixes }),
+    },
+    gate,
+  );
+}
 
 function selectPersonas(
   loaded: ReadonlyArray<WriteSessionPersona>,
@@ -272,8 +321,25 @@ function nextStep(session: WriteSessionRecord, current: string): string {
   return index >= 0 && index < steps.length - 1 ? steps[index + 1]! : SYNTHESIS_STEP;
 }
 
+/**
+ * The cacheable preamble shared by every generation step of one panel
+ * pass: persona answers and the synthesis all lead with the same
+ * topic frame, so a provider prefix cache could reuse these bytes
+ * across the whole deliberation. Routed through `deterministicPrefix`
+ * to make that stability explicit; the bytes are unchanged.
+ */
+function panelPrefix(topic: string | null): PromptPrefix {
+  return deterministicPrefix({
+    kind: "write_session",
+    segments: [`Decision topic: ${topic}`, "\n\n"],
+  });
+}
+
 function personaPrompt(persona: WriteSessionPersona, topic: string): string {
-  return `Decision topic: ${topic}\n\nAnswer as the '${persona.slug}' panelist (${persona.lens}).\n${persona.prompt}`;
+  return (
+    panelPrefix(topic).prefix +
+    `Answer as the '${persona.slug}' panelist (${persona.lens}).\n${persona.prompt}`
+  );
 }
 
 function synthesisPrompt(session: WriteSessionRecord): string {
@@ -281,7 +347,7 @@ function synthesisPrompt(session: WriteSessionRecord): string {
     .map((p) => `### ${p.lens} (${p.slug})\n${session.responses[`persona:${p.slug}`] ?? ""}`)
     .join("\n\n");
   return (
-    `Decision topic: ${session.topic}\n\n` +
+    panelPrefix(session.topic).prefix +
     `Every panelist has answered:\n\n${answers}\n\n` +
     "Synthesize the deliberation into a recommendation: state the decision, the strongest supporting argument per lens, the unresolved tensions, and the conditions that would reverse it."
   );

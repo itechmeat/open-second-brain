@@ -10,6 +10,9 @@ Open Second Brain records what it did - learning events, recall decisions, serve
 | Continuity store | `Brain/log/continuity/<month>.jsonl` | `appendContinuityRecord()` in `src/core/brain/continuity/store.ts` | one JSON record per line |
 | Session lifecycle audit | `Brain/log/session-lifecycle/` | `captureSessionLifecycleEvent()` in `src/core/brain/session-lifecycle.ts` | JSONL audit rows |
 | Bench runs | `<runs-dir>/<run-id>/` (default `.open-second-brain/bench-runs/`, gitignored) | `runMemoryBench()` in `src/core/bench/phases.ts` | `checkpoint.json`, per-question results, `report.json` |
+| Metrics | `Brain/metrics/<surface>.jsonl` | `appendMetric()` in `src/core/brain/metrics.ts` | one run-level JSON record per line (see `docs/metrics.md`) |
+
+The `prompt_prefix` metric surface measures STRUCTURAL prompt-prefix stability (whether the kernel handed the agent a byte-stable, cache-eligible preamble across a generation pass), never a provider's cache-hit rate the kernel cannot observe. It stores only the SHA-256 hash and length of the prefix, never the raw prompt - the same payload-safety rule as `generation_report`. See `docs/metrics.md`.
 
 ## Brain log events
 

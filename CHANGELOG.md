@@ -48,6 +48,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     recall_telemetry keep their current shapes when the gate is off.
     Documented in `docs/observability.md`, `docs/cli-reference.md`, and
     `docs/mcp.md`.
+- **Structural prompt-prefix stability (`prompt_prefix` metric).** A
+  deterministic prefix layer plus a run-level metric that reports how
+  stable the prompt preamble was across the repeated generation handoffs
+  of one brain operation. Open Second Brain cannot port Hindsight's
+  provider prompt-prefix caching verbatim - the kernel never calls an
+  LLM, so it has no outbound request to cache - but it can guarantee the
+  precondition a provider prefix cache rewards: a byte-stable, cache-
+  eligible prefix across a pass.
+  - **Deterministic prefix helper (`src/core/brain/prompt-prefix.ts`).**
+    `deterministicPrefix` certifies a stable preamble (`prefix`, full
+    SHA-256 `hash`, code-point `chars`) from stable inputs only - no
+    clock, no random, sorted keys via `canonicalSegment`. The decision-
+    panel builder routes its shared `Decision topic:` frame through it;
+    the bytes of the persona and synthesis prompts are unchanged.
+  - **Run-level `prompt_prefix` metric.** A decision-panel commit (opt-in
+    `promptPrefixMetric`) and a context-pack consume (opt-in
+    `promptPrefix`) emit one record under
+    `Brain/metrics/prompt_prefix.jsonl` carrying `kind`, `prefix_hash`,
+    `prefix_chars`, `call_count`, and `stable_count`. The reader is
+    surface-agnostic (no `metrics.ts` change), exactly like `dream_stage`.
+  - **Stability, not cache-hit rate.** The metric measures STRUCTURAL
+    prefix stability (what the kernel handed the agent), never a
+    provider's cache-hit rate (which the kernel cannot observe). The raw
+    prompt is never stored - only its hash and length. Emission is opt-in
+    and fail-soft; with the gate off no record is written and the panel
+    commit, write-session envelope, and context_pack report are
+    byte-identical. Documented in `docs/metrics.md` and
+    `docs/observability.md`.
 
 ## [1.12.0] - 2026-06-15
 

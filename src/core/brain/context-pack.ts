@@ -31,6 +31,13 @@ import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
+import {
+  canonicalSegment,
+  deterministicPrefix,
+  emitPromptPrefixMetric,
+  summarizePrefixPass,
+} from "./prompt-prefix.ts";
+import { isoSecond } from "./time.ts";
 import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
 import {
   applyContextTransforms,
@@ -115,6 +122,13 @@ export interface ContextPackOptions {
   readonly receipt?: ContextReceiptOptions;
   /** Opt-in telemetry for recall coverage and gap diagnostics. */
   readonly telemetry?: RecallTelemetryOptions;
+  /**
+   * Opt-in: emit one run-level `prompt_prefix` metric for this pack's
+   * stable request preamble (Hindsight brain-loop ops, t_d8c1f7d9).
+   * Omitted/false keeps the report and any receipt byte-identical and
+   * writes no metric.
+   */
+  readonly promptPrefix?: boolean;
   /** Opt-in post-selection context transforms. Defaults preserve legacy order and bodies. */
   readonly transforms?: ContextTransformOptions;
   /** Optional declarative attention-flow ids to include as a synthetic context item. */
@@ -463,6 +477,35 @@ function finalizeContextPackReport(
     }),
   );
   if (telemetry) enriched = { ...enriched, telemetryId: telemetry.id };
+  // Structural prefix-stability metric (opt-in, fail-soft). The pack's
+  // cacheable preamble is its stable request framing - byte-identical
+  // for an identical request, which is what a provider prefix cache
+  // rewards. Built only when the gate is on, so neither the summary nor
+  // its hash is computed on the default (no-consumer) path.
+  if (opts.promptPrefix) {
+    emitPromptPrefixMetric(
+      vault,
+      {
+        runAt: isoSecond(new Date()),
+        summary: summarizePrefixPass({
+          kind: "context_pack",
+          prefixes: [
+            deterministicPrefix({
+              kind: "context_pack",
+              segments: [
+                canonicalSegment({
+                  lanes: String(opts.includeLanes === true),
+                  max_tokens: String(report.maxTokens),
+                  query: opts.query ?? "",
+                }),
+              ],
+            }),
+          ],
+        }),
+      },
+      opts.promptPrefix,
+    );
+  }
   return Object.freeze(enriched);
 }
 
