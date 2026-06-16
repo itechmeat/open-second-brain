@@ -160,7 +160,14 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                  'this call.'},
                                     'telemetry_host': {'type': 'string', 'maxLength': 200},
                                     'session_id': {'type': 'string', 'maxLength': 512},
-                                    'turn_id': {'type': 'string', 'maxLength': 512}},
+                                    'turn_id': {'type': 'string', 'maxLength': 512},
+                                    'agent_scope': {'type': 'string',
+                                                    'description': 'Optional owner scope: with '
+                                                                   'owner_scoped_facts on, an '
+                                                                   'owner-tagged fact returns only '
+                                                                   'to its own scope; ownerless '
+                                                                   'facts always match. Absent = '
+                                                                   'no filtering.'}},
                      'additionalProperties': False}},
     {'name': 'brain_search',
      'description': 'Full-text search across the vault. Optional semantic layer when configured. '
@@ -206,6 +213,44 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                     'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50},
                                     'semantic': {'type': 'boolean'},
                                     'keyword_only': {'type': 'boolean'},
+                                    'profile': {'type': 'string',
+                                                'enum': ['fast', 'balanced', 'thorough'],
+                                                'description': 'Named recall profile '
+                                                               '(fast|balanced|thorough): a fixed '
+                                                               'knob preset, preferred over '
+                                                               'persisted self-tuning. Absent '
+                                                               'leaves ranking unchanged.'},
+                                    'explain': {'type': 'boolean',
+                                                'description': 'Include a structured '
+                                                               'score_breakdown (per-layer numeric '
+                                                               'components) on each result. '
+                                                               'Default false.'},
+                                    'trust': {'type': 'boolean',
+                                              'description': 'Stamp each result with inline trust '
+                                                             'metadata (age_days, superseded, '
+                                                             'conflict), computed at read time. '
+                                                             'Default false.'},
+                                    'threshold': {'type': 'number',
+                                                  'minimum': 0,
+                                                  'maximum': 1,
+                                                  'description': 'Relevance floor in [0,1] on the '
+                                                                 'final score; drops weaker hits '
+                                                                 'so an irrelevant query returns '
+                                                                 'no match. Default 0 (disabled).'},
+                                    'rerank': {'type': 'boolean',
+                                               'description': 'Re-order the threshold-qualified '
+                                                              'results by core textual relevance '
+                                                              '(keyword + semantic). Default '
+                                                              'false.'},
+                                    'reinforce': {'type': 'array',
+                                                  'maxItems': 50,
+                                                  'items': {'type': 'string',
+                                                            'minLength': 1,
+                                                            'maxLength': 512},
+                                                  'description': 'Paths proven useful: recorded to '
+                                                                 'the reinforce ledger and lifted '
+                                                                 '(bounded) before the top_k cut. '
+                                                                 'Default absent.'},
                                     'record_access': {'type': 'boolean',
                                                       'description': 'Record the surfaced paths as '
                                                                      'one activation access event '
@@ -239,7 +284,14 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                   'match, tagged pages only when '
                                                                   'this scope includes one of '
                                                                   'their values.',
-                                                   'items': {'type': 'string'}}},
+                                                   'items': {'type': 'string'}},
+                                    'agent_scope': {'type': 'string',
+                                                    'description': 'Optional agent-ownership '
+                                                                   'scope; shared (ownerless) '
+                                                                   'pages always match, '
+                                                                   'owner-tagged pages only their '
+                                                                   'owner. Absent = no ownership '
+                                                                   'filtering.'}},
                      'required': ['query'],
                      'additionalProperties': False}},
     {'name': 'brain_recall_gate',

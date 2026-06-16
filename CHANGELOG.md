@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-06-16
+
+### Added
+
+- **Per-handoff LLM generation tracing (`generation_report`).** An
+  additive, opt-in, fail-open way to record the real LLM usage an agent
+  performs on behalf of a brain handoff, without the kernel ever calling
+  an LLM. Open Second Brain owns sequencing and the atomic commit; the
+  calling agent owns generation, so tracing is an INBOUND path: after the
+  agent fulfils a write-session step, a context-pack consume, or a
+  dream-stage proposal, it optionally reports back the usage and Open
+  Second Brain stores it as a `generation_report` continuity record.
+  - **Inbound report surface (`brain_generation_reports` action `record`,
+    `o2b brain generation-reports record`).** Gated (default off) by a
+    per-call `enable` flag or the `generation_trace_enabled` config /
+    `OPEN_SECOND_BRAIN_GENERATION_TRACE_ENABLED` env. With the gate off no
+    payload is built and nothing is written; a throwing build is swallowed
+    so tracing never fails the primary operation (`emitGatedTelemetry`).
+  - **Payload-safe by construction.** The handoff prompt is hashed and
+    counted but never persisted - only `prompt_hash` (SHA-256 hex) and
+    `prompt_chars`, plus token counts, reach disk, and the whole payload
+    still passes `safeContinuityPayload` redaction. The local token
+    estimate (`local_estimate.input_tokens`) is always present; the
+    agent-reported `usage` block is present only when supplied and absent
+    is reported as absent, never fabricated.
+  - **Memory to trace linkage.** `sourceRefs` join each report to the
+    handoff ref (write-session session id, context-receipt id, or dream
+    run id) and the memory paths involved, lifted to first-class
+    `handoffKind` / `handoffRef` read-model fields. The `summary` read
+    (`brain_generation_reports` action `summary`,
+    `o2b brain generation-reports summary`) rolls up call counts,
+    per-handoff-kind breakdown, the local estimate, reported usage, and a
+    per-path map so a memory path resolves back to the reports that
+    produced or consumed it.
+  - **Read surfaces.** `o2b brain generation-reports list|summary|show`
+    and the matching `brain_generation_reports` actions (`list` and
+    `summary`; `show` is CLI-only). The kernel never
+    adds an outbound `fetch`/provider HTTP call - a grep-guarded
+    regression test pins this, and a persisted-file assertion confirms no
+    raw prompt survives. Default behaviour is byte-identical: the
+    write-session envelope, context_receipt, dream_stage metric, and
+    recall_telemetry keep their current shapes when the gate is off.
+    Documented in `docs/observability.md`, `docs/cli-reference.md`, and
+    `docs/mcp.md`.
+- **Structural prompt-prefix stability (`prompt_prefix` metric).** A
+  deterministic prefix layer plus a run-level metric that reports how
+  stable the prompt preamble was across the repeated generation handoffs
+  of one brain operation. Open Second Brain cannot port Hindsight's
+  provider prompt-prefix caching verbatim - the kernel never calls an
+  LLM, so it has no outbound request to cache - but it can guarantee the
+  precondition a provider prefix cache rewards: a byte-stable, cache-
+  eligible prefix across a pass.
+  - **Deterministic prefix helper (`src/core/brain/prompt-prefix.ts`).**
+    `deterministicPrefix` certifies a stable preamble (`prefix`, full
+    SHA-256 `hash`, code-point `chars`) from stable inputs only - no
+    clock, no random, sorted keys via `canonicalSegment`. The decision-
+    panel builder routes its shared `Decision topic:` frame through it;
+    the bytes of the persona and synthesis prompts are unchanged.
+  - **Run-level `prompt_prefix` metric.** A decision-panel commit (opt-in
+    `promptPrefixMetric`) and a context-pack consume (opt-in
+    `promptPrefix`) emit one record under
+    `Brain/metrics/prompt_prefix.jsonl` carrying `kind`, `prefix_hash`,
+    `prefix_chars`, `call_count`, and `stable_count`. The reader is
+    surface-agnostic (no `metrics.ts` change), exactly like `dream_stage`.
+  - **Stability, not cache-hit rate.** The metric measures STRUCTURAL
+    prefix stability (what the kernel handed the agent), never a
+    provider's cache-hit rate (which the kernel cannot observe). The raw
+    prompt is never stored - only its hash and length. Emission is opt-in
+    and fail-soft; with the gate off no record is written and the panel
+    commit, write-session envelope, and context_pack report are
+    byte-identical. Documented in `docs/metrics.md` and
+    `docs/observability.md`.
+
 ## [1.12.0] - 2026-06-15
 
 ### Added
@@ -5540,6 +5613,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v1.12.0...HEAD
 [1.12.0]: https://github.com/itechmeat/open-second-brain/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/itechmeat/open-second-brain/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/itechmeat/open-second-brain/compare/v1.9.0...v1.10.0

@@ -367,6 +367,20 @@ export function resolveRecallGateTelemetry(configPath?: string): boolean {
 }
 
 /**
+ * Generation-report tracing gate (Hindsight brain-loop ops, t_281c3edc).
+ * Default OFF: the inbound `generation_report` continuity path stays
+ * dormant unless `generation_trace_enabled: "true"`, when an agent's
+ * post-handoff usage report lands as a continuity record (prompt hash
+ * and counts only, never the prompt). A per-call option can still enable
+ * a single report when the config gate is off.
+ */
+export function resolveGenerationTraceEnabled(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_GENERATION_TRACE_ENABLED"]?.trim();
+  const raw = env || discoverConfig(configPath).data["generation_trace_enabled"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
+/**
  * Optional external judge command for the memory benchmark (Memory
  * Observability Suite, t_882c396a). Unset (the default) means the
  * judge phase is skipped - the harness itself never calls an LLM.

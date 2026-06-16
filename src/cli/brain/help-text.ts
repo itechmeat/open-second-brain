@@ -82,6 +82,7 @@ Brain verbs (observing memory):
   context-presets     Show/suggest/diff read-only context budget presets
   pre-compact-extract Extract typed continuity records from bounded text
   recall-telemetry    List/summarize opt-in recall telemetry records
+  generation-reports  Record/list/summarize opt-in LLM generation traces
   skill-proposals     Learn/list/review deterministic skill proposals
   procedural-memory   Reconcile/list procedural memory index and usage
   procedural-graph    Rebuild/show procedural graph and hint projections
@@ -558,6 +559,12 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain recall-telemetry list [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +
     "Read opt-in recall telemetry continuity records and aggregate coverage gaps.\n",
+  "generation-reports":
+    "usage: o2b brain generation-reports record <write_session|context_pack|dream_stage> --ref <id> --agent <name> --prompt <text> [--enable] [--provider <p>] [--model <m>] [--finish-reason <r>] [--latency-ms <n>] [--input-tokens <n>] [--output-tokens <n>] [--cached-tokens <n>] [--total-tokens <n>] [--scope <s>] [--source <id[=path]>...] [--created-at <iso>] [--vault <path>] [--json]\n" +
+    "       o2b brain generation-reports list [--handoff <kind>] [--agent <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
+    "       o2b brain generation-reports summary [same filters] [--vault <path>] [--json]\n" +
+    "       o2b brain generation-reports show <report-id> [--vault <path>] [--json]\n" +
+    "Inbound, opt-in LLM generation tracing. record is gated (default off) by --enable or generation_trace_enabled; only prompt_hash + counts are stored, never the prompt.\n",
   "skill-proposals":
     "usage: o2b brain skill-proposals <learn|list|accept|reject> [args]\n" +
     "Deterministic proposal queue lifecycle.\n" +
