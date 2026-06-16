@@ -210,8 +210,11 @@ export function summarizeGenerationReports(
       reported.total += numberOr0(usage["total_tokens"]);
     }
 
+    const seenPaths = new Set<string>();
     for (const ref of record.sourceRefs) {
       if (typeof ref.path !== "string" || ref.path.length === 0) continue;
+      if (seenPaths.has(ref.path)) continue; // one record contributes its id once per path
+      seenPaths.add(ref.path);
       (byPath[ref.path] ??= []).push(record.id);
     }
   }

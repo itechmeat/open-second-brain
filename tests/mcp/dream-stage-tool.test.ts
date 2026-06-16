@@ -104,10 +104,18 @@ test("full staged cycle through tools/call", async () => {
   const runId = staged.structured!["run_id"] as string;
   expect(runId).toMatch(/^stage-/);
 
-  const validated = await call(server, { action: "validate", run_id: runId });
+  const validated = await call(server, {
+    action: "validate",
+    run_id: runId,
+    now: "2026-06-05T12:00:00Z",
+  });
   expect(validated.structured!["valid"]).toBe(true);
 
-  const applied = await call(server, { action: "apply", run_id: runId });
+  const applied = await call(server, {
+    action: "apply",
+    run_id: runId,
+    now: "2026-06-05T12:00:00Z",
+  });
   expect(applied.structured!["applied"]).toBe(true);
   expect(applied.structured!["new_unconfirmed"]).toEqual(["pref-mcp-cycle"]);
 

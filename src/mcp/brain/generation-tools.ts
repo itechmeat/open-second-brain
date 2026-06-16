@@ -160,8 +160,8 @@ function usageArg(raw: unknown): GenerationUsage | undefined {
 
 function numberArg(raw: unknown, key: string): number | undefined {
   if (raw === undefined || raw === null) return undefined;
-  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
-    throw new MCPError(INVALID_PARAMS, `${TOOL}: ${key} must be a non-negative number`);
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) {
+    throw new MCPError(INVALID_PARAMS, `${TOOL}: ${key} must be a non-negative integer`);
   }
   return raw;
 }
