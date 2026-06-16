@@ -40,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     per-path map so a memory path resolves back to the reports that
     produced or consumed it.
   - **Read surfaces.** `o2b brain generation-reports list|summary|show`
-    and the matching `brain_generation_reports` actions. The kernel never
+    and the matching `brain_generation_reports` actions (`list` and
+    `summary`; `show` is CLI-only). The kernel never
     adds an outbound `fetch`/provider HTTP call - a grep-guarded
     regression test pins this, and a persisted-file assertion confirms no
     raw prompt survives. Default behaviour is byte-identical: the
@@ -5612,6 +5613,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v1.12.0...HEAD
 [1.12.0]: https://github.com/itechmeat/open-second-brain/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/itechmeat/open-second-brain/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/itechmeat/open-second-brain/compare/v1.9.0...v1.10.0
