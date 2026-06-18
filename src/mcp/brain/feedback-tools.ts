@@ -22,7 +22,8 @@ import {
   validateDreamBundle,
 } from "../../core/brain/dream-stage.ts";
 import { BRAIN_ROLES } from "../../core/brain/trust/role.ts";
-import { writeSignal } from "../../core/brain/signal.ts";
+import { resolveEffectiveScope, writeSignal } from "../../core/brain/signal.ts";
+import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
 import { writePreference } from "../../core/brain/preference.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../../core/brain/time.ts";
@@ -88,6 +89,14 @@ async function toolBrainFeedback(
   const createdAt = isoSecond(now);
   const slug = deriveSlug(topic);
 
+  // Vault-configured fallback scope (`feedback.default_scope`). Applied
+  // only when the call passes no explicit scope. Compute one effective
+  // scope so the signal, its mirror, and any force-confirmed preference
+  // all land on the same scope.
+  const defaultScope = loadFeedbackDefaultScopeSafe(ctx.vault);
+  const effectiveScope = resolveEffectiveScope(scope, defaultScope);
+  const writeOpts = defaultScope !== undefined ? { defaultScope } : {};
+
   // 1. Always write the signal to inbox/. Mirrors the CLI handler so the
   //    audit trail in `Brain/log/` and `inbox/processed/` stays consistent
   //    across CLI and MCP entry points. `--force-confirmed` ADDITIONALLY
@@ -104,12 +113,14 @@ async function toolBrainFeedback(
     ...(source && source.length > 0 ? { source: [...source] } : {}),
     ...(raw ? { raw } : {}),
   };
-  const sigResult = writeSignal(ctx.vault, signalInput);
+  const sigResult = writeSignal(ctx.vault, signalInput, writeOpts);
   // t_936a1a61: fail-soft mirror into the shared namespace AFTER the
   // primary write; `mirror` is reported only when the key is configured.
   const sharedNamespace = resolveSharedNamespace(ctx.configPath);
   const mirror =
-    sharedNamespace === null ? undefined : mirrorSignal(sharedNamespace, ctx.vault, signalInput);
+    sharedNamespace === null
+      ? undefined
+      : mirrorSignal(sharedNamespace, ctx.vault, signalInput, writeOpts);
 
   try {
     appendLogEvent(ctx.vault, {
@@ -141,7 +152,7 @@ async function toolBrainFeedback(
       status: BRAIN_PREFERENCE_STATUS.confirmed,
       evidenced_by: [`[[${sigResult.id}]]`],
       confirmed_at: createdAt,
-      ...(scope ? { scope } : {}),
+      ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
     });
     try {
       // Offset by 1s so the force-confirmed event sorts after the feedback

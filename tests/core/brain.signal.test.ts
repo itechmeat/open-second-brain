@@ -3,7 +3,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseSignal, writeSignal, type WriteSignalInput } from "../../src/core/brain/signal.ts";
+import {
+  parseSignal,
+  resolveEffectiveScope,
+  writeSignal,
+  type WriteSignalInput,
+} from "../../src/core/brain/signal.ts";
 
 let tmp: string;
 
@@ -113,6 +118,59 @@ describe("writeSignal + parseSignal roundtrip", () => {
 
     // And the parsed source array survives untouched.
     expect(parsed.source).toEqual(["[[Daily/2026.05.14]]", "[[blog-header-draft]]"]);
+  });
+});
+
+describe("resolveEffectiveScope — precedence rule", () => {
+  test("explicit non-empty scope wins over a default", () => {
+    expect(resolveEffectiveScope("docs", "coding")).toBe("docs");
+  });
+  test("default applies when explicit is undefined", () => {
+    expect(resolveEffectiveScope(undefined, "coding")).toBe("coding");
+  });
+  test("default applies when explicit is whitespace-only", () => {
+    expect(resolveEffectiveScope("   ", "coding")).toBe("coding");
+  });
+  test("returns undefined when neither is set", () => {
+    expect(resolveEffectiveScope(undefined, undefined)).toBeUndefined();
+  });
+  test("returns undefined when both are whitespace/empty", () => {
+    expect(resolveEffectiveScope("  ", "")).toBeUndefined();
+  });
+  test("trims the chosen value", () => {
+    expect(resolveEffectiveScope("  docs  ", undefined)).toBe("docs");
+    expect(resolveEffectiveScope(undefined, "  coding ")).toBe("coding");
+  });
+});
+
+describe("writeSignal — defaultScope option", () => {
+  test("applies the default when no explicit scope is given", () => {
+    const input = { ...baseInput({ slug: "default-scope" }) } as Record<string, unknown>;
+    delete input["scope"];
+    const r = writeSignal(tmp, input as unknown as WriteSignalInput, { defaultScope: "coding" });
+    const parsed = parseSignal(r.path);
+    expect(parsed.scope).toBe("coding");
+    expect(parsed.tags).toContain("brain/scope/coding");
+  });
+
+  test("explicit scope overrides the default", () => {
+    const r = writeSignal(tmp, baseInput({ slug: "explicit-wins", scope: "writing" }), {
+      defaultScope: "coding",
+    });
+    const parsed = parseSignal(r.path);
+    expect(parsed.scope).toBe("writing");
+    expect(parsed.tags).toContain("brain/scope/writing");
+    expect(parsed.tags).not.toContain("brain/scope/coding");
+  });
+
+  test("no default and no explicit scope omits the scope frontmatter (byte-identical)", () => {
+    const noScope = { ...baseInput({ slug: "no-scope" }) } as Record<string, unknown>;
+    delete noScope["scope"];
+    const withDefault = writeSignal(tmp, noScope as unknown as WriteSignalInput, {});
+    const text = readFileSync(withDefault.path, "utf8");
+    expect(text).not.toContain("scope:");
+    expect(text).not.toContain("brain/scope/");
+    expect(parseSignal(withDefault.path).scope).toBeUndefined();
   });
 });
 

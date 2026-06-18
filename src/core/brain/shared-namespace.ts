@@ -21,7 +21,7 @@ import { basename, resolve } from "node:path";
 
 import { discoverConfig } from "../config.ts";
 import { appendLogEvent } from "./log.ts";
-import { writeSignal, type WriteSignalInput } from "./signal.ts";
+import { writeSignal, type WriteSignalInput, type WriteSignalOptions } from "./signal.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 
@@ -43,10 +43,11 @@ export function mirrorSignal(
   sharedVault: string,
   originVault: string,
   input: WriteSignalInput,
+  options: WriteSignalOptions = {},
 ): MirrorOutcome {
   if (isSelfMirror(sharedVault, originVault)) return "failed";
   try {
-    writeSignal(sharedVault, { ...input, origin_vault: basename(originVault) });
+    writeSignal(sharedVault, { ...input, origin_vault: basename(originVault) }, options);
     return "ok";
   } catch {
     return "failed";

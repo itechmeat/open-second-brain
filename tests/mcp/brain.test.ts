@@ -221,6 +221,77 @@ describe("brain_feedback", () => {
   });
 });
 
+describe("brain_feedback — default_scope", () => {
+  function setDefaultScope(scope: string): void {
+    const yamlPath = join(vault, "Brain", "_brain.yaml");
+    const existing = readFileSync(yamlPath, "utf8");
+    atomicWriteFileSync(yamlPath, `${existing}\nfeedback:\n  default_scope: ${scope}\n`);
+  }
+
+  test("applies the default scope when none is passed", async () => {
+    setDefaultScope("coding");
+    const server = makeServer();
+    await initialize(server);
+    const r = await call(server, "brain_feedback", {
+      topic: "default-applies",
+      signal: "positive",
+      principle: "Inherit the default scope.",
+    });
+    expect(r.result.isError).toBe(false);
+    const s = r.result.structuredContent;
+    const text = readFileSync(join(vault, s.path), "utf8");
+    expect(text).toContain("scope: coding");
+    expect(text).toContain("brain/scope/coding");
+  });
+
+  test("explicit scope overrides the default", async () => {
+    setDefaultScope("coding");
+    const server = makeServer();
+    await initialize(server);
+    const r = await call(server, "brain_feedback", {
+      topic: "explicit-overrides",
+      signal: "positive",
+      principle: "Explicit scope wins.",
+      scope: "docs",
+    });
+    const s = r.result.structuredContent;
+    const text = readFileSync(join(vault, s.path), "utf8");
+    expect(text).toContain("scope: docs");
+    expect(text).not.toContain("scope: coding");
+  });
+
+  test("no default + no explicit scope omits the scope frontmatter", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = await call(server, "brain_feedback", {
+      topic: "scopeless",
+      signal: "positive",
+      principle: "Stay scope-less.",
+    });
+    const s = r.result.structuredContent;
+    const text = readFileSync(join(vault, s.path), "utf8");
+    expect(text).not.toContain("scope:");
+    expect(text).not.toContain("brain/scope/");
+  });
+
+  test("force_confirmed preference inherits the default scope", async () => {
+    setDefaultScope("coding");
+    const server = makeServer();
+    await initialize(server);
+    const r = await call(server, "brain_feedback", {
+      topic: "fc-default",
+      signal: "positive",
+      principle: "Force-confirmed inherits default scope.",
+      force_confirmed: true,
+    });
+    const s = r.result.structuredContent;
+    expect(s.kind).toBe("preference");
+    const prefFile = preferencePath(vault, "fc-default");
+    const text = readFileSync(prefFile, "utf8");
+    expect(text).toContain("scope: coding");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // brain_dream
 // ---------------------------------------------------------------------------

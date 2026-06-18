@@ -103,6 +103,34 @@ export interface WriteSignalInput {
 export interface WriteSignalOptions {
   /** Maximum collision suffixes to try; defaults to allocateSlug's cap. */
   readonly maxSlugAttempts?: number;
+  /**
+   * Vault-configured fallback scope (`feedback.default_scope`). Applied
+   * only when the input carries no explicit non-empty `scope`; an
+   * explicit per-call scope always wins. Absent: the historical
+   * scope-less behaviour is byte-identical.
+   */
+  readonly defaultScope?: string;
+}
+
+/**
+ * Resolve the effective signal scope from an explicit per-call value and
+ * a configured fallback default. Precedence: a non-empty (after trim)
+ * explicit scope wins; otherwise a non-empty default is used; otherwise
+ * `undefined` (the signal stays scope-less). The returned value is
+ * trimmed but otherwise unsanitised — `writeSignal` runs it through the
+ * same field sanitiser as any explicit scope.
+ *
+ * Exported so the CLI / MCP surfaces can compute one effective scope and
+ * reuse it for a force-confirmed preference write, keeping the signal and
+ * its preference on the same scope.
+ */
+export function resolveEffectiveScope(
+  explicit: string | undefined,
+  fallback: string | undefined,
+): string | undefined {
+  if (explicit !== undefined && explicit.trim() !== "") return explicit.trim();
+  if (fallback !== undefined && fallback.trim() !== "") return fallback.trim();
+  return undefined;
 }
 
 export interface WriteSignalResult {
@@ -138,13 +166,22 @@ export function writeSignal(
   input: WriteSignalInput,
   options: WriteSignalOptions = {},
 ): WriteSignalResult {
+  // Resolve the effective scope FIRST: an explicit non-empty per-call
+  // scope wins; otherwise the configured `defaultScope` fallback applies;
+  // otherwise the field is dropped so the signal stays scope-less and
+  // byte-identical to the historical no-default path.
+  const { scope: explicitScope, ...restInput } = input;
+  const effectiveScope = resolveEffectiveScope(explicitScope, options.defaultScope);
+  const resolvedInput: WriteSignalInput =
+    effectiveScope === undefined ? restInput : { ...restInput, scope: effectiveScope };
+
   // Sanitise free-form fields BEFORE the required-field check so an
   // input that is purely C0-control characters lands in the
   // "missing-field" branch rather than smuggling itself into YAML.
   // `topic`, `slug`, `agent`, `date`, `signal` are constrained by
   // their own validators (slug rules / ISO date / enum) and are
   // already rejected if they carry junk — don't double-process them.
-  const sanitised = sanitiseSignalInput(input);
+  const sanitised = sanitiseSignalInput(resolvedInput);
 
   for (const field of REQUIRED_INPUT_FIELDS) {
     const value = sanitised[field];
@@ -252,7 +289,9 @@ export function writeSignal(
  * carry paragraphs. `scope` is a short slug-adjacent tag.
  */
 const PRINCIPLE_MAX_LEN = 512;
-const SCOPE_MAX_LEN = 128;
+/** Hard cap on a signal `scope` slug; shared with config validation so a
+ * configured `feedback.default_scope` cannot diverge from the write rule. */
+export const SCOPE_MAX_LEN = 128;
 const RAW_MAX_LEN = 4096;
 const SOURCE_ITEM_MAX_LEN = 512;
 

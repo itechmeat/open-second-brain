@@ -4,7 +4,15 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -229,4 +237,23 @@ test("unknown session id is a structured error", () => {
   expect(() =>
     submitToSession(vault, { sessionId: "ws-20990101-000000", artifact: GOOD, now: NOW }),
   ).toThrow(WriteSessionRequestError);
+});
+
+test("commit refuses a target whose Brain ancestor is a symlink out of the vault", () => {
+  // `validateTargetPath` runs at open time and is purely lexical: a
+  // path like `Brain/escape/adr.md` is clean, so the session opens.
+  // Only the write chokepoint can see that `Brain/escape` is a symlink
+  // pointing outside the vault. The containment guard must reject the
+  // commit before any mkdir/write lands the file on the symlink target.
+  const outside = join(tmp, "outside");
+  mkdirSync(outside, { recursive: true });
+  symlinkSync(outside, join(vault, "Brain", "escape"), "dir");
+
+  const opened = open({ targetPath: "Brain/escape/adr.md" });
+  expect(() =>
+    submitToSession(vault, { sessionId: opened.session_id, artifact: GOOD, now: NOW }),
+  ).toThrow(/escapes vault/);
+
+  // Fail-closed: nothing was written through the symlink.
+  expect(existsSync(join(outside, "adr.md"))).toBe(false);
 });

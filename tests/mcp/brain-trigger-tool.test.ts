@@ -15,7 +15,7 @@ import { buildToolTable, findTool, type ServerContext } from "../../src/mcp/tool
 let tmp: string;
 let vault: string;
 let ctx: ServerContext;
-const NOW = new Date("2026-06-03T10:00:00Z");
+const NOW = new Date("2099-06-03T10:00:00Z");
 
 const CANDIDATE: InsightCandidate = {
   kind: "contradiction",

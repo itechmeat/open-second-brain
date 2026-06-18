@@ -27,7 +27,7 @@ o2b update                    Update Open Second Brain across all detected runti
 
 ```text
 o2b brain init                Bootstrap Brain/{inbox,preferences,retired,log,.snapshots}/ + _brain.yaml + _BRAIN.md; --starter drops the bundled example set
-o2b brain feedback            Record one taste signal (--topic, --signal, --principle, ...)
+o2b brain feedback            Record one taste signal (--topic, --signal, --principle, --scope, ...); --scope is optional and falls back to feedback.default_scope from _brain.yaml when set
 o2b brain dream               Run the deterministic consolidation pass (idempotent; usually cron'd)
 o2b brain apply-evidence      Record applied / violated against a preference for a durable artifact
 o2b brain note <text>         Append a one-line narrative milestone to Brain/log/<today>.md (cron / shell mirror of brain_note)

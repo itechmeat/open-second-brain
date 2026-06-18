@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-06-18
+
+### Added
+
+- **Configurable default scope for feedback signals
+  (`feedback.default_scope`).** A vault-local default applied to
+  `brain_feedback` / `o2b brain feedback` writes that pass no explicit
+  `scope`, so agent-recorded signals can land in a consistent category
+  (for example `coding`) instead of staying uncategorized. The rule is a
+  single precedence at the signal write boundary: an explicit per-call
+  scope always wins; otherwise the configured default is used; otherwise
+  the `scope` field is omitted exactly as before. With no
+  `feedback.default_scope` configured and no explicit scope, signal
+  output is byte-identical to prior behaviour.
+  - **Config block.** Optional `feedback:` block in `Brain/_brain.yaml`
+    with a `default_scope` string, validated through the normal Brain
+    config policy against the same constraints as a signal `scope` field
+    (non-empty after trim, single-line, at most 128 characters). Invalid
+    values are rejected by config validation and surfaced by
+    `o2b brain doctor` rather than silently ignored.
+  - **Parity across surfaces.** The effective scope is computed once and
+    reused for the inbox signal, its shared-namespace mirror, and any
+    force-confirmed preference, so a preference never diverges in scope
+    from the signal that produced it. Distinct from the `owner_scoped_facts`
+    and vault guardrail settings, which govern fact visibility rather than
+    feedback categorization.
+
+### Security
+
+- **Write-containment backstop at the write-session commit chokepoint.**
+  The single point where a write-session lands an agent-supplied artifact
+  now re-resolves its target through `ensureInsideVault` before any
+  directory creation, read, or write. The earlier target check is purely
+  lexical and runs at session-open time, so it cannot see a symlinked
+  ancestor (for example a `Brain/<symlink>/note.md` whose ancestor links
+  outside the vault) and is decoupled from the write by the persisted
+  session record. The backstop fails closed: a target that resolves
+  outside the configured vault root is rejected and nothing is written.
+  Audit confirmed every other caller-derived vault path (slugs, ids,
+  device shards, artifacts) already funnels through the guarded
+  `paths.ts` constructors or `ensureInsideVault`, and `validateSlug`
+  continues to admit `@` and `+` so email-style and plus-addressed
+  identifiers remain valid file basenames while dot-traversal tokens stay
+  rejected. Regression tests pin both invariants.
+
 ## [1.13.0] - 2026-06-16
 
 ### Added
@@ -5613,7 +5658,9 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v1.12.0...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/itechmeat/open-second-brain/compare/v1.13.0...v1.14.0
+[1.13.0]: https://github.com/itechmeat/open-second-brain/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/itechmeat/open-second-brain/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/itechmeat/open-second-brain/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/itechmeat/open-second-brain/compare/v1.9.0...v1.10.0
