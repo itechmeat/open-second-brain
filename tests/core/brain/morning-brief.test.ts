@@ -96,6 +96,29 @@ describe("buildMorningBrief", () => {
     expect(brief.recentNotes.some((n) => n.includes("lifecycle suite"))).toBe(true);
   });
 
+  test("renders typed timeline bullets with relative ages", () => {
+    confirmedPref("fresh", 0.9);
+    appendLogEvent(vault, {
+      timestamp: "2026-05-28T09:00:00Z",
+      eventType: "reconcile",
+      body: { topic: "commit-style", domain: "claims", reason: "claims-needs-operator" },
+    });
+    appendLogEvent(vault, {
+      timestamp: "2026-05-29T10:00:00Z",
+      eventType: "note",
+      body: { text: "Finished timeline review", agent: "codex" },
+    });
+
+    const brief = buildMorningBrief(vault, { now, topK: 5, lookbackDays: 7 });
+
+    expect(brief.preferences[0]?.ageLabel).toBe("4w ago");
+    expect(brief.openQuestions[0]).toMatchObject({ topic: "commit-style", ageLabel: "1d ago" });
+    expect(brief.recentNotes).toEqual(["Finished timeline review"]);
+    expect(brief.text).toContain("- [pref] Principle fresh · 4w ago");
+    expect(brief.text).toContain("- [open] commit-style (claims) · 1d ago");
+    expect(brief.text).toContain("- [note] Finished timeline review · 2h ago");
+  });
+
   test("honours the total character budget", () => {
     confirmedPref("a", 0.9);
     confirmedPref("b", 0.8);

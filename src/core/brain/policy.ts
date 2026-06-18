@@ -1720,6 +1720,15 @@ export function validateBrainConfigDetailed(
       }
       partial.default_scope = trimmed;
     }
+    // Forward-compat: unknown sub-keys under `feedback:` → warning.
+    for (const key of Object.keys(rawMap)) {
+      if (key !== "default_scope") {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `feedback.${key}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
     feedback = Object.freeze(partial);
   }
 

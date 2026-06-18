@@ -20,18 +20,22 @@ import { brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { readLogDay } from "./log-jsonl.ts";
-import { isoDate } from "./time.ts";
+import { isoDate, relativeAge } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "./types.ts";
 
 export interface MorningBriefPreference {
   readonly id: string;
   readonly principle: string;
   readonly trimmed: boolean;
+  /** Short relative-age label ("2d ago") of the preference's creation. */
+  readonly ageLabel?: string;
 }
 
 export interface MorningBriefOpenQuestion {
   readonly topic: string;
   readonly domain: string;
+  /** Short relative-age label of the reconcile event that raised it. */
+  readonly ageLabel?: string;
 }
 
 export interface MorningBrief {
@@ -85,14 +89,25 @@ function collectConfirmed(vault: string): ConfirmedPref[] {
   return out;
 }
 
+interface ScannedOpenQuestion {
+  readonly topic: string;
+  readonly domain: string;
+  readonly ts: string;
+}
+
+interface ScannedNote {
+  readonly text: string;
+  readonly ts: string;
+}
+
 interface LogScan {
-  readonly openQuestions: MorningBriefOpenQuestion[];
-  readonly notes: string[];
+  readonly openQuestions: ScannedOpenQuestion[];
+  readonly notes: ScannedNote[];
 }
 
 function scanRecentLog(vault: string, now: Date, lookbackDays: number): LogScan {
-  const openQuestions: MorningBriefOpenQuestion[] = [];
-  const notes: string[] = [];
+  const openQuestions: ScannedOpenQuestion[] = [];
+  const notes: ScannedNote[] = [];
   const seenTopics = new Set<string>();
   const dayMs = 24 * 60 * 60 * 1000;
   // Newest day first so dedup keeps the most recent open question per topic.
@@ -100,6 +115,7 @@ function scanRecentLog(vault: string, now: Date, lookbackDays: number): LogScan 
     const date = isoDate(new Date(now.getTime() - i * dayMs));
     const entries = readLogDay(vault, date).entries;
     for (const e of entries) {
+      const ts = typeof e.timestamp === "string" ? e.timestamp : "";
       if (e.eventType === BRAIN_LOG_EVENT_KIND.reconcile) {
         // Auto-resolutions carry a `resolution` field; only open
         // questions (no resolution) are surfaced to the operator.
@@ -108,11 +124,11 @@ function scanRecentLog(vault: string, now: Date, lookbackDays: number): LogScan 
         const domain = typeof e.body["domain"] === "string" ? e.body["domain"] : "";
         if (topic && !seenTopics.has(topic)) {
           seenTopics.add(topic);
-          openQuestions.push({ topic, domain });
+          openQuestions.push({ topic, domain, ts });
         }
       } else if (e.eventType === BRAIN_LOG_EVENT_KIND.note) {
         const text = typeof e.body["text"] === "string" ? e.body["text"] : "";
-        if (text) notes.push(text);
+        if (text) notes.push({ text, ts });
       }
     }
   }
@@ -122,6 +138,23 @@ function scanRecentLog(vault: string, now: Date, lookbackDays: number): LogScan 
 const PREF_PREFIX = "pref:";
 const OQ_PREFIX = "oq:";
 const NOTE_PREFIX = "note:";
+
+// Per-kind type tags stamped onto every rendered bullet so the
+// session-start bundle reads as a scannable typed timeline rather than
+// undifferentiated prose (v1.13.1 recent-activity presentation).
+const TYPE_TAG_PREF = "pref";
+const TYPE_TAG_OPEN = "open";
+const TYPE_TAG_NOTE = "note";
+
+/**
+ * Render one timeline bullet: a Markdown list item carrying a type tag
+ * and, when available, a short relative-age label. The age is omitted
+ * (not shown as "· ") when `ageLabel` is empty — e.g. when the source
+ * timestamp was missing or unparseable.
+ */
+function timelineBullet(type: string, text: string, ageLabel: string): string {
+  return `- [${type}] ${text}${ageLabel ? ` · ${ageLabel}` : ""}`;
+}
 
 /**
  * Build the morning brief for a vault. Read-only; deterministic given
@@ -148,7 +181,7 @@ export function buildMorningBrief(vault: string, opts: MorningBriefOptions): Mor
     entries.push({ item: `${OQ_PREFIX}${q.topic}`, text: `${q.topic} (${q.domain})` });
   }
   for (let i = 0; i < notes.length; i++) {
-    entries.push({ item: `${NOTE_PREFIX}${i}`, text: notes[i]! });
+    entries.push({ item: `${NOTE_PREFIX}${i}`, text: notes[i]!.text });
   }
 
   const budgeted = applyCharBudget(entries, {
@@ -156,36 +189,59 @@ export function buildMorningBrief(vault: string, opts: MorningBriefOptions): Mor
     maxTotalChars: opts.maxTotalChars,
   });
 
+  // Lookups for relative-age labels: preferences by id, open questions
+  // by topic, notes by their original (pre-budget) index. The budget
+  // primitive preserves the `item` key, so each kept entry resolves
+  // back to its source timestamp.
+  const prefCreatedAtById = new Map(topPrefs.map((p) => [p.id, p.createdAt] as const));
+  const oqByTopic = new Map(openQuestions.map((q) => [q.topic, q] as const));
+
   const preferences: MorningBriefPreference[] = [];
   const keptQuestions: MorningBriefOpenQuestion[] = [];
   const keptNotes: string[] = [];
+  // Per-note rendered bullets carry the age label; the public
+  // `recentNotes` field stays `string[]` for back-compat with MCP
+  // clients, so the age is attached only on the rendered `text` path.
+  const noteBullets: string[] = [];
   for (const kept of budgeted.kept) {
     if (kept.item.startsWith(PREF_PREFIX)) {
-      preferences.push({
-        id: kept.item.slice(PREF_PREFIX.length),
-        principle: kept.text,
-        trimmed: kept.trimmed,
-      });
+      const id = kept.item.slice(PREF_PREFIX.length);
+      const ageLabel = relativeAge(prefCreatedAtById.get(id) ?? "", opts.now) || undefined;
+      preferences.push({ id, principle: kept.text, trimmed: kept.trimmed, ageLabel });
     } else if (kept.item.startsWith(OQ_PREFIX)) {
       const topic = kept.item.slice(OQ_PREFIX.length);
-      const found = openQuestions.find((q) => q.topic === topic);
-      keptQuestions.push({ topic, domain: found?.domain ?? "" });
+      const found = oqByTopic.get(topic);
+      const ageLabel = relativeAge(found?.ts ?? "", opts.now) || undefined;
+      keptQuestions.push({ topic, domain: found?.domain ?? "", ageLabel });
     } else if (kept.item.startsWith(NOTE_PREFIX)) {
+      const idx = Number(kept.item.slice(NOTE_PREFIX.length));
+      const ageLabel = relativeAge(notes[idx]?.ts ?? "", opts.now);
       keptNotes.push(kept.text);
+      noteBullets.push(timelineBullet(TYPE_TAG_NOTE, kept.text, ageLabel));
     }
   }
 
   const sections: string[] = [];
   if (preferences.length > 0) {
-    sections.push(["## Top preferences", ...preferences.map((p) => `- ${p.principle}`)].join("\n"));
+    sections.push(
+      [
+        "## Top preferences",
+        ...preferences.map((p) => timelineBullet(TYPE_TAG_PREF, p.principle, p.ageLabel ?? "")),
+      ].join("\n"),
+    );
   }
   if (keptQuestions.length > 0) {
     sections.push(
-      ["## Open questions", ...keptQuestions.map((q) => `- ${q.topic} (${q.domain})`)].join("\n"),
+      [
+        "## Open questions",
+        ...keptQuestions.map((q) =>
+          timelineBullet(TYPE_TAG_OPEN, `${q.topic} (${q.domain})`, q.ageLabel ?? ""),
+        ),
+      ].join("\n"),
     );
   }
-  if (keptNotes.length > 0) {
-    sections.push(["## Recent notes", ...keptNotes.map((n) => `- ${n}`)].join("\n"));
+  if (noteBullets.length > 0) {
+    sections.push(["## Recent notes", ...noteBullets].join("\n"));
   }
 
   return Object.freeze({

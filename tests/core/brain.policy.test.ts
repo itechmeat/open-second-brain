@@ -219,6 +219,20 @@ describe("validateBrainConfig — feedback block", () => {
     expect(cfg.feedback?.default_scope).toBeUndefined();
   });
 
+  test("unknown feedback subkeys warn without failing validation", () => {
+    const result = validateBrainConfigDetailed(
+      parseBrainYaml(
+        "schema_version: 1\nfeedback:\n  default_scope: coding\n  typo_scope: research\n",
+      ),
+      "<test>",
+    );
+
+    expect(result.config.feedback?.default_scope).toBe("coding");
+    expect(result.warnings.map((warning) => warning.message)).toContain(
+      "feedback.typo_scope: unknown field ignored (forward-compat)",
+    );
+  });
+
   test("rejects a non-string default_scope", () => {
     expect(() =>
       validateBrainConfig(
