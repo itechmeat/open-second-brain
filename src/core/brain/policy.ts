@@ -26,6 +26,7 @@ import type {
   BrainActiveConfig,
   BrainAnticipatoryConfig,
   BrainConfig,
+  BrainFeedbackConfig,
   BrainGuardrailConfig,
   BrainHealthConfig,
   BrainHygieneConfig,
@@ -50,6 +51,7 @@ import {
   SchemaVocabularyError,
   validateSchemaDeclarations,
 } from "./schema-vocab.ts";
+import { SCOPE_MAX_LEN } from "./signal.ts";
 // Imported from `defaults.ts` (not from `vault-scope/index.ts`) to
 // break the module-init cycle: the resolver lives in `index.ts` and
 // itself imports `loadBrainConfig` from this file. See the
@@ -362,6 +364,21 @@ export function loadGuardrailsConfigSafe(vault: string): ResolvedBrainGuardrailC
     return resolveGuardrails(loadBrainConfig(vault));
   } catch {
     return BRAIN_GUARDRAIL_DEFAULTS;
+  }
+}
+
+/**
+ * Load the configured `feedback.default_scope`, or `undefined` when the
+ * config file is missing, malformed, or carries no feedback block. Used
+ * by the feedback write surfaces so a vault without a full `brain init`
+ * stays scope-less (byte-identical to pre-feature behaviour) instead of
+ * throwing when the signal is recorded.
+ */
+export function loadFeedbackDefaultScopeSafe(vault: string): string | undefined {
+  try {
+    return loadBrainConfig(vault).feedback?.default_scope;
+  } catch {
+    return undefined;
   }
 }
 
@@ -1553,6 +1570,7 @@ export function validateBrainConfigDetailed(
     "notes",
     "sessions",
     "schema",
+    "feedback",
   ]);
   for (const key of Object.keys(obj)) {
     if (!known.has(key)) {
@@ -1652,6 +1670,59 @@ export function validateBrainConfigDetailed(
     recall = Object.freeze(partial);
   }
 
+  // Optional `feedback:` block (default-scope-feedback suite). Validates a
+  // vault-default scope applied to feedback signal writes that omit an
+  // explicit per-call scope. Constraints mirror the signal `scope` field
+  // exactly (non-empty after trim, single-line, <= SCOPE_MAX_LEN) so a
+  // configured default can never pass validation yet fail at write time.
+  let feedback: BrainFeedbackConfig | undefined;
+  if ("feedback" in obj) {
+    const raw = obj["feedback"];
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new BrainConfigError(
+        `block must be a map of keys; got ${describe(raw)}`,
+        "feedback",
+        source,
+      );
+    }
+    const rawMap = raw as Record<string, unknown>;
+    const partial: { default_scope?: string } = {};
+    if ("default_scope" in rawMap) {
+      const value = rawMap["default_scope"];
+      if (typeof value !== "string") {
+        throw new BrainConfigError(
+          `must be a string; got ${describe(value)}`,
+          "feedback.default_scope",
+          source,
+        );
+      }
+      const trimmed = value.trim();
+      if (trimmed === "") {
+        throw new BrainConfigError(
+          `must be a non-empty single-line scope slug`,
+          "feedback.default_scope",
+          source,
+        );
+      }
+      if (/[\n\r]/.test(value)) {
+        throw new BrainConfigError(
+          `must be single-line (no newline characters)`,
+          "feedback.default_scope",
+          source,
+        );
+      }
+      if (trimmed.length > SCOPE_MAX_LEN) {
+        throw new BrainConfigError(
+          `must be at most ${SCOPE_MAX_LEN} characters; got ${trimmed.length}`,
+          "feedback.default_scope",
+          source,
+        );
+      }
+      partial.default_scope = trimmed;
+    }
+    feedback = Object.freeze(partial);
+  }
+
   const config: BrainConfig = {
     schema_version: schemaVersion,
     primary_agent: primaryAgent,
@@ -1688,6 +1759,7 @@ export function validateBrainConfigDetailed(
     ...(hygiene !== undefined ? { hygiene } : {}),
     ...(anticipatory !== undefined ? { anticipatory } : {}),
     ...(recall !== undefined ? { recall } : {}),
+    ...(feedback !== undefined ? { feedback } : {}),
   };
 
   return { config, warnings };

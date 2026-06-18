@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { mirrorSignal, resolveSharedNamespace } from "../../../core/brain/shared-namespace.ts";
-import { writeSignal } from "../../../core/brain/signal.ts";
+import { resolveEffectiveScope, writeSignal } from "../../../core/brain/signal.ts";
+import { loadFeedbackDefaultScopeSafe } from "../../../core/brain/policy.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { writePreference } from "../../../core/brain/preference.ts";
 import { isoDate, isoSecond } from "../../../core/brain/time.ts";
@@ -43,6 +44,14 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   const { config, vault } = brainVerbContext(flags);
   const agent = resolveBrainAgent(flags, config);
 
+  // Vault-configured fallback scope (`feedback.default_scope`). Applied
+  // only when the call passes no explicit --scope. Compute one effective
+  // scope so the signal, its mirror, and any force-confirmed preference
+  // all land on the same scope.
+  const defaultScope = loadFeedbackDefaultScopeSafe(vault);
+  const effectiveScope = resolveEffectiveScope(flags["scope"] as string | undefined, defaultScope);
+  const writeOpts = defaultScope !== undefined ? { defaultScope } : {};
+
   let raw: string | undefined;
   const rawFile = flags["raw-file"] as string | undefined;
   if (rawFile) {
@@ -73,7 +82,7 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   };
   let sigResult;
   try {
-    sigResult = writeSignal(vault, signalInput);
+    sigResult = writeSignal(vault, signalInput, writeOpts);
   } catch (exc) {
     return fail(`failed to write signal: ${(exc as Error).message ?? exc}`);
   }
@@ -81,7 +90,9 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   // primary write; surfaced only when the key is configured.
   const sharedNamespace = resolveSharedNamespace(config);
   const mirror =
-    sharedNamespace === null ? undefined : mirrorSignal(sharedNamespace, vault, signalInput);
+    sharedNamespace === null
+      ? undefined
+      : mirrorSignal(sharedNamespace, vault, signalInput, writeOpts);
 
   try {
     appendLogEvent(vault, {
@@ -112,7 +123,7 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
           confirmed_at: now.toISOString(),
           status: BRAIN_PREFERENCE_STATUS.confirmed,
           evidenced_by: [`[[${sigResult.id}]]`],
-          ...(flags["scope"] ? { scope: String(flags["scope"]) } : {}),
+          ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
         },
         { overwrite: false },
       );

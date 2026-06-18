@@ -405,6 +405,8 @@ The plugin's `.mcp.json` ships **two** MCP-server entries:
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).
 
+`brain_feedback`'s `scope` argument stays optional. When the vault declares `feedback.default_scope` in `Brain/_brain.yaml`, a call that omits `scope` records the signal under that default category; an explicit `scope` always wins, and with no default configured a scope-less call stays scope-less. The same effective scope is reused for a `force_confirmed: true` preference so the preference and its signal share one scope. The configured value is validated against the same constraints as any signal `scope` (non-empty after trim, single-line, at most 128 characters).
+
 ## Safety notes
 
 - The vault path is bound to the server instance at startup. Tools cannot

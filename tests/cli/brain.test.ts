@@ -318,6 +318,126 @@ describe("brain feedback", () => {
   });
 });
 
+describe("brain feedback — default_scope", () => {
+  /** Append a feedback block to the vault's _brain.yaml. */
+  function setDefaultScope(scope: string): void {
+    const yamlPath = join(vault, "Brain", "_brain.yaml");
+    const existing = readFileSync(yamlPath, "utf8");
+    writeFileSync(yamlPath, `${existing}\nfeedback:\n  default_scope: ${scope}\n`, "utf8");
+  }
+
+  function readInbox(): string {
+    const inbox = readdirSync(join(vault, "Brain", "inbox")).filter((n) => n.endsWith(".md"));
+    expect(inbox.length).toBe(1);
+    return readFileSync(join(vault, "Brain", "inbox", inbox[0]!), "utf8");
+  }
+
+  test("default_scope applies when no --scope is passed", async () => {
+    await bootstrap();
+    setDefaultScope("coding");
+    const r = await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "use-tabs",
+        "--signal",
+        "positive",
+        "--principle",
+        "Indent with tabs",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const body = readInbox();
+    expect(body).toContain("scope: coding");
+    expect(body).toContain("brain/scope/coding");
+  });
+
+  test("explicit --scope overrides default_scope", async () => {
+    await bootstrap();
+    setDefaultScope("coding");
+    const r = await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "doc-rule",
+        "--signal",
+        "positive",
+        "--principle",
+        "Document public APIs",
+        "--scope",
+        "docs",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const body = readInbox();
+    expect(body).toContain("scope: docs");
+    expect(body).not.toContain("scope: coding");
+  });
+
+  test("no default and no --scope omits scope (byte-identical)", async () => {
+    await bootstrap();
+    const r = await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "plain-rule",
+        "--signal",
+        "positive",
+        "--principle",
+        "A scope-less rule",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const body = readInbox();
+    expect(body).not.toContain("scope:");
+    expect(body).not.toContain("brain/scope/");
+  });
+
+  test("force-confirmed preference inherits the default scope", async () => {
+    await bootstrap();
+    setDefaultScope("coding");
+    const r = await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "fc-rule",
+        "--signal",
+        "positive",
+        "--principle",
+        "Force confirmed with default scope",
+        "--force-confirmed",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const pref = readFileSync(join(vault, "Brain", "preferences", "pref-fc-rule.md"), "utf8");
+    expect(pref).toContain("scope: coding");
+  });
+});
+
 describe("brain dream", () => {
   test("happy path on empty vault returns no-op", async () => {
     await bootstrap();

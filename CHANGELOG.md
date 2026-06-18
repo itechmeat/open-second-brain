@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Configurable default scope for feedback signals
+  (`feedback.default_scope`).** A vault-local default applied to
+  `brain_feedback` / `o2b brain feedback` writes that pass no explicit
+  `scope`, so agent-recorded signals can land in a consistent category
+  (for example `coding`) instead of staying uncategorized. The rule is a
+  single precedence at the signal write boundary: an explicit per-call
+  scope always wins; otherwise the configured default is used; otherwise
+  the `scope` field is omitted exactly as before. With no
+  `feedback.default_scope` configured and no explicit scope, signal
+  output is byte-identical to prior behaviour.
+  - **Config block.** Optional `feedback:` block in `Brain/_brain.yaml`
+    with a `default_scope` string, validated through the normal Brain
+    config policy against the same constraints as a signal `scope` field
+    (non-empty after trim, single-line, at most 128 characters). Invalid
+    values are rejected by config validation and surfaced by
+    `o2b brain doctor` rather than silently ignored.
+  - **Parity across surfaces.** The effective scope is computed once and
+    reused for the inbox signal, its shared-namespace mirror, and any
+    force-confirmed preference, so a preference never diverges in scope
+    from the signal that produced it. Distinct from the `owner_scoped_facts`
+    and vault guardrail settings, which govern fact visibility rather than
+    feedback categorization.
+
 ## [1.13.0] - 2026-06-16
 
 ### Added

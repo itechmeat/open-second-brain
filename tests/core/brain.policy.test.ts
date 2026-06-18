@@ -198,6 +198,62 @@ describe("validateBrainConfig — schema block", () => {
   });
 });
 
+describe("validateBrainConfig — feedback block", () => {
+  test("absent feedback block leaves config.feedback undefined", () => {
+    expect(DEFAULT_BRAIN_CONFIG).not.toHaveProperty("feedback");
+    const cfg = validateBrainConfig({ schema_version: 1 }, "<test>");
+    expect(cfg.feedback).toBeUndefined();
+  });
+
+  test("accepts a valid default_scope", () => {
+    const cfg = validateBrainConfig(
+      parseBrainYaml("schema_version: 1\nfeedback:\n  default_scope: coding\n"),
+      "<test>",
+    );
+    expect(cfg.feedback?.default_scope).toBe("coding");
+  });
+
+  test("empty feedback block leaves default_scope undefined", () => {
+    const cfg = validateBrainConfig({ schema_version: 1, feedback: {} }, "<test>");
+    expect(cfg.feedback).toBeDefined();
+    expect(cfg.feedback?.default_scope).toBeUndefined();
+  });
+
+  test("rejects a non-string default_scope", () => {
+    expect(() =>
+      validateBrainConfig(
+        parseBrainYaml("schema_version: 1\nfeedback:\n  default_scope: 42\n"),
+        "<test>",
+      ),
+    ).toThrow(/feedback\.default_scope/);
+  });
+
+  test("rejects a blank default_scope", () => {
+    expect(() =>
+      validateBrainConfig(
+        parseBrainYaml("schema_version: 1\nfeedback:\n  default_scope: '   '\n"),
+        "<test>",
+      ),
+    ).toThrow(/feedback\.default_scope/);
+  });
+
+  test("rejects an over-long default_scope (>128 chars)", () => {
+    const huge = "x".repeat(129);
+    expect(() =>
+      validateBrainConfig(
+        parseBrainYaml(`schema_version: 1\nfeedback:\n  default_scope: "${huge}"\n`),
+        "<test>",
+      ),
+    ).toThrow(/feedback\.default_scope/);
+  });
+
+  test("rejects a non-map feedback block", () => {
+    expect(() =>
+      validateBrainConfig(parseBrainYaml("schema_version: 1\nfeedback: not-a-map\n"), "<test>"),
+    ).toThrow(/feedback/);
+  });
+});
+
 describe("validateBrainConfig — primary_agent", () => {
   test("absent → null (default)", () => {
     const cfg = validateBrainConfig({ schema_version: 1 }, "<test>");

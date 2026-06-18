@@ -989,6 +989,25 @@ export interface BrainGuardrailConfig {
 }
 
 /**
+ * Optional `feedback:` block (default-scope-feedback suite). Supplies a
+ * vault-default `scope` for feedback signal writes that omit an explicit
+ * per-call scope. Distinct from `owner_scoped_facts` and the vault
+ * guardrails, which govern fact visibility — this only categorizes
+ * freshly-recorded feedback signals.
+ */
+export interface BrainFeedbackConfig {
+  /**
+   * Default scope applied to `brain_feedback` / `o2b brain feedback`
+   * writes that pass no explicit `scope`. An explicit per-call scope
+   * always wins. Validated against the same constraints as a signal
+   * `scope` field: non-empty after trim, single-line, and at most the
+   * 128-character scope cap. Absent: scope-less calls stay scope-less,
+   * byte-identical to prior behaviour.
+   */
+  readonly default_scope?: string;
+}
+
+/**
  * Optional runtime schema vocabulary declarations (v0.25.0 foundation).
  * These are taxonomy tokens, not replacements for operational lifecycle
  * states such as `preference.status` or `apply-evidence` results.
@@ -1089,6 +1108,12 @@ export interface BrainConfig {
    * consumers resolve built-ins through `resolveSchemaVocabulary`.
    */
   readonly schema?: BrainSchemaConfig;
+  /**
+   * Optional `feedback:` block (default-scope-feedback suite). Supplies
+   * a default scope for feedback signal writes that omit an explicit
+   * per-call scope. Absent: scope-less calls stay scope-less.
+   */
+  readonly feedback?: BrainFeedbackConfig;
   /**
    * Optional `hygiene:` block (continuity-hygiene-freshness suite).
    * Tunes the hygiene pipeline: the external conflict-resolver command
