@@ -32,6 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and vault guardrail settings, which govern fact visibility rather than
     feedback categorization.
 
+### Security
+
+- **Write-containment backstop at the write-session commit chokepoint.**
+  The single point where a write-session lands an agent-supplied artifact
+  now re-resolves its target through `ensureInsideVault` before any
+  directory creation, read, or write. The earlier target check is purely
+  lexical and runs at session-open time, so it cannot see a symlinked
+  ancestor (for example a `Brain/<symlink>/note.md` whose ancestor links
+  outside the vault) and is decoupled from the write by the persisted
+  session record. The backstop fails closed: a target that resolves
+  outside the configured vault root is rejected and nothing is written.
+  Audit confirmed every other caller-derived vault path (slugs, ids,
+  device shards, artifacts) already funnels through the guarded
+  `paths.ts` constructors or `ensureInsideVault`, and `validateSlug`
+  continues to admit `@` and `+` so email-style and plus-addressed
+  identifiers remain valid file basenames while dot-traversal tokens stay
+  rejected. Regression tests pin both invariants.
+
 ## [1.13.0] - 2026-06-16
 
 ### Added

@@ -91,6 +91,18 @@ describe("validateSlug", () => {
     expect(validateSlug("alpha_beta-2")).toBe("alpha_beta-2");
   });
 
+  test("admits email-style and plus-addressed identifiers", () => {
+    // The structural whitelist must keep passing `@` and `+` so a
+    // caller-supplied identity (email, plus-addressed alias) can still
+    // become a file basename without escaping its directory. Pinned so a
+    // later sanitization tweak cannot silently drop these characters.
+    expect(validateSlug("user@example.com")).toBe("user@example.com");
+    expect(validateSlug("user+tag@example.com")).toBe("user+tag@example.com");
+    expect(validateSlug("first.last+filter")).toBe("first.last+filter");
+    // A single embedded dot is fine; only the `..` traversal token is not.
+    expect(validateSlug("v1.2.3")).toBe("v1.2.3");
+  });
+
   test("rejects path separators", () => {
     expect(() => validateSlug("a/b")).toThrow(/path separators/);
     expect(() => validateSlug("a\\b")).toThrow(/path separators/);

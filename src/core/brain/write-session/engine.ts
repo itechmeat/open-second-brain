@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { ensureInsideVault } from "../../path-safety.ts";
 import { appendLogEvent } from "../log.ts";
 import { loadSchemaPack } from "../schema-pack.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
@@ -337,7 +338,13 @@ export function commitArtifact(
   artifact: string,
   now: string,
 ): WriteSessionEnvelope {
-  const absolute = join(vault, session.targetPath);
+  // Last-line-of-defense containment: `validateTargetPath` runs at open
+  // time and is purely lexical (it rejects `..`/backslashes/NUL but is
+  // blind to symlinked ancestors), and the persisted session record is
+  // decoupled from that check. Re-resolve at the write chokepoint so a
+  // target that lands outside the vault - e.g. `Brain/<symlink>/x.md`
+  // whose ancestor links out - is rejected before any mkdir/read/write.
+  const absolute = ensureInsideVault(join(vault, session.targetPath), vault);
   // Last-line-of-defense collision guard: submit-time checks cannot
   // cover the window between a needs-review park and the operator's
   // approve - if the target appeared meanwhile, `create` must still
