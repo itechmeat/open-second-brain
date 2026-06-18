@@ -110,11 +110,13 @@ function scanRecentLog(vault: string, now: Date, lookbackDays: number): LogScan 
   const notes: ScannedNote[] = [];
   const seenTopics = new Set<string>();
   const dayMs = 24 * 60 * 60 * 1000;
-  // Newest day first so dedup keeps the most recent open question per topic.
+  // Newest day and newest same-day entries first so dedup keeps the most recent
+  // open question per topic.
   for (let i = 0; i <= lookbackDays; i++) {
     const date = isoDate(new Date(now.getTime() - i * dayMs));
     const entries = readLogDay(vault, date).entries;
-    for (const e of entries) {
+    for (let j = entries.length - 1; j >= 0; j--) {
+      const e = entries[j]!;
       const ts = typeof e.timestamp === "string" ? e.timestamp : "";
       if (e.eventType === BRAIN_LOG_EVENT_KIND.reconcile) {
         // Auto-resolutions carry a `resolution` field; only open
