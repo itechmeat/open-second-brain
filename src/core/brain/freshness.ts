@@ -21,7 +21,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 import { listVaultPages, parseFrontmatter } from "../vault.ts";
@@ -71,6 +71,7 @@ function hashSource(vault: string, source: string): string {
   const path = resolveSourcePath(vault, source);
   try {
     if (!existsSync(path)) return MISSING_SOURCE_HASH;
+    if ((statSync(path).mode & 0o444) === 0) return UNREADABLE_SOURCE_HASH;
     return sha256(readFileSync(path, "utf8"));
   } catch {
     // A transient permission / I/O failure is NOT a deleted source -
