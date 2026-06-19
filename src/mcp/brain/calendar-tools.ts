@@ -92,6 +92,10 @@ function toolBrainObligation(
       return { operation, slug: removed.slug, archive_path: removed.archivePath };
     }
   } catch (err) {
+    // Preserve an already-typed MCPError (e.g. from coerceStr) instead
+    // of re-wrapping it with a doubled "brain_obligation: " prefix and
+    // flattening its code. Only wrap unexpected thrown values.
+    if (err instanceof MCPError) throw err;
     throw new MCPError(INVALID_PARAMS, `brain_obligation: ${(err as Error).message}`);
   }
   throw new MCPError(
@@ -172,6 +176,9 @@ function toolBrainAgenda(
     });
     return snapshotJson(snapshot);
   } catch (err) {
+    // Preserve an already-typed MCPError (e.g. from coerceStr/coerceEvents)
+    // instead of re-wrapping it with a doubled "brain_agenda: " prefix.
+    if (err instanceof MCPError) throw err;
     throw new MCPError(INVALID_PARAMS, `brain_agenda: ${(err as Error).message}`);
   }
 }

@@ -74,7 +74,12 @@ export async function cmdBrainAgenda(argv: string[]): Promise<number> {
   if (eventsSource === null) return fail(USAGE);
 
   const focusRaw = normalizeFlagString(flags["focus-min"]);
-  const focusMinMinutes = focusRaw === null ? 60 : Number.parseInt(focusRaw, 10);
+  if (focusRaw !== null && !/^[1-9]\d*$/u.test(focusRaw)) {
+    // Number.parseInt would accept "30min" as 30; require a bare
+    // positive integer so malformed input is rejected up front.
+    return fail("--focus-min must be a positive integer");
+  }
+  const focusMinMinutes = focusRaw === null ? 60 : Number(focusRaw);
   if (!Number.isFinite(focusMinMinutes) || focusMinMinutes < 1) {
     return fail("--focus-min must be a positive integer");
   }

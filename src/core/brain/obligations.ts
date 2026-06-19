@@ -56,7 +56,6 @@ const CALENDAR_CADENCE_MONTHS: Record<string, number> = {
 };
 
 const EVERY_N_DAYS_RE = /^every-(\d+)-days$/u;
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/u;
 const HISTORY_HEADER = "## Completions";
 
 export interface ObligationPage {
@@ -124,6 +123,22 @@ function requireIsoDate(value: string, label: string): string {
     throw new ObligationError(`${label} is not a valid calendar date: ${JSON.stringify(value)}`);
   }
   return value;
+}
+
+/**
+ * Soft-parse an ISO date read from disk: return it when it is a valid
+ * calendar date, otherwise return the empty string. Unlike
+ * {@link requireIsoDate} this never throws, because a frontmatter value
+ * edited by hand should not crash listing/rendering of the whole page.
+ */
+function parseIsoDate(value: unknown): string {
+  if (typeof value !== "string") return "";
+  try {
+    validateIsoDate(value);
+    return value;
+  } catch {
+    return "";
+  }
 }
 
 function lastDayOfMonth(year: number, monthZeroBased: number): number {
@@ -207,12 +222,10 @@ function parsePage(vault: string, slug: string): ObligationPage | null {
     }
   }
   const lastDoneRaw = typeof meta["last_done"] === "string" ? meta["last_done"].trim() : "";
-  const anchor =
-    typeof meta["anchor"] === "string" && ISO_DATE_RE.test(meta["anchor"]) ? meta["anchor"] : "";
-  const nextDue =
-    typeof meta["next_due"] === "string" && ISO_DATE_RE.test(meta["next_due"])
-      ? meta["next_due"]
-      : anchor;
+  // Full calendar validation (not just format): "2024-02-30" would
+  // otherwise pass a regex and then yield NaN in the due/overdue math.
+  const anchor = parseIsoDate(meta["anchor"]);
+  const nextDue = parseIsoDate(meta["next_due"]) || anchor;
   return Object.freeze({
     slug,
     title: typeof meta["title"] === "string" ? meta["title"] : slug,

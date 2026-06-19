@@ -464,6 +464,9 @@ export interface ParsedOkfBundle {
 interface ManifestInput {
   readonly schema?: unknown;
   readonly producer?: unknown;
+  readonly generated_at?: unknown;
+  readonly vault_basename?: unknown;
+  readonly log_days?: unknown;
   readonly pages?: unknown;
 }
 
@@ -545,10 +548,16 @@ export function readOkfBundle(dir: string): ParsedOkfBundle {
     manifest: {
       schema: OKF_SCHEMA_VERSION,
       producer,
-      generated_at: isoSecond(),
-      vault_basename: "",
+      // Preserve the bundle's own metadata instead of synthesizing
+      // placeholders: readOkfBundle is a reader, and a caller that
+      // inspects the parsed manifest should see what is on disk.
+      generated_at: typeof parsed.generated_at === "string" ? parsed.generated_at : "",
+      vault_basename: typeof parsed.vault_basename === "string" ? parsed.vault_basename : "",
       pages: entries,
-      log_days: 0,
+      log_days:
+        typeof parsed.log_days === "number" && Number.isFinite(parsed.log_days)
+          ? parsed.log_days
+          : 0,
     },
     foreign: producer !== OKF_PRODUCER,
     pages,
@@ -643,9 +652,16 @@ export function importOkfBundle(
     const meta = importFrontmatter(page, bundle.manifest.producer, bundle.foreign, trusted, nowIso);
     try {
       mkdirSync(dirname(abs), { recursive: true });
-      writeFrontmatterAtomic(abs, meta, page.body, { overwrite: true });
+      // overwrite: trusted closes the TOCTOU window in review mode: if a
+      // file appears between the existsSync check above and this write,
+      // the exclusive create throws EEXIST instead of clobbering it.
+      writeFrontmatterAtomic(abs, meta, page.body, { overwrite: trusted });
       written.push(targetRel);
     } catch (exc) {
+      if (!trusted && (exc as NodeJS.ErrnoException).code === "EEXIST") {
+        skipped.push(targetRel);
+        continue;
+      }
       errors.push({ path: targetRel, message: (exc as Error).message ?? String(exc) });
     }
   }

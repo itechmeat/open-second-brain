@@ -263,6 +263,15 @@ export function synthesizeAgenda(
   if (!Number.isFinite(focusMinMinutes) || focusMinMinutes < 1) {
     throw new AgendaError("focusMinMinutes must be a positive number");
   }
+  // Enforce the workday-window pair at the exported boundary so a direct
+  // caller cannot pass only one bound and silently degrade to unbounded
+  // focus-range mode. The MCP/CLI wrappers validate this too, but the
+  // core API is public and should fail fast on the half-specified case.
+  const hasWorkdayStart = options.workdayStart !== undefined;
+  const hasWorkdayEnd = options.workdayEnd !== undefined;
+  if (hasWorkdayStart !== hasWorkdayEnd) {
+    throw new AgendaError("workdayStart and workdayEnd must be given together");
+  }
   const normalized = normalize(events);
   const conflicts = detectConflicts(normalized);
   const focusBlocks = detectFocusBlocks(
