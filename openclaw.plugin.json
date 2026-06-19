@@ -2,7 +2,7 @@
   "id": "open-second-brain",
   "name": "Open Second Brain",
   "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults.",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "activation": { "onStartup": true },
   "skills": ["./skills"],
   "contracts": {

@@ -51,6 +51,7 @@ describe("bootstrapBrain — empty vault", () => {
       dirs.preferences,
       dirs.retired,
       dirs.log,
+      dirs.bases,
       dirs.snapshots,
     ]) {
       expect(existsSync(dir)).toBe(true);
@@ -62,8 +63,10 @@ describe("bootstrapBrain — empty vault", () => {
     expect(existsSync(join(vault, "Brain", "_brain.yaml"))).toBe(true);
     expect(existsSync(join(vault, "Brain", "_BRAIN.md"))).toBe(true);
 
-    // Counts: two created, none overwritten, none skipped.
-    expect(result.created.length).toBe(2);
+    // Counts: six created (_brain.yaml, _BRAIN.md, and the four
+    // Brain/bases/*.base view definitions stamped at init), none
+    // overwritten, none skipped.
+    expect(result.created.length).toBe(6);
     expect(result.overwritten.length).toBe(0);
     expect(result.skipped.length).toBe(0);
 
@@ -209,5 +212,51 @@ describe("bootstrapBrain — _BRAIN.md compliance ceiling", () => {
     const lines = manual.split("\n");
     const lineCount = manual.endsWith("\n") && lines.length > 0 ? lines.length - 1 : lines.length;
     expect(lineCount).toBeLessThan(200);
+  });
+});
+
+describe("bootstrapBrain — Bases view definitions", () => {
+  const BASE_FILES = ["projects.base", "people.base", "tasks.base", "daily.base"] as const;
+
+  test("stamps all four .base files into Brain/bases/ on a fresh vault", () => {
+    const result = bootstrapBrain(vault, { configPath });
+
+    for (const name of BASE_FILES) {
+      const path = join(vault, "Brain", "bases", name);
+      expect(existsSync(path)).toBe(true);
+      expect(result.created).toContain(join("Brain", "bases", name));
+    }
+  });
+
+  test("each stamped base targets the matching Brain collection", () => {
+    bootstrapBrain(vault, { configPath });
+    const read = (name: string) => readFileSync(join(vault, "Brain", "bases", name), "utf8");
+
+    expect(read("projects.base")).toContain('file.inFolder("Brain/entities/project")');
+    expect(read("people.base")).toContain('file.inFolder("Brain/entities/person")');
+    expect(read("tasks.base")).toContain('file.inFolder("Brain/obligations")');
+    expect(read("daily.base")).toContain('file.inFolder("Brain/log")');
+  });
+
+  test("rerun without force leaves operator edits to a base intact", () => {
+    bootstrapBrain(vault, { configPath });
+    const edited = join(vault, "Brain", "bases", "projects.base");
+    writeFileSync(edited, "user: edited\n", "utf8");
+
+    const second = bootstrapBrain(vault, { configPath });
+
+    expect(second.skipped).toContain(join("Brain", "bases", "projects.base"));
+    expect(readFileSync(edited, "utf8")).toBe("user: edited\n");
+  });
+
+  test("force rewrites a stomped base back to the canonical template", () => {
+    bootstrapBrain(vault, { configPath });
+    const stomped = join(vault, "Brain", "bases", "daily.base");
+    writeFileSync(stomped, "stale\n", "utf8");
+
+    const result = bootstrapBrain(vault, { configPath, force: true });
+
+    expect(result.overwritten).toContain(join("Brain", "bases", "daily.base"));
+    expect(readFileSync(stomped, "utf8")).toContain('file.inFolder("Brain/log")');
   });
 });

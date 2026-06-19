@@ -353,6 +353,13 @@ async function toolBrainDeepSynthesis(
     })),
     gaps: report.gaps,
     contaminated: report.contaminated,
+    strongest_objection: report.strongestObjection
+      ? {
+          basis: report.strongestObjection.basis,
+          statement: report.strongestObjection.statement,
+          source_artifacts: report.strongestObjection.sourceArtifacts,
+        }
+      : null,
     ...(triggersCreated !== undefined ? { triggers_created: triggersCreated } : {}),
   };
 }

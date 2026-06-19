@@ -50,6 +50,8 @@ flags for a narrower per-process full server.
 | `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
 | `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls.                                            | `operation`                                    |
 | `brain_generation_reports`  | Inbound, opt-in LLM generation tracing: `record` posts a generation's usage for a handoff (gated, default off; stores prompt hash + token counts only); `list`/`summary` read records and join them to memory paths. Kernel never calls an LLM. | `action`                                       |
+| `brain_obligation`          | Recurring obligations under `Brain/obligations/` with a deterministic cadence-driven next-due date: `add`, `done` (advances next_due by one cadence interval), `list` (optionally overdue-only), `show`, `remove`. Cadences: daily/weekly/biweekly/monthly/quarterly/yearly/every-<N>-days. | `operation`                                    |
+| `brain_agenda`              | Stateless agenda synthesis over caller-provided calendar events (the host fetches them; the Brain never calls a calendar API): overlap conflicts, free focus blocks (optionally clipped to a workday window), and events organised outside the operator's own email domain(s). No vault writes. | `events`                                       |
 | `brain_context_presets`     | Show, suggest, or diff read-only context budget presets (`tight-context`, `long-context`) without writing config.                              | `operation`                                    |
 | `brain_pre_compact_extract` | Extract decision/commitment/outcome/rule/open-question records from bounded text into continuity storage.                                      | `session_id`, `turn_start`, `turn_end`, `text` |
 | `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness), `apply` selected ids, `refresh` stale pages. Resolver command comes from `_brain.yaml` only. | `mode`                                         |
@@ -156,8 +158,10 @@ Four templated URIs come back from `resources/templates/list`:
   `ret-{id}.md` when the active copy is gone. Accepts the bare slug
   (`my-rule`) or the prefixed form (`pref-my-rule` / `ret-my-rule`).
 - `osb://topic/{slug}` — synthesised markdown of every signal, the
-  current preference (or retired), and the most recent log entries
-  for the topic.
+  current preference (or retired), the most recent log entries, and a
+  deterministic **Strongest objection** steelman against the current
+  preference (a retired/quarantined rule, a recorded negative
+  counter-signal, or an unconfirmed-trial caveat) for the topic.
 - `osb://log/{date}` — body of `Brain/log/<date>.md` (date is
   `YYYY-MM-DD`).
 - `osb://backlinks/{id}` — inbound references to the given Brain
@@ -274,7 +278,12 @@ triggers and marks them delivered (once per `trigger_cooldown_days`).
 
 `brain_deep_synthesis` assembles a deterministic topic dossier
 (matched notes, agreements, contradictions, stale claims, knowledge
-gaps; `triggers: true` enqueues findings). `brain_idea_discovery`
+gaps; `triggers: true` enqueues findings). It also returns a
+`strongest_objection` — the single best-formed counter-finding
+(`basis`: contradiction → superseded → stale → knowledge_gap →
+thin_evidence) framed as a steelman seed against the dossier's implicit
+conclusion, or `null` for a larger internally-consistent body.
+`brain_idea_discovery`
 ranks next-direction candidates from open questions, orphan notes, and
 aging inbox signals.
 

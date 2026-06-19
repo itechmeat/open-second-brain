@@ -5,6 +5,103 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-06-19
+
+### Added
+
+- **Calendar-aware obligations and agenda synthesis.** Two deterministic,
+  vault-native surfaces inspired by the obsidian-second-brain calendar
+  commands, built to Open Second Brain's contract: the kernel never
+  reaches a calendar API or calls a model - the host runtime (e.g. the
+  google-workspace skill) fetches events and the Brain owns the durable,
+  deterministic record and analysis.
+  - **Recurring obligations (`brain_obligation`, `o2b brain obligation`).**
+    First-class Brain pages under `Brain/obligations/<slug>.md` tracking a
+    periodic commitment (weekly review, monthly report, quarterly audit)
+    with a cadence and a deterministically computed `next_due` date.
+    `add` creates the page (next-due starts at the anchor), `done` records
+    a completion and advances next-due by exactly one cadence interval from
+    the completion date, `list` (optionally `--overdue`) sorts by next-due
+    with an overdue flag and days-until-due, `show` reads one, `remove`
+    archives into `Brain/obligations/archive/`. Cadences: `daily`,
+    `weekly`, `biweekly`, `monthly`, `quarterly`, `yearly`, and
+    `every-<N>-days`; month-based cadences clamp to the last day of short
+    months (Jan 31 + 1 month -> Feb 28/29). Markdown-first and operator
+    readable in Obsidian; cadence arithmetic is pure UTC calendar math, so
+    the same inputs always yield the same next-due date.
+  - **Agenda synthesis (`brain_agenda`, `o2b brain agenda`).** A stateless
+    analysis over caller-provided calendar events (a JSON array, or piped
+    on stdin for the CLI): overlap **conflicts** between events, free
+    **focus blocks** (the gaps a scheduler would slot work into, optionally
+    clipped to a `--workday-start`/`--workday-end` window), and
+    **external-organizer** flags for events organised outside the
+    operator's own email domain(s). Pure function of its input - no vault
+    writes, no clock, no model - so a given event list always yields the
+    same snapshot.
+  - **MCP surface.** Adds `brain_agenda` and `brain_obligation` to the
+    frozen tool set; both carry input schemas and the deliberate
+    surface-change is pinned in the parity guard.
+
+- **Open Knowledge Format (OKF) export and import.** A portable,
+  producer-agnostic bundle for moving a Brain (or part of one) between
+  vaults and producers, with a deterministic export-then-import
+  round-trip and a review gate for untrusted sources.
+  - **Export (`brain okf-export`, `o2b brain okf-export`).** Writes a
+    self-contained OKF bundle to a directory: `concepts/`, `queries/`,
+    and `references/` pages plus a date-grouped `log.md` and an
+    `okf.json` manifest. Read-only on the vault; `--force` overwrites a
+    non-empty target directory.
+  - **Import (`brain okf-import`, `o2b brain okf-import`).** Reads an OKF
+    bundle directory. By default pages land under `OKF Review/` stamped
+    `okf_review: pending` as review candidates; `--trusted` writes each
+    page straight to its recorded vault-relative path. Foreign-producer
+    bundles get producer and raw-type provenance stamped, with
+    producer-specific (`x-*`) frontmatter preserved.
+
+- **Obsidian Bases view definitions stamped at vault init.** Four
+  native `.base` files are now written into `Brain/bases/` whenever a
+  vault is bootstrapped (`o2b brain init`), giving operators structured,
+  performant views over the Brain collections without any Dataview
+  plugin dependency. Inspired by the obsidian-second-brain
+  `/obsidian-projects` + Bases templates work, adapted to Open Second
+  Brain's real frontmatter rather than copied verbatim:
+  - `projects.base` → canonical entities with `category: project`
+    (`Brain/entities/project/`), with Active / Archived / All table
+    views, a status icon, and a "stale since update" formula.
+  - `people.base` → canonical entities with `category: person`
+    (`Brain/entities/person/`), surfacing optional operator-added
+    `role` / `company` columns alongside status and freshness.
+  - `tasks.base` → recurring obligations (`Brain/obligations/`), ordered
+    by an `overdue` formula and `next_due`, with days-until-due.
+  - `daily.base` → log days (`Brain/log/`) as a date-sorted table plus a
+    calendar view.
+  - Files are inert structural scaffolding (no plugin required; ignored
+    by editors that do not render Bases) and are stamped like the
+    operating manual: written only when absent, overwritten under
+    `--force`, never clobbering operator edits on a plain re-run. The
+    templates ship under `src/core/brain/templates/bases/` so they
+    travel with the published `src/` tree.
+
+- **Strongest-objection steelman in synthesis outputs.** Both the
+  `osb://topic/{slug}` resource and `brain_deep_synthesis` now surface
+  the single best-formed argument *against* their own implicit
+  conclusion, rather than only enumerating tensions within the source
+  material. Inspired by obsidian-wiki's steelman section, adapted to
+  Open Second Brain's deterministic-core contract (no generated prose —
+  the strongest counter-finding is selected by fixed priority and
+  framed as a seed for the calling agent to develop).
+  - `brain_deep_synthesis` (and `o2b brain deep-synthesis`) add a
+    `strongest_objection` field with `basis`
+    (contradiction → superseded → stale → knowledge_gap →
+    thin_evidence), `statement`, and `source_artifacts`. It is `null`
+    only for a larger internally-consistent body, and
+    `strongest_objection` joins the dossier's `checked` dimensions.
+  - `osb://topic/{slug}` gains an always-present **Strongest objection**
+    section steelmanning the current preference: a previously-retired
+    rule, a quarantined rule, a recorded negative counter-signal, or an
+    unconfirmed-trial caveat, falling back to an explicit "no standing
+    objection" line.
+
 ## [1.14.0] - 2026-06-18
 
 ### Added
@@ -5658,7 +5755,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v1.14.0...HEAD
+[1.15.0]: https://github.com/itechmeat/open-second-brain/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/itechmeat/open-second-brain/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/itechmeat/open-second-brain/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/itechmeat/open-second-brain/compare/v1.11.0...v1.12.0

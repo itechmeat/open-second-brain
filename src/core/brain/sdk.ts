@@ -32,6 +32,16 @@ import {
   exportVaultGraph,
   importVaultGraph,
 } from "./portability/graph.ts";
+import {
+  type OkfBundle,
+  type OkfImportOptions,
+  type OkfImportResult,
+  type ParsedOkfBundle,
+  buildOkfBundle,
+  importOkfBundle,
+  readOkfBundle,
+  writeOkfBundle,
+} from "./portability/okf.ts";
 import type {
   IngestSourceInput,
   IngestSourceOptions,
@@ -67,6 +77,12 @@ export interface BrainSdk {
   exportPreferencesJson(): ExportedPreferencesJson;
   exportPreferencesLlmsTxt(): string;
 
+  // Open Knowledge Format bundle export/import (Unit C).
+  buildOkfBundle(): OkfBundle;
+  writeOkfBundle(dir: string, bundle: OkfBundle, opts?: { force?: boolean }): void;
+  readOkfBundle(dir: string): ParsedOkfBundle;
+  importOkf(bundle: ParsedOkfBundle, opts?: OkfImportOptions): OkfImportResult;
+
   // Source-backed writes + reads.
   ingestSource(input: IngestSourceInput, opts: IngestSourceOptions): IngestSourceResult;
   listSources(): ReadonlyArray<IngestedSource>;
@@ -93,6 +109,11 @@ export function createBrain(vault: string): BrainSdk {
 
     exportPreferencesJson: () => exportPreferencesJson(vault),
     exportPreferencesLlmsTxt: () => exportPreferencesLlmsTxt(vault),
+
+    buildOkfBundle: () => buildOkfBundle(vault),
+    writeOkfBundle: (dir, bundle, opts) => writeOkfBundle(dir, bundle, opts ?? {}),
+    readOkfBundle: (dir) => readOkfBundle(dir),
+    importOkf: (bundle, opts) => importOkfBundle(vault, bundle, opts ?? {}),
 
     ingestSource: (input, opts) => ingestSource(vault, input, opts),
     listSources: () => listIngestedSources(vault),

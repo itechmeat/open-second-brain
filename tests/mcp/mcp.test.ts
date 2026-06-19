@@ -283,6 +283,9 @@ describe("tool listing", () => {
         "brain_ingest_source",
         "brain_research_report",
         "brain_derive_fact",
+        // Calendar integration: recurring obligations + agenda synthesis.
+        "brain_obligation",
+        "brain_agenda",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -551,7 +554,8 @@ describe("stdio loop", () => {
     // + brain_codegraph_report (CodeGraph & MCP Operational Readability,
     //   v1.12.0) = 82.
     // + brain_generation_reports (Hindsight brain-loop ops) = 83.
-    expect(list.result.tools.length).toBe(83);
+    // + brain_obligation / brain_agenda (Calendar integration) = 85.
+    expect(list.result.tools.length).toBe(85);
   });
 
   test("returns parse error for invalid JSON", async () => {

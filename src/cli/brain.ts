@@ -66,6 +66,8 @@ import {
   cmdBrainMerge,
   cmdBrainExplorer,
   cmdBrainExport,
+  cmdBrainOkfExport,
+  cmdBrainOkfImport,
   cmdBrainUpgrade,
   handleBrainSnapshotSubcommand,
   cmdBrainScanInline,
@@ -104,6 +106,8 @@ import {
   cmdBrainProceduralMemory,
   cmdBrainProceduralGraph,
   cmdBrainRecurrence,
+  cmdBrainObligation,
+  cmdBrainAgenda,
   cmdBrainAttentionFlows,
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,
@@ -305,6 +309,10 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainUpgrade(rest);
       case "export":
         return await cmdBrainExport(rest);
+      case "okf-export":
+        return await cmdBrainOkfExport(rest);
+      case "okf-import":
+        return await cmdBrainOkfImport(rest);
       case "explorer":
         return await cmdBrainExplorer(rest);
       case "page-dedup":
@@ -333,6 +341,10 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainRecurrence(rest);
       case "attention-flows":
         return await cmdBrainAttentionFlows(rest);
+      case "obligation":
+        return await cmdBrainObligation(rest);
+      case "agenda":
+        return await cmdBrainAgenda(rest);
       case "session-grep":
         return await cmdBrainSessionGrep(rest);
       case "session-describe":

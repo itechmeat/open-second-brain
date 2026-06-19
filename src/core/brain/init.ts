@@ -20,13 +20,14 @@
  *     never a torn hybrid.
  */
 
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defaultConfigPath } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import {
+  BRAIN_BASES_REL,
   BRAIN_ROOT_REL,
   brainConfigPath,
   brainDirs,
@@ -34,7 +35,7 @@ import {
   vaultRelative,
 } from "./paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML, formatPrimaryAgentYamlValue } from "./policy.ts";
-import { renderBrainManual } from "./templates.ts";
+import { BASE_TEMPLATE_FILES, BASES_TEMPLATE_DIR, renderBrainManual } from "./templates.ts";
 
 const STARTER_TARGETS = ["preferences", "retired", "inbox", "log"] as const;
 
@@ -234,6 +235,7 @@ export function bootstrapBrain(
     dirs.preferences,
     dirs.retired,
     dirs.log,
+    dirs.bases,
     dirs.snapshots,
   ]) {
     mkdirSync(dir, { recursive: true });
@@ -271,6 +273,15 @@ export function bootstrapBrain(
     created.push(manualRel);
   }
 
+  // 4. `Brain/bases/*.base` — Obsidian Bases view definitions. Stamped
+  //    like the operating manual (always, not opt-in): they are inert
+  //    structural scaffolding, not example data. Each file is written
+  //    only when absent unless `force` is set.
+  const bases = stampBaseTemplates(vault, force);
+  created.push(...bases.created);
+  overwritten.push(...bases.overwritten);
+  skipped.push(...bases.skipped);
+
   if (opts.starter === true) {
     const starterResult = copyStarterBundle(vault, {
       starterPath: opts.starterPath,
@@ -296,4 +307,44 @@ function applyPrimaryAgentToYaml(yamlBody: string, primaryAgent: string | undefi
   if (primaryAgent === undefined) return yamlBody;
   const line = `primary_agent: ${formatPrimaryAgentYamlValue(primaryAgent)}`;
   return yamlBody.replace(/^primary_agent:.*$/m, line);
+}
+
+interface StampResult {
+  readonly created: string[];
+  readonly overwritten: string[];
+  readonly skipped: string[];
+}
+
+/**
+ * Copy the bundled Obsidian Bases view definitions into
+ * `Brain/bases/`. Each file is written only when absent; `force`
+ * overwrites. Returns the per-file create/overwrite/skip breakdown in
+ * the same vault-relative shape `bootstrapBrain` reports.
+ *
+ * The source assets ship under `src/core/brain/templates/bases/` so
+ * they travel with the published `src/` tree (the `package.json`
+ * `files` allowlist), unlike the opt-in `templates/brain-starter/`
+ * bundle.
+ */
+function stampBaseTemplates(vault: string, force: boolean): StampResult {
+  const created: string[] = [];
+  const overwritten: string[] = [];
+  const skipped: string[] = [];
+  for (const name of BASE_TEMPLATE_FILES) {
+    const body = readFileSync(join(BASES_TEMPLATE_DIR, name), "utf8");
+    const dest = join(vault, BRAIN_BASES_REL, name);
+    const rel = vaultRelative(dest, vault);
+    if (existsSync(dest)) {
+      if (force) {
+        atomicWriteFileSync(dest, body);
+        overwritten.push(rel);
+      } else {
+        skipped.push(rel);
+      }
+    } else {
+      atomicWriteFileSync(dest, body);
+      created.push(rel);
+    }
+  }
+  return { created, overwritten, skipped };
 }

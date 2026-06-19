@@ -1,0 +1,47 @@
+filters:
+  and:
+    - file.inFolder("Brain/entities/person")
+    - file.ext == "md"
+    - note.kind == "brain-entity"
+formulas:
+  days_since_update: if(updated_at, (today() - date(updated_at)).days, "")
+properties:
+  formula.days_since_update:
+    displayName: Stale (days)
+  name:
+    displayName: Name
+  role:
+    displayName: Role
+  company:
+    displayName: Company
+  status:
+    displayName: Status
+  tags:
+    displayName: Tags
+views:
+  - type: table
+    name: Active
+    filters:
+      and:
+        - status == "active"
+    order:
+      - file.basename
+      - name
+      - role
+      - company
+      - tags
+      - updated_at
+      - formula.days_since_update
+    columnSize:
+      file.basename: 180
+  - type: table
+    name: All
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.basename
+      - name
+      - role
+      - company
+      - tags

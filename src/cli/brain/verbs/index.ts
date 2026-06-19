@@ -50,6 +50,8 @@ export { cmdBrainMcpLandscape } from "./mcp-landscape.ts";
 export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";
 export { cmdBrainExport } from "./export.ts";
+export { cmdBrainOkfExport } from "./okf-export.ts";
+export { cmdBrainOkfImport } from "./okf-import.ts";
 export { cmdBrainUpgrade } from "./upgrade.ts";
 export { cmdBrainSnapshotDiff, handleBrainSnapshotSubcommand } from "./snapshot.ts";
 export { cmdBrainScanInline } from "./scan-inline.ts";
@@ -89,6 +91,8 @@ export { cmdBrainProceduralMemory } from "./procedural-memory.ts";
 export { cmdBrainProceduralGraph } from "./procedural-graph.ts";
 export { cmdBrainRecurrence } from "./recurrence.ts";
 export { cmdBrainAttentionFlows } from "./attention-flows.ts";
+export { cmdBrainObligation } from "./obligation.ts";
+export { cmdBrainAgenda } from "./agenda.ts";
 export {
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,

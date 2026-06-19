@@ -33,6 +33,7 @@ import { DERIVE_TOOLS } from "./brain/derive-tools.ts";
 import { NOTES_TOOLS } from "./brain/notes-tools.ts";
 import { SYNTHESIS_TOOLS } from "./brain/synthesis-tools.ts";
 import { GENERATION_TOOLS } from "./brain/generation-tools.ts";
+import { CALENDAR_TOOLS } from "./brain/calendar-tools.ts";
 import type { ToolDefinition } from "./tools.ts";
 
 export { vaultRelativeSafe } from "./brain/shared.ts";
@@ -61,4 +62,5 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...NOTES_TOOLS,
   ...SYNTHESIS_TOOLS,
   ...GENERATION_TOOLS,
+  ...CALENDAR_TOOLS,
 ]);

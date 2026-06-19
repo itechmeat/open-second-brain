@@ -123,6 +123,10 @@ o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts
 o2b brain refresh             --stale [--dry-run] [--json] - targeted recompile of stale derived pages; orphans archive into Brain/.snapshots (since v1.3.0)
 o2b brain anticipate          --session <id> [--refresh] [--signal <text>] [--json] - read or warm the anticipatory context cache for the session's lineage root (since v1.3.0)
 o2b brain intention           set|show|list|move [--scope S] [--text T] [--json] - scoped current-intention chains under Brain/intentions/ (since v0.37.0)
+o2b brain obligation          add|done|list|show|remove [--title T] [--cadence C] [--anchor YYYY-MM-DD] [--date YYYY-MM-DD] [--slug S] [--notes N] [--overdue] [--json] - recurring obligations under Brain/obligations/ with a deterministic cadence-driven next-due date; cadences: daily|weekly|biweekly|monthly|quarterly|yearly|every-<N>-days (since v1.15.0)
+o2b brain agenda              --events <file|-> [--focus-min N] [--owner-domain D[,D2]] [--workday-start HH:MM --workday-end HH:MM] [--json] - stateless agenda synthesis over caller-provided calendar events: overlap conflicts, free focus blocks, external-organizer flags; no vault writes (since v1.15.0)
+o2b brain okf-export          --out <dir> [--force] [--json] - write a portable Open Knowledge Format bundle (concepts/queries/references + date-grouped log.md + okf.json manifest) to a directory; read-only on the vault (since v1.15.0)
+o2b brain okf-import          <bundle-dir> [--trusted] [--json] - import an Open Knowledge Format bundle; default stages pages under OKF Review/ as review candidates, --trusted writes them to their recorded paths; foreign-producer provenance is stamped (since v1.15.0)
 ```
 
 Receipts, telemetry, transforms, and session recall import are opt-in. Receipt and telemetry records store redaction-safe payloads, source references, hashes, counters, and bounded snippets rather than raw private prompt context; session recall stores redacted turn text only when explicitly imported for later expansion.
@@ -136,7 +140,7 @@ o2b brain links               normalize [path-prefix] [--mode preserve|full|shor
 o2b brain profile             [--stale-seconds N] [--force] [--json] - materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
 o2b brain sgrep               <query> [path-prefix] [--limit N] [--keyword-only] [--json] - grep-shaped semantic search; path:line: lines; exit 1 on no matches
 o2b brain trigger             scan | list [--status S] | ack <id> | dismiss <id> | act <id> | history [--json] - grounded trigger queue; cooldown via trigger_cooldown_days (default 7)
-o2b brain deep-synthesis      <topic> [--limit N] [--triggers] [--json] - deterministic topic dossier: agreements, contradictions, stale claims, knowledge gaps
+o2b brain deep-synthesis      <topic> [--limit N] [--triggers] [--json] - deterministic topic dossier: agreements, contradictions, stale claims, knowledge gaps, plus a strongest-objection steelman
 o2b brain ideas               [--cap N] [--triggers] [--json] - ranked next-direction candidates from open questions, orphan notes, aging signals
 o2b brain recall-telemetry    gate-list | gate-summary [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json] - recall-gate decision telemetry (recall_gate_telemetry, default off)
 o2b search <query> --global   Cross-vault union over profiles + read-only sources; origin-labelled results; external vaults are never written to

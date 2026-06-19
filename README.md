@@ -6,6 +6,10 @@
 
 Open Second Brain plugs into [Hermes Agent](https://github.com/NousResearch/hermes-agent) and turns your Obsidian vault into a memory layer the agent reads and writes through deterministic CLI / MCP tools. Preferences, signals, evidence, and audit trails are real `.md` files under `Brain/` in the vault you already open in Obsidian every day. You can grep them, version them with git, search them in Obsidian, edit them by hand. No daemon, no vector black box, no hidden state outside the vault.
 
+## What is new
+
+Open Second Brain 1.15.0 adds calendar-aware obligations and agenda synthesis: recurring commitments live as first-class pages under Brain/obligations/ with a deterministic next-due date, and a stateless agenda command turns caller-provided calendar events into overlap conflicts, free focus blocks, and external-organizer flags. A portable Open Knowledge Format bundle lets you export a Brain to a directory and import it in another vault, staging untrusted pages for review or writing them directly with a trusted flag. Fresh vaults are stamped with native Obsidian Bases views over projects, people, tasks, and daily logs, and topic synthesis now surfaces a strongest-objection steelman next to its findings.
+
 ## Why
 
 - **Lives in your Obsidian vault.** Open `Brain/preferences/pref-no-internal-abbrev.md` in Obsidian and you literally see what your agent learned about you - title, status, evidence count, confidence band, body text. Wikilinks, backlinks, graph view all work.

@@ -25,8 +25,13 @@ Brain/
   preferences/         # active rules (unconfirmed or confirmed)
   retired/             # superseded / expired / rebutted / rejected rules
   log/                 # daily ledger of every state change
+  bases/               # Obsidian Bases views (projects/people/tasks/daily)
   .snapshots/          # pre-`dream` archives for rollback
 ```
+
+`bases/*.base` are native Obsidian structured views over the Brain
+collections (entities, obligations, log) — no Dataview plugin required.
+They are inert scaffolding: never hand-edit them as a data source.
 
 The directory a note sits in encodes its lifecycle state. The frontmatter
 `status` field duplicates it for convenience. `o2b brain doctor` reports

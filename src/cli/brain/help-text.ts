@@ -31,6 +31,8 @@ Brain verbs (observing memory):
   merge            Merge two near-duplicate preferences (<keep> <drop>; --dry-run, --force)
   upgrade          Migrate release-owned files forward (--dry-run by default; --apply --yes)
   export           Dump active preferences (--format json|llms-txt [--out <path>])
+  okf-export       Write a portable Open Knowledge Format bundle (--out <dir> [--force])
+  okf-import       Import an OKF bundle (<dir>; staged as review candidates, --trusted writes direct)
   explorer         Launch the loopback HTML explorer; --export <path> writes a single offline file
   snapshot diff    Read-only diff between two snapshots, or snapshot vs live
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
@@ -88,6 +90,8 @@ Brain verbs (observing memory):
   procedural-graph    Rebuild/show procedural graph and hint projections
   recurrence          Inspect and update recurrence/support diagnostics
   attention-flows     Declarative attention recipes for open loops and learnings
+  obligation          Recurring obligations with cadence-driven next-due dates
+  agenda              Synthesize agenda conflicts/focus blocks from provided events
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -410,6 +414,18 @@ export const VERB_HELP: Record<string, string> = {
     "Reconstruct the page graph from a bank bundle. Preferences, page\n" +
     "contracts, and the sources dashboard are reported as carried-not-restored;\n" +
     "an unsupported bundle schema fails loudly.\n",
+  "okf-export":
+    "usage: o2b brain okf-export --out <dir> [--vault <path>] [--force]\n" +
+    "Write a portable Open Knowledge Format bundle: concepts/, queries/,\n" +
+    "references/ markdown pages, a date-grouped log.md, and an okf.json\n" +
+    "manifest. Page class is derived from frontmatter kind:. Read-only on\n" +
+    "the vault; refuses a non-empty --out dir without --force.\n",
+  "okf-import":
+    "usage: o2b brain okf-import <bundle-dir> [--trusted] [--vault <path>]\n" +
+    "Import an OKF bundle. By default pages are staged under 'OKF Review/'\n" +
+    "with okf_review: pending (review candidates); --trusted writes each\n" +
+    "page directly to its recorded path. Foreign-producer bundles get\n" +
+    "producer + raw type provenance stamped and x-* frontmatter preserved.\n",
   "morning-brief":
     "usage: o2b brain morning-brief [--vault <path>] [--json] [--top-k <n>]\n" +
     "  [--lookback-days <n>] [--max-chars-per-memory <n>] [--max-total-chars <n>]\n" +
@@ -598,6 +614,24 @@ export const VERB_HELP: Record<string, string> = {
     "  list [--vault <path>] [--json]\n" +
     "  evaluate <flow-id> [--vault <path>] [--json]\n" +
     "  render <flow-id> [--vault <path>] [--json]\n",
+  obligation:
+    "usage: o2b brain obligation <add|done|list|show|remove> [args]\n" +
+    "Recurring obligations as Brain pages with a deterministic cadence-driven next-due date.\n" +
+    "Cadences: daily, weekly, biweekly, monthly, quarterly, yearly, every-<N>-days.\n" +
+    "  add --title <t> --cadence <c> [--anchor YYYY-MM-DD] [--notes <n>] [--vault <path>] [--json]\n" +
+    "  done --slug <s> [--date YYYY-MM-DD] [--vault <path>] [--json]\n" +
+    "  list [--overdue] [--vault <path>] [--json]\n" +
+    "  show --slug <s> [--vault <path>] [--json]\n" +
+    "  remove --slug <s> [--vault <path>] [--json]\n",
+  agenda:
+    "usage: o2b brain agenda --events <file|-> [args]\n" +
+    "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +
+    "Reports overlap conflicts, free focus blocks, and external organizers. No vault writes.\n" +
+    "  --events <file|->            event source; '-' reads stdin\n" +
+    "  --focus-min <N>              minimum free-gap minutes for a focus block (default 60)\n" +
+    "  --owner-domain <D[,D2]>      operator domain(s); organizers outside these are flagged\n" +
+    "  --workday-start HH:MM --workday-end HH:MM  clip focus blocks to a daily window\n" +
+    "  [--json]\n",
   "session-grep":
     "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--vault <path>] [--json]\n" +
     "Search imported session recall raw turns and summary nodes.\n",

@@ -51,8 +51,11 @@ export const BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(BRAIN_SKILL_PROPOSA
 export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
 export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
 export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
+export const BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
+/** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
+export const BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
 /** Ingested source summary pages: `Brain/sources/src-<slug>.md` (v1.7.0). */
 export const BRAIN_SOURCES_REL = posix.join(BRAIN_ROOT_REL, "sources");
 /** Cited research report pages: `Brain/reports/<date>-<slug>.md` (v1.7.0). */
@@ -94,6 +97,8 @@ export interface BrainDirs {
   readonly log: string;
   /** Canonical entity registry root: `Brain/entities/<category>/`. */
   readonly entities: string;
+  /** Obsidian Bases view definitions: `Brain/bases/<view>.base`. */
+  readonly bases: string;
   /** Pre-`dream` archive directory. Never recursed into by `dream`. */
   readonly snapshots: string;
 }
@@ -113,6 +118,7 @@ export function brainDirs(vault: string): BrainDirs {
     retired: ensureInsideVault(join(vault, BRAIN_RETIRED_REL), vault),
     log: ensureInsideVault(join(vault, BRAIN_LOG_REL), vault),
     entities: ensureInsideVault(join(vault, BRAIN_ENTITIES_REL), vault),
+    bases: ensureInsideVault(join(vault, BRAIN_BASES_REL), vault),
     snapshots: ensureInsideVault(join(vault, BRAIN_SNAPSHOTS_REL), vault),
   };
 }
@@ -238,6 +244,21 @@ export function proceduralHintsPath(vault: string): string {
 /** Declarative attention-flows directory: `Brain/attention/flows/`. */
 export function attentionFlowsDir(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_ATTENTION_REL, "flows"), vault);
+}
+
+/** Recurring-obligation pages dir: `Brain/obligations/`. */
+export function obligationsDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_OBLIGATIONS_REL), vault);
+}
+
+/** Retired-obligation archive dir: `Brain/obligations/archive/`. */
+export function obligationsArchiveDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_OBLIGATIONS_REL, "archive"), vault);
+}
+
+/** A single obligation page: `Brain/obligations/<slug>.md`. */
+export function obligationPath(vault: string, slug: string): string {
+  return ensureInsideVault(join(vault, BRAIN_OBLIGATIONS_REL, `${slug}.md`), vault);
 }
 
 /** Proposal scan watermark path: `Brain/procedural-memory/proposal-watermark.json`. */

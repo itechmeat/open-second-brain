@@ -43,11 +43,16 @@ test("returns the dossier and optionally enqueues triggers", async () => {
     checked: string[];
     contradictions: Array<{ target: string }>;
     gaps: Array<{ target: string }>;
+    strongest_objection: { basis: string; statement: string; source_artifacts: string[] } | null;
     triggers_created: number;
   };
   expect(report.checked).toContain("knowledge_gaps");
+  expect(report.checked).toContain("strongest_objection");
   expect(report.contradictions[0]!.target).toBe("counter");
   expect(report.gaps[0]!.target).toBe("lost-note");
+  expect(report.strongest_objection).not.toBeNull();
+  expect(report.strongest_objection!.basis).toBe("contradiction");
+  expect(report.strongest_objection!.source_artifacts).toContain("[[counter]]");
   expect(report.triggers_created).toBeGreaterThanOrEqual(2);
   expect(listTriggers(vault, { now: new Date() }).length).toBe(report.triggers_created);
 });

@@ -1,0 +1,21 @@
+filters:
+  and:
+    - file.inFolder("Brain/log")
+    - file.ext == "md"
+    - note.kind == "brain-log"
+properties:
+  date:
+    displayName: Date
+  tags:
+    displayName: Tags
+views:
+  - type: table
+    name: Recent
+    order:
+      - date
+      - file.basename
+    direction: DESC
+    columnSize:
+      file.basename: 140
+  - type: calendar
+    name: Calendar

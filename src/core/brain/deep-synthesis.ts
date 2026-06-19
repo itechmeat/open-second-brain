@@ -64,6 +64,22 @@ export interface SynthesisContamination {
   readonly sources: ReadonlyArray<string>;
 }
 
+/**
+ * The single best-formed objection to the dossier's implicit
+ * conclusion (that the matched notes form a coherent, current body of
+ * knowledge on the topic). This is NOT generated prose — core stays
+ * deterministic — but the strongest counter-finding selected by a fixed
+ * priority and framed as a steelman seed for the calling agent to
+ * develop. `basis` records which finding class grounds it; `null` is
+ * returned only when no counter-finding exists and the body is large
+ * enough that thin evidence is not itself an objection.
+ */
+export interface SynthesisObjection {
+  readonly basis: "contradiction" | "superseded" | "stale" | "knowledge_gap" | "thin_evidence";
+  readonly statement: string;
+  readonly sourceArtifacts: ReadonlyArray<string>;
+}
+
 export interface DeepSynthesisReport {
   readonly topic: string;
   readonly generatedAt: string;
@@ -82,6 +98,12 @@ export interface DeepSynthesisReport {
    * so registry-free vaults stay byte-identical.
    */
   readonly contaminated: ReadonlyArray<SynthesisContamination>;
+  /**
+   * The strongest objection to the dossier's implicit conclusion, or
+   * `null` when none could be constructed. Always among the `checked`
+   * dimensions.
+   */
+  readonly strongestObjection: SynthesisObjection | null;
 }
 
 export interface DeepSynthesisOptions {
@@ -98,10 +120,77 @@ const CHECKED = Object.freeze([
   "contradictions",
   "stale_claims",
   "knowledge_gaps",
+  "strongest_objection",
 ]);
+
+/** A body of this many matched notes or fewer is itself an objection. */
+const THIN_EVIDENCE_MAX = 1;
 
 function stripMd(path: string): string {
   return path.endsWith(".md") ? path.slice(0, -".md".length) : path;
+}
+
+/**
+ * Select the single strongest counter-finding and frame it as a
+ * steelman seed. Deterministic: a direct contradiction is the sharpest
+ * objection, then a superseded claim, then the oldest aged claim, then
+ * a missing load-bearing note. With no counter-finding, a one-note body
+ * is itself the objection (too thin to trust); a larger consistent body
+ * yields `null`, and an empty topic has nothing to object to.
+ */
+function buildStrongestObjection(params: {
+  readonly notePaths: ReadonlyArray<string>;
+  readonly contradictions: ReadonlyArray<SynthesisContradiction>;
+  readonly staleClaims: ReadonlyArray<SynthesisStaleClaim>;
+  readonly gaps: ReadonlyArray<SynthesisGap>;
+}): SynthesisObjection | null {
+  const { notePaths, contradictions, staleClaims, gaps } = params;
+
+  if (contradictions.length > 0) {
+    const c = contradictions[0]!;
+    return Object.freeze({
+      basis: "contradiction" as const,
+      statement: `The strongest case against this synthesis: \`${c.path}\` explicitly contradicts \`${c.target}\`. If that counter-note holds, the topic's consensus does not.`,
+      sourceArtifacts: Object.freeze([c.path, `[[${c.target}]]`]),
+    });
+  }
+
+  const superseded = staleClaims.find((s) => s.supersededBy !== null);
+  if (superseded !== undefined) {
+    return Object.freeze({
+      basis: "superseded" as const,
+      statement: `The strongest case against this synthesis: \`${superseded.path}\` has been superseded by \`${superseded.supersededBy}\`, so any conclusion resting on it may already be obsolete.`,
+      sourceArtifacts: Object.freeze([superseded.path, `[[${superseded.supersededBy}]]`]),
+    });
+  }
+
+  if (staleClaims.length > 0) {
+    const oldest = staleClaims.reduce((a, b) => (b.ageDays > a.ageDays ? b : a));
+    return Object.freeze({
+      basis: "stale" as const,
+      statement: `The strongest case against this synthesis: \`${oldest.path}\` is ${oldest.ageDays} days old with no recent corroboration; its claims may no longer hold.`,
+      sourceArtifacts: Object.freeze([oldest.path]),
+    });
+  }
+
+  if (gaps.length > 0) {
+    const g = gaps[0]!;
+    return Object.freeze({
+      basis: "knowledge_gap" as const,
+      statement: `The strongest case against this synthesis: it leans on \`[[${g.target}]]\`, a referenced note that does not exist, leaving a load-bearing claim unverified.`,
+      sourceArtifacts: Object.freeze([...g.sources]),
+    });
+  }
+
+  if (notePaths.length >= 1 && notePaths.length <= THIN_EVIDENCE_MAX) {
+    return Object.freeze({
+      basis: "thin_evidence" as const,
+      statement: `The strongest case against this synthesis: it rests on a single matched note — too little evidence to treat the conclusion as settled.`,
+      sourceArtifacts: Object.freeze([...notePaths]),
+    });
+  }
+
+  return null;
 }
 
 export async function deepSynthesis(
@@ -265,6 +354,21 @@ export async function deepSynthesis(
     return a.entity < b.entity ? -1 : a.entity > b.entity ? 1 : 0;
   });
 
+  const gaps: ReadonlyArray<SynthesisGap> = Object.freeze(
+    [...gapSources.entries()]
+      .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([target, sources]) =>
+        Object.freeze({ target, sources: Object.freeze([...sources].toSorted()) }),
+      ),
+  );
+
+  const strongestObjection = buildStrongestObjection({
+    notePaths: matched.map((note) => note.path),
+    contradictions,
+    staleClaims,
+    gaps,
+  });
+
   return Object.freeze({
     topic,
     generatedAt: opts.now.toISOString(),
@@ -278,14 +382,9 @@ export async function deepSynthesis(
     agreements: Object.freeze(agreements),
     contradictions: Object.freeze(contradictions),
     staleClaims: Object.freeze(staleClaims),
-    gaps: Object.freeze(
-      [...gapSources.entries()]
-        .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-        .map(([target, sources]) =>
-          Object.freeze({ target, sources: Object.freeze([...sources].toSorted()) }),
-        ),
-    ),
+    gaps,
     contaminated: Object.freeze(contaminated),
+    strongestObjection,
   });
 }
 
