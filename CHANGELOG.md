@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-06-19
+
+### Added
+
+- **Calendar-aware obligations and agenda synthesis.** Two deterministic,
+  vault-native surfaces inspired by the obsidian-second-brain calendar
+  commands, built to Open Second Brain's contract: the kernel never
+  reaches a calendar API or calls a model - the host runtime (e.g. the
+  google-workspace skill) fetches events and the Brain owns the durable,
+  deterministic record and analysis.
+  - **Recurring obligations (`brain_obligation`, `o2b brain obligation`).**
+    First-class Brain pages under `Brain/obligations/<slug>.md` tracking a
+    periodic commitment (weekly review, monthly report, quarterly audit)
+    with a cadence and a deterministically computed `next_due` date.
+    `add` creates the page (next-due starts at the anchor), `done` records
+    a completion and advances next-due by exactly one cadence interval from
+    the completion date, `list` (optionally `--overdue`) sorts by next-due
+    with an overdue flag and days-until-due, `show` reads one, `remove`
+    archives into `Brain/obligations/archive/`. Cadences: `daily`,
+    `weekly`, `biweekly`, `monthly`, `quarterly`, `yearly`, and
+    `every-<N>-days`; month-based cadences clamp to the last day of short
+    months (Jan 31 + 1 month -> Feb 28/29). Markdown-first and operator
+    readable in Obsidian; cadence arithmetic is pure UTC calendar math, so
+    the same inputs always yield the same next-due date.
+  - **Agenda synthesis (`brain_agenda`, `o2b brain agenda`).** A stateless
+    analysis over caller-provided calendar events (a JSON array, or piped
+    on stdin for the CLI): overlap **conflicts** between events, free
+    **focus blocks** (the gaps a scheduler would slot work into, optionally
+    clipped to a `--workday-start`/`--workday-end` window), and
+    **external-organizer** flags for events organised outside the
+    operator's own email domain(s). Pure function of its input - no vault
+    writes, no clock, no model - so a given event list always yields the
+    same snapshot.
+  - **MCP surface.** Adds `brain_agenda` and `brain_obligation` to the
+    frozen tool set; both carry input schemas and the deliberate
+    surface-change is pinned in the parity guard.
+
 ## [1.14.0] - 2026-06-18
 
 ### Added
@@ -5659,6 +5696,7 @@ plugin config (vault field)`, and exits with a clear
 - GitHub release workflow for tag-based and manually dispatched releases.
 
 [Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v1.14.0...HEAD
+[1.15.0]: https://github.com/itechmeat/open-second-brain/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/itechmeat/open-second-brain/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/itechmeat/open-second-brain/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/itechmeat/open-second-brain/compare/v1.11.0...v1.12.0

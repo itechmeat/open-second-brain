@@ -51,6 +51,7 @@ export const BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(BRAIN_SKILL_PROPOSA
 export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
 export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
 export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
+export const BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
 /** Ingested source summary pages: `Brain/sources/src-<slug>.md` (v1.7.0). */
@@ -238,6 +239,21 @@ export function proceduralHintsPath(vault: string): string {
 /** Declarative attention-flows directory: `Brain/attention/flows/`. */
 export function attentionFlowsDir(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_ATTENTION_REL, "flows"), vault);
+}
+
+/** Recurring-obligation pages dir: `Brain/obligations/`. */
+export function obligationsDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_OBLIGATIONS_REL), vault);
+}
+
+/** Retired-obligation archive dir: `Brain/obligations/archive/`. */
+export function obligationsArchiveDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_OBLIGATIONS_REL, "archive"), vault);
+}
+
+/** A single obligation page: `Brain/obligations/<slug>.md`. */
+export function obligationPath(vault: string, slug: string): string {
+  return ensureInsideVault(join(vault, BRAIN_OBLIGATIONS_REL, `${slug}.md`), vault);
 }
 
 /** Proposal scan watermark path: `Brain/procedural-memory/proposal-watermark.json`. */

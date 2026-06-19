@@ -88,6 +88,8 @@ Brain verbs (observing memory):
   procedural-graph    Rebuild/show procedural graph and hint projections
   recurrence          Inspect and update recurrence/support diagnostics
   attention-flows     Declarative attention recipes for open loops and learnings
+  obligation          Recurring obligations with cadence-driven next-due dates
+  agenda              Synthesize agenda conflicts/focus blocks from provided events
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -598,6 +600,24 @@ export const VERB_HELP: Record<string, string> = {
     "  list [--vault <path>] [--json]\n" +
     "  evaluate <flow-id> [--vault <path>] [--json]\n" +
     "  render <flow-id> [--vault <path>] [--json]\n",
+  obligation:
+    "usage: o2b brain obligation <add|done|list|show|remove> [args]\n" +
+    "Recurring obligations as Brain pages with a deterministic cadence-driven next-due date.\n" +
+    "Cadences: daily, weekly, biweekly, monthly, quarterly, yearly, every-<N>-days.\n" +
+    "  add --title <t> --cadence <c> [--anchor YYYY-MM-DD] [--notes <n>] [--vault <path>] [--json]\n" +
+    "  done --slug <s> [--date YYYY-MM-DD] [--vault <path>] [--json]\n" +
+    "  list [--overdue] [--vault <path>] [--json]\n" +
+    "  show --slug <s> [--vault <path>] [--json]\n" +
+    "  remove --slug <s> [--vault <path>] [--json]\n",
+  agenda:
+    "usage: o2b brain agenda --events <file|-> [args]\n" +
+    "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +
+    "Reports overlap conflicts, free focus blocks, and external organizers. No vault writes.\n" +
+    "  --events <file|->            event source; '-' reads stdin\n" +
+    "  --focus-min <N>              minimum free-gap minutes for a focus block (default 60)\n" +
+    "  --owner-domain <D[,D2]>      operator domain(s); organizers outside these are flagged\n" +
+    "  --workday-start HH:MM --workday-end HH:MM  clip focus blocks to a daily window\n" +
+    "  [--json]\n",
   "session-grep":
     "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--vault <path>] [--json]\n" +
     "Search imported session recall raw turns and summary nodes.\n",

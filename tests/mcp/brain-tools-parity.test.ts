@@ -14,7 +14,10 @@
  * suite); the codegraph-and-MCP operational-readability release added
  * `brain_codegraph_report` (read-only codegraph partner report); the
  * Hindsight brain-loop ops release added `brain_generation_reports`
- * (inbound, opt-in LLM generation tracing).
+ * (inbound, opt-in LLM generation tracing); the calendar-integration
+ * release added `brain_agenda` (deterministic agenda synthesis over
+ * caller-provided events) and `brain_obligation` (recurring obligations
+ * with a cadence-driven next-due date).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -22,6 +25,7 @@ import { describe, expect, test } from "bun:test";
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
 
 const FROZEN_BRAIN_TOOL_NAMES = [
+  "brain_agenda",
   "brain_agent_diff",
   "brain_agent_query",
   "brain_analytics",
@@ -62,6 +66,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_moc_audit",
   "brain_note",
   "brain_note_history",
+  "brain_obligation",
   "brain_pinned_context",
   "brain_pre_compact_extract",
   "brain_pre_compress_pack",

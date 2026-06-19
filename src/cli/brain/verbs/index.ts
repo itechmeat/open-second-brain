@@ -89,6 +89,8 @@ export { cmdBrainProceduralMemory } from "./procedural-memory.ts";
 export { cmdBrainProceduralGraph } from "./procedural-graph.ts";
 export { cmdBrainRecurrence } from "./recurrence.ts";
 export { cmdBrainAttentionFlows } from "./attention-flows.ts";
+export { cmdBrainObligation } from "./obligation.ts";
+export { cmdBrainAgenda } from "./agenda.ts";
 export {
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,
