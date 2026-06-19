@@ -88,11 +88,23 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
                 self._bridge.stop()
             except Exception:  # noqa: BLE001
                 pass
-        self._bridge = self._bridge_override or McpBrainBridge(vault=config.resolve_vault())
+        self._bridge = self._bridge_override or McpBrainBridge(
+            vault=config.resolve_vault(),
+            repo_root=self._repo_root(),
+        )
         try:
             self._bridge.start()
         except Exception:  # noqa: BLE001 - degrade to inert; tool calls surface errors
             pass
+
+    @staticmethod
+    def _repo_root() -> str | None:
+        """Plugin checkout root that ships ``skills/`` (provider lives at
+        ``<root>/plugins/hermes/provider.py``). Passed as ``--repo`` so the TS
+        core's ``repoRoot`` resolves and in-repo skills become discoverable;
+        without it ``skill_auto_attach`` returns an empty list."""
+        root = Path(__file__).resolve().parents[2]
+        return str(root) if (root / "skills").is_dir() else None
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         """Return the memory-relevant subset of the server's advertised tools.
