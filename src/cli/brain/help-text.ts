@@ -31,6 +31,8 @@ Brain verbs (observing memory):
   merge            Merge two near-duplicate preferences (<keep> <drop>; --dry-run, --force)
   upgrade          Migrate release-owned files forward (--dry-run by default; --apply --yes)
   export           Dump active preferences (--format json|llms-txt [--out <path>])
+  okf-export       Write a portable Open Knowledge Format bundle (--out <dir> [--force])
+  okf-import       Import an OKF bundle (<dir>; staged as review candidates, --trusted writes direct)
   explorer         Launch the loopback HTML explorer; --export <path> writes a single offline file
   snapshot diff    Read-only diff between two snapshots, or snapshot vs live
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
@@ -412,6 +414,18 @@ export const VERB_HELP: Record<string, string> = {
     "Reconstruct the page graph from a bank bundle. Preferences, page\n" +
     "contracts, and the sources dashboard are reported as carried-not-restored;\n" +
     "an unsupported bundle schema fails loudly.\n",
+  "okf-export":
+    "usage: o2b brain okf-export --out <dir> [--vault <path>] [--force]\n" +
+    "Write a portable Open Knowledge Format bundle: concepts/, queries/,\n" +
+    "references/ markdown pages, a date-grouped log.md, and an okf.json\n" +
+    "manifest. Page class is derived from frontmatter kind:. Read-only on\n" +
+    "the vault; refuses a non-empty --out dir without --force.\n",
+  "okf-import":
+    "usage: o2b brain okf-import <bundle-dir> [--trusted] [--vault <path>]\n" +
+    "Import an OKF bundle. By default pages are staged under 'OKF Review/'\n" +
+    "with okf_review: pending (review candidates); --trusted writes each\n" +
+    "page directly to its recorded path. Foreign-producer bundles get\n" +
+    "producer + raw type provenance stamped and x-* frontmatter preserved.\n",
   "morning-brief":
     "usage: o2b brain morning-brief [--vault <path>] [--json] [--top-k <n>]\n" +
     "  [--lookback-days <n>] [--max-chars-per-memory <n>] [--max-total-chars <n>]\n" +

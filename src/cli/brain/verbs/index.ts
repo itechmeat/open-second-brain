@@ -50,6 +50,8 @@ export { cmdBrainMcpLandscape } from "./mcp-landscape.ts";
 export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";
 export { cmdBrainExport } from "./export.ts";
+export { cmdBrainOkfExport } from "./okf-export.ts";
+export { cmdBrainOkfImport } from "./okf-import.ts";
 export { cmdBrainUpgrade } from "./upgrade.ts";
 export { cmdBrainSnapshotDiff, handleBrainSnapshotSubcommand } from "./snapshot.ts";
 export { cmdBrainScanInline } from "./scan-inline.ts";
