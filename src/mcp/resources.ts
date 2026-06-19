@@ -114,7 +114,7 @@ const TEMPLATES: ReadonlyArray<ResourceTemplateDescriptor> = [
     uriTemplate: "osb://topic/{slug}",
     name: "Brain topic summary",
     description:
-      "Markdown synthesis of every signal (active + processed), the current preference (or retired), and the most recent log mentions for the topic slug.",
+      "Markdown synthesis of every signal (active + processed), the current preference (or retired), the most recent log mentions, and a deterministic 'Strongest objection' steelman against the current preference for the topic slug.",
     mimeType: MIME_MARKDOWN,
   },
   {
@@ -463,6 +463,50 @@ function renderTopicMarkdown(slug: string, result: ReturnType<typeof queryByTopi
     }
     lines.push("");
   }
+  // Steelman: always surface the single best-formed objection to the
+  // topic's implicit conclusion (the current preference) so a reader
+  // confronts the strongest dissent before acting. Deterministic
+  // selection — no generated prose — kept consistent with the
+  // deep-synthesis dossier.
+  lines.push("## Strongest objection");
+  lines.push("");
+  lines.push(`- ${buildTopicObjection(result)}`);
+  lines.push("");
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines.join("\n") + "\n";
+}
+
+/**
+ * The single best-formed reason to distrust the topic's current
+ * preference, by fixed priority: an already-retired rule > a
+ * quarantined rule > a recorded negative counter-signal > an
+ * unconfirmed rule still in its trial window. Returns a "no standing
+ * objection" line when none applies.
+ */
+function buildTopicObjection(result: ReturnType<typeof queryByTopic>): string {
+  const pref = result.preference;
+  if (pref && pref.id.startsWith("ret-")) {
+    const r = pref as BrainRetired;
+    return `This rule was already retired (\`${r.retired_reason}\`); adopting "${r.principle}" again would repeat a judgment the Brain has discarded.`;
+  }
+  if (pref) {
+    const p = pref as BrainPreference;
+    if (p.status === "quarantine") {
+      return `The rule "${p.principle}" is on probation — recent evidence has been dominantly negative, and a single further violation retires it.`;
+    }
+  }
+  const negatives = result.signals
+    .filter((s) => s.signal === "negative")
+    .toSorted((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+  if (negatives.length > 0) {
+    const n = negatives[0]!;
+    return `A recorded counter-signal (\`${n.id}\`) argues against this: "${n.principle}". Treat the preference as contested.`;
+  }
+  if (pref) {
+    const p = pref as BrainPreference;
+    if (p.status === "unconfirmed") {
+      return `The rule "${p.principle}" is unconfirmed — it has not yet earned applied evidence and may not survive its trial window (until ${p.unconfirmed_until.slice(0, 10)}).`;
+    }
+  }
+  return "No standing objection: the current preference is confirmed and faces no recorded counter-signal.";
 }

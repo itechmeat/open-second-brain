@@ -303,6 +303,12 @@ describe("MCP resources — read osb://topic/{slug}", () => {
     expect(text).toContain("# Brain topic: tidy");
     expect(text).toContain("pref-tidy");
     expect(text).toContain("sig-2026-05-14-first");
+    // The steelman section is always present; here a negative signal
+    // exists, so it grounds the objection rather than the unconfirmed
+    // status.
+    expect(text).toContain("## Strongest objection");
+    expect(text).toContain("sig-2026-05-14-first");
+    expect(text).toContain("contested");
   });
 });
 

@@ -54,6 +54,8 @@ export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
 export const BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
+/** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
+export const BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
 /** Ingested source summary pages: `Brain/sources/src-<slug>.md` (v1.7.0). */
 export const BRAIN_SOURCES_REL = posix.join(BRAIN_ROOT_REL, "sources");
 /** Cited research report pages: `Brain/reports/<date>-<slug>.md` (v1.7.0). */
@@ -95,6 +97,8 @@ export interface BrainDirs {
   readonly log: string;
   /** Canonical entity registry root: `Brain/entities/<category>/`. */
   readonly entities: string;
+  /** Obsidian Bases view definitions: `Brain/bases/<view>.base`. */
+  readonly bases: string;
   /** Pre-`dream` archive directory. Never recursed into by `dream`. */
   readonly snapshots: string;
 }
@@ -114,6 +118,7 @@ export function brainDirs(vault: string): BrainDirs {
     retired: ensureInsideVault(join(vault, BRAIN_RETIRED_REL), vault),
     log: ensureInsideVault(join(vault, BRAIN_LOG_REL), vault),
     entities: ensureInsideVault(join(vault, BRAIN_ENTITIES_REL), vault),
+    bases: ensureInsideVault(join(vault, BRAIN_BASES_REL), vault),
     snapshots: ensureInsideVault(join(vault, BRAIN_SNAPSHOTS_REL), vault),
   };
 }

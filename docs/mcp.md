@@ -158,8 +158,10 @@ Four templated URIs come back from `resources/templates/list`:
   `ret-{id}.md` when the active copy is gone. Accepts the bare slug
   (`my-rule`) or the prefixed form (`pref-my-rule` / `ret-my-rule`).
 - `osb://topic/{slug}` — synthesised markdown of every signal, the
-  current preference (or retired), and the most recent log entries
-  for the topic.
+  current preference (or retired), the most recent log entries, and a
+  deterministic **Strongest objection** steelman against the current
+  preference (a retired/quarantined rule, a recorded negative
+  counter-signal, or an unconfirmed-trial caveat) for the topic.
 - `osb://log/{date}` — body of `Brain/log/<date>.md` (date is
   `YYYY-MM-DD`).
 - `osb://backlinks/{id}` — inbound references to the given Brain
@@ -276,7 +278,12 @@ triggers and marks them delivered (once per `trigger_cooldown_days`).
 
 `brain_deep_synthesis` assembles a deterministic topic dossier
 (matched notes, agreements, contradictions, stale claims, knowledge
-gaps; `triggers: true` enqueues findings). `brain_idea_discovery`
+gaps; `triggers: true` enqueues findings). It also returns a
+`strongest_objection` — the single best-formed counter-finding
+(`basis`: contradiction → superseded → stale → knowledge_gap →
+thin_evidence) framed as a steelman seed against the dossier's implicit
+conclusion, or `null` for a larger internally-consistent body.
+`brain_idea_discovery`
 ranks next-direction candidates from open questions, orphan notes, and
 aging inbox signals.
 

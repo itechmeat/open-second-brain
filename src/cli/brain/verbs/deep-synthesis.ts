@@ -63,6 +63,13 @@ export async function cmdBrainDeepSynthesis(argv: string[]): Promise<number> {
         })),
         gaps: report.gaps,
         contaminated: report.contaminated,
+        strongest_objection: report.strongestObjection
+          ? {
+              basis: report.strongestObjection.basis,
+              statement: report.strongestObjection.statement,
+              source_artifacts: report.strongestObjection.sourceArtifacts,
+            }
+          : null,
         ...(flags["triggers"] === true ? { triggers_created: enqueued } : {}),
       });
       return 0;
@@ -82,6 +89,11 @@ export async function cmdBrainDeepSynthesis(argv: string[]): Promise<number> {
       );
     }
     for (const g of report.gaps) ok(`[gap] ${g.target} <- ${g.sources.join(", ")}`);
+    if (report.strongestObjection !== null) {
+      ok(`[objection:${report.strongestObjection.basis}] ${report.strongestObjection.statement}`);
+    } else {
+      ok("[objection] none — body is internally consistent, current, and complete");
+    }
     if (flags["triggers"] === true) ok(`triggers created: ${enqueued}`);
     return 0;
   } catch (err) {

@@ -74,6 +74,7 @@ test("the dossier reports notes, agreements, contradictions, stale claims, and g
     "contradictions",
     "stale_claims",
     "knowledge_gaps",
+    "strongest_objection",
   ]);
   expect(report.notes.length).toBeGreaterThanOrEqual(3);
 
@@ -88,6 +89,24 @@ test("the dossier reports notes, agreements, contradictions, stale claims, and g
   expect(report.gaps).toHaveLength(1);
   expect(report.gaps[0]!.target).toBe("missing-study");
   expect(report.gaps[0]!.sources).toContain("Brain/notes/claim.md");
+
+  // A direct contradiction is the sharpest objection and wins the
+  // priority order over the stale claim and the knowledge gap.
+  expect(report.strongestObjection).not.toBeNull();
+  expect(report.strongestObjection!.basis).toBe("contradiction");
+  expect(report.strongestObjection!.statement).toContain("Brain/notes/claim.md");
+  expect(report.strongestObjection!.statement).toContain("counter");
+  expect(report.strongestObjection!.sourceArtifacts).toContain("[[counter]]");
+});
+
+test("a stale topic with no contradiction objects on staleness", async () => {
+  // "ancient" only matches the aged note — no contradiction, no gap —
+  // so the objection falls through to the stale-claim basis.
+  const report = await deepSynthesis(makeConfig({ vault, dbPath }), "taxonomy", { now: NOW });
+  expect(report.contradictions).toHaveLength(0);
+  expect(report.strongestObjection).not.toBeNull();
+  expect(report.strongestObjection!.basis).toBe("stale");
+  expect(report.strongestObjection!.sourceArtifacts).toContain("Brain/notes/ancient.md");
 });
 
 test("an empty topic yields an empty but interpretable dossier", async () => {
@@ -95,7 +114,9 @@ test("an empty topic yields an empty but interpretable dossier", async () => {
   expect(report.notes).toHaveLength(0);
   expect(report.contradictions).toHaveLength(0);
   expect(report.gaps).toHaveLength(0);
-  expect(report.checked).toHaveLength(5);
+  expect(report.checked).toHaveLength(6);
+  // No notes means there is nothing to object to.
+  expect(report.strongestObjection).toBeNull();
 });
 
 test("contradiction and gap findings convert to trigger candidates", async () => {
