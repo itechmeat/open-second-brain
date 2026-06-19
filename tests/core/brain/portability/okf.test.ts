@@ -318,4 +318,29 @@ describe("writeOkfBundle", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("rejects bundle file paths that escape the output directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-escape-write-"));
+    const outside = mkdtempSync(join(tmpdir(), "o2b-okf-outside-"));
+    try {
+      const outsideName = outside.split("/").pop()!;
+      const bundle = {
+        manifest: {
+          schema: OKF_SCHEMA_VERSION,
+          producer: OKF_PRODUCER,
+          generated_at: "2026-06-01T00:00:00Z",
+          vault_basename: "Vault",
+          pages: [],
+          log_days: 0,
+        },
+        files: [{ path: `../${outsideName}/pwned.md`, contents: "nope\n" }],
+      };
+
+      expect(() => writeOkfBundle(dir, bundle)).toThrow(/path escapes vault/);
+      expect(existsSync(join(outside, "pwned.md"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });

@@ -173,3 +173,26 @@ test("rejects an unparseable anchor date", () => {
     }),
   ).toThrow(ObligationError);
 });
+
+test("rejects overflow calendar dates instead of normalizing them", () => {
+  expect(() =>
+    addObligation(vault, {
+      title: "Impossible Anchor",
+      cadence: "weekly",
+      agent: "a",
+      anchor: "2026-02-31",
+      now: NOW,
+    }),
+  ).toThrow(ObligationError);
+
+  addObligation(vault, {
+    title: "Possible Anchor",
+    cadence: "weekly",
+    agent: "a",
+    anchor: "2026-02-28",
+    now: NOW,
+  });
+  expect(() => completeObligation(vault, { slug: "possible-anchor", date: "2026-04-31" })).toThrow(
+    ObligationError,
+  );
+});

@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { slugify } from "../vault.ts";
 import { parseFrontmatter } from "../vault.ts";
-import { obligationPath, obligationsArchiveDir, obligationsDir } from "./paths.ts";
+import { obligationPath, obligationsArchiveDir, obligationsDir, validateIsoDate } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";
 
 /**
@@ -118,11 +118,9 @@ export function parseCadence(raw: string): ObligationCadence {
 }
 
 function requireIsoDate(value: string, label: string): string {
-  if (!ISO_DATE_RE.test(value)) {
-    throw new ObligationError(`${label} must be a YYYY-MM-DD date: ${JSON.stringify(value)}`);
-  }
-  const ms = Date.parse(`${value}T00:00:00Z`);
-  if (Number.isNaN(ms)) {
+  try {
+    validateIsoDate(value);
+  } catch {
     throw new ObligationError(`${label} is not a valid calendar date: ${JSON.stringify(value)}`);
   }
   return value;

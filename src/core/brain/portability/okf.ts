@@ -41,7 +41,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, posix, relative } from "node:path";
+import { dirname, join, posix, relative, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import {
@@ -431,7 +431,7 @@ export function writeOkfBundle(
     }
   }
   for (const file of bundle.files) {
-    const abs = join(dir, file.path);
+    const abs = ensureInsideVault(resolve(dir, file.path), dir);
     mkdirSync(dirname(abs), { recursive: true });
     atomicWriteFileSync(abs, file.contents);
   }
