@@ -632,6 +632,27 @@ class McpBrainBridgeTests(unittest.TestCase):
         self.assertIn("--vault", captured["argv"])
         self.assertIn("/my/vault", captured["argv"])
 
+    def test_argv_includes_repo_root(self):
+        captured = {}
+
+        def spy(argv):
+            captured["argv"] = argv
+            return _FakeProcess(self._handshake_frames())
+
+        McpBrainBridge(vault="/v", repo_root="/my/repo", spawn=spy).start()
+        self.assertIn("--repo", captured["argv"])
+        self.assertIn("/my/repo", captured["argv"])
+
+    def test_argv_omits_repo_when_unset(self):
+        captured = {}
+
+        def spy(argv):
+            captured["argv"] = argv
+            return _FakeProcess(self._handshake_frames())
+
+        McpBrainBridge(vault="/v", spawn=spy).start()
+        self.assertNotIn("--repo", captured["argv"])
+
     def test_stop_terminates_process(self):
         proc = _FakeProcess(self._handshake_frames())
         bridge = McpBrainBridge(vault="/v", spawn=lambda argv: proc)

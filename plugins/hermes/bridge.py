@@ -129,11 +129,13 @@ class McpBrainBridge:
         self,
         *,
         vault: str | None,
+        repo_root: str | None = None,
         command: tuple[str, ...] = ("o2b", "mcp"),
         spawn: Any = None,
         cwd: str | None = None,
     ) -> None:
         self._vault = vault
+        self._repo_root = repo_root
         self._command = command
         self._spawn = spawn or self._default_spawn
         self._cwd = cwd
@@ -146,6 +148,11 @@ class McpBrainBridge:
         argv = list(self._command)
         if self._vault:
             argv += ["--vault", self._vault]
+        # Without --repo the server's repoRoot is null, so skill discovery
+        # only searches <vault>/Brain/skills and never the in-repo skills/
+        # directory - which silently empties skill_auto_attach.
+        if self._repo_root:
+            argv += ["--repo", self._repo_root]
         return argv
 
     def _default_spawn(self, argv: list[str]) -> Any:
