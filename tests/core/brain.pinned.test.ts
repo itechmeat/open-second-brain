@@ -67,6 +67,52 @@ describe("pinned context core", () => {
   });
 });
 
+describe("pinned context single-op budget honesty", () => {
+  test("write rejects over-budget content with a structured signal and no write", () => {
+    const huge = "x".repeat(MAX_PINNED_CONTEXT_LEN + 100);
+
+    let captured: PinnedBatchError | undefined;
+    try {
+      writePinnedContext(vault, huge);
+    } catch (err) {
+      captured = err as PinnedBatchError;
+    }
+    expect(captured).toBeInstanceOf(PinnedBatchError);
+    expect(captured?.code).toBe("budget_exceeded");
+    expect(captured?.details["budget"]).toBe(MAX_PINNED_CONTEXT_LEN);
+    expect(captured?.details["length"]).toBe(huge.length);
+    expect(captured?.details["operation"]).toBe("write");
+    // No silent truncated success: nothing was persisted.
+    expect(existsSync(brainPinnedPath(vault))).toBe(false);
+    expect(readPinnedContext(vault).content).toBe("");
+  });
+
+  test("write at exactly the budget still succeeds", () => {
+    const exact = "y".repeat(MAX_PINNED_CONTEXT_LEN);
+    const pinned = writePinnedContext(vault, exact);
+    expect(pinned.content).toBe(exact);
+    expect(pinned.content.length).toBe(MAX_PINNED_CONTEXT_LEN);
+  });
+
+  test("append rejects when the combined result would exceed budget, leaving the file unchanged", () => {
+    writePinnedContext(vault, "seed");
+    const before = readFileSync(brainPinnedPath(vault), "utf8");
+    const huge = "z".repeat(MAX_PINNED_CONTEXT_LEN);
+
+    let captured: PinnedBatchError | undefined;
+    try {
+      appendPinnedContext(vault, huge);
+    } catch (err) {
+      captured = err as PinnedBatchError;
+    }
+    expect(captured).toBeInstanceOf(PinnedBatchError);
+    expect(captured?.code).toBe("budget_exceeded");
+    expect(captured?.details["operation"]).toBe("append");
+    expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe(before);
+    expect(readPinnedContext(vault).content).toBe("seed");
+  });
+});
+
 describe("pinned context batch operations", () => {
   test("applies write/append/replace operations in order, all-or-nothing", () => {
     const result = applyPinnedOperations(vault, [

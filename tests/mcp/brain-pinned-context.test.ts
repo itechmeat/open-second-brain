@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { brainPinnedPath } from "../../src/core/brain/paths.ts";
+import { MAX_PINNED_CONTEXT_LEN } from "../../src/core/brain/pinned.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
 let tmp: string;
@@ -113,6 +114,23 @@ describe("brain_pinned_context — batch operations", () => {
     expect(result?.["operations_applied"]).toBe(3);
     expect(result?.["content"]).toBe("ALPHA\n\nbeta");
     expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe("ALPHA\n\nbeta\n");
+  });
+
+  test("a single over-budget write is rejected with a structured budget signal and no write", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const huge = "x".repeat(MAX_PINNED_CONTEXT_LEN + 100);
+    const { result, error } = await callPinned(server, { operation: "write", content: huge });
+    // No silent truncated success.
+    expect(result).toBeUndefined();
+    expect(error).toBeDefined();
+    expect(error!.message).toContain("brain_pinned_context");
+    const data = error!.data as Record<string, unknown> | undefined;
+    expect(data?.["code"]).toBe("budget_exceeded");
+    expect(data?.["budget"]).toBe(MAX_PINNED_CONTEXT_LEN);
+    expect(data?.["length"]).toBe(huge.length);
+    // Nothing persisted on disk.
+    expect(() => readFileSync(brainPinnedPath(vault), "utf8")).toThrow();
   });
 
   test("a malformed middle op aborts with a structured error and no write", async () => {

@@ -210,19 +210,41 @@ async function toolBrainPinnedContext(
     return runPinnedContextBatch(ctx, args["operations"]);
   }
   const operation = coercePinnedContextOperation(args);
-  let pinned: PinnedContext;
   if (operation === "read") {
-    pinned = readPinnedContext(ctx.vault);
-    return serializePinnedContext(ctx, pinned, operation);
+    return serializePinnedContext(ctx, readPinnedContext(ctx.vault), operation);
   }
-  if (operation === "write") {
-    pinned = writePinnedContext(ctx.vault, coerceStr(args, "content", true)!);
-  } else if (operation === "append") {
-    pinned = appendPinnedContext(ctx.vault, coerceStr(args, "content", true)!);
-  } else {
-    pinned = clearPinnedContext(ctx.vault);
+  let pinned: PinnedContext;
+  try {
+    if (operation === "write") {
+      pinned = writePinnedContext(ctx.vault, coerceStr(args, "content", true)!);
+    } else if (operation === "append") {
+      pinned = appendPinnedContext(ctx.vault, coerceStr(args, "content", true)!);
+    } else {
+      pinned = clearPinnedContext(ctx.vault);
+    }
+  } catch (err) {
+    throw pinnedBatchErrorToMcp(err);
   }
   return serializePinnedContext(ctx, pinned, operation, true);
+}
+
+/**
+ * Map a core {@link PinnedBatchError} (budget-exceeded, malformed op,
+ * absent replace target) onto a structured INVALID_PARAMS so the agent
+ * gets a machine-readable rejection — `code`, offending `index`, byte
+ * sizes, and a consolidation hint — instead of an opaque message or, for
+ * over-budget writes, a fake truncated success. Non-pinned errors pass
+ * through unchanged.
+ */
+function pinnedBatchErrorToMcp(err: unknown): unknown {
+  if (err instanceof PinnedBatchError) {
+    return new MCPError(INVALID_PARAMS, `brain_pinned_context: ${err.message}`, {
+      code: err.code,
+      index: err.index,
+      ...err.details,
+    });
+  }
+  return err;
 }
 
 /**
@@ -239,14 +261,7 @@ function runPinnedContextBatch(
   try {
     result = applyPinnedOperations(ctx.vault, operationsRaw as ReadonlyArray<PinnedOperation>);
   } catch (err) {
-    if (err instanceof PinnedBatchError) {
-      throw new MCPError(INVALID_PARAMS, `brain_pinned_context: ${err.message}`, {
-        code: err.code,
-        index: err.index,
-        ...err.details,
-      });
-    }
-    throw err;
+    throw pinnedBatchErrorToMcp(err);
   }
   return {
     ...serializePinnedContext(ctx, result, undefined, true),
