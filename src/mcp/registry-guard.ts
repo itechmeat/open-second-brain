@@ -93,6 +93,8 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_ingest_source: "write; returns the summary path plus bounded id lists",
   brain_research_report: "write; returns the report path and a finding count",
   brain_derive_fact: "write; returns one derived preference id, its level and premises",
+  brain_memory_bridge:
+    "write; returns a small fixed-shape receipt (recorded flag, kind, count, ids)",
 
   // Bounded-by-construction reads.
   second_brain_capabilities: "fixed-size capability report",

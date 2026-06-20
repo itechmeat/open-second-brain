@@ -58,7 +58,14 @@ except Exception:  # noqa: BLE001 - any import failure means "not in Hermes"
         def on_pre_compress(self, messages: list, **_kwargs: Any) -> None:
             return None
 
-        def on_memory_write(self, action: str, target: str, content: str, **_kwargs: Any) -> None:
+        def on_memory_write(
+            self,
+            action: str,
+            target: str,
+            content: str,
+            metadata: dict[str, Any] | None = None,
+            **_kwargs: Any,
+        ) -> None:
             return None
 
         def shutdown(self) -> None:

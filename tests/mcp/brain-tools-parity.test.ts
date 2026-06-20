@@ -17,7 +17,10 @@
  * (inbound, opt-in LLM generation tracing); the calendar-integration
  * release added `brain_agenda` (deterministic agenda synthesis over
  * caller-provided events) and `brain_obligation` (recurring obligations
- * with a cadence-driven next-due date).
+ * with a cadence-driven next-due date); the memory-subsystem-alignment
+ * release added `brain_memory_bridge` (the Hermes on_memory_write host
+ * bridge — persists native built-in-memory writes as durable
+ * host_memory_write continuity records).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -63,6 +66,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_labels",
   "brain_maintenance",
   "brain_mcp_landscape",
+  "brain_memory_bridge",
   "brain_moc_audit",
   "brain_note",
   "brain_note_history",

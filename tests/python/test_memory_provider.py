@@ -483,14 +483,44 @@ class ProviderLifecycleTests(unittest.TestCase):
             len([1 for n, _ in bridge.calls if n == "brain_pre_compact_extract"]), 1
         )
 
-    def test_on_memory_write_mirrors_to_brain_note(self):
-        bridge = FakeBrainBridge(results={"brain_note": {"structuredContent": {}}})
+    def test_on_memory_write_forwards_to_host_bridge_tool(self):
+        bridge = FakeBrainBridge(
+            results={"brain_memory_bridge": {"structuredContent": {"recorded": True}}}
+        )
         provider = self._init(bridge, hermes_home="/tmp/hh")
-        provider.on_memory_write("update", "MEMORY.md", "remember the vault path")
-        note_calls = [a for n, a in bridge.calls if n == "brain_note"]
-        self.assertEqual(len(note_calls), 1)
-        self.assertIn("MEMORY.md", note_calls[0]["text"])
-        self.assertIn("remember the vault path", note_calls[0]["text"])
+        provider.on_memory_write(
+            "add", "user", "remember the vault path", metadata={"session_id": "s1"}
+        )
+        bridge_calls = [a for n, a in bridge.calls if n == "brain_memory_bridge"]
+        self.assertEqual(len(bridge_calls), 1)
+        self.assertEqual(bridge_calls[0]["action"], "add")
+        self.assertEqual(bridge_calls[0]["target"], "user")
+        self.assertEqual(bridge_calls[0]["content"], "remember the vault path")
+        self.assertEqual(bridge_calls[0]["metadata"], {"session_id": "s1"})
+        # The deprecated brain_note mirror path is gone.
+        self.assertEqual([n for n, _ in bridge.calls if n == "brain_note"], [])
+
+    def test_on_memory_write_omits_empty_metadata(self):
+        bridge = FakeBrainBridge(results={"brain_memory_bridge": {"structuredContent": {}}})
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.on_memory_write("replace", "memory", "an observation")
+        args = next(a for n, a in bridge.calls if n == "brain_memory_bridge")
+        self.assertNotIn("metadata", args)
+
+    def test_on_memory_write_is_noop_without_a_bridge(self):
+        # No host invocation path: a provider with no started bridge writes nothing.
+        provider = OpenSecondBrainMemoryProvider(bridge=None)
+        provider.on_memory_write("add", "user", "x")  # must not raise
+
+    def test_memory_bridge_tool_is_not_agent_facing(self):
+        # The host bridge tool is advertised on the server but deliberately kept
+        # out of the curated agent surface: the Hermes agent must not see or be
+        # able to invoke it directly — only the on_memory_write hook calls it.
+        self.assertNotIn("brain_memory_bridge", MEMORY_TOOLS)
+        bridge = FakeBrainBridge()
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        with self.assertRaises(BridgeError):
+            provider.handle_tool_call("brain_memory_bridge", {"action": "add"})
 
     def test_shutdown_stops_bridge(self):
         bridge = FakeBrainBridge()
@@ -508,7 +538,7 @@ class ProviderLifecycleTests(unittest.TestCase):
         provider._drain_captures()
         provider.on_pre_compress([])
         provider.on_session_end([])
-        provider.on_memory_write("update", "USER.md", "x")
+        provider.on_memory_write("add", "user", "x")
         provider.shutdown()
 
 

@@ -48,8 +48,6 @@ _CONFIG_KEYS: tuple[str, ...] = ("vault", "agent_name", "timezone")
 
 # Token budget for the recall slice fetched on each prefetch.
 _PREFETCH_MAX_TOKENS = 1024
-# Upper bound on a single mirrored built-in-memory note.
-_MIRROR_CHAR_LIMIT = 2000
 
 
 class OpenSecondBrainMemoryProvider(MemoryProvider):
@@ -258,10 +256,34 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._drain_captures()
         self._flush_buffer()
 
-    def on_memory_write(self, action: str, target: str, content: str, **_kwargs: Any) -> None:
-        """Mirror a Hermes built-in memory write (MEMORY.md / USER.md) into Brain."""
-        text = f"Hermes built-in memory {action} on {target}: {content}"[:_MIRROR_CHAR_LIMIT]
-        self._safe_call("brain_note", {"text": text})
+    def on_memory_write(
+        self,
+        action: str,
+        target: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+        **_kwargs: Any,
+    ) -> None:
+        """Persist a Hermes built-in memory write into the Brain vault.
+
+        Verified host contract (Hermes c253b0738): the manager dispatches one
+        call per write with ``action`` in {add, replace} (``remove`` is filtered
+        out host-side and never arrives) and ``target`` in {memory, user};
+        batches are decomposed host-side, so a provider never receives an array.
+        ``metadata`` carries structured provenance (write_origin, session_id,
+        tool_name, ...).
+
+        This is a thin adapter: it forwards the payload to the host-bridge tool,
+        which is the single authority that validates the contract and persists a
+        durable ``host_memory_write`` continuity record via the shared substrate.
+        ``_safe_call`` degrades to a no-op (the bridge's own rejection of an
+        unsupported payload, or a missing bridge, never breaks a turn) — matching
+        Hermes' own fail-soft hook contract.
+        """
+        args: dict[str, Any] = {"action": action, "target": target, "content": content}
+        if isinstance(metadata, dict) and metadata:
+            args["metadata"] = metadata
+        self._safe_call("brain_memory_bridge", args)
 
     def shutdown(self) -> None:
         """Drain captures, flush, and stop the bridge. Never raises."""
