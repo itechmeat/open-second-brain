@@ -24,11 +24,15 @@ import { dispatchSubmit, openPanelSession } from "../../core/brain/write-session
 import { listWriteSessions, readWriteSession } from "../../core/brain/write-session/store.ts";
 import type { WriteSessionEnvelope } from "../../core/brain/write-session/types.ts";
 import {
+  PinnedBatchError,
+  applyPinnedOperations,
   appendPinnedContext,
   clearPinnedContext,
   readPinnedContext,
   writePinnedContext,
+  type PinnedBatchResult,
   type PinnedContext,
+  type PinnedOperation,
 } from "../../core/brain/pinned.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
@@ -184,6 +188,7 @@ function serializePinnedContext(
   ctx: ServerContext,
   pinned: PinnedContext,
   operation?: PinnedContextOperation,
+  done?: boolean,
 ): Record<string, unknown> {
   return {
     ...(operation ? { operation } : {}),
@@ -191,6 +196,9 @@ function serializePinnedContext(
     path: vaultRelativeSafe(ctx.vault, pinned.path),
     absolute_path: pinned.path,
     content: pinned.content,
+    // Terminal/idempotent marker on successful writes so the agent does
+    // not redundantly re-call after the store already committed.
+    ...(done ? { done: true } : {}),
   };
 }
 
@@ -198,18 +206,52 @@ async function toolBrainPinnedContext(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  if (args["operations"] !== undefined) {
+    return runPinnedContextBatch(ctx, args["operations"]);
+  }
   const operation = coercePinnedContextOperation(args);
   let pinned: PinnedContext;
   if (operation === "read") {
     pinned = readPinnedContext(ctx.vault);
-  } else if (operation === "write") {
+    return serializePinnedContext(ctx, pinned, operation);
+  }
+  if (operation === "write") {
     pinned = writePinnedContext(ctx.vault, coerceStr(args, "content", true)!);
   } else if (operation === "append") {
     pinned = appendPinnedContext(ctx.vault, coerceStr(args, "content", true)!);
   } else {
     pinned = clearPinnedContext(ctx.vault);
   }
-  return serializePinnedContext(ctx, pinned, operation);
+  return serializePinnedContext(ctx, pinned, operation, true);
+}
+
+/**
+ * Atomic ordered-operations mode for `brain_pinned_context`. The whole
+ * batch is validated and projected in memory by the core; a malformed op,
+ * absent replace target, or over-budget final state aborts with zero
+ * writes and surfaces as a structured INVALID_PARAMS error.
+ */
+function runPinnedContextBatch(
+  ctx: ServerContext,
+  operationsRaw: unknown,
+): Record<string, unknown> {
+  let result: PinnedBatchResult;
+  try {
+    result = applyPinnedOperations(ctx.vault, operationsRaw as ReadonlyArray<PinnedOperation>);
+  } catch (err) {
+    if (err instanceof PinnedBatchError) {
+      throw new MCPError(INVALID_PARAMS, `brain_pinned_context: ${err.message}`, {
+        code: err.code,
+        index: err.index,
+        ...err.details,
+      });
+    }
+    throw err;
+  }
+  return {
+    ...serializePinnedContext(ctx, result, undefined, true),
+    operations_applied: result.applied,
+  };
 }
 
 function appendPinnedToContextContent(activeContent: string, pinnedContent: string): string {
@@ -334,6 +376,8 @@ const PINNED_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> 
     path: { type: "string" },
     absolute_path: { type: "string" },
     content: { type: "string" },
+    done: { type: "boolean" },
+    operations_applied: { type: "integer" },
   },
   additionalProperties: false,
 };
@@ -431,18 +475,35 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_pinned_context",
     description:
-      "Read, write, append, or clear the transient current-task scratchpad at `Brain/pinned.md`. Use for facts that should survive context rotation but should not become permanent preferences.",
+      "Read, write, append, or clear the transient current-task scratchpad at `Brain/pinned.md`. Use for facts that should survive context rotation but should not become permanent preferences. Pass `operations` to apply an ordered batch atomically (all-or-nothing).",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
           enum: ["read", "write", "append", "clear"],
-          description: "Operation to perform. Defaults to read.",
+          description:
+            "Single operation to perform. Defaults to read. Ignored when `operations` is given.",
         },
         content: {
           type: "string",
           description: "Pinned context body for write/append operations.",
+        },
+        operations: {
+          type: "array",
+          description:
+            "Ordered batch applied atomically; any invalid op aborts the whole batch with no write.",
+          items: {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["write", "append", "clear", "replace"] },
+              content: { type: "string", description: "Body for write/append ops." },
+              find: { type: "string", description: "Exact segment to locate for a replace op." },
+              replace: { type: "string", description: "Replacement text for a replace op." },
+            },
+            required: ["op"],
+            additionalProperties: false,
+          },
         },
       },
       additionalProperties: false,

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { acquireLockSync } from "../../../src/core/brain/sync-lockfile.ts";
 import {
   appendContinuityRecord,
+  appendContinuityRecords,
   appendContinuitySourceInvalidation,
   continuityLogPath,
   listContinuityRecords,
@@ -121,5 +122,93 @@ describe("continuity store", () => {
       sourceId: "session-a#turn-1",
     });
     expect(records.map((record) => record.kind)).toEqual(["session_turn", "source_invalidation"]);
+  });
+});
+
+describe("continuity batch append", () => {
+  test("appends every record in a valid batch into the same month shard", () => {
+    const records = appendContinuityRecords(vault, [
+      {
+        kind: "session_turn",
+        createdAt: "2026-06-01T08:00:00Z",
+        sourceRefs: [{ id: "s#1" }],
+        payload: { role: "user", snippet: "one" },
+      },
+      {
+        kind: "session_turn",
+        createdAt: "2026-06-01T08:00:01Z",
+        sourceRefs: [{ id: "s#2" }],
+        payload: { role: "assistant", snippet: "two" },
+      },
+    ]);
+
+    expect(records).toHaveLength(2);
+    const path = continuityLogPath(vault, "2026-06");
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(2);
+    const listed = listContinuityRecords(vault, { kind: "session_turn" });
+    expect(listed.map((r) => r.sourceRefs[0]!.id)).toEqual(["s#1", "s#2"]);
+  });
+
+  test("an invalid record anywhere in the batch leaves the shard log unchanged", () => {
+    // Seed an existing record so we can prove the batch does not touch it.
+    appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-06-01T07:00:00Z",
+      sourceRefs: [{ id: "pre-existing" }],
+      payload: { snippet: "before" },
+    });
+    const path = continuityLogPath(vault, "2026-06");
+    const before = readFileSync(path, "utf8");
+
+    expect(() =>
+      appendContinuityRecords(vault, [
+        {
+          kind: "session_turn",
+          createdAt: "2026-06-01T08:00:00Z",
+          sourceRefs: [{ id: "ok" }],
+          payload: { snippet: "valid" },
+        },
+        {
+          // Malformed createdAt → month prefix fails validation; the whole
+          // batch must abort before any line is written.
+          kind: "session_turn",
+          createdAt: "not-a-timestamp",
+          sourceRefs: [{ id: "bad" }],
+          payload: { snippet: "invalid" },
+        },
+      ]),
+    ).toThrow();
+
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(listContinuityRecords(vault, {}).map((r) => r.sourceRefs[0]!.id)).toEqual([
+      "pre-existing",
+    ]);
+  });
+
+  test("a single-month batch appends all lines under one lock acquisition", () => {
+    const path = continuityLogPath(vault, "2026-06");
+    const handle = acquireLockSync(path);
+    try {
+      // Lock held: the batch must fail to acquire and write nothing.
+      expect(() =>
+        appendContinuityRecords(vault, [
+          {
+            kind: "recall_telemetry",
+            createdAt: "2026-06-02T08:00:00Z",
+            sourceRefs: [{ id: "q1" }],
+            payload: { status: "hit" },
+          },
+        ]),
+      ).toThrow("lock busy");
+    } finally {
+      handle.release();
+    }
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test("rejects an empty batch without writing", () => {
+    expect(() => appendContinuityRecords(vault, [])).toThrow();
+    expect(existsSync(continuityLogPath(vault, "2026-06"))).toBe(false);
   });
 });
