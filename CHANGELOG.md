@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] - 2026-06-20
+
+Memory subsystem alignment: the write paths the Hermes memory provider
+declares now match the live host memory semantics. The release makes
+pinned-context budget handling honest, adds atomic batch writes for
+pinned context and continuity, and connects the `on_memory_write` host
+bridge so the vault is the durable backing store for native built-in
+memory writes. No new LLM, search, dream, or recall behavior; the
+storage model stays vault-first Markdown and JSONL.
+
+### Added
+
+- **Atomic batch writes for pinned context and continuity.** An agent can
+  now free space and add content in one turn without a partial write
+  leaking to disk. `brain_pinned_context` accepts an optional `operations`
+  array of ordered `write` / `append` / `clear` / `replace` steps; the
+  whole batch is projected and validated in memory first, and a malformed
+  operation, an absent `replace` target, or an over-budget final state
+  throws `PinnedBatchError` before any write, leaving `Brain/pinned.md`
+  byte-for-byte unchanged. Successful writes return a terminal `done`
+  marker so an agent does not redundantly re-call. The continuity store
+  gains `appendContinuityRecords`, which builds and validates every record
+  before any disk write and then appends per month shard under a single
+  lock; single-month batches are fully atomic, while cross-shard atomicity
+  is deliberately not guaranteed and is documented as such.
+  Single-operation pinned and continuity writers stay byte-identical when
+  no `operations` array is passed.
+
+- **Hermes `on_memory_write` host bridge.** The provider declared the
+  `on_memory_write` memory-provider hook but only mirrored writes to
+  `brain_note`; the vault was never the durable backing store for native
+  host memory writes. The hook is now a thin adapter over the shared
+  continuity substrate: `plugins/hermes/provider.py` forwards verified
+  `(action, target, content, metadata)` writes to the new
+  `brain_memory_bridge` MCP tool (a deliberate v1.x surface addition,
+  pinned in the parity guard; hidden tools are banned by the 1.0.0 sweep),
+  which delegates to a deterministic core that persists each write as a
+  `host_memory_write` continuity record via `appendContinuityRecord(s)`.
+  The contract was verified against Hermes source
+  (`on_memory_write(action, target, content, metadata=None)`, action in
+  `{add, replace}`, target in `{memory, user}`, batches decomposed
+  host-side so a provider never receives an array) before implementation.
+  Unknown action, unknown target, and empty content are rejected
+  explicitly with nothing written; the path is fail-soft and a no-op when
+  the host never calls the hook. The tool is advertised but kept out of
+  the provider's `MEMORY_TOOLS` allowlist, so the Hermes agent surface is
+  unchanged and only the hook calls it.
+
+### Fixed
+
+- **Pinned-context budget is honest.** Single-operation `write` / `append`
+  on `brain_pinned_context` previously normalized pinned content through
+  `sanitiseTextField`'s `maxLen` cap, silently dropping the tail and
+  returning `done: true`: a deceptive truncated-success the project brief
+  forbids. `writePinnedContext` / `appendPinnedContext` now enforce the
+  budget explicitly through a shared `assertWithinPinnedBudget` that
+  throws `PinnedBatchError` (`code: budget_exceeded`) before any write,
+  carrying `operation`, `length`, `budget`, `over_by`, and a
+  consolidate-then-retry hint; the MCP layer maps it to a structured
+  `INVALID_PARAMS`, mirroring the batch path (which now reuses the same
+  assertion). Within-budget writes are byte-for-byte unchanged.
+
 ## [1.15.0] - 2026-06-19
 
 ### Added
@@ -5755,6 +5817,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.16.0]: https://github.com/itechmeat/open-second-brain/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/itechmeat/open-second-brain/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/itechmeat/open-second-brain/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/itechmeat/open-second-brain/compare/v1.12.0...v1.13.0
