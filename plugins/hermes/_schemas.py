@@ -121,15 +121,36 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     {'name': 'brain_pinned_context',
      'description': 'Read, write, append, or clear the transient current-task scratchpad at '
                     '`Brain/pinned.md`. Use for facts that should survive context rotation but '
-                    'should not become permanent preferences.',
+                    'should not become permanent preferences. Pass `operations` to apply an '
+                    'ordered batch atomically (all-or-nothing).',
      'inputSchema': {'type': 'object',
                      'properties': {'operation': {'type': 'string',
                                                   'enum': ['read', 'write', 'append', 'clear'],
-                                                  'description': 'Operation to perform. Defaults '
-                                                                 'to read.'},
+                                                  'description': 'Single operation to perform. '
+                                                                 'Defaults to read. Ignored when '
+                                                                 '`operations` is given.'},
                                     'content': {'type': 'string',
                                                 'description': 'Pinned context body for '
-                                                               'write/append operations.'}},
+                                                               'write/append operations.'},
+                                    'operations': {'type': 'array',
+                                                   'description': 'Ordered batch applied '
+                                                                  'atomically; any invalid op '
+                                                                  'aborts the whole batch with no '
+                                                                  'write.',
+                                                   'items': {'type': 'object',
+                                                             'properties': {'op': {'type': 'string',
+                                                                                   'enum': ['write',
+                                                                                            'append',
+                                                                                            'clear',
+                                                                                            'replace']},
+                                                                            'content': {'type': 'string',
+                                                                                        'description': 'Body for write/append ops.'},
+                                                                            'find': {'type': 'string',
+                                                                                     'description': 'Exact segment to locate for a replace op.'},
+                                                                            'replace': {'type': 'string',
+                                                                                        'description': 'Replacement text for a replace op.'}},
+                                                             'required': ['op'],
+                                                             'additionalProperties': False}}},
                      'additionalProperties': False}},
     {'name': 'brain_query',
      'description': 'Read-only lookup: one preference + its evidence trail, all artifacts under a '

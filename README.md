@@ -8,7 +8,7 @@ Open Second Brain plugs into [Hermes Agent](https://github.com/NousResearch/herm
 
 ## What is new
 
-Open Second Brain 1.15.0 adds calendar-aware obligations and agenda synthesis: recurring commitments live as first-class pages under Brain/obligations/ with a deterministic next-due date, and a stateless agenda command turns caller-provided calendar events into overlap conflicts, free focus blocks, and external-organizer flags. A portable Open Knowledge Format bundle lets you export a Brain to a directory and import it in another vault, staging untrusted pages for review or writing them directly with a trusted flag. Fresh vaults are stamped with native Obsidian Bases views over projects, people, tasks, and daily logs, and topic synthesis now surfaces a strongest-objection steelman next to its findings.
+Open Second Brain 1.16.0 aligns its memory-write paths with the live Hermes memory semantics. The pinned-context writer now rejects oversized content up front with a structured budget_exceeded error instead of silently truncating it and reporting success. Pinned context and the continuity store gain an atomic batch mode that validates every operation before any write, so a mid-batch failure leaves the vault byte-for-byte unchanged and the agent gets a terminal done flag on success. The Hermes on_memory_write hook is now wired through a verified bridge that persists native host memory writes as durable continuity records, making the vault the backing store for built-in memory.
 
 ## Why
 

@@ -51,6 +51,66 @@ export function appendContinuityRecord(
   return appendRecord(vault, buildRecord(input));
 }
 
+/**
+ * Append a batch of continuity records atomically per month shard.
+ *
+ * Every record is built and validated (payload sanitised, shard month
+ * resolved) BEFORE any write touches disk, so a malformed input aborts
+ * the whole batch with zero writes — the on-disk log is left unchanged.
+ *
+ * Atomicity boundary: writes are grouped by month shard. A batch confined
+ * to a single month (the common case) appends all its lines under ONE
+ * lock acquisition and is fully atomic. A batch that spans multiple months
+ * writes each month's shard independently under its own lock; we do NOT
+ * guarantee cross-shard atomicity — if a later shard's append fails after
+ * an earlier shard committed, the earlier shard stays written. All-or-
+ * nothing is guaranteed only against validation failures (which happen
+ * before any write) and within a single shard.
+ */
+export function appendContinuityRecords(
+  vault: string,
+  inputs: ReadonlyArray<AppendContinuityRecordInput>,
+): ReadonlyArray<ContinuityRecord> {
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    throw new Error("appendContinuityRecords: inputs must be a non-empty array");
+  }
+
+  // Phase 1 — build + validate ALL records before any disk mutation.
+  // buildRecord sanitises payloads; continuityLogPath validates the month
+  // prefix and throws on a malformed createdAt. Any throw here aborts the
+  // batch with nothing written.
+  const built = inputs.map((input) => {
+    const record = buildRecord(input);
+    const path = continuityLogPath(vault, record.createdAt.slice(0, 7));
+    return { record, path };
+  });
+
+  // Phase 2 — group by shard path, preserving first-seen order.
+  const shards = new Map<string, { path: string; records: ContinuityRecord[] }>();
+  for (const { record, path } of built) {
+    let bucket = shards.get(path);
+    if (!bucket) {
+      bucket = { path, records: [] };
+      shards.set(path, bucket);
+    }
+    bucket.records.push(record);
+  }
+
+  // Phase 3 — write each shard under a single lock acquisition.
+  mkdirSync(join(vault, CONTINUITY_REL), { recursive: true });
+  for (const { path, records } of shards.values()) {
+    const handle = acquireLockSync(path);
+    try {
+      const payload = records.map((record) => `${JSON.stringify(record)}\n`).join("");
+      writeFileSync(path, payload, { encoding: "utf8", flag: "a" });
+    } finally {
+      handle.release();
+    }
+  }
+
+  return Object.freeze(built.map((entry) => entry.record));
+}
+
 export function appendContinuitySourceInvalidation(
   vault: string,
   input: AppendSourceInvalidationInput,

@@ -5,6 +5,9 @@ import { join } from "node:path";
 
 import { brainPinnedPath } from "../../src/core/brain/paths.ts";
 import {
+  MAX_PINNED_CONTEXT_LEN,
+  PinnedBatchError,
+  applyPinnedOperations,
   appendPinnedContext,
   clearPinnedContext,
   readPinnedContext,
@@ -61,5 +64,132 @@ describe("pinned context core", () => {
     expect(pinned.content).toBe("");
     expect(existsSync(brainPinnedPath(vault))).toBe(true);
     expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe("");
+  });
+});
+
+describe("pinned context single-op budget honesty", () => {
+  test("write rejects over-budget content with a structured signal and no write", () => {
+    const huge = "x".repeat(MAX_PINNED_CONTEXT_LEN + 100);
+
+    let captured: PinnedBatchError | undefined;
+    try {
+      writePinnedContext(vault, huge);
+    } catch (err) {
+      captured = err as PinnedBatchError;
+    }
+    expect(captured).toBeInstanceOf(PinnedBatchError);
+    expect(captured?.code).toBe("budget_exceeded");
+    expect(captured?.details["budget"]).toBe(MAX_PINNED_CONTEXT_LEN);
+    expect(captured?.details["length"]).toBe(huge.length);
+    expect(captured?.details["operation"]).toBe("write");
+    // No silent truncated success: nothing was persisted.
+    expect(existsSync(brainPinnedPath(vault))).toBe(false);
+    expect(readPinnedContext(vault).content).toBe("");
+  });
+
+  test("write at exactly the budget still succeeds", () => {
+    const exact = "y".repeat(MAX_PINNED_CONTEXT_LEN);
+    const pinned = writePinnedContext(vault, exact);
+    expect(pinned.content).toBe(exact);
+    expect(pinned.content.length).toBe(MAX_PINNED_CONTEXT_LEN);
+  });
+
+  test("append rejects when the combined result would exceed budget, leaving the file unchanged", () => {
+    writePinnedContext(vault, "seed");
+    const before = readFileSync(brainPinnedPath(vault), "utf8");
+    const huge = "z".repeat(MAX_PINNED_CONTEXT_LEN);
+
+    let captured: PinnedBatchError | undefined;
+    try {
+      appendPinnedContext(vault, huge);
+    } catch (err) {
+      captured = err as PinnedBatchError;
+    }
+    expect(captured).toBeInstanceOf(PinnedBatchError);
+    expect(captured?.code).toBe("budget_exceeded");
+    expect(captured?.details["operation"]).toBe("append");
+    expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe(before);
+    expect(readPinnedContext(vault).content).toBe("seed");
+  });
+});
+
+describe("pinned context batch operations", () => {
+  test("applies write/append/replace operations in order, all-or-nothing", () => {
+    const result = applyPinnedOperations(vault, [
+      { op: "write", content: "alpha" },
+      { op: "append", content: "beta" },
+      { op: "replace", find: "alpha", replace: "ALPHA" },
+    ]);
+    expect(result.content).toBe("ALPHA\n\nbeta");
+    expect(result.applied).toBe(3);
+    expect(result.done).toBe(true);
+    expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe("ALPHA\n\nbeta\n");
+  });
+
+  test("clear inside a batch resets accumulated content", () => {
+    writePinnedContext(vault, "old");
+    const result = applyPinnedOperations(vault, [
+      { op: "append", content: "transient" },
+      { op: "clear" },
+      { op: "write", content: "fresh" },
+    ]);
+    expect(result.content).toBe("fresh");
+    expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe("fresh\n");
+  });
+
+  test("a malformed middle operation leaves the pinned file byte-for-byte unchanged", () => {
+    writePinnedContext(vault, "seed content");
+    const before = readFileSync(brainPinnedPath(vault), "utf8");
+
+    expect(() =>
+      applyPinnedOperations(vault, [
+        { op: "append", content: "should-not-persist" },
+        { op: "bogus" as unknown as "write" },
+        { op: "append", content: "also-should-not-persist" },
+      ]),
+    ).toThrow(PinnedBatchError);
+
+    expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe(before);
+    expect(readPinnedContext(vault).content).toBe("seed content");
+  });
+
+  test("a replace whose target is absent aborts the whole batch without writing", () => {
+    writePinnedContext(vault, "seed content");
+    const before = readFileSync(brainPinnedPath(vault), "utf8");
+
+    let captured: PinnedBatchError | undefined;
+    try {
+      applyPinnedOperations(vault, [
+        { op: "append", content: "more" },
+        { op: "replace", find: "NOT-PRESENT", replace: "x" },
+      ]);
+    } catch (err) {
+      captured = err as PinnedBatchError;
+    }
+    expect(captured).toBeInstanceOf(PinnedBatchError);
+    expect(captured?.code).toBe("replace_target_missing");
+    expect(captured?.index).toBe(1);
+    expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe(before);
+  });
+
+  test("an over-budget final projection is rejected without writing", () => {
+    writePinnedContext(vault, "seed");
+    const before = readFileSync(brainPinnedPath(vault), "utf8");
+    const huge = "x".repeat(MAX_PINNED_CONTEXT_LEN + 100);
+
+    let captured: PinnedBatchError | undefined;
+    try {
+      applyPinnedOperations(vault, [{ op: "write", content: huge }]);
+    } catch (err) {
+      captured = err as PinnedBatchError;
+    }
+    expect(captured).toBeInstanceOf(PinnedBatchError);
+    expect(captured?.code).toBe("budget_exceeded");
+    expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe(before);
+  });
+
+  test("rejects an empty operations array without writing", () => {
+    expect(() => applyPinnedOperations(vault, [])).toThrow(PinnedBatchError);
+    expect(existsSync(brainPinnedPath(vault))).toBe(false);
   });
 });

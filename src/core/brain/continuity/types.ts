@@ -18,6 +18,7 @@ export type ContinuityRecordKind =
   | "session_summary_node"
   | "session_summary_digest"
   | "generation_report"
+  | "host_memory_write"
   | "source_invalidation";
 
 export type ContinuityPayload = Readonly<Record<string, unknown>>;

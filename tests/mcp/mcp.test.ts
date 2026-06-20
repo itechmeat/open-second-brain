@@ -286,6 +286,8 @@ describe("tool listing", () => {
         // Calendar integration: recurring obligations + agenda synthesis.
         "brain_obligation",
         "brain_agenda",
+        // Hermes on_memory_write host bridge (memory-subsystem-alignment).
+        "brain_memory_bridge",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -555,7 +557,9 @@ describe("stdio loop", () => {
     //   v1.12.0) = 82.
     // + brain_generation_reports (Hindsight brain-loop ops) = 83.
     // + brain_obligation / brain_agenda (Calendar integration) = 85.
-    expect(list.result.tools.length).toBe(85);
+    // + brain_memory_bridge (Hermes on_memory_write host bridge,
+    //   memory-subsystem-alignment) = 86.
+    expect(list.result.tools.length).toBe(86);
   });
 
   test("returns parse error for invalid JSON", async () => {
