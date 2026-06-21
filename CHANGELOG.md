@@ -15,6 +15,30 @@ calls no LLM.
 
 ### Added
 
+- **Reference-style Markdown links become link-graph edges
+  (`t_13c92d85`).** The deterministic link extractor now resolves
+  CommonMark reference definitions into the existing `markdown_link` row shape:
+  full (`[text][label]`), collapsed (`[text][]`), and shortcut (`[text]`)
+  references match labels case-insensitively with collapsed whitespace, reuse
+  the same external-URL / `mailto:` filtering and `#anchor` stripping as inline
+  links, and ignore image embeds and code fences. Inline-link behavior remains
+  unchanged while reference-heavy notes now contribute real graph edges.
+
+- **Standalone `graphify-mcp`-style console entry (`t_da6321a9`).** Packages now
+  expose an `o2b-mcp` bin that mirrors the existing `o2b` launcher and injects
+  the `mcp` subcommand, so `o2b-mcp --vault X` is equivalent to
+  `o2b mcp --vault X`. The shim is transport-agnostic and forwards all flags
+  verbatim, including the new HTTP transport flags.
+
+- **Streamable HTTP MCP transport with API-key auth (`t_31dfae18`).** `o2b mcp`
+  accepts `--transport stdio|http` (default `stdio`) plus `--host`, `--port`,
+  and `--api-key` for HTTP. The HTTP transport is a thin additive peer to stdio:
+  it authenticates every request with a generic constant-time API-key check,
+  rejects unauthenticated traffic with the same `401 Unauthorized` response,
+  rejects JSON-RPC batches per the 2025-06-18 MCP contract, supports JSON or
+  single-event SSE responses based on `Accept`, and dispatches every accepted
+  request through the existing `MCPServer.handleRequest` core.
+
 - **Explicit offline/deferred backend resolution for indexing
   (`t_85252236`).** The structured `IndexStats` now declares which backend
   processed a run: `backend: "offline"` when only the deterministic lexical

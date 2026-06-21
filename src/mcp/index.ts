@@ -16,6 +16,7 @@ export {
   MCPError,
 } from "./protocol.ts";
 export { MCPServer, errorResponse, type JsonRpcRequest, type JsonRpcResponse } from "./server.ts";
+export { serveHttp, startHttp, type ServeHttpOptions, type HttpServerHandle } from "./http.ts";
 export { serveStdio, serveStdioFromString } from "./stdio.ts";
 export { buildToolTable, PLACEHOLDER_AGENT_VALUES, type ToolDefinition } from "./tools.ts";
 export { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";

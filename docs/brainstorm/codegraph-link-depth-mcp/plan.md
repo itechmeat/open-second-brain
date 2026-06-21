@@ -2,11 +2,22 @@
 
 Shared branch: `feat/codegraph-link-depth-mcp`. Combined design:
 `docs/brainstorm/codegraph-link-depth-mcp/design.md` (Variant 2 — strictly
-additive leaves). Cards are driven **one at a time** in priority order
-(highest first): `t_13c92d85` → `t_da6321a9` → `t_31dfae18` → `t_85252236`.
-Before editing, inspect the current branch commits and build on any
-previously-driven in-scope card commits. Do not duplicate sibling work; update
-shared doc/CHANGELOG sections in place if a sibling already touched them.
+additive leaves).
+
+<lock-scope>
+<task_ids>
+t_13c92d85
+t_da6321a9
+t_31dfae18
+t_85252236
+</task_ids>
+</lock-scope>
+
+Cards are driven **one at a time** in priority order (highest first):
+`t_13c92d85` → `t_da6321a9` → `t_31dfae18` → `t_85252236`. Before editing,
+inspect the current branch commits and build on any previously-driven in-scope
+card commits. Do not duplicate sibling work; update shared doc/CHANGELOG
+sections in place if a sibling already touched them.
 
 Every task is implemented under TDD: write/adjust the focused failing test
 first, then make it pass, then refactor. All identifiers and messages are

@@ -18,6 +18,7 @@
   },
   "bin": {
     "o2b": "./scripts/o2b",
+    "o2b-mcp": "./scripts/o2b-mcp",
     "vault-log": "./scripts/vault-log"
   },
   "files": [
