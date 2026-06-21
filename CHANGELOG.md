@@ -5,7 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.16.0] - 2026-06-20
+## [1.17.0] - 2026-06-21
+
+CodeGraph link-graph depth and MCP exposure. A set of strictly additive
+leaves inspired by Graphify: richer Markdown link resolution, MCP transport
+surfaces, and an explicit offline-first guarantee for keyless processing. No
+default behavior changes when the new options are unused, and the kernel still
+calls no LLM.
+
+### Added
+
+- **Explicit offline/deferred backend resolution for indexing
+  (`t_85252236`).** The structured `IndexStats` now declares which backend
+  processed a run: `backend: "offline"` when only the deterministic lexical
+  pipeline ran and no provider credentials were resolved, or
+  `backend: "semantic"` when the embedding backend was actually engaged. An
+  accompanying `deferredReason` string explains why the semantic backend was
+  not used (embeddings not requested, semantic search disabled, or
+  `embedding_api_key` not configured); it is null on a semantic run. Backend
+  resolution is lazy - the credential check stays inside the explicitly
+  requested embedding path, so a deterministic-only corpus indexes to
+  completion with no key and never hard-fails for a missing credential.
+  Borrowing Graphify's offline-first idea, this makes the already-keyless code
+  path an explicit, tested guarantee rather than an implicit side effect:
+  `importSession` is verified to never read provider-credential environment
+  variables, and keyless indexing is verified to report `offline`. The new
+  fields are additive; existing `IndexStats` fields are byte-identical when no
+  option changes.
+
+
 
 Memory subsystem alignment: the write paths the Hermes memory provider
 declares now match the live host memory semantics. The release makes

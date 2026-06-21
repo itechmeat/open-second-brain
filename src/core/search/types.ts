@@ -210,6 +210,22 @@ export interface IndexStats {
    * (link-recall-intelligence, v7).
    */
   readonly aliasResolved: number;
+  /**
+   * Backend that processed this run, resolved lazily after content
+   * detection (offline code-only extraction, t_85252236). `"offline"`
+   * when only the deterministic lexical pipeline ran and no provider
+   * credentials were resolved; `"semantic"` when the embedding backend
+   * was actually engaged. Additive — the deterministic fields above are
+   * unaffected by this field's value.
+   */
+  readonly backend: "offline" | "semantic";
+  /**
+   * Human-readable explanation of why the semantic backend was not
+   * engaged this run (e.g. embeddings not requested, semantic disabled,
+   * or `embedding_api_key` not configured). Null when the semantic
+   * backend ran (`backend === "semantic"`).
+   */
+  readonly deferredReason: string | null;
   readonly durationMs: number;
 }
 
