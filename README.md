@@ -8,7 +8,7 @@ Open Second Brain plugs into [Hermes Agent](https://github.com/NousResearch/herm
 
 ## What is new
 
-Open Second Brain 1.16.0 aligns its memory-write paths with the live Hermes memory semantics. The pinned-context writer now rejects oversized content up front with a structured budget_exceeded error instead of silently truncating it and reporting success. Pinned context and the continuity store gain an atomic batch mode that validates every operation before any write, so a mid-batch failure leaves the vault byte-for-byte unchanged and the agent gets a terminal done flag on success. The Hermes on_memory_write hook is now wired through a verified bridge that persists native host memory writes as durable continuity records, making the vault the backing store for built-in memory.
+Open Second Brain 1.17.0 widens the CodeGraph and MCP surfaces without changing any default behavior. The deterministic link extractor now resolves CommonMark reference-style Markdown links into real graph edges, a standalone MCP console entry mirrors the existing launcher and injects the mcp subcommand, an optional streamable HTTP MCP transport adds constant-time API-key auth for remote hosts, and search indexing gains an explicit offline backend that processes a keyless corpus to completion and never calls an LLM. Every change is strictly additive: the kernel still calls no LLM, and existing flows are byte-identical when the new options are unused.
 
 ## Why
 

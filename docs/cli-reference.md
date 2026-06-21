@@ -10,12 +10,13 @@ Most verbs accept `--vault <path>` and `--config <path>`; the values default to 
 o2b status                    Show config / vault status
 o2b init                      Bootstrap the vault profile (idempotent)
 o2b init --interactive        Guided first-time setup wizard
-o2b install-cli               Symlink o2b and o2b-hook into ~/.local/bin
+o2b install-cli               Symlink o2b and vault-log into ~/.local/bin
+o2b-mcp                       Console-script alias for `o2b mcp`, forwards all flags
 o2b doctor                    Run vault + adapter checks
 o2b index                     Rebuild the Markdown page index
 o2b export-config             Write a redacted config snapshot
 o2b secrets list|status       Inspect $secret:NAME references without printing values
-o2b mcp                       Run the MCP tool server (stdio); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal, --probe, --allow-tool, --disable-tool, --max-tools
+o2b mcp                       Run the MCP tool server (stdio by default; --transport http requires --api-key); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal, --probe, --allow-tool, --disable-tool, --max-tools
 o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b help --json               Print the command/flag manifest as JSON
 o2b completions --shell zsh   Print completions for bash|zsh|fish|elvish|nushell|powershell

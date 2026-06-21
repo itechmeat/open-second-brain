@@ -51,6 +51,7 @@ import { cmdInitInteractive } from "./install/init-interactive.ts";
 import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
+import { startHttp } from "../mcp/http.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
@@ -385,6 +386,10 @@ async function cmdMcp(argv: string[]): Promise<number> {
     "tool-profile": { type: "string" },
     probe: { type: "boolean" },
     json: { type: "boolean" },
+    transport: { type: "string", default: "stdio" },
+    host: { type: "string", default: "127.0.0.1" },
+    port: { type: "string", default: "0" },
+    "api-key": { type: "string" },
     "allow-tool": { type: "string-array" },
     "disable-tool": { type: "string-array" },
     "max-tools": { type: "string" },
@@ -415,6 +420,25 @@ async function cmdMcp(argv: string[]): Promise<number> {
   }
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
+  const transport = flags["transport"] as string;
+  if (transport !== "stdio" && transport !== "http") {
+    process.stderr.write(
+      `o2b mcp: invalid --transport value: ${transport}; expected one of: stdio, http\n`,
+    );
+    return 2;
+  }
+  const rawPort = flags["port"] as string;
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    process.stderr.write(`o2b mcp: --port must be an integer from 0 to 65535\n`);
+    return 2;
+  }
+  const host = flags["host"] as string;
+  const apiKey = flags["api-key"] as string | undefined;
+  if (transport === "http" && (apiKey === undefined || apiKey === "")) {
+    process.stderr.write("o2b mcp: --api-key is required when --transport http is used\n");
+    return 2;
+  }
 
   // Named tool-surface profile: flag wins over the config key; an
   // unknown name FAILS OPEN to the full surface (logged, never fatal).
@@ -459,6 +483,22 @@ async function cmdMcp(argv: string[]): Promise<number> {
     void ensureVaultCurrent(vault, { background: true, configPath: config }).catch(() => {
       // best-effort; the server must come up regardless
     });
+  }
+
+  if (transport === "http") {
+    const handle = await startHttp(
+      { vault, configPath: config, repoRoot },
+      { host, port, apiKey },
+      { scope, serverName, capabilityWindow },
+    );
+    // Log the actually-bound endpoint. With the default --port 0 the OS
+    // assigns an ephemeral port, so the requested `port` value ("0") would
+    // advertise the wrong URL. handle.url carries the real bound port.
+    process.stderr.write(
+      `[mcp] ${serverName} ${SERVER_VERSION} listening on ${handle.url} (vault=${vault})\n`,
+    );
+    await new Promise<void>((resolve) => handle.server.once("close", resolve));
+    return 0;
   }
 
   process.stderr.write(
@@ -660,7 +700,7 @@ Commands:
   doctor                    Run health checks on vault, config, and plugins
   export-config             Write a redacted config snapshot
   index                     Regenerate the vault index from discovered pages
-  mcp                       Run the optional MCP tool server (stdio JSON-RPC)
+  mcp                       Run the optional MCP tool server (stdio or HTTP JSON-RPC)
   install-cli               Create symlinks for o2b and vault-log in ~/.local/bin
   install                   Multi-runtime install orchestrator (v0.10.11) — detect / plan / apply / --check (see install/)
   update                    Update OSB installation across all detected runtimes

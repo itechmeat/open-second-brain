@@ -101,6 +101,8 @@ interface MutableStats {
   relationViolations: IndexStats["relationViolations"];
   tierDrift: IndexStats["tierDrift"];
   aliasResolved: number;
+  backend: IndexStats["backend"];
+  deferredReason: IndexStats["deferredReason"];
 }
 
 function newStats(): MutableStats {
@@ -116,6 +118,10 @@ function newStats(): MutableStats {
     relationViolations: [],
     tierDrift: [],
     aliasResolved: 0,
+    // Resolved lazily at the end of the run, after content detection.
+    // Defaults to the deterministic offline backend.
+    backend: "offline",
+    deferredReason: null,
   };
 }
 
@@ -132,8 +138,29 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     relationViolations: Object.freeze([...s.relationViolations]),
     tierDrift: Object.freeze([...s.tierDrift]),
     aliasResolved: s.aliasResolved,
+    backend: s.backend,
+    deferredReason: s.deferredReason,
     durationMs,
   });
+}
+
+/**
+ * Explain why the semantic backend was not engaged, inspecting only the
+ * already-resolved config (never `process.env`). Used for an offline run
+ * so operators see whether the cause is an unset option, disabled
+ * semantic search, or a missing credential.
+ */
+function offlineDeferredReason(config: ResolvedSearchConfig, embeddingsRequested: boolean): string {
+  if (!config.semantic.enabled) {
+    return "semantic search disabled (search_semantic_enabled=false); ran offline lexical backend";
+  }
+  if (config.semantic.provider !== "local" && !config.semantic.apiKey) {
+    return "embedding_api_key not configured; semantic backend deferred, ran offline lexical backend";
+  }
+  if (!embeddingsRequested) {
+    return "embeddings not requested this run; ran offline lexical backend";
+  }
+  return "semantic backend not engaged; ran offline lexical backend";
 }
 
 function sha256(text: string): string {
@@ -427,6 +454,12 @@ async function indexInto(
       }
     }
 
+    // Lazy backend resolution (offline code-only extraction, t_85252236).
+    // The credential-gated embedding path runs only when explicitly
+    // requested; reaching past populateEmbeddings without throwing means a
+    // credential was resolved (or the local provider needs none), so the
+    // semantic backend is genuinely active. Otherwise the run is offline
+    // and we record why the semantic backend was deferred.
     if (opts?.embeddings) {
       await populateEmbeddings(
         store,
@@ -436,6 +469,11 @@ async function indexInto(
         opts?.safeguard,
         opts?.signal,
       );
+      stats.backend = "semantic";
+      stats.deferredReason = null;
+    } else {
+      stats.backend = "offline";
+      stats.deferredReason = offlineDeferredReason(config, false);
     }
 
     const now = new Date().toISOString();

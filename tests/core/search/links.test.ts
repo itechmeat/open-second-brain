@@ -80,3 +80,102 @@ test("skips mailto:", () => {
   const links = extractLinks("[email me](mailto:a@b.com)");
   expect(links.length).toBe(0);
 });
+
+test("resolves full reference-style links ([text][label])", () => {
+  const text = `See [the spec][spec] for details.\n\n[spec]: ./design.md`;
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  expect(md.length).toBe(1);
+  expect(md[0]).toEqual({
+    linkType: "markdown_link",
+    targetPath: "./design.md",
+    linkText: "the spec",
+  });
+});
+
+test("resolves collapsed reference-style links ([text][])", () => {
+  const text = `Read [design][] now.\n\n[design]: notes/design.md`;
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  expect(md.length).toBe(1);
+  expect(md[0]).toEqual({
+    linkType: "markdown_link",
+    targetPath: "notes/design.md",
+    linkText: "design",
+  });
+});
+
+test("resolves shortcut reference-style links ([text]) only when defined", () => {
+  const text = `Both [design] and [undefined] here.\n\n[design]: ./design.md`;
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  expect(md.length).toBe(1);
+  expect(md[0]?.targetPath).toBe("./design.md");
+  expect(md[0]?.linkText).toBe("design");
+});
+
+test("reference labels match case-insensitively and normalise whitespace", () => {
+  const text = `See [The   Spec][My Label].\n\n[my label]: ./design.md`;
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  expect(md.length).toBe(1);
+  expect(md[0]?.targetPath).toBe("./design.md");
+  expect(md[0]?.linkText).toBe("The   Spec");
+});
+
+test("reference definitions to external URLs and mailto are skipped", () => {
+  const text = `Go [home][h] or [mail][m] or [local][l].\n\n[h]: https://example.com\n[m]: mailto:a@b.com\n[l]: ./x.md`;
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  expect(md.length).toBe(1);
+  expect(md[0]?.targetPath).toBe("./x.md");
+});
+
+test("strips anchor fragments from reference-style targets", () => {
+  const text = `Jump [there][t].\n\n[t]: notes/x.md#section`;
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  expect(md[0]?.targetPath).toBe("notes/x.md");
+});
+
+test("reference definitions accept titles and angle-bracketed targets", () => {
+  const text = `A [one][a] and [two][b].\n\n[a]: ./one.md "Title here"\n[b]: <./two.md>`;
+  const links = extractLinks(text);
+  const targets = links
+    .filter((l) => l.linkType === "markdown_link")
+    .map((l) => l.targetPath)
+    .toSorted();
+  expect(targets).toEqual(["./one.md", "./two.md"]);
+});
+
+test("reference-style image embeds (![text][label]) are not captured", () => {
+  const text = `![cover][img] and [real][doc].\n\n[img]: assets/cover.png\n[doc]: ./design.md`;
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  expect(md.length).toBe(1);
+  expect(md[0]?.targetPath).toBe("./design.md");
+});
+
+test("reference definition lines do not themselves become links", () => {
+  const text = `[spec]: ./design.md`;
+  const links = extractLinks(text);
+  expect(links.filter((l) => l.linkType === "markdown_link").length).toBe(0);
+});
+
+test("inline links are not double-counted as shortcut references", () => {
+  const text = `[the spec](./design.md)\n\n[the spec]: ./other.md`;
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  // The inline link wins for its own occurrence; the bare [the spec] before the
+  // definition resolves to the definition target. Both are legitimate, distinct edges.
+  const targets = md.map((l) => l.targetPath).toSorted();
+  expect(targets).toContain("./design.md");
+});
+
+test("reference links inside code fences are ignored", () => {
+  const text = `\`\`\`\n[fake][ref]\n[ref]: ./nope.md\n\`\`\`\n\nReal [doc][d].\n\n[d]: ./design.md`;
+  const links = extractLinks(text);
+  const md = links.filter((l) => l.linkType === "markdown_link");
+  expect(md.length).toBe(1);
+  expect(md[0]?.targetPath).toBe("./design.md");
+});

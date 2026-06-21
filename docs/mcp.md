@@ -9,7 +9,8 @@ in Open Second Brain depends on the MCP server being running.
 
 ## Protocol
 
-- Transport: stdio (JSON-RPC 2.0, newline-delimited).
+- Transport: stdio (JSON-RPC 2.0, newline-delimited) by default; optional
+  Streamable HTTP on the same JSON-RPC core with per-request API-key auth.
 - Protocol version: `2025-06-18`.
 - Capabilities advertised: `tools` and `resources` (see "Resources"
   below). No `prompts` or `sampling`.
@@ -178,7 +179,11 @@ with a `not found` message — same shape as `brain_query`'s
 
 ```bash
 scripts/o2b mcp --vault /path/to/vault
+scripts/o2b-mcp --vault /path/to/vault
 ```
+
+`o2b-mcp` is a console-script alias for `o2b mcp`; it injects the `mcp`
+subcommand and forwards every flag verbatim.
 
 Optional flags:
 
@@ -187,13 +192,22 @@ Optional flags:
 - `--scope full|writer` — choose the full server or the always-loaded writer subset.
 - `--writer-only` — alias for `--scope writer`.
 - `--probe` — start an in-process handshake and print whether the server can advertise tools, then exit.
+- `--transport stdio|http` — choose stdio (default) or Streamable HTTP.
+- `--host HOST` — HTTP bind host (default `127.0.0.1`).
+- `--port PORT` — HTTP bind port (default `0`, choose an available port).
+- `--api-key KEY` — required for `--transport http`; accepted as `Authorization: Bearer KEY` or `X-API-Key: KEY` on every request.
 - `--json` — with `--probe`, print a machine-readable capability report.
 - `--allow-tool NAME` — expose only named tools from the static scope. Repeatable.
 - `--disable-tool NAME` — withhold named tools from the static scope. Repeatable.
 - `--max-tools N` — expose only the first N non-diagnostic tools from the static scope.
 
-The server logs its banner to `stderr` and only writes JSON-RPC frames to
-`stdout`, so it is safe to use as a subprocess in any MCP client.
+The stdio server logs its banner to `stderr` and only writes JSON-RPC frames to
+`stdout`, so it is safe to use as a subprocess in any MCP client. HTTP refuses
+to start without `--api-key`, checks the key on every request using a generic
+constant-time comparison, and returns the same `401 Unauthorized` body for a
+missing or wrong key. JSON responses are the default; clients that send
+`Accept: text/event-stream` receive a single SSE `message` event for the same
+JSON-RPC response.
 
 ## Runtime capability window
 
