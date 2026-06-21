@@ -51,7 +51,7 @@ import { cmdInitInteractive } from "./install/init-interactive.ts";
 import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
-import { serveHttp } from "../mcp/http.ts";
+import { startHttp } from "../mcp/http.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
@@ -486,14 +486,19 @@ async function cmdMcp(argv: string[]): Promise<number> {
   }
 
   if (transport === "http") {
-    process.stderr.write(
-      `[mcp] ${serverName} ${SERVER_VERSION} listening on http://${host}:${port} (vault=${vault})\n`,
-    );
-    return await serveHttp(
+    const handle = await startHttp(
       { vault, configPath: config, repoRoot },
       { host, port, apiKey },
       { scope, serverName, capabilityWindow },
     );
+    // Log the actually-bound endpoint. With the default --port 0 the OS
+    // assigns an ephemeral port, so the requested `port` value ("0") would
+    // advertise the wrong URL. handle.url carries the real bound port.
+    process.stderr.write(
+      `[mcp] ${serverName} ${SERVER_VERSION} listening on ${handle.url} (vault=${vault})\n`,
+    );
+    await new Promise<void>((resolve) => handle.server.once("close", resolve));
+    return 0;
   }
 
   process.stderr.write(
