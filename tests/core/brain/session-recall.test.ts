@@ -94,4 +94,22 @@ describe("session recall DAG", () => {
     expect(expanded.raw_content.map((item) => item.turn_id)).toEqual(["t1", "t2"]);
     expect(expanded.next_cursor).toBe("2");
   });
+
+  test("annotates each hit with the 1-based line span of the snippet match", () => {
+    importSessionRecall(vault, {
+      sessionId: "session-b",
+      turns: [turn("t1", "user", "First line.\nSecond line mentions receipts.")],
+      summaryGroupSize: 2,
+      createdAt: "2026-05-20T17:00:00.000Z",
+    });
+
+    const search = searchSessionRecall(vault, {
+      query: "receipts",
+      sessionId: "session-b",
+      limit: 4,
+    });
+    const hit = search.hits.find((candidate) => candidate.kind === "session_turn");
+    expect(hit?.line_start).toBe(2);
+    expect(hit?.line_end).toBe(2);
+  });
 });

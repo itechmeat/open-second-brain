@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { charSpanToLineSpan } from "../search/line-numbering.ts";
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord, ContinuitySourceRef } from "./continuity/types.ts";
 import { readLineageLedger } from "./lineage/ledger.ts";
@@ -36,6 +37,14 @@ export interface SessionRecallHit {
   readonly kind: "session_turn" | "session_summary_node";
   readonly score: number;
   readonly snippet: string;
+  /**
+   * 1-based line span of the matched text within the record, computed at
+   * read time from the snippet match's char offset. Line-anchors the
+   * char-offset snippet so a hit can be cited to exact lines, not just the
+   * record as a whole; the stored text is never mutated.
+   */
+  readonly line_start: number;
+  readonly line_end: number;
   readonly turn_id?: string;
   readonly role?: string;
   readonly depth?: number;
@@ -411,11 +420,14 @@ function hitFor(
   const index = haystack.indexOf(needle);
   if (index < 0) return null;
   const score = (record.kind === "session_turn" ? 2 : 1) + occurrenceCount(haystack, needle);
+  const span = charSpanToLineSpan(text, index, needle.length);
   const base = {
     id: record.id,
     kind: record.kind as "session_turn" | "session_summary_node",
     score,
     snippet: snippet(text, index, snippetChars),
+    line_start: span.lineStart,
+    line_end: span.lineEnd,
   };
   if (record.kind === "session_turn") {
     return Object.freeze({
