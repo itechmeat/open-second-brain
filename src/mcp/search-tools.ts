@@ -570,6 +570,7 @@ function mcpEvidencePack(
       path: record.path,
       document_id: record.documentId,
       chunk_id: record.chunkId,
+      line_pointer: record.linePointer,
       matched_terms: record.matchedTerms,
       missing_terms: record.missingTerms,
       support_coverage: record.supportCoverage,
