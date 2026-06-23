@@ -33,12 +33,18 @@ type SearchConfigOverrides = Partial<Omit<ResolvedSearchConfig, "ignoreRules" | 
 
 export type {
   BrainSearchResult,
+  DisclosureMode,
+  ExpandedNote,
+  ExpandedRawChunk,
+  ExpandHitInput,
+  ExpandHitResult,
   IndexCheckReport,
   IndexStats,
   IndexStatusSnapshot,
   ResolvedEmbeddingConfig,
   ResolvedRecallConfig,
   ResolvedSearchConfig,
+  SearchCard,
   SearchErrorCode,
   SearchOptions,
   SearchOutcome,
@@ -79,7 +85,7 @@ export {
   type IndexVaultOptions,
   type IndexProgressEvent,
 } from "./indexer.ts";
-export { search } from "./search.ts";
+export { search, expandHit } from "./search.ts";
 export {
   captureRecallFeedback,
   computeLearnedWeights,

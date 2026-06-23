@@ -235,10 +235,12 @@ describe("tool listing", () => {
         "brain_brief",
         "brain_analytics",
         "brain_anticipatory_context",
-        // Search (added in v0.10.0; recall gate added in v0.27.0).
+        // Search (added in v0.10.0; recall gate added in v0.27.0;
+        // brain_search_expand added with progressive disclosure).
         "brain_recall_feedback",
         "brain_recall_gate",
         "brain_search",
+        "brain_search_expand",
         "brain_eval",
         "brain_file_context",
         // Session Knowledge Synthesis Suite (v1.11.0).
@@ -561,7 +563,8 @@ describe("stdio loop", () => {
     // + brain_memory_bridge (Hermes on_memory_write host bridge,
     //   memory-subsystem-alignment) = 86.
     // + brain_event_trace (dashboard-context-trace: event→trace join) = 87.
-    expect(list.result.tools.length).toBe(87);
+    // + brain_search_expand (progressive disclosure: search→expand→transcript) = 88.
+    expect(list.result.tools.length).toBe(88);
   });
 
   test("returns parse error for invalid JSON", async () => {

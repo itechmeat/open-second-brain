@@ -21,6 +21,7 @@ import {
 } from "../core/brain/safeguard.ts";
 import {
   captureRecallFeedback,
+  expandHit,
   indexCheck,
   indexStatus,
   indexVault,
@@ -65,6 +66,7 @@ import { CronTemplateError, renderCronTemplate } from "./search-cron-template.ts
 
 const KNOWN_VERBS = new Set([
   "query",
+  "expand",
   "index",
   "reindex",
   "status",
@@ -90,6 +92,8 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
     switch (verb) {
       case "query":
         return await cmdSearchQuery(rest);
+      case "expand":
+        return await cmdSearchExpand(rest);
       case "index":
         return await cmdSearchIndex(rest);
       case "reindex":
@@ -435,6 +439,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     visibility: { type: "string-array" },
     "query-doc": { type: "string" },
     expand: { type: "boolean" },
+    disclosure: { type: "string" },
     profile: { type: "string" },
     "evidence-pack": { type: "boolean" },
     "include-superseded": { type: "boolean" },
@@ -468,6 +473,10 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
   if (!Number.isInteger(limitNum) || limitNum < 1 || limitNum > 100) {
     throw new CliError("--limit must be an integer in 1..100");
   }
+  const disclosureRaw = typeof flags["disclosure"] === "string" ? flags["disclosure"] : undefined;
+  if (disclosureRaw !== undefined && disclosureRaw !== "full" && disclosureRaw !== "cards") {
+    throw new CliError("--disclosure must be 'full' or 'cards'");
+  }
 
   const cfg = resolveConfig(flags);
 
@@ -499,6 +508,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
     ...(flags["expand"] === true ? { expand: true } : {}),
+    ...(disclosureRaw === "cards" ? { disclosure: "cards" as const } : {}),
     ...(typeof flags["profile"] === "string" ? { profile: flags["profile"] as string } : {}),
     ...(flags["evidence-pack"] === true ? { evidencePack: true } : {}),
     ...(flags["include-superseded"] === true ? { includeSuperseded: true } : {}),
@@ -584,6 +594,21 @@ function jsonForOutcome(o: SearchOutcome): unknown {
     })),
     warnings: o.warnings,
     total: o.total,
+    ...(o.cards
+      ? {
+          cards: o.cards.map((c) => ({
+            path: c.path,
+            title: c.title,
+            score: c.score,
+            snippet: c.snippet,
+            pointer: c.pointer,
+            reasons: c.reasons,
+            document_id: c.documentId,
+            chunk_id: c.chunkId,
+            ...(c.origin !== undefined ? { origin: c.origin } : {}),
+          })),
+        }
+      : {}),
     ...(o.evidencePack ? { evidence_pack: jsonForEvidencePack(o.evidencePack) } : {}),
   };
 }
@@ -640,6 +665,22 @@ function jsonForEvidencePack(pack: NonNullable<SearchOutcome["evidencePack"]>): 
 }
 
 function renderOutcomeHuman(o: SearchOutcome, verbose: boolean): string {
+  // Progressive disclosure layer 1: render compact cards. The agent
+  // drills a hit with `o2b search expand --chunk <chunk_id>`.
+  if (o.cards !== undefined) {
+    const lines: string[] = [];
+    if (o.cards.length === 0) lines.push("(no results)");
+    o.cards.forEach((c, i) => {
+      const originSuffix = c.origin !== undefined ? `  •  ${c.origin}` : "";
+      lines.push(`[${i + 1}] ${c.pointer}  •  ${c.score.toFixed(2)}${originSuffix}`);
+      lines.push(`    ${c.snippet}`);
+      lines.push(`    expand: o2b search expand --chunk ${c.chunkId}`);
+      if (verbose && c.reasons.length > 0) lines.push(`    why: ${c.reasons.join(", ")}`);
+      lines.push("");
+    });
+    for (const w of o.warnings) lines.push(`warning: ${w}`);
+    return lines.join("\n") + (lines.length > 0 ? "" : "\n");
+  }
   const lines: string[] = [];
   if (o.results.length === 0) {
     lines.push("(no results)");
@@ -667,6 +708,94 @@ function renderOutcomeHuman(o: SearchOutcome, verbose: boolean): string {
   });
   for (const w of o.warnings) lines.push(`warning: ${w}`);
   return lines.join("\n") + (lines.length > 0 ? "" : "\n");
+}
+
+// ─── expand ───────────────────────────────────────────────────────────────────
+
+/**
+ * Progressive disclosure layers 2 + 3: drill a layer-1 card (from
+ * `o2b search --disclosure cards`) into the fuller note and the paginated
+ * raw chunk transcript. Read-only; never rebuilds the index.
+ */
+async function cmdSearchExpand(argv: ReadonlyArray<string>): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    db: { type: "string" },
+    chunk: { type: "string" },
+    "raw-limit": { type: "string" },
+    cursor: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const chunkId = Number(flags["chunk"]);
+  if (!Number.isInteger(chunkId) || chunkId < 1) {
+    throw new CliError("--chunk must be a positive integer chunk id (from a card)");
+  }
+  let rawLimit: number | undefined;
+  if (typeof flags["raw-limit"] === "string") {
+    rawLimit = Number(flags["raw-limit"]);
+    if (!Number.isInteger(rawLimit) || rawLimit < 1) {
+      throw new CliError("--raw-limit must be a positive integer");
+    }
+  }
+  const cfg = resolveConfig(flags);
+  let result;
+  try {
+    result = await expandHit(cfg, {
+      chunkId,
+      ...(rawLimit !== undefined ? { rawLimit } : {}),
+      ...(typeof flags["cursor"] === "string" ? { cursor: flags["cursor"] as string } : {}),
+    });
+  } catch (e) {
+    if (e instanceof SearchError) {
+      process.stderr.write(`error: ${e.message}\n`);
+      return 2;
+    }
+    throw e;
+  }
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify({
+        chunk_id: result.chunkId,
+        note: {
+          document_id: result.note.documentId,
+          path: result.note.path,
+          title: result.note.title,
+          line_start: result.note.lineStart,
+          line_end: result.note.lineEnd,
+          pointer: result.note.pointer,
+          content: result.note.content,
+        },
+        raw_content: result.raw_content.map((c) => ({
+          chunk_id: c.chunkId,
+          chunk_index: c.chunkIndex,
+          start_line: c.startLine,
+          end_line: c.endLine,
+          pointer: c.pointer,
+          content: c.content,
+        })),
+        next_cursor: result.next_cursor,
+      }) + "\n",
+    );
+    return 0;
+  }
+  const lines: string[] = [];
+  lines.push(`note: ${result.note.pointer}`);
+  if (result.note.title !== null) lines.push(`title: ${result.note.title}`);
+  lines.push("");
+  lines.push(result.note.content);
+  lines.push("");
+  lines.push(`── raw chunks (${result.raw_content.length}) ──`);
+  for (const c of result.raw_content) {
+    lines.push(`[${c.pointer}]`);
+    lines.push(c.content);
+    lines.push("");
+  }
+  if (result.next_cursor !== null) {
+    lines.push(`more: o2b search expand --chunk ${result.chunkId} --cursor ${result.next_cursor}`);
+  }
+  process.stdout.write(lines.join("\n") + "\n");
+  return 0;
 }
 
 // ─── index ────────────────────────────────────────────────────────────────────

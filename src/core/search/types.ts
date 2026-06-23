@@ -288,6 +288,86 @@ export interface IndexCheckReport {
   readonly recommendations: ReadonlyArray<string>;
 }
 
+/**
+ * Result-depth disclosure mode (progressive 3-layer recall). `full`
+ * (default) is the historical flat search: every hit carries its full
+ * chunk content. `cards` returns compact layer-1 {@link SearchCard}s
+ * instead — path/title/score/reasons/snippet/pointer, no full content —
+ * so recall stays token-cheap and the agent pays for depth only by
+ * calling `expandHit` (layer 2 fuller note, layer 3 raw transcript).
+ *
+ * This is NOT the query-lane `expand` flag on {@link SearchOptions}:
+ * that broadens the candidate query, this shapes how much of each
+ * surfaced result is disclosed.
+ */
+export type DisclosureMode = "full" | "cards";
+
+/**
+ * Layer-1 compact card (progressive disclosure). The token-cheap
+ * projection of a ranked {@link BrainSearchResult}: identity, score,
+ * the same explainable `reasons`, a bounded `snippet`, and a
+ * `path:Lstart-Lend` line pointer (D2 grammar) — but never the full
+ * chunk content. Drill to layer 2/3 via `expandHit({ chunkId })`.
+ */
+export interface SearchCard {
+  readonly chunkId: number;
+  readonly documentId: number;
+  readonly path: string;
+  readonly title: string | null;
+  readonly score: number;
+  readonly reasons: ReadonlyArray<string>;
+  readonly snippet: string;
+  /** `path:Lstart-Lend` (or single-line `path:Lstart`) line pointer. */
+  readonly pointer: string;
+  /** Cross-vault origin label, mirrored from the source result when set. */
+  readonly origin?: string;
+}
+
+export interface ExpandHitInput {
+  readonly chunkId: number;
+  /** Raw-chunk page size for layer 3 (default 10). */
+  readonly rawLimit?: number;
+  /** Opaque pagination cursor returned as `next_cursor` by a prior call. */
+  readonly cursor?: string;
+}
+
+/**
+ * Layer-2 fuller note: the hit's whole document, reconstructed from the
+ * store's chunk rows (no new index, no disk read), with the line span it
+ * occupies and a `path:Lstart-Lend` pointer.
+ */
+export interface ExpandedNote {
+  readonly documentId: number;
+  readonly path: string;
+  readonly title: string | null;
+  readonly lineStart: number;
+  readonly lineEnd: number;
+  readonly pointer: string;
+  readonly content: string;
+}
+
+/** Layer-3 raw chunk (the indexed transcript), one page entry. */
+export interface ExpandedRawChunk {
+  readonly chunkId: number;
+  readonly chunkIndex: number;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly pointer: string;
+  readonly content: string;
+}
+
+/**
+ * `expandHit` result, mirroring `expandSessionRecall`: the fuller note
+ * (layer 2) and a paginated slice of the document's raw chunks (layer 3),
+ * with a `next_cursor` that is null once the transcript is exhausted.
+ */
+export interface ExpandHitResult {
+  readonly chunkId: number;
+  readonly note: ExpandedNote;
+  readonly raw_content: ReadonlyArray<ExpandedRawChunk>;
+  readonly next_cursor: string | null;
+}
+
 export interface SearchOptions {
   readonly query: string;
   readonly limit?: number;
@@ -339,6 +419,14 @@ export interface SearchOptions {
    * retrieval. Never silently active.
    */
   readonly expand?: boolean;
+  /**
+   * Result-depth disclosure (progressive 3-layer recall). `full`
+   * (default) keeps the flat full-content result shape byte-identical;
+   * `cards` returns compact {@link SearchCard}s on `SearchOutcome.cards`
+   * and an empty `results`, so the caller pays for depth only by calling
+   * `expandHit`. Distinct from the query-lane `expand` flag above.
+   */
+  readonly disclosure?: DisclosureMode;
   /**
    * Optional named recall profile (Recall & Working-Memory Quality Suite,
    * t_98c39dd6): `fast | balanced | thorough` expand to a fixed knob tuple
@@ -433,6 +521,13 @@ export interface SearchOutcome {
   readonly results: ReadonlyArray<BrainSearchResult>;
   readonly warnings: ReadonlyArray<string>;
   readonly total: number;
+  /**
+   * Layer-1 compact cards (progressive disclosure). Present only when the
+   * caller set `disclosure: "cards"`; in that mode `results` is empty and
+   * `total` counts the cards. Absent on the default `full` path, keeping
+   * the legacy outcome shape byte-identical.
+   */
+  readonly cards?: ReadonlyArray<SearchCard>;
   readonly evidencePack?: EvidencePack;
   /**
    * Self-correcting two-pass recall (Time-Aware Recall & Activation

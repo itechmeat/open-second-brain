@@ -13,6 +13,7 @@
 import {
   captureRecallFeedback,
   evaluateSurfacingGate,
+  expandHit,
   indexStatus,
   resolveSearchConfig,
   search,
@@ -75,6 +76,12 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
     keyword_only: { type: "boolean" },
+    disclosure: {
+      type: "string",
+      enum: ["full", "cards"],
+      description:
+        "Result depth: 'full' (default) returns full chunk content; 'cards' returns token-cheap layer-1 cards — drill a hit with brain_search_expand.",
+    },
     profile: {
       type: "string",
       enum: [...RECALL_PROFILE_NAMES],
@@ -214,6 +221,24 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
               conflict: { type: "boolean" },
             },
           },
+        },
+      },
+    },
+    cards: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["path", "title", "score", "snippet", "pointer", "reasons", "chunk_id"],
+        properties: {
+          path: { type: "string" },
+          title: { type: "string" },
+          score: { type: "number" },
+          snippet: { type: "string" },
+          pointer: { type: "string" },
+          reasons: { type: "array", items: { type: "string" } },
+          document_id: { type: "integer" },
+          chunk_id: { type: "integer" },
+          origin: { type: "string" },
         },
       },
     },
@@ -371,6 +396,10 @@ async function toolBrainSearch(
 
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
+  const disclosure = coerceStringOptional(args, "disclosure", 16);
+  if (disclosure !== undefined && disclosure !== "full" && disclosure !== "cards") {
+    throw new MCPError(INVALID_PARAMS, "argument 'disclosure' must be 'full' or 'cards'");
+  }
   const explain = coerceBoolOptional(args, "explain") ?? false;
   const trust = coerceBoolOptional(args, "trust") ?? false;
   const rerank = coerceBoolOptional(args, "rerank") ?? false;
@@ -441,6 +470,7 @@ async function toolBrainSearch(
     keywordOnly,
     pathPrefix,
     ...(profile !== undefined ? { profile } : {}),
+    ...(disclosure === "cards" ? { disclosure: "cards" as const } : {}),
     ...(properties !== undefined ? { properties } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
     ...(agentScope !== undefined ? { agentScope } : {}),
@@ -499,16 +529,20 @@ async function toolBrainSearch(
   }
 
   const recallHint = deriveRecallHint(outcome.results, outcome.total);
+  // Under disclosure:'cards' the surfaced rows live on `cards`, not
+  // `results`; both shapes carry documentId/chunkId/path/score, so the
+  // telemetry count/status/top-artifacts stay honest either way.
+  const surfaced = outcome.cards ?? outcome.results;
   const telemetryRecord = emitGatedTelemetry(telemetry || undefined, () =>
     emitRecallTelemetry(ctx.vault, {
       host: telemetryHost,
       ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
       ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
       mode: "search",
-      status: outcome.results.length > 0 ? "ok" : "empty",
+      status: surfaced.length > 0 ? "ok" : "empty",
       durationMs: Date.now() - startedAtMs,
-      resultCount: outcome.results.length,
-      topArtifacts: outcome.results.slice(0, 10).map((result) => ({
+      resultCount: surfaced.length,
+      topArtifacts: surfaced.slice(0, 10).map((result) => ({
         id: `${result.documentId}:${result.chunkId}`,
         path: result.path,
         score: result.score,
@@ -541,6 +575,21 @@ async function toolBrainSearch(
       ...(outcome.evidencePack ? { why_retrieved: r.reasons } : {}),
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
     })),
+    ...(outcome.cards
+      ? {
+          cards: outcome.cards.map((c) => ({
+            path: c.path,
+            title: c.title,
+            score: c.score,
+            snippet: c.snippet,
+            pointer: c.pointer,
+            reasons: c.reasons,
+            document_id: c.documentId,
+            chunk_id: c.chunkId,
+            ...(c.origin !== undefined ? { origin: c.origin } : {}),
+          })),
+        }
+      : {}),
     warnings: outcome.warnings,
     total: outcome.total,
     ...(outcome.evidencePack ? { evidence_pack: mcpEvidencePack(outcome.evidencePack) } : {}),
@@ -940,6 +989,129 @@ function coerceIntInRange(
   return raw;
 }
 
+const SEARCH_EXPAND_INPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    chunk_id: {
+      type: "integer",
+      minimum: 1,
+      description: "The chunk_id of a layer-1 card (from brain_search disclosure:'cards').",
+    },
+    raw_limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: MCP_LIMIT_MAX,
+      description: "Layer-3 raw-chunk page size (default 10).",
+    },
+    cursor: {
+      type: "string",
+      maxLength: 32,
+      description: "Pagination cursor returned as next_cursor by a prior expand call.",
+    },
+  },
+  required: ["chunk_id"],
+  additionalProperties: false,
+};
+
+const SEARCH_EXPAND_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
+  type: "object",
+  required: ["chunk_id", "note", "raw_content", "next_cursor"],
+  properties: {
+    chunk_id: { type: "integer" },
+    note: {
+      type: "object",
+      required: ["document_id", "path", "line_start", "line_end", "pointer", "content"],
+      properties: {
+        document_id: { type: "integer" },
+        path: { type: "string" },
+        title: { type: "string" },
+        line_start: { type: "integer" },
+        line_end: { type: "integer" },
+        pointer: { type: "string" },
+        content: { type: "string" },
+      },
+    },
+    raw_content: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["chunk_id", "chunk_index", "start_line", "end_line", "pointer", "content"],
+        properties: {
+          chunk_id: { type: "integer" },
+          chunk_index: { type: "integer" },
+          start_line: { type: "integer" },
+          end_line: { type: "integer" },
+          pointer: { type: "string" },
+          content: { type: "string" },
+        },
+      },
+    },
+    next_cursor: { type: "string" },
+  },
+};
+
+/**
+ * `brain_search_expand` (progressive disclosure layers 2 + 3): drill a
+ * layer-1 card into the fuller note and the paginated raw chunk
+ * transcript. Read-only; reuses the existing store read, never rebuilds
+ * the index.
+ */
+async function toolBrainSearchExpand(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const rawChunk = args["chunk_id"];
+  if (typeof rawChunk !== "number" || !Number.isInteger(rawChunk) || rawChunk < 1) {
+    throw new MCPError(INVALID_PARAMS, "argument 'chunk_id' must be a positive integer");
+  }
+  const rawLimit = coerceIntInRange(args, "raw_limit", 1, MCP_LIMIT_MAX);
+  const cursor = coerceStringOptional(args, "cursor", 32);
+  const config = resolveSearchConfig({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? undefined,
+  });
+  let result;
+  try {
+    result = await withTimeout(
+      expandHit(config, {
+        chunkId: rawChunk,
+        ...(rawLimit !== undefined ? { rawLimit } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
+      }),
+      SEARCH_TIMEOUT_MS,
+      searchTimeoutError,
+    );
+  } catch (e) {
+    if (e instanceof SearchError) throw searchErrorToMcp(e);
+    if (e instanceof MCPError) throw e;
+    throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
+  }
+  return {
+    chunk_id: result.chunkId,
+    note: {
+      document_id: result.note.documentId,
+      path: result.note.path,
+      title: result.note.title,
+      line_start: result.note.lineStart,
+      line_end: result.note.lineEnd,
+      pointer: result.note.pointer,
+      // Drill-down tool: return the full note (layer 2) and raw chunks
+      // (layer 3), not a snippet. The preview budget caps the envelope
+      // and hands back an artifact_id when the payload is large.
+      content: result.note.content,
+    },
+    raw_content: result.raw_content.map((c) => ({
+      chunk_id: c.chunkId,
+      chunk_index: c.chunkIndex,
+      start_line: c.startLine,
+      end_line: c.endLine,
+      pointer: c.pointer,
+      content: c.content,
+    })),
+    next_cursor: result.next_cursor,
+  };
+}
+
 export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_recall_feedback",
@@ -965,6 +1137,15 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     outputSchema: SEARCH_OUTPUT_SCHEMA,
     previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainSearch,
+  },
+  {
+    name: "brain_search_expand",
+    description:
+      "Progressive disclosure layers 2 + 3: drill a brain_search card (by chunk_id) into the fuller note and the paginated raw chunk transcript. Read-only; reuses the existing index.",
+    inputSchema: SEARCH_EXPAND_INPUT_SCHEMA,
+    outputSchema: SEARCH_EXPAND_OUTPUT_SCHEMA,
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainSearchExpand,
   },
   {
     name: "brain_eval",
