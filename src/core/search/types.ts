@@ -436,14 +436,25 @@ export interface SearchOutcome {
   readonly evidencePack?: EvidencePack;
   /**
    * Self-correcting two-pass recall (Time-Aware Recall & Activation
-   * Suite, t_ef92dfdc). Present only when a zero-candidate first pass
-   * in evidence-pack mode triggered the single broadened OR retry.
+   * Suite, t_ef92dfdc; coverage-driven targeted retry, t_8eb5ca32).
+   * Present only when a single follow-up retry fired in evidence-pack
+   * mode. `kind` distinguishes the two triggers, which are mutually
+   * exclusive (at most one retry per query):
+   *   - `"broadened"`: a ZERO-candidate first pass ran one broadened
+   *     OR retry over all significant terms.
+   *   - `"targeted"`: a non-empty first pass left rare query terms
+   *     uncovered (partial coverage below the completeness threshold)
+   *     and ran one retry aimed at exactly those uncovered rare terms,
+   *     listed in `targetedTerms`.
    */
   readonly secondPass?: {
     readonly triggered: true;
+    readonly kind: "broadened" | "targeted";
     readonly reason: string;
-    /** Candidate hits the broadened pass contributed. */
+    /** Candidate hits the retry pass contributed to the pool. */
     readonly added: number;
+    /** The uncovered rare terms re-queried by a `"targeted"` retry. */
+    readonly targetedTerms?: ReadonlyArray<string>;
   };
 }
 
@@ -542,10 +553,14 @@ export interface ResolvedRecallConfig {
    */
   readonly activationEnabled: boolean;
   /**
-   * Self-correcting two-pass recall (t_ef92dfdc). On by default: a
-   * zero-candidate first pass in evidence-pack mode runs exactly one
-   * broadened OR retry instead of dead-ending in an abstention.
-   * Plain (non-evidence-pack) searches never broaden either way.
+   * Self-correcting two-pass recall (t_ef92dfdc; coverage-driven
+   * targeted retry, t_8eb5ca32). On by default and the kill switch for
+   * BOTH retry triggers in evidence-pack mode: a zero-candidate first
+   * pass runs one broadened OR retry, and a non-empty first pass whose
+   * IDF-weighted coverage falls below the completeness threshold with
+   * rare terms still uncovered runs one targeted retry aimed at those
+   * uncovered rare terms. At most one retry fires per query. Plain
+   * (non-evidence-pack) searches never retry either way.
    */
   readonly twoPassEnabled: boolean;
   /**

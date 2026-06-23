@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] - 2026-06-23
+
+Coverage-driven targeted self-correcting recall on partial misses. The
+self-correcting two-pass recall, previously fired only by a
+zero-candidate first pass, now also fires when a non-empty first pass
+leaves rare query terms uncovered — and the follow-up is aimed at
+exactly those missing facts instead of a generic broadening. Deterministic
+and LLM-free; off when `recall.twoPassEnabled` is false.
+
+### Added
+
+- **Targeted retry on partial coverage (`t_8eb5ca32`).** In evidence-pack
+  mode, when the first pass returns candidates but their IDF-weighted
+  coverage of the query is below `COMPLETENESS_COMPLETE_THRESHOLD` with at
+  least one RARE significant term still uncovered, `search()` issues
+  exactly ONE follow-up FTS pass built from those uncovered rare terms
+  (the specifically-missing high-signal facts), merges the recovered
+  candidates into the pool, and lets them flow through the normal ranking
+  and a regenerated evidence pack. The new pure helper
+  `planTargetedRetry(coverage)` (in `coverage.ts`) is the deterministic
+  trigger: it fires only on a below-threshold coverage WITH uncovered rare
+  terms (a rare gate keeps it off when only corpus-common terms are
+  missing) and returns exactly those terms to re-query. This retry is
+  mutually exclusive with the existing zero-candidate broadened OR retry
+  (one needs an empty pool, the other a non-empty one), so at most one
+  retry fires per query — the same single-retry discipline. The
+  regenerated pack still abstains on any term left uncovered after the
+  retry, so the conservative-on-final-miss posture is unchanged.
+
+- **`SearchOutcome.secondPass.kind` (`t_8eb5ca32`).** The two-pass marker
+  now carries `kind: "broadened" | "targeted"` to distinguish the two
+  triggers, plus `targetedTerms` (the uncovered rare terms re-queried) for
+  the targeted variant. Recovered results carry a
+  `second_pass: targeted retry on uncovered rare terms` reason; first-pass
+  hits they merge with do not.
+
 ## [1.17.0] - 2026-06-21
 
 CodeGraph link-graph depth and MCP exposure. A set of strictly additive
@@ -5869,6 +5905,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.18.0]: https://github.com/itechmeat/open-second-brain/compare/v1.17.0...v1.18.0
 [1.17.0]: https://github.com/itechmeat/open-second-brain/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/itechmeat/open-second-brain/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/itechmeat/open-second-brain/compare/v1.14.0...v1.15.0

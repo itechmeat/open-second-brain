@@ -132,6 +132,35 @@ export function buildCompletenessReport(coverage: CoverageReport): CompletenessR
   });
 }
 
+/**
+ * Targeted self-correcting retry plan (t_8eb5ca32): the deterministic
+ * decision that connects coverage to a follow-up retrieval. A retry
+ * fires only when the IDF-weighted coverage is below the completeness
+ * threshold AND at least one RARE significant term is still uncovered;
+ * the follow-up is then aimed at exactly those uncovered rare terms —
+ * the specifically-missing high-signal facts — never a generic
+ * broadening of the whole query. The rare gate keeps the retry off when
+ * only corpus-common terms are missing (low IDF, low value) and bounds
+ * how often it can fire. `terms` is empty iff `fire` is false.
+ *
+ * Pure and deterministic: a verdict over an already-built report, no
+ * I/O. The caller decides how to turn the terms into a query (FTS OR,
+ * expansion, …) and how to cap the number of passes.
+ */
+export interface TargetedRetryPlan {
+  readonly fire: boolean;
+  readonly terms: ReadonlyArray<string>;
+}
+
+export function planTargetedRetry(coverage: CoverageReport): TargetedRetryPlan {
+  const belowThreshold = coverage.idfWeightedCoverage < COMPLETENESS_COMPLETE_THRESHOLD;
+  const fire = belowThreshold && coverage.uncoveredRareTerms.length > 0;
+  return Object.freeze({
+    fire,
+    terms: fire ? coverage.uncoveredRareTerms : Object.freeze([] as string[]),
+  });
+}
+
 export function buildCoverageReport(inputs: CoverageInputs): CoverageReport {
   const terms: TermCoverage[] = inputs.significantTerms.map((term) => {
     const df = inputs.dfByTerm.get(term) ?? 0;
