@@ -102,6 +102,7 @@ export function makeConfig(opts: {
     ignoreRules,
     chunkSize: 800,
     chunkOverlap: 100,
+    chunkMinSize: 100,
     keywordWeight: 0.6,
     semanticWeight: 0.4,
     fusionMode: opts.fusionMode ?? "linear",

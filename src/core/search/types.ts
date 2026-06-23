@@ -580,6 +580,15 @@ export interface ResolvedSearchConfig {
   readonly ignoreRules: ReadonlyArray<VaultIgnoreRule>;
   readonly chunkSize: number;
   readonly chunkOverlap: number;
+  /**
+   * Chunk floor (min tokens) — the heading-boundary flush threshold in
+   * the markdown chunker (`minTokens`). Resolved from
+   * `search_chunk_min_size` / `OPEN_SECOND_BRAIN_SEARCH_CHUNK_MIN_SIZE`.
+   * Default 100 (the chunker's `DEFAULT_MIN_TOKENS`); kept stable so
+   * vaults that don't set it hash identical chunks across Syncthing
+   * peers. Must be ≥ 1 and ≤ `chunkSize`.
+   */
+  readonly chunkMinSize: number;
   readonly keywordWeight: number;
   readonly semanticWeight: number;
   /**

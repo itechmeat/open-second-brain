@@ -36,6 +36,7 @@ function semanticConfig(
     ignoreRules: Object.freeze([{ raw: ".git", kind: "name" as const }]),
     chunkSize: 800,
     chunkOverlap: 100,
+    chunkMinSize: 100,
     keywordWeight: 0.6,
     semanticWeight: 0.4,
     fusionMode: "linear" as const,

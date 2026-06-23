@@ -14,6 +14,7 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_SEMANTIC",
   "OPEN_SECOND_BRAIN_SEARCH_CHUNK_SIZE",
   "OPEN_SECOND_BRAIN_SEARCH_CHUNK_OVERLAP",
+  "OPEN_SECOND_BRAIN_SEARCH_CHUNK_MIN_SIZE",
   "OPEN_SECOND_BRAIN_SEARCH_KW_WEIGHT",
   "OPEN_SECOND_BRAIN_SEARCH_SEM_WEIGHT",
   "OPEN_SECOND_BRAIN_SEARCH_IGNORE",
@@ -62,6 +63,7 @@ test("defaults are returned when config and env are empty", () => {
   expect(cfg.dbPath).toBe(join(tmp, ".open-second-brain", "brain.sqlite"));
   expect(cfg.chunkSize).toBe(800);
   expect(cfg.chunkOverlap).toBe(100);
+  expect(cfg.chunkMinSize).toBe(100);
   expect(cfg.keywordWeight).toBe(0.6);
   expect(cfg.semanticWeight).toBe(0.4);
   expect(cfg.semantic.enabled).toBe(false);
@@ -263,6 +265,25 @@ test("chunk overlap must be non-negative and smaller than chunk size", () => {
     `vault: "${tmp}"\nsearch_chunk_size: "100"\nsearch_chunk_overlap: "100"\n`,
   );
   expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/smaller than/);
+});
+
+test("chunk minimum size resolves from config and env overrides config", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_chunk_min_size: "50"\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).chunkMinSize).toBe(50);
+
+  process.env["OPEN_SECOND_BRAIN_SEARCH_CHUNK_MIN_SIZE"] = "75";
+  expect(resolveSearchConfig({ vault: tmp, configPath }).chunkMinSize).toBe(75);
+});
+
+test("chunk minimum size must be a positive integer not exceeding chunk size", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_chunk_min_size: "0"\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/search_chunk_min_size/);
+
+  writeFileSync(
+    configPath,
+    `vault: "${tmp}"\nsearch_chunk_size: "300"\nsearch_chunk_min_size: "400"\n`,
+  );
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/exceed/);
 });
 
 test("overrides are validated after merging", () => {

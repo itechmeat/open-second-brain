@@ -289,6 +289,7 @@ async function indexInto(
         const filenameBase = basename(file.relPath, ".md");
         const chunkResult = chunkMarkdown(content, filenameBase, {
           maxTokens: config.chunkSize,
+          minTokens: config.chunkMinSize,
           overlapTokens: config.chunkOverlap,
         });
         for (const w of chunkResult.warnings) {
@@ -697,6 +698,7 @@ function reindexStagingSignature(config: ResolvedSearchConfig, embeddings: boole
     schema: LATEST_SCHEMA_VERSION,
     chunkSize: config.chunkSize,
     chunkOverlap: config.chunkOverlap,
+    chunkMinSize: config.chunkMinSize,
     embedding,
   });
 }
