@@ -20,7 +20,9 @@
  * with a cadence-driven next-due date); the memory-subsystem-alignment
  * release added `brain_memory_bridge` (the Hermes on_memory_write host
  * bridge — persists native built-in-memory writes as durable
- * host_memory_write continuity records).
+ * host_memory_write continuity records); the dashboard-context-trace
+ * release added `brain_event_trace` (joins logged Brain events to the
+ * continuity records attached to them by shared correlation ids).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -52,6 +54,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_doctor",
   "brain_dream",
   "brain_entity",
+  "brain_event_trace",
   "brain_feedback",
   "brain_foresight",
   "brain_generation_reports",

@@ -146,5 +146,6 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   // + brain_generation_reports (Hindsight brain-loop ops) = 83.
   // + brain_obligation, brain_agenda (Calendar integration) = 85.
   // + brain_memory_bridge (Hermes on_memory_write host bridge) = 86.
-  expect(list.result.tools.length).toBe(86);
+  // + brain_event_trace (dashboard-context-trace: event→trace join) = 87.
+  expect(list.result.tools.length).toBe(87);
 });

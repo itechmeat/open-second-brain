@@ -218,6 +218,7 @@ describe("tool listing", () => {
         "brain_pre_compress_pack",
         // Context continuity and receipts (added in v0.29.0).
         "brain_context_receipts",
+        "brain_event_trace",
         "brain_recall_telemetry",
         "brain_context_presets",
         "brain_pre_compact_extract",
@@ -559,7 +560,8 @@ describe("stdio loop", () => {
     // + brain_obligation / brain_agenda (Calendar integration) = 85.
     // + brain_memory_bridge (Hermes on_memory_write host bridge,
     //   memory-subsystem-alignment) = 86.
-    expect(list.result.tools.length).toBe(86);
+    // + brain_event_trace (dashboard-context-trace: event→trace join) = 87.
+    expect(list.result.tools.length).toBe(87);
   });
 
   test("returns parse error for invalid JSON", async () => {

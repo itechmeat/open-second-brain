@@ -5,29 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.18.0] - 2026-06-23
-
-Operator-tunable markdown chunk floor. The search chunker's minimum chunk
-size is now configurable per vault, completing the set of chunk-granularity
-knobs alongside the already-configurable maximum size and overlap. Default
-behavior is unchanged.
-
-### Added
-
-- **`search_chunk_min_size` config knob (`t_122b2cbc`).** The markdown
-  chunker's `minTokens` budget — the heading-boundary flush floor — is now
-  resolved through `ResolvedSearchConfig.chunkMinSize` from the
-  `search_chunk_min_size` config key or the
-  `OPEN_SECOND_BRAIN_SEARCH_CHUNK_MIN_SIZE` environment variable, mirroring the
-  existing `search_chunk_size` and `search_chunk_overlap` knobs. The indexer
-  now threads it into `chunkMarkdown`, so operators can tune index granularity
-  per vault: a smaller floor yields sharper, fact-dense chunks; a larger one
-  packs more context per chunk. Validated as an integer ≥ 1 that must not
-  exceed `search_chunk_size`, and folded into the reindex staging signature so
-  a changed floor invalidates a resumable build. Defaults to `100` (the
-  chunker's `DEFAULT_MIN_TOKENS`), so vaults that do not set it hash identical
-  chunks across Syncthing peers.
-
 ## [1.17.0] - 2026-06-21
 
 CodeGraph link-graph depth and MCP exposure. A set of strictly additive
@@ -5892,7 +5869,6 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[1.18.0]: https://github.com/itechmeat/open-second-brain/compare/v1.17.0...v1.18.0
 [1.17.0]: https://github.com/itechmeat/open-second-brain/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/itechmeat/open-second-brain/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/itechmeat/open-second-brain/compare/v1.14.0...v1.15.0

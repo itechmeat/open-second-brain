@@ -117,6 +117,7 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_mcp_landscape: "fixed-shape landscape summary",
   brain_session_describe: "single-session metadata only",
   brain_context_receipts: "bounded receipt list per session",
+  brain_event_trace: "bounded event→trace join summary; full records via per-kind readers",
   brain_context_presets: "small preset list",
   brain_pre_compact_extract: "bounded extract; host injects it whole by design",
   brain_skill_proposals: "bounded proposal list",
