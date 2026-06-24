@@ -306,6 +306,19 @@ export function resolveSearchFocusContextPack(configPath?: string): boolean {
 }
 
 /**
+ * Post-compaction pinned-anchor survival audit gate
+ * (session-lifecycle-capture-durability, t_12c8b256). Default OFF: the
+ * `o2b brain post-compact-audit` entry is a no-op unless
+ * `post_compact_survival_audit: "true"`, so unchanged installs run no
+ * post-compaction re-assertion and stay byte-identical.
+ */
+export function resolvePostCompactSurvivalAudit(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_POST_COMPACT_SURVIVAL_AUDIT"]?.trim();
+  const raw = env || discoverConfig(configPath).data["post_compact_survival_audit"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
+/**
  * SessionEnd handoff-note gate (Agent Surface Suite, t_28afa4d2).
  * Default OFF: lifecycle capture writes no handoff note unless
  * `session_handoff: "true"`.

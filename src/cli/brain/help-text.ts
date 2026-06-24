@@ -84,6 +84,7 @@ Brain verbs (observing memory):
   event-trace         Show context traces attached to logged events by correlation id
   context-presets     Show/suggest/diff read-only context budget presets
   pre-compact-extract Extract typed continuity records from bounded text
+  post-compact-audit  Audit pinned-anchor survival after a compaction; re-assert drifted anchors
   recall-telemetry    List/summarize opt-in recall telemetry records
   generation-reports  Record/list/summarize opt-in LLM generation traces
   skill-proposals     Learn/list/review deterministic skill proposals
@@ -580,6 +581,9 @@ export const VERB_HELP: Record<string, string> = {
   "pre-compact-extract":
     "usage: o2b brain pre-compact-extract --vault <path> --session-id <id> --turn-start <id> --turn-end <id> --text <text> [--host <name>] [--max-chars <n>] [--json]\n" +
     "Extract Decision/Commitment/Outcome/Rule/Open question lines into idempotent continuity records.\n",
+  "post-compact-audit":
+    "usage: o2b brain post-compact-audit [--session-id <id>] [--no-reassert] [--force] [--vault <path>] [--json]\n" +
+    "Reads a { session_id, messages } JSON document from stdin. Detects a Hermes compaction, audits which pinned anchors survived in the active (non-summary) region, and re-asserts only the drifted ones. Gated by post_compact_survival_audit (default off); --force overrides the gate.\n",
   "recall-telemetry":
     "usage: o2b brain recall-telemetry list [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +

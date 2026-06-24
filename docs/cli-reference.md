@@ -72,6 +72,7 @@ o2b brain recall-telemetry    List/summarise opt-in recall telemetry continuity 
 o2b brain generation-reports  Record/list/summarise opt-in inbound LLM generation traces (prompt hash + token counts only; kernel never calls an LLM)
 o2b brain context-presets     Show/suggest/diff read-only context budget presets (since v0.29.0)
 o2b brain pre-compact-extract Extract decision/commitment/outcome/rule/open-question continuity records from bounded text (since v0.29.0)
+o2b brain post-compact-audit  Audit pinned-anchor survival after a compaction and re-assert drifted anchors (gated by post_compact_survival_audit)
 o2b brain session-grep        Search imported session recall raw turns and summary nodes (since v0.29.0)
 o2b brain session-describe    Count raw turns and deterministic summary depths for one session recall DAG (since v0.29.0)
 o2b brain session-expand      Expand a session recall node to immediate sources and paginated raw turn content (since v0.29.0)
@@ -115,6 +116,7 @@ o2b brain recall-telemetry    list|summary [--mode search|context_pack|pre_compr
 o2b brain generation-reports  record <write_session|context_pack|dream_stage> --ref <id> --agent <name> --prompt <text> [--enable] [--provider <p>] [--model <m>] [--finish-reason <r>] [--latency-ms <n>] [--input-tokens <n>] [--output-tokens <n>] [--cached-tokens <n>] [--total-tokens <n>] [--scope <s>] [--source <id[=path]>...] [--created-at <iso>] [--json]; list|summary [--handoff <kind>] [--agent <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json]; show <report-id> [--json] - record is gated (default off) by --enable or generation_trace_enabled; stores prompt_hash + counts only
 o2b brain context-presets     show [tight-context|long-context] --json; suggest --model <name> --context-window <tokens> --json; diff <preset-id> [current-value flags] [--override <path>...] --json
 o2b brain pre-compact-extract --session-id <id> --turn-start <id> --turn-end <id> --text <bounded-text> [--host <name>] [--max-chars <n>] [--json]
+o2b brain post-compact-audit  [--session-id <id>] [--no-reassert] [--force] [--vault <path>] [--json] - reads { session_id, messages } JSON from stdin; gated off by default (post_compact_survival_audit), --force overrides
 o2b brain import-session      <path> --recall [--recall-session-id <id>] [--recall-summary-group-size <n>] [--json]
 o2b brain session-grep        --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--json]
 o2b brain session-describe    --session-id <id> [--json]
