@@ -33,12 +33,18 @@ type SearchConfigOverrides = Partial<Omit<ResolvedSearchConfig, "ignoreRules" | 
 
 export type {
   BrainSearchResult,
+  DisclosureMode,
+  ExpandedNote,
+  ExpandedRawChunk,
+  ExpandHitInput,
+  ExpandHitResult,
   IndexCheckReport,
   IndexStats,
   IndexStatusSnapshot,
   ResolvedEmbeddingConfig,
   ResolvedRecallConfig,
   ResolvedSearchConfig,
+  SearchCard,
   SearchErrorCode,
   SearchOptions,
   SearchOutcome,
@@ -79,7 +85,7 @@ export {
   type IndexVaultOptions,
   type IndexProgressEvent,
 } from "./indexer.ts";
-export { search } from "./search.ts";
+export { search, expandHit } from "./search.ts";
 export {
   captureRecallFeedback,
   computeLearnedWeights,
@@ -97,6 +103,7 @@ export {
 const DEFAULTS = {
   chunkSize: 800,
   chunkOverlap: 100,
+  chunkMinSize: 100,
   keywordWeight: 0.6,
   semanticWeight: 0.4,
   provider: "openai-compat" as const,
@@ -117,6 +124,7 @@ const DEFAULTS = {
   rrfK: DEFAULT_RRF_K,
   shutdownGraceSeconds: 5,
   resumeReindex: false,
+  chainStopScore: 0.8,
 };
 
 function parseFusionMode(raw: string | null): "linear" | "rrf" {
@@ -203,6 +211,13 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
       `search_chunk_overlap must be smaller than search_chunk_size, got ${config.chunkOverlap} >= ${config.chunkSize}`,
     );
   }
+  validateIntegerRange(config.chunkMinSize, "search_chunk_min_size", { min: 1 });
+  if (config.chunkMinSize > config.chunkSize) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `search_chunk_min_size must not exceed search_chunk_size, got ${config.chunkMinSize} > ${config.chunkSize}`,
+    );
+  }
   validateWeight(config.keywordWeight, "search_keyword_weight");
   validateWeight(config.semanticWeight, "search_semantic_weight");
   if (config.keywordWeight + config.semanticWeight > 1.0 + 1e-9) {
@@ -284,6 +299,12 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.chunkOverlap,
     "search_chunk_overlap",
     { min: 0 },
+  );
+  const chunkMinSize = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_CHUNK_MIN_SIZE", "search_chunk_min_size"),
+    DEFAULTS.chunkMinSize,
+    "search_chunk_min_size",
+    { min: 1 },
   );
   const keywordWeight = parseFloat01(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_KW_WEIGHT", "search_keyword_weight"),
@@ -510,6 +531,21 @@ export function resolveSearchConfig(opts: {
     false,
     "search_self_tuning_enabled",
   );
+  const chainStopEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP", "search_chain_stop_enabled"),
+    false,
+    "search_chain_stop_enabled",
+  );
+  const chainStopScore = parseFloat01(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE",
+      "search_chain_stop_score",
+    ),
+    DEFAULTS.chainStopScore,
+    "search_chain_stop_score",
+  );
   const shutdownGraceSeconds = parseInteger(
     envOrConfig(
       env,
@@ -545,6 +581,8 @@ export function resolveSearchConfig(opts: {
     twoPassEnabled,
     poolMultiplier,
     selfTuningEnabled,
+    chainStopEnabled,
+    chainStopScore,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({
@@ -553,6 +591,7 @@ export function resolveSearchConfig(opts: {
     ignoreRules,
     chunkSize,
     chunkOverlap,
+    chunkMinSize,
     keywordWeight,
     semanticWeight,
     fusionMode,

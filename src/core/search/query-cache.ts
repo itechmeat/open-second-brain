@@ -86,6 +86,10 @@ export function buildCacheKey(
     properties: canonicalProperties(opts.properties),
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
     agentScope: opts.agentScope ?? null,
+    // Disclosure depth (D3) partitions the cache: a `cards` outcome and a
+    // `full` outcome must not collide. Folded in only for `cards`, so the
+    // default `full` key (and every pre-D3 cached row) stays byte-identical.
+    disclosure: opts.disclosure === "cards" ? "cards" : undefined,
     structuredQuery: canonicalStructuredQuery(opts),
     sessionFocus: canonicalSessionFocus(opts),
     plan: planHash,

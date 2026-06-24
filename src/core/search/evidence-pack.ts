@@ -5,12 +5,21 @@ import {
   termIncludedIn,
 } from "./coverage.ts";
 import type { CompletenessReport, CoverageReport } from "./coverage.ts";
+import { formatLinePointer } from "./line-numbering.ts";
 import type { BrainSearchResult } from "./types.ts";
 
 export interface EvidenceRecord {
   readonly path: string;
   readonly documentId: number;
   readonly chunkId: number;
+  /**
+   * Read-time line-anchored citation for this chunk, formatted
+   * `path:Lstart-Lend` (or `path:Lstart` for a single line) from the chunk's
+   * 1-based `startLine`/`endLine`. Resolves by opening the file and slicing
+   * the range with {@link extractLineRange}; the stored bytes are never
+   * mutated, so the pointer stays valid across idempotent re-mining.
+   */
+  readonly linePointer: string;
   readonly matchedTerms: ReadonlyArray<string>;
   readonly missingTerms: ReadonlyArray<string>;
   readonly supportCoverage: number;
@@ -184,6 +193,7 @@ export function buildEvidencePack(
       path: result.path,
       documentId: result.documentId,
       chunkId: result.chunkId,
+      linePointer: formatLinePointer(result.path, result.startLine, result.endLine),
       matchedTerms: Object.freeze(matched),
       missingTerms: Object.freeze(missing),
       supportCoverage: supportCoverage(matched, significant),

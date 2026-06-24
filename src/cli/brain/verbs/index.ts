@@ -82,6 +82,7 @@ export { cmdBrainPageDedup } from "./page-dedup.ts";
 export { cmdBrainTokenFootprint } from "./token-footprint.ts";
 export { cmdBrainContextPack } from "./context-pack.ts";
 export { cmdBrainContextReceipts } from "./context-receipts.ts";
+export { cmdBrainEventTrace } from "./event-trace.ts";
 export { cmdBrainContextPresets } from "./context-presets.ts";
 export { cmdBrainPreCompactExtract } from "./pre-compact-extract.ts";
 export { cmdBrainRecallTelemetry } from "./recall-telemetry.ts";

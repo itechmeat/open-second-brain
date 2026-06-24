@@ -370,6 +370,8 @@ Recall and ranking quality (v0.20.0), each tunable and bounded:
 | `search_synonym_max_terms` | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS` | `3`     | Cap on expansion terms OR'd onto the query                       |
 | `search_cache_enabled`     | `OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED`     | `false` | Opt-in persistent query cache, gated by corpus generation        |
 | `search_cache_ttl_seconds` | `OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL`         | `300`   | Cache row time-to-live in seconds                                |
+| `search_chain_stop_enabled`| `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP`        | `false` | Opt-in cross-vault early termination once an origin answers confidently |
+| `search_chain_stop_score`  | `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE`  | `0.8`   | Normalized `[0,1]` top-score threshold that triggers the chain-stop |
 
 `brain_context_pack` also accepts `max_chars_per_memory` and
 `max_total_chars` (code-point caps). Pass `--lanes` to keep the legacy flat

@@ -14,6 +14,7 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_SEMANTIC",
   "OPEN_SECOND_BRAIN_SEARCH_CHUNK_SIZE",
   "OPEN_SECOND_BRAIN_SEARCH_CHUNK_OVERLAP",
+  "OPEN_SECOND_BRAIN_SEARCH_CHUNK_MIN_SIZE",
   "OPEN_SECOND_BRAIN_SEARCH_KW_WEIGHT",
   "OPEN_SECOND_BRAIN_SEARCH_SEM_WEIGHT",
   "OPEN_SECOND_BRAIN_SEARCH_IGNORE",
@@ -35,6 +36,8 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL",
   "OPEN_SECOND_BRAIN_SEARCH_SHUTDOWN_GRACE",
   "OPEN_SECOND_BRAIN_SEARCH_RESUME_REINDEX",
+  "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP",
+  "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE",
 ];
 
 beforeEach(() => {
@@ -62,6 +65,7 @@ test("defaults are returned when config and env are empty", () => {
   expect(cfg.dbPath).toBe(join(tmp, ".open-second-brain", "brain.sqlite"));
   expect(cfg.chunkSize).toBe(800);
   expect(cfg.chunkOverlap).toBe(100);
+  expect(cfg.chunkMinSize).toBe(100);
   expect(cfg.keywordWeight).toBe(0.6);
   expect(cfg.semanticWeight).toBe(0.4);
   expect(cfg.semantic.enabled).toBe(false);
@@ -122,6 +126,23 @@ test("query cache defaults off with a 300s TTL and is toggleable", () => {
   const on = resolveSearchConfig({ vault: tmp, configPath }).recall;
   expect(on.cacheEnabled).toBe(true);
   expect(on.cacheTtlSeconds).toBe(60);
+});
+
+test("cross-vault chain-stop defaults off at a 0.8 threshold and is toggleable", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const def = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  expect(def.chainStopEnabled).toBe(false);
+  expect(def.chainStopScore).toBe(0.8);
+  process.env["OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP"] = "true";
+  process.env["OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE"] = "0.9";
+  const on = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  expect(on.chainStopEnabled).toBe(true);
+  expect(on.chainStopScore).toBe(0.9);
+});
+
+test("chain-stop score outside [0,1] is rejected", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_chain_stop_score: "1.5"\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/search_chain_stop_score/);
 });
 
 test("non-positive recency scale is rejected", () => {
@@ -263,6 +284,25 @@ test("chunk overlap must be non-negative and smaller than chunk size", () => {
     `vault: "${tmp}"\nsearch_chunk_size: "100"\nsearch_chunk_overlap: "100"\n`,
   );
   expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/smaller than/);
+});
+
+test("chunk minimum size resolves from config and env overrides config", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_chunk_min_size: "50"\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).chunkMinSize).toBe(50);
+
+  process.env["OPEN_SECOND_BRAIN_SEARCH_CHUNK_MIN_SIZE"] = "75";
+  expect(resolveSearchConfig({ vault: tmp, configPath }).chunkMinSize).toBe(75);
+});
+
+test("chunk minimum size must be a positive integer not exceeding chunk size", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_chunk_min_size: "0"\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/search_chunk_min_size/);
+
+  writeFileSync(
+    configPath,
+    `vault: "${tmp}"\nsearch_chunk_size: "300"\nsearch_chunk_min_size: "400"\n`,
+  );
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/exceed/);
 });
 
 test("overrides are validated after merging", () => {

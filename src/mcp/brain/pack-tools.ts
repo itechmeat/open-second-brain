@@ -33,6 +33,8 @@ import {
   type ContextPresetCurrentConfig,
 } from "../../core/brain/context-presets.ts";
 import { extractPreCompactRecords } from "../../core/brain/pre-compact-extract.ts";
+import { resolveLogEventTraces } from "../../core/brain/event-trace.ts";
+import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/brain/types.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -195,6 +197,44 @@ async function toolBrainContextReceipts(
   }
 
   throw new MCPError(INVALID_PARAMS, "brain_context_receipts: operation must be list or show");
+}
+
+// ----- brain_event_trace ---------------------------------------------------
+
+async function toolBrainEventTrace(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const kind = optionalStringArg("brain_event_trace", args, "kind");
+  if (kind !== undefined && !BRAIN_LOG_EVENT_KIND_SET.has(kind)) {
+    throw new MCPError(INVALID_PARAMS, `brain_event_trace: unknown event kind '${kind}'`);
+  }
+  const date = optionalStringArg("brain_event_trace", args, "date");
+  const at = optionalStringArg("brain_event_trace", args, "at");
+  const sessionId = optionalStringArg("brain_event_trace", args, "session_id");
+  const limit = coercePositiveInteger("brain_event_trace", "limit", args["limit"]);
+  const keepPrivate = coerceBool(args, "keep_private");
+
+  let events;
+  try {
+    events = resolveLogEventTraces(ctx.vault, {
+      ...(date !== undefined ? { date } : {}),
+      ...(at !== undefined ? { at } : {}),
+      ...(kind !== undefined ? { kind: kind as BrainLogEventKind } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      ...(keepPrivate === true ? { keepPrivate: true } : {}),
+    });
+  } catch (err) {
+    throw new MCPError(INVALID_PARAMS, `brain_event_trace: ${(err as Error).message}`);
+  }
+
+  return {
+    vault_path: ctx.vault,
+    total: events.length,
+    trace_total: events.reduce((sum, e) => sum + e.traceCount, 0),
+    events,
+  };
 }
 
 function receiptOptionsFromArgs(
@@ -528,6 +568,46 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainContextReceipts,
+  },
+  {
+    name: "brain_event_trace",
+    description:
+      "Join logged Brain events to the continuity records (recall telemetry, context receipts, generation reports) attached to them by shared correlation ids (session_id, turn_id, artifact refs) — the integrated 'why did the agent do this?' reader. Defaults to today's log. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        date: {
+          type: "string",
+          pattern: "^\\d{4}-\\d{2}-\\d{2}$",
+          description: "Log day to read (YYYY-MM-DD, UTC). Defaults to today.",
+        },
+        at: {
+          type: "string",
+          pattern: "^\\d{2}:\\d{2}:\\d{2}$",
+          description: "Pin a single event by its HH:MM:SS UTC stamp.",
+        },
+        kind: {
+          type: "string",
+          description:
+            "Optional filter by Brain log event kind (e.g. write-session, apply-evidence).",
+        },
+        session_id: {
+          type: "string",
+          description: "Restrict to events whose body carries this session id.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum number of events to return.",
+        },
+        keep_private: {
+          type: "boolean",
+          description: "Keep continuity records flagged private (default: drop them).",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainEventTrace,
   },
   {
     name: "brain_context_presets",

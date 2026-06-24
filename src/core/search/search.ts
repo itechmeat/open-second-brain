@@ -35,7 +35,14 @@ import {
 } from "./activation/store.ts";
 import { extractEntities } from "./entities.ts";
 import { expandQueryEntities } from "./entity-alias.ts";
-import { buildCoverageReport, significantTerms, termIncludedIn } from "./coverage.ts";
+import {
+  buildCoverageReport,
+  COMPLETENESS_COMPLETE_THRESHOLD,
+  planTargetedRetry,
+  significantTerms,
+  termIncludedIn,
+  type CoverageReport,
+} from "./coverage.ts";
 import {
   buildEvidencePack,
   downrankTerminalEvidenceResults,
@@ -58,10 +65,14 @@ import { resolveTimeRange } from "./time-range.ts";
 import { eventTimeInRange, parseValidityWindow, type ValidityWindow } from "./validity.ts";
 import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
 import { Store } from "./store.ts";
+import { formatLinePointer } from "./line-numbering.ts";
 import { SearchError } from "./types.ts";
 import type {
   BrainSearchResult,
+  ExpandHitInput,
+  ExpandHitResult,
   ResolvedSearchConfig,
+  SearchCard,
   SearchOptions,
   SearchOutcome,
 } from "./types.ts";
@@ -418,6 +429,24 @@ export async function search(
     for (const h of semHits) allChunkIds.add(h.chunkId);
     let idsList = Array.from(allChunkIds);
 
+    // Validity-window resolver (hoisted): used both by the time-range
+    // filter below and by the targeted-retry coverage gate, which must
+    // judge coverage over the IN-RANGE pool (see below). One cached
+    // frontmatter read per candidate path.
+    const validityWindowCache = new Map<string, ValidityWindow | null>();
+    const validityWindowFor = (path: string): ValidityWindow | null => {
+      if (validityWindowCache.has(path)) return validityWindowCache.get(path) ?? null;
+      let window: ValidityWindow | null = null;
+      try {
+        const [meta] = parseFrontmatter(join(config.vault, path));
+        window = parseValidityWindow(meta as Record<string, unknown>);
+      } catch {
+        window = null;
+      }
+      validityWindowCache.set(path, window);
+      return window;
+    };
+
     // Self-correcting two-pass recall (t_ef92dfdc): a zero-candidate
     // first pass in evidence-pack mode means the implicit-AND keyword
     // match was too strict - the classic abstention dead end. Instead
@@ -426,6 +455,10 @@ export async function search(
     // as alternatives, then let the merged pool flow through the normal
     // ranking, filters, and a recomputed evidence pack.
     let secondPass: SearchOutcome["secondPass"];
+    // Chunk ids the targeted retry below recovered, so only those
+    // results (not the first-pass hits they merge with) get the
+    // second-pass attribution reason.
+    const targetedChunkIds = new Set<number>();
     if (idsList.length === 0 && opts.evidencePack === true && config.recall.twoPassEnabled) {
       const terms = significantTerms(query);
       if (terms.length >= 2) {
@@ -441,8 +474,70 @@ export async function search(
           idsList = Array.from(allChunkIds);
           secondPass = Object.freeze({
             triggered: true,
+            kind: "broadened",
             reason: "zero-candidate first pass; broadened OR retry",
             added: kwHits.length,
+          });
+        }
+      }
+    }
+
+    // Coverage-driven targeted follow-up (t_8eb5ca32): the first pass
+    // DID return candidates, but their IDF-weighted coverage of the
+    // query is below the completeness threshold with rare query terms
+    // still uncovered - a PARTIAL miss, distinct from the zero-candidate
+    // dead end above. Issue exactly ONE targeted retry built from the
+    // specifically-uncovered rare terms (not a generic broadening of the
+    // whole query), merge the recovered candidates into the pool, and
+    // let them flow through the normal ranking and a recomputed evidence
+    // pack. Mutually exclusive with the broadened retry above (that needs
+    // an empty pool, this a non-empty one), so at most one retry fires -
+    // the same single-retry discipline. The trigger is deterministic and
+    // LLM-free; the recomputed pack still abstains on any term left
+    // uncovered after the retry.
+    if (
+      secondPass === undefined &&
+      idsList.length > 0 &&
+      opts.evidencePack === true &&
+      config.recall.twoPassEnabled
+    ) {
+      // Judge coverage over the pool that will actually survive ranking:
+      // for a time-scoped query, exclude out-of-range candidates first, so
+      // a rare term is not marked "covered" only because an out-of-range
+      // chunk matched it (which would wrongly suppress the retry while the
+      // final in-range result set still misses that term).
+      let coverageIds = idsList;
+      if (timeRange !== null) {
+        const hydratedForCoverage = store.hydrateChunks(idsList);
+        coverageIds = idsList.filter((chunkId) => {
+          const chunk = hydratedForCoverage.get(chunkId);
+          if (chunk === undefined) return false;
+          return eventTimeInRange(validityWindowFor(chunk.path), chunk.mtime, timeRange);
+        });
+      }
+      const poolCoverage = coverageOverChunks(store, query, coverageIds);
+      const plan = planTargetedRetry(poolCoverage);
+      if (plan.fire) {
+        const targeted = runFtsQueryDetailed(store, plan.terms[0]!, {
+          expandedTerms: plan.terms.slice(1),
+          limit: Math.max(limit * 5, 50),
+          pathPrefix: pathPrefix ?? null,
+        });
+        for (const w of targeted.warnings) warnings.push(w);
+        const newHits = targeted.hits.filter((h) => !allChunkIds.has(h.chunkId));
+        if (newHits.length > 0) {
+          kwHits = kwHits.concat(newHits);
+          for (const h of newHits) {
+            allChunkIds.add(h.chunkId);
+            targetedChunkIds.add(h.chunkId);
+          }
+          idsList = Array.from(allChunkIds);
+          secondPass = Object.freeze({
+            triggered: true,
+            kind: "targeted",
+            reason: `partial coverage ${poolCoverage.idfWeightedCoverage.toFixed(2)} < ${COMPLETENESS_COMPLETE_THRESHOLD}; targeted retry on uncovered rare terms: ${plan.terms.join(", ")}`,
+            added: newHits.length,
+            targetedTerms: plan.terms,
           });
         }
       }
@@ -471,22 +566,9 @@ export async function search(
     // Event-time discipline (t_b7191486): a document declaring
     // `valid_from` / `valid_until` is tested by validity-window
     // OVERLAP - storage mtime is the fallback, never the authority,
-    // when explicit event time exists. One cached frontmatter read per
-    // candidate path; an unparseable declared value warns once and
-    // falls back to mtime.
-    const validityWindowCache = new Map<string, ValidityWindow | null>();
-    const validityWindowFor = (path: string): ValidityWindow | null => {
-      if (validityWindowCache.has(path)) return validityWindowCache.get(path) ?? null;
-      let window: ValidityWindow | null = null;
-      try {
-        const [meta] = parseFrontmatter(join(config.vault, path));
-        window = parseValidityWindow(meta as Record<string, unknown>);
-      } catch {
-        window = null;
-      }
-      validityWindowCache.set(path, window);
-      return window;
-    };
+    // when explicit event time exists. The `validityWindowFor` resolver
+    // is hoisted above (shared with the targeted-retry coverage gate); an
+    // unparseable declared value warns once and falls back to mtime.
     if (timeRange !== null) {
       const warnedInvalid = new Set<string>();
       const windowFor = validityWindowFor;
@@ -852,18 +934,24 @@ export async function search(
               : r,
           )
         : withStructuredReasons;
-    // Two-pass attribution (t_ef92dfdc): every surfaced result of a
-    // broadened retry says so - the operator can tell recovered
-    // evidence from a first-pass hit.
+    // Two-pass attribution (t_ef92dfdc; targeted retry t_8eb5ca32): a
+    // surfaced result of a retry says so - the operator can tell
+    // recovered evidence from a first-pass hit. The broadened retry
+    // replaced the whole pool, so every result is recovered; the
+    // targeted retry only ADDED candidates, so only those (tracked in
+    // `targetedChunkIds`) carry the reason - the first-pass hits they
+    // merge with do not.
     const withSecondPassReasons =
-      secondPass !== undefined
-        ? withCanonicalReasons.map((r) =>
-            Object.freeze({
-              ...r,
-              reasons: Object.freeze([...r.reasons, "second_pass: or-broadened retry"]),
-            }),
-          )
-        : withCanonicalReasons;
+      secondPass === undefined
+        ? withCanonicalReasons
+        : withCanonicalReasons.map((r) => {
+            if (secondPass.kind === "targeted" && !targetedChunkIds.has(r.chunkId)) return r;
+            const reason =
+              secondPass.kind === "targeted"
+                ? "second_pass: targeted retry on uncovered rare terms"
+                : "second_pass: or-broadened retry";
+            return Object.freeze({ ...r, reasons: Object.freeze([...r.reasons, reason]) });
+          });
     // Terminal-state downrank (recall-trust-suite) is now structural and
     // language-agnostic: a result is terminal when its frontmatter
     // `status:` field declares a terminal value (controlled vocabulary),
@@ -917,6 +1005,26 @@ export async function search(
     const resultsOut =
       opts.trust === true ? attachTrustMetadata(config.vault, finalResults) : finalResults;
 
+    // Progressive disclosure (D3): layer 1. When the caller opts into
+    // `cards`, project the SAME ranked rows into token-cheap cards and
+    // return them on `cards` with an empty `results`. The ranking,
+    // filtering, and evidence pack are computed identically to full mode -
+    // only the surfaced depth differs - so the contract stays
+    // deterministic and the default `full` path is byte-identical.
+    if ((opts.disclosure ?? "full") === "cards") {
+      const cards = resultsOut.map(toSearchCard);
+      return finalize(
+        Object.freeze({
+          results: Object.freeze([] as ReadonlyArray<BrainSearchResult>),
+          cards: Object.freeze(cards),
+          warnings: Object.freeze(warnings),
+          total: cards.length,
+          ...(evidencePack !== undefined ? { evidencePack } : {}),
+          ...(secondPass !== undefined ? { secondPass } : {}),
+        }),
+      );
+    }
+
     return finalize(
       Object.freeze({
         results: Object.freeze(resultsOut),
@@ -926,6 +1034,102 @@ export async function search(
         ...(secondPass !== undefined ? { secondPass } : {}),
       }),
     );
+  } finally {
+    await store.close();
+  }
+}
+
+/** Max chars of a layer-1 card snippet — enough to judge a hit, cheap to carry. */
+const CARD_SNIPPET_CHARS = 240;
+/** Default layer-3 raw-chunk page size for `expandHit`. */
+const DEFAULT_EXPAND_RAW_LIMIT = 10;
+
+/**
+ * Project a ranked result into a layer-1 card (progressive disclosure):
+ * identity + score + the same `reasons`, a whitespace-collapsed snippet
+ * capped at {@link CARD_SNIPPET_CHARS}, and a `path:Lstart-Lend` pointer
+ * (D2 grammar) over the chunk's stored line span. No full content.
+ */
+function toSearchCard(result: BrainSearchResult): SearchCard {
+  return Object.freeze({
+    chunkId: result.chunkId,
+    documentId: result.documentId,
+    path: result.path,
+    title: result.title,
+    score: result.score,
+    reasons: result.reasons,
+    snippet: cardSnippet(result.content),
+    pointer: formatLinePointer(result.path, result.startLine, result.endLine),
+    ...(result.origin !== undefined ? { origin: result.origin } : {}),
+  });
+}
+
+function cardSnippet(content: string): string {
+  const collapsed = content.replace(/\s+/g, " ").trim();
+  return collapsed.length <= CARD_SNIPPET_CHARS
+    ? collapsed
+    : `${collapsed.slice(0, CARD_SNIPPET_CHARS)}...`;
+}
+
+/**
+ * Progressive disclosure (D3): layers 2 and 3 of a hit the agent already
+ * holds as a layer-1 card. Given the card's `chunkId`, reconstruct the
+ * fuller note (layer 2) from the document's stored chunks and return a
+ * paginated slice of those raw chunks (layer 3), mirroring
+ * `expandSessionRecall`'s cursor contract.
+ *
+ * Read-only by construction: it opens the index in read mode and never
+ * self-heals — a card can only exist because a prior search built the
+ * index, and a rebuild would WRITE it. The layer-2/3 data is pure store
+ * reads (`hydrateChunks` + `getChunksByDocument`), never a new index.
+ */
+export async function expandHit(
+  config: ResolvedSearchConfig,
+  input: ExpandHitInput,
+): Promise<ExpandHitResult> {
+  if (!Number.isInteger(input.chunkId) || input.chunkId < 1) {
+    throw new SearchError("INVALID_INPUT", "chunkId must be a positive integer");
+  }
+  const store = await Store.open(config, { mode: "read" });
+  try {
+    const hit = store.hydrateChunks([input.chunkId]).get(input.chunkId);
+    if (hit === undefined) {
+      throw new SearchError("INVALID_INPUT", `chunk not found: ${input.chunkId}`);
+    }
+    // Document chunks in `chunkIndex` order: the fuller note (layer 2) is
+    // their concatenation; the raw transcript (layer 3) is the same rows.
+    const chunks = store.getChunksByDocument(hit.documentId);
+    const lineStart = chunks.length > 0 ? chunks[0]!.startLine : hit.startLine;
+    const lineEnd = chunks.length > 0 ? chunks[chunks.length - 1]!.endLine : hit.endLine;
+    const note = Object.freeze({
+      documentId: hit.documentId,
+      path: hit.path,
+      title: hit.title,
+      lineStart,
+      lineEnd,
+      pointer: formatLinePointer(hit.path, lineStart, lineEnd),
+      content: chunks.map((c) => c.content).join("\n"),
+    });
+
+    const offset = Math.max(0, Number.parseInt(input.cursor ?? "0", 10) || 0);
+    const rawLimit = Math.max(1, input.rawLimit ?? DEFAULT_EXPAND_RAW_LIMIT);
+    const page = chunks.slice(offset, offset + rawLimit).map((c) =>
+      Object.freeze({
+        chunkId: c.id,
+        chunkIndex: c.chunkIndex,
+        startLine: c.startLine,
+        endLine: c.endLine,
+        pointer: formatLinePointer(hit.path, c.startLine, c.endLine),
+        content: c.content,
+      }),
+    );
+    const nextOffset = offset + rawLimit;
+    return Object.freeze({
+      chunkId: input.chunkId,
+      note,
+      raw_content: Object.freeze(page),
+      next_cursor: nextOffset < chunks.length ? String(nextOffset) : null,
+    });
   } finally {
     await store.close();
   }
@@ -1069,6 +1273,40 @@ const UNION_RECORDS_TOTAL = 8;
  * fetch up to {@link UNION_RECORDS_PER_TERM} records that DO cover it
  * (evidence can span records the primary ranking never surfaced).
  */
+/**
+ * IDF-weighted coverage of the query over a candidate POOL (the partial
+ * self-correcting retry trigger, t_8eb5ca32). Mirrors the result-set
+ * coverage in {@link buildEvidenceVerification} but scores the
+ * pre-ranking candidate chunks: a term is covered when any candidate's
+ * path/title/content contains it. Corpus document frequencies and the
+ * document count come from the store, exactly as the result-set pass
+ * does, so the two reports share one definition of "covered" and one
+ * IDF scale.
+ */
+function coverageOverChunks(
+  store: Store,
+  query: string,
+  chunkIds: ReadonlyArray<number>,
+): CoverageReport {
+  const terms = significantTerms(query);
+  const dfByTerm = store.documentFrequencies(terms);
+  const documentCount = store.counts().documents;
+  const hydrated = store.hydrateChunks(chunkIds);
+  const covered = new Set<string>();
+  for (const h of hydrated.values()) {
+    const haystack = `${h.path}\n${h.title ?? ""}\n${h.content}`;
+    for (const t of terms) {
+      if (!covered.has(t) && termIncludedIn(haystack, t)) covered.add(t);
+    }
+  }
+  return buildCoverageReport({
+    significantTerms: terms,
+    coveredTerms: covered,
+    documentCount,
+    dfByTerm,
+  });
+}
+
 function buildEvidenceVerification(
   store: Store,
   query: string,

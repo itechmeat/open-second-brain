@@ -288,6 +288,86 @@ export interface IndexCheckReport {
   readonly recommendations: ReadonlyArray<string>;
 }
 
+/**
+ * Result-depth disclosure mode (progressive 3-layer recall). `full`
+ * (default) is the historical flat search: every hit carries its full
+ * chunk content. `cards` returns compact layer-1 {@link SearchCard}s
+ * instead — path/title/score/reasons/snippet/pointer, no full content —
+ * so recall stays token-cheap and the agent pays for depth only by
+ * calling `expandHit` (layer 2 fuller note, layer 3 raw transcript).
+ *
+ * This is NOT the query-lane `expand` flag on {@link SearchOptions}:
+ * that broadens the candidate query, this shapes how much of each
+ * surfaced result is disclosed.
+ */
+export type DisclosureMode = "full" | "cards";
+
+/**
+ * Layer-1 compact card (progressive disclosure). The token-cheap
+ * projection of a ranked {@link BrainSearchResult}: identity, score,
+ * the same explainable `reasons`, a bounded `snippet`, and a
+ * `path:Lstart-Lend` line pointer (D2 grammar) — but never the full
+ * chunk content. Drill to layer 2/3 via `expandHit({ chunkId })`.
+ */
+export interface SearchCard {
+  readonly chunkId: number;
+  readonly documentId: number;
+  readonly path: string;
+  readonly title: string | null;
+  readonly score: number;
+  readonly reasons: ReadonlyArray<string>;
+  readonly snippet: string;
+  /** `path:Lstart-Lend` (or single-line `path:Lstart`) line pointer. */
+  readonly pointer: string;
+  /** Cross-vault origin label, mirrored from the source result when set. */
+  readonly origin?: string;
+}
+
+export interface ExpandHitInput {
+  readonly chunkId: number;
+  /** Raw-chunk page size for layer 3 (default 10). */
+  readonly rawLimit?: number;
+  /** Opaque pagination cursor returned as `next_cursor` by a prior call. */
+  readonly cursor?: string;
+}
+
+/**
+ * Layer-2 fuller note: the hit's whole document, reconstructed from the
+ * store's chunk rows (no new index, no disk read), with the line span it
+ * occupies and a `path:Lstart-Lend` pointer.
+ */
+export interface ExpandedNote {
+  readonly documentId: number;
+  readonly path: string;
+  readonly title: string | null;
+  readonly lineStart: number;
+  readonly lineEnd: number;
+  readonly pointer: string;
+  readonly content: string;
+}
+
+/** Layer-3 raw chunk (the indexed transcript), one page entry. */
+export interface ExpandedRawChunk {
+  readonly chunkId: number;
+  readonly chunkIndex: number;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly pointer: string;
+  readonly content: string;
+}
+
+/**
+ * `expandHit` result, mirroring `expandSessionRecall`: the fuller note
+ * (layer 2) and a paginated slice of the document's raw chunks (layer 3),
+ * with a `next_cursor` that is null once the transcript is exhausted.
+ */
+export interface ExpandHitResult {
+  readonly chunkId: number;
+  readonly note: ExpandedNote;
+  readonly raw_content: ReadonlyArray<ExpandedRawChunk>;
+  readonly next_cursor: string | null;
+}
+
 export interface SearchOptions {
   readonly query: string;
   readonly limit?: number;
@@ -339,6 +419,14 @@ export interface SearchOptions {
    * retrieval. Never silently active.
    */
   readonly expand?: boolean;
+  /**
+   * Result-depth disclosure (progressive 3-layer recall). `full`
+   * (default) keeps the flat full-content result shape byte-identical;
+   * `cards` returns compact {@link SearchCard}s on `SearchOutcome.cards`
+   * and an empty `results`, so the caller pays for depth only by calling
+   * `expandHit`. Distinct from the query-lane `expand` flag above.
+   */
+  readonly disclosure?: DisclosureMode;
   /**
    * Optional named recall profile (Recall & Working-Memory Quality Suite,
    * t_98c39dd6): `fast | balanced | thorough` expand to a fixed knob tuple
@@ -433,17 +521,49 @@ export interface SearchOutcome {
   readonly results: ReadonlyArray<BrainSearchResult>;
   readonly warnings: ReadonlyArray<string>;
   readonly total: number;
+  /**
+   * Layer-1 compact cards (progressive disclosure). Present only when the
+   * caller set `disclosure: "cards"`; in that mode `results` is empty and
+   * `total` counts the cards. Absent on the default `full` path, keeping
+   * the legacy outcome shape byte-identical.
+   */
+  readonly cards?: ReadonlyArray<SearchCard>;
   readonly evidencePack?: EvidencePack;
   /**
    * Self-correcting two-pass recall (Time-Aware Recall & Activation
-   * Suite, t_ef92dfdc). Present only when a zero-candidate first pass
-   * in evidence-pack mode triggered the single broadened OR retry.
+   * Suite, t_ef92dfdc; coverage-driven targeted retry, t_8eb5ca32).
+   * Present only when a single follow-up retry fired in evidence-pack
+   * mode. `kind` distinguishes the two triggers, which are mutually
+   * exclusive (at most one retry per query):
+   *   - `"broadened"`: a ZERO-candidate first pass ran one broadened
+   *     OR retry over all significant terms.
+   *   - `"targeted"`: a non-empty first pass left rare query terms
+   *     uncovered (partial coverage below the completeness threshold)
+   *     and ran one retry aimed at exactly those uncovered rare terms,
+   *     listed in `targetedTerms`.
    */
   readonly secondPass?: {
     readonly triggered: true;
+    readonly kind: "broadened" | "targeted";
     readonly reason: string;
-    /** Candidate hits the broadened pass contributed. */
+    /** Candidate hits the retry pass contributed to the pool. */
     readonly added: number;
+    /** The uncovered rare terms re-queried by a `"targeted"` retry. */
+    readonly targetedTerms?: ReadonlyArray<string>;
+  };
+  /**
+   * Normalized-confidence chain-stop (t_23c1b929). Present only when
+   * `searchAcrossVaults` ran with `chainStopEnabled` and a completed origin's
+   * top normalized score reached the threshold, so the remaining origins were
+   * skipped. `stoppedAfter` is the origin label that cleared the threshold;
+   * `skipped` lists the origin labels that were not searched. Absent whenever
+   * the chain-stop is off or never triggered, keeping the outcome shape
+   * byte-identical to single-vault search.
+   */
+  readonly chainStop?: {
+    readonly triggered: true;
+    readonly stoppedAfter: string;
+    readonly skipped: ReadonlyArray<string>;
   };
 }
 
@@ -542,10 +662,14 @@ export interface ResolvedRecallConfig {
    */
   readonly activationEnabled: boolean;
   /**
-   * Self-correcting two-pass recall (t_ef92dfdc). On by default: a
-   * zero-candidate first pass in evidence-pack mode runs exactly one
-   * broadened OR retry instead of dead-ending in an abstention.
-   * Plain (non-evidence-pack) searches never broaden either way.
+   * Self-correcting two-pass recall (t_ef92dfdc; coverage-driven
+   * targeted retry, t_8eb5ca32). On by default and the kill switch for
+   * BOTH retry triggers in evidence-pack mode: a zero-candidate first
+   * pass runs one broadened OR retry, and a non-empty first pass whose
+   * IDF-weighted coverage falls below the completeness threshold with
+   * rare terms still uncovered runs one targeted retry aimed at those
+   * uncovered rare terms. At most one retry fires per query. Plain
+   * (non-evidence-pack) searches never retry either way.
    */
   readonly twoPassEnabled: boolean;
   /**
@@ -563,6 +687,18 @@ export interface ResolvedRecallConfig {
    * silently.
    */
   readonly selfTuningEnabled: boolean;
+  /**
+   * Normalized-confidence chain-stop for cross-vault recall (t_23c1b929).
+   * Off by default: when true, `searchAcrossVaults` stops querying further
+   * origins as soon as a completed origin's top NORMALIZED [0,1] result
+   * score reaches `chainStopScore`, recording the skipped origins. Gates on
+   * the normalized result score, never the raw lane score, so a tiny-corpus
+   * origin with a high raw score but a low normalized score never
+   * short-circuits. Default-off keeps cross-vault results bit-identical.
+   */
+  readonly chainStopEnabled: boolean;
+  /** Normalized-score threshold in [0, 1] that triggers the chain-stop. */
+  readonly chainStopScore: number;
 }
 
 export interface ResolvedSearchConfig {
@@ -580,6 +716,15 @@ export interface ResolvedSearchConfig {
   readonly ignoreRules: ReadonlyArray<VaultIgnoreRule>;
   readonly chunkSize: number;
   readonly chunkOverlap: number;
+  /**
+   * Chunk floor (min tokens) — the heading-boundary flush threshold in
+   * the markdown chunker (`minTokens`). Resolved from
+   * `search_chunk_min_size` / `OPEN_SECOND_BRAIN_SEARCH_CHUNK_MIN_SIZE`.
+   * Default 100 (the chunker's `DEFAULT_MIN_TOKENS`); kept stable so
+   * vaults that don't set it hash identical chunks across Syncthing
+   * peers. Must be ≥ 1 and ≤ `chunkSize`.
+   */
+  readonly chunkMinSize: number;
   readonly keywordWeight: number;
   readonly semanticWeight: number;
   /**

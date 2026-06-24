@@ -69,3 +69,20 @@ test("buildEvidencePack reports terminal downrank only when applied", () => {
 
   expect(pack.records[0]?.droppedCandidateReasons).toContain("terminal_state_downranked");
 });
+
+test("buildEvidencePack carries a single-line linePointer for a one-line chunk", () => {
+  const pack = buildEvidencePack("alpha", [result("active.md", "alpha beta")]);
+
+  expect(pack.records[0]?.linePointer).toBe("active.md:L1");
+});
+
+test("buildEvidencePack carries a line-range linePointer from the chunk span", () => {
+  const multiLine: BrainSearchResult = Object.freeze({
+    ...result("notes.md", "alpha"),
+    startLine: 5,
+    endLine: 12,
+  });
+  const pack = buildEvidencePack("alpha", [multiLine]);
+
+  expect(pack.records[0]?.linePointer).toBe("notes.md:L5-L12");
+});
