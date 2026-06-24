@@ -127,6 +127,8 @@ export function makeConfig(opts: {
       twoPassEnabled: opts.twoPassEnabled ?? true,
       poolMultiplier: 3,
       selfTuningEnabled: opts.selfTuningEnabled ?? false,
+      chainStopEnabled: false,
+      chainStopScore: 0.8,
     }),
     shutdownGraceMs: 5_000,
     resumeReindex: false,

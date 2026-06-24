@@ -36,6 +36,8 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL",
   "OPEN_SECOND_BRAIN_SEARCH_SHUTDOWN_GRACE",
   "OPEN_SECOND_BRAIN_SEARCH_RESUME_REINDEX",
+  "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP",
+  "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE",
 ];
 
 beforeEach(() => {
@@ -124,6 +126,23 @@ test("query cache defaults off with a 300s TTL and is toggleable", () => {
   const on = resolveSearchConfig({ vault: tmp, configPath }).recall;
   expect(on.cacheEnabled).toBe(true);
   expect(on.cacheTtlSeconds).toBe(60);
+});
+
+test("cross-vault chain-stop defaults off at a 0.8 threshold and is toggleable", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const def = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  expect(def.chainStopEnabled).toBe(false);
+  expect(def.chainStopScore).toBe(0.8);
+  process.env["OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP"] = "true";
+  process.env["OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE"] = "0.9";
+  const on = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  expect(on.chainStopEnabled).toBe(true);
+  expect(on.chainStopScore).toBe(0.9);
+});
+
+test("chain-stop score outside [0,1] is rejected", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_chain_stop_score: "1.5"\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/search_chain_stop_score/);
 });
 
 test("non-positive recency scale is rejected", () => {

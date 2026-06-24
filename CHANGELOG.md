@@ -5,16 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.18.0] - 2026-06-23
+## [1.18.0] - 2026-06-24
 
-Coverage-driven targeted self-correcting recall on partial misses. The
-self-correcting two-pass recall, previously fired only by a
-zero-candidate first pass, now also fires when a non-empty first pass
-leaves rare query terms uncovered — and the follow-up is aimed at
-exactly those missing facts instead of a generic broadening. Deterministic
-and LLM-free; off when `recall.twoPassEnabled` is false.
+Recall precision, coverage, and provenance hardening. Six related
+improvements make recall more accurate, more complete, and more auditable:
+an end-to-end provenance reader, exact line-span citations, progressive
+disclosure for all recall, normalized-confidence cross-vault early
+termination, coverage-driven targeted self-correction, and a configurable
+chunk floor. Every new decision is deterministic and LLM-free, and each new
+behaviour is off by default or otherwise byte-identical until opted in.
 
 ### Added
+
+- **Configurable chunk minimum size (`t_122b2cbc`).** The markdown chunker's
+  packing floor (`minTokens`) is now operator-tunable per vault via
+  `search_chunk_min_size` / `OPEN_SECOND_BRAIN_SEARCH_CHUNK_MIN_SIZE`,
+  threaded through `chunkMarkdown` and the indexer alongside the existing
+  `search_chunk_size` and `search_chunk_overlap` knobs. Default `100` is
+  unchanged, so vaults that do not set it hash identical chunks across
+  Syncthing peers.
+
+- **Event-to-context provenance reader (`t_8da11868`).** A new read-only
+  correlation-join surface attaches a logged event's context traces via its
+  correlation IDs, so an operator can answer "why did the agent do this"
+  from one surface: the `o2b brain event-trace` CLI verb and the
+  `brain_event_trace` MCP tool. Read-only; joins existing records and writes
+  nothing.
+
+- **Read-time line-span citations (`t_0b83c97b`).** A shared `LinePointer`
+  type and `line-numbering.ts` helpers resolve recalled content to exact
+  `path:Lstart-Lend` spans at read time (no Markdown mutation), and evidence
+  records and session-recall hits now carry those line anchors for sharper
+  citation-depth and answer-containment signals.
+
+- **Progressive disclosure for all recall (`t_468190f5`).** The compact-card
+  to expand to raw-transcript disclosure already used by session-recall is
+  generalized to the main vault search via `disclosure: "cards"`, so callers
+  can pay layer-1 token cost up front and drill deeper only when needed. The
+  default `full` path stays byte-identical.
+
+- **Normalized-confidence cross-vault chain-stop (`t_23c1b929`).** Opt-in via
+  `search_chain_stop_enabled` / `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP`:
+  `searchAcrossVaults` stops querying further origins once a completed
+  origin's top NORMALIZED `[0,1]` result score reaches
+  `search_chain_stop_score` (default `0.8`), recording the skipped origins on
+  the new `SearchOutcome.chainStop`. The gate reads the normalized result
+  score, never the raw lane score, so a tiny-corpus origin with a high raw
+  score never short-circuits. Off by default and byte-identical when no
+  origin is skipped.
 
 - **Targeted retry on partial coverage (`t_8eb5ca32`).** In evidence-pack
   mode, when the first pass returns candidates but their IDF-weighted
@@ -40,6 +78,12 @@ and LLM-free; off when `recall.twoPassEnabled` is false.
   the targeted variant. Recovered results carry a
   `second_pass: targeted retry on uncovered rare terms` reason; first-pass
   hits they merge with do not.
+
+### Fixed
+
+- **MCP search output contracts.** Aligned the MCP search tool output with
+  the new line-span and disclosure result shapes so the typed-relation and
+  evidence fields surface consistently across the CLI and MCP surfaces.
 
 ## [1.17.0] - 2026-06-21
 

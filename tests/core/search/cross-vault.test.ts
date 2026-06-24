@@ -93,3 +93,47 @@ test("single-origin union (no profiles, no sources) matches plain search shape",
   expect(outcome.results.length).toBeGreaterThan(0);
   expect(outcome.results.every((r) => r.origin === "local")).toBe(true);
 });
+
+// D4 t_23c1b929 - normalized-confidence chain-stop for cross-vault early termination.
+function withChainStop(score: number): void {
+  // Re-resolve every origin from config.yaml, so the knob reaches the
+  // active origin the cross-vault loop gates on.
+  writeFileSync(
+    configPath,
+    `vault: "${active}"\nsearch_chain_stop_enabled: true\nsearch_chain_stop_score: ${score}\n`,
+  );
+}
+
+test("chain-stop on: a confident active origin skips the remaining origins", async () => {
+  addRecallSource(configPath, active, "team", external);
+  // Threshold 0: any non-empty origin clears it, so the active origin
+  // alone answers and the external origin is never searched.
+  withChainStop(0);
+  const outcome = await searchAcrossVaults(configPath, active, { query: "griffin", limit: 10 });
+  expect(outcome.results.every((r) => r.origin === "local")).toBe(true);
+  expect(outcome.chainStop).toBeDefined();
+  expect(outcome.chainStop?.triggered).toBe(true);
+  expect(outcome.chainStop?.stoppedAfter).toBe("local");
+  expect(outcome.chainStop?.skipped).toEqual(["source/team"]);
+});
+
+test("chain-stop gates on the normalized score, never raw: a sub-threshold top does not stop", async () => {
+  addRecallSource(configPath, active, "team", external);
+  // The active origin's top NORMALIZED score for this fixture is ~0.65,
+  // well under 0.9, so the gate must not fire and every origin is searched.
+  // The raw FTS/BM25 lane score is far higher than 0.9, so this also proves
+  // the gate reads the normalized result score, not the raw lane score.
+  withChainStop(0.9);
+  const outcome = await searchAcrossVaults(configPath, active, { query: "griffin", limit: 10 });
+  const labels = new Set(outcome.results.map((r) => r.origin));
+  expect(labels).toEqual(new Set(["local", "source/team"]));
+  expect(outcome.chainStop).toBeUndefined();
+});
+
+test("chain-stop off (default) runs every origin bit-identically and records no chainStop", async () => {
+  addRecallSource(configPath, active, "team", external);
+  const outcome = await searchAcrossVaults(configPath, active, { query: "griffin", limit: 10 });
+  const labels = new Set(outcome.results.map((r) => r.origin));
+  expect(labels).toEqual(new Set(["local", "source/team"]));
+  expect(outcome.chainStop).toBeUndefined();
+});

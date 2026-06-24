@@ -551,6 +551,20 @@ export interface SearchOutcome {
     /** The uncovered rare terms re-queried by a `"targeted"` retry. */
     readonly targetedTerms?: ReadonlyArray<string>;
   };
+  /**
+   * Normalized-confidence chain-stop (t_23c1b929). Present only when
+   * `searchAcrossVaults` ran with `chainStopEnabled` and a completed origin's
+   * top normalized score reached the threshold, so the remaining origins were
+   * skipped. `stoppedAfter` is the origin label that cleared the threshold;
+   * `skipped` lists the origin labels that were not searched. Absent whenever
+   * the chain-stop is off or never triggered, keeping the outcome shape
+   * byte-identical to single-vault search.
+   */
+  readonly chainStop?: {
+    readonly triggered: true;
+    readonly stoppedAfter: string;
+    readonly skipped: ReadonlyArray<string>;
+  };
 }
 
 export interface ResolvedEmbeddingConfig {
@@ -673,6 +687,18 @@ export interface ResolvedRecallConfig {
    * silently.
    */
   readonly selfTuningEnabled: boolean;
+  /**
+   * Normalized-confidence chain-stop for cross-vault recall (t_23c1b929).
+   * Off by default: when true, `searchAcrossVaults` stops querying further
+   * origins as soon as a completed origin's top NORMALIZED [0,1] result
+   * score reaches `chainStopScore`, recording the skipped origins. Gates on
+   * the normalized result score, never the raw lane score, so a tiny-corpus
+   * origin with a high raw score but a low normalized score never
+   * short-circuits. Default-off keeps cross-vault results bit-identical.
+   */
+  readonly chainStopEnabled: boolean;
+  /** Normalized-score threshold in [0, 1] that triggers the chain-stop. */
+  readonly chainStopScore: number;
 }
 
 export interface ResolvedSearchConfig {

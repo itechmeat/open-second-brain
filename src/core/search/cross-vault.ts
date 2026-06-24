@@ -84,9 +84,20 @@ export async function searchAcrossVaults(
     }
   }
 
+  // Normalized-confidence chain-stop policy is an active-origin decision
+  // (t_23c1b929): the active vault's resolved config governs whether and
+  // when the union short-circuits. External origins resolve fresh and their
+  // own knob never gates the union. Resolved once, before the loop.
+  const activeRecall = (
+    activeConfig ?? resolveSearchConfig({ vault: resolve(activeVault), configPath })
+  ).recall;
+
+  let chainStop: SearchOutcome["chainStop"];
+
   // Origins run sequentially: each opens its own SQLite store, and a
   // handful of local index reads gains nothing from interleaving.
-  for (const origin of origins) {
+  for (let i = 0; i < origins.length; i++) {
+    const origin = origins[i]!;
     const isActive = origin.kind === "active";
     try {
       const base =
@@ -110,6 +121,27 @@ export async function searchAcrossVaults(
       merged.push(...outcome.results.map((result) => labelled(result, origin.label)));
       warnings.push(...outcome.warnings.map((warning) => `[${origin.label}] ${warning}`));
       total += outcome.total;
+      // Chain-stop: if this origin answered confidently (its top NORMALIZED
+      // [0,1] result score reached the threshold) and origins remain, skip
+      // them. `results` is ranked score-desc, so `[0]` is the top score; it
+      // is the normalized score, never the raw lane score, so a tiny-corpus
+      // origin with a high raw score does not short-circuit. Only recorded
+      // when origins were actually skipped, keeping the single-origin and
+      // never-triggered paths byte-identical.
+      const remaining = origins.slice(i + 1);
+      if (
+        activeRecall.chainStopEnabled &&
+        remaining.length > 0 &&
+        outcome.results.length > 0 &&
+        outcome.results[0]!.score >= activeRecall.chainStopScore
+      ) {
+        chainStop = Object.freeze({
+          triggered: true as const,
+          stoppedAfter: origin.label,
+          skipped: Object.freeze(remaining.map((o) => o.label)),
+        });
+        break;
+      }
     } catch (exc) {
       warnings.push(`[${origin.label}] ${(exc as Error).message ?? String(exc)}`);
     }
@@ -122,5 +154,6 @@ export async function searchAcrossVaults(
     // Sum of per-origin totals - informational, mirrors single-vault
     // semantics where `total` can exceed the capped `results` length.
     total,
+    ...(chainStop ? { chainStop } : {}),
   });
 }

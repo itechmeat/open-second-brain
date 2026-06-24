@@ -58,6 +58,8 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
       twoPassEnabled: true,
       poolMultiplier: 3,
       selfTuningEnabled: false,
+      chainStopEnabled: false,
+      chainStopScore: 0.8,
     }),
     shutdownGraceMs: 5_000,
     resumeReindex: false,

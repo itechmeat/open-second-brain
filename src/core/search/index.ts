@@ -124,6 +124,7 @@ const DEFAULTS = {
   rrfK: DEFAULT_RRF_K,
   shutdownGraceSeconds: 5,
   resumeReindex: false,
+  chainStopScore: 0.8,
 };
 
 function parseFusionMode(raw: string | null): "linear" | "rrf" {
@@ -530,6 +531,21 @@ export function resolveSearchConfig(opts: {
     false,
     "search_self_tuning_enabled",
   );
+  const chainStopEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP", "search_chain_stop_enabled"),
+    false,
+    "search_chain_stop_enabled",
+  );
+  const chainStopScore = parseFloat01(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE",
+      "search_chain_stop_score",
+    ),
+    DEFAULTS.chainStopScore,
+    "search_chain_stop_score",
+  );
   const shutdownGraceSeconds = parseInteger(
     envOrConfig(
       env,
@@ -565,6 +581,8 @@ export function resolveSearchConfig(opts: {
     twoPassEnabled,
     poolMultiplier,
     selfTuningEnabled,
+    chainStopEnabled,
+    chainStopScore,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({
