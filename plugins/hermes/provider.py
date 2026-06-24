@@ -251,10 +251,19 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._drain_captures()
         self._flush_buffer()
 
-    def on_session_end(self, messages: list, **_kwargs: Any) -> None:
-        """Flush any remaining buffered turns at session close."""
+    def on_session_end(self, messages: list, *, interrupted: bool = False, **_kwargs: Any) -> None:
+        """Flush any remaining buffered turns at session close.
+
+        Hermes now fires this hook on an interrupted close too
+        (SIGHUP/SIGTERM/force-quit/restart-drain, #50004/#50003/#50312),
+        passing ``interrupted=True`` alongside the flushed in-flight transcript.
+        Surfacing the flag onto the flush payload lets the TS core record an
+        interrupted capture honestly; the flush itself already drains the same
+        buffered turns whether the close was clean or interrupted, so no turn is
+        lost. Python makes no capture decision - it only forwards the flag.
+        """
         self._drain_captures()
-        self._flush_buffer()
+        self._flush_buffer(interrupted=bool(interrupted))
 
     def on_memory_write(
         self,
@@ -359,23 +368,27 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         except OSError:
             pass
 
-    def _flush_buffer(self) -> None:
-        """Hand buffered turns to deterministic extraction, then clear the buffer."""
+    def _flush_buffer(self, interrupted: bool = False) -> None:
+        """Hand buffered turns to deterministic extraction, then clear the buffer.
+
+        ``interrupted`` is forwarded to the extractor only when set, so a clean
+        close emits a byte-identical payload (the field is absent by default).
+        """
         with self._lock:
             turns = list(self._buffer)
             self._buffer.clear()
         if not turns:
             return
         text = "\n\n".join(f"User: {u}\nAssistant: {a}" for u, a in turns)
-        self._safe_call(
-            "brain_pre_compact_extract",
-            {
-                "session_id": self._session_id or "hermes",
-                "turn_start": 0,
-                "turn_end": len(turns),
-                "text": text,
-            },
-        )
+        args: dict[str, Any] = {
+            "session_id": self._session_id or "hermes",
+            "turn_start": 0,
+            "turn_end": len(turns),
+            "text": text,
+        }
+        if interrupted:
+            args["interrupted"] = True
+        self._safe_call("brain_pre_compact_extract", args)
 
     def _drain_captures(self) -> None:
         """Join outstanding capture threads so a turn buffered just before a

@@ -483,6 +483,28 @@ class ProviderLifecycleTests(unittest.TestCase):
             len([1 for n, _ in bridge.calls if n == "brain_pre_compact_extract"]), 1
         )
 
+    def test_on_session_end_clean_close_omits_interrupted_flag(self):
+        bridge = FakeBrainBridge(results={"brain_pre_compact_extract": {"structuredContent": {}}})
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.sync_turn("u1", "a1", session_id="sess-1")
+        provider._drain_captures()
+        provider.on_session_end([])
+        extract_calls = [a for n, a in bridge.calls if n == "brain_pre_compact_extract"]
+        self.assertEqual(len(extract_calls), 1)
+        # A clean close is byte-identical: no interrupted field on the payload.
+        self.assertNotIn("interrupted", extract_calls[0])
+
+    def test_on_session_end_surfaces_interrupted_onto_flush_payload(self):
+        bridge = FakeBrainBridge(results={"brain_pre_compact_extract": {"structuredContent": {}}})
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.sync_turn("u1", "a1", session_id="sess-1")
+        provider._drain_captures()
+        provider.on_session_end([], interrupted=True)
+        extract_calls = [a for n, a in bridge.calls if n == "brain_pre_compact_extract"]
+        self.assertEqual(len(extract_calls), 1)
+        # The interrupted close is recorded honestly on the flushed segment.
+        self.assertIs(extract_calls[0].get("interrupted"), True)
+
     def test_on_memory_write_forwards_to_host_bridge_tool(self):
         bridge = FakeBrainBridge(
             results={"brain_memory_bridge": {"structuredContent": {"recorded": True}}}

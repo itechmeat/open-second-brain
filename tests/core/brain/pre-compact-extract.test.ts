@@ -51,6 +51,27 @@ describe("pre-compact extraction", () => {
     expect(result.records[5]!.payload["text"]).toContain("[base64]");
   });
 
+  test("records the interrupted flag only when set, byte-identical otherwise", () => {
+    const clean = extractPreCompactRecords(vault, {
+      createdAt: "2026-05-20T17:00:00.000Z",
+      sessionId: "session-clean",
+      turnStart: "turn-1",
+      turnEnd: "turn-1",
+      text: "Decision: Clean close keeps the payload unchanged.",
+    });
+    expect("interrupted" in clean.records[0]!.payload).toBe(false);
+
+    const interrupted = extractPreCompactRecords(vault, {
+      createdAt: "2026-05-20T17:00:00.000Z",
+      sessionId: "session-interrupted",
+      turnStart: "turn-1",
+      turnEnd: "turn-1",
+      text: "Decision: An interrupted flush is recorded honestly.",
+      interrupted: true,
+    });
+    expect(interrupted.records[0]!.payload["interrupted"]).toBe(true);
+  });
+
   test("is idempotent by session, turn range, type, and content hash", () => {
     const input = {
       createdAt: "2026-05-20T17:00:00.000Z",

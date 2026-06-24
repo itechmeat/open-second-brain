@@ -437,7 +437,14 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                   'minimum': 1,
                                                   'description': 'Optional maximum input '
                                                                  'characters to scan before '
-                                                                 'extracting.'}},
+                                                                 'extracting.'},
+                                    'interrupted': {'type': 'boolean',
+                                                    'description': 'When true, mark the extracted '
+                                                                   'records as flushed by an '
+                                                                   'interrupted close '
+                                                                   '(SIGHUP/SIGTERM/force-quit/'
+                                                                   'restart-drain). Absent by '
+                                                                   'default.'}},
                      'required': ['session_id', 'turn_start', 'turn_end', 'text'],
                      'additionalProperties': False}},
 )
