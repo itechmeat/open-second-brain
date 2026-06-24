@@ -33,6 +33,7 @@ test("default off: post-compact-audit is a no-op without the gate", async () => 
   expect(result.returncode).toBe(0);
   const body = JSON.parse(result.stdout);
   expect(body.enabled).toBe(false);
+  expect(body.forced).toBe(false);
   expect(body.compaction_detected).toBe(false);
   expect(readPinnedContext(vault).content).not.toContain("Re-asserted standing context");
 });
@@ -63,4 +64,6 @@ test("--force runs the audit even when the gate is off", async () => {
   const body = JSON.parse(result.stdout);
   expect(body.compaction_detected).toBe(true);
   expect(body.reasserted).toBe(true);
+  expect(body.enabled).toBe(false);
+  expect(body.forced).toBe(true);
 });

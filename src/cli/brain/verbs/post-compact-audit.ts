@@ -31,8 +31,12 @@ export async function cmdBrainPostCompactAudit(argv: string[]): Promise<number> 
   const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
 
   const enabled = resolvePostCompactSurvivalAudit(config);
-  if (!enabled && flags["force"] !== true) {
-    writeOutput({ enabled: false, compaction_detected: false }, flags["json"] === true);
+  const forced = flags["force"] === true;
+  if (!enabled && !forced) {
+    writeOutput(
+      { enabled: false, forced: false, compaction_detected: false },
+      flags["json"] === true,
+    );
     return 0;
   }
 
@@ -62,6 +66,7 @@ export async function cmdBrainPostCompactAudit(argv: string[]): Promise<number> 
   writeOutput(
     {
       enabled,
+      forced,
       compaction_detected: result.compactionDetected,
       already_audited: result.alreadyAudited,
       summary_hash: result.summaryHash,

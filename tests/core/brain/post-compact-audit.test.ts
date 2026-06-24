@@ -149,7 +149,9 @@ describe("auditPostCompaction", () => {
       messages: undefined as unknown as never,
     });
     expect(result.compactionDetected).toBe(false);
-    expect(result.errors.length).toBeGreaterThanOrEqual(0);
+    expect(result.errors).toEqual([]);
+    expect(result.reasserted).toBe(false);
+    expect(result.record).toBeNull();
   });
 
   test("audits static anchors alongside dynamic pins", () => {

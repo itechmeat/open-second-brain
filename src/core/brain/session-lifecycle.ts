@@ -383,14 +383,18 @@ async function writeHandoffNoteFromTranscript(
  * user-typed, so no inside-vault check applies.
  */
 async function readTranscriptTurns(path: string): Promise<SessionTurn[]> {
-  if (!existsSync(path)) return [];
-  const text = readFileSync(path, "utf8");
-  const nl = text.indexOf("\n");
-  const adapter = detectAdapter(nl < 0 ? text : text.slice(0, nl));
-  if (adapter === null) return [];
-  const turns: SessionTurn[] = [];
-  for await (const turn of adapter.iterate(path)) turns.push(turn);
-  return turns;
+  try {
+    if (!existsSync(path)) return [];
+    const text = readFileSync(path, "utf8");
+    const nl = text.indexOf("\n");
+    const adapter = detectAdapter(nl < 0 ? text : text.slice(0, nl));
+    if (adapter === null) return [];
+    const turns: SessionTurn[] = [];
+    for await (const turn of adapter.iterate(path)) turns.push(turn);
+    return turns;
+  } catch {
+    return [];
+  }
 }
 
 function normalizePayload(payload: unknown): NormalizedPayload {
