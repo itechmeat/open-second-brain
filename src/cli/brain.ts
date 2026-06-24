@@ -101,6 +101,7 @@ import {
   cmdBrainEventTrace,
   cmdBrainContextPresets,
   cmdBrainPreCompactExtract,
+  cmdBrainPostCompactAudit,
   cmdBrainRecallTelemetry,
   cmdBrainGenerationReports,
   cmdBrainSkillProposals,
@@ -330,6 +331,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainContextPresets(rest);
       case "pre-compact-extract":
         return await cmdBrainPreCompactExtract(rest);
+      case "post-compact-audit":
+        return await cmdBrainPostCompactAudit(rest);
       case "recall-telemetry":
         return await cmdBrainRecallTelemetry(rest);
       case "generation-reports":

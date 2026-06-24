@@ -14,6 +14,7 @@ export type ContinuityRecordKind =
   | "recall_telemetry"
   | "gate_telemetry"
   | "pre_compact_extract"
+  | "post_compact_audit"
   | "session_turn"
   | "session_summary_node"
   | "session_summary_digest"

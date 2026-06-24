@@ -85,6 +85,7 @@ export { cmdBrainContextReceipts } from "./context-receipts.ts";
 export { cmdBrainEventTrace } from "./event-trace.ts";
 export { cmdBrainContextPresets } from "./context-presets.ts";
 export { cmdBrainPreCompactExtract } from "./pre-compact-extract.ts";
+export { cmdBrainPostCompactAudit } from "./post-compact-audit.ts";
 export { cmdBrainRecallTelemetry } from "./recall-telemetry.ts";
 export { cmdBrainGenerationReports } from "./generation-reports.ts";
 export { cmdBrainSkillProposals } from "./skill-proposals.ts";

@@ -44,6 +44,18 @@ export interface CaptureSessionLifecycleResult {
   readonly facts_deduped: number;
   readonly audit_path: string;
   readonly log_path?: string;
+  /**
+   * True when the host marked this SessionEnd as interrupted
+   * (SIGHUP/SIGTERM/force-quit/restart-drain). Absent for a clean close so
+   * the pre-interrupt result shape stays byte-identical (t_c181f92b).
+   */
+  readonly interrupted?: boolean;
+  /**
+   * Whether the pre-restart transcript could be consumed on an interrupted
+   * close. Absent unless `interrupted` is set; `false` when the transcript
+   * was missing/unreadable/empty rather than silently coerced to a clean close.
+   */
+  readonly transcript_consumed?: boolean;
   /** True when a SessionEnd event cleared that session's bound focus. */
   readonly focus_cleared?: boolean;
   /** Path of the handoff note a SessionEnd event produced (gated). */
@@ -69,6 +81,12 @@ interface NormalizedPayload {
   readonly compressionDepth?: number;
   /** SessionStart discriminator (`startup|resume|clear|compact`). */
   readonly sessionStartSource?: string;
+  /**
+   * Host flag: this SessionEnd was an interrupted close
+   * (SIGHUP/SIGTERM/force-quit/restart-drain). Absent by default; only
+   * `true` is honoured so an omitted field is byte-identical (t_c181f92b).
+   */
+  readonly interrupted?: boolean;
   readonly malformed: number;
 }
 
@@ -191,6 +209,55 @@ export async function captureSessionLifecycleEvent(
     }
   }
 
+  // Interrupted-session capture (t_c181f92b): when the host flushes an
+  // in-flight transcript on SIGHUP/SIGTERM/force-quit/restart-drain and fires
+  // SessionEnd with interrupted=true, the in-flight user turns may never have
+  // reached per-turn capture. Consume the persisted pre-restart transcript so
+  // those turns reach the SAME marker/fact extraction as a live prompt. Only
+  // user-authored turns are extracted (matching the fact-extract carve-out -
+  // bare assistant output is never auto-captured). Double-counting on resume
+  // is prevented by the existing content-keyed dedupe seams (signal
+  // dedup_hash + fact dedup index), so re-reading the same turns on a later
+  // close suppresses them. Honest: when the transcript cannot be consumed,
+  // transcript_consumed is recorded false rather than coerced to a clean
+  // close. Fail-soft - a bad transcript never blocks lifecycle capture.
+  let transcriptConsumed: boolean | undefined;
+  if (
+    normalized.event === "SessionEnd" &&
+    normalized.interrupted === true &&
+    mayWrite &&
+    !opts.dryRun
+  ) {
+    transcriptConsumed = false;
+    if (normalized.transcriptPath !== undefined) {
+      try {
+        const turns = await readTranscriptTurns(normalized.transcriptPath);
+        for (const turn of turns) {
+          if (turn.role !== "user" || turn.text === undefined) continue;
+          if (boundary.suppressMessage(turn.text)) {
+            counters.suppressed_messages++;
+            continue;
+          }
+          captureMarkers(vault, normalized, turn.text, opts, now, ensureDedup(), counters);
+          const routed = routeExtractedFacts(vault, {
+            facts: extractFacts(turn.text),
+            agent: opts.agent,
+            now,
+            sessionRef: sessionReference(normalized),
+            dedup: ensureDedup(),
+          });
+          counters.facts_extracted += routed.created;
+          counters.facts_deduped += routed.deduped;
+        }
+        transcriptConsumed = turns.length > 0;
+      } catch {
+        // A malformed/unreadable transcript is surfaced honestly (false),
+        // never raised into the host.
+        transcriptConsumed = false;
+      }
+    }
+  }
+
   // Handoff note on SessionEnd (Agent Surface Suite, t_28afa4d2):
   // gated by the session_handoff config key (default off) and the
   // capture boundary; reads the recorded transcript through the
@@ -248,6 +315,8 @@ export async function captureSessionLifecycleEvent(
       ...(normalized.sessionId ? { session_id: normalized.sessionId } : {}),
       dry_run: opts.dryRun === true,
       boundary_decision: decision,
+      ...(normalized.interrupted === true ? { interrupted: true } : {}),
+      ...(transcriptConsumed !== undefined ? { transcript_consumed: transcriptConsumed } : {}),
       ...(chainLineage !== undefined
         ? {
             lineage_root: chainLineage.rootId,
@@ -273,6 +342,8 @@ export async function captureSessionLifecycleEvent(
     facts_deduped: counters.facts_deduped,
     audit_path: auditPath,
     ...(logPath ? { log_path: logPath } : {}),
+    ...(normalized.interrupted === true ? { interrupted: true } : {}),
+    ...(transcriptConsumed !== undefined ? { transcript_consumed: transcriptConsumed } : {}),
     ...(focusCleared ? { focus_cleared: true } : {}),
     ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
     ...(chainLineage !== undefined ? { lineage: chainLineage } : {}),
@@ -293,13 +364,7 @@ async function writeHandoffNoteFromTranscript(
   now: Date,
 ): Promise<HandoffNoteResult | null> {
   const path = normalized.transcriptPath!;
-  if (!existsSync(path)) return null;
-  const text = readFileSync(path, "utf8");
-  const nl = text.indexOf("\n");
-  const adapter = detectAdapter(nl < 0 ? text : text.slice(0, nl));
-  if (adapter === null) return null;
-  const turns: SessionTurn[] = [];
-  for await (const turn of adapter.iterate(path)) turns.push(turn);
+  const turns = await readTranscriptTurns(path);
   if (turns.length === 0) return null;
   return writeHandoffNote(vault, {
     turns,
@@ -308,6 +373,28 @@ async function writeHandoffNoteFromTranscript(
     now,
     sourcePaths: [path],
   });
+}
+
+/**
+ * Read a recorded transcript through the session adapters. Returns an empty
+ * array (never throws) when the path is missing, unrecognised, or empty - the
+ * callers treat "no turns" as "nothing to consume". Trust model matches
+ * {@link writeHandoffNoteFromTranscript}: the path is host-produced, not
+ * user-typed, so no inside-vault check applies.
+ */
+async function readTranscriptTurns(path: string): Promise<SessionTurn[]> {
+  try {
+    if (!existsSync(path)) return [];
+    const text = readFileSync(path, "utf8");
+    const nl = text.indexOf("\n");
+    const adapter = detectAdapter(nl < 0 ? text : text.slice(0, nl));
+    if (adapter === null) return [];
+    const turns: SessionTurn[] = [];
+    for await (const turn of adapter.iterate(path)) turns.push(turn);
+    return turns;
+  } catch {
+    return [];
+  }
 }
 
 function normalizePayload(payload: unknown): NormalizedPayload {
@@ -341,6 +428,7 @@ function normalizePayload(payload: unknown): NormalizedPayload {
     ...(rootSessionId ? { rootSessionId } : {}),
     ...(compressionDepth !== undefined ? { compressionDepth } : {}),
     ...(sessionStartSource ? { sessionStartSource } : {}),
+    ...(record["interrupted"] === true ? { interrupted: true } : {}),
     ...(extractPromptText(record) ? { promptText: extractPromptText(record)! } : {}),
     ...(readNonEmptyString(record["tool_name"])
       ? { toolName: readNonEmptyString(record["tool_name"])! }

@@ -18,6 +18,13 @@ export interface PreCompactExtractInput {
   readonly host?: string;
   readonly createdAt?: string;
   readonly maxChars?: number;
+  /**
+   * True when this segment was flushed by an interrupted close
+   * (SIGHUP/SIGTERM/force-quit/restart-drain). Recorded on the continuity
+   * record so an interrupted capture is honestly distinguishable from a clean
+   * one. Absent by default - omitted records stay byte-identical (t_c181f92b).
+   */
+  readonly interrupted?: boolean;
 }
 
 export interface PreCompactExtractResult {
@@ -83,6 +90,7 @@ export function extractPreCompactRecords(
             turn_end: input.turnEnd,
             turn_range: `${input.turnStart}..${input.turnEnd}`,
             ...(host !== undefined && host.length > 0 ? { host } : {}),
+            ...(input.interrupted === true ? { interrupted: true } : {}),
             content_hash: contentHash,
             dedupe_key: dedupeKey,
             truncated_input: boundedText.length < input.text.length,

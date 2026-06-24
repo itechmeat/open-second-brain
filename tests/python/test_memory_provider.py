@@ -483,6 +483,47 @@ class ProviderLifecycleTests(unittest.TestCase):
             len([1 for n, _ in bridge.calls if n == "brain_pre_compact_extract"]), 1
         )
 
+    def test_on_session_end_clean_close_omits_interrupted_flag(self):
+        bridge = FakeBrainBridge(results={"brain_pre_compact_extract": {"structuredContent": {}}})
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.sync_turn("u1", "a1", session_id="sess-1")
+        provider._drain_captures()
+        provider.on_session_end([])
+        extract_calls = [a for n, a in bridge.calls if n == "brain_pre_compact_extract"]
+        self.assertEqual(len(extract_calls), 1)
+        # A clean close is byte-identical: no interrupted field on the payload.
+        self.assertNotIn("interrupted", extract_calls[0])
+
+    def test_on_session_end_surfaces_interrupted_onto_flush_payload(self):
+        bridge = FakeBrainBridge(results={"brain_pre_compact_extract": {"structuredContent": {}}})
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.sync_turn("u1", "a1", session_id="sess-1")
+        provider._drain_captures()
+        provider.on_session_end([], interrupted=True)
+        extract_calls = [a for n, a in bridge.calls if n == "brain_pre_compact_extract"]
+        self.assertEqual(len(extract_calls), 1)
+        # The interrupted close is recorded honestly on the flushed segment.
+        self.assertIs(extract_calls[0].get("interrupted"), True)
+
+    def test_on_session_end_drains_and_flushes_the_exit_path(self):
+        # Regression for Hermes #49315: the god-file Phase 4 refactor bound the
+        # atexit _active_agent_ref to the mixin module instead of cli.py, so
+        # on_session_end never fired on CLI /exit and end-of-session capture was
+        # silently lost. The hook is native again; this guards the path /exit now
+        # drives by calling on_session_end WITHOUT a prior manual _drain_captures()
+        # — the hook must self-drain the in-flight sync_turn thread and flush.
+        bridge = FakeBrainBridge(results={"brain_pre_compact_extract": {"structuredContent": {}}})
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.sync_turn("u1", "a1", session_id="sess-1")
+        # No _drain_captures() here: end-of-session capture must work end to end.
+        provider.on_session_end([])
+        extract_calls = [a for n, a in bridge.calls if n == "brain_pre_compact_extract"]
+        self.assertEqual(len(extract_calls), 1)
+        self.assertIn("u1", extract_calls[0]["text"])
+        self.assertIn("a1", extract_calls[0]["text"])
+        # The capture threads were joined: drain ran inside the hook.
+        self.assertEqual(provider._sync_threads, [])
+
     def test_on_memory_write_forwards_to_host_bridge_tool(self):
         bridge = FakeBrainBridge(
             results={"brain_memory_bridge": {"structuredContent": {"recorded": True}}}

@@ -376,6 +376,7 @@ async function toolBrainPreCompactExtract(
       ? { host: optionalStringArg("brain_pre_compact_extract", args, "host") }
       : {}),
     ...(maxChars !== undefined ? { maxChars } : {}),
+    ...(coerceBool(args, "interrupted") === true ? { interrupted: true } : {}),
   });
   return { count: result.records.length, ...result };
 }
@@ -731,6 +732,11 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description: "Optional maximum input characters to scan before extracting.",
+        },
+        interrupted: {
+          type: "boolean",
+          description:
+            "When true, mark the extracted records as flushed by an interrupted close (SIGHUP/SIGTERM/force-quit/restart-drain). Absent by default.",
         },
       },
       required: ["session_id", "turn_start", "turn_end", "text"],
