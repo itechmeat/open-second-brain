@@ -186,12 +186,17 @@ export function resolveLogEventTraces(
   );
 
   const wantStamp = selector.at !== undefined ? `${date}T${selector.at}Z` : undefined;
+  // Cap is evaluated BEFORE the push, so `limit: 0` yields an empty list and a
+  // limit of N never collects N+1 events (the cap is the count returned, not
+  // the count plus one).
+  const cap = selector.limit !== undefined ? Math.max(0, Math.floor(selector.limit)) : undefined;
   const results: LogEventTrace[] = [];
   for (const entry of entries) {
     if (selector.kind !== undefined && entry.eventType !== selector.kind) continue;
     if (wantStamp !== undefined && entry.timestamp !== wantStamp) continue;
     const correlation = extractEventCorrelation(entry);
     if (selector.sessionId !== undefined && correlation.sessionId !== selector.sessionId) continue;
+    if (cap !== undefined && results.length >= cap) break;
     const traces = attachTracesToEvent(records, correlation);
     results.push({
       event: {
@@ -206,9 +211,6 @@ export function resolveLogEventTraces(
       traces,
       traceCount: traces.length,
     });
-    if (selector.limit !== undefined && results.length >= Math.max(0, Math.floor(selector.limit))) {
-      break;
-    }
   }
   return Object.freeze(results);
 }

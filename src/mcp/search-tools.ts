@@ -231,7 +231,16 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
       type: "array",
       items: {
         type: "object",
-        required: ["path", "title", "score", "snippet", "pointer", "reasons", "chunk_id"],
+        required: [
+          "path",
+          "title",
+          "score",
+          "snippet",
+          "pointer",
+          "reasons",
+          "document_id",
+          "chunk_id",
+        ],
         properties: {
           path: { type: "string" },
           // Nullable, same as full search result titles above.
@@ -1024,7 +1033,7 @@ const SEARCH_EXPAND_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
     chunk_id: { type: "integer" },
     note: {
       type: "object",
-      required: ["document_id", "path", "line_start", "line_end", "pointer", "content"],
+      required: ["document_id", "path", "title", "line_start", "line_end", "pointer", "content"],
       properties: {
         document_id: { type: "integer" },
         path: { type: "string" },

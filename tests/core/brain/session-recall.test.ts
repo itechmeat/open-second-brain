@@ -112,4 +112,28 @@ describe("session recall DAG", () => {
     expect(hit?.line_start).toBe(2);
     expect(hit?.line_end).toBe(2);
   });
+
+  test("line span stays correct when an earlier line lowercases to more code units", () => {
+    // U+0130 (Turkish dotted capital I) lowercases to two code units, so a
+    // match offset taken from the lowercased copy would be shifted ahead of
+    // its true position in the original text. Nine of them on line 1 shift a
+    // line-2 match onto line 3 under the bug; the offset must index the
+    // original text so the line span stays line 2.
+    importSessionRecall(vault, {
+      sessionId: "session-locale",
+      turns: [turn("t1", "user", `${"İ".repeat(9)}\nreceipts\nfinal line three`)],
+      summaryGroupSize: 2,
+      createdAt: "2026-05-20T18:00:00.000Z",
+    });
+
+    const search = searchSessionRecall(vault, {
+      query: "receipts",
+      sessionId: "session-locale",
+      limit: 4,
+    });
+    const hit = search.hits.find((candidate) => candidate.kind === "session_turn");
+    expect(hit).toBeDefined();
+    expect(hit?.line_start).toBe(2);
+    expect(hit?.line_end).toBe(2);
+  });
 });

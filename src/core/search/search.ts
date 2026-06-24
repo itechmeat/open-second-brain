@@ -429,6 +429,24 @@ export async function search(
     for (const h of semHits) allChunkIds.add(h.chunkId);
     let idsList = Array.from(allChunkIds);
 
+    // Validity-window resolver (hoisted): used both by the time-range
+    // filter below and by the targeted-retry coverage gate, which must
+    // judge coverage over the IN-RANGE pool (see below). One cached
+    // frontmatter read per candidate path.
+    const validityWindowCache = new Map<string, ValidityWindow | null>();
+    const validityWindowFor = (path: string): ValidityWindow | null => {
+      if (validityWindowCache.has(path)) return validityWindowCache.get(path) ?? null;
+      let window: ValidityWindow | null = null;
+      try {
+        const [meta] = parseFrontmatter(join(config.vault, path));
+        window = parseValidityWindow(meta as Record<string, unknown>);
+      } catch {
+        window = null;
+      }
+      validityWindowCache.set(path, window);
+      return window;
+    };
+
     // Self-correcting two-pass recall (t_ef92dfdc): a zero-candidate
     // first pass in evidence-pack mode means the implicit-AND keyword
     // match was too strict - the classic abstention dead end. Instead
@@ -483,7 +501,21 @@ export async function search(
       opts.evidencePack === true &&
       config.recall.twoPassEnabled
     ) {
-      const poolCoverage = coverageOverChunks(store, query, idsList);
+      // Judge coverage over the pool that will actually survive ranking:
+      // for a time-scoped query, exclude out-of-range candidates first, so
+      // a rare term is not marked "covered" only because an out-of-range
+      // chunk matched it (which would wrongly suppress the retry while the
+      // final in-range result set still misses that term).
+      let coverageIds = idsList;
+      if (timeRange !== null) {
+        const hydratedForCoverage = store.hydrateChunks(idsList);
+        coverageIds = idsList.filter((chunkId) => {
+          const chunk = hydratedForCoverage.get(chunkId);
+          if (chunk === undefined) return false;
+          return eventTimeInRange(validityWindowFor(chunk.path), chunk.mtime, timeRange);
+        });
+      }
+      const poolCoverage = coverageOverChunks(store, query, coverageIds);
       const plan = planTargetedRetry(poolCoverage);
       if (plan.fire) {
         const targeted = runFtsQueryDetailed(store, plan.terms[0]!, {
@@ -534,22 +566,9 @@ export async function search(
     // Event-time discipline (t_b7191486): a document declaring
     // `valid_from` / `valid_until` is tested by validity-window
     // OVERLAP - storage mtime is the fallback, never the authority,
-    // when explicit event time exists. One cached frontmatter read per
-    // candidate path; an unparseable declared value warns once and
-    // falls back to mtime.
-    const validityWindowCache = new Map<string, ValidityWindow | null>();
-    const validityWindowFor = (path: string): ValidityWindow | null => {
-      if (validityWindowCache.has(path)) return validityWindowCache.get(path) ?? null;
-      let window: ValidityWindow | null = null;
-      try {
-        const [meta] = parseFrontmatter(join(config.vault, path));
-        window = parseValidityWindow(meta as Record<string, unknown>);
-      } catch {
-        window = null;
-      }
-      validityWindowCache.set(path, window);
-      return window;
-    };
+    // when explicit event time exists. The `validityWindowFor` resolver
+    // is hoisted above (shared with the targeted-retry coverage gate); an
+    // unparseable declared value warns once and falls back to mtime.
     if (timeRange !== null) {
       const warnedInvalid = new Set<string>();
       const windowFor = validityWindowFor;

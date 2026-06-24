@@ -4,7 +4,7 @@ import {
   type LogEventTrace,
 } from "../../../core/brain/event-trace.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../../core/brain/types.ts";
-import { CliError, brainVerbContext, parse } from "../helpers.ts";
+import { brainVerbContext, parse, usageError } from "../helpers.ts";
 
 /**
  * `o2b brain event-trace` — given one or more logged Brain events,
@@ -27,9 +27,15 @@ export async function cmdBrainEventTrace(argv: string[]): Promise<number> {
 
   const kindRaw = trimOrUndefined(flags["kind"]);
   if (kindRaw !== undefined && !BRAIN_LOG_EVENT_KIND_SET.has(kindRaw)) {
-    throw new CliError(`brain event-trace: unknown event kind '${kindRaw}'`);
+    // Bad flag value is a usage error (exit 2, plain stderr), not a runtime
+    // failure (exit 1). Same for --limit and the resolver's selector checks.
+    return usageError(`brain event-trace: unknown event kind '${kindRaw}'`);
   }
-  const limit = parsePositiveInteger(trimOrUndefined(flags["limit"]), "--limit");
+  const limitRaw = trimOrUndefined(flags["limit"]);
+  if (limitRaw !== undefined && (!/^[0-9]+$/.test(limitRaw) || Number.parseInt(limitRaw, 10) < 1)) {
+    return usageError(`brain event-trace: --limit must be a positive integer`);
+  }
+  const limit = limitRaw !== undefined ? Number.parseInt(limitRaw, 10) : undefined;
   const vault = brainVerbContext(flags).vault;
 
   let results: ReadonlyArray<LogEventTrace>;
@@ -47,7 +53,10 @@ export async function cmdBrainEventTrace(argv: string[]): Promise<number> {
       ...(flags["keep-private"] === true ? { keepPrivate: true } : {}),
     });
   } catch (err) {
-    throw new CliError(`brain event-trace: ${(err as Error).message}`);
+    // The resolver validates selectors (--date, --at, --kind) before any IO
+    // and a missing log day reads as empty rather than throwing, so a throw
+    // here is a selector usage error: exit 2, not the runtime exit-1 path.
+    return usageError(`brain event-trace: ${(err as Error).message}`);
   }
 
   if (flags["json"]) {
@@ -90,18 +99,6 @@ function formatTrace(trace: AttachedTrace): string {
   if (trace.private) flags.push("private");
   if (trace.redacted) flags.push("redacted");
   return `${trace.createdAt}  ${trace.kind}  ${trace.id}  [${flags.join(", ")}]`;
-}
-
-function parsePositiveInteger(value: string | undefined, label: string): number | undefined {
-  if (value === undefined) return undefined;
-  if (!/^[0-9]+$/.test(value)) {
-    throw new CliError(`brain event-trace: ${label} must be a positive integer`);
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (parsed < 1) {
-    throw new CliError(`brain event-trace: ${label} must be a positive integer`);
-  }
-  return parsed;
 }
 
 function trimOrUndefined(value: string | boolean | string[] | undefined): string | undefined {

@@ -141,6 +141,18 @@ describe("resolveLogEventTraces", () => {
     expect(result[0]!.traces[0]!.joinedBy).toEqual(["session"]);
   });
 
+  test("limit caps the number of events; limit 0 yields an empty list", () => {
+    logSessionEvent("sess-1", "10:00:00");
+    logSessionEvent("sess-2", "11:00:00");
+    logSessionEvent("sess-3", "12:00:00");
+
+    // The cap is the count returned, evaluated before each push: limit 0 is
+    // an empty list (not one event), limit 2 returns exactly two.
+    expect(resolveLogEventTraces(vault, { date: DATE, limit: 0 })).toEqual([]);
+    expect(resolveLogEventTraces(vault, { date: DATE, limit: 2 })).toHaveLength(2);
+    expect(resolveLogEventTraces(vault, { date: DATE })).toHaveLength(3);
+  });
+
   test("--at pins a single event by HH:MM:SS", () => {
     logSessionEvent("sess-1", "10:00:00");
     logSessionEvent("sess-2", "11:00:00");
