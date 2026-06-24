@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.1] - 2026-06-24
+
+### Fixed
+
+- **Cross-vault chain-stop reads the max normalized score, not the first
+  result (`t_23c1b929`).** The normalized-confidence chain-stop gated on
+  `results[0].score`, assuming a score-descending order, but `rerank` and MMR
+  reorder results by relevance/diversity, so the positional first element is
+  not always the score maximum. It now gates on the maximum normalized score
+  across the origin's results, so an enabled chain-stop short-circuits exactly
+  when an origin truly answers confidently. Off by default, and byte-identical
+  on the default ranking path where the first result already is the maximum.
+
 ## [1.18.0] - 2026-06-24
 
 Recall precision, coverage, and provenance hardening. Six related
