@@ -8,7 +8,7 @@ Open Second Brain plugs into [Hermes Agent](https://github.com/NousResearch/herm
 
 ## What is new
 
-Open Second Brain 1.17.0 widens the CodeGraph and MCP surfaces without changing any default behavior. The deterministic link extractor now resolves CommonMark reference-style Markdown links into real graph edges, a standalone MCP console entry mirrors the existing launcher and injects the mcp subcommand, an optional streamable HTTP MCP transport adds constant-time API-key auth for remote hosts, and search indexing gains an explicit offline backend that processes a keyless corpus to completion and never calls an LLM. Every change is strictly additive: the kernel still calls no LLM, and existing flows are byte-identical when the new options are unused.
+Open Second Brain 1.19.0 closes two session-boundary durability gaps that silently lost or distorted memory, and it adds a deterministic post-compaction survival audit for pinned context. When the host runtime reports an interrupted shutdown, the agent now honours the flag, consumes the persisted pre-restart transcript, and runs its turns through the same extraction as a live prompt, so a SIGHUP or force-quit no longer leaves the conversation without a memory trace. A new LLM-free post-compaction audit detects when a pinned anchor has drifted into a context summary and selectively re-asserts only the drifted anchors, keeping the long-conversation memory the pinned store was built to protect. Both behaviours are off by default and byte-identical when unused, and the kernel still calls no LLM.
 
 ## Why
 

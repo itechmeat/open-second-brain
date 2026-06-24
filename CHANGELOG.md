@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.0] - 2026-06-24
+
+Session-boundary capture durability and a post-compaction survival
+audit for pinned context. Three durability gaps at session boundaries
+are closed, and each new behaviour is off by default or otherwise
+byte-identical until opted in. The kernel still calls no LLM.
+
+### Added
+
+- **Post-compaction pinned-anchor survival audit and selective
+  re-assertion (`t_post_compact_audit`).** A deterministic, LLM-free
+  audit symmetric to the existing pre-compaction capture
+  (`extractPreCompactRecords`). After a Hermes context-compaction demotes
+  a pinned anchor's text into the background summary block, nothing
+  previously verified the anchor still lived in the ACTIVE region or
+  re-surfaced it. `detectCompaction` scans the conversation for Hermes
+  compressor handoff markers (Unicode SUMMARY_PREFIX, ASCII fallback, and
+  legacy `[CONTEXT SUMMARY]:`; overridable per-host) and splits summary
+  versus active. A per-session summary-body hash
+  (`sessionId:summaryHash` dedupe key on a new `post_compact_audit`
+  continuity record) ensures only a genuinely new compaction triggers an
+  audit, so re-running each turn cannot churn the prompt cache.
+  Locale-agnostic keyword probes (length-based, no stopword list)
+  classify each pinned and static anchor as survived, drifted, or absent;
+  only drifted anchors (present in the summary, gone from active) are
+  re-asserted via `appendPinnedContext`, so survivors cost zero tokens.
+  Fail-open throughout (every recoverable error lands in `errors`, never
+  thrown), with a bounded drift log. Surfaced as the `o2b brain
+  post-compact-audit` CLI verb and gated by `post_compact_survival_audit`
+  (default OFF, env/config), with `--force` for diagnostics; unchanged
+  installs stay byte-identical.
+
+### Changed
+
+- **Interrupted sessions are captured instead of dropped
+  (`t_interrupted_capture`).** Since Hermes PRs #50004/#50003/#50312, a
+  SIGHUP/SIGTERM/force-quit/restart-drain now flushes the in-flight
+  transcript and fires `on_session_end(interrupted=True)`. Previously
+  Open Second Brain swallowed the `interrupted` flag into `_kwargs` and
+  these sessions left no memory trace. `session-lifecycle.ts` now threads
+  an absent-by-default `interrupted` flag through `NormalizedPayload`; on
+  an interrupted `SessionEnd` it consumes the persisted pre-restart
+  transcript via the session adapters and runs its user turns through the
+  same marker/fact extraction as a live prompt. Double-counting on resume
+  is prevented by the existing content-keyed dedupe seams (signal
+  `dedup_hash` and the fact dedup index). `interrupted` and
+  `transcript_consumed` are recorded honestly in the audit record/result;
+  an unreadable transcript surfaces `transcript_consumed: false` rather
+  than coercing to a clean close. The Hermes `provider.py` surfaces the
+  `interrupted` kwarg from `on_session_end` onto the flush payload
+  (absent by default, so a clean close is byte-identical) and makes no
+  capture decision. The `pre-compact-extract` path and the
+  `brain_pre_compact_extract` MCP schema accept an optional `interrupted`
+  flag recorded on the continuity record so an interrupted capture is
+  marked honestly. Fail-soft throughout.
+
 ## [1.18.1] - 2026-06-24
 
 ### Fixed
@@ -5962,6 +6018,8 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.19.0]: https://github.com/itechmeat/open-second-brain/compare/v1.18.1...v1.19.0
+[1.18.1]: https://github.com/itechmeat/open-second-brain/compare/v1.18.0...v1.18.1
 [1.18.0]: https://github.com/itechmeat/open-second-brain/compare/v1.17.0...v1.18.0
 [1.17.0]: https://github.com/itechmeat/open-second-brain/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/itechmeat/open-second-brain/compare/v1.15.0...v1.16.0
