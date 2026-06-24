@@ -123,17 +123,20 @@ export async function searchAcrossVaults(
       total += outcome.total;
       // Chain-stop: if this origin answered confidently (its top NORMALIZED
       // [0,1] result score reached the threshold) and origins remain, skip
-      // them. `results` is ranked score-desc, so `[0]` is the top score; it
-      // is the normalized score, never the raw lane score, so a tiny-corpus
-      // origin with a high raw score does not short-circuit. Only recorded
-      // when origins were actually skipped, keeping the single-origin and
-      // never-triggered paths byte-identical.
+      // them. Take the MAX score over the origin's results rather than `[0]`:
+      // the final result order is not always score-desc (rerank and MMR reorder
+      // by relevance/diversity), so the positional first element is not
+      // necessarily the score-max. The gate reads the normalized result score,
+      // never the raw lane score, so a tiny-corpus origin with a high raw score
+      // does not short-circuit. Only recorded when origins were actually
+      // skipped, keeping the single-origin and never-triggered paths identical.
       const remaining = origins.slice(i + 1);
+      const topScore = outcome.results.reduce((max, r) => Math.max(max, r.score), 0);
       if (
         activeRecall.chainStopEnabled &&
         remaining.length > 0 &&
         outcome.results.length > 0 &&
-        outcome.results[0]!.score >= activeRecall.chainStopScore
+        topScore >= activeRecall.chainStopScore
       ) {
         chainStop = Object.freeze({
           triggered: true as const,
