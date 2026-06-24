@@ -177,7 +177,10 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
         ],
         properties: {
           path: { type: "string" },
-          title: { type: "string" },
+          // Titles are nullable for markdown files without frontmatter/title.
+          // The lightweight contract validator has no union types, so leave
+          // this field unconstrained while keeping it required in the shape.
+          title: {},
           content: { type: "string" },
           score: { type: "number" },
           startLine: { type: "integer" },
@@ -231,7 +234,8 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
         required: ["path", "title", "score", "snippet", "pointer", "reasons", "chunk_id"],
         properties: {
           path: { type: "string" },
-          title: { type: "string" },
+          // Nullable, same as full search result titles above.
+          title: {},
           score: { type: "number" },
           snippet: { type: "string" },
           pointer: { type: "string" },
@@ -1024,7 +1028,9 @@ const SEARCH_EXPAND_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
       properties: {
         document_id: { type: "integer" },
         path: { type: "string" },
-        title: { type: "string" },
+        // Nullable for title-less notes; the local schema validator does not
+        // support union types, so keep the field present but unconstrained.
+        title: {},
         line_start: { type: "integer" },
         line_end: { type: "integer" },
         pointer: { type: "string" },
@@ -1046,7 +1052,8 @@ const SEARCH_EXPAND_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
         },
       },
     },
-    next_cursor: { type: "string" },
+    // String cursor or null when the raw transcript is exhausted.
+    next_cursor: {},
   },
 };
 

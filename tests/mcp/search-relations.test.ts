@@ -12,10 +12,38 @@ import { join } from "node:path";
 import { SEARCH_TOOLS } from "../../src/mcp/search-tools.ts";
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
 let vault: string;
 let configHome: string;
 let ctx: { vault: string; configPath: string };
+
+async function initialize(server: MCPServer): Promise<void> {
+  await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "search-relations-test", version: "0" },
+    },
+  });
+  await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
+}
+
+async function callTool(
+  server: MCPServer,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, any>> {
+  return (await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    id: 2,
+    method: "tools/call",
+    params: { name, arguments: args },
+  })) as Record<string, any>;
+}
 
 beforeEach(async () => {
   vault = mkdtempSync(join(tmpdir(), "o2b-rel-vault-"));
@@ -75,5 +103,30 @@ describe("brain_search typed relations", () => {
     const hit = out.results.find((r) => r.path.endsWith("plain.md"));
     expect(hit).toBeDefined();
     expect(hit!.relations).toBeUndefined();
+  });
+
+  test("cards and expand output contract accepts exhausted cursor", async () => {
+    writeFileSync(join(vault, "notes", "untitled.md"), "Unique exhausted cursor search term.\n");
+    const config = resolveSearchConfig({ vault, configPath: ctx.configPath });
+    await indexVault(config, {});
+
+    const server = new MCPServer({ vault, configPath: ctx.configPath });
+    await initialize(server);
+    const searchResponse = await callTool(server, "brain_search", {
+      query: "exhausted cursor",
+      disclosure: "cards",
+      limit: 1,
+    });
+    expect(searchResponse.result?.isError).toBe(false);
+    const card = searchResponse.result.structuredContent.cards[0];
+    expect(card.title).toBe("untitled");
+
+    const expandResponse = await callTool(server, "brain_search_expand", {
+      chunk_id: card.chunk_id,
+      raw_limit: 50,
+    });
+    expect(expandResponse.result?.isError).toBe(false);
+    expect(expandResponse.result.structuredContent.note.title).toBe("untitled");
+    expect(expandResponse.result.structuredContent.next_cursor).toBeNull();
   });
 });
