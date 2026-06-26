@@ -131,6 +131,17 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   // themselves in the 1.0.0 sweep (tombstones in REMOVED_TOOLS).
 });
 
+/**
+ * Own-key membership set for {@link PREVIEW_BUDGET_EXEMPT}, computed once at
+ * module load. Replaces `name in PREVIEW_BUDGET_EXEMPT`, which walks the
+ * prototype chain (so a tool named like an `Object.prototype` member -
+ * `constructor`, `toString`, `hasOwnProperty` - would be falsely treated as
+ * exempt) and recomputed `Object.keys` on every call. (t_6fbdba4b)
+ */
+const PREVIEW_BUDGET_EXEMPT_NAMES: ReadonlySet<string> = new Set(
+  Object.keys(PREVIEW_BUDGET_EXEMPT),
+);
+
 export interface PreviewBudgetAudit {
   /** Tools with neither a budget nor an exempt entry - the guard fails on these. */
   readonly unbudgetedAndUnexempted: ReadonlyArray<string>;
@@ -145,11 +156,11 @@ export function auditPreviewBudgets(tools: ReadonlyArray<ToolDefinition>): Previ
   const unbudgetedAndUnexempted: string[] = [];
   const exemptButBudgeted: string[] = [];
   for (const tool of tools) {
-    const exempt = tool.name in PREVIEW_BUDGET_EXEMPT;
+    const exempt = PREVIEW_BUDGET_EXEMPT_NAMES.has(tool.name);
     if (tool.previewBudget === undefined && !exempt) unbudgetedAndUnexempted.push(tool.name);
     if (tool.previewBudget !== undefined && exempt) exemptButBudgeted.push(tool.name);
   }
-  const exemptButUnknown = Object.keys(PREVIEW_BUDGET_EXEMPT).filter((n) => !names.has(n));
+  const exemptButUnknown = [...PREVIEW_BUDGET_EXEMPT_NAMES].filter((n) => !names.has(n));
   return Object.freeze({
     unbudgetedAndUnexempted: Object.freeze(unbudgetedAndUnexempted),
     exemptButBudgeted: Object.freeze(exemptButBudgeted),
