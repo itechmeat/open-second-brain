@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -120,5 +120,22 @@ describe("brain_event_trace tool", () => {
       params: { name: "brain_event_trace", arguments: { kind: "not-a-kind" } },
     })) as { error?: { code: number } };
     expect(response.error?.code).toBe(-32602);
+  });
+
+  test("a runtime IO error surfaces as INTERNAL_ERROR, not INVALID_PARAMS", async () => {
+    // Brain/log exists but is a FILE: existsSync passes, readdirSync throws
+    // ENOTDIR inside the resolver's IO path. A bad selector is a caller error
+    // (-32602); a runtime IO failure must be an internal error (-32603).
+    rmSync(join(vault, "Brain", "log"), { recursive: true, force: true });
+    writeFileSync(join(vault, "Brain", "log"), "not a directory\n");
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 9,
+      method: "tools/call",
+      params: { name: "brain_event_trace", arguments: { date: "2026-06-15" } },
+    })) as { error?: { code: number } };
+    expect(response.error?.code).toBe(-32603);
   });
 });

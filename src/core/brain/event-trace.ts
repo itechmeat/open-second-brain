@@ -40,6 +40,21 @@ import type { NormalizedContinuityRecord } from "./continuity/read-model.ts";
 import { validateIsoDate } from "./paths.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
+/**
+ * A selector-validation failure: a bad `--date` / `--at` / `--kind`, detected
+ * BEFORE any IO. Entry points map this to a usage error (CLI exit 2 / MCP
+ * `INVALID_PARAMS`); ANY OTHER throw from {@link resolveLogEventTraces} is a
+ * runtime IO failure (e.g. an existing-but-unreadable log dir: EACCES / EIO /
+ * ENOTDIR) and must surface as a runtime error (CLI exit 1 / MCP
+ * `INTERNAL_ERROR`), never as a usage error. (t_27ea0daa)
+ */
+export class EventTraceSelectorError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EventTraceSelectorError";
+  }
+}
+
 /** Why a continuity record was attached to a given log event. */
 export type TraceJoinReason = "session" | "turn" | "artifact";
 
@@ -171,12 +186,14 @@ export function resolveLogEventTraces(
   vault: string,
   selector: EventTraceSelector = {},
 ): ReadonlyArray<LogEventTrace> {
-  const date = selector.date !== undefined ? validateIsoDate(selector.date) : todayUtc();
+  const date = selector.date !== undefined ? validateSelectorDate(selector.date) : todayUtc();
   if (selector.at !== undefined && !/^\d{2}:\d{2}:\d{2}$/.test(selector.at)) {
-    throw new Error(`event-trace: --at must be HH:MM:SS (UTC); got ${JSON.stringify(selector.at)}`);
+    throw new EventTraceSelectorError(
+      `event-trace: --at must be HH:MM:SS (UTC); got ${JSON.stringify(selector.at)}`,
+    );
   }
   if (selector.kind !== undefined && !BRAIN_LOG_EVENT_KIND_SET.has(selector.kind)) {
-    throw new Error(`event-trace: unknown event kind '${selector.kind}'`);
+    throw new EventTraceSelectorError(`event-trace: unknown event kind '${selector.kind}'`);
   }
 
   const { entries } = readLogDay(vault, date);
@@ -297,4 +314,17 @@ function readBodyString(value: unknown): string | undefined {
 
 function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Validate the `--date` selector. `validateIsoDate` throws a generic `Error`;
+ * re-tag a bad date as a selector error so callers route it to the usage path,
+ * not the runtime-failure path. (t_27ea0daa)
+ */
+function validateSelectorDate(date: string): string {
+  try {
+    return validateIsoDate(date);
+  } catch (err) {
+    throw new EventTraceSelectorError((err as Error).message);
+  }
 }

@@ -33,9 +33,9 @@ import {
   type ContextPresetCurrentConfig,
 } from "../../core/brain/context-presets.ts";
 import { extractPreCompactRecords } from "../../core/brain/pre-compact-extract.ts";
-import { resolveLogEventTraces } from "../../core/brain/event-trace.ts";
+import { EventTraceSelectorError, resolveLogEventTraces } from "../../core/brain/event-trace.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/brain/types.ts";
-import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, coerceStrList, coerceBool } from "../coerce.ts";
@@ -226,7 +226,14 @@ async function toolBrainEventTrace(
       ...(keepPrivate === true ? { keepPrivate: true } : {}),
     });
   } catch (err) {
-    throw new MCPError(INVALID_PARAMS, `brain_event_trace: ${(err as Error).message}`);
+    // A selector-validation error (bad date/at/kind, checked before any IO) is
+    // a caller error (INVALID_PARAMS). ANY OTHER throw is a runtime IO failure -
+    // e.g. an existing-but-unreadable log dir (EACCES/EIO/ENOTDIR) - and must be
+    // an internal error, not a parameter error.
+    if (err instanceof EventTraceSelectorError) {
+      throw new MCPError(INVALID_PARAMS, `brain_event_trace: ${err.message}`);
+    }
+    throw new MCPError(INTERNAL_ERROR, `brain_event_trace: ${(err as Error).message}`);
   }
 
   return {

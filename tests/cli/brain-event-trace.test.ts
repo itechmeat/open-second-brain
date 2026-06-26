@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,4 +44,16 @@ test("a malformed --at selector is a usage error (exit 2)", async () => {
 test("a clean run over an empty log exits 0", async () => {
   const r = await runCli(["brain", "event-trace", "--vault", vault, "--json"]);
   expect(r.returncode).toBe(0);
+});
+
+test("a runtime IO error reading the log dir is exit 1, not a usage error (exit 2)", async () => {
+  // Brain/log exists but is a FILE, not a directory: existsSync passes the
+  // guard in listLogShardFiles, then readdirSync throws ENOTDIR. That is a
+  // runtime failure (exit 1), distinct from a selector usage error (exit 2) -
+  // the selectors here are all valid, so the only throw is the IO one.
+  const ioVault = join(tmp, "io-vault");
+  mkdirSync(join(ioVault, "Brain"), { recursive: true });
+  writeFileSync(join(ioVault, "Brain", "log"), "not a directory\n");
+  const r = await runCli(["brain", "event-trace", "--vault", ioVault, "--json"]);
+  expect(r.returncode).toBe(1);
 });
