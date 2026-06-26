@@ -43,4 +43,18 @@ describe("preview-budget default", () => {
       expect(reason.trim().length, name).toBeGreaterThan(10);
     }
   });
+
+  test("a tool named like an Object.prototype member is not falsely exempt (t_6fbdba4b)", () => {
+    // The exempt membership test must be own-key only: `name in EXEMPT` walks
+    // the prototype chain, so a budget-less tool named "toString" (or
+    // "constructor", "hasOwnProperty", ...) would be wrongly treated as exempt
+    // and silently escape the unbudgeted-output guard.
+    const tool = {
+      name: "toString",
+      description: "x",
+      inputSchema: { type: "object" },
+    } as unknown as (typeof TOOLS)[number];
+    const audit = auditPreviewBudgets([tool]);
+    expect(audit.unbudgetedAndUnexempted).toContain("toString");
+  });
 });

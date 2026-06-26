@@ -30,6 +30,7 @@ import { readActiveSessionFocus } from "./session-focus.ts";
 import type {
   BrainSearchResult,
   ResolvedSearchConfig,
+  SearchCard,
   SearchOptions,
   SearchOutcome,
 } from "./types.ts";
@@ -42,8 +43,25 @@ function labelled(result: BrainSearchResult, label: string): BrainSearchResult {
   });
 }
 
+/** Cards mirror results: same origin label, same `origin:<label>` reason. */
+function labelledCard(card: SearchCard, label: string): SearchCard {
+  return Object.freeze({
+    ...card,
+    origin: label,
+    reasons: Object.freeze([...card.reasons, `origin:${label}`]),
+  });
+}
+
+/** The fields the merge order reads - shared by results and cards. */
+interface MergeKey {
+  readonly score: number;
+  readonly origin?: string;
+  readonly path: string;
+  readonly chunkId: number;
+}
+
 /** Deterministic merge order: score desc, then label, path, chunk id. */
-function compareMerged(a: BrainSearchResult, b: BrainSearchResult): number {
+function compareMerged(a: MergeKey, b: MergeKey): number {
   if (a.score !== b.score) return b.score - a.score;
   const al = a.origin ?? "";
   const bl = b.origin ?? "";
@@ -66,7 +84,12 @@ export async function searchAcrossVaults(
 ): Promise<SearchOutcome> {
   const origins = listSearchOrigins(configPath, activeVault);
   const limit = Math.max(1, Math.min(100, opts.limit ?? 10));
+  // Cards mode (disclosure: "cards") puts each origin's hits on `outcome.cards`
+  // and leaves `outcome.results` empty; full mode is the reverse. Merge the
+  // collection this mode populates and mirror single-vault return semantics.
+  const cardsMode = opts.disclosure === "cards";
   const merged: BrainSearchResult[] = [];
+  const mergedCards: SearchCard[] = [];
   const warnings: string[] = [];
   let total = 0;
 
@@ -119,6 +142,9 @@ export async function searchAcrossVaults(
         ...(isActive ? {} : { selfHeal: false }),
       });
       merged.push(...outcome.results.map((result) => labelled(result, origin.label)));
+      if (outcome.cards !== undefined) {
+        mergedCards.push(...outcome.cards.map((card) => labelledCard(card, origin.label)));
+      }
       warnings.push(...outcome.warnings.map((warning) => `[${origin.label}] ${warning}`));
       total += outcome.total;
       // Chain-stop: if this origin answered confidently (its top NORMALIZED
@@ -131,11 +157,16 @@ export async function searchAcrossVaults(
       // does not short-circuit. Only recorded when origins were actually
       // skipped, keeping the single-origin and never-triggered paths identical.
       const remaining = origins.slice(i + 1);
-      const topScore = outcome.results.reduce((max, r) => Math.max(max, r.score), 0);
+      // Gate on whichever collection THIS mode populates: in cards mode results
+      // is empty, so reading it would never short-circuit (the latent bug).
+      const hits: ReadonlyArray<{ readonly score: number }> = cardsMode
+        ? (outcome.cards ?? [])
+        : outcome.results;
+      const topScore = hits.reduce((max, h) => Math.max(max, h.score), 0);
       if (
         activeRecall.chainStopEnabled &&
         remaining.length > 0 &&
-        outcome.results.length > 0 &&
+        hits.length > 0 &&
         topScore >= activeRecall.chainStopScore
       ) {
         chainStop = Object.freeze({
@@ -151,11 +182,15 @@ export async function searchAcrossVaults(
   }
 
   merged.sort(compareMerged);
+  mergedCards.sort(compareMerged);
   return Object.freeze({
-    results: Object.freeze(merged.slice(0, limit)),
+    // Cards mode mirrors single-vault semantics: hits ride `cards`, `results`
+    // is empty. Full mode is byte-identical to before (no `cards` key).
+    results: cardsMode ? Object.freeze([]) : Object.freeze(merged.slice(0, limit)),
+    ...(cardsMode ? { cards: Object.freeze(mergedCards.slice(0, limit)) } : {}),
     warnings: Object.freeze(warnings),
     // Sum of per-origin totals - informational, mirrors single-vault
-    // semantics where `total` can exceed the capped `results` length.
+    // semantics where `total` can exceed the capped result/card length.
     total,
     ...(chainStop ? { chainStop } : {}),
   });

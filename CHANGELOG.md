@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.1] - 2026-06-26
+
+Three correctness and hygiene follow-ups deferred from the v1.18.0 review,
+shipped together. No behaviour changes beyond the fixes; the kernel still
+calls no LLM and the default `full` search path stays byte-identical.
+
+### Fixed
+
+- **Cross-vault search now returns `disclosure: "cards"` results
+  (`t_fd411665`).** In `--global` (cross-vault) mode a cards search returned
+  nothing: single-vault `search()` puts cards on `outcome.cards` and leaves
+  `outcome.results` empty, but `searchAcrossVaults` merged only `results`, so
+  every origin's cards were dropped. The union now merges each origin's cards
+  (labelled by origin, ranked and capped like results) and returns them on
+  `outcome.cards` with `results` empty, mirroring single-vault semantics. The
+  normalized-confidence chain-stop now gates on the top card score when cards
+  mode leaves `results` empty.
+- **A genuine event-trace IO error is a runtime failure, not a usage error
+  (`t_27ea0daa`).** `o2b brain event-trace` mapped any throw from the resolver
+  to a usage error (exit 2). A real IO failure from the log-shard reader (an
+  existing-but-unreadable `Brain/log`: EACCES / EIO / ENOTDIR) is now exit 1,
+  while a bad `--date` / `--at` / `--kind` selector stays exit 2. The MCP twin
+  `brain_event_trace` likewise maps a runtime IO error to `INTERNAL_ERROR` and
+  a bad selector to `INVALID_PARAMS`, via a shared `EventTraceSelectorError`
+  tag thrown only by the pre-IO selector checks.
+- **Registry-guard exempt membership is own-key only (`t_6fbdba4b`).**
+  `auditPreviewBudgets` tested exemption with `name in PREVIEW_BUDGET_EXEMPT`,
+  which walks the prototype chain - so a tool named like an `Object.prototype`
+  member (`constructor`, `toString`, ...) would be falsely treated as exempt
+  and escape the unbudgeted-output guard. Membership now uses a name set
+  hoisted once at module load, removing the per-call `Object.keys` as well.
+
 ## [1.19.0] - 2026-06-24
 
 Session-boundary capture durability and a post-compaction survival
@@ -6018,6 +6050,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.19.1]: https://github.com/itechmeat/open-second-brain/compare/v1.19.0...v1.19.1
 [1.19.0]: https://github.com/itechmeat/open-second-brain/compare/v1.18.1...v1.19.0
 [1.18.1]: https://github.com/itechmeat/open-second-brain/compare/v1.18.0...v1.18.1
 [1.18.0]: https://github.com/itechmeat/open-second-brain/compare/v1.17.0...v1.18.0

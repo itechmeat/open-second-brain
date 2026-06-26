@@ -94,6 +94,58 @@ test("single-origin union (no profiles, no sources) matches plain search shape",
   expect(outcome.results.every((r) => r.origin === "local")).toBe(true);
 });
 
+// t_fd411665 - cards-mode (disclosure: "cards") must compose with the union:
+// each origin returns its hits on `outcome.cards` with `results` empty, and the
+// union has to merge the cards, not silently drop them.
+test("cards mode: cards from every origin merge, labelled, with results empty", async () => {
+  addRecallSource(configPath, active, "team", external);
+  const outcome = await searchAcrossVaults(configPath, active, {
+    query: "griffin",
+    limit: 10,
+    disclosure: "cards",
+  });
+  expect(outcome.results).toHaveLength(0);
+  expect(outcome.cards).toBeDefined();
+  const labels = new Set((outcome.cards ?? []).map((c) => c.origin));
+  expect(labels).toEqual(new Set(["local", "source/team"]));
+  for (const c of outcome.cards ?? []) {
+    expect(c.reasons.some((reason) => reason.startsWith("origin:"))).toBe(true);
+  }
+  const scores = (outcome.cards ?? []).map((c) => c.score);
+  expect([...scores].toSorted((a, b) => b - a)).toEqual(scores);
+});
+
+test("cards mode: limit caps the merged card set", async () => {
+  addRecallSource(configPath, active, "team", external);
+  const outcome = await searchAcrossVaults(configPath, active, {
+    query: "griffin",
+    limit: 1,
+    disclosure: "cards",
+  });
+  expect(outcome.cards).toHaveLength(1);
+  expect(outcome.results).toHaveLength(0);
+  expect(outcome.total).toBeGreaterThanOrEqual(2);
+});
+
+test("cards mode: chain-stop gates on the top CARD score and skips remaining origins", async () => {
+  addRecallSource(configPath, active, "team", external);
+  // Threshold 0: the active origin's cards clear it, so the external origin is
+  // never searched. Proves the gate reads the card score when results is empty.
+  writeFileSync(
+    configPath,
+    `vault: "${active}"\nsearch_chain_stop_enabled: true\nsearch_chain_stop_score: 0\n`,
+  );
+  const outcome = await searchAcrossVaults(configPath, active, {
+    query: "griffin",
+    limit: 10,
+    disclosure: "cards",
+  });
+  expect((outcome.cards ?? []).every((c) => c.origin === "local")).toBe(true);
+  expect(outcome.chainStop?.triggered).toBe(true);
+  expect(outcome.chainStop?.stoppedAfter).toBe("local");
+  expect(outcome.chainStop?.skipped).toEqual(["source/team"]);
+});
+
 // D4 t_23c1b929 - normalized-confidence chain-stop for cross-vault early termination.
 function withChainStop(score: number): void {
   // Re-resolve every origin from config.yaml, so the knob reaches the

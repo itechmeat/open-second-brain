@@ -1,10 +1,11 @@
 import {
+  EventTraceSelectorError,
   resolveLogEventTraces,
   type AttachedTrace,
   type LogEventTrace,
 } from "../../../core/brain/event-trace.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../../core/brain/types.ts";
-import { brainVerbContext, parse, usageError } from "../helpers.ts";
+import { brainVerbContext, fail, parse, usageError } from "../helpers.ts";
 
 /**
  * `o2b brain event-trace` — given one or more logged Brain events,
@@ -53,10 +54,14 @@ export async function cmdBrainEventTrace(argv: string[]): Promise<number> {
       ...(flags["keep-private"] === true ? { keepPrivate: true } : {}),
     });
   } catch (err) {
-    // The resolver validates selectors (--date, --at, --kind) before any IO
-    // and a missing log day reads as empty rather than throwing, so a throw
-    // here is a selector usage error: exit 2, not the runtime exit-1 path.
-    return usageError(`brain event-trace: ${(err as Error).message}`);
+    // A selector-validation error (bad --date/--at/--kind, checked before any
+    // IO) is a usage error: exit 2. ANY OTHER throw is a runtime failure - e.g.
+    // an existing-but-unreadable log dir (EACCES/EIO/ENOTDIR) from the shard
+    // reader - and must be the runtime exit-1 path, not a usage error.
+    if (err instanceof EventTraceSelectorError) {
+      return usageError(`brain event-trace: ${err.message}`);
+    }
+    return fail(`brain event-trace: ${(err as Error).message}`);
   }
 
   if (flags["json"]) {
