@@ -10,7 +10,11 @@
  * with the shared lexical scorer and returns a char-budgeted block.
  */
 
-import { resolveSkillAutoAttach, resolveSkillsDir } from "../core/config.ts";
+import {
+  resolveSkillAutoAttach,
+  resolveSkillsDir,
+  resolveSkillsAttachTriggers,
+} from "../core/config.ts";
 import { buildSkillAttachment } from "../core/surface/skill-attach.ts";
 import { discoverSkills, readSkillFile, skillRoots, SkillError } from "../core/surface/skills.ts";
 import { coerceInt, coerceStr } from "./coerce.ts";
@@ -69,10 +73,12 @@ function toolSkillsAttach(
   if (!resolveSkillAutoAttach(ctx.configPath ?? undefined)) {
     return { enabled: false, block: "", skills: [] };
   }
+  const includeTriggers = resolveSkillsAttachTriggers(ctx.configPath ?? undefined);
   const attachment = buildSkillAttachment({
     query,
     skills: discoverSkills(rootsFor(ctx)),
     maxSkills,
+    includeTriggers,
   });
   return {
     enabled: true,

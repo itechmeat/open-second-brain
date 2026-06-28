@@ -32,6 +32,8 @@ export interface DescribableSkill {
   readonly name: string;
   readonly description: string;
   readonly path: string;
+  /** Flattened trigger keywords from frontmatter `triggers` field. */
+  readonly triggers?: string;
 }
 
 /** First non-empty line, trimmed. Empty input stays empty. */
@@ -81,16 +83,18 @@ export function toolDescriptors(
 /** Build sorted, frozen descriptors for discovered skills. */
 export function skillDescriptors(
   skills: ReadonlyArray<DescribableSkill>,
+  includeTriggers?: boolean,
 ): ReadonlyArray<SurfaceDescriptor> {
-  const out = skills.map((s) =>
-    freezeDescriptor({
+  const out = skills.map((s) => {
+    const tags: string[] = s.triggers && includeTriggers ? [s.triggers] : [];
+    return freezeDescriptor({
       kind: "skill",
       name: s.name,
       description: firstLine(s.description),
       group: "skill",
-      tags: [],
-    }),
-  );
+      tags,
+    });
+  });
   out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return Object.freeze(out);
 }

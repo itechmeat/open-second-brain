@@ -34,6 +34,12 @@ export interface BuildSkillAttachmentOptions {
   readonly maxSkills?: number;
   /** Char budget for the rendered block. Default 1200. */
   readonly maxChars?: number;
+  /**
+   * When set, the `triggers` field from each skill's frontmatter is
+   * included in the lexical scorer as a 2x-BM25 tag signal. Default
+   * false (name 3x + description 1x only).
+   */
+  readonly includeTriggers?: boolean;
 }
 
 const DEFAULT_MAX_SKILLS = 3;
@@ -48,7 +54,10 @@ export function buildSkillAttachment(opts: BuildSkillAttachmentOptions): SkillAt
   const maxSkills = opts.maxSkills ?? DEFAULT_MAX_SKILLS;
   const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;
   const byName = new Map(opts.skills.map((s) => [s.name, s]));
-  const ranked = scoreDescriptors(opts.query, skillDescriptors(opts.skills)).slice(0, maxSkills);
+  const ranked = scoreDescriptors(
+    opts.query,
+    skillDescriptors(opts.skills, opts.includeTriggers),
+  ).slice(0, maxSkills);
 
   const items: SkillAttachItem[] = [];
   const lines: string[] = [];

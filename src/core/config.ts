@@ -294,6 +294,19 @@ export function resolveSkillsDir(configPath?: string): string | null {
 }
 
 /**
+ * Skill-attach triggers gate (Agent Surface Suite). When enabled (default
+ * OFF), the `triggers` field from each skill's SKILL.md frontmatter is
+ * included in the lexical scorer as a 2x-BM25 tag signal. When disabled
+ * or unset, triggers are ignored and scoring is name (3x) + description
+ * (1x) only.
+ */
+export function resolveSkillsAttachTriggers(configPath?: string): boolean {
+  const env = process.env["OPEN_SECOND_BRAIN_SKILLS_ATTACH_TRIGGERS"]?.trim();
+  const raw = env || discoverConfig(configPath).data["skills_attach_triggers"]?.trim();
+  return raw === "true" || raw === "1";
+}
+
+/**
  * Skill auto-attach gate (Agent Surface Suite). Default OFF: the
  * skills_attach tool returns an empty block unless the operator sets
  * `skill_auto_attach: "true"` (or the matching env override), so the
