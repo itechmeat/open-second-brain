@@ -114,6 +114,32 @@ test("skillRoots returns existing repo and vault roots only", () => {
   expect(skillRoots({ repoRoot: join(tmp, "ghost"), vault: null })).toEqual([]);
 });
 
+test("skillsDir overrides the vault-local Brain/skills root", () => {
+  const vault = join(tmp, "vault");
+  mkdirSync(join(vault, "Brain", "skills"), { recursive: true });
+  const external = join(tmp, "external-skills");
+  mkdirSync(external, { recursive: true });
+  // With skillsDir set, the vault-local path is replaced, not appended.
+  expect(skillRoots({ vault, skillsDir: external })).toEqual([external]);
+});
+
+test("skillsDir alongside repoRoot keeps the repo root and replaces the vault root", () => {
+  const repoRoot = join(tmp, "repo");
+  mkdirSync(join(repoRoot, "skills"), { recursive: true });
+  const vault = join(tmp, "vault");
+  mkdirSync(join(vault, "Brain", "skills"), { recursive: true });
+  const external = join(tmp, "external-skills");
+  mkdirSync(external, { recursive: true });
+  expect(skillRoots({ repoRoot, vault, skillsDir: external })).toEqual([
+    join(repoRoot, "skills"),
+    external,
+  ]);
+});
+
+test("a non-existent skillsDir falls soft to an empty root list", () => {
+  expect(skillRoots({ vault: null, skillsDir: join(tmp, "ghost-skills") })).toEqual([]);
+});
+
 test("readSkillFile returns SKILL.md by default and auxiliary files by relative path", () => {
   const root = join(tmp, "skills");
   const dir = writeSkill(root, "rich", "name: rich\ndescription: r", "# Rich");
