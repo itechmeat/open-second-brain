@@ -43,6 +43,13 @@ export interface SkillRootsOptions {
   readonly repoRoot?: string | null;
   /** Vault root; vault-local skills live at `Brain/skills/`. */
   readonly vault?: string | null;
+  /**
+   * Explicit skills directory override. When set, takes precedence over
+   * the vault-local `Brain/skills/` path, letting operators point the
+   * skill surface at an external directory (e.g. `~/.hermes/skills/`)
+   * without symlinks. Supports ~ expansion via the caller.
+   */
+  readonly skillsDir?: string | null;
 }
 
 export const SKILL_FILE_NAME = "SKILL.md";
@@ -51,7 +58,11 @@ export const SKILL_FILE_NAME = "SKILL.md";
 export function skillRoots(opts: SkillRootsOptions): string[] {
   const candidates: string[] = [];
   if (opts.repoRoot) candidates.push(join(opts.repoRoot, "skills"));
-  if (opts.vault) candidates.push(join(opts.vault, "Brain", "skills"));
+  if (opts.skillsDir) {
+    candidates.push(opts.skillsDir);
+  } else if (opts.vault) {
+    candidates.push(join(opts.vault, "Brain", "skills"));
+  }
   return candidates.filter((root) => {
     try {
       return statSync(root).isDirectory();

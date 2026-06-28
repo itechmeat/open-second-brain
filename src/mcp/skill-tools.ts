@@ -10,7 +10,7 @@
  * with the shared lexical scorer and returns a char-budgeted block.
  */
 
-import { resolveSkillAutoAttach } from "../core/config.ts";
+import { resolveSkillAutoAttach, resolveSkillsDir } from "../core/config.ts";
 import { buildSkillAttachment } from "../core/surface/skill-attach.ts";
 import { discoverSkills, readSkillFile, skillRoots, SkillError } from "../core/surface/skills.ts";
 import { coerceInt, coerceStr } from "./coerce.ts";
@@ -19,7 +19,8 @@ import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
 
 function rootsFor(ctx: ServerContext): string[] {
-  return skillRoots({ repoRoot: ctx.repoRoot, vault: ctx.vault });
+  const skillsDir = resolveSkillsDir(ctx.configPath ?? undefined);
+  return skillRoots({ repoRoot: ctx.repoRoot, vault: ctx.vault, skillsDir });
 }
 
 function toolListSkills(ctx: ServerContext): Record<string, unknown> {

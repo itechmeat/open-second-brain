@@ -282,6 +282,18 @@ export function resolveMcpToolProfile(configPath?: string): string | null {
 }
 
 /**
+ * Optional skills directory override (Agent Surface Suite). When set,
+ * `skills_attach` / `list_skills` / `get_skill` read from this path
+ * instead of `<vault>/Brain/skills/`. Supports `~` expansion.
+ * Falls back to null (use the default vault-local path).
+ */
+export function resolveSkillsDir(configPath?: string): string | null {
+  const env = process.env["OPEN_SECOND_BRAIN_SKILLS_DIR"]?.trim();
+  const raw = env || discoverConfig(configPath).data["skills_dir"]?.trim();
+  return raw && raw.length > 0 ? expandTilde(raw) : null;
+}
+
+/**
  * Skill auto-attach gate (Agent Surface Suite). Default OFF: the
  * skills_attach tool returns an empty block unless the operator sets
  * `skill_auto_attach: "true"` (or the matching env override), so the
