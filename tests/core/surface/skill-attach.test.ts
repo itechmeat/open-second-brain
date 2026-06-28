@@ -7,6 +7,7 @@ function entry(name: string, description: string): SkillEntry {
   return Object.freeze({
     name,
     description,
+    triggers: "",
     path: `/skills/${name}`,
     skillFile: `/skills/${name}/SKILL.md`,
   });

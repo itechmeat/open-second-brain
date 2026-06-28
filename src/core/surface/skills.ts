@@ -32,6 +32,11 @@ export interface SkillEntry {
   readonly name: string;
   /** Frontmatter `description`, falling back to the first body line. */
   readonly description: string;
+  /**
+   * Flattened trigger keywords from frontmatter `triggers` field.
+   * Empty string when no triggers are declared.
+   */
+  readonly triggers: string;
   /** Absolute path to the skill directory. */
   readonly path: string;
   /** Absolute path to the SKILL.md file. */
@@ -72,6 +77,28 @@ export function skillRoots(opts: SkillRootsOptions): string[] {
   });
 }
 
+/**
+ * Recursively flatten the frontmatter `triggers` field into a
+ * space-separated keyword string. Handles nested arrays and objects:
+ *
+ *   triggers:
+ *     - research: "调研/search"
+ *     - social:
+ *         - 小红书: "xiaohongshu/红书"
+ *
+ *   → "调研/search xiaohongshu/红书"
+ */
+function flattenTriggers(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) {
+    return raw.map(flattenTriggers).filter(Boolean).join(" ");
+  }
+  if (typeof raw === "object" && raw !== null) {
+    return Object.values(raw).map(flattenTriggers).filter(Boolean).join(" ");
+  }
+  return "";
+}
+
 function readSkillEntry(root: string, dir: string): SkillEntry | null {
   const path = join(root, dir);
   const skillFile = join(path, SKILL_FILE_NAME);
@@ -79,9 +106,12 @@ function readSkillEntry(root: string, dir: string): SkillEntry | null {
   const [meta, body] = parseFrontmatter(skillFile);
   const metaName = typeof meta["name"] === "string" ? meta["name"].trim() : "";
   const metaDescription = typeof meta["description"] === "string" ? meta["description"].trim() : "";
+  const rawTriggers = meta["triggers"];
+  const triggers = rawTriggers !== undefined ? flattenTriggers(rawTriggers) : "";
   return Object.freeze({
     name: metaName.length > 0 ? metaName : dir,
     description: metaDescription.length > 0 ? metaDescription : firstBodyLine(body),
+    triggers,
     path,
     skillFile,
   });
