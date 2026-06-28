@@ -10,7 +10,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import lockfile from "proper-lockfile";
 
@@ -284,13 +284,20 @@ export function resolveMcpToolProfile(configPath?: string): string | null {
 /**
  * Optional skills directory override (Agent Surface Suite). When set,
  * `skills_attach` / `list_skills` / `get_skill` read from this path
- * instead of `<vault>/Brain/skills/`. Supports `~` expansion.
- * Falls back to null (use the default vault-local path).
+ * instead of `<vault>/Brain/skills/`. Supports `~` expansion. A relative
+ * value is anchored to the directory of the resolved config file so the
+ * skill root is deterministic regardless of the process working
+ * directory (a bare `skills_dir: nested/skills` would otherwise resolve
+ * against an unpredictable CWD). Falls back to null (use the default
+ * vault-local path).
  */
 export function resolveSkillsDir(configPath?: string): string | null {
+  const discovery = discoverConfig(configPath);
   const env = process.env["OPEN_SECOND_BRAIN_SKILLS_DIR"]?.trim();
-  const raw = env || discoverConfig(configPath).data["skills_dir"]?.trim();
-  return raw && raw.length > 0 ? expandTilde(raw) : null;
+  const raw = env || discovery.data["skills_dir"]?.trim();
+  if (!raw || raw.length === 0) return null;
+  const expanded = expandTilde(raw);
+  return isAbsolute(expanded) ? expanded : resolve(dirname(discovery.path), expanded);
 }
 
 /**
