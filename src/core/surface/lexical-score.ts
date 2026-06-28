@@ -33,11 +33,23 @@ const DEFAULTS = Object.freeze({ nameWeight: 3, tagWeight: 2, k1: 1.2, b: 0.75 }
 /**
  * Lowercase, split on non-alphanumerics, drop 1-char tokens. Plain
  * toLowerCase keeps tokenisation identical across host locales.
+ * CJK text without spaces (e.g. "实现方式") gets overlapping bigrams
+ * so queries like "gbrain的实现方式" can match trigger/description
+ * tokens like "实现方式".
  */
 export function tokenize(text: string): string[] {
   const out: string[] = [];
   for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
-    if (raw.length >= 2) out.push(raw);
+    if (raw.length < 2) continue;
+    // CJK bigram pass: any token containing 2+ CJK characters also
+    // emits overlapping 2-char windows so "实现方式" and "的实现方式"
+    // share the bigram "实现".
+    if (/[\u4e00-\u9fff]/.test(raw) && raw.length > 2) {
+      for (let i = 0; i < raw.length - 1; i++) {
+        out.push(raw.slice(i, i + 2));
+      }
+    }
+    out.push(raw);
   }
   return out;
 }
