@@ -56,6 +56,26 @@ test("skillDescriptors maps skill entries with the skill group", () => {
   expect(out[0]!.name).toBe("brain-memory");
 });
 
+test("skillDescriptors omits triggers tags unless includeTriggers is set", () => {
+  const skills = [
+    {
+      name: "agent-search",
+      description: "Search the web.",
+      path: "skills/agent-search",
+      triggers: "research lookup",
+    },
+  ];
+  const off = skillDescriptors(skills);
+  expect(off[0]!.tags).toEqual([]);
+  const on = skillDescriptors(skills, true);
+  expect(on[0]!.tags).toEqual(["research lookup"]);
+});
+
+test("skillDescriptors with includeTriggers still emits no tag for an empty triggers field", () => {
+  const skills = [{ name: "bare", description: "No triggers.", path: "skills/bare", triggers: "" }];
+  expect(skillDescriptors(skills, true)[0]!.tags).toEqual([]);
+});
+
 test("firstLine trims and collapses to the first non-empty line", () => {
   expect(firstLine("  hello world \n second")).toBe("hello world");
   expect(firstLine("\n\nlate start\nrest")).toBe("late start");

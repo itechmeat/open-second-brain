@@ -13,6 +13,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
+import type { FrontmatterValue } from "../types.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { firstLine } from "./descriptor.ts";
 
@@ -78,24 +79,20 @@ export function skillRoots(opts: SkillRootsOptions): string[] {
 }
 
 /**
- * Recursively flatten the frontmatter `triggers` field into a
- * space-separated keyword string. Handles nested arrays and objects:
+ * Flatten the frontmatter `triggers` field into a space-separated
+ * keyword string. The vault frontmatter parser yields only the two
+ * shapes a SKILL.md author can write - a scalar string or an inline
+ * array - so those are the cases handled:
  *
- *   triggers:
- *     - research: "调研/search"
- *     - social:
- *         - 小红书: "xiaohongshu/红书"
+ *   triggers: "research lookup 调研"        → "research lookup 调研"
+ *   triggers: [research, lookup, 调研]      → "research lookup 调研"
  *
- *   → "调研/search xiaohongshu/红书"
+ * A non-string scalar (number/boolean) is not a meaningful keyword
+ * source and flattens to the empty string.
  */
-function flattenTriggers(raw: unknown): string {
+function flattenTriggers(raw: FrontmatterValue): string {
   if (typeof raw === "string") return raw;
-  if (Array.isArray(raw)) {
-    return raw.map(flattenTriggers).filter(Boolean).join(" ");
-  }
-  if (typeof raw === "object" && raw !== null) {
-    return Object.values(raw).map(flattenTriggers).filter(Boolean).join(" ");
-  }
+  if (Array.isArray(raw)) return raw.join(" ");
   return "";
 }
 

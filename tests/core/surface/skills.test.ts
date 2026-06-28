@@ -42,6 +42,34 @@ test("discoverSkills reads frontmatter name and description", () => {
   expect(skills[0]!.description).toBe("Does alpha things.");
 });
 
+test("parses a scalar triggers field into the flattened keyword string", () => {
+  const root = join(tmp, "skills");
+  writeSkill(
+    root,
+    "agent-search",
+    'name: agent-search\ndescription: "Search."\ntriggers: "research lookup 调研"',
+    "# Search",
+  );
+  expect(discoverSkills([root])[0]!.triggers).toBe("research lookup 调研");
+});
+
+test("parses an inline-array triggers field by joining on space", () => {
+  const root = join(tmp, "skills");
+  writeSkill(
+    root,
+    "agent-search",
+    "name: agent-search\ndescription: d\ntriggers: [research, lookup, 调研]",
+    "# Search",
+  );
+  expect(discoverSkills([root])[0]!.triggers).toBe("research lookup 调研");
+});
+
+test("a skill without a triggers field exposes an empty triggers string", () => {
+  const root = join(tmp, "skills");
+  writeSkill(root, "plain", "name: plain\ndescription: d", "# Plain");
+  expect(discoverSkills([root])[0]!.triggers).toBe("");
+});
+
 test("falls back to directory name and first body line without frontmatter", () => {
   const root = join(tmp, "skills");
   writeSkill(root, "bare", null, "# Bare Skill\n\nFirst real paragraph line.\n\nMore.");
