@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-06-28
+
+Two optional, opt-in config keys widen the agent skill surface without
+changing any default behaviour: skill discovery can point at an external
+directory, and skill auto-attach can score on a `triggers` keyword field.
+
+### Added
+
+- **Configurable skill discovery root (`skills_dir` /
+  `OPEN_SECOND_BRAIN_SKILLS_DIR`).** Points `list_skills` / `get_skill` /
+  `skills_attach` at an arbitrary directory (e.g. an external
+  `~/.hermes/skills/`) instead of vault-local `Brain/skills/`, with no
+  symlinks or vault restructuring. `~` is expanded; a relative value is
+  anchored to the resolved config file's directory so the root is
+  deterministic regardless of the process working directory. Unset leaves
+  discovery byte-identical to before.
+- **Trigger-keyword scoring for skill auto-attach (`skills_attach_triggers`
+  / `OPEN_SECOND_BRAIN_SKILLS_ATTACH_TRIGGERS`).** When `"true"` or `"1"`,
+  each skill's `triggers` frontmatter field (a scalar string or an inline
+  array) participates in the lexical scorer as a 2x BM25 tag signal,
+  alongside name (3x) and description (1x). Default off: `triggers` is
+  ignored and scoring stays name + description only. The tokenizer also
+  emits overlapping bigrams for runs of Han characters, so a spaceless CJK
+  query can match a trigger keyword.
+
 ## [1.19.1] - 2026-06-26
 
 Three correctness and hygiene follow-ups deferred from the v1.18.0 review,

@@ -42,6 +42,34 @@ test("discoverSkills reads frontmatter name and description", () => {
   expect(skills[0]!.description).toBe("Does alpha things.");
 });
 
+test("parses a scalar triggers field into the flattened keyword string", () => {
+  const root = join(tmp, "skills");
+  writeSkill(
+    root,
+    "agent-search",
+    'name: agent-search\ndescription: "Search."\ntriggers: "research lookup 调研"',
+    "# Search",
+  );
+  expect(discoverSkills([root])[0]!.triggers).toBe("research lookup 调研");
+});
+
+test("parses an inline-array triggers field by joining on space", () => {
+  const root = join(tmp, "skills");
+  writeSkill(
+    root,
+    "agent-search",
+    "name: agent-search\ndescription: d\ntriggers: [research, lookup, 调研]",
+    "# Search",
+  );
+  expect(discoverSkills([root])[0]!.triggers).toBe("research lookup 调研");
+});
+
+test("a skill without a triggers field exposes an empty triggers string", () => {
+  const root = join(tmp, "skills");
+  writeSkill(root, "plain", "name: plain\ndescription: d", "# Plain");
+  expect(discoverSkills([root])[0]!.triggers).toBe("");
+});
+
 test("falls back to directory name and first body line without frontmatter", () => {
   const root = join(tmp, "skills");
   writeSkill(root, "bare", null, "# Bare Skill\n\nFirst real paragraph line.\n\nMore.");
@@ -84,6 +112,32 @@ test("skillRoots returns existing repo and vault roots only", () => {
     join(vault, "Brain", "skills"),
   ]);
   expect(skillRoots({ repoRoot: join(tmp, "ghost"), vault: null })).toEqual([]);
+});
+
+test("skillsDir overrides the vault-local Brain/skills root", () => {
+  const vault = join(tmp, "vault");
+  mkdirSync(join(vault, "Brain", "skills"), { recursive: true });
+  const external = join(tmp, "external-skills");
+  mkdirSync(external, { recursive: true });
+  // With skillsDir set, the vault-local path is replaced, not appended.
+  expect(skillRoots({ vault, skillsDir: external })).toEqual([external]);
+});
+
+test("skillsDir alongside repoRoot keeps the repo root and replaces the vault root", () => {
+  const repoRoot = join(tmp, "repo");
+  mkdirSync(join(repoRoot, "skills"), { recursive: true });
+  const vault = join(tmp, "vault");
+  mkdirSync(join(vault, "Brain", "skills"), { recursive: true });
+  const external = join(tmp, "external-skills");
+  mkdirSync(external, { recursive: true });
+  expect(skillRoots({ repoRoot, vault, skillsDir: external })).toEqual([
+    join(repoRoot, "skills"),
+    external,
+  ]);
+});
+
+test("a non-existent skillsDir falls soft to an empty root list", () => {
+  expect(skillRoots({ vault: null, skillsDir: join(tmp, "ghost-skills") })).toEqual([]);
 });
 
 test("readSkillFile returns SKILL.md by default and auxiliary files by relative path", () => {

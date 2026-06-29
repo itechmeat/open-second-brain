@@ -271,6 +271,26 @@ scorer and returns a char-budgeted block of top matches; it returns
 config key is `"true"`, so default per-turn injection is unchanged. The
 native Hermes provider calls it from `prefetch()` fail-soft.
 
+Two optional config keys (each with a matching environment variable)
+tune the surface; both are off/unset by default, so behaviour is
+unchanged unless an operator opts in:
+
+- `skills_dir` (`OPEN_SECOND_BRAIN_SKILLS_DIR`) overrides the skill
+  discovery root, replacing vault-local `Brain/skills/` with an arbitrary
+  path (e.g. an external `~/.hermes/skills/`) without symlinks. `~` is
+  expanded; a relative value is anchored to the directory of the resolved
+  config file so the root is the same regardless of the process working
+  directory. The shipped `skills/` root is still scanned.
+- `skills_attach_triggers` (`OPEN_SECOND_BRAIN_SKILLS_ATTACH_TRIGGERS`),
+  when `"true"` or `"1"`, folds each skill's `triggers` frontmatter field
+  into the scorer as a 2x BM25 tag signal (alongside name at 3x and
+  description at 1x). When unset, `triggers` is ignored and scoring stays
+  name + description only. The `triggers` field accepts a scalar string
+  (`triggers: "research lookup"`) or an inline array
+  (`triggers: [research, lookup]`); the scorer also emits overlapping
+  bigrams for runs of Han characters, so a spaceless CJK query can match a
+  trigger keyword.
+
 ## Workspace Insight Suite tools (since v0.38.0)
 
 `brain_search` accepts `global: true` for cross-vault union search:

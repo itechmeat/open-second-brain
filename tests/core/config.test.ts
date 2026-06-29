@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import {
   defaultConfigPath,
@@ -10,6 +10,8 @@ import {
   redactMapping,
   resolveAgentName,
   resolveLinkOutputFormat,
+  resolveSkillsAttachTriggers,
+  resolveSkillsDir,
   resolveTimezone,
   resolveVault,
   setConfigValue,
@@ -28,6 +30,8 @@ beforeEach(() => {
     "VAULT_AGENT_NAME",
     "VAULT_TIMEZONE",
     "OBSIDIAN_LINK_FORMAT",
+    "OPEN_SECOND_BRAIN_SKILLS_DIR",
+    "OPEN_SECOND_BRAIN_SKILLS_ATTACH_TRIGGERS",
   ]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
@@ -271,5 +275,85 @@ describe("resolveTimezone", () => {
     const cfg = join(tmp, "config.yaml");
     writeFileSync(cfg, 'timezone: "Europe/Belgrade"\n');
     expect(resolveTimezone(cfg)).toBe("UTC");
+  });
+});
+
+describe("resolveSkillsDir", () => {
+  test("returns null when neither env nor config", () => {
+    expect(resolveSkillsDir(join(tmp, "missing.yaml"))).toBeNull();
+  });
+
+  test("returns null for an empty or whitespace value", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'skills_dir: "   "\n');
+    expect(resolveSkillsDir(cfg)).toBeNull();
+  });
+
+  test("reads an absolute path from config verbatim", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'skills_dir: "/srv/skills"\n');
+    expect(resolveSkillsDir(cfg)).toBe("/srv/skills");
+  });
+
+  test("env wins over config", () => {
+    process.env["OPEN_SECOND_BRAIN_SKILLS_DIR"] = "/env/skills";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'skills_dir: "/cfg/skills"\n');
+    expect(resolveSkillsDir(cfg)).toBe("/env/skills");
+  });
+
+  test("expands ~ in config value", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'skills_dir: "~/my-skills"\n');
+    const got = resolveSkillsDir(cfg);
+    expect(got).not.toBeNull();
+    expect(got!.startsWith("~")).toBe(false);
+    expect(isAbsolute(got!)).toBe(true);
+  });
+
+  test("anchors a relative config value to the config-file directory", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "skills_dir: nested/skills\n");
+    expect(resolveSkillsDir(cfg)).toBe(resolve(dirname(cfg), "nested/skills"));
+  });
+
+  test("anchors a relative env value to the config-file directory (CWD-independent)", () => {
+    process.env["OPEN_SECOND_BRAIN_SKILLS_DIR"] = "rel/skills";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "instance_name: x\n");
+    const got = resolveSkillsDir(cfg);
+    expect(got).toBe(resolve(dirname(cfg), "rel/skills"));
+    expect(isAbsolute(got!)).toBe(true);
+  });
+});
+
+describe("resolveSkillsAttachTriggers", () => {
+  test("defaults to false when nothing configured", () => {
+    expect(resolveSkillsAttachTriggers(join(tmp, "missing.yaml"))).toBe(false);
+  });
+
+  test("reads true from config", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'skills_attach_triggers: "true"\n');
+    expect(resolveSkillsAttachTriggers(cfg)).toBe(true);
+  });
+
+  test("accepts 1 as truthy", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'skills_attach_triggers: "1"\n');
+    expect(resolveSkillsAttachTriggers(cfg)).toBe(true);
+  });
+
+  test("any other value stays false", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'skills_attach_triggers: "yes"\n');
+    expect(resolveSkillsAttachTriggers(cfg)).toBe(false);
+  });
+
+  test("env wins over config", () => {
+    process.env["OPEN_SECOND_BRAIN_SKILLS_ATTACH_TRIGGERS"] = "true";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'skills_attach_triggers: "false"\n');
+    expect(resolveSkillsAttachTriggers(cfg)).toBe(true);
   });
 });

@@ -29,6 +29,30 @@ test("tokenize lowercases, splits punctuation, drops 1-char tokens", () => {
   ]);
 });
 
+test("a CJK run longer than 2 chars also emits overlapping bigrams", () => {
+  // Han text has no spaces, so a query like "...的实现方式" only matches a
+  // skill trigger "实现方式" if both share the "实现" / "方式" bigrams.
+  expect(tokenize("实现方式")).toEqual(["实现", "现方", "方式", "实现方式"]);
+});
+
+test("a 2-char CJK token is kept whole without extra bigrams", () => {
+  expect(tokenize("实现")).toEqual(["实现"]);
+});
+
+test("ASCII tokenization is unaffected by the CJK bigram pass", () => {
+  expect(tokenize("Hello World")).toEqual(["hello", "world"]);
+});
+
+test("CJK bigram overlap lets a spaceless query match a tag token", () => {
+  const corpus = [
+    d("doc_a", "documentation", ["实现方式"]),
+    d("doc_b", "documentation", ["其他内容"]),
+  ];
+  const ranked = scoreDescriptors("新的实现方式", corpus);
+  expect(ranked).toHaveLength(1);
+  expect(ranked[0]!.descriptor.name).toBe("doc_a");
+});
+
 test("query matching a description ranks that descriptor first", () => {
   const ranked = scoreDescriptors("semantic vault search", CORPUS);
   expect(ranked[0]!.descriptor.name).toBe("brain_search");

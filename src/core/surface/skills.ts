@@ -13,6 +13,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
+import type { FrontmatterValue } from "../types.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { firstLine } from "./descriptor.ts";
 
@@ -32,6 +33,11 @@ export interface SkillEntry {
   readonly name: string;
   /** Frontmatter `description`, falling back to the first body line. */
   readonly description: string;
+  /**
+   * Flattened trigger keywords from frontmatter `triggers` field.
+   * Empty string when no triggers are declared.
+   */
+  readonly triggers: string;
   /** Absolute path to the skill directory. */
   readonly path: string;
   /** Absolute path to the SKILL.md file. */
@@ -43,6 +49,13 @@ export interface SkillRootsOptions {
   readonly repoRoot?: string | null;
   /** Vault root; vault-local skills live at `Brain/skills/`. */
   readonly vault?: string | null;
+  /**
+   * Explicit skills directory override. When set, takes precedence over
+   * the vault-local `Brain/skills/` path, letting operators point the
+   * skill surface at an external directory (e.g. `~/.hermes/skills/`)
+   * without symlinks. Supports ~ expansion via the caller.
+   */
+  readonly skillsDir?: string | null;
 }
 
 export const SKILL_FILE_NAME = "SKILL.md";
@@ -51,7 +64,11 @@ export const SKILL_FILE_NAME = "SKILL.md";
 export function skillRoots(opts: SkillRootsOptions): string[] {
   const candidates: string[] = [];
   if (opts.repoRoot) candidates.push(join(opts.repoRoot, "skills"));
-  if (opts.vault) candidates.push(join(opts.vault, "Brain", "skills"));
+  if (opts.skillsDir) {
+    candidates.push(opts.skillsDir);
+  } else if (opts.vault) {
+    candidates.push(join(opts.vault, "Brain", "skills"));
+  }
   return candidates.filter((root) => {
     try {
       return statSync(root).isDirectory();
@@ -61,6 +78,24 @@ export function skillRoots(opts: SkillRootsOptions): string[] {
   });
 }
 
+/**
+ * Flatten the frontmatter `triggers` field into a space-separated
+ * keyword string. The vault frontmatter parser yields only the two
+ * shapes a SKILL.md author can write - a scalar string or an inline
+ * array - so those are the cases handled:
+ *
+ *   triggers: "research lookup 调研"        → "research lookup 调研"
+ *   triggers: [research, lookup, 调研]      → "research lookup 调研"
+ *
+ * A non-string scalar (number/boolean) is not a meaningful keyword
+ * source and flattens to the empty string.
+ */
+function flattenTriggers(raw: FrontmatterValue): string {
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) return raw.join(" ");
+  return "";
+}
+
 function readSkillEntry(root: string, dir: string): SkillEntry | null {
   const path = join(root, dir);
   const skillFile = join(path, SKILL_FILE_NAME);
@@ -68,9 +103,12 @@ function readSkillEntry(root: string, dir: string): SkillEntry | null {
   const [meta, body] = parseFrontmatter(skillFile);
   const metaName = typeof meta["name"] === "string" ? meta["name"].trim() : "";
   const metaDescription = typeof meta["description"] === "string" ? meta["description"].trim() : "";
+  const rawTriggers = meta["triggers"];
+  const triggers = rawTriggers !== undefined ? flattenTriggers(rawTriggers) : "";
   return Object.freeze({
     name: metaName.length > 0 ? metaName : dir,
     description: metaDescription.length > 0 ? metaDescription : firstBodyLine(body),
+    triggers,
     path,
     skillFile,
   });

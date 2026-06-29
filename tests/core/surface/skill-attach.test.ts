@@ -3,10 +3,11 @@ import { test, expect } from "bun:test";
 import { buildSkillAttachment } from "../../../src/core/surface/skill-attach.ts";
 import type { SkillEntry } from "../../../src/core/surface/skills.ts";
 
-function entry(name: string, description: string): SkillEntry {
+function entry(name: string, description: string, triggers = ""): SkillEntry {
   return Object.freeze({
     name,
     description,
+    triggers,
     path: `/skills/${name}`,
     skillFile: `/skills/${name}/SKILL.md`,
   });
@@ -58,6 +59,27 @@ test("maxChars budget drops whole trailing entries, never truncates mid-line", (
 test("empty skill list and empty query fail soft", () => {
   expect(buildSkillAttachment({ query: "anything", skills: [] }).items).toHaveLength(0);
   expect(buildSkillAttachment({ query: "", skills: SKILLS }).items).toHaveLength(0);
+});
+
+test("includeTriggers lets a triggers-only keyword surface a skill", () => {
+  const skills = [
+    entry("agent-search", "A general capability.", "调研 reconnaissance"),
+    entry("brain-memory", "Record taste signals."),
+  ];
+  // The query word matches only the triggers field, not name or description.
+  const without = buildSkillAttachment({ query: "reconnaissance", skills });
+  expect(without.items).toHaveLength(0);
+  const withTriggers = buildSkillAttachment({
+    query: "reconnaissance",
+    skills,
+    includeTriggers: true,
+  });
+  expect(withTriggers.items[0]!.name).toBe("agent-search");
+});
+
+test("includeTriggers is off by default", () => {
+  const skills = [entry("agent-search", "A general capability.", "reconnaissance")];
+  expect(buildSkillAttachment({ query: "reconnaissance", skills }).items).toHaveLength(0);
 });
 
 test("the block is deterministic and headed", () => {
