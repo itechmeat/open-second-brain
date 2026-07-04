@@ -136,12 +136,36 @@ describe("slugify", () => {
     expect(slugify("Hello, World!")).toBe("hello-world");
   });
 
-  test("handles non-ASCII and empty inputs", () => {
-    expect(slugify("   ")).toBe("note");
-    expect(slugify("---")).toBe("note");
-    // Geometric / dingbat symbols — purely non-ASCII, stripped down to nothing
-    // by the alphanumeric regex. Falls back to the "note" sentinel.
-    expect(slugify("★ ☆ ☃")).toBe("note");
+  test("empty / punctuation-only inputs fall back to a stable unnamed-<hash>", () => {
+    // Every input that slugifies to nothing must land on `unnamed-<hex>` —
+    // never a bare `-`, empty string, or traversal-capable name.
+    const fallback = /^unnamed-[0-9a-f]{8}$/;
+    for (const input of [
+      "", // empty
+      "   ", // whitespace-only
+      "---", // punctuation-only
+      "@", // single symbol
+      "!!!", // repeated punctuation
+      "★ ☆ ☃", // dingbat / geometric symbols
+      "🙂🙂", // emoji-only
+      "́̈", // bare combining marks (acute + diaeresis)
+    ]) {
+      expect(slugify(input)).toMatch(fallback);
+    }
+  });
+
+  test("fallback is stable per-input and distinct across inputs", () => {
+    // Same title → same basename (stable across devices / re-slug)...
+    expect(slugify("@")).toBe(slugify("@"));
+    // ...normalized: leading/trailing whitespace and case do not fork it.
+    expect(slugify("  @  ")).toBe(slugify("@"));
+    // ...but different punctuation-only titles must not collide on one name.
+    expect(slugify("@")).not.toBe(slugify("!!!"));
+  });
+
+  test("fallback is idempotent under a second slugify pass", () => {
+    const once = slugify("@");
+    expect(slugify(once)).toBe(once);
   });
 
   test("truncates long input to 64 chars", () => {
