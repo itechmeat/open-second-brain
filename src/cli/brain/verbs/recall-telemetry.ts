@@ -139,34 +139,28 @@ function costMeter(argv: string[]): number {
   const vault = brainVerbContext(flags).vault;
   const since = trimOrUndefined(flags["since"]);
   const until = trimOrUndefined(flags["until"]);
+  // Parse each numeric weight once; the cost meter omits undefined weights
+  // so the module applies its own defaults.
+  const writeCost = parseNonNegativeNumber(
+    trimOrUndefined(flags["write-cost"]),
+    "brain recall-telemetry cost",
+    "--write-cost",
+  );
+  const readCost = parseNonNegativeNumber(
+    trimOrUndefined(flags["read-cost"]),
+    "brain recall-telemetry cost",
+    "--read-cost",
+  );
+  const writeHeavyRatio = parseNonNegativeNumber(
+    trimOrUndefined(flags["write-heavy-ratio"]),
+    "brain recall-telemetry cost",
+    "--write-heavy-ratio",
+  );
   const meter = computeMemoryCostMeter(vault, {
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
-    weights: {
-      write: parseNonNegativeNumber(
-        trimOrUndefined(flags["write-cost"]),
-        "brain recall-telemetry cost",
-        "--write-cost",
-      ),
-      read: parseNonNegativeNumber(
-        trimOrUndefined(flags["read-cost"]),
-        "brain recall-telemetry cost",
-        "--read-cost",
-      ),
-    },
-    ...(parseNonNegativeNumber(
-      trimOrUndefined(flags["write-heavy-ratio"]),
-      "brain recall-telemetry cost",
-      "--write-heavy-ratio",
-    ) !== undefined
-      ? {
-          writeHeavyRatio: parseNonNegativeNumber(
-            trimOrUndefined(flags["write-heavy-ratio"]),
-            "brain recall-telemetry cost",
-            "--write-heavy-ratio",
-          ),
-        }
-      : {}),
+    weights: { write: writeCost, read: readCost },
+    ...(writeHeavyRatio !== undefined ? { writeHeavyRatio } : {}),
   });
 
   if (flags["json"]) {
