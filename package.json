@@ -46,6 +46,8 @@
     "validate:fix": "bun run lint:fix && bun run fmt",
     "sync-version": "bun run scripts/sync-version.ts",
     "sync-version:check": "bun run scripts/sync-version.ts --check",
+    "check:paths": "bun run scripts/check-hardcoded-paths.ts",
+    "check:paths:strict": "bun run scripts/check-hardcoded-paths.ts --strict",
     "hooks:install": "git config core.hooksPath .githooks && echo 'git hooks enabled (core.hooksPath=.githooks)'",
     "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
   },
