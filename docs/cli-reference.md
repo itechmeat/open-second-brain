@@ -275,7 +275,7 @@ See [`hermes-cron.md`](hermes-cron.md) for the cron envelope and Telegram delive
 Reports on external code-project partners. Strictly read-only: never installs, initializes, extracts, or mutates a partner index or the vault.
 
 ```text
-o2b partner codegraph report  Resolve the in-scope code project and report the codegraph index state (no_project | absent | not_indexed | indexed with node/file/edge counts | error) plus a structural Cargo.toml workspace-member list. Non-Rust projects report cargo_workspace: null with a reason. --vault sharpens the scan scope; --json emits the schema-versioned report
+o2b partner codegraph report  Resolve the in-scope code project and report the codegraph index state (no_project | absent | not_indexed | indexed with node/file/edge counts | error) plus a structural Cargo.toml workspace-member list. When indexed, runs a read-only, non-blocking graph-health gate (index.health) that flags empty-graph, collapsed-edges, dangling-references, self-loops, and cache-root-mismatch before labeling/import/recall trust the graph. Non-Rust projects report cargo_workspace: null with a reason. --vault sharpens the scan scope; --json emits the schema-versioned report
 ```
 
 ## Search

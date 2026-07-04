@@ -198,6 +198,50 @@ describe("checkCodegraph", () => {
     expect(r!.message).toContain("392");
   });
 
+  test("indexed but unhealthy graph -> ok stays true, health summary in message", () => {
+    // A cache-root mismatch (common in worktree checkouts) and collapsed edges
+    // are non-blocking: doctor must not fail, but must surface the warning.
+    const repo = makeRepo(join(tmp, "repo"));
+    makeIndexed(repo);
+    const r = checkCodegraph(
+      { cwd: repo, vault: join(tmp, "vault") },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        runStatusJson: () => ({
+          ok: true,
+          data: {
+            initialized: true,
+            nodeCount: 800,
+            fileCount: 50,
+            edgeCount: 0,
+            worktreeMismatch: { worktreeRoot: "/other/root", indexRoot: "/repo" },
+          },
+        }),
+      },
+    );
+    expect(r!.ok).toBe(true);
+    expect(r!.message).toContain("graph-health");
+    expect(r!.message).toContain("collapsed-edges");
+    expect(r!.message).toContain("cache-root-mismatch");
+  });
+
+  test("indexed healthy graph -> no graph-health suffix", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    makeIndexed(repo);
+    const r = checkCodegraph(
+      { cwd: repo, vault: join(tmp, "vault") },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        runStatusJson: () => ({
+          ok: true,
+          data: { initialized: true, nodeCount: 100, fileCount: 10, edgeCount: 250 },
+        }),
+      },
+    );
+    expect(r!.ok).toBe(true);
+    expect(r!.message).not.toContain("graph-health");
+  });
+
   test("status reports initialized:false -> not_indexed", () => {
     const repo = makeRepo(join(tmp, "repo"));
     makeIndexed(repo);
