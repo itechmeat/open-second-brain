@@ -11,6 +11,7 @@ import { appendMetric } from "../../core/brain/metrics.ts";
 import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../../core/search/benchmark.ts";
 import { loadTunedParameters, resetTuning, tuneRecall } from "../../core/search/tuning.ts";
 import { listGateTelemetry, summarizeGateTelemetry } from "../../core/brain/gate-telemetry.ts";
+import { computeMemoryCostMeter } from "../../core/brain/memory-cost-meter.ts";
 import {
   isRecallTelemetryMode,
   isRecallTelemetryStatus,
@@ -181,10 +182,43 @@ async function toolBrainRecallTelemetry(
     });
     return { ...summary };
   }
+  // Write-vs-read cost meter (memory cost meter): folds write volume
+  // against the read telemetry above. Period-based; mode/status/host/limit
+  // do not apply to the write side and are ignored here.
+  if (operation === "cost") {
+    const writeCost = coerceNonNegativeNumber("write_cost", args["write_cost"]);
+    const readCost = coerceNonNegativeNumber("read_cost", args["read_cost"]);
+    const writeHeavyRatio = coerceNonNegativeNumber("write_heavy_ratio", args["write_heavy_ratio"]);
+    const meter = computeMemoryCostMeter(ctx.vault, {
+      ...(filter.since !== undefined ? { since: filter.since } : {}),
+      ...(filter.until !== undefined ? { until: filter.until } : {}),
+      ...(writeCost !== undefined || readCost !== undefined
+        ? {
+            weights: {
+              ...(writeCost !== undefined ? { write: writeCost } : {}),
+              ...(readCost !== undefined ? { read: readCost } : {}),
+            },
+          }
+        : {}),
+      ...(writeHeavyRatio !== undefined ? { writeHeavyRatio } : {}),
+    });
+    return { vault_path: ctx.vault, ...meter };
+  }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_recall_telemetry: operation must be list, summary, gate_list, or gate_summary",
+    "brain_recall_telemetry: operation must be list, summary, gate_list, gate_summary, or cost",
   );
+}
+
+function coerceNonNegativeNumber(name: string, raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_recall_telemetry: ${name} must be a non-negative number`,
+    );
+  }
+  return raw;
 }
 
 function recallTelemetryFilter(args: Record<string, unknown>): RecallTelemetryFilter {
@@ -330,15 +364,15 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_recall_telemetry",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "List recall telemetry records or summarize recall coverage and knowledge gaps. Records are emitted only by opt-in callers. Read-only.",
+      "List recall telemetry records or summarize recall coverage and gaps; cost folds write volume (feedback/apply-evidence/note/host writes) against reads into a write-vs-read ratio, a write-heavy flag, and a rough cost signal per period. Emitted only by opt-in callers. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["list", "summary", "gate_list", "gate_summary"],
+          enum: ["list", "summary", "gate_list", "gate_summary", "cost"],
           description:
-            "list/summary for recall telemetry; gate_list/gate_summary for recall-gate decisions.",
+            "list/summary for recall telemetry; gate_list/gate_summary for recall-gate decisions; cost for the write-vs-read cost meter.",
         },
         mode: {
           type: "string",
@@ -366,6 +400,22 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description: "Optional maximum record count for list.",
+        },
+        write_cost: {
+          type: "number",
+          minimum: 0,
+          description: "cost: weight charged per write op (default 1).",
+        },
+        read_cost: {
+          type: "number",
+          minimum: 0,
+          description: "cost: weight charged per read op (default 1).",
+        },
+        write_heavy_ratio: {
+          type: "number",
+          minimum: 0,
+          description:
+            "cost: write/read ratio above which the period is flagged write-heavy (default 1).",
         },
       },
       required: ["operation"],

@@ -587,7 +587,8 @@ export const VERB_HELP: Record<string, string> = {
   "recall-telemetry":
     "usage: o2b brain recall-telemetry list [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +
-    "Read opt-in recall telemetry continuity records and aggregate coverage gaps.\n",
+    "       o2b brain recall-telemetry cost [--since <iso>] [--until <iso>] [--write-cost <n>] [--read-cost <n>] [--write-heavy-ratio <n>] [--vault <path>] [--json]\n" +
+    "Read opt-in recall telemetry continuity records and aggregate coverage gaps. cost folds write volume (feedback/apply-evidence/note/host writes) against reads into a write-vs-read ratio, a write-heavy flag, and a rough weighted cost signal per period.\n",
   "generation-reports":
     "usage: o2b brain generation-reports record <write_session|context_pack|dream_stage> --ref <id> --agent <name> --prompt <text> [--enable] [--provider <p>] [--model <m>] [--finish-reason <r>] [--latency-ms <n>] [--input-tokens <n>] [--output-tokens <n>] [--cached-tokens <n>] [--total-tokens <n>] [--scope <s>] [--source <id[=path]>...] [--created-at <iso>] [--vault <path>] [--json]\n" +
     "       o2b brain generation-reports list [--handoff <kind>] [--agent <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +

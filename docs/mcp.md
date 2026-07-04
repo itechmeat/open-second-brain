@@ -109,7 +109,10 @@ weights (applied to ranking only when `search_learned_weights_enabled` is on).
 `brain_context_pack` accepts opt-in `receipt`, `telemetry`, `cache_stable`, and
 `dedup_repeated` diagnostics; `brain_pre_compress_pack` accepts opt-in `receipt`
 and `telemetry`. `brain_context_receipts` supports `operation: "list"|"show"`;
-`brain_recall_telemetry` supports `operation: "list"|"summary"`;
+`brain_recall_telemetry` supports `operation: "list"|"summary"|"cost"` (`cost`
+folds write volume - feedback/apply-evidence/note plus host-bridge writes -
+against reads into a write-vs-read ratio, a `write_heavy` flag, and a rough
+weighted cost signal per period; tune with `write_cost`/`read_cost`/`write_heavy_ratio`);
 `brain_context_presets` supports `operation: "show"|"suggest"|"diff"`; and
 `brain_generation_reports` supports `action: "record"|"list"|"summary"` -
 `record` is gated (default off) by a per-call `enable` flag or the
