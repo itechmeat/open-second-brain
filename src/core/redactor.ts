@@ -15,6 +15,21 @@
  * intentionally narrow — receipts and signals carry a disclaimer that
  * the agent must visually inspect output before posting externally.
  *
+ * An optional infra-topology pass (`redactInfra`) additionally scrubs
+ * bare network coordinates that carry no `key=value` shape — public
+ * IPv4/IPv6 literals, `user:pass@host` URL credentials, `host:port`
+ * endpoints, and internal hostnames. It is off by default (the key/value
+ * passes suffice for receipts) and enabled on the artifact store, which
+ * persists full tool payloads where a bare IP or internal FQDN is the
+ * most common topology leak. Every infra regex is bounded (no nested
+ * unbounded quantifiers), so the pass stays linear on large inputs.
+ *
+ * Oversized input FAILS CLOSED: rather than silently dropping the tail
+ * past the scan window as if it were clean, {@link redactRawOutput}
+ * appends {@link SCAN_TRUNCATED_MARKER}. {@link wasScanTruncated} lets a
+ * downstream consumer detect that marker and demote/exclude the artifact
+ * instead of trusting a partially-scanned payload.
+ *
  * `normaliseTextField` is the shared input sanitiser for fields that
  * land in YAML frontmatter or single-line Markdown bullets. It strips
  * C0 control characters (except `\n` and `\t`), folds the unicode line
@@ -30,15 +45,41 @@ const PLACEHOLDER = "***REDACTED***";
 export const PRIVATE_REGION_PLACEHOLDER = "***PRIVATE***";
 
 /**
- * Maximum input size accepted by `redactRawOutput`. Receipts have no
+ * Maximum input size scanned by `redactRawOutput`. Receipts have no
  * legitimate reason to embed multi-megabyte payloads — a runaway pipe
- * of server logs is the realistic cause of an oversize input. Capping
- * at 256 KB keeps the four-pass regex pipeline bounded and avoids a
- * DoS vector for whoever's caller is feeding the redactor.
+ * of server logs is the realistic cause of an oversize input. The
+ * regex pipeline is linear, so the window is a DoS bound rather than a
+ * correctness limit; 1 MiB is wide enough that a secret rarely lands
+ * past it, and anything that does trips the fail-closed marker below
+ * rather than being dropped as if it were clean.
  */
-export const MAX_REDACTOR_INPUT = 256 * 1024;
-const TRUNCATION_MARKER =
-  "\n\n[…truncated for size; original exceeded 256 KB. Inspect raw output before sharing.]\n";
+export const MAX_REDACTOR_INPUT = 1024 * 1024;
+
+/**
+ * Stable, machine-detectable token embedded in {@link SCAN_TRUNCATED_MARKER}.
+ * {@link wasScanTruncated} matches on this so downstream consumers can
+ * demote/exclude a partially-scanned artifact without parsing prose.
+ */
+const SCAN_TRUNCATED_TOKEN = "***SCAN_TRUNCATED***";
+
+/**
+ * Appended when input exceeds the scan window. The tail past the window
+ * is dropped *and* flagged: because it was never scanned, the whole
+ * payload must be treated as unverified rather than clean.
+ */
+export const SCAN_TRUNCATED_MARKER =
+  `\n\n${SCAN_TRUNCATED_TOKEN} [redactor scan window exceeded (> 1 MiB); the unscanned tail was dropped. ` +
+  `This payload was only partially scanned — treat it as unverified and inspect the raw source before sharing.]\n`;
+
+/**
+ * True when `text` carries the fail-closed marker appended by
+ * {@link redactRawOutput} on oversized input. Consumers use this to
+ * demote or exclude an artifact that could not be fully scanned instead
+ * of trusting the redactor's output as complete.
+ */
+export function wasScanTruncated(text: string): boolean {
+  return typeof text === "string" && text.includes(SCAN_TRUNCATED_TOKEN);
+}
 
 const PRIVATE_OPEN_TAG_RE = /<private\b[^>]*>/gi;
 const PRIVATE_CLOSE_TAG_RE = /<\/private>/gi;
@@ -91,6 +132,100 @@ const JSON_ENTRY_RE = new RegExp(
 // common enough that we preserve the `Bearer ` prefix for readability
 // and only replace the token portion.
 const BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._\-+/=]+)/gi;
+
+// ----- Infra-topology detectors (opt-in via `redactInfra`) ------------------
+//
+// These scrub network coordinates that carry no key=value shape, so the
+// assignment passes above never see them. Every regex uses only bounded
+// repetition ({m,n}) — no nested unbounded quantifiers — so the pass is
+// linear and cannot be driven into catastrophic backtracking (ReDoS) by
+// a large adversarial input.
+
+/** A single dotted-quad octet (0-255), used to compose IPv4 patterns. */
+const IPV4_OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+/** A syntactically-valid IPv4 literal (four octets). */
+const IPV4 = `${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}`;
+
+// `scheme://user:pass@host` — strip the embedded credentials but keep the
+// scheme and `@host` for readability. Run first so the host that follows
+// is still available to the host/port passes below.
+const BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/g;
+
+// `ipv4:port` — a reachable service endpoint. Redacted whole regardless of
+// whether the address is public or private (the port is what leaks the
+// service). Runs before the bare-IPv4 pass so the port form is caught first.
+const IPV4_PORT_RE = new RegExp(`\\b${IPV4}:\\d{1,5}\\b`, "g");
+
+// `fqdn:port` — a named service endpoint (`db.example.com:5432`). The final
+// label is alphabetic, so this never collides with `ipv4:port`.
+const FQDN_PORT_RE =
+  /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}:\d{1,5}\b/g;
+
+// Internal hostnames — FQDNs under a private/self-hosted suffix
+// (`db.internal`, `svc.cluster.local`, `host.corp`, …). These reveal
+// internal topology even without a port.
+const INTERNAL_HOST_RE =
+  /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:internal|intranet|localdomain|local|lan|corp|home)\b/gi;
+
+// Bare IPv6 literals: either a full 8-group address or any `::`-compressed
+// form. Requiring `::` or 8 groups keeps `HH:MM:SS`-style timestamps (only
+// two colons, no `::`) from being mistaken for an address. Every quantifier
+// is bounded.
+const IPV6_RE = new RegExp(
+  "(?<![\\w:.])(?:" +
+    // full 8 groups
+    "(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}" +
+    "|" +
+    // `::`-compressed with leading groups (e.g. 2001:db8::1, fe80::)
+    "(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4}::(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{0,4}" +
+    "|" +
+    // leading `::` (e.g. ::1, ::ffff:1.2.3.4-style prefix)
+    "::(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4}" +
+    ")(?![\\w:.])",
+  "g",
+);
+
+// Bare IPv4 literal not part of a longer dotted run (excludes version
+// strings like `1.2.3.4.5` and `v1.2.3`). Public-only: the callback skips
+// private/reserved ranges.
+const IPV4_BARE_RE = new RegExp(`(?<![\\w.])${IPV4}(?![\\w.])`, "g");
+
+/** RFC 1918 / loopback / link-local / CGNAT / multicast+reserved IPv4. */
+function isPrivateOrReservedIPv4(ip: string): boolean {
+  const octets = ip.split(".");
+  const a = Number.parseInt(octets[0] ?? "", 10);
+  const b = Number.parseInt(octets[1] ?? "", 10);
+  if (a === 0 || a === 10 || a === 127) return true; // this-network, private, loopback
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16
+  if (a === 169 && b === 254) return true; // link-local
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
+  if (a >= 224) return true; // multicast + reserved (224+)
+  return false;
+}
+
+/** Loopback / unspecified / link-local (fe80::/10) / unique-local (fc00::/7). */
+function isPrivateOrReservedIPv6(ip: string): boolean {
+  const lower = ip.toLowerCase();
+  if (lower === "::" || lower === "::1") return true;
+  if (/^fe[89ab]/.test(lower)) return true; // link-local
+  if (/^f[cd]/.test(lower)) return true; // unique-local
+  return false;
+}
+
+function redactInfraTopology(text: string): string {
+  let out = text.replace(BASIC_AUTH_URL_RE, (_m, scheme: string) => `${scheme}${PLACEHOLDER}@`);
+  out = out.replace(IPV4_PORT_RE, PLACEHOLDER);
+  out = out.replace(FQDN_PORT_RE, PLACEHOLDER);
+  out = out.replace(INTERNAL_HOST_RE, PLACEHOLDER);
+  out = out.replace(IPV6_RE, (match: string) =>
+    isPrivateOrReservedIPv6(match) ? match : PLACEHOLDER,
+  );
+  out = out.replace(IPV4_BARE_RE, (match: string) =>
+    isPrivateOrReservedIPv4(match) ? match : PLACEHOLDER,
+  );
+  return out;
+}
 
 export function stripPrivateRegions(text: string): string {
   if (!text) return text;
@@ -153,6 +288,15 @@ export interface RedactRawOutputOptions {
    * when no key=value shape surrounds it.
    */
   readonly literals?: ReadonlyArray<string>;
+  /**
+   * When `true`, also run the infra-topology pass (public IPv4/IPv6,
+   * `user:pass@host` URL credentials, `host:port` endpoints, internal
+   * hostnames). Off by default — the key/value passes suffice for
+   * receipts, and blanket IP/host redaction would mangle legitimate
+   * prose. Enabled on the artifact store, whose full tool payloads are
+   * where a bare coordinate is the likeliest topology leak.
+   */
+  readonly redactInfra?: boolean;
 }
 
 export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
@@ -167,8 +311,11 @@ export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {})
     out = out.split(literal).join(PLACEHOLDER);
   }
 
+  // Fail closed on oversized input: scan the prefix that fits the window,
+  // drop the unscanned tail, and flag the result so a downstream consumer
+  // treats it as unverified rather than trusting it as fully scanned.
   const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
-  if (out.length > maxInput) out = out.slice(0, maxInput) + TRUNCATION_MARKER;
+  if (out.length > maxInput) out = out.slice(0, maxInput) + SCAN_TRUNCATED_MARKER;
 
   out = stripPrivateRegions(out);
 
@@ -199,6 +346,11 @@ export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {})
     }
     return `${key}${sep}${PLACEHOLDER}`;
   });
+
+  // Infra-topology pass last: it runs on values the key/value passes
+  // already left untouched (bare coordinates), and any value they redacted
+  // is now a placeholder with no IP/host shape left to match.
+  if (opts.redactInfra) out = redactInfraTopology(out);
 
   return out;
 }

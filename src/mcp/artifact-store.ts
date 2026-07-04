@@ -69,9 +69,15 @@ export class ArtifactStore {
    */
   put(fullText: string): StoredArtifact {
     // Scrub secrets but never truncate: the artifact IS the recoverable
-    // full payload, so the receipt-oriented 256 KiB context cap must not
-    // apply here, or large results would be silently clipped on disk.
-    const text = redactRawOutput(fullText, { maxInput: Number.POSITIVE_INFINITY });
+    // full payload, so the receipt-oriented scan-window cap must not apply
+    // here, or large results would be silently clipped on disk. The whole
+    // payload is scanned, so also run the infra-topology pass — a bare
+    // public IP or internal hostname in a stored tool result is the
+    // likeliest topology leak and carries no key=value shape to catch it.
+    const text = redactRawOutput(fullText, {
+      maxInput: Number.POSITIVE_INFINITY,
+      redactInfra: true,
+    });
     const artifactId = createHash("sha256")
       .update(text, "utf8")
       .digest("hex")
