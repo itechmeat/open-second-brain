@@ -15,5 +15,5 @@
     "unicorn/no-useless-fallback-in-spread": "warn",
     "unicorn/no-useless-spread": "warn"
   },
-  "ignorePatterns": [".codegraph", "node_modules", "openclaw/**", "dist", "coverage"]
+  "ignorePatterns": [".codegraph", "node_modules", "openclaw/**", "dist", "coverage", ".worktrees"]
 }

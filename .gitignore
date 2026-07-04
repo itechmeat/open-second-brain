@@ -26,3 +26,6 @@ sandbox-vault/
 .orphaned_at
 .claude/scheduled_tasks.lock
 .open-second-brain/bench-runs/
+
+# Local Kanban/git worktrees (never committed; exclude from lint/fmt)
+.worktrees/
