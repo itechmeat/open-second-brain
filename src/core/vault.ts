@@ -234,6 +234,10 @@ export function slugify(value: string): string {
   let slug = lowered.replace(SLUG_INVALID_RE, "-").replace(/^-+|-+$/g, "");
   if (!slug) return unnamedFallbackSlug(lowered);
   slug = slug.slice(0, SLUG_MAX_LEN).replace(/-+$/, "");
+  // Defensive only: SLUG_MAX_LEN (64) > 0 and the leading-trim above
+  // guarantees a non-empty alnum-started slug here, so slicing cannot
+  // produce "". Kept so a future SLUG_MAX_LEN or generation change cannot
+  // silently produce an empty slug.
   return slug || unnamedFallbackSlug(lowered);
 }
 

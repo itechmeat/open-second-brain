@@ -157,9 +157,20 @@ const BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+
 const IPV4_PORT_RE = new RegExp(`\\b${IPV4}:\\d{1,5}\\b`, "g");
 
 // `fqdn:port` — a named service endpoint (`db.example.com:5432`). The final
-// label is alphabetic, so this never collides with `ipv4:port`.
-const FQDN_PORT_RE =
-  /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}:\d{1,5}\b/g;
+// label is alphabetic, so this never collides with `ipv4:port`. A negative
+// lookahead skips source-file extensions (`index.js:42`, `app.ts:128`) so
+// diagnostics and stack frames are not mistaken for service endpoints when
+// `redactInfra` runs over tool output (e.g. ArtifactStore.put).
+const FQDN_PORT_SOURCE_EXTS =
+  "js|ts|tsx|jsx|py|json|rs|go|java|rb|php|c|cc|cpp|cxx|h|hpp|css|scss|sass|less|" +
+  "html|htm|xml|yaml|yml|toml|ini|cfg|md|markdown|sh|bash|sql|vue|svelte|gradle|" +
+  "kt|swift|scala|clj|ex|exs|erl|elm|dart|lua|pl|pm|r|jl|tf|lock|map|txt|csv|log";
+const FQDN_PORT_RE = new RegExp(
+  "\\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+(?!(" +
+    FQDN_PORT_SOURCE_EXTS +
+    "):\\d)[a-zA-Z]{2,63}:\\d{1,5}\\b",
+  "g",
+);
 
 // Internal hostnames — FQDNs under a private/self-hosted suffix
 // (`db.internal`, `svc.cluster.local`, `host.corp`, …). These reveal

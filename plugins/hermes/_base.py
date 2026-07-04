@@ -82,4 +82,4 @@ except Exception:  # noqa: BLE001 - any import failure means "not in Hermes"
     HAS_HERMES_ABC = False
 
 
-__all__ = ["MemoryProvider", "_FallbackMemoryProviderBase", "HAS_HERMES_ABC"]
+__all__ = ["HAS_HERMES_ABC", "MemoryProvider", "_FallbackMemoryProviderBase"]

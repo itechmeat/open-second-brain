@@ -184,8 +184,18 @@ async function toolBrainRecallTelemetry(
   }
   // Write-vs-read cost meter (memory cost meter): folds write volume
   // against the read telemetry above. Period-based; mode/status/host/limit
-  // do not apply to the write side and are ignored here.
+  // do not apply to the write side, so reject them to mirror the CLI's
+  // fail-closed behavior (recall-telemetry.ts costMeter) rather than
+  // silently ignoring and looking like a valid filtered result.
   if (operation === "cost") {
+    for (const name of ["mode", "status", "host", "limit"] as const) {
+      if (args[name] !== undefined) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          `brain_recall_telemetry: ${name} is not supported for the cost meter`,
+        );
+      }
+    }
     const writeCost = coerceNonNegativeNumber("write_cost", args["write_cost"]);
     const readCost = coerceNonNegativeNumber("read_cost", args["read_cost"]);
     const writeHeavyRatio = coerceNonNegativeNumber("write_heavy_ratio", args["write_heavy_ratio"]);

@@ -12,7 +12,7 @@
  * from config. No deep filesystem walk.
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import type { CheckResult } from "../types.ts";
@@ -266,8 +266,10 @@ export function checkCodegraph(
     edgeCount: status.data.edgeCount ?? 0,
     ...(status.data.danglingRefs !== undefined ? { danglingRefs: status.data.danglingRefs } : {}),
     ...(status.data.selfLoops !== undefined ? { selfLoops: status.data.selfLoops } : {}),
-    indexRoot: status.data.worktreeMismatch?.indexRoot ?? status.data.projectPath ?? null,
-    worktreeRoot: status.data.worktreeMismatch?.worktreeRoot ?? project,
+    indexRoot: resolveRealpath(
+      status.data.worktreeMismatch?.indexRoot ?? status.data.projectPath ?? null,
+    ),
+    worktreeRoot: resolveRealpath(status.data.worktreeMismatch?.worktreeRoot ?? project),
   });
 
   return {
@@ -277,4 +279,19 @@ export function checkCodegraph(
       ? base
       : `${base}; graph-health: ${summarizeGraphHealth(health)} - run: o2b partner codegraph report`,
   };
+}
+
+/**
+ * Resolve a path through symlinks so the cache-root-mismatch comparison treats
+ * a real checkout and its symlinked worktree as the same root. Falls back to
+ * the raw value when the path is missing or unreadable (a missing path is not
+ * a topology mismatch worth warning about here).
+ */
+function resolveRealpath(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    return realpathSync(value);
+  } catch {
+    return value;
+  }
 }

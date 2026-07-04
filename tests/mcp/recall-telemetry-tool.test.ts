@@ -9,6 +9,7 @@ import { writePreference } from "../../src/core/brain/preference.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
 let tmp: string;
@@ -256,5 +257,26 @@ describe("brain_recall_telemetry tool", () => {
     })) as { result?: { isError?: boolean }; error?: unknown };
     // Invalid params surface as a tool error rather than a valid meter.
     expect(response.error ?? response.result?.isError).toBeTruthy();
+  });
+
+  test("cost meter rejects read-side-only filters (mode/status/host/limit)", async () => {
+    // Parity with the CLI: mode/status/host/limit filter recall records only
+    // and have no write-side analogue. They must be rejected for the cost
+    // meter, not silently ignored as a valid filtered result.
+    for (const field of ["mode", "status", "host", "limit"]) {
+      const server = new MCPServer({ vault, configPath });
+      await initialize(server);
+      const response = (await server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 9,
+        method: "tools/call",
+        params: {
+          name: "brain_recall_telemetry",
+          arguments: { operation: "cost", [field]: "search" },
+        },
+      })) as { error?: { code: number; message: string } };
+      expect(response.error?.code).toBe(INVALID_PARAMS);
+      expect(response.error?.message).toContain(field);
+    }
   });
 });

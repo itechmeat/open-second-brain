@@ -123,6 +123,17 @@ describe("redactRawOutput infra-topology pass (redactInfra)", () => {
     expect(out).not.toContain("db.example.com");
   });
 
+  test("leaves file:line references untouched (no false-positive fqdn:port)", () => {
+    // Diagnostics and stack frames (`index.js:42`, `app.ts:128`) must not be
+    // mistaken for service endpoints when redactInfra runs over tool output.
+    const input = "error at src/app.ts:128 see lib/index.js:42 and tests/main.py:10";
+    const out = redactRawOutput(input, { redactInfra: true });
+    expect(out).toContain("src/app.ts:128");
+    expect(out).toContain("lib/index.js:42");
+    expect(out).toContain("tests/main.py:10");
+    expect(out).not.toContain("REDACTED");
+  });
+
   test("strips basic-auth credentials from URLs but keeps scheme and host", () => {
     const out = redactRawOutput("git clone https://alice:hunter2@github.com/x.git", {
       redactInfra: true,

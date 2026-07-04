@@ -118,8 +118,8 @@ function collectFiles(dir: string, root: string, out: string[]): void {
 
 /**
  * Enumerate every in-scope file under `root`, as repo-relative paths.
- * Deterministic order (directory walk order, which readdir returns
- * alphabetically on the platforms we target) so reports diff cleanly.
+ * Deterministic order (sorted after the walk) so reports diff cleanly
+ * regardless of the readdir ordering the platform returns.
  */
 export function listScanTargets(root: string): string[] {
   const abs: string[] = [];
@@ -134,6 +134,9 @@ export function listScanTargets(root: string): string[] {
       // absent root file is fine
     }
   }
+  // Sort to guarantee stable cross-platform output: readdirSync is
+  // alphabetical on POSIX (libuv alphasort) but not guaranteed on Windows.
+  abs.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return abs.map((p) => relative(root, p)).map((p) => p.split(sep).join("/"));
 }
 
