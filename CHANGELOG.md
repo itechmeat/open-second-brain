@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-07-04
+
+A safety-hardening pass around the surfaces that write to or trust the
+vault and the codegraph. Each change tightens a boundary or closes a
+silent-loss gap; none changes default behaviour when the new path is
+unused, and the kernel still calls no LLM.
+
+### Added
+
+- **Fail-closed redactor scan window and opt-in infra-topology
+  detectors.** The secret redactor now enforces a hard 1 MiB input
+  window and fails closed instead of silently truncating oversized
+  input, so a too-large document can no longer slip past redaction. Two
+  opt-in detector families (hostnames that resolve to a private range,
+  and well-known infrastructure tokens) extend coverage beyond secrets
+  when enabled; off by default, the shipped redaction set is unchanged.
+- **Read-only codegraph health gate before labeling and import.** Before
+  the partner surface mutates the codegraph (labeling, edge import), it
+  runs a read-only `codegraph health` check and refuses the write when
+  the index reports stale, partial, or inconsistent state, instead of
+  importing into a graph it cannot trust.
+- **Report-only hardcoded-path check for shipped surfaces.** A new
+  `check-hardcoded-paths` script scans the shipped source for absolute
+  or machine-local paths and reports them, without failing a build on
+  pre-existing hits, so path leakage stays visible without blocking
+  history it did not create.
+- **Memory cost meter: write-volume versus read accounting.** The
+  recall-telemetry surface now separates memory write volume from read
+  volume, so a runaway writer (a provider looping on store) is
+  distinguishable from a busy reader in the same numbers.
+
+### Changed
+
+- **Stable `unnamed-<hash>` slug fallback for punctuation-only titles.**
+  A note whose title collapses to empty after slugification now gets a
+  deterministic `unnamed-<hash>` slug instead of colliding into a single
+  shared `unnamed` note, so distinct punctuation-only titles no longer
+  overwrite one another.
+- **Portable session-provenance key.** Session import records its
+  provenance as a stable logical key rather than the absolute
+  session-file path, so a vault moved between machines no longer breaks
+  session provenance lookups.
+
 ## [1.20.0] - 2026-06-28
 
 Two optional, opt-in config keys widen the agent skill surface without
@@ -6075,6 +6118,8 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.21.0]: https://github.com/itechmeat/open-second-brain/compare/v1.20.0...v1.21.0
+[1.20.0]: https://github.com/itechmeat/open-second-brain/compare/v1.19.1...v1.20.0
 [1.19.1]: https://github.com/itechmeat/open-second-brain/compare/v1.19.0...v1.19.1
 [1.19.0]: https://github.com/itechmeat/open-second-brain/compare/v1.18.1...v1.19.0
 [1.18.1]: https://github.com/itechmeat/open-second-brain/compare/v1.18.0...v1.18.1
