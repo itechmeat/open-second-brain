@@ -312,7 +312,14 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                    'pages always match, '
                                                                    'owner-tagged pages only their '
                                                                    'owner. Absent = no ownership '
-                                                                   'filtering.'}},
+                                                                   'filtering.'},
+                                    'disclosure': {'type': 'string',
+                                                   'enum': ['full', 'cards'],
+                                                   'description': "Result depth: 'full' "
+                                                                  '(default) returns full chunk '
+                                                                  "content; 'cards' returns token-"
+                                                                  'cheap layer-1 cards — drill a '
+                                                                  'hit with brain_search_expand.'}},
                      'required': ['query'],
                      'additionalProperties': False}},
     {'name': 'brain_recall_gate',
