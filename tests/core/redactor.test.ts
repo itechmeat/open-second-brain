@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 import {
   PRIVATE_REGION_PLACEHOLDER,
+  SCAN_TRUNCATED_MARKER,
   normaliseTextField,
   redactRawOutput,
   sanitiseTextField,
   stripPrivateRegions,
+  wasScanTruncated,
 } from "../../src/core/redactor.ts";
 
 describe("stripPrivateRegions", () => {
@@ -50,6 +52,124 @@ describe("redactRawOutput (cross-module backward compat)", () => {
   test("preserves `Bearer ` prefix while masking the token", () => {
     const out = redactRawOutput("Authorization: Bearer eyJhbGci...");
     expect(out).toContain("Bearer ***REDACTED***");
+  });
+});
+
+describe("redactRawOutput fail-closed truncation", () => {
+  test("appends the scan-truncated marker when input exceeds maxInput", () => {
+    const out = redactRawOutput("x".repeat(100), { maxInput: 10 });
+    expect(out).toContain(SCAN_TRUNCATED_MARKER.trim());
+    expect(wasScanTruncated(out)).toBe(true);
+  });
+
+  test("does not flag input that fits within the window", () => {
+    const out = redactRawOutput("small payload", { maxInput: 1024 });
+    expect(wasScanTruncated(out)).toBe(false);
+    expect(out).toBe("small payload");
+  });
+
+  test("still scrubs secrets within the kept prefix on truncated input", () => {
+    const head = "api_key=topsecret\n";
+    const out = redactRawOutput(head + "y".repeat(100), { maxInput: head.length + 5 });
+    expect(out).toContain("api_key=***REDACTED***");
+    expect(out).not.toContain("topsecret");
+    expect(wasScanTruncated(out)).toBe(true);
+  });
+
+  test("wasScanTruncated tolerates non-string input", () => {
+    expect(wasScanTruncated(undefined as unknown as string)).toBe(false);
+  });
+
+  test("Infinity maxInput never truncates (artifact-store contract)", () => {
+    const big = "z".repeat(2 * 1024 * 1024);
+    const out = redactRawOutput(big, { maxInput: Number.POSITIVE_INFINITY });
+    expect(wasScanTruncated(out)).toBe(false);
+    expect(out.length).toBe(big.length);
+  });
+});
+
+describe("redactRawOutput infra-topology pass (redactInfra)", () => {
+  test("is off by default — bare coordinates pass through", () => {
+    const input = "reach 8.8.8.8 and db.example.com:5432";
+    expect(redactRawOutput(input)).toBe(input);
+  });
+
+  test("redacts public IPv4 but leaves private/reserved ranges", () => {
+    const out = redactRawOutput("pub 8.8.8.8 priv 10.0.0.5 lo 127.0.0.1 lan 192.168.1.1", {
+      redactInfra: true,
+    });
+    expect(out).toContain("pub ***REDACTED***");
+    expect(out).toContain("priv 10.0.0.5");
+    expect(out).toContain("lo 127.0.0.1");
+    expect(out).toContain("lan 192.168.1.1");
+  });
+
+  test("does not mistake a version string for an IPv4", () => {
+    const out = redactRawOutput("v1.2.3.4 and 1.2.3.4.5", { redactInfra: true });
+    expect(out).toBe("v1.2.3.4 and 1.2.3.4.5");
+  });
+
+  test("redacts ipv4:port endpoints regardless of range", () => {
+    const out = redactRawOutput("db at 10.0.0.5:5432 cache 8.8.8.8:6379", { redactInfra: true });
+    expect(out).toContain("db at ***REDACTED***");
+    expect(out).toContain("cache ***REDACTED***");
+    expect(out).not.toContain("5432");
+    expect(out).not.toContain("6379");
+  });
+
+  test("redacts fqdn:port endpoints", () => {
+    const out = redactRawOutput("connect db.example.com:5432", { redactInfra: true });
+    expect(out).toContain("connect ***REDACTED***");
+    expect(out).not.toContain("db.example.com");
+  });
+
+  test("leaves file:line references untouched (no false-positive fqdn:port)", () => {
+    // Diagnostics and stack frames (`index.js:42`, `app.ts:128`) must not be
+    // mistaken for service endpoints when redactInfra runs over tool output.
+    const input = "error at src/app.ts:128 see lib/index.js:42 and tests/main.py:10";
+    const out = redactRawOutput(input, { redactInfra: true });
+    expect(out).toContain("src/app.ts:128");
+    expect(out).toContain("lib/index.js:42");
+    expect(out).toContain("tests/main.py:10");
+    expect(out).not.toContain("REDACTED");
+  });
+
+  test("strips basic-auth credentials from URLs but keeps scheme and host", () => {
+    const out = redactRawOutput("git clone https://alice:hunter2@github.com/x.git", {
+      redactInfra: true,
+    });
+    expect(out).toContain("https://***REDACTED***@github.com/x.git");
+    expect(out).not.toContain("hunter2");
+    expect(out).not.toContain("alice");
+  });
+
+  test("redacts internal hostnames", () => {
+    const out = redactRawOutput("ping db.internal and app.svc.cluster.local", {
+      redactInfra: true,
+    });
+    expect(out).not.toContain("db.internal");
+    expect(out).not.toContain("svc.cluster.local");
+  });
+
+  test("redacts public IPv6 but leaves loopback and link-local", () => {
+    const out = redactRawOutput("pub 2001:db8:0:0:0:0:0:1 lo ::1 ll fe80::1", {
+      redactInfra: true,
+    });
+    expect(out).toContain("pub ***REDACTED***");
+    expect(out).toContain("lo ::1");
+    expect(out).toContain("ll fe80::1");
+  });
+
+  test("does not mistake HH:MM:SS timestamps for IPv6", () => {
+    const input = "event at 12:34:56 done";
+    expect(redactRawOutput(input, { redactInfra: true })).toBe(input);
+  });
+
+  test("stays linear on a large adversarial infra-shaped input (no ReDoS)", () => {
+    const evil = `${"1234:".repeat(5000)}z`;
+    // Should return promptly; a catastrophic-backtracking regex would hang.
+    const out = redactRawOutput(evil, { redactInfra: true });
+    expect(typeof out).toBe("string");
   });
 });
 

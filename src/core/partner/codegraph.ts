@@ -12,10 +12,11 @@
  * from config. No deep filesystem walk.
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import type { CheckResult } from "../types.ts";
+import { assessGraphHealth, summarizeGraphHealth } from "./codegraph-health.ts";
 
 const CODE_MANIFESTS: ReadonlyArray<string> = [
   "package.json",
@@ -109,11 +110,35 @@ export function findCodeProjects(opts: FindCodeProjectsOptions): string[] {
   return found;
 }
 
+/**
+ * The root the index was built for vs. the root it is being read from.
+ * `codegraph status -j` emits this block only when they differ (e.g. the
+ * index lives at the repo root but is queried from a git worktree). Its
+ * presence is the raw signal behind the graph-health `cache-root-mismatch`
+ * finding.
+ */
+export interface CodegraphWorktreeMismatch {
+  readonly worktreeRoot: string;
+  readonly indexRoot: string;
+}
+
 export interface CodegraphStatusData {
   readonly initialized: boolean;
   readonly nodeCount?: number;
   readonly fileCount?: number;
   readonly edgeCount?: number;
+  /** Absolute root the index was built for (`status.projectPath`). */
+  readonly projectPath?: string;
+  /** Present only when the index root differs from the queried root. */
+  readonly worktreeMismatch?: CodegraphWorktreeMismatch;
+  /**
+   * Optional partner-provided graph diagnostics. Base `codegraph status`
+   * does not emit these today; the graph-health gate consumes them when a
+   * richer status surface provides them, and treats their absence as
+   * "not measured" (no finding), never as zero.
+   */
+  readonly danglingRefs?: number;
+  readonly selfLoops?: number;
 }
 
 export type CodegraphStatusResult =
@@ -228,9 +253,45 @@ export function checkCodegraph(
 
   const nodes = status.data.nodeCount ?? 0;
   const files = status.data.fileCount ?? 0;
+  const base = `code project at ${project}: indexed (${nodes} nodes, ${files} files)`;
+
+  // Read-only graph-health gate. Runs after the partner has indexed the graph
+  // and before OSB surfaces trust it. Findings are non-blocking: the graph is
+  // present and usable, so `ok` stays true (a cache-root mismatch, common in
+  // worktree checkouts, must not fail `o2b doctor`) - but the summary is
+  // appended so an operator sees the warning and can drill in via
+  // `o2b partner codegraph report`.
+  const health = assessGraphHealth({
+    nodeCount: nodes,
+    edgeCount: status.data.edgeCount ?? 0,
+    ...(status.data.danglingRefs !== undefined ? { danglingRefs: status.data.danglingRefs } : {}),
+    ...(status.data.selfLoops !== undefined ? { selfLoops: status.data.selfLoops } : {}),
+    indexRoot: resolveRealpath(
+      status.data.worktreeMismatch?.indexRoot ?? status.data.projectPath ?? null,
+    ),
+    worktreeRoot: resolveRealpath(status.data.worktreeMismatch?.worktreeRoot ?? project),
+  });
+
   return {
     name: "code_graph",
     ok: true,
-    message: `code project at ${project}: indexed (${nodes} nodes, ${files} files)`,
+    message: health.ok
+      ? base
+      : `${base}; graph-health: ${summarizeGraphHealth(health)} - run: o2b partner codegraph report`,
   };
+}
+
+/**
+ * Resolve a path through symlinks so the cache-root-mismatch comparison treats
+ * a real checkout and its symlinked worktree as the same root. Falls back to
+ * the raw value when the path is missing or unreadable (a missing path is not
+ * a topology mismatch worth warning about here).
+ */
+function resolveRealpath(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    return realpathSync(value);
+  } catch {
+    return value;
+  }
 }

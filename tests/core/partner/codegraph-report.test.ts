@@ -159,6 +159,50 @@ describe("buildCodegraphReport", () => {
     expect(r.index.node_count).toBe(12);
     expect(r.index.file_count).toBe(3);
     expect(r.index.edge_count).toBe(40);
+    // Read-only graph-health gate attaches a clean report for a healthy graph.
+    expect(r.index.health).toBeDefined();
+    expect(r.index.health!.ok).toBe(true);
+    expect(r.index.health!.warnings).toEqual([]);
+  });
+
+  test("indexed but edge-collapsed graph -> non-blocking collapsed-edges warning", () => {
+    const repo = makeRepo(join(tmp, "repo"), "Cargo.toml", WORKSPACE_TOML);
+    makeIndexed(repo);
+    const r = buildCodegraphReport(
+      { cwd: repo, vault: join(tmp, "vault") },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        runStatusJson: () => ({
+          ok: true,
+          data: { initialized: true, nodeCount: 500, fileCount: 30, edgeCount: 0 },
+        }),
+      },
+    );
+    expect(r.index.state).toBe("indexed");
+    expect(r.index.health!.ok).toBe(false);
+    expect(r.index.health!.warnings.map((w) => w.code)).toEqual(["collapsed-edges"]);
+  });
+
+  test("worktreeMismatch from status surfaces as cache-root-mismatch", () => {
+    const repo = makeRepo(join(tmp, "repo"), "Cargo.toml", WORKSPACE_TOML);
+    makeIndexed(repo);
+    const r = buildCodegraphReport(
+      { cwd: repo, vault: join(tmp, "vault") },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        runStatusJson: () => ({
+          ok: true,
+          data: {
+            initialized: true,
+            nodeCount: 10,
+            fileCount: 3,
+            edgeCount: 20,
+            worktreeMismatch: { worktreeRoot: "/repo/.worktrees/x", indexRoot: "/repo" },
+          },
+        }),
+      },
+    );
+    expect(r.index.health!.warnings.map((w) => w.code)).toContain("cache-root-mismatch");
   });
 
   test("status error surfaces as error state with reason", () => {

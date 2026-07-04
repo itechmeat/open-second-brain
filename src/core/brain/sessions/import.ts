@@ -125,6 +125,22 @@ function firstLineOfFile(path: string): string {
   return nl < 0 ? text : text.slice(0, nl);
 }
 
+/**
+ * Portable session identity for provenance refs (Vault portability suite).
+ *
+ * A session file's absolute path is machine-local, so persisting it into a
+ * synced signal's `source` / `session_ref` bakes in a host path (e.g.
+ * `/root/vault/...` vs a Mac/Android home) that no Syncthing peer can
+ * resolve. We key provenance by the session file's basename instead — the
+ * same identity the recall DAG uses — so signal provenance and recall
+ * records join on one portable id. An explicit `recallSessionId` wins so a
+ * caller can pin a stable logical id.
+ */
+export function sessionRefIdentity(absPath: string, recallSessionId?: string): string {
+  const explicit = recallSessionId?.trim();
+  return explicit && explicit.length > 0 ? explicit : basename(absPath);
+}
+
 /** Pick an adapter — by explicit format, or autodetect. */
 function chooseAdapter(path: string, format?: SessionAdapterId): SessionAdapter {
   if (format !== undefined) {
@@ -157,6 +173,9 @@ export async function importSession(
   const now = opts.now ?? new Date();
   const sinceMs = opts.since ? opts.since.getTime() : undefined;
   const absPath = resolve(path);
+  // Portable provenance key for signal/fact `source` + `session_ref` and the
+  // recall DAG id — never the machine-local `absPath`. See sessionRefIdentity.
+  const sessionKey = sessionRefIdentity(absPath, opts.recallSessionId);
   const errors: { path: string; message: string }[] = [];
 
   let turnsScanned = 0;
@@ -195,7 +214,7 @@ export async function importSession(
       // actually written.
       return;
     }
-    const sessionRef = `${absPath}#${input.turnId}`;
+    const sessionRef = `${sessionKey}#${input.turnId}`;
     try {
       const res = writeSignal(vault, {
         topic: input.topic,
@@ -287,7 +306,7 @@ export async function importSession(
         facts: extractFacts(turn.text),
         agent: agentLabelForTurn(turn, adapter.id, opts.agent),
         now,
-        sessionRef: `${absPath}#${turn.turnId}`,
+        sessionRef: `${sessionKey}#${turn.turnId}`,
         dedup,
         ...(opts.dryRun === true ? { dryRun: true } : {}),
       });
@@ -354,7 +373,9 @@ export async function importSession(
   let recallSummaryNodes = 0;
   if (opts.recall === true && opts.dryRun !== true && recallTurns.length > 0) {
     try {
-      const recallSessionId = opts.recallSessionId ?? basename(absPath);
+      // Same portable identity used for signal/fact provenance above, so
+      // the recall DAG and the emitted signals key this session identically.
+      const recallSessionId = sessionKey;
       // Persisted-link resolution only: without a clock the crutch
       // never infers a new link, so an unknown session imports flat.
       const lineage =

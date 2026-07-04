@@ -5,6 +5,7 @@ import {
   summarizeRecallTelemetry,
 } from "../../../core/brain/recall-telemetry.ts";
 import { listGateTelemetry, summarizeGateTelemetry } from "../../../core/brain/gate-telemetry.ts";
+import { computeMemoryCostMeter } from "../../../core/brain/memory-cost-meter.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainRecallTelemetry(argv: string[]): Promise<number> {
@@ -15,7 +16,11 @@ export async function cmdBrainRecallTelemetry(argv: string[]): Promise<number> {
   // Gate-decision telemetry (Workspace Insight Suite, t_65036e02).
   if (subcommand === "gate-list") return listGate(rest);
   if (subcommand === "gate-summary") return summarizeGate(rest);
-  throw new CliError("brain recall-telemetry: expected list, summary, gate-list, or gate-summary");
+  // Write-vs-read cost meter (memory cost meter).
+  if (subcommand === "cost") return costMeter(rest);
+  throw new CliError(
+    "brain recall-telemetry: expected list, summary, gate-list, gate-summary, or cost",
+  );
 }
 
 function listTelemetry(argv: string[]): number {
@@ -119,6 +124,64 @@ function summarizeGate(argv: string[]): number {
   return 0;
 }
 
+function costMeter(argv: string[]): number {
+  const { flags } = parseTelemetryFlags(argv);
+  // The cost meter is period-based; mode/status/host/limit filter recall
+  // records only and have no write-side analogue, so reject them rather
+  // than silently ignore.
+  for (const name of ["mode", "status", "host", "limit"]) {
+    if (flags[name] !== undefined) {
+      throw new CliError(
+        `brain recall-telemetry cost: --${name} is not supported for the cost meter`,
+      );
+    }
+  }
+  const vault = brainVerbContext(flags).vault;
+  const since = trimOrUndefined(flags["since"]);
+  const until = trimOrUndefined(flags["until"]);
+  // Parse each numeric weight once; the cost meter omits undefined weights
+  // so the module applies its own defaults.
+  const writeCost = parseNonNegativeNumber(
+    trimOrUndefined(flags["write-cost"]),
+    "brain recall-telemetry cost",
+    "--write-cost",
+  );
+  const readCost = parseNonNegativeNumber(
+    trimOrUndefined(flags["read-cost"]),
+    "brain recall-telemetry cost",
+    "--read-cost",
+  );
+  const writeHeavyRatio = parseNonNegativeNumber(
+    trimOrUndefined(flags["write-heavy-ratio"]),
+    "brain recall-telemetry cost",
+    "--write-heavy-ratio",
+  );
+  const meter = computeMemoryCostMeter(vault, {
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    weights: { write: writeCost, read: readCost },
+    ...(writeHeavyRatio !== undefined ? { writeHeavyRatio } : {}),
+  });
+
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify(meter, null, 2) + "\n");
+    return 0;
+  }
+
+  const ratio = meter.write_read_ratio === null ? "n/a (no reads)" : meter.write_read_ratio;
+  process.stdout.write(`writes: ${meter.writes.total}\n`);
+  process.stdout.write(`reads: ${meter.reads.total}\n`);
+  process.stdout.write(`write/read ratio: ${ratio}\n`);
+  process.stdout.write(`write-heavy: ${meter.write_heavy ? "yes" : "no"}\n`);
+  process.stdout.write(`by write kind: ${JSON.stringify(meter.writes.by_kind)}\n`);
+  process.stdout.write(`by read mode: ${JSON.stringify(meter.reads.by_mode)}\n`);
+  process.stdout.write(
+    `cost (write=${meter.weights.write}, read=${meter.weights.read}): ` +
+      `write=${meter.cost.write} read=${meter.cost.read} total=${meter.cost.total}\n`,
+  );
+  return 0;
+}
+
 function parseTelemetryFlags(argv: string[]): {
   readonly flags: Record<string, string | boolean | string[] | undefined>;
 } {
@@ -131,7 +194,23 @@ function parseTelemetryFlags(argv: string[]): {
     since: { type: "string" },
     until: { type: "string" },
     limit: { type: "string" },
+    "write-cost": { type: "string" },
+    "read-cost": { type: "string" },
+    "write-heavy-ratio": { type: "string" },
   });
+}
+
+function parseNonNegativeNumber(
+  value: string | undefined,
+  label: string,
+  flag: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new CliError(`${label}: ${flag} must be a non-negative number`);
+  }
+  return parsed;
 }
 
 function telemetryFilter(

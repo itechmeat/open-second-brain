@@ -562,7 +562,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_codegraph_report",
     description:
-      "Read-only codegraph partner report: resolves the in-scope code project, reports index state (no_project|absent|not_indexed|indexed|error, with counts), and structurally parses Cargo.toml for workspace members. Non-Rust projects report cargo_workspace: null. Never installs or mutates.",
+      "Read-only codegraph partner report: in-scope project, index state + counts, and Cargo.toml workspace members. When indexed, adds a non-blocking graph-health gate (index.health: dangling refs, self-loops, collapsed edges, cache-root mismatch) before labeling/import trust the graph. Never mutates.",
     inputSchema: {
       type: "object",
       properties: {},

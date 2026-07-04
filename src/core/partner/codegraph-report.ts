@@ -23,6 +23,7 @@ import {
   findCodeProjects,
   type CodegraphStatusResult,
 } from "./codegraph.ts";
+import { assessGraphHealth, type GraphHealthReport } from "./codegraph-health.ts";
 
 export interface CargoWorkspace {
   readonly manifestPath: string;
@@ -178,6 +179,14 @@ export interface CodegraphReport {
     readonly file_count?: number;
     readonly edge_count?: number;
     readonly reason?: string;
+    /**
+     * Read-only graph-health gate result. Present only when the index is
+     * `indexed` (there is a graph to assess). Findings are non-blocking
+     * warnings - a syntactically present graph that is nonetheless an
+     * untrustworthy input for labeling/import/recall (empty, edge-collapsed,
+     * dangling references, self-loops, or built for a different root).
+     */
+    readonly health?: GraphHealthReport;
   };
   readonly cargo_workspace: CargoWorkspace | null;
   readonly cargo_workspace_reason: string;
@@ -256,10 +265,21 @@ function resolveIndexState(
   if (!status.data.initialized) {
     return { state: "not_indexed", reason: `run: codegraph init ${project}` };
   }
+  const nodeCount = status.data.nodeCount ?? 0;
+  const edgeCount = status.data.edgeCount ?? 0;
+  const health = assessGraphHealth({
+    nodeCount,
+    edgeCount,
+    ...(status.data.danglingRefs !== undefined ? { danglingRefs: status.data.danglingRefs } : {}),
+    ...(status.data.selfLoops !== undefined ? { selfLoops: status.data.selfLoops } : {}),
+    indexRoot: status.data.worktreeMismatch?.indexRoot ?? status.data.projectPath ?? null,
+    worktreeRoot: status.data.worktreeMismatch?.worktreeRoot ?? project,
+  });
   return {
     state: "indexed",
-    node_count: status.data.nodeCount ?? 0,
+    node_count: nodeCount,
     file_count: status.data.fileCount ?? 0,
-    edge_count: status.data.edgeCount ?? 0,
+    edge_count: edgeCount,
+    health,
   };
 }

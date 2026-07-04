@@ -43,6 +43,9 @@ jobs:
       - name: Verify manifest version sync
         run: bun run sync-version:check
 
+      - name: Hardcoded path hygiene (report-only)
+        run: bun run check:paths
+
       - name: Formatting check
         run: bun run fmt:check
 

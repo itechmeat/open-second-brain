@@ -70,10 +70,11 @@ describe("slugify (re-exported via MCP barrel)", () => {
     expect(slugify("Hello, World!")).toBe("hello-world");
   });
 
-  test("handles empty/non-ASCII inputs", () => {
-    expect(slugify("   ")).toBe("note");
-    expect(slugify("---")).toBe("note");
-    expect(slugify("★ ☆ ☃")).toBe("note");
+  test("empty/non-ASCII inputs fall back to a stable unnamed-<hash>", () => {
+    const fallback = /^unnamed-[0-9a-f]{8}$/;
+    expect(slugify("   ")).toMatch(fallback);
+    expect(slugify("---")).toMatch(fallback);
+    expect(slugify("★ ☆ ☃")).toMatch(fallback);
   });
 
   test("truncates to 64 chars", () => {

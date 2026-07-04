@@ -7,6 +7,7 @@
  * through Obsidian and the simple parser.
  */
 
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
@@ -196,17 +197,48 @@ export function writeFrontmatterAtomic(
   }
 }
 
+const SLUG_FALLBACK_PREFIX = "unnamed";
+const SLUG_FALLBACK_HASH_LEN = 8;
+
+/**
+ * Stable safe basename for a title that slugifies to nothing — empty,
+ * whitespace-only, or punctuation / emoji / combining-mark-only input.
+ *
+ * A bare shared constant (the old `"note"`) is stable but collides: every
+ * punctuation-only title lands on the same basename, so `@`, `!!!`, and an
+ * emoji all fight for one filename in a synced vault. Instead we suffix a
+ * short sha256 digest of the normalized input, which is
+ *   - deterministic — the same empty-slug title yields the same basename on
+ *     every device and under a re-slug, and
+ *   - distinct — different empty-slug titles get different basenames.
+ *
+ * The suffix is hex (`[a-f0-9]`), so the result stays traversal-safe and is
+ * idempotent under a second `slugify` pass.
+ */
+function unnamedFallbackSlug(normalized: string): string {
+  const digest = createHash("sha256")
+    .update(normalized, "utf8")
+    .digest("hex")
+    .slice(0, SLUG_FALLBACK_HASH_LEN);
+  return `${SLUG_FALLBACK_PREFIX}-${digest}`;
+}
+
 /**
  * Convert a free-form title to a URL-safe slug. Lowercase, alphanumeric
- * runs joined by `-`, trimmed to 64 chars. Empty / non-ASCII inputs fall
- * back to "note".
+ * runs joined by `-`, trimmed to 64 chars. Inputs that slugify to nothing
+ * (empty, whitespace-only, punctuation / emoji / combining-mark-only) fall
+ * back to a stable `unnamed-<hash>` basename — see `unnamedFallbackSlug`.
  */
 export function slugify(value: string): string {
   const lowered = value.trim().toLowerCase();
   let slug = lowered.replace(SLUG_INVALID_RE, "-").replace(/^-+|-+$/g, "");
-  if (!slug) slug = "note";
+  if (!slug) return unnamedFallbackSlug(lowered);
   slug = slug.slice(0, SLUG_MAX_LEN).replace(/-+$/, "");
-  return slug || "note";
+  // Defensive only: SLUG_MAX_LEN (64) > 0 and the leading-trim above
+  // guarantees a non-empty alnum-started slug here, so slicing cannot
+  // produce "". Kept so a future SLUG_MAX_LEN or generation change cannot
+  // silently produce an empty slug.
+  return slug || unnamedFallbackSlug(lowered);
 }
 
 /**

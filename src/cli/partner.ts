@@ -30,6 +30,16 @@ function renderCodegraphReport(report: CodegraphReport): string {
       `index: indexed (${idx.node_count ?? 0} nodes, ${idx.file_count ?? 0} files, ` +
         `${idx.edge_count ?? 0} edges)`,
     );
+    // Read-only graph-health gate: surface non-blocking findings before any
+    // labeling/import/recall surface trusts the graph.
+    if (idx.health) {
+      if (idx.health.ok) {
+        lines.push("graph health: ok");
+      } else {
+        lines.push(`graph health: ${idx.health.warnings.length} warning(s)`);
+        for (const w of idx.health.warnings) lines.push(`  - ${w.code}: ${w.message}`);
+      }
+    }
   } else {
     lines.push(`index: ${idx.state}${detail}`);
   }

@@ -38,7 +38,7 @@ flags for a narrower per-process full server.
 | `vault_health`              | Run vault, config, and plugin manifest health checks.                                                                                          | —                                              |
 | `brain_health`              | Run semantic Brain Health checks and return the health verdict/domains.                                                                        | —                                              |
 | `brain_mcp_landscape`       | List the MCP servers configured across the vault: name, source config file, packages, and required env-var names. Env values never read.       | —                                              |
-| `brain_codegraph_report`    | Read-only codegraph partner report: in-scope code project, index state (`no_project`/`absent`/`not_indexed`/`indexed` with counts/`error`), and structural `Cargo.toml` workspace members. Never installs, extracts, or mutates; non-Rust projects report `cargo_workspace: null` with a reason. | —                                              |
+| `brain_codegraph_report`    | Read-only codegraph partner report: in-scope code project, index state (`no_project`/`absent`/`not_indexed`/`indexed` with counts/`error`), and structural `Cargo.toml` workspace members. When indexed, attaches a non-blocking `index.health` graph-health gate (`empty-graph`, `collapsed-edges`, `dangling-references`, `self-loops`, `cache-root-mismatch`) surfaced before labeling/import/recall trust the graph. Never installs, extracts, or mutates; non-Rust projects report `cargo_workspace: null` with a reason. | —                                              |
 | `brain_agent_query`         | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.               | —                                              |
 | `brain_agent_diff`          | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                             | —                                              |
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
@@ -109,7 +109,10 @@ weights (applied to ranking only when `search_learned_weights_enabled` is on).
 `brain_context_pack` accepts opt-in `receipt`, `telemetry`, `cache_stable`, and
 `dedup_repeated` diagnostics; `brain_pre_compress_pack` accepts opt-in `receipt`
 and `telemetry`. `brain_context_receipts` supports `operation: "list"|"show"`;
-`brain_recall_telemetry` supports `operation: "list"|"summary"`;
+`brain_recall_telemetry` supports `operation: "list"|"summary"|"cost"` (`cost`
+folds write volume - feedback/apply-evidence/note plus host-bridge writes -
+against reads into a write-vs-read ratio, a `write_heavy` flag, and a rough
+weighted cost signal per period; tune with `write_cost`/`read_cost`/`write_heavy_ratio`);
 `brain_context_presets` supports `operation: "show"|"suggest"|"diff"`; and
 `brain_generation_reports` supports `action: "record"|"list"|"summary"` -
 `record` is gated (default off) by a per-call `enable` flag or the

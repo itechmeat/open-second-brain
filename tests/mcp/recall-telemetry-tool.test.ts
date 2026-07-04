@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { emitRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
+import { recordHostMemoryWrite } from "../../src/core/brain/host-memory-write.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
 let tmp: string;
@@ -199,5 +201,82 @@ describe("brain_recall_telemetry tool", () => {
       by_mode: { context_pack: 1, pre_compress: 1 },
       by_status: { ok: 2 },
     });
+  });
+
+  test("cost meter folds write volume against reads", async () => {
+    recordHostMemoryWrite(vault, {
+      action: "add",
+      target: "memory",
+      content: "one",
+      createdAt: "2026-05-20T09:00:00.000Z",
+    });
+    recordHostMemoryWrite(vault, {
+      action: "add",
+      target: "memory",
+      content: "two",
+      createdAt: "2026-05-20T09:01:00.000Z",
+    });
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T09:02:00.000Z",
+      host: "mcp-test",
+      mode: "search",
+      status: "ok",
+      durationMs: 3,
+      resultCount: 1,
+    });
+
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const meter = await callTelemetry(server, {
+      operation: "cost",
+      write_cost: 2,
+      read_cost: 1,
+    });
+    expect(meter).toMatchObject({
+      write_read_ratio: 2, // 2 host writes / 1 read
+      write_heavy: true,
+      cost: { write: 4, read: 1, total: 5 },
+    });
+    expect((meter["writes"] as Record<string, unknown>)["by_kind"]).toEqual({
+      host_memory_write: 2,
+    });
+  });
+
+  test("cost meter rejects a negative weight", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 9,
+      method: "tools/call",
+      params: {
+        name: "brain_recall_telemetry",
+        arguments: { operation: "cost", write_cost: -1 },
+      },
+    })) as { result?: { isError?: boolean }; error?: unknown };
+    // Invalid params surface as a tool error rather than a valid meter.
+    expect(response.error ?? response.result?.isError).toBeTruthy();
+  });
+
+  test("cost meter rejects read-side-only filters (mode/status/host/limit)", async () => {
+    // Parity with the CLI: mode/status/host/limit filter recall records only
+    // and have no write-side analogue. They must be rejected for the cost
+    // meter, not silently ignored as a valid filtered result.
+    for (const field of ["mode", "status", "host", "limit"]) {
+      const server = new MCPServer({ vault, configPath });
+      await initialize(server);
+      const response = (await server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 9,
+        method: "tools/call",
+        params: {
+          name: "brain_recall_telemetry",
+          arguments: { operation: "cost", [field]: "search" },
+        },
+      })) as { error?: { code: number; message: string } };
+      expect(response.error?.code).toBe(INVALID_PARAMS);
+      expect(response.error?.message).toContain(field);
+    }
   });
 });
