@@ -7,9 +7,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
@@ -85,6 +85,31 @@ describe("importSession", () => {
     const second = await importSession(tmp, CLAUDE, { agent: "test" });
     expect(second.signals_created).toBe(0);
     expect(second.signals_deduped).toBe(first.signals_created);
+  });
+
+  test("persists a portable session_ref, not the absolute session-file path", async () => {
+    // The session fixture lives OUTSIDE the vault at an absolute path.
+    // A synced signal must not carry that machine-local path in its
+    // provenance (Syncthing peers on Mac/Android cannot resolve it):
+    // the ref keys the session by basename, matching the recall DAG id.
+    const res = await importSession(tmp, CLAUDE, { agent: "test" });
+    expect(res.signals_created).toBeGreaterThan(0);
+
+    const inbox = brainDirs(tmp).inbox;
+    const files = readdirSync(inbox).filter((n) => n.startsWith("sig-"));
+    expect(files.length).toBeGreaterThan(0);
+
+    const absDir = dirname(CLAUDE);
+    for (const name of files) {
+      const text = readFileSync(join(inbox, name), "utf8");
+      // No absolute host directory of the session file leaked in.
+      expect(text).not.toContain(absDir);
+      expect(text).not.toContain(CLAUDE);
+      // The portable identity (basename#turn) is present instead, in both
+      // the `source` wikilink and the `session_ref` field.
+      expect(text).toContain(`[[${basename(CLAUDE)}#`);
+      expect(text).toContain(`session_ref: "${basename(CLAUDE)}#`);
+    }
   });
 
   test("dry-run does not write signals", async () => {
