@@ -20,7 +20,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from plugins.hermes import config as cfg  # noqa: E402
-from plugins.hermes._base import MemoryProvider  # noqa: E402
+from plugins.hermes._base import (  # noqa: E402
+    HAS_HERMES_ABC,
+    MemoryProvider,
+    _FallbackMemoryProviderBase,
+)
 from plugins.hermes.bridge import (  # noqa: E402
     BridgeError,
     BridgeTransportError,
@@ -104,8 +108,17 @@ class ConfigHelperTests(unittest.TestCase):
 
 
 class FallbackBaseTests(unittest.TestCase):
-    def test_memory_provider_is_subclassable(self):
-        class Demo(MemoryProvider):
+    """Pin the no-op stand-in contract.
+
+    These tests target ``_FallbackMemoryProviderBase`` directly so they hold in
+    both environments: CI without the Hermes ABC, and a real install where
+    ``MemoryProvider`` aliases the Hermes ABC (which enforces its abstract
+    surface). The stand-in is the unit under test, not whichever base
+    ``MemoryProvider`` resolves to at import time.
+    """
+
+    def test_fallback_base_is_subclassable_without_abstract_methods(self):
+        class Demo(_FallbackMemoryProviderBase):
             @property
             def name(self):
                 return "demo"
@@ -113,8 +126,8 @@ class FallbackBaseTests(unittest.TestCase):
         demo = Demo()
         self.assertEqual(demo.name, "demo")
 
-    def test_optional_hooks_are_noop_on_base(self):
-        class Demo(MemoryProvider):
+    def test_optional_hooks_are_noop_on_fallback_base(self):
+        class Demo(_FallbackMemoryProviderBase):
             @property
             def name(self):
                 return "demo"
@@ -124,6 +137,16 @@ class FallbackBaseTests(unittest.TestCase):
         self.assertIsNone(demo.queue_prefetch("q"))
         self.assertIsNone(demo.on_session_end([]))
         self.assertIsNone(demo.shutdown())
+
+    def test_memory_provider_aliases_fallback_base_without_hermes(self):
+        # When the Hermes ABC is unavailable, MemoryProvider must BE the
+        # fallback stand-in (not a separate class), so the provider subclass
+        # inherits the no-op hooks. With Hermes present, MemoryProvider is the
+        # real ABC and the stand-in stays independently testable above.
+        if not HAS_HERMES_ABC:
+            self.assertIs(MemoryProvider, _FallbackMemoryProviderBase)
+        else:
+            self.assertIsNot(MemoryProvider, _FallbackMemoryProviderBase)
 
 
 class ProviderRequiredSurfaceTests(unittest.TestCase):
