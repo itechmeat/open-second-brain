@@ -61,6 +61,37 @@ describe("doctor entity lints", () => {
     expect(dup[0]!.message).toContain("people:ada");
   });
 
+  test("alias-merge candidate lint is off by default (byte-identical report)", () => {
+    upsertEntity(vault, { category: "org", name: "Google LLC", agent: "a", now: NOW });
+    upsertEntity(vault, { category: "org", name: "Google Inc", agent: "a", now: NOW });
+    const out = runDoctor(vault);
+    expect(
+      [...out.warnings, ...out.errors].filter((i) => i.code === "entity-alias-candidate"),
+    ).toEqual([]);
+  });
+
+  test("enabled: lexical variants surface as an entity-alias-candidate warning", () => {
+    upsertEntity(vault, { category: "org", name: "Google LLC", agent: "a", now: NOW });
+    upsertEntity(vault, { category: "org", name: "Google Inc", agent: "a", now: NOW });
+    const prevEnabled = process.env["OPEN_SECOND_BRAIN_ENTITY_SEMANTIC_DEDUP_ENABLED"];
+    const prevThreshold = process.env["OPEN_SECOND_BRAIN_ENTITY_SEMANTIC_DEDUP_LEXICAL_THRESHOLD"];
+    process.env["OPEN_SECOND_BRAIN_ENTITY_SEMANTIC_DEDUP_ENABLED"] = "1";
+    process.env["OPEN_SECOND_BRAIN_ENTITY_SEMANTIC_DEDUP_LEXICAL_THRESHOLD"] = "0.3";
+    try {
+      const cand = runDoctor(vault).warnings.filter((i) => i.code === "entity-alias-candidate");
+      expect(cand).toHaveLength(1);
+      expect(cand[0]!.message).toContain("[lexical");
+      expect(cand[0]!.message).toContain("never auto-merged");
+    } finally {
+      if (prevEnabled === undefined)
+        delete process.env["OPEN_SECOND_BRAIN_ENTITY_SEMANTIC_DEDUP_ENABLED"];
+      else process.env["OPEN_SECOND_BRAIN_ENTITY_SEMANTIC_DEDUP_ENABLED"] = prevEnabled;
+      if (prevThreshold === undefined)
+        delete process.env["OPEN_SECOND_BRAIN_ENTITY_SEMANTIC_DEDUP_LEXICAL_THRESHOLD"];
+      else process.env["OPEN_SECOND_BRAIN_ENTITY_SEMANTIC_DEDUP_LEXICAL_THRESHOLD"] = prevThreshold;
+    }
+  });
+
   test("a relation pointing at a missing entity surfaces as broken-entity-relation", () => {
     upsertEntity(vault, { category: "people", name: "Ada", agent: "a", now: NOW });
     upsertEntity(vault, { category: "projects", name: "Open Second Brain", agent: "a", now: NOW });
