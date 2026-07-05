@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] - 2026-07-05
+
+Two optional precision layers that complete the retrieval-precision loop
+started in 1.22.0. Each is off by default with byte-identical output when
+unconfigured, and the kernel still calls no LLM.
+
+### Added
+
+- **Proposal-only semantic entity dedup.** With `entity_semantic_dedup_enabled`
+  set, `brain_doctor` (and the `doctor` lint surface) surfaces lexical
+  entity-name variants ("Google LLC" vs "Google Inc") as PROPOSAL-ONLY
+  alias-merge candidates through a deterministic jaccard layer
+  (`entity_semantic_dedup_lexical_threshold`, default 0.8). An embedding-cosine
+  reader (`entity_semantic_dedup_threshold`, default 0.92) reuses the configured
+  embedding provider and is exposed as a library reader for apply plans. The
+  deterministic `entityIdentityKey` is never rewritten and no entity is ever
+  auto-merged; a human or apply plan owns the actual merge, preserving audit
+  friendliness. Optional `identity_type` tagging derives from frontmatter and
+  structural signals only (language-agnostic by construction). Registry and
+  search behavior is byte-identical until opted in.
+- **Optional cross-encoder rerank stage.** A learned final reader step
+  re-scores the top-K fused search candidates jointly against the query,
+  appended after every heuristic rerank. Off by default
+  (`search_rerank_enabled`); when on, it resolves an OpenAI-compatible
+  `/rerank` endpoint (`search_rerank_base_url` / `search_rerank_model` /
+  `search_rerank_env_key`, or a profile registered via
+  `o2b search rerank-provider add`) and re-orders the
+  `search_rerank_top_k` candidates by the returned relevance, promoting a
+  genuinely-relevant hit the heuristic ranker placed deep. Zero HTTP cost and
+  byte-identical ordering when disabled; a request-time endpoint error
+  degrades to the heuristic ordering (a `rerank_degraded:` warning, never a
+  throw). Most valuable on the `thorough` profile.
+
 ## [1.22.0] - 2026-07-05
 
 A retrieval-precision and quality-loop pass. Four new surfaces close the
@@ -6172,6 +6205,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.23.0]: https://github.com/itechmeat/open-second-brain/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/itechmeat/open-second-brain/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/itechmeat/open-second-brain/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/itechmeat/open-second-brain/compare/v1.19.1...v1.20.0
