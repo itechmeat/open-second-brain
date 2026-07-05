@@ -1633,6 +1633,7 @@ export function validateBrainConfigDetailed(
     "snapshots",
     "vault",
     "active",
+    "lessons",
     "discipline_report",
     "guardrails",
     "link_graph",

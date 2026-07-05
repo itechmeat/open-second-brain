@@ -203,9 +203,9 @@ export function recordQueryDemand(
     input.terms !== undefined ? sanitizeTerms(input.terms) : normalizeQueryTerms(input.query ?? "");
   if (terms.length === 0) return null;
   const record: QueryDemandRecord = {
-    ts: input.at ?? new Date().toISOString(),
+    ts: normalizeDemandTimestamp(input.at),
     terms,
-    results: Math.max(0, Math.floor(input.resultCount)),
+    results: Number.isFinite(input.resultCount) ? Math.max(0, Math.floor(input.resultCount)) : 0,
     ...(typeof input.coverage === "number" && Number.isFinite(input.coverage)
       ? { coverage: clamp01(input.coverage) }
       : {}),
@@ -437,6 +437,24 @@ function clamp01(value: number): number {
   if (value < 0) return 0;
   if (value > 1) return 1;
   return value;
+}
+
+/**
+ * Normalize a caller-supplied (or absent) timestamp into a canonical
+ * millisecond-precision ISO string. `readQueryDemand` and
+ * `aggregateQueryDemand` compare `ts` as raw strings (sort + range
+ * filter), which is only stable when every record uses the same precision
+ * — `2026-07-01T00:00:00.000Z` must sort after `2026-07-01T00:00:00Z`,
+ * but lexically `.` < `Z` flips them. Parsing-and-reformatting through
+ * `Date` collapses the difference and also rejects non-ISO input by
+ * falling back to now, so a malformed `at` can't silently misorder the
+ * log. Non-finite `Date` (invalid input) resolves to the current time.
+ */
+function normalizeDemandTimestamp(at: string | undefined): string {
+  if (at === undefined) return new Date().toISOString();
+  const parsed = new Date(at);
+  const ms = parsed.getTime();
+  return Number.isFinite(ms) ? parsed.toISOString() : new Date().toISOString();
 }
 
 function round4(value: number): number {
