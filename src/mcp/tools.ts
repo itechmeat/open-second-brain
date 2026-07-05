@@ -347,7 +347,13 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
         properties: {},
         additionalProperties: false,
       },
-      previewBudget: MCP_PREVIEW_BUDGET,
+      // No previewBudget: a vault with an indexed search and a populated
+      // Brain layer easily exceeds the default MCP preview cap, and
+      // the `search.*` / `brain.*` blocks are the whole point of the
+      // tool. Without this override, large payloads came back wrapped
+      // in a `{ preview_truncated, artifact_id, bytes_preview }`
+      // envelope — tests parsing `content[0].text` as JSON then lost
+      // every block the operator asked for.
       handler: toolStatus,
     },
     {
