@@ -10,6 +10,7 @@ import {
   redactMapping,
   resolveAgentName,
   resolveLinkOutputFormat,
+  resolveRecallAdequacyThresholds,
   resolveSkillsAttachTriggers,
   resolveSkillsDir,
   resolveTimezone,
@@ -32,6 +33,9 @@ beforeEach(() => {
     "OBSIDIAN_LINK_FORMAT",
     "OPEN_SECOND_BRAIN_SKILLS_DIR",
     "OPEN_SECOND_BRAIN_SKILLS_ATTACH_TRIGGERS",
+    "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_SUFFICIENT",
+    "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_WEAK",
+    "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_MIN_RESULTS",
   ]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
@@ -355,5 +359,55 @@ describe("resolveSkillsAttachTriggers", () => {
     const cfg = join(tmp, "config.yaml");
     writeFileSync(cfg, 'skills_attach_triggers: "false"\n');
     expect(resolveSkillsAttachTriggers(cfg)).toBe(true);
+  });
+});
+
+describe("resolveRecallAdequacyThresholds", () => {
+  test("defaults to 0.6 / 0.3 / 1 when unset", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "");
+    expect(resolveRecallAdequacyThresholds(cfg)).toEqual({
+      sufficient: 0.6,
+      weak: 0.3,
+      minResults: 1,
+    });
+  });
+
+  test("reads configured floors and min_results", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(
+      cfg,
+      'recall_adequacy_sufficient: "0.75"\nrecall_adequacy_weak: "0.4"\nrecall_adequacy_min_results: "2"\n',
+    );
+    expect(resolveRecallAdequacyThresholds(cfg)).toEqual({
+      sufficient: 0.75,
+      weak: 0.4,
+      minResults: 2,
+    });
+  });
+
+  test("env overrides the config file", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'recall_adequacy_sufficient: "0.6"\n');
+    process.env["OPEN_SECOND_BRAIN_RECALL_ADEQUACY_SUFFICIENT"] = "0.9";
+    expect(resolveRecallAdequacyThresholds(cfg).sufficient).toBe(0.9);
+  });
+
+  test("rejects out-of-range floors", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'recall_adequacy_sufficient: "1.5"\n');
+    expect(() => resolveRecallAdequacyThresholds(cfg)).toThrow();
+  });
+
+  test("rejects weak above sufficient", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'recall_adequacy_sufficient: "0.4"\nrecall_adequacy_weak: "0.6"\n');
+    expect(() => resolveRecallAdequacyThresholds(cfg)).toThrow();
+  });
+
+  test("rejects a non-positive min_results", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'recall_adequacy_min_results: "0"\n');
+    expect(() => resolveRecallAdequacyThresholds(cfg)).toThrow();
   });
 });

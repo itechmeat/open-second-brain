@@ -25,7 +25,12 @@ import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { RECALL_PROFILE_NAMES } from "../core/search/profiles.ts";
 import { fileContextRecall } from "../core/brain/file-recall.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
-import { defaultConfigPath, resolveRecallGateTelemetry } from "../core/config.ts";
+import {
+  defaultConfigPath,
+  resolveRecallAdequacyThresholds,
+  resolveRecallGateTelemetry,
+} from "../core/config.ts";
+import { assessRecallAdequacy } from "../core/brain/recall-adequacy.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tools.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts";
@@ -271,6 +276,13 @@ const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
     explicit: { type: "boolean" },
     telemetry_host: { type: "string", maxLength: 200 },
     session_id: { type: "string", maxLength: 512 },
+    scores: {
+      type: "array",
+      maxItems: 200,
+      items: { type: "number" },
+      description:
+        "Optional top-k recall relevance scores. When given, the gate adds an adequacy verdict: sufficient/proceed, weak/re_recall, or insufficient/abstain.",
+    },
   },
   required: ["prompt"],
   additionalProperties: false,
@@ -282,6 +294,27 @@ const RECALL_GATE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
   properties: {
     retrieve: { type: "boolean" },
     reason: { type: "string" },
+    adequacy: {
+      type: "object",
+      required: [
+        "level",
+        "action",
+        "escalate",
+        "result_count",
+        "top_score",
+        "mean_score",
+        "reason",
+      ],
+      properties: {
+        level: { type: "string", enum: ["sufficient", "weak", "insufficient"] },
+        action: { type: "string", enum: ["proceed", "re_recall", "abstain"] },
+        escalate: { type: "boolean" },
+        result_count: { type: "integer" },
+        top_score: { type: "number" },
+        mean_score: { type: "number" },
+        reason: { type: "string" },
+      },
+    },
   },
 };
 
@@ -706,7 +739,47 @@ async function toolBrainRecallGate(
       ...(sessionId !== undefined ? { sessionId } : {}),
     });
   });
-  return { ...decision };
+  // Adequacy verdict (t_b8f66fec): thin verdict + action layer over the
+  // relevance scores of a recall attempt. Only computed when the caller
+  // passes `scores`, keeping the pure structural-gate contract otherwise.
+  const scores = parseRecallScores(args["scores"]);
+  if (scores === undefined) return { ...decision };
+  const thresholds = resolveRecallAdequacyThresholds(ctx.configPath ?? undefined);
+  const verdict = assessRecallAdequacy(scores, thresholds);
+  return {
+    ...decision,
+    adequacy: {
+      level: verdict.level,
+      action: verdict.action,
+      escalate: verdict.escalate,
+      result_count: verdict.resultCount,
+      top_score: verdict.topScore,
+      mean_score: verdict.meanScore,
+      reason: verdict.reason,
+    },
+  };
+}
+
+/**
+ * Parse the optional `scores` argument for the recall gate. Returns
+ * `undefined` when absent (verdict skipped) and throws INVALID_PARAMS on
+ * a malformed shape so callers get a clear error rather than a silently
+ * dropped verdict. An empty array is a valid "no results" signal.
+ */
+function parseRecallScores(raw: unknown): ReadonlyArray<number> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new MCPError(INVALID_PARAMS, "argument 'scores' must be an array of numbers");
+  }
+  if (raw.length > 200) {
+    throw new MCPError(INVALID_PARAMS, "argument 'scores' must not exceed 200 items");
+  }
+  for (const item of raw) {
+    if (typeof item !== "number") {
+      throw new MCPError(INVALID_PARAMS, "argument 'scores' must contain only numbers");
+    }
+  }
+  return raw as ReadonlyArray<number>;
 }
 
 const RECALL_FEEDBACK_INPUT_SCHEMA: Record<string, unknown> = {
@@ -1140,7 +1213,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_recall_gate",
     description:
-      "Classify whether an automatic recall/surfacing attempt should run. Diagnostics only; does not search.",
+      "Classify whether an automatic recall/surfacing attempt should run. Diagnostics only; does not search. Pass `scores` (a recall attempt's top-k relevance scores) to also get an adequacy verdict — sufficient (proceed) / weak (re_recall) / insufficient (abstain + escalate).",
     inputSchema: RECALL_GATE_INPUT_SCHEMA,
     outputSchema: RECALL_GATE_OUTPUT_SCHEMA,
     handler: toolBrainRecallGate,

@@ -412,6 +412,68 @@ export function resolveRecallGateTelemetry(configPath?: string): boolean {
 }
 
 /**
+ * Recall adequacy thresholds (retrieval-precision-quality-loop,
+ * t_b8f66fec). Configurable floors that drive the sufficient / weak /
+ * insufficient verdict over existing recall relevance scores. Defaults
+ * mirror DEFAULT_RECALL_ADEQUACY_THRESHOLDS (0.6 / 0.3 / 1). Invalid
+ * values fail fast rather than silently reverting to a default.
+ */
+export function resolveRecallAdequacyThresholds(configPath?: string): {
+  sufficient: number;
+  weak: number;
+  minResults: number;
+} {
+  const data = discoverConfig(configPath).data;
+  const sufficient = resolveAdequacyFloor(
+    "recall_adequacy_sufficient",
+    process.env["OPEN_SECOND_BRAIN_RECALL_ADEQUACY_SUFFICIENT"],
+    data["recall_adequacy_sufficient"],
+    0.6,
+  );
+  const weak = resolveAdequacyFloor(
+    "recall_adequacy_weak",
+    process.env["OPEN_SECOND_BRAIN_RECALL_ADEQUACY_WEAK"],
+    data["recall_adequacy_weak"],
+    0.3,
+  );
+  if (weak > sufficient) {
+    throw new Error(
+      `recall_adequacy_weak (${weak}) must not exceed recall_adequacy_sufficient (${sufficient})`,
+    );
+  }
+  const minResults = resolveAdequacyMinResults(
+    process.env["OPEN_SECOND_BRAIN_RECALL_ADEQUACY_MIN_RESULTS"],
+    data["recall_adequacy_min_results"],
+  );
+  return { sufficient, weak, minResults };
+}
+
+function resolveAdequacyFloor(
+  key: string,
+  env: string | undefined,
+  fileValue: string | undefined,
+  fallback: number,
+): number {
+  const raw = (env?.trim() || fileValue?.trim()) ?? "";
+  if (raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${key} must be a number in [0,1]; got '${raw}'`);
+  }
+  return value;
+}
+
+function resolveAdequacyMinResults(env: string | undefined, fileValue: string | undefined): number {
+  const raw = (env?.trim() || fileValue?.trim()) ?? "";
+  if (raw === "") return 1;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`recall_adequacy_min_results must be a positive integer; got '${raw}'`);
+  }
+  return value;
+}
+
+/**
  * Generation-report tracing gate (Hindsight brain-loop ops, t_281c3edc).
  * Default OFF: the inbound `generation_report` continuity path stays
  * dormant unless `generation_trace_enabled: "true"`, when an agent's

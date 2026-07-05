@@ -35,6 +35,7 @@ import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
+import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
 import {
   canonicalSegment,
@@ -134,6 +135,13 @@ export interface ContextPackOptions {
   readonly includeLanes?: boolean;
   /** Opt-in audit receipt for the final emitted context. */
   readonly receipt?: ContextReceiptOptions;
+  /**
+   * Recall adequacy verdict (t_b8f66fec) for the recall that produced
+   * this pack. When present alongside `receipt`, it is persisted in the
+   * receipt so the audit trail records the sufficient/weak/insufficient
+   * verdict and the action the caller was told to take.
+   */
+  readonly recallAdequacy?: RecallAdequacyVerdict;
   /** Opt-in telemetry for recall coverage and gap diagnostics. */
   readonly telemetry?: RecallTelemetryOptions;
   /**
@@ -475,6 +483,7 @@ function finalizeContextPackReport(
       })),
       finalText: report.items.map((item) => item.body).join("\n\n"),
       budget: contextPackBudgetMetadata(opts, report),
+      ...(opts.recallAdequacy ? { adequacy: opts.recallAdequacy } : {}),
       extra: {
         skipped_count: report.skipped.length,
         lanes: opts.includeLanes === true,
