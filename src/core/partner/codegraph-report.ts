@@ -14,7 +14,7 @@
  * errors and not silent no-ops.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -238,12 +238,30 @@ export function buildCodegraphReport(
 
   return {
     schema_version: 1,
-    project,
+    project: displayPath(project),
     cli,
     index,
     cargo_workspace: cargo.workspace,
     cargo_workspace_reason: cargo.reason,
   };
+}
+
+/**
+ * Canonicalize the reported project path so it matches the shape callers
+ * already hold. On macOS `/var` is a symlink to `/private/var`, so
+ * `realpathSync` resolves temp roots (Node's `tmpdir()` -> `/var/folders/...`)
+ * to `/private/var/...`; stripping the `/private` prefix restores the
+ * user-facing `/var/...` form. The narrow prefix is deliberate - only the
+ * `/var` firmlink is rewritten this way, never an arbitrary `/private/*` path.
+ * Display-only: index resolution above runs against the raw `project`.
+ */
+function displayPath(path: string): string {
+  try {
+    const real = realpathSync(path);
+    return real.startsWith("/private/var/") ? real.slice("/private".length) : real;
+  } catch {
+    return path.startsWith("/private/var/") ? path.slice("/private".length) : path;
+  }
 }
 
 function resolveIndexState(

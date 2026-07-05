@@ -98,6 +98,8 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
 
   // Bounded-by-construction reads.
   second_brain_capabilities: "fixed-size capability report",
+  second_brain_status:
+    "diagnostic contract; callers need full brain/search/config blocks, not a preview envelope",
   brain_context:
     "session bootstrap; deliberately returns the full preference set - it is the full-view target the budgeted SessionStart injection points at",
   brain_pre_compress_pack: "self-budgeting; enforces its own char budget internally",
