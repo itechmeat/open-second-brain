@@ -45,6 +45,10 @@ import {
   addProviderProfile,
   removeProviderProfile,
   getProviderProfile,
+  loadRerankRegistry,
+  addRerankProviderProfile,
+  removeRerankProviderProfile,
+  getRerankProviderProfile,
 } from "../core/search/index.ts";
 import type {
   IndexCheckReport,
@@ -75,6 +79,7 @@ const KNOWN_VERBS = new Set([
   "feedback",
   "weights",
   "provider",
+  "rerank-provider",
   "watch",
 ]);
 
@@ -112,6 +117,8 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
         return await cmdSearchWeights(rest);
       case "provider":
         return await cmdSearchProvider(rest);
+      case "rerank-provider":
+        return await cmdSearchRerankProvider(rest);
       default:
         process.stderr.write(`error: unknown search verb: ${verb}\n`);
         return 2;
@@ -416,6 +423,102 @@ async function cmdSearchProvider(argv: ReadonlyArray<string>): Promise<number> {
   } else {
     process.stdout.write(
       `added provider '${name}' (set ${envKey} in the environment to supply its key)\n`,
+    );
+  }
+  return 0;
+}
+
+// ─── rerank provider registry (retrieval-precision-quality-loop, card A) ─────
+
+async function cmdSearchRerankProvider(argv: ReadonlyArray<string>): Promise<number> {
+  const action = argv[0];
+  if (!action || !["add", "list", "show", "remove"].includes(action)) {
+    throw new CliError(
+      "usage: o2b search rerank-provider <add NAME --base-url U --model M --env-key K | list | show NAME | remove NAME> [--json]",
+    );
+  }
+  const { flags, positional } = parseFlags(argv.slice(1), {
+    vault: { type: "string" },
+    config: { type: "string" },
+    db: { type: "string" },
+    "base-url": { type: "string" },
+    model: { type: "string" },
+    "env-key": { type: "string" },
+    json: { type: "boolean" },
+  });
+  const cfg = resolveConfig(flags);
+  const json = flags["json"] === true;
+  const name = typeof positional[0] === "string" ? positional[0] : undefined;
+
+  if (action === "list") {
+    const registry = loadRerankRegistry(cfg.vault);
+    if (json) {
+      process.stdout.write(JSON.stringify(registry) + "\n");
+      return 0;
+    }
+    if (registry.length === 0) {
+      process.stdout.write("no registered rerank providers\n");
+      return 0;
+    }
+    for (const p of registry) {
+      process.stdout.write(`${p.name}  ${p.baseUrl}  model=${p.defaultModel}  env=${p.envKey}\n`);
+    }
+    return 0;
+  }
+
+  if (action === "show") {
+    if (!name) throw new CliError("usage: o2b search rerank-provider show NAME");
+    const profile = getRerankProviderProfile(cfg.vault, name);
+    if (!profile) {
+      process.stderr.write(`error: no registered rerank provider named '${name}'\n`);
+      return 1;
+    }
+    process.stdout.write(
+      json
+        ? JSON.stringify(profile) + "\n"
+        : `${profile.name}\n  base-url:  ${profile.baseUrl}\n  model:     ${profile.defaultModel}\n  env-key:   ${profile.envKey}\n`,
+    );
+    return 0;
+  }
+
+  if (action === "remove") {
+    if (!name) throw new CliError("usage: o2b search rerank-provider remove NAME");
+    const { removed } = removeRerankProviderProfile(cfg.vault, name);
+    if (json) {
+      process.stdout.write(JSON.stringify({ removed, name }) + "\n");
+    } else {
+      process.stdout.write(
+        removed ? `removed rerank provider '${name}'\n` : `no such rerank provider '${name}'\n`,
+      );
+    }
+    return removed ? 0 : 1;
+  }
+
+  // add
+  if (!name)
+    throw new CliError(
+      "usage: o2b search rerank-provider add NAME --base-url U --model M --env-key K",
+    );
+  const baseUrl = typeof flags["base-url"] === "string" ? (flags["base-url"] as string) : undefined;
+  const model = typeof flags["model"] === "string" ? (flags["model"] as string) : undefined;
+  const envKey = typeof flags["env-key"] === "string" ? (flags["env-key"] as string) : undefined;
+  if (!baseUrl || !model || !envKey) {
+    throw new CliError(
+      "rerank-provider add requires --base-url, --model, and --env-key (the env var NAME holding the API key)",
+    );
+  }
+  const registry = addRerankProviderProfile(cfg.vault, {
+    name,
+    baseUrl,
+    defaultModel: model,
+    envKey,
+  });
+  const added = registry.find((p) => p.name === name)!;
+  if (json) {
+    process.stdout.write(JSON.stringify(added) + "\n");
+  } else {
+    process.stdout.write(
+      `added rerank provider '${name}' (set ${envKey} in the environment to supply its key)\n`,
     );
   }
   return 0;

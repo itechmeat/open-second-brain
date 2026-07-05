@@ -804,6 +804,18 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   indexes each chunk's heading breadcrumb in a dedicated FTS column
   (weighted below content) so a mid-document chunk keeps its topical
   anchor. Entity and heading layers populate on the next reindex.
+- **Optional cross-encoder rerank (opt-in).** A learned final reader step
+  that re-scores the top-K fused candidates jointly against the query,
+  appended after every heuristic rerank. Off by default
+  (`search_rerank_enabled`); when on, it resolves an OpenAI-compatible
+  `/rerank` endpoint (`search_rerank_base_url` / `search_rerank_model` /
+  `search_rerank_env_key`, or a profile registered via
+  `o2b search rerank-provider add`) and re-orders the `search_rerank_top_k`
+  candidates by the returned relevance, promoting a genuinely-relevant hit
+  the heuristic ranker placed deep. Zero HTTP cost and byte-identical
+  ordering when disabled; a request-time endpoint error degrades to the
+  heuristic ordering (a `rerank_degraded:` warning, never a throw). Most
+  valuable on the `thorough` profile.
 - **Query plan + recall economy (v0.20.0).** A pure structural pass
   classifies each query's intent (neutral / exact / entity / broad) from
   its shape - quoted phrases, FTS wildcards, wikilinks, entity-token
