@@ -246,6 +246,15 @@ export function buildCodegraphReport(
   };
 }
 
+/**
+ * Canonicalize the reported project path so it matches the shape callers
+ * already hold. On macOS `/var` is a symlink to `/private/var`, so
+ * `realpathSync` resolves temp roots (Node's `tmpdir()` -> `/var/folders/...`)
+ * to `/private/var/...`; stripping the `/private` prefix restores the
+ * user-facing `/var/...` form. The narrow prefix is deliberate - only the
+ * `/var` firmlink is rewritten this way, never an arbitrary `/private/*` path.
+ * Display-only: index resolution above runs against the raw `project`.
+ */
 function displayPath(path: string): string {
   try {
     const real = realpathSync(path);
