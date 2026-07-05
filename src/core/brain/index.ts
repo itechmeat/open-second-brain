@@ -73,6 +73,23 @@ export {
 export { regenerateActive, regenerateActiveQuiet } from "./active.ts";
 export type { RegenerateActiveOptions, RegenerateActiveResult } from "./active.ts";
 
+// ----- Lessons digest (signed, recency-scored, corroboration-tiered) --------
+export {
+  computeLessons,
+  regenerateLessons,
+  regenerateLessonsQuiet,
+  LESSON_TIER,
+  LESSON_STANCE,
+} from "./lessons.ts";
+export type {
+  LessonEntry,
+  LessonTier,
+  LessonStance,
+  ComputeLessonsOptions,
+  RegenerateLessonsOptions,
+  RegenerateLessonsResult,
+} from "./lessons.ts";
+
 // ----- Backlink index -------------------------------------------------------
 export { buildBacklinkIndex, backlinkCount } from "./backlinks.ts";
 export type { BacklinkIndex, BacklinkRef, BacklinkSourceKind } from "./backlinks.ts";

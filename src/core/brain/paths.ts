@@ -72,6 +72,7 @@ export const BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, ".artifacts");
 export const BRAIN_CONFIG_FILE = "_brain.yaml";
 export const BRAIN_MANUAL_FILE = "_BRAIN.md";
 export const BRAIN_ACTIVE_FILE = "active.md";
+export const BRAIN_LESSONS_FILE = "lessons.md";
 export const BRAIN_PINNED_FILE = "pinned.md";
 export const BRAIN_INDEX_FILE = "_INDEX.md";
 
@@ -141,6 +142,17 @@ export function brainManualPath(vault: string): string {
  */
 export function brainActivePath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_ACTIVE_FILE), vault);
+}
+
+/**
+ * Path of the auto-generated lessons digest (`Brain/lessons.md`) written
+ * by `dream`: the unified, signed, recency-scored corpus over
+ * preferences and dead-ends. Read by the `SessionStart` / `PostCompact`
+ * hook alongside `active.md` and exposed as the MCP resource
+ * `osb://lessons`.
+ */
+export function brainLessonsPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_LESSONS_FILE), vault);
 }
 
 /** Path of the transient current-task scratchpad read by `brain_context`. */

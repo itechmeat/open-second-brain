@@ -37,12 +37,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { listLogMarkdownFiles } from "../core/brain/log-jsonl.ts";
 
 import { regenerateActive } from "../core/brain/active.ts";
+import { regenerateLessons } from "../core/brain/lessons.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import type { BacklinkRef } from "../core/brain/backlinks.ts";
 import { renderDigest } from "../core/brain/digest.ts";
 import { computeBrainStatus, type BrainStatusSnapshot } from "../core/brain/status.ts";
 import {
   brainActivePath,
+  brainLessonsPath,
   preferencePath,
   retiredPath,
   validateIsoDate,
@@ -85,6 +87,13 @@ const CONCRETE: ReadonlyArray<ResourceDescriptor> = [
     name: "Active Brain preferences",
     description:
       "Auto-generated digest of confirmed and quarantined preferences plus the three most recently retired entries. Regenerated at the tail of every dream run.",
+    mimeType: MIME_MARKDOWN,
+  },
+  {
+    uri: "osb://lessons",
+    name: "Brain lessons digest",
+    description:
+      "Auto-generated, signed and recency-scored lessons corpus unifying preferences and dead-ends into corroboration-tiered lessons (preferred / tentative / contested / avoid). Regenerated at the tail of every dream run.",
     mimeType: MIME_MARKDOWN,
   },
   {
@@ -145,6 +154,8 @@ export function readResource(ctx: ResourceContext, uri: string): ResourceContent
   switch (parsed.kind) {
     case "active":
       return readActive(ctx, uri);
+    case "lessons":
+      return readLessons(ctx, uri);
     case "digestLatest":
       return readDigestLatest(ctx, uri);
     case "status":
@@ -164,6 +175,7 @@ export function readResource(ctx: ResourceContext, uri: string): ResourceContent
 
 type Parsed =
   | { readonly kind: "active" }
+  | { readonly kind: "lessons" }
   | { readonly kind: "digestLatest" }
   | { readonly kind: "status" }
   | { readonly kind: "preference"; readonly id: string }
@@ -182,6 +194,9 @@ function parseUri(uri: string): Parsed {
   const head = parts[0] ?? "";
   if (head === "preferences" && parts[1] === "active" && parts.length === 2) {
     return { kind: "active" };
+  }
+  if (head === "lessons" && parts.length === 1) {
+    return { kind: "lessons" };
   }
   if (head === "digest" && parts[1] === "latest" && parts.length === 2) {
     return { kind: "digestLatest" };
@@ -221,6 +236,24 @@ function readActive(ctx: ResourceContext, uri: string): ResourceContent {
       throw new MCPError(
         INTERNAL_ERROR,
         `active.md not present and on-demand regeneration failed: ${(err as Error).message}`,
+      );
+    }
+  }
+  return readMarkdown(uri, path);
+}
+
+function readLessons(ctx: ResourceContext, uri: string): ResourceContent {
+  const path = brainLessonsPath(ctx.vault);
+  // Same on-demand-on-first-miss policy as readActive: a fresh vault
+  // that has never been dreamed has no lessons.md yet — generate it
+  // once so the resource is always meaningful, but never on every read.
+  if (!existsSync(path)) {
+    try {
+      regenerateLessons(ctx.vault);
+    } catch (err) {
+      throw new MCPError(
+        INTERNAL_ERROR,
+        `lessons.md not present and on-demand regeneration failed: ${(err as Error).message}`,
       );
     }
   }

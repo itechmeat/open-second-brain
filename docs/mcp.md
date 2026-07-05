@@ -148,6 +148,12 @@ come back from `resources/list`:
   generated digest of confirmed + quarantined preferences plus the
   last three retired entries. Auto-regenerated on first read if the
   file does not exist yet.
+- `osb://lessons` — body of `Brain/lessons.md`, the auto-generated,
+  signed and recency-scored lessons corpus that unifies preferences and
+  dead-ends into corroboration-tiered lessons (`preferred` / `tentative`
+  / `contested` / `avoid`). Auto-regenerated on first read if the file
+  does not exist yet. The SessionStart / PostCompact hook injects it
+  alongside `active.md`.
 - `osb://digest/latest` — same body as `brain_brief` `view="digest"`
   in its default (24h) Markdown window.
 - `osb://status` — Brain operational snapshot: counts (inbox /

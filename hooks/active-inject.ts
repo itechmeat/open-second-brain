@@ -31,7 +31,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { resolveVault } from "../src/core/config.ts";
 import { parseFrontmatterText } from "../src/core/vault.ts";
-import { brainActivePath } from "../src/core/brain/paths.ts";
+import { brainActivePath, brainLessonsPath } from "../src/core/brain/paths.ts";
 import { budgetActiveBody } from "../src/core/brain/active-budget.ts";
 import { INJECT_BUDGET_CHARS_DEFAULT, loadBrainConfig } from "../src/core/brain/policy.ts";
 import { healCliSymlinks } from "../src/cli/install-cli.ts";
@@ -121,13 +121,43 @@ async function main(): Promise<void> {
     // intentional fallback - a corrupted _brain.yaml is doctor's job
   }
 
+  // Auto-load the lessons digest alongside active.md so the agent gets
+  // the unified, signed, recency-scored corpus (preferences + dead-ends)
+  // on the same SessionStart surface. Fail-soft and budgeted separately:
+  // a missing / unreadable / oversized lessons file must never disturb
+  // the active-preferences injection above.
+  const lessonsBody = readLessonsBody(brainLessonsPath(vault), budget);
+
+  const additionalContext =
+    lessonsBody === null
+      ? budgetActiveBody(trimmed, budget)
+      : `${budgetActiveBody(trimmed, budget)}\n\n${lessonsBody}`;
+
   const out = {
     hookSpecificOutput: {
       hookEventName,
-      additionalContext: budgetActiveBody(trimmed, budget),
+      additionalContext,
     },
   };
   process.stdout.write(JSON.stringify(out) + "\n");
+}
+
+/**
+ * Read and budget the `Brain/lessons.md` body for injection. Returns
+ * `null` on any failure mode (missing file, unreadable, empty body) so
+ * the caller falls back to injecting active.md alone.
+ */
+function readLessonsBody(lessonsPath: string, budget: number): string | null {
+  if (!existsSync(lessonsPath)) return null;
+  try {
+    const raw = readFileSync(lessonsPath, "utf8");
+    const [, body] = parseFrontmatterText(raw);
+    const trimmed = body.trim();
+    if (trimmed.length === 0) return null;
+    return budgetActiveBody(trimmed, budget);
+  } catch {
+    return null;
+  }
 }
 
 main().catch(() => {

@@ -111,7 +111,12 @@ describe("MCP resources — capabilities and discovery", () => {
     await initialize(server);
     const r = await listResources(server);
     const uris = r.result.resources.map((x: any) => x.uri).toSorted();
-    expect(uris).toEqual(["osb://digest/latest", "osb://preferences/active", "osb://status"]);
+    expect(uris).toEqual([
+      "osb://digest/latest",
+      "osb://lessons",
+      "osb://preferences/active",
+      "osb://status",
+    ]);
     for (const desc of r.result.resources) {
       expect(desc.mimeType).toBe("text/markdown");
       expect(typeof desc.name).toBe("string");
@@ -184,6 +189,19 @@ describe("MCP resources — read osb://preferences/active", () => {
     await initialize(server);
     const r = await read(server, "osb://preferences/active");
     expect(r.result.contents[0].text).toContain("pref-rule-b");
+  });
+});
+
+describe("MCP resources — read osb://lessons", () => {
+  test("regenerates lessons.md on demand when missing and returns its body", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = await read(server, "osb://lessons");
+    expect(r.result.contents).toHaveLength(1);
+    const c = r.result.contents[0];
+    expect(c.uri).toBe("osb://lessons");
+    expect(c.mimeType).toBe("text/markdown");
+    expect(c.text).toContain("# Lessons");
   });
 });
 
