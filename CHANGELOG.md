@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.0] - 2026-07-05
+
+A retrieval-precision and quality-loop pass. Four new surfaces close the
+loop between what recall surfaces, how honestly it reports its own
+grounding, and how observed failures turn into a prioritized backlog.
+Each new field is optional and absent by default, so every call site
+whose caller does not opt in produces byte-identical output, and the
+kernel still calls no LLM.
+
+### Added
+
+- **Epistemic provenance markers on packed and recalled items.** Every
+  item emitted by `brain_context_pack`, `brain_context_receipts`, and
+  recall results now carries a structural `epistemic` status
+  (`observed` | `derived` | `hypothesis` | `plan` | `unknown`) plus
+  `evidence_refs`, derived from existing graph metadata with no manual
+  tagging and no natural-language word lists. A consuming model can now
+  tell a source-backed fact from a conjecture or a plan. The status is
+  language-agnostic by construction; fields are absent when the status
+  is `unknown`, so the off-path is byte-identical to today.
+- **Recall adequacy verdict with explicit low-adequacy actions.** A thin
+  verdict layer classifies each recall attempt as `sufficient`, `weak`,
+  or `insufficient` and emits a recommended action (`proceed`,
+  `re_recall`, `abstain`) with an optional `escalate` flag, reusing the
+  existing gate-telemetry relevance scores plus the new epistemic mix.
+  The verdict appears in `brain_recall_gate` output and the
+  context-receipts summary when the caller passes recall scores;
+  otherwise the field is absent and output is unchanged. Thresholds are
+  configurable (`recall_adequacy_sufficient`, `recall_adequacy_weak`,
+  `recall_adequacy_min_results`).
+- **Cross-query demand log surfacing recurring poorly-answered queries.**
+  A rolling, size-capped demand log under `Brain/log/query-demand.jsonl`
+  records each recall (normalized terms plus timestamp, result count,
+  and the existing coverage score) and an aggregation reader ranks
+  recurring queries the vault answers poorly, ranked by frequency
+  times (1 minus IDF-weighted coverage). Surfaced read-only as the
+  `brain_knowledge_gaps` MCP tool and `o2b brain knowledge-gaps` CLI.
+  The log is written only when recall gate telemetry is opt-in (default
+  off) and queries are normalized before append; the reader is always
+  available and never writes.
+- **Unified outcome-tagged lessons loop.** A `Brain/lessons.md` digest
+  folds positive knowledge (preferences and their applied evidence) and
+  negative knowledge (`violated` / `outdated` rows and `Brain/dead-ends/`)
+  into one outcome-tagged corpus scored by a signed, recency-decayed
+  weight (shared 30-day half-life from working-memory continuity). Each
+  lesson lands in a tier: `preferred` (net-positive and corroborated by
+  at least N distinct results), `tentative` (net-positive but under the
+  corroboration floor), `contested` (both positive and negative recent
+  evidence, recency-wins), or `avoid` (dead-ends and net-negative). The
+  digest is regenerated at the tail of every `dream` pass alongside
+  `active.md`, exposed as the `osb://lessons` MCP resource, and injected
+  on SessionStart and PostCompact. Tunable via `lessons.limit`,
+  `lessons.half_life_days`, and `lessons.corroboration_min`.
+
 ## [1.21.0] - 2026-07-04
 
 A safety-hardening pass around the surfaces that write to or trust the
@@ -6118,6 +6172,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.22.0]: https://github.com/itechmeat/open-second-brain/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/itechmeat/open-second-brain/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/itechmeat/open-second-brain/compare/v1.19.1...v1.20.0
 [1.19.1]: https://github.com/itechmeat/open-second-brain/compare/v1.19.0...v1.19.1
