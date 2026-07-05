@@ -286,6 +286,16 @@ export function proceduralRecurrencePath(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_LOG_REL, "recurrence-support.jsonl"), vault);
 }
 
+/**
+ * Cross-query demand ledger path: `Brain/log/query-demand.jsonl`. A
+ * rolling, byte-budget-capped append-only log of normalized recall
+ * queries with their result count and IDF-weighted coverage, aggregated
+ * to surface recurring queries the vault answers poorly (unmet demand).
+ */
+export function queryDemandLogPath(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_LOG_REL, "query-demand.jsonl"), vault);
+}
+
 /** Log file for the given UTC date: `Brain/log/<YYYY-MM-DD>.md`. */
 export function logPath(vault: string, date: string): string {
   const d = validateIsoDate(date);

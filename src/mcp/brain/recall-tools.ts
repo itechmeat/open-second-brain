@@ -26,6 +26,7 @@ import {
   expandSessionRecall,
   searchSessionRecall,
 } from "../../core/brain/session-recall.ts";
+import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/brain/query-demand.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
@@ -272,6 +273,39 @@ function coerceRecallTelemetryStatus(raw: unknown): RecallTelemetryStatus | unde
   return trimmed;
 }
 
+// ----- brain_knowledge_gaps (t_97091fff) -----------------------------------
+
+async function toolBrainKnowledgeGaps(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const since = optionalStringArg("brain_knowledge_gaps", args, "since");
+  const until = optionalStringArg("brain_knowledge_gaps", args, "until");
+  const minOccurrences = coercePositiveInteger(
+    "brain_knowledge_gaps",
+    "min_occurrences",
+    args["min_occurrences"],
+  );
+  const limit = coercePositiveInteger("brain_knowledge_gaps", "limit", args["limit"]);
+  const maxSatisfaction = coerceUnitInterval("max_satisfaction", args["max_satisfaction"]);
+  const report = aggregateQueryDemand(ctx.vault, {
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(minOccurrences !== undefined ? { minOccurrences } : {}),
+    ...(maxSatisfaction !== undefined ? { maxSatisfaction } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  });
+  return { vault_path: ctx.vault, ...serializeQueryDemandReport(report) };
+}
+
+function coerceUnitInterval(name: string, raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > 1) {
+    throw new MCPError(INVALID_PARAMS, `brain_knowledge_gaps: ${name} must be a number in [0, 1]`);
+  }
+  return raw;
+}
+
 // ----- brain_context_presets ----------------------------------------------
 
 async function toolBrainSessionGrep(
@@ -432,6 +466,34 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRecallTelemetry,
+  },
+  {
+    name: "brain_knowledge_gaps",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Cross-query demand gaps: aggregate the persisted recall demand log into recurring queries the vault answers poorly, ranked by frequency × (1 − IDF-weighted coverage). Read-only; log written only by opt-in recall telemetry.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        min_occurrences: {
+          type: "integer",
+          minimum: 1,
+          description: "Minimum times a query must recur to surface (default 2).",
+        },
+        max_satisfaction: {
+          type: "number",
+          minimum: 0,
+          maximum: 1,
+          description:
+            "Surface only queries at/below this mean satisfaction (default 0.8) — i.e. not already answered well.",
+        },
+        since: { type: "string", description: "Optional inclusive lower timestamp bound." },
+        until: { type: "string", description: "Optional inclusive upper timestamp bound." },
+        limit: { type: "integer", minimum: 1, description: "Optional maximum gaps to return." },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainKnowledgeGaps,
   },
   {
     name: "brain_session_grep",

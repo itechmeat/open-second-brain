@@ -86,6 +86,7 @@ Brain verbs (observing memory):
   pre-compact-extract Extract typed continuity records from bounded text
   post-compact-audit  Audit pinned-anchor survival after a compaction; re-assert drifted anchors
   recall-telemetry    List/summarize opt-in recall telemetry records
+  knowledge-gaps      Rank recurring queries the vault answers poorly (unmet demand)
   generation-reports  Record/list/summarize opt-in LLM generation traces
   skill-proposals     Learn/list/review deterministic skill proposals
   procedural-memory   Reconcile/list procedural memory index and usage
@@ -589,6 +590,9 @@ export const VERB_HELP: Record<string, string> = {
     "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +
     "       o2b brain recall-telemetry cost [--since <iso>] [--until <iso>] [--write-cost <n>] [--read-cost <n>] [--write-heavy-ratio <n>] [--vault <path>] [--json]\n" +
     "Read opt-in recall telemetry continuity records and aggregate coverage gaps. cost folds write volume (feedback/apply-evidence/note/host writes) against reads into a write-vs-read ratio, a write-heavy flag, and a rough weighted cost signal per period.\n",
+  "knowledge-gaps":
+    "usage: o2b brain knowledge-gaps [--min-occurrences <n>] [--max-satisfaction <0..1>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
+    "Aggregate the persisted cross-query demand log (Brain/log/query-demand.jsonl) into recurring queries the vault answers poorly. Buckets by normalized query terms and ranks by frequency x (1 - satisfaction), where satisfaction is the reused IDF-weighted coverage (or the non-empty-result fraction when coverage was not recorded). Turns repeated recall failures into a prioritized backlog of what to write next. Read-only; the log is written only by opt-in recall telemetry.\n",
   "generation-reports":
     "usage: o2b brain generation-reports record <write_session|context_pack|dream_stage> --ref <id> --agent <name> --prompt <text> [--enable] [--provider <p>] [--model <m>] [--finish-reason <r>] [--latency-ms <n>] [--input-tokens <n>] [--output-tokens <n>] [--cached-tokens <n>] [--total-tokens <n>] [--scope <s>] [--source <id[=path]>...] [--created-at <iso>] [--vault <path>] [--json]\n" +
     "       o2b brain generation-reports list [--handoff <kind>] [--agent <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +

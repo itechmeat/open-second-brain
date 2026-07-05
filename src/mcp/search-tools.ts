@@ -42,6 +42,7 @@ import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../core/search/
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
 import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
 import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
+import { recordQueryDemand } from "../core/brain/query-demand.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -603,6 +604,18 @@ async function toolBrainSearch(
         warnings_count: outcome.warnings.length,
         ...(pathPrefix !== undefined ? { path_prefix: pathPrefix } : {}),
       },
+    }),
+  );
+  // Cross-query demand log (t_97091fff): persist the normalized query
+  // terms, result count, and (when the evidence pack computed it) the
+  // IDF-weighted coverage so recurring poorly-answered queries can be
+  // surfaced as unmet-demand knowledge gaps. Gated behind the same
+  // telemetry opt-in and fail-open — a log write never breaks search.
+  emitGatedTelemetry(telemetry || undefined, () =>
+    recordQueryDemand(ctx.vault, {
+      query,
+      resultCount: surfaced.length,
+      coverage: outcome.evidencePack?.idfWeightedCoverage ?? null,
     }),
   );
   return {
