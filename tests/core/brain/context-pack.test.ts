@@ -370,3 +370,40 @@ describe("packContext - untrusted_source_delimiting flag (Unit 1)", () => {
     expect(body).toContain(HOSTILE); // content preserved, not blanked
   });
 });
+
+describe("packContext - epistemic provenance markers (ACM)", () => {
+  function writeRaw(slug: string, frontLines: string[], body = "x") {
+    writeFileSync(
+      join(vault, "Brain", "preferences", `pref-${slug}.md`),
+      ["---", `id: pref-${slug}`, "topic: t", "principle: p", ...frontLines, "---", "", body].join(
+        "\n",
+      ),
+    );
+  }
+
+  test("a plain preference defaults to observed with no evidence refs", () => {
+    writePref("plain", { topic: "t", principle: "p", tier: "core" });
+    const item = packContext(vault, { maxTokens: 10_000 }).items[0]!;
+    expect(item.epistemic).toBe("observed");
+    expect(item.evidenceRefs).toEqual([]);
+  });
+
+  test("a confirmed stated rule is observed and surfaces its evidence refs", () => {
+    // Real preferences store derived fields `_`-prefixed with inline arrays.
+    writeRaw("obs", ["provenance: stated", "_status: confirmed", '_evidenced_by: ["[[sig-1]]"]']);
+    const item = packContext(vault, { maxTokens: 10_000 }).items[0]!;
+    expect(item.epistemic).toBe("observed");
+    expect(item.evidenceRefs).toEqual(["[[sig-1]]"]);
+  });
+
+  test("a deduced/inferred fact is derived; unconfirmed is hypothesis; disputed is unknown", () => {
+    writeRaw("der", ["provenance: deduced", '_evidenced_by: ["[[pref-obs]]"]']);
+    writeRaw("hyp", ["_status: unconfirmed"]);
+    writeRaw("unk", ["_lifecycle: disputed", "_status: confirmed"]);
+    const byId = new Map(packContext(vault, { maxTokens: 10_000 }).items.map((i) => [i.id, i]));
+    expect(byId.get("pref-der")!.epistemic).toBe("derived");
+    expect(byId.get("pref-der")!.evidenceRefs).toEqual(["[[pref-obs]]"]);
+    expect(byId.get("pref-hyp")!.epistemic).toBe("hypothesis");
+    expect(byId.get("pref-unk")!.epistemic).toBe("unknown");
+  });
+});

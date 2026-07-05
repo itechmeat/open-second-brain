@@ -148,5 +148,6 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   // + brain_memory_bridge (Hermes on_memory_write host bridge) = 86.
   // + brain_event_trace (dashboard-context-trace: event→trace join) = 87.
   // + brain_search_expand (progressive disclosure: search→expand→transcript) = 88.
-  expect(list.result.tools.length).toBe(88);
+  // + brain_knowledge_gaps (cross-query demand log, t_97091fff) = 89.
+  expect(list.result.tools.length).toBe(89);
 });

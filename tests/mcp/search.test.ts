@@ -18,6 +18,7 @@ import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { LATEST_SCHEMA_VERSION } from "../../src/core/search/schema.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
+import { readQueryDemand } from "../../src/core/brain/query-demand.ts";
 
 let tmp: string;
 let vault: string;
@@ -153,6 +154,24 @@ test("brain_search can opt in to recall telemetry", async () => {
   });
   expect(records).toHaveLength(1);
   expect(records[0]!.payload).toMatchObject({ status: "ok", result_count: 1 });
+
+  // The same opt-in also persists a cross-query demand record with the
+  // normalized query terms and result count (t_97091fff).
+  const demand = readQueryDemand(vault);
+  expect(demand).toHaveLength(1);
+  expect(demand[0]!.terms).toEqual(["telemetry"]);
+  expect(demand[0]!.results).toBe(1);
+});
+
+test("brain_search does not persist demand records without the telemetry opt-in", async () => {
+  writeMd("notes/quiet.md", "# Quiet\n\nsilent recall leaves no demand trace.");
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  await call(server, "brain_search", { query: "silent", limit: 5 });
+  expect(readQueryDemand(vault)).toHaveLength(0);
 });
 
 test("brain_search accepts structured query_document", async () => {

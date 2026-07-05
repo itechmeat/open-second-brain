@@ -426,6 +426,21 @@ flowchart LR
   The writer is idempotent — if the rendered body matches the file
   on disk, no I/O happens. The same window / limit drive a mirrored
   `Most-applied (Nd)` section in `brain_digest` output.
+- **`Brain/lessons.md`** is a second derived digest that folds the
+  positive-knowledge (preferences + their `apply-evidence applied`
+  rows) and negative-knowledge (`violated` / `outdated` rows and
+  `Brain/dead-ends/`) into ONE outcome-tagged corpus scored by a
+  **signed, recency-decayed** weight (shared 30-day half-life from
+  working-memory continuity; tunable via `lessons.half_life_days`).
+  Each lesson lands in a tier: **preferred** (net-positive and
+  corroborated by ≥N distinct results — `lessons.corroboration_min`,
+  default 2), **tentative** (net-positive but under the corroboration
+  floor), **contested** (both positive and negative recent evidence —
+  the shown stance follows the sign of the decayed score, so recency
+  wins), or **avoid** (dead-ends and rules whose recent evidence is
+  net-negative). Rendered top-N (`lessons.limit`, default 20), ranked
+  by decayed salience. Regenerated at the tail of every `dream` pass
+  alongside `active.md`, with the same idempotent write.
 - **SessionStart hook** (`startup | resume | clear | compact`) injects
   the body as `additionalContext` so the agent sees current rules at
   the start of every session and again after `/compact` - the
@@ -434,7 +449,9 @@ flowchart LR
   budgeted (`active.inject_budget_chars`, default 8,000 chars):
   sections drop deterministically (recently retired first, then
   quarantine, then most-applied) and a one-line notice points the
-  agent at `brain_context` for the full set. Fails closed - any error
+  agent at `brain_context` for the full set. When `Brain/lessons.md`
+  exists, its (separately budgeted) body is appended so the unified
+  lessons corpus loads on the same surface. Fails closed - any error
   path exits 0 with no output so the runtime proceeds unaffected.
 - **MCP Resources** expose the same content for hosts that prefer
   pull access (`osb://preferences/active` and friends in the table

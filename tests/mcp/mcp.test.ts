@@ -221,6 +221,7 @@ describe("tool listing", () => {
         "brain_context_receipts",
         "brain_event_trace",
         "brain_recall_telemetry",
+        "brain_knowledge_gaps",
         "brain_context_presets",
         "brain_pre_compact_extract",
         "brain_session_grep",
@@ -565,7 +566,8 @@ describe("stdio loop", () => {
     //   memory-subsystem-alignment) = 86.
     // + brain_event_trace (dashboard-context-trace: event→trace join) = 87.
     // + brain_search_expand (progressive disclosure: search→expand→transcript) = 88.
-    expect(list.result.tools.length).toBe(88);
+    // + brain_knowledge_gaps (cross-query demand log, t_97091fff) = 89.
+    expect(list.result.tools.length).toBe(89);
   });
 
   test("returns parse error for invalid JSON", async () => {

@@ -60,6 +60,10 @@ function writeActive(body: string): void {
   writeFileSync(join(vault, "Brain", "active.md"), body, "utf8");
 }
 
+function writeLessons(body: string): void {
+  writeFileSync(join(vault, "Brain", "lessons.md"), body, "utf8");
+}
+
 describe("active-inject hook", () => {
   test("injects active.md content as SessionStart additionalContext", async () => {
     writeActive(
@@ -204,6 +208,36 @@ describe("active-inject hook", () => {
     const injected: string = out.hookSpecificOutput.additionalContext;
     expect(injected.length).toBeLessThanOrEqual(800);
     expect(injected).toContain("brain_context");
+  });
+
+  test("appends lessons.md body alongside active.md when present", async () => {
+    writeActive(
+      "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n",
+    );
+    writeLessons(
+      "---\nkind: brain-lessons\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Lessons\n\n## Avoid (1)\n\n- `de-2026-05-18-x` (score: -0.95) — the flaky retry loop\n",
+    );
+
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault });
+    expect(r.exit).toBe(0);
+    const out = JSON.parse(r.stdout);
+    const injected: string = out.hookSpecificOutput.additionalContext;
+    expect(injected).toContain("# Active Brain Preferences");
+    expect(injected).toContain("pref-foo");
+    expect(injected).toContain("# Lessons");
+    expect(injected).toContain("the flaky retry loop");
+  });
+
+  test("injects active.md alone when lessons.md is absent", async () => {
+    writeActive(
+      "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n",
+    );
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault });
+    expect(r.exit).toBe(0);
+    const out = JSON.parse(r.stdout);
+    const injected: string = out.hookSpecificOutput.additionalContext;
+    expect(injected).toContain("pref-foo");
+    expect(injected).not.toContain("# Lessons");
   });
 
   test("stays silent when active.md is empty whitespace only", async () => {

@@ -39,6 +39,7 @@ import { basename, join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
 import { regenerateActiveQuiet } from "./active.ts";
+import { regenerateLessonsQuiet } from "./lessons.ts";
 import { openWorkrun, WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
 import { DREAM_PHASE, type DreamPhase, type DreamPhaseSummary } from "./dream-phases.ts";
 import { extractTemporalConstraints } from "./temporal-extract.ts";
@@ -345,7 +346,10 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     scan.corrupted.length > 0;
 
   if (!changed) {
-    if (!dryRun) regenerateActiveQuiet(vault, { now });
+    if (!dryRun) {
+      regenerateActiveQuiet(vault, { now });
+      regenerateLessonsQuiet(vault, { now });
+    }
     return Object.freeze({
       run_id: runId,
       changed: false,
@@ -772,6 +776,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       process.stderr.write(`warning: prune snapshots failed: ${(err as Error).message}\n`);
     }
     regenerateActiveQuiet(vault, { now });
+    regenerateLessonsQuiet(vault, { now });
   }
 
   // v0.12.0 Brain Integrity Suite: finalise the durable workrun

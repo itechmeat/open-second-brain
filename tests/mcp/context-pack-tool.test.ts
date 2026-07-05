@@ -100,9 +100,24 @@ describe("brain_context_pack tool — round trip", () => {
     const out = await callPack(server, { max_tokens: 10_000 });
     expect(out["max_tokens"]).toBe(10000);
     expect(typeof out["tokens_used"]).toBe("number");
-    const items = out["items"] as Array<{ id: string; tier: string }>;
+    const items = out["items"] as Array<{ id: string; tier: string; epistemic: string }>;
     expect(items[0]!.id).toBe("pref-core");
     expect(items[1]!.id).toBe("pref-supp");
+    // Every emitted item carries an epistemic provenance marker (ACM).
+    expect(items[0]!.epistemic).toBe("observed");
+  });
+
+  test("emits derived epistemic status and evidence_refs from provenance metadata", async () => {
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-derived.md"),
+      '---\nid: pref-derived\ntopic: x\nprinciple: derived principle\ntier: core\nprovenance: inferred\n_evidenced_by: ["[[pref-a]]"]\n---\n',
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { max_tokens: 10_000 });
+    const items = out["items"] as Array<{ epistemic: string; evidence_refs?: string[] }>;
+    expect(items[0]!.epistemic).toBe("derived");
+    expect(items[0]!.evidence_refs).toEqual(["[[pref-a]]"]);
   });
 
   test("returns polarity lanes when requested", async () => {

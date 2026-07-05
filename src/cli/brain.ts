@@ -103,6 +103,7 @@ import {
   cmdBrainPreCompactExtract,
   cmdBrainPostCompactAudit,
   cmdBrainRecallTelemetry,
+  cmdBrainKnowledgeGaps,
   cmdBrainGenerationReports,
   cmdBrainSkillProposals,
   cmdBrainProceduralMemory,
@@ -335,6 +336,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainPostCompactAudit(rest);
       case "recall-telemetry":
         return await cmdBrainRecallTelemetry(rest);
+      case "knowledge-gaps":
+        return await cmdBrainKnowledgeGaps(rest);
       case "generation-reports":
         return await cmdBrainGenerationReports(rest);
       case "skill-proposals":

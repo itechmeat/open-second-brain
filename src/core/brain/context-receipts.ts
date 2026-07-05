@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
+import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
 
 export type ContextReceiptTrigger = "context_pack" | "pre_compress";
 
@@ -21,6 +22,10 @@ export interface ContextReceiptItemInput {
   readonly tier?: string;
   readonly trimmed?: boolean;
   readonly safetyFiltered?: boolean;
+  /** Epistemic grounding of the item (ACM): observed | derived | ... */
+  readonly epistemic?: string;
+  /** `evidenced_by` wikilinks grounding the item. */
+  readonly evidenceRefs?: ReadonlyArray<string>;
 }
 
 export interface EmitContextReceiptInput {
@@ -29,6 +34,26 @@ export interface EmitContextReceiptInput {
   readonly finalText: string;
   readonly budget?: Readonly<Record<string, unknown>>;
   readonly extra?: Readonly<Record<string, unknown>>;
+  /**
+   * Recall adequacy verdict (t_b8f66fec) for the recall that produced
+   * this context. When present it is persisted so the audit trail records
+   * whether the surfaced grounding was judged sufficient / weak /
+   * insufficient and what action the caller was told to take.
+   */
+  readonly adequacy?: RecallAdequacyVerdict;
+}
+
+/** Flatten a verdict into the snake_cased receipt payload shape. */
+export function serializeAdequacy(verdict: RecallAdequacyVerdict): Record<string, unknown> {
+  return {
+    level: verdict.level,
+    action: verdict.action,
+    escalate: verdict.escalate,
+    result_count: verdict.resultCount,
+    top_score: verdict.topScore,
+    mean_score: verdict.meanScore,
+    reason: verdict.reason,
+  };
 }
 
 export interface ContextReceiptFilter {
@@ -49,6 +74,12 @@ export interface ContextReceiptSummary {
   readonly source_count: number;
   readonly private: boolean;
   readonly redacted: boolean;
+  /** Recall adequacy verdict summary, when the receipt recorded one. */
+  readonly adequacy?: {
+    readonly level: string;
+    readonly action: string;
+    readonly escalate: boolean;
+  };
 }
 
 export function emitContextReceipt(
@@ -64,6 +95,10 @@ export function emitContextReceipt(
     ...(item.tier ? { tier: item.tier } : {}),
     ...(item.trimmed !== undefined ? { trimmed: item.trimmed } : {}),
     ...(item.safetyFiltered !== undefined ? { safety_filtered: item.safetyFiltered } : {}),
+    ...(item.epistemic !== undefined ? { epistemic: item.epistemic } : {}),
+    ...(item.evidenceRefs && item.evidenceRefs.length > 0
+      ? { evidence_refs: [...item.evidenceRefs] }
+      : {}),
     ...(item.text ? { text_hash: sha256(item.text) } : {}),
   }));
   const payload: Record<string, unknown> = {
@@ -76,6 +111,7 @@ export function emitContextReceipt(
     final_text_chars: [...input.finalText].length,
     items: itemPayloads,
     ...(input.budget ? { budget: input.budget } : {}),
+    ...(input.adequacy ? { adequacy: serializeAdequacy(input.adequacy) } : {}),
   };
   mergeReceiptExtra(payload, input.extra);
   return appendContinuityRecord(vault, {
@@ -136,7 +172,19 @@ export function summarizeContextReceipt(record: ContinuityRecord): ContextReceip
     source_count: record.sourceRefs.length,
     private: record.private,
     redacted: record.redacted,
+    ...adequacySummary(payload["adequacy"]),
   };
+}
+
+function adequacySummary(
+  raw: unknown,
+): { adequacy: { level: string; action: string; escalate: boolean } } | Record<string, never> {
+  if (typeof raw !== "object" || raw === null) return {};
+  const record = raw as Record<string, unknown>;
+  const level = record["level"];
+  const action = record["action"];
+  if (typeof level !== "string" || typeof action !== "string") return {};
+  return { adequacy: { level, action, escalate: record["escalate"] === true } };
 }
 
 export function isContextReceiptTrigger(value: unknown): value is ContextReceiptTrigger {

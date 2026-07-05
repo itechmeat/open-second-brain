@@ -906,6 +906,21 @@ export interface BrainActiveConfig {
 }
 
 /**
+ * Container for the `lessons:` block of `_brain.yaml` (t_62363378).
+ * Tunes the signed, recency-scored lessons digest (`Brain/lessons.md`).
+ * Every field is optional; absence falls back to the `LESSONS_*`
+ * defaults in policy.ts.
+ */
+export interface BrainLessonsConfig {
+  /** Exponential half-life of the recency decay, in days. */
+  readonly half_life_days?: number;
+  /** Distinct-result count required to promote a lesson to `preferred`. */
+  readonly corroboration_min?: number;
+  /** Max lessons rendered into the digest. */
+  readonly limit?: number;
+}
+
+/**
  * Optional configuration for the daily discipline report (§D of the
  * agent-discipline-tail design). Absent on vaults that have not opted
  * in; the loader returns `undefined` rather than injecting defaults.
@@ -1059,6 +1074,13 @@ export interface BrainConfig {
    * mirrored `most_applied` block in `brain_digest`.
    */
   readonly active?: BrainActiveConfig;
+  /**
+   * Optional `lessons:` block (t_62363378). Tunes the signed,
+   * recency-scored lessons digest (`Brain/lessons.md`): decay
+   * half-life, corroboration threshold, and rendered limit. Absent:
+   * callers fall back to the `LESSONS_*` defaults in policy.ts.
+   */
+  readonly lessons?: BrainLessonsConfig;
   /** Optional daily discipline-report configuration (§D). Absent when not configured. */
   readonly discipline_report?: DisciplineReportConfig;
   /**

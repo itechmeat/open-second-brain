@@ -26,10 +26,16 @@ import {
 } from "./safety/context-guard.ts";
 import { brainDirs } from "./paths.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
+import {
+  deriveEpistemicStatus,
+  EPISTEMIC_STATUS,
+  type EpistemicStatus,
+} from "./provenance/epistemic.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
+import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
 import {
   canonicalSegment,
@@ -73,6 +79,15 @@ export interface ContextPackItem extends ContextTransformAnnotations {
   readonly contextLane: ContextLaneName | null;
   /** True when `body` was truncated by `maxCharsPerMemory` (v0.20.0). */
   readonly trimmed: boolean;
+  /**
+   * Epistemic grounding of this item (ACM), derived from the page's
+   * provenance / status / lifecycle metadata: `observed | derived |
+   * hypothesis | plan | unknown`. Lets downstream reasoning distinguish a
+   * grounded fact from a conjecture.
+   */
+  readonly epistemic: EpistemicStatus;
+  /** `evidenced_by` wikilinks grounding this item; empty when it cites none. */
+  readonly evidenceRefs: ReadonlyArray<string>;
   /** Present when the surfaced body was filtered or explicitly trusted. */
   readonly safety?: ContextSafetyReport;
 }
@@ -120,6 +135,13 @@ export interface ContextPackOptions {
   readonly includeLanes?: boolean;
   /** Opt-in audit receipt for the final emitted context. */
   readonly receipt?: ContextReceiptOptions;
+  /**
+   * Recall adequacy verdict (t_b8f66fec) for the recall that produced
+   * this pack. When present alongside `receipt`, it is persisted in the
+   * receipt so the audit trail records the sufficient/weak/insufficient
+   * verdict and the action the caller was told to take.
+   */
+  readonly recallAdequacy?: RecallAdequacyVerdict;
   /** Opt-in telemetry for recall coverage and gap diagnostics. */
   readonly telemetry?: RecallTelemetryOptions;
   /**
@@ -153,6 +175,8 @@ interface Candidate {
   readonly contextLane: ContextLaneName | null;
   readonly body: string;
   readonly tokens: number;
+  readonly epistemic: EpistemicStatus;
+  readonly evidenceRefs: ReadonlyArray<string>;
   readonly safety?: ContextSafetyReport;
 }
 
@@ -207,6 +231,7 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
       const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
       const contextLane = normalizeContextLane(meta["context_lane"]);
+      const epistemic = deriveEpistemicStatus(meta);
       const guarded = guardBrainContextSnippet(body, {
         source: { id, path: full, metadata: meta },
         ...(meta["context_safety"] === "trusted-instruction"
@@ -231,6 +256,8 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
         contextLane,
         body: guarded.safeText,
         tokens: estimateTokens(guarded.safeText),
+        epistemic: epistemic.status,
+        evidenceRefs: epistemic.evidenceRefs,
         ...(contextSafetyReport(guarded) ? { safety: contextSafetyReport(guarded) } : {}),
       });
     }
@@ -323,6 +350,8 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       principle: c.principle,
       contextLane: c.contextLane,
       trimmed,
+      epistemic: c.epistemic,
+      evidenceRefs: c.evidenceRefs,
       ...(c.safety ? { safety: c.safety } : {}),
     });
     used += tokens;
@@ -354,6 +383,10 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
           principle: "Declarative attention flow output",
           contextLane: "directives",
           trimmed: false,
+          // Synthesized from the vault's attention-flow graph, not a
+          // source-backed page, so it is `derived` with no evidence refs.
+          epistemic: EPISTEMIC_STATUS.derived,
+          evidenceRefs: [],
           ...(safetyReport ? { safety: safetyReport } : {}),
         });
         used += tokens;
@@ -445,9 +478,12 @@ function finalizeContextPackReport(
         tier: item.tier,
         trimmed: item.trimmed,
         safetyFiltered: item.safety?.filtered,
+        epistemic: item.epistemic,
+        evidenceRefs: item.evidenceRefs,
       })),
       finalText: report.items.map((item) => item.body).join("\n\n"),
       budget: contextPackBudgetMetadata(opts, report),
+      ...(opts.recallAdequacy ? { adequacy: opts.recallAdequacy } : {}),
       extra: {
         skipped_count: report.skipped.length,
         lanes: opts.includeLanes === true,

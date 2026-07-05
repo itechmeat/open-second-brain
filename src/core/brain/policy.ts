@@ -30,6 +30,7 @@ import type {
   BrainGuardrailConfig,
   BrainHealthConfig,
   BrainHygieneConfig,
+  BrainLessonsConfig,
   BrainRecallConfig,
   BrainLinkGraphConfig,
   BrainNotesConfig,
@@ -86,6 +87,25 @@ export const INJECT_BUDGET_CHARS_MIN = 500;
 export const INJECT_BUDGET_CHARS_MAX = 200_000;
 /** Default top-N limit when `_brain.yaml` lacks `active.most_applied.limit`. */
 export const MOST_APPLIED_LIMIT_DEFAULT = 10;
+
+/**
+ * Bounds and defaults for the `lessons:` block (t_62363378) that tunes
+ * the signed, recency-scored lessons digest (`Brain/lessons.md`).
+ * Out-of-range values are hard errors — an operator-tunable knob must
+ * never silently clamp. The half-life default matches the working-memory
+ * continuity decay (30 days); the corroboration floor (2 distinct
+ * results) keeps a one-off application from promoting straight to
+ * `preferred`.
+ */
+export const LESSONS_HALF_LIFE_DAYS_DEFAULT = 30;
+export const LESSONS_HALF_LIFE_DAYS_MIN = 1;
+export const LESSONS_HALF_LIFE_DAYS_MAX = 365;
+export const LESSONS_CORROBORATION_MIN_DEFAULT = 2;
+export const LESSONS_CORROBORATION_MIN_MIN = 1;
+export const LESSONS_CORROBORATION_MIN_MAX = 100;
+export const LESSONS_LIMIT_DEFAULT = 20;
+export const LESSONS_LIMIT_MIN = 1;
+export const LESSONS_LIMIT_MAX = 200;
 
 /**
  * Hard upper bound on `guardrails.instruction_file_max_lines`. Any
@@ -913,6 +933,56 @@ export function validateBrainConfigDetailed(
     };
   }
 
+  // Optional `lessons:` block (t_62363378). Tunes the signed,
+  // recency-scored lessons digest. Hard-error on out-of-range values —
+  // operator-tunable knobs must never silently fall back to defaults.
+  let lessons: BrainLessonsConfig | undefined;
+  if ("lessons" in obj) {
+    const rawLessons = obj["lessons"];
+    if (typeof rawLessons !== "object" || rawLessons === null || Array.isArray(rawLessons)) {
+      throw new BrainConfigError(
+        `block must be a map of keys; got ${describe(rawLessons)}`,
+        "lessons",
+        source,
+      );
+    }
+    const lessonsMap = rawLessons as Record<string, unknown>;
+    const halfLife = readBoundedInt(
+      lessonsMap,
+      "half_life_days",
+      LESSONS_HALF_LIFE_DAYS_MIN,
+      LESSONS_HALF_LIFE_DAYS_MAX,
+      source,
+    );
+    const corroborationMin = readBoundedInt(
+      lessonsMap,
+      "corroboration_min",
+      LESSONS_CORROBORATION_MIN_MIN,
+      LESSONS_CORROBORATION_MIN_MAX,
+      source,
+    );
+    const lessonsLimit = readBoundedInt(
+      lessonsMap,
+      "limit",
+      LESSONS_LIMIT_MIN,
+      LESSONS_LIMIT_MAX,
+      source,
+    );
+    for (const k of Object.keys(lessonsMap)) {
+      if (k !== "half_life_days" && k !== "corroboration_min" && k !== "limit") {
+        warnings.push({
+          path: source ?? "<config>",
+          message: `lessons.${k}: unknown field ignored (forward-compat)`,
+        });
+      }
+    }
+    lessons = {
+      ...(halfLife !== undefined ? { half_life_days: halfLife } : {}),
+      ...(corroborationMin !== undefined ? { corroboration_min: corroborationMin } : {}),
+      ...(lessonsLimit !== undefined ? { limit: lessonsLimit } : {}),
+    };
+  }
+
   // Optional `discipline_report` section. On any type mismatch, emit a
   // warning and drop the section (return undefined) rather than throwing —
   // the rest of the CLI surface must keep working.
@@ -1563,6 +1633,7 @@ export function validateBrainConfigDetailed(
     "snapshots",
     "vault",
     "active",
+    "lessons",
     "discipline_report",
     "guardrails",
     "link_graph",
@@ -1757,6 +1828,7 @@ export function validateBrainConfigDetailed(
     },
     ...(vault !== undefined ? { vault } : {}),
     ...(active !== undefined ? { active } : {}),
+    ...(lessons !== undefined ? { lessons } : {}),
     ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
     ...(guardrails !== undefined ? { guardrails } : {}),
     ...(linkGraph !== undefined ? { link_graph: linkGraph } : {}),
@@ -1825,6 +1897,32 @@ function requireUnitInterval(field: string, value: unknown, source: string | nul
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
     throw new BrainConfigError(`must be a number in [0, 1]; got ${describe(value)}`, field, source);
   }
+}
+
+/**
+ * Read an optional integer field bounded to `[min, max]` from a config
+ * sub-map. Returns `undefined` when the key is absent; throws a
+ * {@link BrainConfigError} (never clamps) when present but out of range
+ * or non-integer. Shared by the `lessons:` block loader.
+ */
+function readBoundedInt(
+  map: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+  source: string | null,
+  field: string = `lessons.${key}`,
+): number | undefined {
+  if (!(key in map)) return undefined;
+  const raw = map[key];
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < min || raw > max) {
+    throw new BrainConfigError(
+      `must be an integer between ${min} and ${max}; got ${describe(raw)}`,
+      field,
+      source,
+    );
+  }
+  return raw;
 }
 
 function describe(value: unknown): string {

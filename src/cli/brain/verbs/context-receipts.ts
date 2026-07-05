@@ -82,6 +82,10 @@ function showReceipt(argv: string[]): number {
   if (summary.turn_id) process.stdout.write(`turn_id: ${summary.turn_id}\n`);
   process.stdout.write(`item_count: ${summary.item_count ?? "?"}\n`);
   process.stdout.write(`source_count: ${summary.source_count}\n`);
+  if (summary.adequacy) {
+    const { level, action, escalate } = summary.adequacy;
+    process.stdout.write(`adequacy: ${level} -> ${action}${escalate ? " (escalate)" : ""}\n`);
+  }
   return 0;
 }
 

@@ -88,6 +88,8 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
         path: i.path,
         tier: i.tier,
         tokens: i.tokens,
+        epistemic: i.epistemic,
+        ...(i.evidenceRefs.length > 0 ? { evidence_refs: i.evidenceRefs } : {}),
         ...(i.originalRank !== undefined ? { original_rank: i.originalRank } : {}),
         ...(i.stableRank !== undefined ? { stable_rank: i.stableRank } : {}),
         ...(i.dedupedFrom !== undefined ? { deduped_from: i.dedupedFrom } : {}),
@@ -106,7 +108,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
   process.stdout.write(`pages skipped: ${report.skipped.length}\n\n`);
   if (report.receiptId) process.stdout.write(`receipt: ${report.receiptId}\n`);
   for (const i of report.items) {
-    process.stdout.write(`[${i.tier}] ${i.id} (${i.tokens} tokens)\n`);
+    process.stdout.write(`[${i.tier}] ${i.epistemic} ${i.id} (${i.tokens} tokens)\n`);
   }
   return 0;
 }

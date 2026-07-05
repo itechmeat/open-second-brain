@@ -8,10 +8,14 @@
  * BRAIN_TOOLS surface.
  */
 
-import { resolveSearchFocusContextPack } from "../../core/config.ts";
+import {
+  resolveRecallAdequacyThresholds,
+  resolveSearchFocusContextPack,
+} from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { readActiveSessionFocus } from "../../core/search/session-focus.ts";
 import { packContext } from "../../core/brain/context-pack.ts";
+import { assessRecallAdequacy } from "../../core/brain/recall-adequacy.ts";
 import {
   readAnticipatoryContext,
   refreshAnticipatoryCache,
@@ -74,6 +78,17 @@ async function toolBrainContextPack(
   const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
   const receipt = receiptOptionsFromArgs("brain_context_pack", args, "context_pack", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
+  // Adequacy verdict (t_b8f66fec): when the caller passes the recall
+  // scores that produced this material, classify grounding fitness and
+  // name the action; also persist it in the receipt for the audit trail.
+  const recallScores = parseRecallScores(args["recall_scores"]);
+  const adequacy =
+    recallScores !== undefined
+      ? assessRecallAdequacy(
+          recallScores,
+          resolveRecallAdequacyThresholds(ctx.configPath ?? undefined),
+        )
+      : undefined;
   // Focus wiring (Agent Surface Suite, t_5b478e47): gated on the
   // search_focus_context_pack config key (default off) so the default
   // pack stays byte-identical. Fail-soft - a broken search config
@@ -100,6 +115,7 @@ async function toolBrainContextPack(
     ...(query ? { query } : {}),
     ...(includeLanes ? { includeLanes: true } : {}),
     ...(receipt !== undefined ? { receipt } : {}),
+    ...(adequacy !== undefined ? { recallAdequacy: adequacy } : {}),
     ...(cacheStable || dedupRepeated
       ? {
           transforms: {
@@ -127,6 +143,8 @@ async function toolBrainContextPack(
       tokens: i.tokens,
       body: i.body,
       trimmed: i.trimmed,
+      epistemic: i.epistemic,
+      ...(i.evidenceRefs.length > 0 ? { evidence_refs: i.evidenceRefs } : {}),
       ...(i.originalRank !== undefined ? { original_rank: i.originalRank } : {}),
       ...(i.stableRank !== undefined ? { stable_rank: i.stableRank } : {}),
       ...(i.dedupedFrom !== undefined ? { deduped_from: i.dedupedFrom } : {}),
@@ -141,7 +159,50 @@ async function toolBrainContextPack(
     ...(report.receiptId ? { receipt_id: report.receiptId } : {}),
     ...(report.telemetryId ? { telemetry_id: report.telemetryId } : {}),
     ...(report.lanes ? { lanes: report.lanes } : {}),
+    ...(adequacy !== undefined
+      ? {
+          adequacy: {
+            level: adequacy.level,
+            action: adequacy.action,
+            escalate: adequacy.escalate,
+            result_count: adequacy.resultCount,
+            top_score: adequacy.topScore,
+            mean_score: adequacy.meanScore,
+            reason: adequacy.reason,
+          },
+        }
+      : {}),
   };
+}
+
+/**
+ * Parse the optional `recall_scores` argument. Returns `undefined` when
+ * absent (verdict skipped) and throws INVALID_PARAMS on a malformed
+ * shape. An empty array is a valid "no results" signal.
+ */
+function parseRecallScores(raw: unknown): ReadonlyArray<number> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_context_pack: recall_scores must be an array of numbers",
+    );
+  }
+  if (raw.length > 200) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_context_pack: recall_scores must not exceed 200 items",
+    );
+  }
+  for (const item of raw) {
+    if (typeof item !== "number") {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_pack: recall_scores must contain only numbers",
+      );
+    }
+  }
+  return raw as ReadonlyArray<number>;
 }
 
 // ----- brain_context_receipts ---------------------------------------------
@@ -513,6 +574,13 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         receipt_host: {
           type: "string",
           description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
+        },
+        recall_scores: {
+          type: "array",
+          maxItems: 200,
+          items: { type: "number" },
+          description:
+            "Optional relevance scores of the recall behind this material. When given, the response adds an adequacy verdict (level + action) and persists it in the receipt.",
         },
         telemetry: {
           type: "boolean",
