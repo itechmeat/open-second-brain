@@ -127,6 +127,8 @@ async function toolBrainContextPack(
       tokens: i.tokens,
       body: i.body,
       trimmed: i.trimmed,
+      epistemic: i.epistemic,
+      ...(i.evidenceRefs.length > 0 ? { evidence_refs: i.evidenceRefs } : {}),
       ...(i.originalRank !== undefined ? { original_rank: i.originalRank } : {}),
       ...(i.stableRank !== undefined ? { stable_rank: i.stableRank } : {}),
       ...(i.dedupedFrom !== undefined ? { deduped_from: i.dedupedFrom } : {}),

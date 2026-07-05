@@ -21,6 +21,10 @@ export interface ContextReceiptItemInput {
   readonly tier?: string;
   readonly trimmed?: boolean;
   readonly safetyFiltered?: boolean;
+  /** Epistemic grounding of the item (ACM): observed | derived | ... */
+  readonly epistemic?: string;
+  /** `evidenced_by` wikilinks grounding the item. */
+  readonly evidenceRefs?: ReadonlyArray<string>;
 }
 
 export interface EmitContextReceiptInput {
@@ -64,6 +68,10 @@ export function emitContextReceipt(
     ...(item.tier ? { tier: item.tier } : {}),
     ...(item.trimmed !== undefined ? { trimmed: item.trimmed } : {}),
     ...(item.safetyFiltered !== undefined ? { safety_filtered: item.safetyFiltered } : {}),
+    ...(item.epistemic !== undefined ? { epistemic: item.epistemic } : {}),
+    ...(item.evidenceRefs && item.evidenceRefs.length > 0
+      ? { evidence_refs: [...item.evidenceRefs] }
+      : {}),
     ...(item.text ? { text_hash: sha256(item.text) } : {}),
   }));
   const payload: Record<string, unknown> = {
