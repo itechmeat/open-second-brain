@@ -134,9 +134,10 @@ interface ToolAvailability {
 function detectTooling(): ToolAvailability {
   const pathEnv = process.env["PATH"] ?? "";
   const dirs = pathEnv.split(process.platform === "win32" ? ";" : ":").filter((d) => d.length > 0);
-  const winExts = process.platform === "win32"
-    ? (process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";")
-    : [];
+  const winExts =
+    process.platform === "win32"
+      ? (process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";")
+      : [];
   const probe = (cmd: string): boolean => {
     for (const d of dirs) {
       if (existsSync(join(d, cmd))) return true;
