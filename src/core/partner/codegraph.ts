@@ -12,10 +12,11 @@
  * from config. No deep filesystem walk.
  */
 
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import type { CheckResult } from "../types.ts";
+import { isDir } from "../fs-utils.ts";
 import { assessGraphHealth, summarizeGraphHealth } from "./codegraph-health.ts";
 
 const CODE_MANIFESTS: ReadonlyArray<string> = [
@@ -31,14 +32,6 @@ const CODE_MANIFESTS: ReadonlyArray<string> = [
 ];
 
 const DEFAULT_LIMIT = 50;
-
-function isDir(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Heuristic check: does `dir` look like a code project root?

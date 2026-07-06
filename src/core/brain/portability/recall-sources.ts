@@ -13,10 +13,11 @@
  * Standalone module (no import of config.ts), same as `profiles.ts`.
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { isDir as isDirectory } from "../../fs-utils.ts";
 
 export interface RecallSource {
   readonly alias: string;
@@ -35,14 +36,6 @@ interface SourcesFile {
 /** Path of the recall-sources registry that accompanies a config file. */
 export function recallSourcesPath(configPath: string): string {
   return join(dirname(configPath), "recall-sources.json");
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 function loadRegistry(
