@@ -26,6 +26,7 @@ import {
   type GenerationReportFilter,
   type GenerationUsage,
 } from "../../core/brain/generation-reports.ts";
+import { isCanonicalUtcTimestamp } from "../../core/brain/continuity/store.ts";
 import type { ContinuitySourceRef } from "../../core/brain/continuity/types.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
@@ -55,6 +56,19 @@ function recordAction(ctx: ServerContext, args: Record<string, unknown>): Record
   const ref = requiredStringArg(TOOL, args, "ref");
   const agent = requiredStringArg(TOOL, args, "agent");
   const prompt = requiredStringArg(TOOL, args, "prompt");
+
+  // Validate `created_at` here rather than relying on the store guard:
+  // `emitGenerationReport` is fail-open (a throwing build returns null),
+  // so a malformed timestamp would silently report `recorded: false`
+  // instead of the INVALID_PARAMS the caller needs.
+  const createdAt = optionalStringArg(TOOL, args, "created_at");
+  if (createdAt !== undefined && !isCanonicalUtcTimestamp(createdAt)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${TOOL}: created_at must be a canonical UTC ISO-8601 timestamp ` +
+        `(e.g. 2026-07-06T15:00:00Z or 2026-07-06T15:00:00.000Z)`,
+    );
+  }
 
   // Opt-in: per-call enable wins, else the config gate. Off => nothing written.
   const enabled =

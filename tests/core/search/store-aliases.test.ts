@@ -53,8 +53,8 @@ function targetDocId(store: Store, sourceId: number): number | null {
   return row?.target_document_id ?? null;
 }
 
-test("schema version is 7", () => {
-  expect(LATEST_SCHEMA_VERSION).toBe(7);
+test("schema version is 8", () => {
+  expect(LATEST_SCHEMA_VERSION).toBe(8);
 });
 
 test("normalizeAlias lower-cases, trims, and NFC-normalises", () => {
@@ -186,6 +186,39 @@ describe("resolveAliasTargets", () => {
         n: number;
       } | null;
       expect(count?.n).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe("resolvedDocLinkPairs basename resolution (v8)", () => {
+  test("exact top-level path wins over a nested basename; unique nested resolves; ambiguous nested is dropped", async () => {
+    const store = await Store.open(config, { mode: "write" });
+    try {
+      // Top-level `alpha.md` and nested `notes/alpha.md` both exist: the
+      // exact `<target>.md` branch must pick the top-level doc, not treat
+      // `alpha` as an ambiguous basename.
+      const topAlpha = doc(store, "alpha.md");
+      doc(store, "notes/alpha.md");
+      // Unique nested basename.
+      const beta = doc(store, "notes/beta.md");
+      // Ambiguous nested basename: two `.../gamma.md`.
+      doc(store, "x/gamma.md");
+      doc(store, "y/gamma.md");
+
+      const sAlpha = doc(store, "src/s-alpha.md");
+      const sBeta = doc(store, "src/s-beta.md");
+      const sGamma = doc(store, "src/s-gamma.md");
+      link(store, sAlpha, "alpha");
+      link(store, sBeta, "beta");
+      link(store, sGamma, "gamma");
+
+      const pairs = store.resolvedDocLinkPairs();
+      const bySource = new Map(pairs.map((p) => [p.source, p.target]));
+      expect(bySource.get(sAlpha)).toBe(topAlpha); // exact top-level wins
+      expect(bySource.get(sBeta)).toBe(beta); // unique nested resolves
+      expect(bySource.has(sGamma)).toBe(false); // ambiguous nested dropped
     } finally {
       await store.close();
     }

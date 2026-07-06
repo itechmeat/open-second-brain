@@ -201,18 +201,22 @@ function addStructuredReasons(
 }
 
 /**
- * Open the index for reading, self-healing a stale or absent index. After a
- * plugin upgrade the on-disk index can be a different schema version
- * (`SCHEMA_MISMATCH`) or not yet built (`INDEX_MISSING`); rather than forcing
- * the user to run `o2b search reindex` / `o2b search index`, rebuild once and
- * retry. `reindexVault` is imported lazily so the hot path never pulls in the
- * indexer and there is no module cycle.
+ * Open the index for reading, self-healing a stale, absent, or unreadable
+ * index. After a plugin upgrade the on-disk index can be a different schema
+ * version (`SCHEMA_MISMATCH`), not yet built (`INDEX_MISSING`), or corrupt
+ * / truncated / non-OSB at the index path (`INDEX_UNREADABLE`); rather than
+ * forcing the user to run `o2b search reindex` / `o2b search index`, rebuild
+ * once and retry. `reindexVault` is imported lazily so the hot path never
+ * pulls in the indexer and there is no module cycle.
  */
 async function openReadOrSelfHeal(config: ResolvedSearchConfig): Promise<Store> {
   try {
     return await Store.open(config, { mode: "read" });
   } catch (e) {
-    if (e instanceof SearchError && (e.code === "INDEX_MISSING" || e.code === "SCHEMA_MISMATCH")) {
+    if (
+      e instanceof SearchError &&
+      (e.code === "INDEX_MISSING" || e.code === "SCHEMA_MISMATCH" || e.code === "INDEX_UNREADABLE")
+    ) {
       try {
         const { reindexVault } = await import("./indexer.ts");
         await reindexVault(config);
@@ -1150,11 +1154,16 @@ function toSearchCard(result: BrainSearchResult): SearchCard {
   });
 }
 
-function cardSnippet(content: string): string {
+export function cardSnippet(content: string): string {
   const collapsed = content.replace(/\s+/g, " ").trim();
-  return collapsed.length <= CARD_SNIPPET_CHARS
+  // Truncate on code points, not UTF-16 units: a raw `.slice` can cut an
+  // astral character (emoji, rare CJK) mid-surrogate-pair, shipping a lone
+  // surrogate that renders as U+FFFD. Spreading into an array iterates by
+  // code point, so the cap never splits a character.
+  const points = [...collapsed];
+  return points.length <= CARD_SNIPPET_CHARS
     ? collapsed
-    : `${collapsed.slice(0, CARD_SNIPPET_CHARS)}...`;
+    : `${points.slice(0, CARD_SNIPPET_CHARS).join("")}...`;
 }
 
 /**

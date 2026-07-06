@@ -34,21 +34,50 @@ export function deriveTitleFromContent(markdown: string): string | null {
 }
 
 /**
- * Wrap exact whole-token occurrences of any `known` title/alias in a
- * wikilink. Text inside existing wikilinks or inline code is left
- * untouched, so the function is idempotent. Returns the input unchanged
- * when `known` is empty.
+ * One known title/alias, prepared once: the raw form (for per-page
+ * self-link exclusion, which matches on the exact string the caller
+ * supplied) and its regex-escaped, trimmed form (for the alternation).
  */
-export function linkExactMentions(body: string, known: ReadonlyArray<string>): string {
-  const phrases = known
-    .map((k) => k.trim())
-    .filter((k) => k.length > 0)
+interface PreparedPhrase {
+  readonly raw: string;
+  readonly escaped: string;
+}
+
+/**
+ * The full known title/alias set, trimmed / dropped-if-empty / sorted
+ * longest-first (lexicographic tie-break) / regex-escaped ONCE. The heal
+ * runner shares this across every page instead of re-sorting and
+ * re-escaping K phrases per page (the dominant per-page cost), then
+ * excludes each page's own few terms via {@link linkExactMentionsPrepared}.
+ */
+export interface PreparedHealPhrases {
+  readonly entries: ReadonlyArray<PreparedPhrase>;
+}
+
+/** Build the shared, sorted, escaped phrase set. Order-preserving under
+ * later per-page filtering, so output stays identical to sorting the
+ * already-filtered list. */
+export function prepareHealPhrases(known: ReadonlyArray<string>): PreparedHealPhrases {
+  const entries = known
+    .map((raw) => ({ raw, trimmed: raw.trim() }))
+    .filter((e) => e.trimmed.length > 0)
     // Longest first so a multi-word title wins over a contained shorter
     // one at the same position; lexicographic tie-break for determinism.
-    .toSorted((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
-  if (phrases.length === 0) return body;
+    .toSorted(
+      (a, b) =>
+        b.trimmed.length - a.trimmed.length ||
+        (a.trimmed < b.trimmed ? -1 : a.trimmed > b.trimmed ? 1 : 0),
+    )
+    .map((e) => Object.freeze({ raw: e.raw, escaped: escapeRegex(e.trimmed) }));
+  return Object.freeze({ entries: Object.freeze(entries) });
+}
 
-  const alternation = phrases.map(escapeRegex).join("|");
+/** Compile the alternation from the ordered escaped forms and link every
+ * whole-token match outside protected spans. Shared core of both public
+ * entry points. */
+function applyPhrases(body: string, escaped: ReadonlyArray<string>): string {
+  if (escaped.length === 0) return body;
+  const alternation = escaped.join("|");
   // Whole-token boundaries via Unicode letter/number lookarounds so the
   // match is language-agnostic (works for any script).
   const linkRe = new RegExp(`(?<![\\p{L}\\p{N}])(?:${alternation})(?![\\p{L}\\p{N}])`, "gu");
@@ -60,6 +89,38 @@ export function linkExactMentions(body: string, known: ReadonlyArray<string>): s
     parts[i] = parts[i]!.replace(linkRe, (match) => `[[${match}]]`);
   }
   return parts.join("");
+}
+
+/**
+ * Wrap exact whole-token occurrences of any `known` title/alias in a
+ * wikilink. Text inside existing wikilinks or inline code is left
+ * untouched, so the function is idempotent. Returns the input unchanged
+ * when `known` is empty.
+ */
+export function linkExactMentions(body: string, known: ReadonlyArray<string>): string {
+  return applyPhrases(
+    body,
+    prepareHealPhrases(known).entries.map((e) => e.escaped),
+  );
+}
+
+/**
+ * Prepared-set variant of {@link linkExactMentions}: link every phrase in
+ * `prepared` whose raw form is NOT in `exclude` (the page's own titles /
+ * aliases). Filtering the pre-sorted set preserves order, so the
+ * alternation - and therefore the output - is byte-identical to calling
+ * `linkExactMentions` with the pre-excluded list.
+ */
+export function linkExactMentionsPrepared(
+  body: string,
+  prepared: PreparedHealPhrases,
+  exclude: ReadonlySet<string>,
+): string {
+  const escaped: string[] = [];
+  for (const entry of prepared.entries) {
+    if (!exclude.has(entry.raw)) escaped.push(entry.escaped);
+  }
+  return applyPhrases(body, escaped);
 }
 
 /** A page view the heal planner reads. */
@@ -87,6 +148,27 @@ export function planHealEnrichment(
   page: HealPageInput,
   knownTitlesAndAliases: ReadonlyArray<string>,
 ): HealPlan {
+  return finishPlan(page, linkExactMentions(page.body, knownTitlesAndAliases));
+}
+
+/**
+ * Prepared-set variant of {@link planHealEnrichment} for the heal runner:
+ * links against the shared, pre-sorted phrase set minus this page's own
+ * titles/aliases. Output is byte-identical to
+ * `planHealEnrichment(page, [...known].filter((k) => !exclude.has(k)))`,
+ * but skips re-sorting and re-escaping the whole phrase set per page.
+ */
+export function planHealEnrichmentPrepared(
+  page: HealPageInput,
+  prepared: PreparedHealPhrases,
+  exclude: ReadonlySet<string>,
+): HealPlan {
+  return finishPlan(page, linkExactMentionsPrepared(page.body, prepared, exclude));
+}
+
+/** Shared tail: derive a missing title from the first H1 and package the
+ * (possibly) relinked body into a plan. */
+function finishPlan(page: HealPageInput, linked: string): HealPlan {
   const existingTitle = page.frontmatter["title"];
   const hasTitle = typeof existingTitle === "string" && existingTitle.trim().length > 0;
 
@@ -96,7 +178,6 @@ export function planHealEnrichment(
     if (derived !== null) title = derived;
   }
 
-  const linked = linkExactMentions(page.body, knownTitlesAndAliases);
   const body = linked !== page.body ? linked : undefined;
 
   return {

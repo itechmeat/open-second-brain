@@ -33,6 +33,22 @@ test("shortestUniqueSuffix grows until the suffix is unambiguous", () => {
   expect(shortestUniqueSuffix("Brain/archive/beta", PAGES)).toBe("archive/beta");
 });
 
+test("shortestUniqueSuffix: memoized index stays correct across repeated calls and a 3-way basename clash", () => {
+  const pages = [
+    "a/x/beta",
+    "b/y/beta",
+    "c/z/beta", // three pages share basename `beta`; each needs 2 segments
+    "solo/gamma",
+  ];
+  // Repeated calls reuse the memoized suffix index built from `pages`.
+  expect(shortestUniqueSuffix("a/x/beta", pages)).toBe("x/beta");
+  expect(shortestUniqueSuffix("b/y/beta", pages)).toBe("y/beta");
+  expect(shortestUniqueSuffix("a/x/beta", pages)).toBe("x/beta"); // no corruption on reuse
+  expect(shortestUniqueSuffix("solo/gamma", pages)).toBe("gamma");
+  // A fresh array with identical content rebuilds the index and agrees.
+  expect(shortestUniqueSuffix("c/z/beta", [...pages])).toBe("z/beta");
+});
+
 // ── formatWikilinkBody ──────────────────────────────────────────────────────
 
 test("full mode rewrites a unique basename to its full key path", () => {

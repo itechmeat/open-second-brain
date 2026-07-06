@@ -39,6 +39,58 @@ export interface ContinuityPaginationOptions extends ContinuityRecordFilter {
 const CONTINUITY_REL = `${BRAIN_LOG_REL}/continuity`;
 const CURSOR_PREFIX = "offset:";
 
+/**
+ * Canonical UTC ISO-8601 shape: `YYYY-MM-DDTHH:MM:SS[.sss]Z`. A trailing
+ * `Z` is mandatory — a numeric offset (`+03:00`) is rejected so every
+ * stored `createdAt` sorts and filters lexically against its siblings
+ * (readers compare the strings directly) and shards into the correct UTC
+ * month. Fractional seconds are optional (0–3 digits) to accept both the
+ * second-precision and `toISOString()` millisecond forms already on disk.
+ */
+const CANONICAL_UTC_TIMESTAMP_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?Z$/;
+
+/**
+ * True when `value` is a canonical UTC timestamp with a real calendar
+ * date/time. The regex enforces the `…Z` shape; the round-trip check
+ * rejects out-of-range fields that `Date` silently rolls over (e.g.
+ * `2026-02-30` → Mar 2, `2026-13-…` → NaN), so `2026-13-01T00:00:00Z`
+ * and `2026-02-30T00:00:00Z` are both caught.
+ */
+export function isCanonicalUtcTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = CANONICAL_UTC_TIMESTAMP_RE.exec(value);
+  if (match === null) return false;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return false;
+  const date = new Date(ms);
+  return (
+    date.getUTCFullYear() === Number(match[1]) &&
+    date.getUTCMonth() + 1 === Number(match[2]) &&
+    date.getUTCDate() === Number(match[3]) &&
+    date.getUTCHours() === Number(match[4]) &&
+    date.getUTCMinutes() === Number(match[5]) &&
+    date.getUTCSeconds() === Number(match[6])
+  );
+}
+
+/**
+ * Guard every record's `createdAt` at the store boundary. Throws on any
+ * non-canonical value so a malformed timestamp can never reach disk as a
+ * junk shard (`2026-13.jsonl`) or a local-time record that mis-sorts
+ * against the fleet of `Z` timestamps. All append paths funnel through
+ * `buildRecord`, so this is the single choke point.
+ */
+export function assertCanonicalCreatedAt(createdAt: unknown): string {
+  if (!isCanonicalUtcTimestamp(createdAt)) {
+    throw new Error(
+      `invalid continuity createdAt: expected a canonical UTC ISO-8601 timestamp ` +
+        `(YYYY-MM-DDTHH:MM:SS[.sss]Z with a real calendar date), got ${JSON.stringify(createdAt)}`,
+    );
+  }
+  return createdAt;
+}
+
 export function continuityLogPath(vault: string, month: string): string {
   if (!/^\d{4}-\d{2}$/.test(month)) throw new Error(`invalid continuity month: ${month}`);
   return ensureInsideVault(join(vault, CONTINUITY_REL, `${month}.jsonl`), vault);
@@ -130,7 +182,7 @@ export function listContinuityRecords(
   vault: string,
   filter: ContinuityRecordFilter = {},
 ): ReadonlyArray<ContinuityRecord> {
-  return Object.freeze(readAllRecords(vault).filter((record) => matches(record, filter)));
+  return Object.freeze(readAllRecords(vault, filter).filter((record) => matches(record, filter)));
 }
 
 export function paginateContinuityRecords(
@@ -155,6 +207,7 @@ function buildRecord(
         readonly payload: Readonly<Record<string, unknown>>;
       },
 ): ContinuityRecord {
+  assertCanonicalCreatedAt(input.createdAt);
   const payloadResult = safeContinuityPayload(input.payload ?? {});
   const sourceRefs = Object.freeze([...(input.sourceRefs ?? [])]);
   // `schema` stays OUT of recordId(): identical records must keep
@@ -187,12 +240,36 @@ function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord
   return record;
 }
 
-function readAllRecords(vault: string): ContinuityRecord[] {
+/**
+ * Read every stored record, optionally skipping whole month shards that
+ * a `since`/`until` filter proves cannot contribute a matching record.
+ *
+ * Shards are named `YYYY-MM.jsonl`, so the shard month is a 7-char prefix
+ * of every record's `createdAt` inside it. A shard whose month sorts
+ * strictly before `since`'s month can only hold records with
+ * `createdAt < since` (rejected by {@link matches}); one whose month sorts
+ * strictly after `until`'s month can only hold `createdAt > until`. Both
+ * are skipped without opening the file. The boundary months (equal to
+ * `since`/`until`'s month) are still read in full, so the returned set is
+ * byte-identical to reading everything and letting `matches` filter -
+ * this only avoids reading shards that would contribute nothing. Grows
+ * the read cost with the queried window, not the whole log history.
+ */
+function readAllRecords(vault: string, filter: ContinuityRecordFilter = {}): ContinuityRecord[] {
   const dir = ensureInsideVault(join(vault, CONTINUITY_REL), vault);
   if (!existsSync(dir)) return [];
+  const sinceMonth = filter.since ? filter.since.slice(0, 7) : undefined;
+  const untilMonth = filter.until ? filter.until.slice(0, 7) : undefined;
   const records: ContinuityRecord[] = [];
   for (const name of readdirSync(dir).toSorted()) {
     if (!name.endsWith(".jsonl")) continue;
+    const month = name.slice(0, -".jsonl".length);
+    // Only a canonical YYYY-MM shard has a month prefix we can range-skip
+    // on; any other name is read in full to stay byte-identical.
+    if (/^\d{4}-\d{2}$/.test(month)) {
+      if (sinceMonth !== undefined && month < sinceMonth) continue;
+      if (untilMonth !== undefined && month > untilMonth) continue;
+    }
     const path = ensureInsideVault(join(dir, name), vault);
     let st;
     try {

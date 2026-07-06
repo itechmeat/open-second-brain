@@ -40,17 +40,29 @@ const DEFAULTS = Object.freeze({ nameWeight: 3, tagWeight: 2, k1: 1.2, b: 0.75 }
  * is provably unchanged, and the only consumer of scoreDescriptors today
  * is the skill-attach path. The range covers Han Unified Ideographs only;
  * kana / Hangul / CJK extensions are not bigram-split.
+ *
+ * Bigrams are extracted only from each maximal contiguous Han span within a
+ * token, so a mixed token like "gbrain..." yields the inner Han bigram but
+ * never a cross-script window (e.g. an ASCII+Han pair) that would match
+ * nothing yet inflate term frequency / document length. Scope is thus the
+ * Han run, not the total token length: an embedded 2-char Han run still
+ * emits its bigram.
  */
+const HAN_SPAN = /[一-鿿]+/gu;
+
 export function tokenize(text: string): string[] {
   const out: string[] = [];
   for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
     if (raw.length < 2) continue;
-    // Han bigram pass: a token with a Han character and length > 2 also
-    // emits overlapping 2-char windows so "实现方式" and "的实现方式"
-    // share the bigram "实现".
-    if (/[\u4e00-\u9fff]/.test(raw) && raw.length > 2) {
-      for (let i = 0; i < raw.length - 1; i++) {
-        out.push(raw.slice(i, i + 2));
+    // Han bigram pass: emit overlapping 2-char windows from each maximal Han
+    // span so a spaceless run and a query prefixed run share their inner
+    // bigrams, without crossing into adjacent ASCII.
+    for (const span of raw.match(HAN_SPAN) ?? []) {
+      for (let i = 0; i < span.length - 1; i++) {
+        const bigram = span.slice(i, i + 2);
+        // Skip a bigram equal to the whole token (a standalone 2-char Han
+        // token) so it is not emitted twice.
+        if (bigram !== raw) out.push(bigram);
       }
     }
     out.push(raw);

@@ -224,6 +224,48 @@ function isPrivateOrReservedIPv6(ip: string): boolean {
   return false;
 }
 
+// ----- Bare high-entropy token detector (opt-in via `redactTokens`) ---------
+//
+// Credential tokens passed as bare positional values carry no key=value
+// shape for the assignment passes to latch onto (e.g. an argv like
+// `["mytool", "sk-abc123"]`). Two complementary shapes are scrubbed:
+// well-known vendor-prefixed keys, and long mixed-class runs that look
+// like an API key or hash. Every quantifier is bounded, so the pass stays
+// linear and cannot be driven into catastrophic backtracking.
+
+/**
+ * Vendor-prefixed credential tokens (OpenAI/Stripe `sk-`/`sk_`/`rk_`/`pk_`,
+ * GitHub `ghp_`/`gho_`/…/`github_pat_`, Slack `xox?-`, AWS `AKIA…`, Google
+ * `AIza…`, GitLab `glpat-`). The recognizable prefix is what lets a short
+ * token like `sk-abc123` be caught without a length gate that would also
+ * hit ordinary words.
+ */
+const VENDOR_TOKEN_RE = new RegExp(
+  [
+    "\\b(?:sk|rk|pk)[-_][A-Za-z0-9._-]{3,200}",
+    "\\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{6,255}",
+    "\\bgithub_pat_[A-Za-z0-9_]{6,255}",
+    "\\bxox[baprs]-[A-Za-z0-9-]{6,200}",
+    "\\bAKIA[0-9A-Z]{16}\\b",
+    "\\bAIza[0-9A-Za-z._-]{10,100}",
+    "\\bglpat-[A-Za-z0-9_-]{6,100}",
+  ].join("|"),
+  "g",
+);
+
+/**
+ * A long bare run that mixes letters and digits — the shape of an
+ * unprefixed API key, session id, or hash. Length-gated (≥ 24) so ordinary
+ * words and short ids are never touched, with bounded repetition so the
+ * lookaheads stay linear.
+ */
+const HIGH_ENTROPY_TOKEN_RE =
+  /\b(?=[A-Za-z0-9_-]{24,200}\b)(?=[A-Za-z0-9_-]{0,199}[A-Za-z])(?=[A-Za-z0-9_-]{0,199}\d)[A-Za-z0-9_-]{24,200}\b/g;
+
+function redactBareTokens(text: string): string {
+  return text.replace(VENDOR_TOKEN_RE, PLACEHOLDER).replace(HIGH_ENTROPY_TOKEN_RE, PLACEHOLDER);
+}
+
 function redactInfraTopology(text: string): string {
   let out = text.replace(BASIC_AUTH_URL_RE, (_m, scheme: string) => `${scheme}${PLACEHOLDER}@`);
   out = out.replace(IPV4_PORT_RE, PLACEHOLDER);
@@ -308,6 +350,15 @@ export interface RedactRawOutputOptions {
    * where a bare coordinate is the likeliest topology leak.
    */
   readonly redactInfra?: boolean;
+  /**
+   * When `true`, also scrub bare high-entropy credential tokens that carry
+   * no key=value shape — vendor-prefixed keys (`sk-…`, `ghp_…`, `AKIA…`)
+   * and long mixed letter+digit runs. Off by default (over-redacting prose
+   * is worse than the narrow key/value passes). Enabled on the secret-exec
+   * audit trail, whose long-lived log records a full argv that may carry a
+   * foreign credential passed as a positional argument.
+   */
+  readonly redactTokens?: boolean;
 }
 
 export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
@@ -361,6 +412,8 @@ export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {})
   // Infra-topology pass last: it runs on values the key/value passes
   // already left untouched (bare coordinates), and any value they redacted
   // is now a placeholder with no IP/host shape left to match.
+  if (opts.redactTokens) out = redactBareTokens(out);
+
   if (opts.redactInfra) out = redactInfraTopology(out);
 
   return out;

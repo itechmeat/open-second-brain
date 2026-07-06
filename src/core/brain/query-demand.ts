@@ -224,13 +224,21 @@ export function readQueryDemand(
 ): ReadonlyArray<QueryDemandRecord> {
   const path = queryDemandLogPath(vault);
   if (!existsSync(path)) return Object.freeze([]);
+  // Normalize the filter bounds to the same millisecond-precision form the
+  // stored `ts` already uses (records are normalized at write time). The
+  // comparison below is lexical, so a second-precision `--since
+  // 2026-07-01T00:00:00Z` would otherwise drop every ms-precision record in
+  // `[00:00:00.000Z, 00:00:00.999Z]` — `.` sorts before `Z`. Running the
+  // bounds through the same normalizer keeps both sides at one precision.
+  const since = filter.since !== undefined ? normalizeDemandTimestamp(filter.since) : undefined;
+  const until = filter.until !== undefined ? normalizeDemandTimestamp(filter.until) : undefined;
   const out: QueryDemandRecord[] = [];
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (!line.trim()) continue;
     const record = coerceRecord(line);
     if (record === null) continue;
-    if (filter.since !== undefined && record.ts < filter.since) continue;
-    if (filter.until !== undefined && record.ts > filter.until) continue;
+    if (since !== undefined && record.ts < since) continue;
+    if (until !== undefined && record.ts > until) continue;
     out.push(record);
   }
   out.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));

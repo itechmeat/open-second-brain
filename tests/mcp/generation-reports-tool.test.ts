@@ -140,6 +140,32 @@ describe("brain_generation_reports tool", () => {
     ).toEqual([report["id"]]);
   });
 
+  test("rejects a malformed created_at with INVALID_PARAMS", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const bad = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 11,
+      method: "tools/call",
+      params: {
+        name: "brain_generation_reports",
+        arguments: {
+          action: "record",
+          handoff_kind: "write_session",
+          ref: "ws-bad",
+          agent: "tester",
+          enable: true,
+          prompt: "do the thing",
+          created_at: "2026-13-01T00:00:00Z",
+        },
+      },
+    })) as { error?: { message?: string }; result?: { isError?: boolean } };
+    expect(bad.error ?? bad.result?.isError).toBeTruthy();
+    // Nothing was written — the invalid timestamp is rejected before the emit.
+    expect(listGenerationReports(vault)).toHaveLength(0);
+  });
+
   test("rejects an unknown action and an unknown handoff_kind", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

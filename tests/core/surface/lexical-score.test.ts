@@ -39,6 +39,19 @@ test("a 2-char CJK token is kept whole without extra bigrams", () => {
   expect(tokenize("实现")).toEqual(["实现"]);
 });
 
+test("bigrams come only from the Han span of a mixed token, not across the boundary", () => {
+  // A spaceless mixed token like "gbrain实现" should share the Han bigram
+  // "实现" with a query, but must NOT emit the cross-script window "n实"
+  // (inert noise that inflates term frequency / document length).
+  expect(tokenize("gbrain实现")).toEqual(["实现", "gbrain实现"]);
+});
+
+test("a 2-char Han run embedded in a longer mixed token still emits its bigram", () => {
+  // Gated by the Han run, not the total token length: "ab实现cd" yields "实现"
+  // even though the token as a whole is > 2 chars of mostly ASCII.
+  expect(tokenize("ab实现cd")).toEqual(["实现", "ab实现cd"]);
+});
+
 test("ASCII tokenization is unaffected by the CJK bigram pass", () => {
   expect(tokenize("Hello World")).toEqual(["hello", "world"]);
 });

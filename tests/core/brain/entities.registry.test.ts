@@ -337,4 +337,44 @@ describe("buildEntityIndex", () => {
     const index = buildEntityIndex(vault);
     expect(index.entities).toHaveLength(1);
   });
+
+  test("memoizes: an unchanged registry returns the same index object", () => {
+    seedAda();
+    const first = buildEntityIndex(vault);
+    const second = buildEntityIndex(vault);
+    expect(second).toBe(first); // same reference: no rebuild when nothing changed
+  });
+
+  test("invalidates the memo when a new entity is written", () => {
+    seedAda();
+    const before = buildEntityIndex(vault);
+    expect(before.byKey.has("projects:open second brain")).toBe(false);
+    upsertEntity(vault, {
+      category: "projects",
+      name: "Open Second Brain",
+      agent: "claude-dev-agent",
+      now: LATER,
+    });
+    const after = buildEntityIndex(vault);
+    expect(after).not.toBe(before); // rebuilt after the write
+    expect(after.byKey.get("projects:open second brain")?.id).toBe(
+      "ent-projects-open-second-brain",
+    );
+  });
+
+  test("invalidates the memo when an entity file is edited in place", () => {
+    seedAda();
+    expect(buildEntityIndex(vault).byAlias.has("newnym")).toBe(false);
+    // Idempotent upsert rewrites the SAME file (same path) with an added
+    // alias; the memo must notice via mtime/size and not serve the stale
+    // index despite the unchanged file set.
+    upsertEntity(vault, {
+      category: "people",
+      name: "Ada",
+      aliases: ["Ада", "S.E.", "Newnym"],
+      agent: "claude-dev-agent",
+      now: LATER,
+    });
+    expect(buildEntityIndex(vault).byAlias.get("newnym")?.id).toBe("ent-people-ada");
+  });
 });

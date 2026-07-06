@@ -9,6 +9,7 @@ import {
   appendContinuityRecords,
   appendContinuitySourceInvalidation,
   continuityLogPath,
+  isCanonicalUtcTimestamp,
   listContinuityRecords,
   paginateContinuityRecords,
 } from "../../../src/core/brain/continuity/store.ts";
@@ -123,6 +124,33 @@ describe("continuity store", () => {
     });
     expect(records.map((record) => record.kind)).toEqual(["session_turn", "source_invalidation"]);
   });
+
+  test("since/until shard-skip returns the same records as an unfiltered window", () => {
+    const months = ["2026-03", "2026-05", "2026-07", "2026-09"];
+    for (const month of months) {
+      appendContinuityRecord(vault, {
+        kind: "context_receipt",
+        createdAt: `${month}-15T12:00:00Z`,
+        sourceRefs: [{ id: `src-${month}` }],
+        payload: { query: month },
+      });
+    }
+
+    // A bounded window skips the 2026-03 and 2026-09 shards but returns
+    // exactly the in-window records, in ascending createdAt order.
+    const windowed = listContinuityRecords(vault, {
+      since: "2026-05-01T00:00:00Z",
+      until: "2026-07-31T23:59:59Z",
+    });
+    expect(windowed.map((r) => r.payload["query"])).toEqual(["2026-05", "2026-07"]);
+
+    // Boundary months are read in full: since exactly on a record's month.
+    const openEnded = listContinuityRecords(vault, { since: "2026-05-15T12:00:00Z" });
+    expect(openEnded.map((r) => r.payload["query"])).toEqual(["2026-05", "2026-07", "2026-09"]);
+
+    // No filter still reads every shard.
+    expect(listContinuityRecords(vault)).toHaveLength(4);
+  });
 });
 
 describe("continuity batch append", () => {
@@ -210,5 +238,55 @@ describe("continuity batch append", () => {
   test("rejects an empty batch without writing", () => {
     expect(() => appendContinuityRecords(vault, [])).toThrow();
     expect(existsSync(continuityLogPath(vault, "2026-06"))).toBe(false);
+  });
+});
+
+describe("createdAt validation at the store boundary", () => {
+  const ACCEPT: string[] = [
+    "2026-05-31T12:00:00Z", // second precision
+    "2026-06-15T10:00:00.000Z", // millisecond precision
+    "2026-06-15T10:00:00.5Z", // sub-second, ≤3 digits
+    "2024-02-29T00:00:00Z", // real leap day
+    "2026-12-31T23:59:59.999Z",
+  ];
+  const REJECT: Array<[string, unknown]> = [
+    ["month out of range shards into junk", "2026-13-01T00:00:00Z"],
+    ["day out of range for the month", "2026-02-30T00:00:00Z"],
+    ["Feb 29 on a non-leap year", "2026-02-29T00:00:00Z"],
+    ["numeric offset instead of Z mis-sorts", "2026-07-06T15:00:00+03:00"],
+    ["no zone designator", "2026-07-06T15:00:00"],
+    ["date only", "2026-07-06"],
+    ["month prefix only", "2026-07"],
+    ["free text", "not-a-timestamp"],
+    ["empty string", ""],
+    ["lowercase z", "2026-07-06T15:00:00z"],
+    ["non-string number", 1_783_350_000_000],
+    ["null", null],
+  ];
+
+  test.each(ACCEPT)("accepts %s", (value) => {
+    expect(isCanonicalUtcTimestamp(value)).toBe(true);
+    const record = appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: value,
+      sourceRefs: [{ id: "ok" }],
+      payload: { snippet: "valid" },
+    });
+    expect(record.createdAt).toBe(value);
+  });
+
+  test.each(REJECT)("rejects %s", (_label, value) => {
+    expect(isCanonicalUtcTimestamp(value)).toBe(false);
+    expect(() =>
+      appendContinuityRecord(vault, {
+        kind: "session_turn",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        createdAt: value as any,
+        sourceRefs: [{ id: "bad" }],
+        payload: { snippet: "invalid" },
+      }),
+    ).toThrow(/invalid continuity createdAt/);
+    // Nothing was written: no shard exists for a rejected timestamp.
+    expect(listContinuityRecords(vault, {})).toHaveLength(0);
   });
 });
