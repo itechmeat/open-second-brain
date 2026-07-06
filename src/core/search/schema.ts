@@ -16,7 +16,21 @@ import { SearchError } from "./types.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 7;
+export const LATEST_SCHEMA_VERSION = 8;
+
+/**
+ * The wikilink-resolution basename of a stored document path: the final
+ * `/`-segment with a trailing `.md` stripped. `notes/alpha.md` → `alpha`,
+ * top-level `alpha.md` → `alpha`. Persisted in `documents.basename` so
+ * dangling-link resolution can equality-join an index instead of
+ * `SUBSTR`-scanning every path. Must stay in lockstep with the resolution
+ * ladder in `store.ts` (`<target>.md` exact match, then basename suffix).
+ */
+export function documentBasename(path: string): string {
+  const slash = path.lastIndexOf("/");
+  const name = slash >= 0 ? path.slice(slash + 1) : path;
+  return name.endsWith(".md") ? name.slice(0, -".md".length) : name;
+}
 
 const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS documents (
@@ -323,6 +337,34 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
         );
         CREATE INDEX IF NOT EXISTS idx_doc_aliases_alias ON doc_aliases(alias);
       `);
+    },
+  },
+  {
+    // v8 (hot-path-performance) - a persisted `documents.basename` column
+    // (final path segment, `.md` stripped) with an index, so
+    // dangling-wikilink resolution (`resolvedDocLinkPairs`,
+    // `resolveAliasTargets`) can equality-join `idx_documents_basename`
+    // instead of `SUBSTR`-scanning every `documents.path` twice per
+    // unresolved link. The column is backfilled from the existing paths
+    // in-place, so a migrated (not-yet-reindexed) index resolves links
+    // identically at once; a full reindex repopulates it via
+    // `upsertDocument`.
+    version: 8,
+    up(db) {
+      const docCols = db.query<{ name: string }, []>("PRAGMA table_info(documents)").all();
+      if (!docCols.some((c) => c.name === "basename")) {
+        db.exec("ALTER TABLE documents ADD COLUMN basename TEXT");
+      }
+      db.exec("CREATE INDEX IF NOT EXISTS idx_documents_basename ON documents(basename)");
+      const rows = db
+        .query<{ id: number; path: string }, []>(
+          "SELECT id, path FROM documents WHERE basename IS NULL",
+        )
+        .all();
+      const update = db.prepare<undefined, [string, number]>(
+        "UPDATE documents SET basename = ? WHERE id = ?",
+      );
+      for (const row of rows) update.run(documentBasename(row.path), row.id);
     },
   },
 ]);

@@ -25,6 +25,7 @@ import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 import {
   applyMigrations,
+  documentBasename,
   dropVecTable,
   ensureVecTable,
   LATEST_SCHEMA_VERSION,
@@ -613,11 +614,23 @@ export class Store {
     const row = this.db
       .query<
         { id: number },
-        [string, string | null, string, number, number, string | null, string, string, string]
+        [
+          string,
+          string,
+          string | null,
+          string,
+          number,
+          number,
+          string | null,
+          string,
+          string,
+          string,
+        ]
       >(
-        "INSERT INTO documents(path, title, content_hash, mtime, size, page_type, created_at, updated_at, indexed_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "INSERT INTO documents(path, basename, title, content_hash, mtime, size, page_type, created_at, updated_at, indexed_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
           "ON CONFLICT(path) DO UPDATE SET " +
+          "  basename = excluded.basename, " +
           "  title = excluded.title, " +
           "  content_hash = excluded.content_hash, " +
           "  mtime = excluded.mtime, " +
@@ -629,6 +642,7 @@ export class Store {
       )
       .get(
         doc.path,
+        documentBasename(doc.path),
         doc.title,
         doc.contentHash,
         doc.mtime,
@@ -1068,9 +1082,12 @@ export class Store {
         "JOIN documents d ON d.id = a.document_id " +
         "WHERE a.alias = ? ORDER BY d.path ASC LIMIT 1",
     );
-    const basenameExists = this.db.prepare<{ id: number }, [string, string, string]>(
-      "SELECT id FROM documents WHERE path = ? " +
-        "OR SUBSTR(path, -(LENGTH(?) + 4)) = '/' || ? || '.md' LIMIT 1",
+    // A real document basename owns the target (top-level `target.md` or
+    // any nested `.../target.md`): both collapse to `basename = target`,
+    // an index lookup instead of the old `path = target.md OR SUBSTR(...)`
+    // full scan.
+    const basenameExists = this.db.prepare<{ id: number }, [string]>(
+      "SELECT id FROM documents WHERE basename = ? LIMIT 1",
     );
     const update = this.db.prepare<undefined, [number, string]>(
       "UPDATE links SET target_document_id = ? " +
@@ -1084,7 +1101,7 @@ export class Store {
         const key = normalizeAlias(row.target_path);
         if (key.length === 0) continue;
         // Skip targets a real document basename owns.
-        if (basenameExists.get(`${row.target_path}.md`, row.target_path, row.target_path)) {
+        if (basenameExists.get(row.target_path)) {
           continue;
         }
         const owner = aliasOwner.get(key);
@@ -1111,14 +1128,21 @@ export class Store {
   resolvedDocLinkPairs(): Array<{ readonly source: number; readonly target: number }> {
     const rows = this.db
       .query<{ source: number; target: number | null }, []>(
+        // Resolution ladder: materialized id, then `<target>.md` exact
+        // (path is UNIQUE + indexed), then an UNAMBIGUOUS nested-basename
+        // match. The basename branch equality-joins idx_documents_basename
+        // and mirrors the old `SUBSTR(path) = '/'||target||'.md'` scan
+        // exactly: a `/`-aligned basename suffix is precisely
+        // `basename = target AND path is nested` (top-level `target.md`
+        // has no leading slash and is owned by the exact branch above).
         "SELECT DISTINCT l.source_document_id AS source, " +
           "  COALESCE(" +
           "    l.target_document_id, " +
           "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
           "    (SELECT d.id FROM documents d " +
-          "       WHERE SUBSTR(d.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md' " +
+          "       WHERE d.basename = l.target_path AND instr(d.path, '/') > 0 " +
           "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
-          "                WHERE SUBSTR(d2.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md'))" +
+          "                WHERE d2.basename = l.target_path AND instr(d2.path, '/') > 0))" +
           "  ) AS target " +
           "FROM links l WHERE l.target_path IS NOT NULL",
       )
