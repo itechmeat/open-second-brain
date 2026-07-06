@@ -19,6 +19,8 @@ import {
   search,
   SearchError,
   serializeEvidencePack,
+  serializeSearchCard,
+  serializeIndexStatus,
 } from "../core/search/index.ts";
 import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
@@ -635,21 +637,7 @@ async function toolBrainSearch(
       ...(outcome.evidencePack ? { why_retrieved: r.reasons } : {}),
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
     })),
-    ...(outcome.cards
-      ? {
-          cards: outcome.cards.map((c) => ({
-            path: c.path,
-            title: c.title,
-            score: c.score,
-            snippet: c.snippet,
-            pointer: c.pointer,
-            reasons: c.reasons,
-            document_id: c.documentId,
-            chunk_id: c.chunkId,
-            ...(c.origin !== undefined ? { origin: c.origin } : {}),
-          })),
-        }
-      : {}),
+    ...(outcome.cards ? { cards: outcome.cards.map(serializeSearchCard) } : {}),
     warnings: outcome.warnings,
     total: outcome.total,
     ...(outcome.evidencePack ? { evidence_pack: serializeEvidencePack(outcome.evidencePack) } : {}),
@@ -1232,22 +1220,15 @@ export async function buildSearchStatusBlock(ctx: ServerContext): Promise<Record
     if (!snap.exists) {
       return { exists: false, hint: "run: o2b search index" };
     }
-    return {
-      index_path: snap.indexPath,
-      exists: true,
-      schema_version: snap.schemaVersion,
-      documents: snap.documents,
-      chunks: snap.chunks,
-      embeddings: snap.embeddings,
-      stale_embeddings: snap.staleEmbeddings,
-      embedding_model: snap.embeddingModel,
-      embedding_dimension: snap.embeddingDimension,
-      vec_extension: snap.vecExtension,
-      semantic_enabled: snap.semanticEnabled,
-      embedding_key_present: snap.embeddingKeyPresent,
-      last_indexed_at: snap.lastIndexedAt,
-      last_full_index_at: snap.lastFullIndexAt,
-    };
+    // Token-budget conscious: pick the MCP subset out of the shared
+    // serializer's full field set rather than re-declaring the mapping.
+    const {
+      embedding_signature: _embeddingSignature,
+      estimated_refresh_cost_usd: _estimatedRefreshCostUsd,
+      warnings: _warnings,
+      ...rest
+    } = serializeIndexStatus(snap);
+    return rest;
   } catch (e) {
     return { exists: false, error: e instanceof Error ? e.message : String(e) };
   }

@@ -72,6 +72,7 @@ export {
 } from "./session-focus.ts";
 export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-gate.ts";
 export { buildEvidencePack, serializeEvidencePack, type EvidencePack } from "./evidence-pack.ts";
+export { serializeSearchCard, serializeIndexStatus } from "./serialize.ts";
 export {
   loadProviderRegistry,
   addProviderProfile,

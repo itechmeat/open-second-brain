@@ -50,6 +50,8 @@ import {
   removeRerankProviderProfile,
   getRerankProviderProfile,
   serializeEvidencePack,
+  serializeSearchCard,
+  serializeIndexStatus,
 } from "../core/search/index.ts";
 import type {
   IndexCheckReport,
@@ -656,21 +658,7 @@ function jsonForOutcome(o: SearchOutcome): unknown {
     })),
     warnings: o.warnings,
     total: o.total,
-    ...(o.cards
-      ? {
-          cards: o.cards.map((c) => ({
-            path: c.path,
-            title: c.title,
-            score: c.score,
-            snippet: c.snippet,
-            pointer: c.pointer,
-            reasons: c.reasons,
-            document_id: c.documentId,
-            chunk_id: c.chunkId,
-            ...(c.origin !== undefined ? { origin: c.origin } : {}),
-          })),
-        }
-      : {}),
+    ...(o.cards ? { cards: o.cards.map(serializeSearchCard) } : {}),
     ...(o.evidencePack ? { evidence_pack: serializeEvidencePack(o.evidencePack) } : {}),
   };
 }
@@ -1049,33 +1037,11 @@ async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<number> {
   const cfg = resolveConfig(flags);
   const status = await indexStatus(cfg);
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(jsonForStatus(status)) + "\n");
+    process.stdout.write(JSON.stringify(serializeIndexStatus(status)) + "\n");
     return 0;
   }
   process.stdout.write(renderStatusHuman(status));
   return 0;
-}
-
-function jsonForStatus(s: IndexStatusSnapshot): unknown {
-  return {
-    index_path: s.indexPath,
-    exists: s.exists,
-    schema_version: s.schemaVersion,
-    documents: s.documents,
-    chunks: s.chunks,
-    embeddings: s.embeddings,
-    stale_embeddings: s.staleEmbeddings,
-    embedding_model: s.embeddingModel,
-    embedding_dimension: s.embeddingDimension,
-    embedding_signature: s.embeddingSignature,
-    estimated_refresh_cost_usd: s.estimatedRefreshCostUsd,
-    vec_extension: s.vecExtension,
-    semantic_enabled: s.semanticEnabled,
-    embedding_key_present: s.embeddingKeyPresent,
-    last_indexed_at: s.lastIndexedAt,
-    last_full_index_at: s.lastFullIndexAt,
-    warnings: s.warnings,
-  };
 }
 
 function renderStatusHuman(s: IndexStatusSnapshot): string {
