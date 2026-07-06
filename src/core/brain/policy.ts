@@ -342,6 +342,26 @@ export function resolveSessions(cfg: BrainConfig): ResolvedBrainSessionsConfig {
 }
 
 /**
+ * Factory for the "load + resolve a block, fall back to its defaults on
+ * ANY failure" pattern repeated at every `load*ConfigSafe` below (missing
+ * `_brain.yaml`, malformed YAML, or a validation error all collapse to
+ * the same fallback - these are read surfaces for vaults that may not
+ * have run `brain init` yet, not strict config consumers).
+ */
+function makeSafeLoader<T>(
+  resolveFn: (config: BrainConfig) => T,
+  fallback: T,
+): (vault: string) => T {
+  return (vault: string): T => {
+    try {
+      return resolveFn(loadBrainConfig(vault));
+    } catch {
+      return fallback;
+    }
+  };
+}
+
+/**
  * Load + resolve the `notes:` block, falling back to
  * `BRAIN_NOTES_DEFAULTS` when the config file is missing, malformed,
  * or otherwise unreadable. Same pattern as `loadTemporalConfigSafe`.
@@ -349,13 +369,7 @@ export function resolveSessions(cfg: BrainConfig): ResolvedBrainSessionsConfig {
  * vault that has not been `brain init`-ed still produces a clean
  * "no user folders to read" result.
  */
-export function loadNotesConfigSafe(vault: string): ResolvedBrainNotesConfig {
-  try {
-    return resolveNotes(loadBrainConfig(vault));
-  } catch {
-    return BRAIN_NOTES_DEFAULTS;
-  }
-}
+export const loadNotesConfigSafe = makeSafeLoader(resolveNotes, BRAIN_NOTES_DEFAULTS);
 
 /**
  * Load + resolve the `temporal:` block, falling back to
@@ -364,13 +378,7 @@ export function loadNotesConfigSafe(vault: string): ResolvedBrainNotesConfig {
  * consumer (MCP wrappers, CLI verbs) so a freshly-initialised vault
  * still produces a useful report.
  */
-export function loadTemporalConfigSafe(vault: string): ResolvedBrainTemporalConfig {
-  try {
-    return resolveTemporal(loadBrainConfig(vault));
-  } catch {
-    return BRAIN_TEMPORAL_DEFAULTS;
-  }
-}
+export const loadTemporalConfigSafe = makeSafeLoader(resolveTemporal, BRAIN_TEMPORAL_DEFAULTS);
 
 /**
  * Load + resolve the `guardrails:` block, falling back to
@@ -379,13 +387,7 @@ export function loadTemporalConfigSafe(vault: string): ResolvedBrainTemporalConf
  * context pack) that must work on a vault without a full `brain init`;
  * the opt-in toggles therefore default off rather than throwing.
  */
-export function loadGuardrailsConfigSafe(vault: string): ResolvedBrainGuardrailConfig {
-  try {
-    return resolveGuardrails(loadBrainConfig(vault));
-  } catch {
-    return BRAIN_GUARDRAIL_DEFAULTS;
-  }
-}
+export const loadGuardrailsConfigSafe = makeSafeLoader(resolveGuardrails, BRAIN_GUARDRAIL_DEFAULTS);
 
 /**
  * Load the configured `feedback.default_scope`, or `undefined` when the
@@ -394,13 +396,10 @@ export function loadGuardrailsConfigSafe(vault: string): ResolvedBrainGuardrailC
  * stays scope-less (byte-identical to pre-feature behaviour) instead of
  * throwing when the signal is recorded.
  */
-export function loadFeedbackDefaultScopeSafe(vault: string): string | undefined {
-  try {
-    return loadBrainConfig(vault).feedback?.default_scope;
-  } catch {
-    return undefined;
-  }
-}
+export const loadFeedbackDefaultScopeSafe = makeSafeLoader(
+  (config: BrainConfig) => config.feedback?.default_scope,
+  undefined as string | undefined,
+);
 
 /**
  * Default `_brain.yaml` content. Mirrors §10 of the design doc. Used by
@@ -636,6 +635,12 @@ export function validateBrainConfigDetailed(
   }
   const obj = parsed as Record<string, unknown>;
   const warnings: BrainConfigLoadWarning[] = [];
+  // Populated by every `hasBlock`/`mergeBlock` call below; drives the
+  // forward-compat "unknown top-level field" check at the end of this
+  // function. `schema_version` is seeded directly since its presence is
+  // checked by an inverted `if (!(... in obj))` immediately below, not
+  // through either helper.
+  const knownBlockKeys = new Set<string>(["schema_version"]);
 
   // schema_version is mandatory and must be in the supported set.
   if (!("schema_version" in obj)) {
@@ -667,7 +672,7 @@ export function validateBrainConfigDetailed(
   // writer would later refuse to emit fails fast at load time
   // instead of round-tripping into a state we cannot persist.
   let primaryAgent: string | null = DEFAULT_BRAIN_CONFIG.primary_agent;
-  if ("primary_agent" in obj) {
+  if (hasBlock(obj, "primary_agent", knownBlockKeys)) {
     const v = obj["primary_agent"];
     if (v === null || v === undefined) {
       primaryAgent = null;
@@ -708,6 +713,7 @@ export function validateBrainConfigDetailed(
     obj["dream"],
     DEFAULT_BRAIN_CONFIG.dream as unknown as Readonly<Record<string, number>>,
     source,
+    knownBlockKeys,
   );
   requirePositiveInteger("dream.candidate_threshold", dream.candidate_threshold, source);
   requirePositiveInteger("dream.unconfirmed_window_days", dream.unconfirmed_window_days, source);
@@ -722,6 +728,7 @@ export function validateBrainConfigDetailed(
     obj["retire"],
     DEFAULT_BRAIN_CONFIG.retire as unknown as Readonly<Record<string, number>>,
     source,
+    knownBlockKeys,
   );
   requirePositiveInteger("retire.stale_evidence_days", retire.stale_evidence_days, source);
 
@@ -730,6 +737,7 @@ export function validateBrainConfigDetailed(
     obj["confidence"],
     DEFAULT_BRAIN_CONFIG.confidence as unknown as Readonly<Record<string, number>>,
     source,
+    knownBlockKeys,
   );
   requireNonNegativeInteger("confidence.low_max_applied", confidence.low_max_applied, source);
   requireUnitInterval("confidence.medium_min", confidence.medium_min, source);
@@ -748,6 +756,7 @@ export function validateBrainConfigDetailed(
     obj["snapshots"],
     DEFAULT_BRAIN_CONFIG.snapshots as unknown as Readonly<Record<string, number>>,
     source,
+    knownBlockKeys,
   );
   requirePositiveInteger("snapshots.retention_count", snapshots.retention_count, source);
 
@@ -757,16 +766,9 @@ export function validateBrainConfigDetailed(
   // operators who explicitly removed it; the resolver falls back to
   // `DEFAULT_VAULT_IGNORE_PATHS` in both cases.
   let vault: BrainVaultConfig | undefined;
-  if ("vault" in obj) {
+  if (hasBlock(obj, "vault", knownBlockKeys)) {
     const raw = obj["vault"];
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new BrainConfigError(
-        `block must be a map of keys; got ${describe(raw)}`,
-        "vault",
-        source,
-      );
-    }
-    const rawMap = raw as Record<string, unknown>;
+    const rawMap = requireMapBlock(raw, "vault", source);
     if ("ignore_paths" in rawMap) {
       const list = rawMap["ignore_paths"];
       if (!Array.isArray(list)) {
@@ -831,14 +833,7 @@ export function validateBrainConfigDetailed(
       vault = { ignore_paths: Object.freeze(validated) };
     }
     // Forward-compat: unknown sub-keys under `vault:` → warning.
-    for (const key of Object.keys(rawMap)) {
-      if (key !== "ignore_paths") {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `vault.${key}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(rawMap, ["ignore_paths"], "vault", source, warnings);
   }
 
   // Optional `active.{most_applied_window_days, most_applied_limit}`
@@ -850,16 +845,9 @@ export function validateBrainConfigDetailed(
   // groups them so downstream consumers (`active.md`, `brain_digest`)
   // can pass one struct around.
   let active: BrainActiveConfig | undefined;
-  if ("active" in obj) {
+  if (hasBlock(obj, "active", knownBlockKeys)) {
     const rawActive = obj["active"];
-    if (typeof rawActive !== "object" || rawActive === null || Array.isArray(rawActive)) {
-      throw new BrainConfigError(
-        `block must be a map of keys; got ${describe(rawActive)}`,
-        "active",
-        source,
-      );
-    }
-    const activeMap = rawActive as Record<string, unknown>;
+    const activeMap = requireMapBlock(rawActive, "active", source);
     const hasWindow = "most_applied_window_days" in activeMap;
     const hasLimit = "most_applied_limit" in activeMap;
     let mostApplied: BrainMostAppliedConfig | undefined;
@@ -915,18 +903,13 @@ export function validateBrainConfigDetailed(
       injectBudgetChars = raw;
     }
     // Forward-compat: unknown sub-keys under `active:` → warning.
-    for (const k of Object.keys(activeMap)) {
-      if (
-        k !== "most_applied_window_days" &&
-        k !== "most_applied_limit" &&
-        k !== "inject_budget_chars"
-      ) {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `active.${k}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(
+      activeMap,
+      ["most_applied_window_days", "most_applied_limit", "inject_budget_chars"],
+      "active",
+      source,
+      warnings,
+    );
     active = {
       ...(mostApplied !== undefined ? { most_applied: mostApplied } : {}),
       ...(injectBudgetChars !== undefined ? { inject_budget_chars: injectBudgetChars } : {}),
@@ -937,16 +920,9 @@ export function validateBrainConfigDetailed(
   // recency-scored lessons digest. Hard-error on out-of-range values —
   // operator-tunable knobs must never silently fall back to defaults.
   let lessons: BrainLessonsConfig | undefined;
-  if ("lessons" in obj) {
+  if (hasBlock(obj, "lessons", knownBlockKeys)) {
     const rawLessons = obj["lessons"];
-    if (typeof rawLessons !== "object" || rawLessons === null || Array.isArray(rawLessons)) {
-      throw new BrainConfigError(
-        `block must be a map of keys; got ${describe(rawLessons)}`,
-        "lessons",
-        source,
-      );
-    }
-    const lessonsMap = rawLessons as Record<string, unknown>;
+    const lessonsMap = requireMapBlock(rawLessons, "lessons", source);
     const halfLife = readBoundedInt(
       lessonsMap,
       "half_life_days",
@@ -968,14 +944,13 @@ export function validateBrainConfigDetailed(
       LESSONS_LIMIT_MAX,
       source,
     );
-    for (const k of Object.keys(lessonsMap)) {
-      if (k !== "half_life_days" && k !== "corroboration_min" && k !== "limit") {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `lessons.${k}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(
+      lessonsMap,
+      ["half_life_days", "corroboration_min", "limit"],
+      "lessons",
+      source,
+      warnings,
+    );
     lessons = {
       ...(halfLife !== undefined ? { half_life_days: halfLife } : {}),
       ...(corroborationMin !== undefined ? { corroboration_min: corroborationMin } : {}),
@@ -987,7 +962,7 @@ export function validateBrainConfigDetailed(
   // warning and drop the section (return undefined) rather than throwing —
   // the rest of the CLI surface must keep working.
   let disciplineReport: DisciplineReportConfig | undefined;
-  if ("discipline_report" in obj) {
+  if (hasBlock(obj, "discipline_report", knownBlockKeys)) {
     const dr = obj["discipline_report"];
     if (typeof dr !== "object" || dr === null || Array.isArray(dr)) {
       warnings.push({
@@ -1071,16 +1046,9 @@ export function validateBrainConfigDetailed(
   // `cfg.guardrails` undefined; `resolveGuardrails` injects defaults
   // on the read side so consumers receive a fully-populated struct.
   let guardrails: BrainGuardrailConfig | undefined;
-  if ("guardrails" in obj) {
+  if (hasBlock(obj, "guardrails", knownBlockKeys)) {
     const raw = obj["guardrails"];
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new BrainConfigError(
-        `block must be a map of keys; got ${describe(raw)}`,
-        "guardrails",
-        source,
-      );
-    }
-    const rawMap = raw as Record<string, unknown>;
+    const rawMap = requireMapBlock(raw, "guardrails", source);
     const partial: {
       promotion_min_signals?: number;
       promotion_min_distinct_agents?: number;
@@ -1164,24 +1132,22 @@ export function validateBrainConfigDetailed(
     }
 
     // Forward-compat: unknown sub-keys under `guardrails:` → warning.
-    const knownGuardrailKeys = new Set([
-      "promotion_min_signals",
-      "promotion_min_distinct_agents",
-      "promotion_min_age_days",
-      "instruction_file_max_lines",
-      "untrusted_source_delimiting",
-      "derived_fact_synthesis",
-      "provenance_trust_ordering",
-      "owner_scoped_facts",
-    ]);
-    for (const key of Object.keys(rawMap)) {
-      if (!knownGuardrailKeys.has(key)) {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `guardrails.${key}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(
+      rawMap,
+      [
+        "promotion_min_signals",
+        "promotion_min_distinct_agents",
+        "promotion_min_age_days",
+        "instruction_file_max_lines",
+        "untrusted_source_delimiting",
+        "derived_fact_synthesis",
+        "provenance_trust_ordering",
+        "owner_scoped_facts",
+      ],
+      "guardrails",
+      source,
+      warnings,
+    );
 
     if (Object.keys(partial).length > 0) {
       guardrails = partial;
@@ -1201,12 +1167,9 @@ export function validateBrainConfigDetailed(
   // Absent block → `cfg.link_graph` undefined; resolveLinkGraph
   // returns the bit-identical defaults.
   let linkGraph: BrainLinkGraphConfig | undefined;
-  if ("link_graph" in obj) {
+  if (hasBlock(obj, "link_graph", knownBlockKeys)) {
     const rawLg = obj["link_graph"];
-    if (typeof rawLg !== "object" || rawLg === null || Array.isArray(rawLg)) {
-      throw new BrainConfigError("link_graph must be a mapping", "link_graph", source);
-    }
-    const lgObj = rawLg as Record<string, unknown>;
+    const lgObj = requireMapBlock(rawLg, "link_graph", source);
     const partialLg: Record<string, unknown> = {};
     if ("moc_min_outbound_links" in lgObj) {
       const v = lgObj["moc_min_outbound_links"];
@@ -1256,18 +1219,13 @@ export function validateBrainConfigDetailed(
       partialLg["vault_instruction_file"] = trimmed;
     }
     // Forward-compat: unknown sub-keys under `link_graph:` → warning.
-    for (const key of Object.keys(lgObj)) {
-      if (
-        key !== "moc_min_outbound_links" &&
-        key !== "moc_min_link_ratio" &&
-        key !== "vault_instruction_file"
-      ) {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `link_graph.${key}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(
+      lgObj,
+      ["moc_min_outbound_links", "moc_min_link_ratio", "vault_instruction_file"],
+      "link_graph",
+      source,
+      warnings,
+    );
     linkGraph = Object.keys(partialLg).length > 0 ? (partialLg as BrainLinkGraphConfig) : {};
   }
 
@@ -1281,12 +1239,9 @@ export function validateBrainConfigDetailed(
   // Absent block → `cfg.temporal` undefined; resolveTemporal returns
   // the bit-identical defaults.
   let temporal: BrainTemporalConfig | undefined;
-  if ("temporal" in obj) {
+  if (hasBlock(obj, "temporal", knownBlockKeys)) {
     const rawTp = obj["temporal"];
-    if (typeof rawTp !== "object" || rawTp === null || Array.isArray(rawTp)) {
-      throw new BrainConfigError("temporal must be a mapping", "temporal", source);
-    }
-    const tpObj = rawTp as Record<string, unknown>;
+    const tpObj = requireMapBlock(rawTp, "temporal", source);
     const partialTp: Record<string, unknown> = {};
     const positiveIntKeys: ReadonlyArray<
       "stale_pref_days" | "stale_signal_days" | "stale_log_days"
@@ -1323,21 +1278,19 @@ export function validateBrainConfigDetailed(
       partialTp["daily_window_offset_hours"] = v;
     }
     // Forward-compat: unknown sub-keys under `temporal:` → warning.
-    const knownTp = new Set([
-      "stale_pref_days",
-      "stale_signal_days",
-      "stale_log_days",
-      "weekly_start_dow",
-      "daily_window_offset_hours",
-    ]);
-    for (const key of Object.keys(tpObj)) {
-      if (!knownTp.has(key)) {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `temporal.${key}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(
+      tpObj,
+      [
+        "stale_pref_days",
+        "stale_signal_days",
+        "stale_log_days",
+        "weekly_start_dow",
+        "daily_window_offset_hours",
+      ],
+      "temporal",
+      source,
+      warnings,
+    );
     temporal = Object.keys(partialTp).length > 0 ? (partialTp as BrainTemporalConfig) : {};
   }
 
@@ -1350,12 +1303,9 @@ export function validateBrainConfigDetailed(
   // Absent block → `cfg.health` undefined; resolveHealth returns the
   // bit-identical defaults.
   let health: BrainHealthConfig | undefined;
-  if ("health" in obj) {
+  if (hasBlock(obj, "health", knownBlockKeys)) {
     const rawH = obj["health"];
-    if (typeof rawH !== "object" || rawH === null || Array.isArray(rawH)) {
-      throw new BrainConfigError("health must be a mapping", "health", source);
-    }
-    const hObj = rawH as Record<string, unknown>;
+    const hObj = requireMapBlock(rawH, "health", source);
     const partialH: Record<string, unknown> = {};
     if ("contradiction_jaccard" in hObj) {
       const v = hObj["contradiction_jaccard"];
@@ -1380,20 +1330,18 @@ export function validateBrainConfigDetailed(
         partialH[key] = v;
       }
     }
-    const knownH = new Set([
-      "contradiction_jaccard",
-      "concept_gap_min_frequency",
-      "stale_claim_max_age_days",
-      "remediation_step_cap",
-    ]);
-    for (const key of Object.keys(hObj)) {
-      if (!knownH.has(key)) {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `health.${key}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(
+      hObj,
+      [
+        "contradiction_jaccard",
+        "concept_gap_min_frequency",
+        "stale_claim_max_age_days",
+        "remediation_step_cap",
+      ],
+      "health",
+      source,
+      warnings,
+    );
     health = Object.keys(partialH).length > 0 ? (partialH as BrainHealthConfig) : {};
   }
 
@@ -1406,12 +1354,9 @@ export function validateBrainConfigDetailed(
   // bit-identical defaults (empty `read_paths`). The list is purely
   // a READ surface; agents never write to these paths.
   let notes: BrainNotesConfig | undefined;
-  if ("notes" in obj) {
+  if (hasBlock(obj, "notes", knownBlockKeys)) {
     const rawNotes = obj["notes"];
-    if (typeof rawNotes !== "object" || rawNotes === null || Array.isArray(rawNotes)) {
-      throw new BrainConfigError("notes must be a mapping", "notes", source);
-    }
-    const notesObj = rawNotes as Record<string, unknown>;
+    const notesObj = requireMapBlock(rawNotes, "notes", source);
     const partialNotes: Record<string, unknown> = {};
     if ("read_paths" in notesObj) {
       const v = notesObj["read_paths"];
@@ -1459,14 +1404,7 @@ export function validateBrainConfigDetailed(
       partialNotes["read_paths"] = cleaned;
     }
     // Forward-compat: unknown sub-keys under `notes:` → warning.
-    for (const key of Object.keys(notesObj)) {
-      if (key !== "read_paths") {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `notes.${key}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(notesObj, ["read_paths"], "notes", source, warnings);
     notes = Object.keys(partialNotes).length > 0 ? (partialNotes as BrainNotesConfig) : {};
   }
 
@@ -1480,12 +1418,9 @@ export function validateBrainConfigDetailed(
   // capture-boundary warning, never a config error, so a typo cannot
   // take the whole Brain config down).
   let sessions: BrainSessionsConfig | undefined;
-  if ("sessions" in obj) {
+  if (hasBlock(obj, "sessions", knownBlockKeys)) {
     const rawSessions = obj["sessions"];
-    if (typeof rawSessions !== "object" || rawSessions === null || Array.isArray(rawSessions)) {
-      throw new BrainConfigError("sessions must be a mapping", "sessions", source);
-    }
-    const sessionsObj = rawSessions as Record<string, unknown>;
+    const sessionsObj = requireMapBlock(rawSessions, "sessions", source);
     const partial: Record<string, unknown> = {};
     const LIST_KEYS = ["ignore_patterns", "stateless_patterns", "ignore_message_patterns"];
     for (const key of LIST_KEYS) {
@@ -1511,14 +1446,7 @@ export function validateBrainConfigDetailed(
       });
       partial[key] = cleaned;
     }
-    for (const key of Object.keys(sessionsObj)) {
-      if (!LIST_KEYS.includes(key)) {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `sessions.${key}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(sessionsObj, LIST_KEYS, "sessions", source, warnings);
     sessions = partial as BrainSessionsConfig;
   }
 
@@ -1536,12 +1464,9 @@ export function validateBrainConfigDetailed(
   // Absent block leaves cfg.schema undefined; consumers merge built-ins
   // through resolveSchemaVocabulary.
   let schema: BrainSchemaConfig | undefined;
-  if ("schema" in obj) {
+  if (hasBlock(obj, "schema", knownBlockKeys)) {
     const rawSchema = obj["schema"];
-    if (typeof rawSchema !== "object" || rawSchema === null || Array.isArray(rawSchema)) {
-      throw new BrainConfigError("schema must be a mapping", "schema", source);
-    }
-    const schemaObj = rawSchema as Record<string, unknown>;
+    const schemaObj = requireMapBlock(rawSchema, "schema", source);
     const partialSchema: Partial<Record<keyof BrainSchemaConfig, ReadonlyArray<string>>> = {};
     for (const category of SCHEMA_VOCAB_CATEGORIES) {
       if (!(category in schemaObj)) continue;
@@ -1591,17 +1516,13 @@ export function validateBrainConfigDetailed(
         return trimmed;
       });
     }
-    for (const key of Object.keys(schemaObj)) {
-      if (
-        !(SCHEMA_VOCAB_CATEGORIES as ReadonlyArray<string>).includes(key) &&
-        !(schemaMetaKeys as ReadonlyArray<string>).includes(key)
-      ) {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `schema.${key}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(
+      schemaObj,
+      [...(SCHEMA_VOCAB_CATEGORIES as ReadonlyArray<string>), ...schemaMetaKeys],
+      "schema",
+      source,
+      warnings,
+    );
     try {
       const declarations = validateSchemaDeclarations(partialSchema);
       schema = {
@@ -1623,47 +1544,11 @@ export function validateBrainConfigDetailed(
     }
   }
 
-  // Forward-compat: unknown top-level keys → warning, not error.
-  const known = new Set([
-    "schema_version",
-    "primary_agent",
-    "dream",
-    "retire",
-    "confidence",
-    "snapshots",
-    "vault",
-    "active",
-    "lessons",
-    "discipline_report",
-    "guardrails",
-    "link_graph",
-    "temporal",
-    "notes",
-    "sessions",
-    "schema",
-    "feedback",
-  ]);
-  for (const key of Object.keys(obj)) {
-    if (!known.has(key)) {
-      warnings.push({
-        path: source ?? "<config>",
-        message: `unknown top-level field '${key}' ignored (forward-compat)`,
-      });
-    }
-  }
-
   // Optional `hygiene:` block (continuity-hygiene-freshness suite).
   let hygiene: BrainHygieneConfig | undefined;
-  if ("hygiene" in obj) {
+  if (hasBlock(obj, "hygiene", knownBlockKeys)) {
     const raw = obj["hygiene"];
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new BrainConfigError(
-        `block must be a map of keys; got ${describe(raw)}`,
-        "hygiene",
-        source,
-      );
-    }
-    const rawMap = raw as Record<string, unknown>;
+    const rawMap = requireMapBlock(raw, "hygiene", source);
     const partial: { resolver_cmd?: string; dedup_threshold?: number } = {};
     if ("resolver_cmd" in rawMap) {
       const cmd = rawMap["resolver_cmd"];
@@ -1692,16 +1577,9 @@ export function validateBrainConfigDetailed(
 
   // Optional `anticipatory:` block (continuity-hygiene-freshness suite).
   let anticipatory: BrainAnticipatoryConfig | undefined;
-  if ("anticipatory" in obj) {
+  if (hasBlock(obj, "anticipatory", knownBlockKeys)) {
     const raw = obj["anticipatory"];
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new BrainConfigError(
-        `block must be a map of keys; got ${describe(raw)}`,
-        "anticipatory",
-        source,
-      );
-    }
-    const rawMap = raw as Record<string, unknown>;
+    const rawMap = requireMapBlock(raw, "anticipatory", source);
     const partial: { ttl_seconds?: number; max_tokens?: number } = {};
     if ("ttl_seconds" in rawMap) {
       requirePositiveInteger("anticipatory.ttl_seconds", rawMap["ttl_seconds"], source);
@@ -1716,16 +1594,9 @@ export function validateBrainConfigDetailed(
 
   // Optional `recall:` block (continuity-hygiene-freshness suite).
   let recall: BrainRecallConfig | undefined;
-  if ("recall" in obj) {
+  if (hasBlock(obj, "recall", knownBlockKeys)) {
     const raw = obj["recall"];
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new BrainConfigError(
-        `block must be a map of keys; got ${describe(raw)}`,
-        "recall",
-        source,
-      );
-    }
-    const rawMap = raw as Record<string, unknown>;
+    const rawMap = requireMapBlock(raw, "recall", source);
     const partial: { degradation?: "hard-cut" | "staged" } = {};
     if ("degradation" in rawMap) {
       const mode = rawMap["degradation"];
@@ -1747,16 +1618,9 @@ export function validateBrainConfigDetailed(
   // exactly (non-empty after trim, single-line, <= SCOPE_MAX_LEN) so a
   // configured default can never pass validation yet fail at write time.
   let feedback: BrainFeedbackConfig | undefined;
-  if ("feedback" in obj) {
+  if (hasBlock(obj, "feedback", knownBlockKeys)) {
     const raw = obj["feedback"];
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new BrainConfigError(
-        `block must be a map of keys; got ${describe(raw)}`,
-        "feedback",
-        source,
-      );
-    }
-    const rawMap = raw as Record<string, unknown>;
+    const rawMap = requireMapBlock(raw, "feedback", source);
     const partial: { default_scope?: string } = {};
     if ("default_scope" in rawMap) {
       const value = rawMap["default_scope"];
@@ -1792,15 +1656,23 @@ export function validateBrainConfigDetailed(
       partial.default_scope = trimmed;
     }
     // Forward-compat: unknown sub-keys under `feedback:` → warning.
-    for (const key of Object.keys(rawMap)) {
-      if (key !== "default_scope") {
-        warnings.push({
-          path: source ?? "<config>",
-          message: `feedback.${key}: unknown field ignored (forward-compat)`,
-        });
-      }
-    }
+    warnUnknownKeys(rawMap, ["default_scope"], "feedback", source, warnings);
     feedback = Object.freeze(partial);
+  }
+
+  // Forward-compat: unknown top-level keys → warning, not error. Runs
+  // last (every block above has had a chance to register itself into
+  // `knownBlockKeys` via `hasBlock`/`mergeBlock`) so a block can never be
+  // parsed-but-not-yet-known at the point this check reads the set. Uses
+  // its own message format (distinct from `warnUnknownKeys`'s
+  // `block.key: ...` shape), pinned by an existing test.
+  for (const key of Object.keys(obj)) {
+    if (!knownBlockKeys.has(key)) {
+      warnings.push({
+        path: source ?? "<config>",
+        message: `unknown top-level field '${key}' ignored (forward-compat)`,
+      });
+    }
   }
 
   const config: BrainConfig = {
@@ -1854,27 +1726,85 @@ export function validateBrainConfigDetailed(
  * block (string, number, array) is a hard error — the user probably
  * miswrote the YAML.
  */
+/**
+ * Narrow a raw config value to a plain object, or throw a field-named
+ * `BrainConfigError`. Centralizes the "block must be a map of keys" guard
+ * that used to be copy-pasted at every optional-block site with two
+ * slightly different wordings ("must be a mapping" vs "must be a map of
+ * keys") - callers get one consistent message (`BrainConfigError` already
+ * prepends the block's `field` name, so the message itself does not repeat
+ * it).
+ */
+function requireMapBlock(
+  raw: unknown,
+  blockKey: string,
+  source: string | null,
+): Record<string, unknown> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new BrainConfigError(`must be a map of keys; got ${describe(raw)}`, blockKey, source);
+  }
+  return raw as Record<string, unknown>;
+}
+
+/**
+ * Push one forward-compat warning per key in `map` that isn't in `known`.
+ * Replaces the per-block loop that used to mix `Set`, chained `!==`, and
+ * (elsewhere) `.includes` for the same "unknown sub-key" check, each with
+ * its own copy of the `${blockName}.${key}: unknown field ignored
+ * (forward-compat)` message.
+ */
+function warnUnknownKeys(
+  map: Readonly<Record<string, unknown>>,
+  known: ReadonlySet<string> | ReadonlyArray<string>,
+  blockName: string,
+  source: string | null,
+  warnings: BrainConfigLoadWarning[],
+): void {
+  const knownSet = known instanceof Set ? known : new Set(known);
+  for (const key of Object.keys(map)) {
+    if (!knownSet.has(key)) {
+      warnings.push({
+        path: source ?? "<config>",
+        message: `${blockName}.${key}: unknown field ignored (forward-compat)`,
+      });
+    }
+  }
+}
+
 function mergeBlock(
   blockKey: string,
   raw: unknown,
   fallback: Readonly<Record<string, number>>,
   source: string | null,
+  knownBlockKeys: Set<string>,
 ): Record<string, unknown> {
+  knownBlockKeys.add(blockKey);
   if (raw === undefined) {
     return { ...fallback };
   }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new BrainConfigError(
-      `block must be a map of keys; got ${describe(raw)}`,
-      blockKey,
-      source,
-    );
-  }
+  const rawMap = requireMapBlock(raw, blockKey, source);
   const merged: Record<string, unknown> = { ...fallback };
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+  for (const [k, v] of Object.entries(rawMap)) {
     merged[k] = v;
   }
   return merged;
+}
+
+/**
+ * Record that this call site checked for `key` at the top level, then
+ * report whether it's present. Every top-level block/field presence
+ * check (`"vault" in obj`, etc.) MUST go through this - or `mergeBlock`,
+ * for the four blocks that merge onto numeric defaults instead of being
+ * fully optional - so `knownBlockKeys` can never drift from the set of
+ * keys this function actually understands (the bug class fixed in
+ * phase 0: four blocks were parsed but missing from a hand-maintained
+ * `known` list, so valid config produced a false "unknown field"
+ * warning). A key that is never checked can never be "known", by
+ * construction - there is no separate list to forget to update.
+ */
+function hasBlock(obj: Record<string, unknown>, key: string, knownBlockKeys: Set<string>): boolean {
+  knownBlockKeys.add(key);
+  return key in obj;
 }
 
 function requirePositiveInteger(field: string, value: unknown, source: string | null): void {

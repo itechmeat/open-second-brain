@@ -206,6 +206,11 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** `?,?,...` placeholder list for a SQL `IN (...)` clause of `items.length` params. */
+function sqlPlaceholders(items: ReadonlyArray<unknown>): string {
+  return items.map(() => "?").join(",");
+}
+
 /**
  * Stale window for the writer lock (ms). A lock whose mtime is older
  * than this is treated as abandoned (crashed holder) and taken over by
@@ -703,7 +708,7 @@ export class Store {
     this.db.exec("BEGIN");
     try {
       this.purgeVecRowsByChunkIds(chunkIds);
-      const placeholders = chunkIds.map(() => "?").join(",");
+      const placeholders = sqlPlaceholders(chunkIds);
       this.db.run(`DELETE FROM chunks WHERE id IN (${placeholders})`, chunkIds as number[]);
       this.db.exec("COMMIT");
     } catch (e) {
@@ -725,7 +730,7 @@ export class Store {
 
   private purgeVecRowsByChunkIds(chunkIds: ReadonlyArray<number>): void {
     if (!this._vecLoaded || chunkIds.length === 0) return;
-    const placeholders = chunkIds.map(() => "?").join(",");
+    const placeholders = sqlPlaceholders(chunkIds);
     const vecRows = this.db
       .query<{ vec_rowid: number }, number[]>(
         `SELECT vec_rowid FROM chunk_vec_map WHERE chunk_id IN (${placeholders})`,
@@ -737,7 +742,7 @@ export class Store {
 
   private purgeVecRowidsRaw(vecRowids: number[]): void {
     if (!this._vecLoaded || vecRowids.length === 0) return;
-    const placeholders = vecRowids.map(() => "?").join(",");
+    const placeholders = sqlPlaceholders(vecRowids);
     this.db.run(`DELETE FROM chunk_vec WHERE rowid IN (${placeholders})`, vecRowids);
   }
 
@@ -1094,7 +1099,7 @@ export class Store {
   ): Map<number, Array<{ relation: string; target: string }>> {
     const out = new Map<number, Array<{ relation: string; target: string }>>();
     if (documentIds.length === 0) return out;
-    const placeholders = documentIds.map(() => "?").join(",");
+    const placeholders = sqlPlaceholders(documentIds);
     const rows = this.db
       .query<
         {
@@ -1138,7 +1143,7 @@ export class Store {
     readonly targetDocumentId: number | null;
   }> {
     if (documentIds.length === 0) return [];
-    const placeholders = documentIds.map(() => "?").join(",");
+    const placeholders = sqlPlaceholders(documentIds);
     const rows = this.db
       .query<
         {
@@ -1566,7 +1571,7 @@ export class Store {
   hydrateChunks(chunkIds: ReadonlyArray<number>): Map<number, HydratedChunk> {
     const out = new Map<number, HydratedChunk>();
     if (chunkIds.length === 0) return out;
-    const placeholders = chunkIds.map(() => "?").join(",");
+    const placeholders = sqlPlaceholders(chunkIds);
     const rows = this.db
       .query<
         {
@@ -1610,7 +1615,7 @@ export class Store {
   inboundLinkSources(candidateChunkIds: ReadonlyArray<number>): Map<number, Set<number>> {
     const out = new Map<number, Set<number>>();
     if (candidateChunkIds.length === 0) return out;
-    const placeholders = candidateChunkIds.map(() => "?").join(",");
+    const placeholders = sqlPlaceholders(candidateChunkIds);
     const rows = this.db
       .query<{ chunk_id: number; source_document_id: number }, number[]>(
         "SELECT c.id AS chunk_id, l.source_document_id " +
@@ -1639,7 +1644,7 @@ export class Store {
   outboundLinkTargets(sourceDocumentIds: ReadonlyArray<number>): Map<number, number[]> {
     const out = new Map<number, number[]>();
     if (sourceDocumentIds.length === 0) return out;
-    const placeholders = sourceDocumentIds.map(() => "?").join(",");
+    const placeholders = sqlPlaceholders(sourceDocumentIds);
     const rows = this.db
       .query<{ source_document_id: number; target_document_id: number }, number[]>(
         "SELECT DISTINCT l.source_document_id, l.target_document_id " +
@@ -1671,7 +1676,7 @@ export class Store {
   representativeChunks(documentIds: ReadonlyArray<number>): Map<number, HydratedChunk> {
     const out = new Map<number, HydratedChunk>();
     if (documentIds.length === 0) return out;
-    const placeholders = documentIds.map(() => "?").join(",");
+    const placeholders = sqlPlaceholders(documentIds);
     const rows = this.db
       .query<
         {
@@ -1762,8 +1767,8 @@ export class Store {
   ): Map<number, number> {
     const out = new Map<number, number>();
     if (candidateChunkIds.length === 0 || queryEntities.length === 0) return out;
-    const chunkPlaceholders = candidateChunkIds.map(() => "?").join(",");
-    const entityPlaceholders = queryEntities.map(() => "?").join(",");
+    const chunkPlaceholders = sqlPlaceholders(candidateChunkIds);
+    const entityPlaceholders = sqlPlaceholders(queryEntities);
     const rows = this.db
       .query<{ chunk_id: number; c: number }, (number | string)[]>(
         "SELECT chunk_id, COUNT(DISTINCT entity) AS c FROM chunk_entities " +
@@ -1782,7 +1787,7 @@ export class Store {
   tagsByChunkDocument(candidateChunkIds: ReadonlyArray<number>): Map<number, Set<string>> {
     const out = new Map<number, Set<string>>();
     if (candidateChunkIds.length === 0) return out;
-    const placeholders = candidateChunkIds.map(() => "?").join(",");
+    const placeholders = sqlPlaceholders(candidateChunkIds);
     const rows = this.db
       .query<{ chunk_id: number; tag: string }, number[]>(
         "SELECT c.id AS chunk_id, l.link_text AS tag " +

@@ -24,16 +24,11 @@
  * rolling and byte-budget-capped (see {@link DEMAND_LOG_MAX_BYTES}).
  */
 
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
+import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { clamp01 } from "../math.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { redactRawOutput } from "../redactor.ts";
 import { queryDemandLogPath } from "./paths.ts";
@@ -430,13 +425,7 @@ function compactIfNeeded(path: string): void {
     bytes += lineBytes;
   }
   kept.reverse();
-  writeFileSync(path, kept.length > 0 ? `${kept.join("\n")}\n` : "", { encoding: "utf8" });
-}
-
-function clamp01(value: number): number {
-  if (value < 0) return 0;
-  if (value > 1) return 1;
-  return value;
+  atomicWriteFileSync(path, kept.length > 0 ? `${kept.join("\n")}\n` : "");
 }
 
 /**

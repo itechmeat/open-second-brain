@@ -226,4 +226,60 @@ export function buildEvidencePack(
   });
 }
 
+/**
+ * Snake_case wire representation of an {@link EvidencePack}, shared by the
+ * CLI (`o2b search`) and MCP (`brain_search`) surfaces so the two never
+ * drift on this safety-relevant contract (abstention, coverage).
+ */
+export function serializeEvidencePack(pack: EvidencePack): Record<string, unknown> {
+  return {
+    significant_terms: pack.significantTerms,
+    matched_terms: pack.matchedTerms,
+    missing_terms: pack.missingTerms,
+    support_coverage: pack.supportCoverage,
+    records: pack.records.map((record) => ({
+      path: record.path,
+      document_id: record.documentId,
+      chunk_id: record.chunkId,
+      line_pointer: record.linePointer,
+      matched_terms: record.matchedTerms,
+      missing_terms: record.missingTerms,
+      support_coverage: record.supportCoverage,
+      terminal_state: record.terminalState,
+      why_retrieved: record.whyRetrieved,
+      dropped_candidate_reasons: record.droppedCandidateReasons,
+    })),
+    dropped_candidates: pack.droppedCandidates,
+    abstention: pack.abstention,
+    ...(pack.idfWeightedCoverage !== undefined
+      ? { idf_weighted_coverage: pack.idfWeightedCoverage }
+      : {}),
+    ...(pack.rareTerms !== undefined ? { rare_terms: pack.rareTerms } : {}),
+    ...(pack.uncoveredRareTerms !== undefined
+      ? { uncovered_rare_terms: pack.uncoveredRareTerms }
+      : {}),
+    ...(pack.unionRecords !== undefined
+      ? {
+          union_records: pack.unionRecords.map((r) => ({
+            term: r.term,
+            path: r.path,
+            document_id: r.documentId,
+            chunk_id: r.chunkId,
+          })),
+        }
+      : {}),
+    ...(pack.completeness !== undefined
+      ? {
+          completeness: {
+            verdict: pack.completeness.verdict,
+            idf_weighted_coverage: pack.completeness.idfWeightedCoverage,
+            covered_terms: pack.completeness.coveredTerms,
+            uncovered_terms: pack.completeness.uncoveredTerms,
+            uncovered_but_present_in_corpus: pack.completeness.uncoveredButPresentInCorpus,
+          },
+        }
+      : {}),
+  };
+}
+
 export { buildCoverageReport, significantTerms };

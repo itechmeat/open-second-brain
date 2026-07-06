@@ -16,6 +16,8 @@
  * functions are pure and side-effect free regardless.
  */
 
+import { escapeRegex } from "../strings.ts";
+
 const H1_RE = /^#[ \t]+(.+?)[ \t]*$/m;
 // Existing wikilinks, fenced code blocks, and inline code spans are
 // protected from linking. The fenced-block alternation comes first so a
@@ -29,10 +31,6 @@ export function deriveTitleFromContent(markdown: string): string | null {
   if (!m) return null;
   const title = m[1]!.trim();
   return title.length > 0 ? title : null;
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -50,7 +48,7 @@ export function linkExactMentions(body: string, known: ReadonlyArray<string>): s
     .toSorted((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
   if (phrases.length === 0) return body;
 
-  const alternation = phrases.map(escapeRegExp).join("|");
+  const alternation = phrases.map(escapeRegex).join("|");
   // Whole-token boundaries via Unicode letter/number lookarounds so the
   // match is language-agnostic (works for any script).
   const linkRe = new RegExp(`(?<![\\p{L}\\p{N}])(?:${alternation})(?![\\p{L}\\p{N}])`, "gu");

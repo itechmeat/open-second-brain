@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.1] - 2026-07-06
+
+### Fixed
+
+- **`o2b init` fails on native Windows** — `resolve()` produces backslash
+  paths that `setConfigValue()` rejects via `CONFIG_VALUE_REJECTED_CHARS`.
+  Vault path is now normalized to forward slashes before persisting; forward
+  slashes work identically in Node/Bun fs APIs on Windows. (#119)
+- **Hermes memory provider bridge fails on Windows** — `scripts/o2b` is a
+  bash script that `subprocess.Popen` cannot execute directly (Windows
+  delegates to `cmd.exe`, not a POSIX shell). Added `_resolve_command()`
+  which detects the platform and falls back to `bun run <entry> mcp` when
+  `o2b` is not available as a native executable.
+
 ## [1.23.0] - 2026-07-05
 
 Two optional precision layers that complete the retrieval-precision loop

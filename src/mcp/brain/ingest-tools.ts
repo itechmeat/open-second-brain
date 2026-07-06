@@ -12,10 +12,10 @@
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
 import { IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
 import { resolveAgentName } from "../../core/config.ts";
-import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { coerceStr } from "../coerce.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
+import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_ingest_source";
 
@@ -31,7 +31,7 @@ async function toolBrainIngestSource(
       ? parsed.agent
       : resolveAgentName(ctx.configPath ?? undefined);
 
-  try {
+  return wrapToolErrors(TOOL, [IntakeValidationError], async () => {
     const res = ingestSource(
       ctx.vault,
       { sourcePath, summary, extraction: parsed.intake },
@@ -44,14 +44,7 @@ async function toolBrainIngestSource(
       entities_updated: [...res.entitiesUpdated],
       connections: [...res.connections],
     };
-  } catch (err) {
-    if (err instanceof IntakeValidationError) {
-      throw new MCPError(INVALID_PARAMS, `${TOOL}: ${err.message}`);
-    }
-    if (err instanceof MCPError) throw err;
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new MCPError(INTERNAL_ERROR, `${TOOL}: ${reason}`);
-  }
+  });
 }
 
 export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([

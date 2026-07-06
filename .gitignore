@@ -29,3 +29,4 @@ sandbox-vault/
 
 # Local Kanban/git worktrees (never committed; exclude from lint/fmt)
 .worktrees/
+.code-ranker/

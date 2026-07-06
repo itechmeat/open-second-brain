@@ -45,7 +45,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, coerceBool } from "../coerce.ts";
-import { optionalPositiveInt } from "./shared.ts";
+import { coercePositiveInteger } from "./shared.ts";
 
 /** Forward-looking projection envelope; read-only fold. */
 function toolBrainForesight(
@@ -320,7 +320,7 @@ async function toolBrainDeepSynthesis(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const topic = coerceStr(args, "topic", true)!;
-  const limit = optionalPositiveInt(args, "limit", "brain_deep_synthesis") ?? 30;
+  const limit = coercePositiveInteger("brain_deep_synthesis", "limit", args["limit"]) ?? 30;
   if (limit > 100) {
     throw new MCPError(INVALID_PARAMS, "brain_deep_synthesis: limit must be at most 100");
   }
@@ -370,7 +370,7 @@ function toolBrainIdeaDiscovery(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Record<string, unknown> {
-  const cap = optionalPositiveInt(args, "cap", "brain_idea_discovery") ?? 5;
+  const cap = coercePositiveInteger("brain_idea_discovery", "cap", args["cap"]) ?? 5;
   if (cap > 50) {
     throw new MCPError(INVALID_PARAMS, "brain_idea_discovery: cap must be at most 50");
   }

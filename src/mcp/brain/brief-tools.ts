@@ -31,23 +31,28 @@ import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceIsoDate, coerceFormat } from "../coerce.ts";
 import {
   coerceIsoTimestampOrDate,
+  coercePositiveInteger,
   dispatchByView,
   localizeEnvelope,
-  optionalPositiveInt,
 } from "./shared.ts";
 
 async function toolBrainMorningBrief(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const topK = optionalPositiveInt(args, "top_k", "brain_brief view=morning") ?? 10;
-  const lookbackDays = optionalPositiveInt(args, "lookback_days", "brain_brief view=morning") ?? 7;
-  const maxCharsPerMemory = optionalPositiveInt(
-    args,
-    "max_chars_per_memory",
+  const topK = coercePositiveInteger("brain_brief view=morning", "top_k", args["top_k"]) ?? 10;
+  const lookbackDays =
+    coercePositiveInteger("brain_brief view=morning", "lookback_days", args["lookback_days"]) ?? 7;
+  const maxCharsPerMemory = coercePositiveInteger(
     "brain_brief view=morning",
+    "max_chars_per_memory",
+    args["max_chars_per_memory"],
   );
-  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_brief view=morning");
+  const maxTotalChars = coercePositiveInteger(
+    "brain_brief view=morning",
+    "max_total_chars",
+    args["max_total_chars"],
+  );
   const now = new Date();
   const brief = buildMorningBrief(ctx.vault, {
     now,

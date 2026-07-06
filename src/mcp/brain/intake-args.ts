@@ -28,11 +28,11 @@ export interface ParsedIntakeArgs {
   readonly agent?: string;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requiredString(value: unknown, tool: string, field: string): string {
+export function requiredString(value: unknown, tool: string, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new MCPError(INVALID_PARAMS, `${tool}: '${field}' must be a non-empty string`);
   }

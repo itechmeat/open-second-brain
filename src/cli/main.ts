@@ -136,9 +136,10 @@ async function cmdInit(argv: string[]): Promise<number> {
   // a --vault flag.
   void flags["force"]; // accepted for backward CLI compat; unused
   void flags["name"]; // accepted for backward CLI compat; unused
+  const resolvedVault = resolve(vault).replace(/\\/g, "/");
   let configPath: string;
   try {
-    configPath = setConfigValue("vault", resolve(vault));
+    configPath = setConfigValue("vault", resolvedVault);
     if (agentName) setConfigValue("agent_name", agentName);
     if (timezone) setConfigValue("timezone", timezone);
   } catch (exc) {
@@ -147,7 +148,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  process.stdout.write(`initialized vault: ${resolve(vault)}\n`);
+  process.stdout.write(`initialized vault: ${resolvedVault}\n`);
   process.stdout.write(`vault path persisted to: ${configPath}\n`);
   if (agentName) {
     process.stdout.write(`agent name registered: ${agentName}\n`);
