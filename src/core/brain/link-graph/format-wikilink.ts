@@ -52,17 +52,60 @@ function stripMd(path: string): string {
 }
 
 /**
+ * `/`-aligned-suffix index over the known pages: every trailing-segment
+ * suffix of every page maps to the (stripped) pages that carry it, in
+ * `knownPaths` order. A target side `t` resolves to exactly the pages
+ * where `page === t || page.endsWith("/" + t)` — precisely the bucket
+ * `bySuffix.get(t)`, so per-link resolution drops from an O(pages) scan
+ * (plus a fresh pages-sized array per link in the old
+ * {@link shortestUniqueSuffix}) to a single Map lookup.
+ */
+type SuffixIndex = ReadonlyMap<string, ReadonlyArray<string>>;
+
+/**
+ * Built once per run and memoized on the `knownPaths` array identity:
+ * `links normalize` walks the vault once and passes the same array to
+ * every {@link normalizeWikilinks} call, so the index is built one time
+ * and reused across all files instead of O(files × links) rebuilds.
+ */
+const SUFFIX_INDEX_MEMO = new WeakMap<ReadonlyArray<string>, SuffixIndex>();
+
+function suffixIndex(knownPaths: ReadonlyArray<string>): SuffixIndex {
+  const cached = SUFFIX_INDEX_MEMO.get(knownPaths);
+  if (cached) return cached;
+  const bySuffix = new Map<string, string[]>();
+  for (const raw of knownPaths) {
+    const page = stripMd(raw);
+    const segments = page.split("/");
+    // Each `take` is a distinct-length key, so a page is inserted at
+    // most once per suffix (matching the old scan's single push).
+    for (let take = 1; take <= segments.length; take += 1) {
+      const key = segments.slice(segments.length - take).join("/");
+      const list = bySuffix.get(key);
+      if (list) list.push(page);
+      else bySuffix.set(key, [page]);
+    }
+  }
+  SUFFIX_INDEX_MEMO.set(knownPaths, bySuffix);
+  return bySuffix;
+}
+
+/**
  * The shortest trailing-segment suffix of `path` that no other known
  * page shares. `Brain/notes/alpha` with no sibling `alpha` yields
  * `alpha`; two pages ending in `beta` yield `deep/beta` /
  * `archive/beta`.
  */
 export function shortestUniqueSuffix(path: string, knownPaths: ReadonlyArray<string>): string {
+  const index = suffixIndex(knownPaths);
   const segments = path.split("/");
-  const others = knownPaths.map(stripMd).filter((p) => p !== path);
   for (let take = 1; take <= segments.length; take += 1) {
     const suffix = segments.slice(segments.length - take).join("/");
-    const clash = others.some((p) => p === suffix || p.endsWith("/" + suffix));
+    // `path`'s own bucket entry is always present; a clash is any OTHER
+    // page sharing the suffix — identical to the old
+    // `others.filter(p => p !== path).some(...)`.
+    const bucket = index.get(suffix);
+    const clash = bucket !== undefined && bucket.some((p) => p !== path);
     if (!clash) return suffix;
   }
   return path;
@@ -79,11 +122,8 @@ function resolveTarget(
 ): string | "ambiguous" | null {
   const target = stripMd(targetSide.trim());
   if (target === "") return null;
-  const matches: string[] = [];
-  for (const raw of knownPaths) {
-    const page = stripMd(raw);
-    if (page === target || page.endsWith("/" + target)) matches.push(page);
-  }
+  const matches = suffixIndex(knownPaths).get(target);
+  if (matches === undefined) return null;
   if (matches.length === 1) return matches[0]!;
   if (matches.length > 1) return "ambiguous";
   return null;
