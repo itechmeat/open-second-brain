@@ -13,6 +13,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import type { FrontmatterMap } from "../types.ts";
 import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
 import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../graph/agent-scope.ts";
 import { makeProvider } from "./embeddings/provider.ts";
@@ -225,6 +226,48 @@ async function openReadOrSelfHeal(config: ResolvedSearchConfig): Promise<Store> 
   }
 }
 
+/**
+ * Bounds for the public `limit` option. CLI validates against the same
+ * ceiling before calling in; MCP applies its own, lower `MCP_LIMIT_MAX`
+ * (token-budget conscious) - the two ceilings are deliberately different,
+ * this just gives the shared one a name instead of a bare `100` literal.
+ */
+export const SEARCH_LIMIT_MIN = 1;
+export const SEARCH_LIMIT_MAX = 100;
+
+/**
+ * Semantic candidate-pool over-fetch policy: rank more than `limit` rows
+ * so downstream filtering (property/visibility scope, MMR diversify) has
+ * enough headroom to still fill the final window. `floor` is the minimum
+ * pool size regardless of `limit`; `overfetch` is the multiplier applied
+ * to `limit` itself.
+ */
+const POOL_OVERFETCH = 5;
+const POOL_FLOOR = 50;
+
+function semanticPoolSize(limit: number): number {
+  return Math.max(limit * POOL_OVERFETCH, POOL_FLOOR);
+}
+
+/**
+ * One frontmatter read per (vault, path) pair, shared across every filter
+ * stage of a single `search()` call. `parseFrontmatter` never throws (a
+ * read failure resolves to empty metadata internally), so caching the raw
+ * result changes no call site's fallback behaviour - it only stops the
+ * same file being read and parsed once per stage instead of once total.
+ */
+function readCachedFrontmatter(
+  cache: Map<string, FrontmatterMap>,
+  vault: string,
+  path: string,
+): FrontmatterMap {
+  const cached = cache.get(path);
+  if (cached !== undefined) return cached;
+  const [meta] = parseFrontmatter(join(vault, path));
+  cache.set(path, meta);
+  return meta;
+}
+
 export async function search(
   config: ResolvedSearchConfig,
   opts: SearchOptions,
@@ -245,7 +288,7 @@ export async function search(
     profileParams ?? (config.recall.selfTuningEnabled ? loadTunedParameters(config.vault) : null);
   if (tuned !== null) config = applyTunedParameters(config, tuned);
   const expandActive = opts.expand ?? (tuned !== null && tuned.expansion);
-  const limit = Math.max(1, Math.min(100, opts.limit ?? 10));
+  const limit = Math.max(SEARCH_LIMIT_MIN, Math.min(SEARCH_LIMIT_MAX, opts.limit ?? 10));
   if (opts.threshold !== undefined && (!Number.isFinite(opts.threshold) || opts.threshold < 0)) {
     throw new SearchError("INVALID_INPUT", "threshold must be a finite number >= 0");
   }
@@ -271,6 +314,11 @@ export async function search(
       ? await Store.open(config, { mode: "read" })
       : await openReadOrSelfHeal(config);
   try {
+    // Shared across every frontmatter-reading filter stage below (Plan 1,
+    // 1.3) so a candidate path already read by one stage is not re-read
+    // and re-parsed by the next.
+    const frontmatterCache = new Map<string, FrontmatterMap>();
+
     // Opt-in local expansion (t_2fa95db1): an explicit structured
     // document always wins; expansion only fills the gap. The lex lane's
     // corpus-common tokens are derived from document frequency here
@@ -410,7 +458,7 @@ export async function search(
     }
     if (policy.wantSemantic) {
       const semOutcome = await runSemanticPhase(store, config, semanticLaneQuery ?? query, {
-        limit: Math.max(limit * 5, 50),
+        limit: semanticPoolSize(limit),
         pathPrefix,
         explicit: policy.explicit,
       });
@@ -448,7 +496,7 @@ export async function search(
       if (validityWindowCache.has(path)) return validityWindowCache.get(path) ?? null;
       let window: ValidityWindow | null = null;
       try {
-        const [meta] = parseFrontmatter(join(config.vault, path));
+        const meta = readCachedFrontmatter(frontmatterCache, config.vault, path);
         window = parseValidityWindow(meta as Record<string, unknown>);
       } catch {
         window = null;
@@ -474,7 +522,7 @@ export async function search(
       if (terms.length >= 2) {
         const broadened = runFtsQueryDetailed(store, terms[0]!, {
           expandedTerms: terms.slice(1),
-          limit: Math.max(limit * 5, 50),
+          limit: semanticPoolSize(limit),
           pathPrefix: pathPrefix ?? null,
         });
         for (const w of broadened.warnings) warnings.push(w);
@@ -530,7 +578,7 @@ export async function search(
       if (plan.fire) {
         const targeted = runFtsQueryDetailed(store, plan.terms[0]!, {
           expandedTerms: plan.terms.slice(1),
-          limit: Math.max(limit * 5, 50),
+          limit: semanticPoolSize(limit),
           pathPrefix: pathPrefix ?? null,
         });
         for (const w of targeted.warnings) warnings.push(w);
@@ -638,7 +686,7 @@ export async function search(
           if (cached !== undefined) return cached;
           let fmKind: string | null = null;
           try {
-            const [meta] = parseFrontmatter(join(config.vault, path));
+            const meta = readCachedFrontmatter(frontmatterCache, config.vault, path);
             const raw = (meta as Record<string, unknown>)["kind"];
             fmKind = typeof raw === "string" ? raw : null;
           } catch {
@@ -714,7 +762,7 @@ export async function search(
         seenDocs.add(h.documentId);
         if (!h.path.startsWith("Brain/preferences/")) continue;
         try {
-          const [meta] = parseFrontmatter(join(config.vault, h.path));
+          const meta = readCachedFrontmatter(frontmatterCache, config.vault, h.path);
           const trend = parseFreshnessTrend((meta as Record<string, unknown>)["freshness_trend"]);
           if (trend !== null) byDoc.set(h.documentId, trend);
         } catch {
@@ -769,7 +817,7 @@ export async function search(
     const maxHops = opts.maxHops ?? config.recall.maxHops;
     const traversalActive = maxHops > 0;
     const baseRankLimit =
-      hasFrontmatterFilter || hasStructuredExclusions ? Math.max(limit * 5, 50) : limit;
+      hasFrontmatterFilter || hasStructuredExclusions ? semanticPoolSize(limit) : limit;
     const rankLimit =
       mmrActive || traversalActive || crossEncoderActive
         ? Math.max(baseRankLimit, limit * 3, 30, crossEncoderActive ? config.rerank.topK : 0)
@@ -869,13 +917,20 @@ export async function search(
       // drops pages outside the requested visibility scope. Caching by
       // document path bounds the read cost to the result set.
       const propFiltered = hasPropertyFilter
-        ? applyPropertyFilter(ranked, opts.properties!, config.vault)
+        ? applyPropertyFilter(ranked, opts.properties!, config.vault, frontmatterCache)
         : ranked;
-      const visible = applyVisibilityScope(propFiltered, visibilityScope, config.vault);
+      const visible = applyVisibilityScope(
+        propFiltered,
+        visibilityScope,
+        config.vault,
+        frontmatterCache,
+      );
       // Agent-ownership isolation (Unit 5): only when a scope is requested;
       // a null scope skips the filter entirely (byte-identical default).
       const scoped =
-        agentScope !== null ? applyAgentScope(visible, agentScope, config.vault) : visible;
+        agentScope !== null
+          ? applyAgentScope(visible, agentScope, config.vault, frontmatterCache)
+          : visible;
       return { preVisibility: propFiltered.length, visible: scoped, capHit };
     };
 
@@ -893,7 +948,7 @@ export async function search(
       assembled.visible.length < assembled.preVisibility &&
       assembled.capHit
     ) {
-      const wideCap = Math.max(limit * 5, 50, limit * 3, 30);
+      const wideCap = Math.max(semanticPoolSize(limit), limit * 3, 30);
       if (wideCap > rankLimit) assembled = assemble(wideCap);
     }
     const excluded = applyStructuredExclusions(assembled.visible, structured);
@@ -991,7 +1046,7 @@ export async function search(
     // in evidence-pack mode.
     const terminalPaths =
       opts.evidencePack === true
-        ? buildTerminalPaths(config.vault, withSecondPassReasons)
+        ? buildTerminalPaths(config.vault, withSecondPassReasons, frontmatterCache)
         : new Set<string>();
     const finalResults =
       opts.evidencePack === true
@@ -1275,6 +1330,7 @@ function highFrequencyTokens(store: Store, query: string): ReadonlySet<string> {
 function buildTerminalPaths(
   vault: string,
   results: ReadonlyArray<BrainSearchResult>,
+  frontmatterCache: Map<string, FrontmatterMap>,
 ): ReadonlySet<string> {
   const terminal = new Set<string>();
   const seen = new Set<string>();
@@ -1282,7 +1338,7 @@ function buildTerminalPaths(
     if (seen.has(r.path)) continue;
     seen.add(r.path);
     try {
-      const [meta] = parseFrontmatter(join(vault, r.path));
+      const meta = readCachedFrontmatter(frontmatterCache, vault, r.path);
       if (isTerminalStatus((meta as Record<string, unknown>)["status"])) terminal.add(r.path);
     } catch {
       // Unreadable frontmatter is non-terminal.
@@ -1440,16 +1496,12 @@ function applyPropertyFilter(
   ranked: ReadonlyArray<BrainSearchResult>,
   filters: ReadonlyMap<string, ReadonlyArray<string>>,
   vault: string,
+  frontmatterCache: Map<string, FrontmatterMap>,
 ): ReadonlyArray<BrainSearchResult> {
-  const cache = new Map<string, Record<string, unknown> | null>();
   const reader = (path: string): Record<string, unknown> | null => {
-    if (cache.has(path)) return cache.get(path) ?? null;
     try {
-      const [meta] = parseFrontmatter(join(vault, path));
-      cache.set(path, meta as Record<string, unknown>);
-      return meta as Record<string, unknown>;
+      return readCachedFrontmatter(frontmatterCache, vault, path) as Record<string, unknown>;
     } catch {
-      cache.set(path, null);
       return null;
     }
   };
@@ -1487,20 +1539,14 @@ function applyVisibilityScope(
   ranked: ReadonlyArray<BrainSearchResult>,
   scope: ReadonlySet<string>,
   vault: string,
+  frontmatterCache: Map<string, FrontmatterMap>,
 ): ReadonlyArray<BrainSearchResult> {
-  const cache = new Map<string, string[]>();
   const tagsFor = (path: string): string[] => {
-    const cached = cache.get(path);
-    if (cached) return cached;
-    let tags: string[] = [];
     try {
-      const [meta] = parseFrontmatter(join(vault, path));
-      tags = pageVisibility(meta);
+      return pageVisibility(readCachedFrontmatter(frontmatterCache, vault, path));
     } catch {
-      tags = [];
+      return [];
     }
-    cache.set(path, tags);
-    return tags;
   };
   return ranked.filter((r) => isVisible(tagsFor(r.path), scope));
 }
@@ -1509,25 +1555,19 @@ function applyAgentScope(
   ranked: ReadonlyArray<BrainSearchResult>,
   scope: string,
   vault: string,
+  frontmatterCache: Map<string, FrontmatterMap>,
 ): ReadonlyArray<BrainSearchResult> {
   // Fail-closed sentinel: a page whose frontmatter cannot be parsed has
   // an unknowable owner, so under an active scope it is dropped rather
   // than leaked. This is stricter than visibility scoping's fail-open
   // default - deliberate, because agent-scope is an isolation boundary.
   const UNPARSEABLE = " unparseable-owner";
-  const cache = new Map<string, string>();
   const ownerFor = (path: string): string => {
-    const cached = cache.get(path);
-    if (cached !== undefined) return cached;
-    let owner: string;
     try {
-      const [meta] = parseFrontmatter(join(vault, path));
-      owner = pageOwner(meta) ?? "";
+      return pageOwner(readCachedFrontmatter(frontmatterCache, vault, path)) ?? "";
     } catch {
-      owner = UNPARSEABLE;
+      return UNPARSEABLE;
     }
-    cache.set(path, owner);
-    return owner;
   };
   return ranked.filter((r) => {
     const owner = ownerFor(r.path);

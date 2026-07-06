@@ -666,17 +666,12 @@ function checkVaultIgnore(vault: string, issues: DoctorIssue[]): void {
 function checkSignals(vault: string, issues: DoctorIssue[], idIndex: Map<string, string[]>): void {
   const dirs = brainDirs(vault);
   for (const dir of [dirs.inbox, dirs.processed]) {
-    if (!existsSync(dir)) continue;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      if (!entry.name.endsWith(".md")) continue;
-      if (!entry.name.startsWith("sig-")) continue;
-      const path = join(dir, entry.name);
+    forEachBrainFile(dir, "sig-", (path, filename) => {
       try {
         const sig = parseSignal(path);
         registerId(idIndex, sig.id, path);
         checkIso(path, "created_at", sig.created_at, issues);
-        const expectedId = entry.name.slice(0, -".md".length);
+        const expectedId = filename.slice(0, -".md".length);
         if (sig.id !== expectedId) {
           issues.push({
             severity: "warning",
@@ -693,7 +688,7 @@ function checkSignals(vault: string, issues: DoctorIssue[], idIndex: Map<string,
           message: (err as Error).message ?? String(err),
         });
       }
-    }
+    });
   }
 }
 
@@ -706,11 +701,7 @@ function checkPreferences(
   knownBasenames: ReadonlySet<string>,
 ): void {
   const dirs = brainDirs(vault);
-  if (!existsSync(dirs.preferences)) return;
-  for (const entry of readdirSync(dirs.preferences, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    if (!entry.name.startsWith("pref-")) continue;
-    const path = join(dirs.preferences, entry.name);
+  forEachBrainFile(dirs.preferences, "pref-", (path) => {
     try {
       const pref = parsePreference(path);
       registerId(idIndex, pref.id, path);
@@ -744,32 +735,9 @@ function checkPreferences(
         });
       }
     } catch (err) {
-      if (err instanceof BrainStatusFolderMismatchError) {
-        issues.push({
-          severity: "warning",
-          code: "status-folder-mismatch",
-          path,
-          message: err.message,
-        });
-      } else {
-        // Distinguish field-missing errors (write-time contract) from
-        // unexpected throws so the CLI report stays useful.
-        const msg = (err as Error).message ?? String(err);
-        const isMissingField = /missing field/.test(msg);
-        const isInvalidIso = /ISO-8601/i.test(msg);
-        issues.push({
-          severity: "error",
-          code: isMissingField
-            ? "preference-missing-field"
-            : isInvalidIso
-              ? "iso-invalid"
-              : "preference-invalid",
-          path,
-          message: msg,
-        });
-      }
+      classifyParseError(err, path, "preference", issues);
     }
-  }
+  });
 }
 
 // ----- Retired check --------------------------------------------------------
@@ -781,11 +749,7 @@ function checkRetired(
   knownBasenames: ReadonlySet<string>,
 ): void {
   const dirs = brainDirs(vault);
-  if (!existsSync(dirs.retired)) return;
-  for (const entry of readdirSync(dirs.retired, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    if (!entry.name.startsWith("ret-")) continue;
-    const path = join(dirs.retired, entry.name);
+  forEachBrainFile(dirs.retired, "ret-", (path) => {
     try {
       const ret = parseRetired(path);
       registerId(idIndex, ret.id, path);
@@ -800,30 +764,9 @@ function checkRetired(
         checkWikilinks(path, "superseded_by", [ret.superseded_by], knownBasenames, issues);
       }
     } catch (err) {
-      if (err instanceof BrainStatusFolderMismatchError) {
-        issues.push({
-          severity: "warning",
-          code: "status-folder-mismatch",
-          path,
-          message: err.message,
-        });
-      } else {
-        const msg = (err as Error).message ?? String(err);
-        const isMissingField = /missing field/.test(msg);
-        const isInvalidIso = /ISO-8601/i.test(msg);
-        issues.push({
-          severity: "error",
-          code: isMissingField
-            ? "retired-missing-field"
-            : isInvalidIso
-              ? "iso-invalid"
-              : "retired-invalid",
-          path,
-          message: msg,
-        });
-      }
+      classifyParseError(err, path, "retired", issues);
     }
-  }
+  });
 }
 
 // ----- Log check ------------------------------------------------------------
@@ -851,6 +794,62 @@ function registerId(idIndex: Map<string, string[]>, id: string, path: string): v
   const list = idIndex.get(id);
   if (list) list.push(path);
   else idIndex.set(id, [path]);
+}
+
+/**
+ * Iterate the `<prefix>*.md` files directly inside `dir` (non-recursive),
+ * invoking `cb(path, filename)` for each. Absent `dir` is a no-op - the
+ * per-kind checks (`checkPreferences`, `checkRetired`, `checkSignals`) all
+ * treat a missing Brain subdirectory as "nothing to check", not an error.
+ */
+function forEachBrainFile(
+  dir: string,
+  prefix: string,
+  cb: (path: string, filename: string) => void,
+): void {
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    if (!entry.name.startsWith(prefix)) continue;
+    cb(join(dir, entry.name), entry.name);
+  }
+}
+
+/**
+ * Classify a parse-time error into a `DoctorIssue` and push it. Shared by
+ * `checkPreferences` and `checkRetired`, which previously carried
+ * byte-identical copies of this regex-based classification - a change to
+ * a parser's error wording would otherwise reclassify issues in one path
+ * without the other noticing.
+ */
+function classifyParseError(
+  err: unknown,
+  path: string,
+  kindPrefix: string,
+  issues: DoctorIssue[],
+): void {
+  if (err instanceof BrainStatusFolderMismatchError) {
+    issues.push({
+      severity: "warning",
+      code: "status-folder-mismatch",
+      path,
+      message: err.message,
+    });
+    return;
+  }
+  const msg = (err as Error).message ?? String(err);
+  const isMissingField = /missing field/.test(msg);
+  const isInvalidIso = /ISO-8601/i.test(msg);
+  issues.push({
+    severity: "error",
+    code: isMissingField
+      ? `${kindPrefix}-missing-field`
+      : isInvalidIso
+        ? "iso-invalid"
+        : `${kindPrefix}-invalid`,
+    path,
+    message: msg,
+  });
 }
 
 // ISO-8601 UTC: YYYY-MM-DDTHH:MM:SS(.fff)?Z. Lenient — we accept the

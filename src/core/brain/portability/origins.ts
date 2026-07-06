@@ -14,9 +14,9 @@
  * they never reach the search fan-out.
  */
 
-import { statSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { isDir as isDirectory } from "../../fs-utils.ts";
 import { listProfiles } from "./profiles.ts";
 import { listRecallSources } from "./recall-sources.ts";
 
@@ -29,14 +29,6 @@ export interface SearchOrigin {
   readonly label: string;
   readonly vault: string;
   readonly kind: SearchOriginKind;
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 export function listSearchOrigins(

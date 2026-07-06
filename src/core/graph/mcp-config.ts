@@ -18,6 +18,8 @@
 import { readFileSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
+import { EXCLUDED_DIRS } from "../vault.ts";
+
 /** The config filenames recognised across common MCP hosts. */
 export const MCP_CONFIG_FILENAMES: ReadonlyArray<string> = Object.freeze([
   ".mcp.json",
@@ -28,15 +30,12 @@ export const MCP_CONFIG_FILENAMES: ReadonlyArray<string> = Object.freeze([
 
 const FILENAME_SET = new Set<string>(MCP_CONFIG_FILENAMES);
 
-/** Directories never descended into during discovery. */
-const SKIP_DIRS = new Set<string>([
-  ".git",
-  ".obsidian",
-  ".trash",
-  ".stversions",
-  "node_modules",
-  ".open-second-brain",
-]);
+/**
+ * Directories never descended into during discovery: the vault-wide
+ * exclusions plus two extra dirs specific to config discovery
+ * (`node_modules`, `.open-second-brain`).
+ */
+const SKIP_DIRS = new Set<string>([...EXCLUDED_DIRS, "node_modules", ".open-second-brain"]);
 
 /** Commands that take a package reference as their first non-flag argument. */
 const PACKAGE_RUNNERS = new Set<string>(["npx", "bunx", "pnpx", "uvx", "pipx"]);

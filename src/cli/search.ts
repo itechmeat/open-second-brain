@@ -49,6 +49,11 @@ import {
   addRerankProviderProfile,
   removeRerankProviderProfile,
   getRerankProviderProfile,
+  serializeEvidencePack,
+  serializeSearchCard,
+  serializeIndexStatus,
+  SEARCH_LIMIT_MIN,
+  SEARCH_LIMIT_MAX,
 } from "../core/search/index.ts";
 import type {
   IndexCheckReport,
@@ -341,11 +346,43 @@ function formatLearnedWeights(w: LearnedWeights): string {
 
 // ─── provider registry (Embedding Provider Suite) ────────────────────────────
 
-async function cmdSearchProvider(argv: ReadonlyArray<string>): Promise<number> {
+/** Structural shape shared by `ProviderProfile` and `RerankProviderProfile`. */
+interface CliRegistryProfile {
+  readonly name: string;
+  readonly baseUrl: string;
+  readonly defaultModel: string;
+  readonly envKey: string;
+}
+
+/**
+ * CRUD operations a provider-style registry exposes to the CLI, plus the
+ * naming used in usage/output strings. `verb` is the CLI subcommand name
+ * (`provider` / `rerank-provider`); `kind` is the human noun used in prose
+ * (`provider` / `rerank provider`).
+ */
+interface ProviderRegistryOps<T extends CliRegistryProfile> {
+  readonly verb: string;
+  readonly kind: string;
+  readonly load: (vault: string) => ReadonlyArray<T>;
+  readonly get: (vault: string, name: string) => T | null;
+  readonly add: (vault: string, profile: CliRegistryProfile) => ReadonlyArray<T>;
+  readonly remove: (vault: string, name: string) => { removed: boolean };
+}
+
+/**
+ * Shared `add|list|show|remove` dispatch for the provider and rerank-provider
+ * registries (retrieval-precision-quality-loop, card A) - identical CRUD
+ * shape over two structurally identical profile registries.
+ */
+async function runProviderRegistryCommand<T extends CliRegistryProfile>(
+  argv: ReadonlyArray<string>,
+  ops: ProviderRegistryOps<T>,
+): Promise<number> {
+  const { verb, kind } = ops;
   const action = argv[0];
   if (!action || !["add", "list", "show", "remove"].includes(action)) {
     throw new CliError(
-      "usage: o2b search provider <add NAME --base-url U --model M --env-key K | list | show NAME | remove NAME> [--json]",
+      `usage: o2b search ${verb} <add NAME --base-url U --model M --env-key K | list | show NAME | remove NAME> [--json]`,
     );
   }
   const { flags, positional } = parseFlags(argv.slice(1), {
@@ -362,13 +399,13 @@ async function cmdSearchProvider(argv: ReadonlyArray<string>): Promise<number> {
   const name = typeof positional[0] === "string" ? positional[0] : undefined;
 
   if (action === "list") {
-    const registry = loadProviderRegistry(cfg.vault);
+    const registry = ops.load(cfg.vault);
     if (json) {
       process.stdout.write(JSON.stringify(registry) + "\n");
       return 0;
     }
     if (registry.length === 0) {
-      process.stdout.write("no registered providers\n");
+      process.stdout.write(`no registered ${kind}s\n`);
       return 0;
     }
     for (const p of registry) {
@@ -378,10 +415,10 @@ async function cmdSearchProvider(argv: ReadonlyArray<string>): Promise<number> {
   }
 
   if (action === "show") {
-    if (!name) throw new CliError("usage: o2b search provider show NAME");
-    const profile = getProviderProfile(cfg.vault, name);
+    if (!name) throw new CliError(`usage: o2b search ${verb} show NAME`);
+    const profile = ops.get(cfg.vault, name);
     if (!profile) {
-      process.stderr.write(`error: no registered provider named '${name}'\n`);
+      process.stderr.write(`error: no registered ${kind} named '${name}'\n`);
       return 1;
     }
     process.stdout.write(
@@ -393,135 +430,61 @@ async function cmdSearchProvider(argv: ReadonlyArray<string>): Promise<number> {
   }
 
   if (action === "remove") {
-    if (!name) throw new CliError("usage: o2b search provider remove NAME");
-    const { removed } = removeProviderProfile(cfg.vault, name);
+    if (!name) throw new CliError(`usage: o2b search ${verb} remove NAME`);
+    const { removed } = ops.remove(cfg.vault, name);
     if (json) {
       process.stdout.write(JSON.stringify({ removed, name }) + "\n");
     } else {
-      process.stdout.write(
-        removed ? `removed provider '${name}'\n` : `no such provider '${name}'\n`,
-      );
+      process.stdout.write(removed ? `removed ${kind} '${name}'\n` : `no such ${kind} '${name}'\n`);
     }
     return removed ? 0 : 1;
   }
 
   // add
   if (!name)
-    throw new CliError("usage: o2b search provider add NAME --base-url U --model M --env-key K");
+    throw new CliError(`usage: o2b search ${verb} add NAME --base-url U --model M --env-key K`);
   const baseUrl = typeof flags["base-url"] === "string" ? (flags["base-url"] as string) : undefined;
   const model = typeof flags["model"] === "string" ? (flags["model"] as string) : undefined;
   const envKey = typeof flags["env-key"] === "string" ? (flags["env-key"] as string) : undefined;
   if (!baseUrl || !model || !envKey) {
     throw new CliError(
-      "provider add requires --base-url, --model, and --env-key (the env var NAME holding the API key)",
+      `${verb} add requires --base-url, --model, and --env-key (the env var NAME holding the API key)`,
     );
   }
-  const registry = addProviderProfile(cfg.vault, { name, baseUrl, defaultModel: model, envKey });
+  const registry = ops.add(cfg.vault, { name, baseUrl, defaultModel: model, envKey });
   const added = registry.find((p) => p.name === name)!;
   if (json) {
     process.stdout.write(JSON.stringify(added) + "\n");
   } else {
     process.stdout.write(
-      `added provider '${name}' (set ${envKey} in the environment to supply its key)\n`,
+      `added ${kind} '${name}' (set ${envKey} in the environment to supply its key)\n`,
     );
   }
   return 0;
 }
 
+async function cmdSearchProvider(argv: ReadonlyArray<string>): Promise<number> {
+  return runProviderRegistryCommand(argv, {
+    verb: "provider",
+    kind: "provider",
+    load: loadProviderRegistry,
+    get: getProviderProfile,
+    add: addProviderProfile,
+    remove: removeProviderProfile,
+  });
+}
+
 // ─── rerank provider registry (retrieval-precision-quality-loop, card A) ─────
 
 async function cmdSearchRerankProvider(argv: ReadonlyArray<string>): Promise<number> {
-  const action = argv[0];
-  if (!action || !["add", "list", "show", "remove"].includes(action)) {
-    throw new CliError(
-      "usage: o2b search rerank-provider <add NAME --base-url U --model M --env-key K | list | show NAME | remove NAME> [--json]",
-    );
-  }
-  const { flags, positional } = parseFlags(argv.slice(1), {
-    vault: { type: "string" },
-    config: { type: "string" },
-    db: { type: "string" },
-    "base-url": { type: "string" },
-    model: { type: "string" },
-    "env-key": { type: "string" },
-    json: { type: "boolean" },
+  return runProviderRegistryCommand(argv, {
+    verb: "rerank-provider",
+    kind: "rerank provider",
+    load: loadRerankRegistry,
+    get: getRerankProviderProfile,
+    add: addRerankProviderProfile,
+    remove: removeRerankProviderProfile,
   });
-  const cfg = resolveConfig(flags);
-  const json = flags["json"] === true;
-  const name = typeof positional[0] === "string" ? positional[0] : undefined;
-
-  if (action === "list") {
-    const registry = loadRerankRegistry(cfg.vault);
-    if (json) {
-      process.stdout.write(JSON.stringify(registry) + "\n");
-      return 0;
-    }
-    if (registry.length === 0) {
-      process.stdout.write("no registered rerank providers\n");
-      return 0;
-    }
-    for (const p of registry) {
-      process.stdout.write(`${p.name}  ${p.baseUrl}  model=${p.defaultModel}  env=${p.envKey}\n`);
-    }
-    return 0;
-  }
-
-  if (action === "show") {
-    if (!name) throw new CliError("usage: o2b search rerank-provider show NAME");
-    const profile = getRerankProviderProfile(cfg.vault, name);
-    if (!profile) {
-      process.stderr.write(`error: no registered rerank provider named '${name}'\n`);
-      return 1;
-    }
-    process.stdout.write(
-      json
-        ? JSON.stringify(profile) + "\n"
-        : `${profile.name}\n  base-url:  ${profile.baseUrl}\n  model:     ${profile.defaultModel}\n  env-key:   ${profile.envKey}\n`,
-    );
-    return 0;
-  }
-
-  if (action === "remove") {
-    if (!name) throw new CliError("usage: o2b search rerank-provider remove NAME");
-    const { removed } = removeRerankProviderProfile(cfg.vault, name);
-    if (json) {
-      process.stdout.write(JSON.stringify({ removed, name }) + "\n");
-    } else {
-      process.stdout.write(
-        removed ? `removed rerank provider '${name}'\n` : `no such rerank provider '${name}'\n`,
-      );
-    }
-    return removed ? 0 : 1;
-  }
-
-  // add
-  if (!name)
-    throw new CliError(
-      "usage: o2b search rerank-provider add NAME --base-url U --model M --env-key K",
-    );
-  const baseUrl = typeof flags["base-url"] === "string" ? (flags["base-url"] as string) : undefined;
-  const model = typeof flags["model"] === "string" ? (flags["model"] as string) : undefined;
-  const envKey = typeof flags["env-key"] === "string" ? (flags["env-key"] as string) : undefined;
-  if (!baseUrl || !model || !envKey) {
-    throw new CliError(
-      "rerank-provider add requires --base-url, --model, and --env-key (the env var NAME holding the API key)",
-    );
-  }
-  const registry = addRerankProviderProfile(cfg.vault, {
-    name,
-    baseUrl,
-    defaultModel: model,
-    envKey,
-  });
-  const added = registry.find((p) => p.name === name)!;
-  if (json) {
-    process.stdout.write(JSON.stringify(added) + "\n");
-  } else {
-    process.stdout.write(
-      `added rerank provider '${name}' (set ${envKey} in the environment to supply its key)\n`,
-    );
-  }
-  return 0;
 }
 
 // ─── query ────────────────────────────────────────────────────────────────────
@@ -573,8 +536,8 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     throw new CliError("query string is required when --query-doc has no searchable lanes");
   }
   const limitNum = Number(flags["limit"] ?? "10");
-  if (!Number.isInteger(limitNum) || limitNum < 1 || limitNum > 100) {
-    throw new CliError("--limit must be an integer in 1..100");
+  if (!Number.isInteger(limitNum) || limitNum < SEARCH_LIMIT_MIN || limitNum > SEARCH_LIMIT_MAX) {
+    throw new CliError(`--limit must be an integer in ${SEARCH_LIMIT_MIN}..${SEARCH_LIMIT_MAX}`);
   }
   const disclosureRaw = typeof flags["disclosure"] === "string" ? flags["disclosure"] : undefined;
   if (disclosureRaw !== undefined && disclosureRaw !== "full" && disclosureRaw !== "cards") {
@@ -697,73 +660,8 @@ function jsonForOutcome(o: SearchOutcome): unknown {
     })),
     warnings: o.warnings,
     total: o.total,
-    ...(o.cards
-      ? {
-          cards: o.cards.map((c) => ({
-            path: c.path,
-            title: c.title,
-            score: c.score,
-            snippet: c.snippet,
-            pointer: c.pointer,
-            reasons: c.reasons,
-            document_id: c.documentId,
-            chunk_id: c.chunkId,
-            ...(c.origin !== undefined ? { origin: c.origin } : {}),
-          })),
-        }
-      : {}),
-    ...(o.evidencePack ? { evidence_pack: jsonForEvidencePack(o.evidencePack) } : {}),
-  };
-}
-
-function jsonForEvidencePack(pack: NonNullable<SearchOutcome["evidencePack"]>): unknown {
-  return {
-    significant_terms: pack.significantTerms,
-    matched_terms: pack.matchedTerms,
-    missing_terms: pack.missingTerms,
-    support_coverage: pack.supportCoverage,
-    records: pack.records.map((record) => ({
-      path: record.path,
-      document_id: record.documentId,
-      chunk_id: record.chunkId,
-      line_pointer: record.linePointer,
-      matched_terms: record.matchedTerms,
-      missing_terms: record.missingTerms,
-      support_coverage: record.supportCoverage,
-      terminal_state: record.terminalState,
-      why_retrieved: record.whyRetrieved,
-      dropped_candidate_reasons: record.droppedCandidateReasons,
-    })),
-    dropped_candidates: pack.droppedCandidates,
-    abstention: pack.abstention,
-    ...(pack.idfWeightedCoverage !== undefined
-      ? { idf_weighted_coverage: pack.idfWeightedCoverage }
-      : {}),
-    ...(pack.rareTerms !== undefined ? { rare_terms: pack.rareTerms } : {}),
-    ...(pack.uncoveredRareTerms !== undefined
-      ? { uncovered_rare_terms: pack.uncoveredRareTerms }
-      : {}),
-    ...(pack.unionRecords !== undefined
-      ? {
-          union_records: pack.unionRecords.map((r) => ({
-            term: r.term,
-            path: r.path,
-            document_id: r.documentId,
-            chunk_id: r.chunkId,
-          })),
-        }
-      : {}),
-    ...(pack.completeness !== undefined
-      ? {
-          completeness: {
-            verdict: pack.completeness.verdict,
-            idf_weighted_coverage: pack.completeness.idfWeightedCoverage,
-            covered_terms: pack.completeness.coveredTerms,
-            uncovered_terms: pack.completeness.uncoveredTerms,
-            uncovered_but_present_in_corpus: pack.completeness.uncoveredButPresentInCorpus,
-          },
-        }
-      : {}),
+    ...(o.cards ? { cards: o.cards.map(serializeSearchCard) } : {}),
+    ...(o.evidencePack ? { evidence_pack: serializeEvidencePack(o.evidencePack) } : {}),
   };
 }
 
@@ -1141,33 +1039,11 @@ async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<number> {
   const cfg = resolveConfig(flags);
   const status = await indexStatus(cfg);
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(jsonForStatus(status)) + "\n");
+    process.stdout.write(JSON.stringify(serializeIndexStatus(status)) + "\n");
     return 0;
   }
   process.stdout.write(renderStatusHuman(status));
   return 0;
-}
-
-function jsonForStatus(s: IndexStatusSnapshot): unknown {
-  return {
-    index_path: s.indexPath,
-    exists: s.exists,
-    schema_version: s.schemaVersion,
-    documents: s.documents,
-    chunks: s.chunks,
-    embeddings: s.embeddings,
-    stale_embeddings: s.staleEmbeddings,
-    embedding_model: s.embeddingModel,
-    embedding_dimension: s.embeddingDimension,
-    embedding_signature: s.embeddingSignature,
-    estimated_refresh_cost_usd: s.estimatedRefreshCostUsd,
-    vec_extension: s.vecExtension,
-    semantic_enabled: s.semanticEnabled,
-    embedding_key_present: s.embeddingKeyPresent,
-    last_indexed_at: s.lastIndexedAt,
-    last_full_index_at: s.lastFullIndexAt,
-    warnings: s.warnings,
-  };
 }
 
 function renderStatusHuman(s: IndexStatusSnapshot): string {

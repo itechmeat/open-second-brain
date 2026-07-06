@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 
+import { escapeRegex } from "../strings.ts";
 import { brainConfigPath } from "./paths.ts";
 import {
   SCHEMA_VOCAB_CATEGORIES,
@@ -431,8 +432,4 @@ function unique(values: ReadonlyArray<string>): string[] {
     out.push(value);
   }
   return out;
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

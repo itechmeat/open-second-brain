@@ -11,6 +11,7 @@
 
 import { redactRawOutput } from "../../redactor.ts";
 import { appendAuditRecord } from "../../reliability/audit.ts";
+import { escapeRegex } from "../../strings.ts";
 import { brainDirs } from "../paths.ts";
 import { join } from "node:path";
 import { resolveSecretForExec, type SecretAuditContext } from "./store.ts";
@@ -44,14 +45,7 @@ export interface RunWithSecretResult {
 /** Glob match: `*` is the only metacharacter, everything else literal. */
 export function matchesAllowlist(allow: ReadonlyArray<string>, command: string): boolean {
   return allow.some((pattern) => {
-    const re = new RegExp(
-      "^" +
-        pattern
-          .split("*")
-          .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-          .join(".*") +
-        "$",
-    );
+    const re = new RegExp("^" + pattern.split("*").map(escapeRegex).join(".*") + "$");
     return re.test(command);
   });
 }
