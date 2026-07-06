@@ -133,10 +133,12 @@ interface ToolAvailability {
  */
 function detectTooling(): ToolAvailability {
   const pathEnv = process.env["PATH"] ?? "";
-  const dirs = pathEnv.split(":").filter((d) => d.length > 0);
+  const dirs = pathEnv.split(process.platform === "win32" ? ";" : ":").filter((d) => d.length > 0);
   const probe = (cmd: string): boolean => {
     for (const d of dirs) {
       if (existsSync(join(d, cmd))) return true;
+      // On Windows, executables have .exe extension
+      if (process.platform === "win32" && existsSync(join(d, cmd + ".exe"))) return true;
     }
     return false;
   };

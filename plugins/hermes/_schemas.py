@@ -458,5 +458,13 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
 
 
 def static_tool_schemas() -> list[dict[str, Any]]:
-    """Deep copies of the vendored schemas; callers may mutate freely."""
-    return [copy.deepcopy(schema) for schema in STATIC_TOOL_SCHEMAS]
+    """Deep copies of the vendored schemas; callers may mutate freely.
+
+    Converts MCP ``inputSchema`` to ``parameters`` so Hermes adapters
+    (Anthropic, OpenAI, Bedrock) can see the tool's expected arguments.
+    """
+    schemas = [copy.deepcopy(schema) for schema in STATIC_TOOL_SCHEMAS]
+    for s in schemas:
+        if "inputSchema" in s and "parameters" not in s:
+            s["parameters"] = s.pop("inputSchema")
+    return schemas

@@ -119,7 +119,15 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             tools = self._bridge.list_tools()
         except Exception:  # noqa: BLE001 - static fallback rather than a crash
             return static_tool_schemas()
-        return [t for t in tools if t.get("name") in MEMORY_TOOLS]
+        filtered = []
+        for t in tools:
+            if t.get("name") not in MEMORY_TOOLS:
+                continue
+            # MCP uses "inputSchema"; Hermes adapters expect "parameters"
+            if "inputSchema" in t and "parameters" not in t:
+                t = {**t, "parameters": t.pop("inputSchema")}
+            filtered.append(t)
+        return filtered
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **_kwargs: Any) -> str:
         """Forward an agent tool invocation to the TS core over the bridge.
