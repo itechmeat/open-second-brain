@@ -111,26 +111,6 @@ export function localizeEnvelope(ctx: ServerContext, result: unknown): unknown {
   };
 }
 
-/** Parse an optional positive-integer arg, throwing INVALID_PARAMS otherwise. */
-export function optionalPositiveInt(
-  args: Record<string, unknown>,
-  key: string,
-  tool: string,
-): number | undefined {
-  const raw = args[key];
-  if (raw === undefined) return undefined;
-  const n =
-    typeof raw === "number"
-      ? raw
-      : typeof raw === "string" && /^[0-9]+$/.test(raw.trim())
-        ? Number.parseInt(raw.trim(), 10)
-        : Number.NaN;
-  if (!Number.isInteger(n) || n <= 0) {
-    throw new MCPError(INVALID_PARAMS, `${tool}: ${key} must be a positive integer`);
-  }
-  return n;
-}
-
 export function optionalStringArg(
   tool: string,
   args: Record<string, unknown>,

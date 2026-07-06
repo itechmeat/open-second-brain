@@ -25,7 +25,7 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
   const { config, vault } = brainVerbContext(flags);
 
   // Positive-integer validation mirroring the MCP tool's
-  // optionalPositiveInt, so the CLI and MCP surfaces share semantics.
+  // coercePositiveInteger, so the CLI and MCP surfaces share semantics.
   const positiveInt = (name: string): { value: number | null; error: string | null } => {
     const parsed = parseOptionalNumberFlag(flags, name);
     if (parsed.error) return parsed;
