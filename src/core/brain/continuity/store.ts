@@ -182,7 +182,7 @@ export function listContinuityRecords(
   vault: string,
   filter: ContinuityRecordFilter = {},
 ): ReadonlyArray<ContinuityRecord> {
-  return Object.freeze(readAllRecords(vault).filter((record) => matches(record, filter)));
+  return Object.freeze(readAllRecords(vault, filter).filter((record) => matches(record, filter)));
 }
 
 export function paginateContinuityRecords(
@@ -240,12 +240,36 @@ function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord
   return record;
 }
 
-function readAllRecords(vault: string): ContinuityRecord[] {
+/**
+ * Read every stored record, optionally skipping whole month shards that
+ * a `since`/`until` filter proves cannot contribute a matching record.
+ *
+ * Shards are named `YYYY-MM.jsonl`, so the shard month is a 7-char prefix
+ * of every record's `createdAt` inside it. A shard whose month sorts
+ * strictly before `since`'s month can only hold records with
+ * `createdAt < since` (rejected by {@link matches}); one whose month sorts
+ * strictly after `until`'s month can only hold `createdAt > until`. Both
+ * are skipped without opening the file. The boundary months (equal to
+ * `since`/`until`'s month) are still read in full, so the returned set is
+ * byte-identical to reading everything and letting `matches` filter -
+ * this only avoids reading shards that would contribute nothing. Grows
+ * the read cost with the queried window, not the whole log history.
+ */
+function readAllRecords(vault: string, filter: ContinuityRecordFilter = {}): ContinuityRecord[] {
   const dir = ensureInsideVault(join(vault, CONTINUITY_REL), vault);
   if (!existsSync(dir)) return [];
+  const sinceMonth = filter.since ? filter.since.slice(0, 7) : undefined;
+  const untilMonth = filter.until ? filter.until.slice(0, 7) : undefined;
   const records: ContinuityRecord[] = [];
   for (const name of readdirSync(dir).toSorted()) {
     if (!name.endsWith(".jsonl")) continue;
+    const month = name.slice(0, -".jsonl".length);
+    // Only a canonical YYYY-MM shard has a month prefix we can range-skip
+    // on; any other name is read in full to stay byte-identical.
+    if (/^\d{4}-\d{2}$/.test(month)) {
+      if (sinceMonth !== undefined && month < sinceMonth) continue;
+      if (untilMonth !== undefined && month > untilMonth) continue;
+    }
     const path = ensureInsideVault(join(dir, name), vault);
     let st;
     try {

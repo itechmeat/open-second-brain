@@ -124,6 +124,33 @@ describe("continuity store", () => {
     });
     expect(records.map((record) => record.kind)).toEqual(["session_turn", "source_invalidation"]);
   });
+
+  test("since/until shard-skip returns the same records as an unfiltered window", () => {
+    const months = ["2026-03", "2026-05", "2026-07", "2026-09"];
+    for (const month of months) {
+      appendContinuityRecord(vault, {
+        kind: "context_receipt",
+        createdAt: `${month}-15T12:00:00Z`,
+        sourceRefs: [{ id: `src-${month}` }],
+        payload: { query: month },
+      });
+    }
+
+    // A bounded window skips the 2026-03 and 2026-09 shards but returns
+    // exactly the in-window records, in ascending createdAt order.
+    const windowed = listContinuityRecords(vault, {
+      since: "2026-05-01T00:00:00Z",
+      until: "2026-07-31T23:59:59Z",
+    });
+    expect(windowed.map((r) => r.payload["query"])).toEqual(["2026-05", "2026-07"]);
+
+    // Boundary months are read in full: since exactly on a record's month.
+    const openEnded = listContinuityRecords(vault, { since: "2026-05-15T12:00:00Z" });
+    expect(openEnded.map((r) => r.payload["query"])).toEqual(["2026-05", "2026-07", "2026-09"]);
+
+    // No filter still reads every shard.
+    expect(listContinuityRecords(vault)).toHaveLength(4);
+  });
 });
 
 describe("continuity batch append", () => {
