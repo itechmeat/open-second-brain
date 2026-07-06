@@ -138,7 +138,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   void flags["name"]; // accepted for backward CLI compat; unused
   let configPath: string;
   try {
-    configPath = setConfigValue("vault", resolve(vault));
+    configPath = setConfigValue("vault", resolve(vault).replace(/\\/g, "/"));
     if (agentName) setConfigValue("agent_name", agentName);
     if (timezone) setConfigValue("timezone", timezone);
   } catch (exc) {
