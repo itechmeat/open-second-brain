@@ -172,27 +172,51 @@ These are the places where two surfaces can silently disagree.
 
 ### 1.5 Property-filter parsing: share semantics, keep syntax adapters
 
-- **Where:** `src/cli/search.ts:653-675` (KEY=VALUE strings) vs
-  `src/mcp/search-tools.ts:332-360` (object argument); identical output
-  contract and OR-within-key / AND-across-keys semantics.
-- **Fix:** shared `buildPropertyFilter(entries)` in core; each layer keeps
-  only its syntax adapter.
+- **Where:** `src/cli/search.ts:616-638` (`parsePropertyFlags`, KEY=VALUE
+  strings) vs `src/mcp/search-tools.ts:335-363` (`parsePropertiesArgument`,
+  object argument).
+- **Assessed, not extracted:** on inspection the two do NOT share
+  extractable validation logic - CLI parses a flat string list and can
+  never produce an empty value array by construction (a malformed entry
+  throws before accumulation), while MCP iterates an already-object
+  argument and must explicitly reject non-array/non-string values and
+  empty arrays (failure modes only possible with a JSON object input).
+  Each throws its own error type (`CliError` vs `MCPError`) with
+  layer-specific messages. What the plan called "identical semantics" is
+  really just the shared *output type*
+  (`ReadonlyMap<string, ReadonlyArray<string>>`), which both already
+  satisfy - there is no meaningful logic left to factor into a
+  `buildPropertyFilter(entries)` without adding an indirection that
+  doesn't remove real duplication. Left as two independent, correctly
+  input-shape-specific parsers.
 
 ### 1.6 In-module duplication inside core search
 
-- `store.ts`: `xs.map(() => "?").join(",")` repeated ~12 times (lines 706,
-  728, 740, 1097, 1141, 1569, 1613, 1642, 1674, 1765, 1766, 1785) - one
-  private `placeholders(n)` helper; parameter-count mismatches hide exactly
-  here.
-- `search.ts`: semantic pool sizing `Math.max(limit * 5, 50)` repeated at
-  413, 477, 533, 772, 896 - name the policy (`POOL_OVERFETCH`,
-  `SEMANTIC_POOL_FLOOR`, or a `semanticPoolSize(limit)` helper); line 896's
-  wider cap becomes its own named expression.
-- Snippet rendering: CLI hardcodes `slice(0, 140)` (`src/cli/search.ts:801`),
-  MCP uses `MCP_CONTENT_MAX = 600` (`src/mcp/search-tools.ts:48,392-395`),
-  and `src/core/brain/session-recall.ts:540` / `idea-lineage.ts:248` re-do
-  the whitespace-collapse. One `renderSnippet(text, maxChars)` util; the
-  per-surface max stays a named per-surface constant.
+- **Done:** `store.ts` - `xs.map(() => "?").join(",")` was repeated 12
+  times; extracted a private `sqlPlaceholders(items)` helper (named to
+  avoid shadowing the many local `const placeholders = ...` call sites).
+- **Done:** `search.ts` - semantic pool sizing `Math.max(limit * 5, 50)`
+  was repeated 5 times; named the policy (`POOL_OVERFETCH`, `POOL_FLOOR`,
+  `semanticPoolSize(limit)`); the one wider-cap variant now builds on it
+  (`Math.max(semanticPoolSize(limit), limit * 3, 30)`) instead of
+  repeating the `5, 50` pair inline.
+- **Assessed, not extracted:** snippet rendering. CLI's inline snippet
+  (`src/cli/search.ts`, collapse whitespace + `slice(0, 140)` + `…`),
+  MCP's `truncateContent` (`src/mcp/search-tools.ts:395-398`, NO whitespace
+  collapse, `MCP_CONTENT_MAX = 600`, deliberately larger since it preserves
+  fuller content rather than previewing it), `session-recall.ts`'s `snippet`
+  (extracts a window CENTERED on a match index - a different algorithm
+  entirely, not a leading truncation), and `idea-lineage.ts`'s `snippet`
+  (collapse + truncate, but checks the COLLAPSED string's length and slices
+  to `SNIPPET - 3` to leave room for a 3-dot `...` - more correct than
+  CLI's version, which checks the ORIGINAL uncollapsed length for its
+  ellipsis decision). These are four genuinely different operations, not
+  one duplicated across four sites; the two that are superficially similar
+  (CLI, idea-lineage) already disagree on which string's length gates the
+  ellipsis. Unifying would mean either building a parameterized
+  `{collapse, anchor, ellipsis}` abstraction for four call sites (more
+  machinery than the duplication justifies) or silently changing one
+  side's behavior (an unauthorized policy call). Left as-is.
 
 ---
 
