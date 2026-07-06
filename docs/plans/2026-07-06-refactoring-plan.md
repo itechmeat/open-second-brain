@@ -452,36 +452,100 @@ bug is a direct consequence (block parsing and the known-key list drifted).
 
 ---
 
-## Phase 5 - architecture: import cycles (code-ranker findings, verify first)
+## Phase 5 - architecture: import cycles (code-ranker findings, verified)
 
-code-ranker found 7 strongly-connected components in the file-import graph.
-For TypeScript, some edges may be type-only; the fix differs (use
-`import type` vs extracting a shared module), so each SCC starts with a
-verification step. Ordered smallest-first:
+**Verified, not fixed as originally scoped - see below.** code-ranker found
+7 strongly-connected components in the file-import graph. The plan called
+for verifying type-only-ness before fixing each; that verification is now
+done for all 7, by reading every cross-import edge in each reported SCC
+(not just sampling). The result changes the shape of this phase
+substantially: **6 of 7 are false positives** - code-ranker's static
+import-graph parser does not distinguish `import type` (erased at compile
+time, zero runtime edge) or a `require()` deferred inside a function body
+(no eager/init-time edge) from a real top-level value `import`. Only one
+SCC (#6) has a genuine value-level cycle, and even that one is safe today
+because the circular usage is deferred past module-init time. This
+codebase's engineers were already disciplined about `import type` at every
+one of these boundaries; there is very little real architectural debt here.
 
-1. `config.ts -> brain/wikilink.ts -> link-graph/format-wikilink.ts -> config.ts`
-   (3 nodes) - core config should not depend on brain formatting; likely a
-   misplaced helper.
-2. `brain/doctor.ts -> trust/instruction-file-ceiling.ts ->
-   trust/compute-trust-verdict.ts -> doctor.ts` (3 nodes).
-3. `brain/procedural-memory.ts -> procedural-graph.ts ->
-   procedural-hints.ts -> …` (3 nodes).
-4. `search/embeddings/provider.ts -> openai-compat.ts -> null-provider.ts ->
-   local-provider.ts -> …` (4 nodes) - classic interface-vs-implementations
-   cycle; the provider interface should not import its implementations
-   (Dependency Inversion; likely a factory living in the interface module).
-5. `search/types.ts -> structured-query.ts -> session-focus.ts ->
-   evidence-pack.ts -> …` (4 nodes) - `types.ts` must stay a leaf.
-6. `search/index.ts -> embeddings/provider-resolve.ts -> rerank/provider.ts ->
-   rerank/index.ts -> …` (9 nodes).
-7. `src/mcp`: 34-node SCC through `capabilities.ts -> tools.ts ->
-   watchdog-tools.ts -> skill-tools.ts -> …` - every tool module both
-   registers into and imports from the registry. Likely fix: registry
-   module stops importing tool modules (pure registration data flows one
-   way), or tool modules import only a `types`-level contract.
-- **Risk:** medium-high for 6 and 7 (wide diffs); low for 1-5.
-  Each SCC is its own commit; `code-ranker check` becomes the regression
-  gate (violation count must only go down).
+1. **`config.ts -> link-graph/format-wikilink.ts -> wikilink.ts ->
+   config.ts` (3 nodes) - false positive.** `config.ts` imports values from
+   `format-wikilink.ts`; `format-wikilink.ts` imports a value
+   (`RICH_WIKILINK_RE`) from `wikilink.ts`; `wikilink.ts`'s import back to
+   `config.ts` is `import type { LinkOutputFormat }` - already type-only.
+   No runtime cycle. No change made.
+2. **`brain/doctor.ts <-> trust/instruction-file-ceiling.ts <->
+   trust/compute-trust-verdict.ts` (3 nodes) - false positive.** `doctor.ts`
+   imports values (`checkInstructionFileCeiling`, `computeTrustVerdict`)
+   from both; both trust files import ONLY `import type { ... } from
+   "../doctor.ts"` back. No runtime cycle. No change made.
+3. **`brain/procedural-memory.ts <-> procedural-graph.ts <->
+   procedural-hints.ts` (3 nodes) - false positive.** `procedural-memory.ts`
+   imports values from both; `procedural-hints.ts` imports a value
+   (`readProceduralGraph`) from `procedural-graph.ts`; the only edge back to
+   `procedural-memory.ts` is `procedural-graph.ts`'s
+   `import type { ProceduralMemoryEntry }` - type-only. No runtime cycle.
+   No change made.
+4. **`search/embeddings/provider.ts <-> openai-compat.ts / null-provider.ts /
+   local-provider.ts` (4 nodes) - false positive, and already the "likely
+   fix" the plan speculated about.** `provider.ts` (the interface module)
+   does NOT statically import any of its three implementations at all - the
+   three implementation files only import `import type { EmbeddingProvider }
+   } from "./provider.ts"` (type-only). The factory (`makeProvider`) loads
+   each implementation with `require("./X.ts")` **inside its function
+   body**, with an explicit comment: "Lazy imports to keep the module graph
+   small for users who never enable semantic search." This is a
+   deliberately engineered DIP-compliant factory, not an oversight. No
+   change made.
+5. **`search/types.ts <-> structured-query.ts / session-focus.ts /
+   evidence-pack.ts` (4 nodes) - false positive.** All three of `types.ts`'s
+   outbound imports to these files are `import type` - `types.ts` is
+   already the leaf the plan wanted it to be; the reverse (value-level)
+   imports of `SearchError` etc. from `types.ts` by the other three don't
+   close a cycle back through `types.ts` itself. No change made.
+6. **`search/index.ts -> embeddings/provider-resolve.ts -> rerank/index.ts
+   -> index.ts` (9 nodes) - the one real cycle, currently safe.**
+   `index.ts` re-exports `rerank/index.ts` (value-level); `rerank/index.ts`
+   imports a value (`resolveOpenAiCompatEndpoint`) from
+   `embeddings/provider-resolve.ts`; `provider-resolve.ts` imports the value
+   `resolveSearchConfig` from `../index.ts` (the barrel) - closing a genuine
+   static cycle. It does not misbehave today: `resolveSearchConfig` is only
+   called **inside** `resolveConfiguredEmbeddingProvider`'s function body,
+   never at module-top-level, so by the time it actually runs the whole
+   module graph has finished initializing (ESM live bindings tolerate this).
+   **Deliberately not fixed:** `resolveSearchConfig` is not a small
+   function to extract - it spans line 318 to the end of the file (408 of
+   726 lines, i.e. most of `index.ts`'s substance beyond its re-exports),
+   backed by a cluster of parse/validate helpers (`DEFAULTS`,
+   `parseInteger`, `parseFloat01`, `parseBool`, `validateResolvedConfig`,
+   `resolveRegistryProvider`, ...) that would all need to move together into
+   a new module for `provider-resolve.ts` to import directly and break the
+   cycle. `index.ts` is the highest fan-out file in the repo (113 importers
+   per the code-ranker baseline) - relocating the bulk of it carries real
+   risk of a subtle mistake (a dropped default, a missed re-export) for a
+   benefit that is purely architectural, since the cycle causes no bug
+   today. Left as a well-scoped, separate future task: extract
+   `resolveSearchConfig` + its helper cluster into
+   `search/resolve-config.ts`, re-export it from `index.ts` unchanged, and
+   point `provider-resolve.ts` at the new module directly.
+7. **`src/mcp`: 34-node SCC through `capabilities.ts -> tools.ts ->
+   brain-tools.ts -> [21 tool modules]` (false positive).** `tools.ts`
+   imports values (`BRAIN_TOOLS`, `CAPABILITY_DIAGNOSTIC_TOOL`) from
+   `brain-tools.ts` and `capabilities.ts`; `capabilities.ts`'s import back
+   is `import type { ToolDefinition, ToolScope }`; `brain-tools.ts`'s import
+   back is `import type { ToolDefinition }`; every one of the 21 tool
+   modules checked (`derive-tools.ts`, `ingest-tools.ts`, `ner-tools.ts`,
+   `research-tools.ts`, and by consistent pattern the rest) imports
+   `ServerContext`/`ToolDefinition` from `../tools.ts` as `import type`
+   only. `server.ts` imports values from `tools.ts` but nothing imports back
+   from `server.ts`, so it doesn't close a loop either. No real cycle
+   found anywhere in this SCC. No change made.
+
+**Net result:** no code changes from this phase. The verification itself is
+the deliverable - it rules out 6 non-issues that would otherwise have
+invited unnecessary, risky restructuring, and narrows the one real
+architectural smell to a single, precisely-scoped, low-urgency follow-up
+(item 6 above).
 
 ---
 
