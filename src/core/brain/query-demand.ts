@@ -34,6 +34,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 
+import { clamp01 } from "../math.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { redactRawOutput } from "../redactor.ts";
 import { queryDemandLogPath } from "./paths.ts";
@@ -431,12 +432,6 @@ function compactIfNeeded(path: string): void {
   }
   kept.reverse();
   writeFileSync(path, kept.length > 0 ? `${kept.join("\n")}\n` : "", { encoding: "utf8" });
-}
-
-function clamp01(value: number): number {
-  if (value < 0) return 0;
-  if (value > 1) return 1;
-  return value;
 }
 
 /**

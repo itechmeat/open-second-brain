@@ -420,6 +420,20 @@ describe("validateBrainConfig — warnings (forward-compat)", () => {
     );
     expect(result.warnings.length).toBe(0);
   });
+
+  test("health/hygiene/anticipatory/recall blocks are known top-level keys", () => {
+    const result = validateBrainConfigDetailed(
+      {
+        schema_version: 1,
+        health: {},
+        hygiene: {},
+        anticipatory: {},
+        recall: {},
+      },
+      "<test>",
+    );
+    expect(result.warnings.length).toBe(0);
+  });
 });
 
 describe("validateBrainConfig — vault block (v0.10.9)", () => {

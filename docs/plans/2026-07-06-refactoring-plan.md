@@ -64,23 +64,43 @@ reliably - confirm "dead code" verdicts there with grep before deleting.
 ### 0.3 CLI search: numeric flags accept `NaN` silently
 
 - **Where:** `src/cli/search.ts:161-166` (`keyword-weight`,
-  `semantic-weight`, `concurrency` via bare `Number(...)`).
-- **Problem:** `--keyword-weight=hi` becomes `NaN`, silently corrupting
-  ranking; contrast the guarded `--limit` (:575) and `--debounce-ms` (:966).
-- **Fix:** validate with `Number.isFinite` and throw the same `CliError`
-  usage error the other numeric flags throw. Route through
-  `core/validate.ts` primitives (see task 5.2) rather than new inline checks.
-- **Test:** CLI test asserting a usage error on a non-numeric weight.
+  `semantic-weight`, `concurrency` via bare `Number(...)`) pass a raw JS
+  `number` into `resolveSearchConfig`'s `overrides`.
+- **Problem:** `--keyword-weight=hi` becomes `NaN`. Root cause is one level
+  deeper than the CLI: `validateIntegerRange` in
+  `src/core/search/index.ts:225-232` only compares `n < min` / `n > max`,
+  and both comparisons are `false` for `NaN`, so a NaN override for any
+  integer knob (`concurrency`, `batchSize`, `dimension`, `timeoutMs`,
+  `chunkSize`, ...) silently passes range validation. String-sourced values
+  (config file / env) are protected because they already go through
+  `parseInteger`/`parseFloat01` (`core/validate.ts`), which do check
+  `Number.isFinite` - only the raw-number `overrides` path was exposed.
+  `validateWeight` was already guarded (`!Number.isFinite(n)`), so only the
+  integer-range path had the gap.
+- **Fix (done):** added a `Number.isFinite` guard at the top of
+  `validateIntegerRange`, matching `validateWeight`'s existing style. This
+  closes the gap for every integer override, not just the CLI's
+  `--concurrency`, with one change. No separate CLI-layer guard was added:
+  `cmdSearch`'s catch block already maps `SearchError` with code
+  `INVALID_INPUT` to a clean `error: ... [INVALID_INPUT]` / exit 2, i.e.
+  the same UX as `CliError` - a second inline check in `cli/search.ts` would
+  have been redundant validation of the same value in two places.
+- **Test (done):** `tests/core/search/config.test.ts` - "a NaN integer
+  override is rejected instead of silently passing range checks"
+  (`overrides: { semantic: { concurrency: NaN } }`).
 - **Risk:** minimal (turns silent corruption into an error).
 
 ### 0.4 Dead export cleanup (verified zero callers)
 
 - `src/mcp/coerce.ts:54` `coerceOptionalNumber` - delete (confirmed dead via
-  codegraph_callers + repo grep).
-- `src/core/search/store.ts:252` `normalizeAlias`, `:215`
-  `WRITER_LOCK_STALE_MS`, `:226` `WRITER_LOCK_HEARTBEAT_MS` - keep the
-  symbols, drop the `export` keyword (used only inside store.ts, not
-  re-exported by `src/core/search/index.ts`).
+  codegraph_callers + repo grep across `src/` and `tests/`).
+- ~~`src/core/search/store.ts` `normalizeAlias`, `WRITER_LOCK_STALE_MS`,
+  `WRITER_LOCK_HEARTBEAT_MS` - drop `export`~~ **correction, not applied:**
+  all three are imported directly by `tests/core/search/store-aliases.test.ts`
+  and `tests/core/search/multi-instance.test.ts` to pin invariants (e.g.
+  `WRITER_LOCK_HEARTBEAT_MS < WRITER_LOCK_STALE_MS`). The original finding
+  only checked `src/` callers and missed the test-file importers; these
+  exports are live and must stay.
 - **Risk:** minimal; typecheck catches any missed caller.
 
 ---

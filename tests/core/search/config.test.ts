@@ -323,6 +323,19 @@ test("overrides are validated after merging", () => {
   ).toThrow(/embedding_batch_size/);
 });
 
+test("a NaN integer override is rejected instead of silently passing range checks", () => {
+  // `NaN < min` and `NaN > max` are both false, so an integer-range check
+  // that only compares bounds would let a NaN override through unnoticed.
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  expect(() =>
+    resolveSearchConfig({
+      vault: tmp,
+      configPath,
+      overrides: { semantic: { concurrency: Number.NaN } },
+    }),
+  ).toThrow(/embedding_concurrency/);
+});
+
 // ── Indexer Durability suite: shutdown grace + resume flag ──────────────────
 
 test("durability keys default to a 5s grace and no resume", () => {

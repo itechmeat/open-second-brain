@@ -20,6 +20,8 @@
  * injectable at the ranker boundary.
  */
 
+import { clamp01 } from "../math.ts";
+
 export interface WeibullRecencyOptions {
   /** Weibull shape parameter k (> 0). Lower values decay faster early. */
   readonly shape: number;
@@ -47,13 +49,6 @@ export const DEFAULT_RECENCY: WeibullRecencyOptions = Object.freeze({
  * layer and preserves the "old content has no recency reason" contract.
  */
 const EPSILON = 0.0005;
-
-function clamp01(x: number): number {
-  if (!Number.isFinite(x)) return 0;
-  if (x < 0) return 0;
-  if (x > 1) return 1;
-  return x;
-}
 
 /**
  * Recency boost for a content age in days under a Weibull curve. Ages at

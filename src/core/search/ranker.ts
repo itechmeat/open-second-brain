@@ -9,6 +9,7 @@
  * testable and substitutable.
  */
 
+import { clamp01 } from "../math.ts";
 import { PAGE_TIER_DEFAULT, tierWeight, type PageTier } from "../brain/page-meta/tier.ts";
 import { weibullDecay, DEFAULT_RECENCY, type WeibullRecencyOptions } from "./recency.ts";
 import { scoreSessionFocusTarget, type SearchSessionFocus } from "./session-focus.ts";
@@ -105,13 +106,6 @@ export interface RankerOptions {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-function clamp01(x: number): number {
-  if (!Number.isFinite(x)) return 0;
-  if (x < 0) return 0;
-  if (x > 1) return 1;
-  return x;
-}
 
 /** Min-max normalise BM25 within the candidate set. Lower BM25 is better. */
 function normalizeBm25(hits: ReadonlyArray<KeywordHit>): Map<number, number> {

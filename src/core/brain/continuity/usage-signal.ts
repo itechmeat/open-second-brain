@@ -20,6 +20,7 @@
  * Read-only by construction; this module never writes to the store.
  */
 
+import { clamp01 } from "../../math.ts";
 import { listRecallTelemetry } from "../recall-telemetry.ts";
 import type { NormalizedContinuityRecord } from "./read-model.ts";
 
@@ -219,9 +220,4 @@ function readArtifacts(value: unknown): ReadonlyArray<ArtifactRef> {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, value));
 }

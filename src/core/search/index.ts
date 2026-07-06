@@ -223,6 +223,12 @@ function parseFiniteFloat(raw: string | null, fallback: number, fieldName: strin
 }
 
 function validateIntegerRange(n: number, fieldName: string, range?: IntegerRange): void {
+  // NaN/Infinity fail every `<`/`>` comparison below, so without this guard
+  // an override supplied as a raw (non-string) number silently passes range
+  // checks that a string-sourced value would have caught via parseInteger.
+  if (!Number.isFinite(n)) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be a finite number, got '${n}'`);
+  }
   if (range?.min !== undefined && n < range.min) {
     throw new SearchError("INVALID_INPUT", `${fieldName} must be >= ${range.min}, got ${n}`);
   }

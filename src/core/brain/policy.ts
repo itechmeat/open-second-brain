@@ -1638,9 +1638,13 @@ export function validateBrainConfigDetailed(
     "guardrails",
     "link_graph",
     "temporal",
+    "health",
     "notes",
     "sessions",
     "schema",
+    "hygiene",
+    "anticipatory",
+    "recall",
     "feedback",
   ]);
   for (const key of Object.keys(obj)) {
