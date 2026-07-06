@@ -52,23 +52,30 @@ test("A.1: two overlapping reindex runs leave a complete, readable index", async
   // the live-path writer lock). With the fix it serialises on that lock;
   // without it, its synchronous pre-lock `tryUnlink(.new)` destroyed the
   // first run's staging DB mid-build.
-  let second: Promise<IndexStats | Error> | null = null;
+  //
+  // The contender promise is held in a single-cell container rather than a
+  // bare `let` because TypeScript's control-flow analysis does not track
+  // mutations performed inside the `onFile` closure — a bare `let second =
+  // null` is narrowed to `null` at the post-`await` read site, breaking the
+  // downstream `instanceof Error` narrowing (TS2358).
+  const second: Array<Promise<IndexStats | Error>> = [];
   const firstStats = await reindexVault(cfg, {
     onFile: () => {
-      if (!second) {
-        second = reindexVault(cfg).catch((e: unknown) =>
-          e instanceof Error ? e : new Error(String(e)),
+      if (second.length === 0) {
+        second.push(
+          reindexVault(cfg).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e)))),
         );
       }
     },
   });
-  const secondResult: IndexStats | Error | null = second ? await second : null;
+  const secondResult: IndexStats | Error | null =
+    second.length > 0 ? ((await second[0]) ?? null) : null;
 
   expect(firstStats.added).toBeGreaterThanOrEqual(docs);
 
   // The second contender either rebuilt cleanly (took the lock once the
   // first released) or fast-failed with INDEX_LOCKED — never corruption.
-  if (secondResult !== null && secondResult instanceof Error) {
+  if (secondResult instanceof Error) {
     expect(secondResult).toBeInstanceOf(SearchError);
     expect((secondResult as SearchError).code).toBe("INDEX_LOCKED");
   }
