@@ -635,6 +635,12 @@ export function validateBrainConfigDetailed(
   }
   const obj = parsed as Record<string, unknown>;
   const warnings: BrainConfigLoadWarning[] = [];
+  // Populated by every `hasBlock`/`mergeBlock` call below; drives the
+  // forward-compat "unknown top-level field" check at the end of this
+  // function. `schema_version` is seeded directly since its presence is
+  // checked by an inverted `if (!(... in obj))` immediately below, not
+  // through either helper.
+  const knownBlockKeys = new Set<string>(["schema_version"]);
 
   // schema_version is mandatory and must be in the supported set.
   if (!("schema_version" in obj)) {
@@ -666,7 +672,7 @@ export function validateBrainConfigDetailed(
   // writer would later refuse to emit fails fast at load time
   // instead of round-tripping into a state we cannot persist.
   let primaryAgent: string | null = DEFAULT_BRAIN_CONFIG.primary_agent;
-  if ("primary_agent" in obj) {
+  if (hasBlock(obj, "primary_agent", knownBlockKeys)) {
     const v = obj["primary_agent"];
     if (v === null || v === undefined) {
       primaryAgent = null;
@@ -707,6 +713,7 @@ export function validateBrainConfigDetailed(
     obj["dream"],
     DEFAULT_BRAIN_CONFIG.dream as unknown as Readonly<Record<string, number>>,
     source,
+    knownBlockKeys,
   );
   requirePositiveInteger("dream.candidate_threshold", dream.candidate_threshold, source);
   requirePositiveInteger("dream.unconfirmed_window_days", dream.unconfirmed_window_days, source);
@@ -721,6 +728,7 @@ export function validateBrainConfigDetailed(
     obj["retire"],
     DEFAULT_BRAIN_CONFIG.retire as unknown as Readonly<Record<string, number>>,
     source,
+    knownBlockKeys,
   );
   requirePositiveInteger("retire.stale_evidence_days", retire.stale_evidence_days, source);
 
@@ -729,6 +737,7 @@ export function validateBrainConfigDetailed(
     obj["confidence"],
     DEFAULT_BRAIN_CONFIG.confidence as unknown as Readonly<Record<string, number>>,
     source,
+    knownBlockKeys,
   );
   requireNonNegativeInteger("confidence.low_max_applied", confidence.low_max_applied, source);
   requireUnitInterval("confidence.medium_min", confidence.medium_min, source);
@@ -747,6 +756,7 @@ export function validateBrainConfigDetailed(
     obj["snapshots"],
     DEFAULT_BRAIN_CONFIG.snapshots as unknown as Readonly<Record<string, number>>,
     source,
+    knownBlockKeys,
   );
   requirePositiveInteger("snapshots.retention_count", snapshots.retention_count, source);
 
@@ -756,7 +766,7 @@ export function validateBrainConfigDetailed(
   // operators who explicitly removed it; the resolver falls back to
   // `DEFAULT_VAULT_IGNORE_PATHS` in both cases.
   let vault: BrainVaultConfig | undefined;
-  if ("vault" in obj) {
+  if (hasBlock(obj, "vault", knownBlockKeys)) {
     const raw = obj["vault"];
     const rawMap = requireMapBlock(raw, "vault", source);
     if ("ignore_paths" in rawMap) {
@@ -835,7 +845,7 @@ export function validateBrainConfigDetailed(
   // groups them so downstream consumers (`active.md`, `brain_digest`)
   // can pass one struct around.
   let active: BrainActiveConfig | undefined;
-  if ("active" in obj) {
+  if (hasBlock(obj, "active", knownBlockKeys)) {
     const rawActive = obj["active"];
     const activeMap = requireMapBlock(rawActive, "active", source);
     const hasWindow = "most_applied_window_days" in activeMap;
@@ -910,7 +920,7 @@ export function validateBrainConfigDetailed(
   // recency-scored lessons digest. Hard-error on out-of-range values —
   // operator-tunable knobs must never silently fall back to defaults.
   let lessons: BrainLessonsConfig | undefined;
-  if ("lessons" in obj) {
+  if (hasBlock(obj, "lessons", knownBlockKeys)) {
     const rawLessons = obj["lessons"];
     const lessonsMap = requireMapBlock(rawLessons, "lessons", source);
     const halfLife = readBoundedInt(
@@ -952,7 +962,7 @@ export function validateBrainConfigDetailed(
   // warning and drop the section (return undefined) rather than throwing —
   // the rest of the CLI surface must keep working.
   let disciplineReport: DisciplineReportConfig | undefined;
-  if ("discipline_report" in obj) {
+  if (hasBlock(obj, "discipline_report", knownBlockKeys)) {
     const dr = obj["discipline_report"];
     if (typeof dr !== "object" || dr === null || Array.isArray(dr)) {
       warnings.push({
@@ -1036,7 +1046,7 @@ export function validateBrainConfigDetailed(
   // `cfg.guardrails` undefined; `resolveGuardrails` injects defaults
   // on the read side so consumers receive a fully-populated struct.
   let guardrails: BrainGuardrailConfig | undefined;
-  if ("guardrails" in obj) {
+  if (hasBlock(obj, "guardrails", knownBlockKeys)) {
     const raw = obj["guardrails"];
     const rawMap = requireMapBlock(raw, "guardrails", source);
     const partial: {
@@ -1157,7 +1167,7 @@ export function validateBrainConfigDetailed(
   // Absent block → `cfg.link_graph` undefined; resolveLinkGraph
   // returns the bit-identical defaults.
   let linkGraph: BrainLinkGraphConfig | undefined;
-  if ("link_graph" in obj) {
+  if (hasBlock(obj, "link_graph", knownBlockKeys)) {
     const rawLg = obj["link_graph"];
     const lgObj = requireMapBlock(rawLg, "link_graph", source);
     const partialLg: Record<string, unknown> = {};
@@ -1229,7 +1239,7 @@ export function validateBrainConfigDetailed(
   // Absent block → `cfg.temporal` undefined; resolveTemporal returns
   // the bit-identical defaults.
   let temporal: BrainTemporalConfig | undefined;
-  if ("temporal" in obj) {
+  if (hasBlock(obj, "temporal", knownBlockKeys)) {
     const rawTp = obj["temporal"];
     const tpObj = requireMapBlock(rawTp, "temporal", source);
     const partialTp: Record<string, unknown> = {};
@@ -1293,7 +1303,7 @@ export function validateBrainConfigDetailed(
   // Absent block → `cfg.health` undefined; resolveHealth returns the
   // bit-identical defaults.
   let health: BrainHealthConfig | undefined;
-  if ("health" in obj) {
+  if (hasBlock(obj, "health", knownBlockKeys)) {
     const rawH = obj["health"];
     const hObj = requireMapBlock(rawH, "health", source);
     const partialH: Record<string, unknown> = {};
@@ -1344,7 +1354,7 @@ export function validateBrainConfigDetailed(
   // bit-identical defaults (empty `read_paths`). The list is purely
   // a READ surface; agents never write to these paths.
   let notes: BrainNotesConfig | undefined;
-  if ("notes" in obj) {
+  if (hasBlock(obj, "notes", knownBlockKeys)) {
     const rawNotes = obj["notes"];
     const notesObj = requireMapBlock(rawNotes, "notes", source);
     const partialNotes: Record<string, unknown> = {};
@@ -1408,7 +1418,7 @@ export function validateBrainConfigDetailed(
   // capture-boundary warning, never a config error, so a typo cannot
   // take the whole Brain config down).
   let sessions: BrainSessionsConfig | undefined;
-  if ("sessions" in obj) {
+  if (hasBlock(obj, "sessions", knownBlockKeys)) {
     const rawSessions = obj["sessions"];
     const sessionsObj = requireMapBlock(rawSessions, "sessions", source);
     const partial: Record<string, unknown> = {};
@@ -1454,7 +1464,7 @@ export function validateBrainConfigDetailed(
   // Absent block leaves cfg.schema undefined; consumers merge built-ins
   // through resolveSchemaVocabulary.
   let schema: BrainSchemaConfig | undefined;
-  if ("schema" in obj) {
+  if (hasBlock(obj, "schema", knownBlockKeys)) {
     const rawSchema = obj["schema"];
     const schemaObj = requireMapBlock(rawSchema, "schema", source);
     const partialSchema: Partial<Record<keyof BrainSchemaConfig, ReadonlyArray<string>>> = {};
@@ -1534,42 +1544,9 @@ export function validateBrainConfigDetailed(
     }
   }
 
-  // Forward-compat: unknown top-level keys → warning, not error.
-  const known = new Set([
-    "schema_version",
-    "primary_agent",
-    "dream",
-    "retire",
-    "confidence",
-    "snapshots",
-    "vault",
-    "active",
-    "lessons",
-    "discipline_report",
-    "guardrails",
-    "link_graph",
-    "temporal",
-    "health",
-    "notes",
-    "sessions",
-    "schema",
-    "hygiene",
-    "anticipatory",
-    "recall",
-    "feedback",
-  ]);
-  for (const key of Object.keys(obj)) {
-    if (!known.has(key)) {
-      warnings.push({
-        path: source ?? "<config>",
-        message: `unknown top-level field '${key}' ignored (forward-compat)`,
-      });
-    }
-  }
-
   // Optional `hygiene:` block (continuity-hygiene-freshness suite).
   let hygiene: BrainHygieneConfig | undefined;
-  if ("hygiene" in obj) {
+  if (hasBlock(obj, "hygiene", knownBlockKeys)) {
     const raw = obj["hygiene"];
     const rawMap = requireMapBlock(raw, "hygiene", source);
     const partial: { resolver_cmd?: string; dedup_threshold?: number } = {};
@@ -1600,7 +1577,7 @@ export function validateBrainConfigDetailed(
 
   // Optional `anticipatory:` block (continuity-hygiene-freshness suite).
   let anticipatory: BrainAnticipatoryConfig | undefined;
-  if ("anticipatory" in obj) {
+  if (hasBlock(obj, "anticipatory", knownBlockKeys)) {
     const raw = obj["anticipatory"];
     const rawMap = requireMapBlock(raw, "anticipatory", source);
     const partial: { ttl_seconds?: number; max_tokens?: number } = {};
@@ -1617,7 +1594,7 @@ export function validateBrainConfigDetailed(
 
   // Optional `recall:` block (continuity-hygiene-freshness suite).
   let recall: BrainRecallConfig | undefined;
-  if ("recall" in obj) {
+  if (hasBlock(obj, "recall", knownBlockKeys)) {
     const raw = obj["recall"];
     const rawMap = requireMapBlock(raw, "recall", source);
     const partial: { degradation?: "hard-cut" | "staged" } = {};
@@ -1641,7 +1618,7 @@ export function validateBrainConfigDetailed(
   // exactly (non-empty after trim, single-line, <= SCOPE_MAX_LEN) so a
   // configured default can never pass validation yet fail at write time.
   let feedback: BrainFeedbackConfig | undefined;
-  if ("feedback" in obj) {
+  if (hasBlock(obj, "feedback", knownBlockKeys)) {
     const raw = obj["feedback"];
     const rawMap = requireMapBlock(raw, "feedback", source);
     const partial: { default_scope?: string } = {};
@@ -1681,6 +1658,21 @@ export function validateBrainConfigDetailed(
     // Forward-compat: unknown sub-keys under `feedback:` → warning.
     warnUnknownKeys(rawMap, ["default_scope"], "feedback", source, warnings);
     feedback = Object.freeze(partial);
+  }
+
+  // Forward-compat: unknown top-level keys → warning, not error. Runs
+  // last (every block above has had a chance to register itself into
+  // `knownBlockKeys` via `hasBlock`/`mergeBlock`) so a block can never be
+  // parsed-but-not-yet-known at the point this check reads the set. Uses
+  // its own message format (distinct from `warnUnknownKeys`'s
+  // `block.key: ...` shape), pinned by an existing test.
+  for (const key of Object.keys(obj)) {
+    if (!knownBlockKeys.has(key)) {
+      warnings.push({
+        path: source ?? "<config>",
+        message: `unknown top-level field '${key}' ignored (forward-compat)`,
+      });
+    }
   }
 
   const config: BrainConfig = {
@@ -1784,7 +1776,9 @@ function mergeBlock(
   raw: unknown,
   fallback: Readonly<Record<string, number>>,
   source: string | null,
+  knownBlockKeys: Set<string>,
 ): Record<string, unknown> {
+  knownBlockKeys.add(blockKey);
   if (raw === undefined) {
     return { ...fallback };
   }
@@ -1794,6 +1788,23 @@ function mergeBlock(
     merged[k] = v;
   }
   return merged;
+}
+
+/**
+ * Record that this call site checked for `key` at the top level, then
+ * report whether it's present. Every top-level block/field presence
+ * check (`"vault" in obj`, etc.) MUST go through this - or `mergeBlock`,
+ * for the four blocks that merge onto numeric defaults instead of being
+ * fully optional - so `knownBlockKeys` can never drift from the set of
+ * keys this function actually understands (the bug class fixed in
+ * phase 0: four blocks were parsed but missing from a hand-maintained
+ * `known` list, so valid config produced a false "unknown field"
+ * warning). A key that is never checked can never be "known", by
+ * construction - there is no separate list to forget to update.
+ */
+function hasBlock(obj: Record<string, unknown>, key: string, knownBlockKeys: Set<string>): boolean {
+  knownBlockKeys.add(key);
+  return key in obj;
 }
 
 function requirePositiveInteger(field: string, value: unknown, source: string | null): void {
