@@ -112,6 +112,38 @@ describe("readQueryDemand", () => {
   test("empty when the log does not exist", () => {
     expect(readQueryDemand(vault)).toEqual([]);
   });
+
+  test("second-precision since/until bounds compare consistently against ms records", () => {
+    // Records are stored at millisecond precision. A raw lexical compare
+    // against a second-precision bound misfires because `.` (0x2E) sorts
+    // before `Z` (0x5A): `since 00:00:00Z` wrongly DROPS the whole
+    // [.000, .999] window, and `until 00:00:00Z` wrongly KEEPS it.
+    recordQueryDemand(vault, { terms: ["before"], resultCount: 1, at: "2026-06-30T23:59:59.500Z" });
+    recordQueryDemand(vault, {
+      terms: ["lowedge"],
+      resultCount: 1,
+      at: "2026-07-01T00:00:00.000Z",
+    });
+    recordQueryDemand(vault, { terms: ["midlow"], resultCount: 1, at: "2026-07-01T00:00:00.500Z" });
+    recordQueryDemand(vault, {
+      terms: ["highedge"],
+      resultCount: 1,
+      at: "2026-07-01T00:00:00.999Z",
+    });
+    recordQueryDemand(vault, { terms: ["after"], resultCount: 1, at: "2026-07-01T00:00:01.000Z" });
+
+    // `since 00:00:00Z` (normalized to .000Z) keeps the whole second and the
+    // record after it; the pre-fix lexical compare dropped lowedge/midlow/
+    // highedge because `.NNNZ` < `Z`.
+    const fromSecond = readQueryDemand(vault, { since: "2026-07-01T00:00:00Z" });
+    expect(fromSecond.map((r) => r.terms[0])).toEqual(["lowedge", "midlow", "highedge", "after"]);
+
+    // `until 00:00:00Z` (normalized to .000Z) is inclusive of exactly .000Z
+    // and excludes the rest of the second; the pre-fix lexical compare
+    // wrongly kept midlow/highedge (`.NNNZ` < `Z` ⇒ not `> until`).
+    const untilSecond = readQueryDemand(vault, { until: "2026-07-01T00:00:00Z" });
+    expect(untilSecond.map((r) => r.terms[0])).toEqual(["before", "lowedge"]);
+  });
 });
 
 describe("aggregateQueryDemand", () => {

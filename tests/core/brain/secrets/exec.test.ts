@@ -121,6 +121,42 @@ describe("runWithSecret", () => {
     }
   });
 
+  test("a foreign bare secret in argv is redacted in the persisted audit trail", async () => {
+    setSecret(vault, {
+      name: "api-key",
+      value: "own-custody-secret",
+      envVar: "MY_API_KEY",
+      allow: ["bun *"],
+      agent: "tester",
+      now: NOW,
+    });
+    // The agent passes some OTHER credential as a bare positional argument —
+    // it never enters the custody store, so it is not a known literal, but it
+    // must not land in the long-lived audit log in cleartext.
+    const foreignToken = "sk-foreign-abc123def456";
+    const result = await runWithSecret(
+      vault,
+      "api-key",
+      ["bun", "-e", "process.exit(0)", foreignToken],
+      CTX,
+    );
+    expect(result.exitCode).toBe(0);
+
+    const auditDir = join(vault, "Brain", "log", "secret-custody");
+    const raw = readdirSync(auditDir)
+      .map((f) => readFileSync(join(auditDir, f), "utf8"))
+      .join("");
+    expect(raw).not.toContain(foreignToken);
+    const started = raw
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as { action: string; details?: { command?: string } })
+      .find((l) => l.action === "secret_exec_started");
+    expect(started).toBeDefined();
+    expect(started!.details!.command).toContain("***REDACTED***");
+    expect(started!.details!.command).not.toContain(foreignToken);
+  });
+
   test("the subprocess exit code propagates", async () => {
     setSecret(vault, {
       name: "api-key",

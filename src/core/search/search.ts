@@ -1150,11 +1150,16 @@ function toSearchCard(result: BrainSearchResult): SearchCard {
   });
 }
 
-function cardSnippet(content: string): string {
+export function cardSnippet(content: string): string {
   const collapsed = content.replace(/\s+/g, " ").trim();
-  return collapsed.length <= CARD_SNIPPET_CHARS
+  // Truncate on code points, not UTF-16 units: a raw `.slice` can cut an
+  // astral character (emoji, rare CJK) mid-surrogate-pair, shipping a lone
+  // surrogate that renders as U+FFFD. Spreading into an array iterates by
+  // code point, so the cap never splits a character.
+  const points = [...collapsed];
+  return points.length <= CARD_SNIPPET_CHARS
     ? collapsed
-    : `${collapsed.slice(0, CARD_SNIPPET_CHARS)}...`;
+    : `${points.slice(0, CARD_SNIPPET_CHARS).join("")}...`;
 }
 
 /**
