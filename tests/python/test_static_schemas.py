@@ -51,11 +51,12 @@ class StaticSchemaIntegrityTests(unittest.TestCase):
 
     def test_accessor_returns_deep_copies(self):
         first = static_tool_schemas()
-        first[0]["inputSchema"]["properties"]["__mutated__"] = True
+        # static_tool_schemas() remaps inputSchema -> parameters
+        first[0]["parameters"]["properties"]["__mutated__"] = True
         first[0]["name"] = "mutated"
         second = static_tool_schemas()
         self.assertNotEqual(second[0]["name"], "mutated")
-        self.assertNotIn("__mutated__", second[0]["inputSchema"]["properties"])
+        self.assertNotIn("__mutated__", second[0]["parameters"]["properties"])
 
 
 def _live_memory_tool_projection() -> list[dict]:
