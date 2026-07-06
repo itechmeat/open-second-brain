@@ -166,7 +166,8 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
                 continue
             # MCP uses "inputSchema"; Hermes adapters expect "parameters"
             if "inputSchema" in t and "parameters" not in t:
-                t = {**t, "parameters": t.pop("inputSchema")}
+                t = dict(t)
+                t["parameters"] = t.pop("inputSchema")
             filtered.append(t)
         return filtered
 
