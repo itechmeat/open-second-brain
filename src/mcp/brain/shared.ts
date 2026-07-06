@@ -9,11 +9,38 @@ import { resolveTimezone } from "../../core/config.ts";
 import { type RecallTelemetryOptions } from "../../core/brain/recall-telemetry.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { formatLocalTimestamp } from "../../core/brain/present-time.ts";
-import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext } from "../tools.ts";
 import { coerceBool } from "../coerce.ts";
 
 export const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Run a tool handler body, classifying a thrown error into the right MCP
+ * error code: a client-resolvable input problem (any class in
+ * `validationClasses`, or an already-typed `MCPError`) surfaces as
+ * `INVALID_PARAMS`; anything else is a server fault (`INTERNAL_ERROR`).
+ * This mapping is safety-relevant - it decides whether the CALLER or the
+ * SERVER is blamed for a failure - and was previously copy-pasted
+ * identically across derive-tools, ingest-tools, ner-tools, and
+ * research-tools, one drift away from silently reclassifying an error.
+ */
+export async function wrapToolErrors<T>(
+  tool: string,
+  validationClasses: ReadonlyArray<new (...args: never[]) => Error>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (validationClasses.some((cls) => err instanceof cls)) {
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${(err as Error).message}`);
+    }
+    if (err instanceof MCPError) throw err;
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new MCPError(INTERNAL_ERROR, `${tool}: ${reason}`);
+  }
+}
 
 export function coerceIsoTimestampOrDate(
   tool: string,
