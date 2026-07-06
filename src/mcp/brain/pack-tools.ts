@@ -45,7 +45,6 @@ import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, coerceStrList, coerceBool } from "../coerce.ts";
 import {
   coercePositiveInteger,
-  optionalPositiveInt,
   optionalStringArg,
   requiredStringArg,
   telemetryOptionsFromArgs,
@@ -59,14 +58,8 @@ async function toolBrainContextPack(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const maxRaw = args["max_tokens"];
-  const maxTokens =
-    typeof maxRaw === "number"
-      ? maxRaw
-      : typeof maxRaw === "string" && /^[0-9]+$/.test(maxRaw.trim())
-        ? Number.parseInt(maxRaw.trim(), 10)
-        : Number.NaN;
-  if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
+  const maxTokens = coercePositiveInteger("brain_context_pack", "max_tokens", args["max_tokens"]);
+  if (maxTokens === undefined) {
     throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
@@ -74,8 +67,16 @@ async function toolBrainContextPack(
   const cacheStable = coerceBool(args, "cache_stable");
   const dedupRepeated = coerceBool(args, "dedup_repeated");
   const attentionFlowIds = coerceStrList(args, "attention_flow_ids");
-  const maxCharsPerMemory = optionalPositiveInt(args, "max_chars_per_memory", "brain_context_pack");
-  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_context_pack");
+  const maxCharsPerMemory = coercePositiveInteger(
+    "brain_context_pack",
+    "max_chars_per_memory",
+    args["max_chars_per_memory"],
+  );
+  const maxTotalChars = coercePositiveInteger(
+    "brain_context_pack",
+    "max_total_chars",
+    args["max_total_chars"],
+  );
   const receipt = receiptOptionsFromArgs("brain_context_pack", args, "context_pack", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
   // Adequacy verdict (t_b8f66fec): when the caller passes the recall
@@ -386,13 +387,17 @@ async function toolBrainPreCompressPack(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const topK = optionalPositiveInt(args, "top_k", "brain_pre_compress_pack") ?? 10;
-  const maxCharsPerMemory = optionalPositiveInt(
-    args,
-    "max_chars_per_memory",
+  const topK = coercePositiveInteger("brain_pre_compress_pack", "top_k", args["top_k"]) ?? 10;
+  const maxCharsPerMemory = coercePositiveInteger(
     "brain_pre_compress_pack",
+    "max_chars_per_memory",
+    args["max_chars_per_memory"],
   );
-  const maxTotalChars = optionalPositiveInt(args, "max_total_chars", "brain_pre_compress_pack");
+  const maxTotalChars = coercePositiveInteger(
+    "brain_pre_compress_pack",
+    "max_total_chars",
+    args["max_total_chars"],
+  );
   const receipt = receiptOptionsFromArgs("brain_pre_compress_pack", args, "pre_compress", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_pre_compress_pack", args, "mcp");
   const pack = buildPreCompressPack(ctx.vault, {

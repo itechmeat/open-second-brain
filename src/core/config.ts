@@ -301,6 +301,19 @@ export function resolveSkillsDir(configPath?: string): string | null {
 }
 
 /**
+ * Shared body for a default-OFF boolean config gate: env var (trimmed)
+ * wins, falling back to the matching `_brain.yaml`/config key (trimmed);
+ * only the literal strings `"true"`/`"1"` are truthy, anything else
+ * (including absence) resolves to `false`. Replaces seven copy-pasted
+ * resolver bodies that differed only in their env/config key names.
+ */
+function resolveConfigFlag(envKey: string, configKey: string, configPath?: string): boolean {
+  const env = process.env[envKey]?.trim();
+  const raw = env || discoverConfig(configPath).data[configKey]?.trim();
+  return raw === "true" || raw === "1";
+}
+
+/**
  * Skill-attach triggers gate (Agent Surface Suite). When enabled (default
  * OFF), the `triggers` field from each skill's SKILL.md frontmatter is
  * included in the lexical scorer as a 2x-BM25 tag signal. When disabled
@@ -308,9 +321,11 @@ export function resolveSkillsDir(configPath?: string): string | null {
  * (1x) only.
  */
 export function resolveSkillsAttachTriggers(configPath?: string): boolean {
-  const env = process.env["OPEN_SECOND_BRAIN_SKILLS_ATTACH_TRIGGERS"]?.trim();
-  const raw = env || discoverConfig(configPath).data["skills_attach_triggers"]?.trim();
-  return raw === "true" || raw === "1";
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_SKILLS_ATTACH_TRIGGERS",
+    "skills_attach_triggers",
+    configPath,
+  );
 }
 
 /**
@@ -320,9 +335,7 @@ export function resolveSkillsAttachTriggers(configPath?: string): boolean {
  * default per-turn injection stays bit-identical.
  */
 export function resolveSkillAutoAttach(configPath?: string): boolean {
-  const env = process.env["OPEN_SECOND_BRAIN_SKILL_AUTO_ATTACH"]?.trim();
-  const raw = env || discoverConfig(configPath).data["skill_auto_attach"]?.trim();
-  return raw === "true" || raw === "1";
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_SKILL_AUTO_ATTACH", "skill_auto_attach", configPath);
 }
 
 /**
@@ -332,9 +345,11 @@ export function resolveSkillAutoAttach(configPath?: string): boolean {
  * pack byte-identical.
  */
 export function resolveSearchFocusContextPack(configPath?: string): boolean {
-  const env = process.env["OPEN_SECOND_BRAIN_SEARCH_FOCUS_CONTEXT_PACK"]?.trim();
-  const raw = env || discoverConfig(configPath).data["search_focus_context_pack"]?.trim();
-  return raw === "true" || raw === "1";
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_SEARCH_FOCUS_CONTEXT_PACK",
+    "search_focus_context_pack",
+    configPath,
+  );
 }
 
 /**
@@ -345,9 +360,11 @@ export function resolveSearchFocusContextPack(configPath?: string): boolean {
  * post-compaction re-assertion and stay byte-identical.
  */
 export function resolvePostCompactSurvivalAudit(configPath?: string): boolean {
-  const env = process.env["OPEN_SECOND_BRAIN_POST_COMPACT_SURVIVAL_AUDIT"]?.trim();
-  const raw = env || discoverConfig(configPath).data["post_compact_survival_audit"]?.trim();
-  return raw === "true" || raw === "1";
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_POST_COMPACT_SURVIVAL_AUDIT",
+    "post_compact_survival_audit",
+    configPath,
+  );
 }
 
 /**
@@ -356,9 +373,7 @@ export function resolvePostCompactSurvivalAudit(configPath?: string): boolean {
  * `session_handoff: "true"`.
  */
 export function resolveSessionHandoff(configPath?: string): boolean {
-  const env = process.env["OPEN_SECOND_BRAIN_SESSION_HANDOFF"]?.trim();
-  const raw = env || discoverConfig(configPath).data["session_handoff"]?.trim();
-  return raw === "true" || raw === "1";
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_SESSION_HANDOFF", "session_handoff", configPath);
 }
 
 /**
@@ -406,9 +421,11 @@ export function resolveTriggerCooldownDays(configPath?: string): number {
  * prompt).
  */
 export function resolveRecallGateTelemetry(configPath?: string): boolean {
-  const env = process.env["OPEN_SECOND_BRAIN_RECALL_GATE_TELEMETRY"]?.trim();
-  const raw = env || discoverConfig(configPath).data["recall_gate_telemetry"]?.trim();
-  return raw === "true" || raw === "1";
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_RECALL_GATE_TELEMETRY",
+    "recall_gate_telemetry",
+    configPath,
+  );
 }
 
 /**
@@ -482,9 +499,11 @@ function resolveAdequacyMinResults(env: string | undefined, fileValue: string | 
  * a single report when the config gate is off.
  */
 export function resolveGenerationTraceEnabled(configPath?: string): boolean {
-  const env = process.env["OPEN_SECOND_BRAIN_GENERATION_TRACE_ENABLED"]?.trim();
-  const raw = env || discoverConfig(configPath).data["generation_trace_enabled"]?.trim();
-  return raw === "true" || raw === "1";
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_GENERATION_TRACE_ENABLED",
+    "generation_trace_enabled",
+    configPath,
+  );
 }
 
 /**

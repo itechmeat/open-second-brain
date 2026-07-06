@@ -18,10 +18,11 @@
  * it without a cycle - same constraint as `profiles.ts`.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { isDir as isDirectory } from "../../fs-utils.ts";
 
 export const VAULT_POINTER_FILE = ".o2b-vault.json";
 
@@ -39,14 +40,6 @@ export interface PointerProbe {
   readonly pointer: VaultPointer | null;
   /** Malformation reason, or null when the pointer parsed cleanly. */
   readonly error: string | null;
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 function assertNotInsideVault(projectDir: string, vault: string): void {

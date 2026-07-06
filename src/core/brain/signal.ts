@@ -357,14 +357,7 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
   // Optional fields. `scope` is a plain scalar; `source` is an inline
   // array of wikilink strings. `raw` is extracted from the body if the
   // canonical heading is present.
-  let scope: string | undefined;
-  if (meta["scope"] !== undefined) {
-    const s = meta["scope"];
-    if (typeof s !== "string") {
-      throw new Error(`signal field 'scope' must be a string (${path})`);
-    }
-    if (s.trim()) scope = s.trim();
-  }
+  const scope = readOptionalTrimmedString(meta, "scope", path);
 
   let source: ReadonlyArray<string> | undefined;
   if (meta["source"] !== undefined) {
@@ -424,25 +417,8 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
     }
   }
 
-  let dedup_hash: string | undefined;
-  if (meta["dedup_hash"] !== undefined) {
-    const v = meta["dedup_hash"];
-    if (typeof v !== "string") {
-      throw new Error(`signal field 'dedup_hash' must be a string (${path})`);
-    }
-    const trimmed = v.trim();
-    if (trimmed) dedup_hash = trimmed;
-  }
-
-  let session_ref: string | undefined;
-  if (meta["session_ref"] !== undefined) {
-    const v = meta["session_ref"];
-    if (typeof v !== "string") {
-      throw new Error(`signal field 'session_ref' must be a string (${path})`);
-    }
-    const trimmed = v.trim();
-    if (trimmed) session_ref = trimmed;
-  }
+  const dedup_hash = readOptionalTrimmedString(meta, "dedup_hash", path);
+  const session_ref = readOptionalTrimmedString(meta, "session_ref", path);
 
   const result: BrainSignal = {
     kind: "brain-signal",
@@ -482,26 +458,35 @@ function readBiTemporal(
   readonly valid_until?: string;
   readonly recorded_at?: string;
 } {
+  const valid_from = readOptionalTrimmedString(meta, "valid_from", path);
+  const valid_until = readOptionalTrimmedString(meta, "valid_until", path);
+  const recorded_at = readOptionalTrimmedString(meta, "recorded_at", path);
   return {
-    ...readBiTemporalSlot(meta, "valid_from", path),
-    ...readBiTemporalSlot(meta, "valid_until", path),
-    ...readBiTemporalSlot(meta, "recorded_at", path),
+    ...(valid_from !== undefined ? { valid_from } : {}),
+    ...(valid_until !== undefined ? { valid_until } : {}),
+    ...(recorded_at !== undefined ? { recorded_at } : {}),
   };
 }
 
-function readBiTemporalSlot(
+/**
+ * Read an optional string frontmatter field, trimmed. Returns `undefined`
+ * when the key is absent or trims to empty; throws if present but not a
+ * string (a wrong-typed value is a corruption worth surfacing, not
+ * something to silently drop). Shared by every optional-string signal
+ * field (`scope`, `dedup_hash`, `session_ref`) and the bi-temporal slots.
+ */
+function readOptionalTrimmedString(
   meta: ReturnType<typeof parseFrontmatter>[0],
-  key: "valid_from" | "valid_until" | "recorded_at",
+  key: string,
   path: string,
-): Partial<Record<"valid_from" | "valid_until" | "recorded_at", string>> {
+): string | undefined {
   const v = meta[key];
-  if (v === undefined) return {};
+  if (v === undefined) return undefined;
   if (typeof v !== "string") {
     throw new Error(`signal field '${key}' must be a string (${path})`);
   }
   const trimmed = v.trim();
-  if (trimmed.length === 0) return {};
-  return { [key]: trimmed };
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 // ----- Helpers --------------------------------------------------------------

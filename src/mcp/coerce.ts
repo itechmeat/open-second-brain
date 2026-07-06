@@ -7,7 +7,6 @@
  */
 
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
-import { parseOptionalFiniteNumberInput } from "../core/validate.ts";
 
 export function coerceStr(
   args: Record<string, unknown>,
@@ -49,17 +48,6 @@ export function coerceInt(
     throw new MCPError(INVALID_PARAMS, `argument '${key}' must be between ${min} and ${max}`);
   }
   return value;
-}
-
-export function coerceOptionalNumber(args: Record<string, unknown>, key: string): number | null {
-  const parsed = parseOptionalFiniteNumberInput(args[key]);
-  if (parsed.error === "finite-number") {
-    throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a finite number`);
-  }
-  if (parsed.error === "number-or-numeric-string") {
-    throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a number or numeric string`);
-  }
-  return parsed.value;
 }
 
 export function coerceBool(args: Record<string, unknown>, key: string): boolean {

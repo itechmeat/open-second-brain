@@ -29,7 +29,7 @@ import {
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { coerceStrList } from "../coerce.ts";
-import { optionalPositiveInt, optionalStringArg, requiredStringArg } from "./shared.ts";
+import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
 
 async function toolBrainSkillProposals(
   ctx: ServerContext,
@@ -37,7 +37,11 @@ async function toolBrainSkillProposals(
 ): Promise<Record<string, unknown>> {
   const operation = requiredStringArg("brain_skill_proposals", args, "operation");
   if (operation === "learn") {
-    const minSupport = optionalPositiveInt(args, "min_support", "brain_skill_proposals");
+    const minSupport = coercePositiveInteger(
+      "brain_skill_proposals",
+      "min_support",
+      args["min_support"],
+    );
     const result =
       minSupport !== undefined
         ? learnSkillProposals(ctx.vault, { minSupport })

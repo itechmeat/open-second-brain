@@ -16,9 +16,9 @@
 
 import { intakeExtraction, IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
 import { resolveAgentName } from "../../core/config.ts";
-import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
+import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_intake_entities";
 
@@ -31,7 +31,9 @@ async function toolBrainIntakeEntities(
     parsed.agent && parsed.agent.trim().length > 0
       ? parsed.agent
       : resolveAgentName(ctx.configPath ?? undefined);
-  try {
+  // A malformed extraction is a client-resolvable input problem, not a
+  // server fault - surface it as INVALID_PARAMS, never a fabricated result.
+  return wrapToolErrors(TOOL, [IntakeValidationError], async () => {
     const result = intakeExtraction(ctx.vault, parsed.intake, {
       agent,
       now: new Date(),
@@ -42,16 +44,7 @@ async function toolBrainIntakeEntities(
       entities_updated: [...result.entitiesUpdated],
       relations_applied: result.relationsApplied,
     };
-  } catch (err) {
-    // A malformed extraction is a client-resolvable input problem, not a
-    // server fault - surface it as INVALID_PARAMS, never a fabricated result.
-    if (err instanceof IntakeValidationError) {
-      throw new MCPError(INVALID_PARAMS, `${TOOL}: ${err.message}`);
-    }
-    if (err instanceof MCPError) throw err;
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new MCPError(INTERNAL_ERROR, `${TOOL}: ${reason}`);
-  }
+  });
 }
 
 export const NER_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([

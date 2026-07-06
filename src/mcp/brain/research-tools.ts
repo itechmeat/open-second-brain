@@ -14,26 +14,19 @@ import {
   type ResearchFinding,
 } from "../../core/brain/research/research.ts";
 import { resolveAgentName } from "../../core/config.ts";
-import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { coerceStr } from "../coerce.ts";
+import { isRecord, requiredString } from "./intake-args.ts";
+import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_research_report";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function reqStringList(value: unknown, field: string): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new MCPError(INVALID_PARAMS, `${TOOL}: '${field}' must be a non-empty array of strings`);
   }
-  return value.map((item, i) => {
-    if (typeof item !== "string" || item.trim().length === 0) {
-      throw new MCPError(INVALID_PARAMS, `${TOOL}: '${field}[${i}]' must be a non-empty string`);
-    }
-    return item;
-  });
+  return value.map((item, i) => requiredString(item, TOOL, `${field}[${i}]`));
 }
 
 function parseFinding(value: unknown, i: number): ResearchFinding {
@@ -68,7 +61,7 @@ async function toolBrainResearchReport(
       ? agentArg
       : resolveAgentName(ctx.configPath ?? undefined);
 
-  try {
+  return wrapToolErrors(TOOL, [ResearchValidationError], async () => {
     const res = writeResearchReport(
       ctx.vault,
       { title, sources, findings },
@@ -79,14 +72,7 @@ async function toolBrainResearchReport(
       created: res.created,
       finding_count: res.findingCount,
     };
-  } catch (err) {
-    if (err instanceof ResearchValidationError) {
-      throw new MCPError(INVALID_PARAMS, `${TOOL}: ${err.message}`);
-    }
-    if (err instanceof MCPError) throw err;
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new MCPError(INTERNAL_ERROR, `${TOOL}: ${reason}`);
-  }
+  });
 }
 
 export const RESEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([

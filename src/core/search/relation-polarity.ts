@@ -20,6 +20,7 @@
  * without typed relations are unaffected.
  */
 
+import { clamp01 } from "../math.ts";
 import type { BrainSearchResult } from "./types.ts";
 
 /** Multiplier applied to a matched predecessor's score. */
@@ -86,13 +87,6 @@ interface Mutable {
   carriedScore: number;
   /** Additive positive-relation boost; capped sum. */
   positiveBoost: number;
-}
-
-function clamp01(x: number): number {
-  if (!Number.isFinite(x)) return 0;
-  if (x < 0) return 0;
-  if (x > 1) return 1;
-  return x;
 }
 
 function fmt(x: number): string {
