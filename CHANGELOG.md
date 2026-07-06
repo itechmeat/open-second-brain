@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delegates to `cmd.exe`, not a POSIX shell). Added `_resolve_command()`
   which detects the platform and falls back to `bun run <entry> mcp` when
   `o2b` is not available as a native executable.
+- **`detectTooling()` fails to find tools on Windows** — PATH was split on
+  `:` only (POSIX); now uses `;` on Windows. Executable probing now honours
+  `PATHEXT` (`.exe`, `.cmd`, `.bat`, `.com`) instead of hardcoding `.exe`.
+- **MCP `inputSchema` not recognized by Hermes adapters (all platforms)** —
+  Hermes adapters (Anthropic, OpenAI, Bedrock) expect tool schemas under
+  `parameters`, but MCP serves them as `inputSchema`. Without this remap
+  brain tools had no visible arguments on any OS. Both live and static
+  fallback schemas now remap `inputSchema` → `parameters` at the provider
+  boundary.
 
 ## [1.23.0] - 2026-07-05
 
