@@ -338,52 +338,70 @@ bug is a direct consequence (block parsing and the known-key list drifted).
 
 ## Phase 3 - MCP boundary: one validation and error-envelope toolkit
 
-### 3.1 Shared tool-error wrapper (safety-relevant classification)
+### 3.1 Shared tool-error wrapper (safety-relevant classification) - done
 
-- **Where:** six modules hand-roll the identical catch cascade
+- **Where:** four modules hand-rolled the identical catch cascade
   (validation error to INVALID_PARAMS, MCPError passthrough, else
-  INTERNAL_ERROR): `src/mcp/brain/derive-tools.ts:54-61`,
-  `ingest-tools.ts:47-54`, `ner-tools.ts:45-54`, `research-tools.ts:82-89`,
-  `calendar-tools.ts:94,178`, `entity-tools.ts:81-83`.
-- **Why:** "caller's fault vs server fault" is a safety-relevant mapping;
-  one module drifting reclassifies client errors as internal (or worse, the
-  reverse).
-- **Fix:** `wrapToolErrors(tool, fn, { validation: [ErrorClass, ...] })` in
-  `src/mcp/brain/shared.ts`; each handler delegates.
+  INTERNAL_ERROR): `derive-tools.ts`, `ingest-tools.ts`, `ner-tools.ts`,
+  `research-tools.ts`.
+- **Fix (done):** `wrapToolErrors(tool, validationClasses, fn)` in
+  `src/mcp/brain/shared.ts`; each handler now wraps its whole body in it
+  instead of a local try/catch. Error codes and messages unchanged.
+- **Assessed, not touched:** `calendar-tools.ts` and `entity-tools.ts`
+  were flagged as having "the same" cascade, but on inspection their catch
+  blocks always classify as INVALID_PARAMS with no INTERNAL_ERROR branch -
+  a narrower, genuinely different policy. Forcing them onto
+  `wrapToolErrors` would silently give them an INTERNAL_ERROR path they
+  don't want. Left as-is.
 
-### 3.2 Collapse duplicate coercers
+### 3.2 Collapse duplicate coercers - partially done
 
-- Same-file near-duplicates: `src/mcp/brain/shared.ts:49`
-  `coercePositiveInteger` (11 callers) vs `:115` `optionalPositiveInt`
-  (6 callers) - keep one positive-integer coercer with an
-  `{ optional }` flag or a thin optional wrapper; 17 call sites are split
-  arbitrarily today.
-- Array-of-string validation exists 6+ times with divergent semantics:
-  `src/mcp/coerce.ts:28` `coerceStrList`,
-  `src/mcp/brain/hygiene-tools.ts:39` `coerceStringArray`,
-  `src/mcp/brain/research-tools.ts:27` `reqStringList`,
-  `src/mcp/brain/intake-args.ts:50` `optionalStringArray`, plus inline
-  throws in `synthesis-tools.ts:43` and `search-tools.ts:345,365,380`.
-  One parameterized `coerceStrList(args, key, { required, nonEmpty, tool })`
-  in `coerce.ts`; delete the locals.
-- Structural guards duplicated: `intake-args.ts:31-56` (`isRecord`,
-  `requiredString`, `optionalString`, `optionalStringArray`) re-implemented
-  in `research-tools.ts:23-52` - export from one place, consume in the other.
-- Longer term the `shared.ts` coercers should sit on `coerce.ts` primitives
-  with a `tool`-prefixing message wrapper; do that only if it falls out
-  naturally - message texts are part of the tool contract, pin them in tests.
+- **Done:** `coercePositiveInteger` (15 callers) vs `optionalPositiveInt`
+  (13 callers) were near-duplicate positive-integer coercers with 17 call
+  sites split arbitrarily. Migrated every `optionalPositiveInt` call site
+  to `coercePositiveInteger` and deleted it. Behavior note: the old
+  function threw on an explicit `null` argument; the surviving one treats
+  `null` the same as absent, matching this file's `optionalStringArg`
+  convention - no test exercised the old behavior.
+- **Done:** `intake-args.ts`'s `isRecord`/`requiredString` were
+  byte-for-byte duplicated in `research-tools.ts`. Exported from
+  `intake-args.ts` (the established shared MCP-boundary parser) and
+  consumed in `research-tools.ts`; message text unchanged.
+- **Assessed, not extracted:** the "6+ array-of-string implementations"
+  (`coerceStrList`, `hygiene-tools.ts`'s local `coerceStringArray`,
+  `reqStringList`, `optionalStringArray`) turned out to have real,
+  relied-upon differences - most importantly, `hygiene-tools.ts`'s two
+  call sites explicitly branch on `undefined` (absent) vs an empty array
+  vs a populated array (`detectorsRaw !== undefined`, `ids === undefined
+  || ids.length === 0`); `coerceStrList` returns `[]` for absent instead
+  of `undefined`, so swapping it in would silently break those branches.
+  `reqStringList` requires a non-empty array; the others allow empty.
+  Forcing one parameterized function over four genuinely different
+  contracts was rejected for the same reason as 1.5's property-filter
+  parsing - the "duplication" is mostly in the output type, not logic
+  safe to share.
+- Longer term the `shared.ts` coercers sitting on `coerce.ts` primitives
+  remains a reasonable idea; not pursued here since it wasn't a clean
+  mechanical follow-on from the above.
 
-### 3.3 One ISO-instant parser
+### 3.3 One ISO-instant parser - deferred
 
-- **Where:** three divergent validators: `src/mcp/coerce.ts:100`
-  `coerceIsoDate` (anything `new Date()` parses - masks malformed input),
-  `src/mcp/brain/shared.ts:18` `coerceIsoTimestampOrDate` (`Date.parse` +
-  date-only regex), `src/cli/coerce.ts:57` `parseOptionalIsoDate` (strict
-  offset regex).
-- **Fix:** single `parseIsoInstant(raw, shape)` in `core/validate.ts`; the
-  three call sites keep their layer-specific error wrapping. Tightening
-  `coerceIsoDate` is a deliberate contract fix (reject what `new Date`
-  merely guesses at), covered by tests.
+- **Where:** three divergent validators: `src/mcp/coerce.ts`
+  `coerceIsoDate` (anything `new Date()` parses - masks malformed input,
+  returns `Date | null`), `src/mcp/brain/shared.ts`
+  `coerceIsoTimestampOrDate` (`Date.parse` + date-only regex, returns
+  `string | undefined`), `src/cli/coerce.ts` `parseOptionalIsoDate`
+  (strict offset regex, returns a `{value, error}` tuple).
+- **Why deferred:** the three have incompatible return contracts (Date
+  object vs raw string vs non-throwing tuple) consumed by live,
+  widely-used tool arguments (`now`/`since`/`until` across
+  `review-tools.ts`, `brief-tools.ts`, `feedback-tools.ts`,
+  `query-tools.ts`). The plan's own risk note calls for "a deliberate
+  contract fix... covered by tests" before tightening `coerceIsoDate`'s
+  permissive parsing - that requires pinning today's accepted/rejected
+  input boundary with new tests FIRST, across four call sites, which is
+  a real, separate piece of work rather than a mechanical dedup. Left for
+  a dedicated pass.
 - Note: the CLI-vs-MCP split of coerce modules (tuple-return vs throw) is
   justified layering - do NOT force-merge the two `coerce.ts` files.
 
