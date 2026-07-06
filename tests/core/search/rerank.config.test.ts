@@ -133,3 +133,27 @@ test("a non-integer top_k fails closed", () => {
   writeFileSync(configPath, ["vault: " + tmp, "search_rerank_top_k: notanumber"].join("\n") + "\n");
   expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(SearchError);
 });
+
+test("overrides.rerank accepts a partial config and merges it over the base", () => {
+  // Resolves the base with rerank enabled so every field is populated, then
+  // overrides only topK. The merged config keeps base.baseUrl/model but takes
+  // the partial topK. This also guards the type: a partial rerank override
+  // (e.g. { topK: 5 }) must type-check like the semantic override does.
+  process.env["MY_RERANK_KEY"] = "sk-rerank";
+  writeFileSync(
+    configPath,
+    [
+      "vault: " + tmp,
+      "search_rerank_enabled: true",
+      "search_rerank_base_url: https://api.example.com/v1/",
+      "search_rerank_model: rerank-1",
+      "search_rerank_env_key: MY_RERANK_KEY",
+      "search_rerank_top_k: 20",
+      "search_rerank_min_score: 0",
+    ].join("\n") + "\n",
+  );
+  const cfg = resolveSearchConfig({ vault: tmp, configPath, overrides: { rerank: { topK: 5 } } });
+  expect(cfg.rerank.topK).toBe(5);
+  expect(cfg.rerank.baseUrl).toBe("https://api.example.com/v1/");
+  expect(cfg.rerank.model).toBe("rerank-1");
+});

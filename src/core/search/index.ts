@@ -28,9 +28,12 @@ import type {
   VaultIgnoreRule,
 } from "./types.ts";
 
-type SearchConfigOverrides = Partial<Omit<ResolvedSearchConfig, "ignoreRules" | "semantic">> & {
+type SearchConfigOverrides = Partial<
+  Omit<ResolvedSearchConfig, "ignoreRules" | "semantic" | "rerank">
+> & {
   readonly ignoreRules?: ReadonlyArray<VaultIgnoreRule>;
   readonly semantic?: Partial<ResolvedEmbeddingConfig>;
+  readonly rerank?: Partial<ResolvedRerankConfig>;
 };
 
 export type {
