@@ -46,7 +46,7 @@ import { parseFrontmatterText } from "../vault.ts";
 import { appendMetric } from "../brain/metrics.ts";
 import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
-import { Store } from "./store.ts";
+import { acquireWriterLock, Store } from "./store.ts";
 import { LATEST_SCHEMA_VERSION } from "./schema.ts";
 import { SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
@@ -638,49 +638,67 @@ export async function reindexVault(
 
   mkdirSync(dirname(config.dbPath), { recursive: true });
 
-  // Build into the temp file with an override config.
-  const tempConfig: ResolvedSearchConfig = Object.freeze({
-    ...config,
-    dbPath: newPath,
-  });
+  // Hold the writer lock on the LIVE index path for the whole rebuild +
+  // swap. Keyed on `config.dbPath` (not the `.new` staging path), so a
+  // second concurrent reindex — the double-reindex a schema-bump upgrade
+  // triggers when CLI and the long-lived MCP server both self-heal at
+  // once — waits-or-bails on the SAME lock instead of unlinking this run's
+  // in-progress staging DB and then having its empty seed swapped over the
+  // live index (INDEX_UNREADABLE, silent data loss). The staging-DB opens
+  // below lock a different path (`.new`), so there is no self-deadlock.
+  const release = await acquireWriterLock(config.dbPath);
+  try {
+    // Build into the temp file with an override config.
+    const tempConfig: ResolvedSearchConfig = Object.freeze({
+      ...config,
+      dbPath: newPath,
+    });
 
-  // Resumable staging (opt-in). A compatible in-progress `.new` from an
-  // interrupted run is resumed via the incremental fastpath instead of
-  // rebuilt from scratch; an incompatible or unreadable one is
-  // discarded. With the flag OFF, the temp file is always rebuilt fresh
-  // and no staging marker is written or read - byte-identical to the
-  // pre-suite path (no extra staging-DB open/close cycles).
-  let resume = false;
-  if (config.resumeReindex) {
-    const signature = reindexStagingSignature(config, opts?.embeddings === true);
-    if (existsSync(newPath)) {
-      resume = await stagingSignatureMatches(tempConfig, signature);
+    // Resumable staging (opt-in). A compatible in-progress `.new` from an
+    // interrupted run is resumed via the incremental fastpath instead of
+    // rebuilt from scratch; an incompatible or unreadable one is
+    // discarded. With the flag OFF, the temp file is always rebuilt fresh
+    // and no staging marker is written or read - byte-identical to the
+    // pre-suite path (no extra staging-DB open/close cycles).
+    let resume = false;
+    if (config.resumeReindex) {
+      const signature = reindexStagingSignature(config, opts?.embeddings === true);
+      if (existsSync(newPath)) {
+        resume = await stagingSignatureMatches(tempConfig, signature);
+      }
+      if (!resume) tryUnlink(newPath);
+      // Stamp the signature so an interruption leaves a build a later run
+      // can recognise and resume.
+      await withStagingStore(tempConfig, (store) =>
+        store.setState(REINDEX_SIGNATURE_KEY, signature),
+      );
+    } else {
+      tryUnlink(newPath);
     }
-    if (!resume) tryUnlink(newPath);
-    // Stamp the signature so an interruption leaves a build a later run
-    // can recognise and resume.
-    await withStagingStore(tempConfig, (store) => store.setState(REINDEX_SIGNATURE_KEY, signature));
-  } else {
-    tryUnlink(newPath);
+
+    // `force: false` on resume lets the fastpath skip the files the
+    // partial build already committed; a fresh build forces every file.
+    const stats = await indexVault(tempConfig, { ...opts, force: !resume });
+
+    // Clear the marker so the swapped-in live index carries no staging
+    // state. Only present when resume was enabled.
+    if (config.resumeReindex) {
+      await withStagingStore(tempConfig, (store) => store.deleteState(REINDEX_SIGNATURE_KEY));
+    }
+
+    // Same-directory rename swap. The two renames are each atomic on
+    // POSIX; the gap between them is the only crash window. A read that
+    // opens in that window is held off by this same lock (see
+    // restoreFromBakIfMissing in store.ts), so it cannot restore the stale
+    // `.bak` over the freshly built index; a genuine crash leaves the lock
+    // stale and the .bak restore on the next Store.open recovers.
+    tryUnlink(bakPath);
+    tryRename(config.dbPath, bakPath); // no-op (ENOENT) on fresh reindex
+    renameSync(newPath, config.dbPath); // must succeed — `newPath` was just built
+    return stats;
+  } finally {
+    await release();
   }
-
-  // `force: false` on resume lets the fastpath skip the files the
-  // partial build already committed; a fresh build forces every file.
-  const stats = await indexVault(tempConfig, { ...opts, force: !resume });
-
-  // Clear the marker so the swapped-in live index carries no staging
-  // state. Only present when resume was enabled.
-  if (config.resumeReindex) {
-    await withStagingStore(tempConfig, (store) => store.deleteState(REINDEX_SIGNATURE_KEY));
-  }
-
-  // Same-directory rename swap. The two renames are each atomic on
-  // POSIX; the gap between them is the only crash window, which the
-  // .bak restore on Store.open handles.
-  tryUnlink(bakPath);
-  tryRename(config.dbPath, bakPath); // no-op (ENOENT) on fresh reindex
-  renameSync(newPath, config.dbPath); // must succeed — `newPath` was just built
-  return stats;
 }
 
 /** index_state key carrying the staging-build compatibility signature. */

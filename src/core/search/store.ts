@@ -249,6 +249,75 @@ function acquireWriterLockSync(path: string): () => void {
 }
 
 /**
+ * Acquire the exclusive writer lock on the LIVE index path. Shared by
+ * `Store.open({ mode: "write" })` and `reindexVault`'s rebuild+swap so both
+ * serialise on the SAME lock (keyed on `dbPath`, not on the `.new` staging
+ * path). Fast-fails to `INDEX_LOCKED` after a few retries rather than
+ * blocking indefinitely, matching the module's fail-fast contention
+ * contract. `realpath: false` lets the lock be taken before `dbPath` exists
+ * (a fresh reindex has no live index yet); only the parent directory must
+ * already exist.
+ */
+export async function acquireWriterLock(dbPath: string): Promise<() => Promise<void>> {
+  try {
+    return await lockfile.lock(dbPath, {
+      retries: { retries: 3, factor: 1, minTimeout: 1000, maxTimeout: 1000 },
+      stale: WRITER_LOCK_STALE_MS,
+      // Explicit heartbeat: refresh the lock mtime mid-run so a long index
+      // is never mistaken for a stale lock and taken over.
+      update: WRITER_LOCK_HEARTBEAT_MS,
+      realpath: false,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new SearchError("INDEX_LOCKED", `another writer holds the search index lock: ${msg}`);
+  }
+}
+
+/**
+ * Crash-recovery preamble shared by every {@link Store.open}: if the live
+ * index file is absent but a `.bak` from a `reindex` rename swap is present,
+ * restore it. Guarded by the SAME writer lock `reindexVault` holds across
+ * its swap, so a read that opens during the swap's brief db-absent window
+ * cannot mistake it for a crashed reindex and clobber the freshly built
+ * index with the stale `.bak` (the silent-data-loss race, A.2).
+ *
+ * Lock semantics distinguish the two cases without a heuristic:
+ *   - a live reindex mid-swap holds a heartbeated (non-stale) lock, so we
+ *     block briefly, then find `dbPath` present and skip the restore;
+ *   - a genuine crash leaves a stale lock (no heartbeat) that is taken over
+ *     within the stale window, after which we restore.
+ * If the lock cannot be taken at all we skip the restore rather than risk a
+ * clobber; the caller's open path then re-evaluates existence and reports
+ * honestly (INDEX_MISSING). The `.bak` restore of a genuine crash is
+ * unaffected: with no live holder the lock is acquired immediately.
+ */
+function restoreFromBakIfMissing(dbPath: string): void {
+  const bak = dbPath + ".bak";
+  if (existsSync(dbPath) || !existsSync(bak)) return;
+  let release: (() => void) | null = null;
+  try {
+    release = acquireWriterLockSync(dbPath);
+  } catch {
+    // A live writer holds the lock (mid-swap). Do not restore — the swap
+    // will place the fresh index; the open path re-checks existence.
+    return;
+  }
+  try {
+    // Re-check under the lock: the swap may have completed while we waited,
+    // or another opener may have already restored.
+    if (existsSync(dbPath) || !existsSync(bak)) return;
+    renameSync(bak, dbPath);
+    // eslint-disable-next-line no-console
+    console.error(`restored search index from ${bak} (previous reindex crash)`);
+  } catch {
+    /* fall through — open path below will report INDEX_MISSING */
+  } finally {
+    release();
+  }
+}
+
+/**
  * Canonical alias/lookup-key normalisation for `doc_aliases` (v7):
  * trim, NFC-normalise, lower-case - the exact rule
  * `link-graph/alias-index.ts` applies on the Brain-artifact side, so
@@ -290,20 +359,11 @@ export class Store {
     const loadVec = opts.loadVec !== false;
 
     // Crash recovery: if the main index is missing but `.bak` is present
-    // from a failed `reindex` rename window, restore it. Stderr notice
-    // (not a thrown error) so existing tooling keeps working.
-    if (!existsSync(config.dbPath)) {
-      const bak = config.dbPath + ".bak";
-      if (existsSync(bak)) {
-        try {
-          renameSync(bak, config.dbPath);
-          // eslint-disable-next-line no-console
-          console.error(`restored search index from ${bak} (previous reindex crash)`);
-        } catch {
-          /* fall through — open path below will report INDEX_MISSING */
-        }
-      }
-    }
+    // from a failed `reindex` rename window, restore it. Lock-guarded so a
+    // read opening during a live reindex's swap window cannot clobber the
+    // freshly built index with the stale `.bak`. Stderr notice (not a thrown
+    // error) so existing tooling keeps working.
+    restoreFromBakIfMissing(config.dbPath);
 
     if (opts.mode === "read") {
       if (!existsSync(config.dbPath)) {
@@ -358,20 +418,7 @@ export class Store {
       seed.close();
     }
 
-    let release: () => Promise<void>;
-    try {
-      release = await lockfile.lock(config.dbPath, {
-        retries: { retries: 3, factor: 1, minTimeout: 1000, maxTimeout: 1000 },
-        stale: WRITER_LOCK_STALE_MS,
-        // Explicit heartbeat: refresh the lock mtime mid-run so a long
-        // index is never mistaken for a stale lock and taken over.
-        update: WRITER_LOCK_HEARTBEAT_MS,
-        realpath: false,
-      });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new SearchError("INDEX_LOCKED", `another writer holds the search index lock: ${msg}`);
-    }
+    const release = await acquireWriterLock(config.dbPath);
 
     let db: Database;
     try {
