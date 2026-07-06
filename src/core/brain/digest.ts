@@ -40,7 +40,7 @@ import { join } from "node:path";
 
 import type { LinkOutputFormat } from "../config.ts";
 
-import { backlinkCount, buildBacklinkIndex } from "./backlinks.ts";
+import { backlinkCount, buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
 import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summary.ts";
 import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
@@ -500,7 +500,11 @@ function collectDigestData(vault: string, since: Date, until: Date): DigestData 
   retiredEntries.sort((a, b) => a.id.localeCompare(b.id));
 
   const top_applied = pickTopApplied(preferences);
-  const top_referenced = pickTopReferenced(vault, preferences);
+  // Built once and shared with `computeConnectionHealth` below: both
+  // read the same vault state within this digest run, so one
+  // full-history backlink scan replaces two.
+  const backlinkIndex = buildBacklinkIndex(vault);
+  const top_referenced = pickTopReferenced(backlinkIndex, preferences);
   // `merge_suggestions` reflects current vault state, not windowed
   // change. It is independent of `since`/`until` on purpose —
   // operators should see pending duplicates regardless of the digest
@@ -572,7 +576,7 @@ function collectDigestData(vault: string, since: Date, until: Date): DigestData 
     merge_suggestions,
     agent_summary,
     most_applied,
-    connection_health: computeConnectionHealth(vault, preferences),
+    connection_health: computeConnectionHealth(vault, backlinkIndex, preferences),
     actions: collectMaintenanceActions(vault),
   };
 }
@@ -606,10 +610,9 @@ function pickTopApplied(
 }
 
 function pickTopReferenced(
-  vault: string,
+  index: BacklinkIndex,
   preferences: ReadonlyArray<PreferenceWithPath>,
 ): ReadonlyArray<DigestJsonTopReferenced> {
-  const index = buildBacklinkIndex(vault);
   const scored = preferences
     .map(({ pref }) => ({
       pref,
@@ -636,9 +639,9 @@ function pickTopReferenced(
  */
 function computeConnectionHealth(
   vault: string,
+  index: BacklinkIndex,
   preferences: ReadonlyArray<PreferenceWithPath>,
 ): DigestJsonConnectionHealth {
-  const index = buildBacklinkIndex(vault);
   const allIds = preferences.map(({ pref }) => pref.id);
   // Also include retired entries.
   const dirs = brainDirs(vault);
