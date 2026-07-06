@@ -342,6 +342,26 @@ export function resolveSessions(cfg: BrainConfig): ResolvedBrainSessionsConfig {
 }
 
 /**
+ * Factory for the "load + resolve a block, fall back to its defaults on
+ * ANY failure" pattern repeated at every `load*ConfigSafe` below (missing
+ * `_brain.yaml`, malformed YAML, or a validation error all collapse to
+ * the same fallback - these are read surfaces for vaults that may not
+ * have run `brain init` yet, not strict config consumers).
+ */
+function makeSafeLoader<T>(
+  resolveFn: (config: BrainConfig) => T,
+  fallback: T,
+): (vault: string) => T {
+  return (vault: string): T => {
+    try {
+      return resolveFn(loadBrainConfig(vault));
+    } catch {
+      return fallback;
+    }
+  };
+}
+
+/**
  * Load + resolve the `notes:` block, falling back to
  * `BRAIN_NOTES_DEFAULTS` when the config file is missing, malformed,
  * or otherwise unreadable. Same pattern as `loadTemporalConfigSafe`.
@@ -349,13 +369,7 @@ export function resolveSessions(cfg: BrainConfig): ResolvedBrainSessionsConfig {
  * vault that has not been `brain init`-ed still produces a clean
  * "no user folders to read" result.
  */
-export function loadNotesConfigSafe(vault: string): ResolvedBrainNotesConfig {
-  try {
-    return resolveNotes(loadBrainConfig(vault));
-  } catch {
-    return BRAIN_NOTES_DEFAULTS;
-  }
-}
+export const loadNotesConfigSafe = makeSafeLoader(resolveNotes, BRAIN_NOTES_DEFAULTS);
 
 /**
  * Load + resolve the `temporal:` block, falling back to
@@ -364,13 +378,7 @@ export function loadNotesConfigSafe(vault: string): ResolvedBrainNotesConfig {
  * consumer (MCP wrappers, CLI verbs) so a freshly-initialised vault
  * still produces a useful report.
  */
-export function loadTemporalConfigSafe(vault: string): ResolvedBrainTemporalConfig {
-  try {
-    return resolveTemporal(loadBrainConfig(vault));
-  } catch {
-    return BRAIN_TEMPORAL_DEFAULTS;
-  }
-}
+export const loadTemporalConfigSafe = makeSafeLoader(resolveTemporal, BRAIN_TEMPORAL_DEFAULTS);
 
 /**
  * Load + resolve the `guardrails:` block, falling back to
@@ -379,13 +387,7 @@ export function loadTemporalConfigSafe(vault: string): ResolvedBrainTemporalConf
  * context pack) that must work on a vault without a full `brain init`;
  * the opt-in toggles therefore default off rather than throwing.
  */
-export function loadGuardrailsConfigSafe(vault: string): ResolvedBrainGuardrailConfig {
-  try {
-    return resolveGuardrails(loadBrainConfig(vault));
-  } catch {
-    return BRAIN_GUARDRAIL_DEFAULTS;
-  }
-}
+export const loadGuardrailsConfigSafe = makeSafeLoader(resolveGuardrails, BRAIN_GUARDRAIL_DEFAULTS);
 
 /**
  * Load the configured `feedback.default_scope`, or `undefined` when the
@@ -394,13 +396,10 @@ export function loadGuardrailsConfigSafe(vault: string): ResolvedBrainGuardrailC
  * stays scope-less (byte-identical to pre-feature behaviour) instead of
  * throwing when the signal is recorded.
  */
-export function loadFeedbackDefaultScopeSafe(vault: string): string | undefined {
-  try {
-    return loadBrainConfig(vault).feedback?.default_scope;
-  } catch {
-    return undefined;
-  }
-}
+export const loadFeedbackDefaultScopeSafe = makeSafeLoader(
+  (config: BrainConfig) => config.feedback?.default_scope,
+  undefined as string | undefined,
+);
 
 /**
  * Default `_brain.yaml` content. Mirrors §10 of the design doc. Used by
