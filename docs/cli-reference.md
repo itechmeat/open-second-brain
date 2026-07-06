@@ -241,6 +241,7 @@ Wikilinks to frontmatter `aliases:` resolve at index materialization (schema v7)
 ```text
 o2b brain dream               [run] [--dry-run] | stage | validate <run-id> | apply <run-id> | discard <run-id> | list - staged lifecycle over a persisted proposal bundle; validate/apply exit 1 on drift
 o2b brain doctor              gains the removed-tool-reference warning: vault notes, root instruction files, and installed skills naming a tool removed in 1.0.0 are flagged with the replacement
+o2b brain doctor              opt-in `entity-alias-candidate` lint (off by default): with `entity_semantic_dedup_enabled: true` surfaces lexical entity-name variants ("Google LLC" vs "Google Inc") as PROPOSAL-ONLY alias-merge candidates via a deterministic jaccard layer (`entity_semantic_dedup_lexical_threshold`, default 0.8); never auto-merges or rewrites the identity key. The embedding-cosine layer (`entity_semantic_dedup_threshold`, default 0.92, reuses the configured embedding provider) is exposed as a library reader for apply plans
 o2b brain daily | weekly | monthly | morning-brief | timeline
                               gain additive timezone + local_time JSON fields when `timezone:` is configured; storage stays canonical UTC
 o2b brain digest | daily | weekly

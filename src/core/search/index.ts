@@ -18,17 +18,22 @@ import {
   expandRegisteredProvider,
   type ExpandedProvider,
 } from "./embeddings/registry.ts";
+import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
 import { SearchError } from "./types.ts";
 import type {
   ResolvedEmbeddingConfig,
   ResolvedRecallConfig,
+  ResolvedRerankConfig,
   ResolvedSearchConfig,
   VaultIgnoreRule,
 } from "./types.ts";
 
-type SearchConfigOverrides = Partial<Omit<ResolvedSearchConfig, "ignoreRules" | "semantic">> & {
+type SearchConfigOverrides = Partial<
+  Omit<ResolvedSearchConfig, "ignoreRules" | "semantic" | "rerank">
+> & {
   readonly ignoreRules?: ReadonlyArray<VaultIgnoreRule>;
   readonly semantic?: Partial<ResolvedEmbeddingConfig>;
+  readonly rerank?: Partial<ResolvedRerankConfig>;
 };
 
 export type {
@@ -43,6 +48,7 @@ export type {
   IndexStatusSnapshot,
   ResolvedEmbeddingConfig,
   ResolvedRecallConfig,
+  ResolvedRerankConfig,
   ResolvedSearchConfig,
   SearchCard,
   SearchErrorCode,
@@ -75,6 +81,19 @@ export {
   RESERVED_PROVIDER_NAMES,
   type ProviderProfile,
 } from "./embeddings/registry.ts";
+export {
+  loadRerankRegistry,
+  addRerankProviderProfile,
+  removeRerankProviderProfile,
+  getRerankProviderProfile,
+  rerankRegistryPath,
+  type RerankProviderProfile,
+} from "./rerank/registry.ts";
+export {
+  applyCrossEncoderRerank,
+  type ApplyCrossEncoderRerankOptions,
+  type RerankTelemetryEvent,
+} from "./rerank/index.ts";
 
 export { resolveIndexPath } from "./paths.ts";
 export {
@@ -125,6 +144,8 @@ const DEFAULTS = {
   shutdownGraceSeconds: 5,
   resumeReindex: false,
   chainStopScore: 0.8,
+  rerankTopK: 20,
+  rerankMinScore: 0,
 };
 
 function parseFusionMode(raw: string | null): "linear" | "rrf" {
@@ -183,6 +204,20 @@ function parseNonNegativeFloat(raw: string | null, fallback: number, fieldName: 
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) {
     throw new SearchError("INVALID_INPUT", `${fieldName} must be a number >= 0, got '${raw}'`);
+  }
+  return n;
+}
+
+/**
+ * Parse a finite float over the whole real line (e.g. a rerank floor,
+ * which can be negative for backends that emit logits rather than [0, 1]
+ * relevance).
+ */
+function parseFiniteFloat(raw: string | null, fallback: number, fieldName: string): number {
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be a finite number, got '${raw}'`);
   }
   return n;
 }
@@ -411,6 +446,69 @@ export function resolveSearchConfig(opts: {
     costGateUsd,
   });
 
+  // Cross-encoder rerank (retrieval-precision-quality-loop, card A). Off
+  // by default; when off the reader tail is byte-identical. A registered
+  // provider name (`search_rerank_provider`) supplies base_url / model /
+  // env-key defaults; explicit `search_rerank_*` config/env always wins.
+  const rerankEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RERANK_ENABLED", "search_rerank_enabled"),
+    false,
+    "search_rerank_enabled",
+  );
+  const rerankProviderName = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_SEARCH_RERANK_PROVIDER",
+    "search_rerank_provider",
+  );
+  const rerankProfile =
+    rerankProviderName !== null
+      ? expandRegisteredRerankProvider(rerankProviderName, loadRerankRegistry(opts.vault))
+      : null;
+  const rerankBaseUrl =
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_RERANK_BASE_URL",
+      "search_rerank_base_url",
+    ) ??
+    rerankProfile?.baseUrl ??
+    null;
+  const rerankModel =
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RERANK_MODEL", "search_rerank_model") ??
+    rerankProfile?.model ??
+    null;
+  const rerankEnvKey =
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RERANK_ENV_KEY", "search_rerank_env_key") ??
+    rerankProfile?.envKey ??
+    null;
+  const rerankApiKey = rerankEnvKey !== null ? (env[rerankEnvKey] ?? null) : null;
+  const rerankTopK = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RERANK_TOP_K", "search_rerank_top_k"),
+    DEFAULTS.rerankTopK,
+    "search_rerank_top_k",
+    { min: 1 },
+  );
+  const rerankMinScore = parseFiniteFloat(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_RERANK_MIN_SCORE",
+      "search_rerank_min_score",
+    ),
+    DEFAULTS.rerankMinScore,
+    "search_rerank_min_score",
+  );
+  const rerank: ResolvedRerankConfig = Object.freeze({
+    enabled: rerankEnabled,
+    baseUrl: rerankBaseUrl,
+    model: rerankModel,
+    envKey: rerankEnvKey,
+    apiKey: rerankApiKey !== null && rerankApiKey !== "" ? rerankApiKey : null,
+    topK: rerankTopK,
+    minScore: rerankMinScore,
+  });
+
   const mmrLambda = parseFloat01(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_MMR_LAMBDA", "search_mmr_lambda"),
     DEFAULTS.mmrLambda,
@@ -598,6 +696,7 @@ export function resolveSearchConfig(opts: {
     rrfK,
     semantic,
     recall,
+    rerank,
     shutdownGraceMs: shutdownGraceSeconds * 1000,
     resumeReindex,
   });
@@ -610,6 +709,7 @@ export function resolveSearchConfig(opts: {
     ...base,
     ...opts.overrides,
     semantic: Object.freeze({ ...base.semantic, ...opts.overrides.semantic }),
+    rerank: Object.freeze({ ...base.rerank, ...opts.overrides.rerank }),
     ignoreRules: opts.overrides.ignoreRules
       ? Object.freeze([...opts.overrides.ignoreRules])
       : base.ignoreRules,

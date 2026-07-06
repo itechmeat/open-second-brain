@@ -44,6 +44,10 @@ import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
+import {
+  entityLexicalAliasCandidates,
+  resolveEntitySemanticDedupConfig,
+} from "./entities/semantic-dedup.ts";
 import { buildCaptureBoundary } from "./capture-boundary.ts";
 import { verifyContentHash } from "./content-hash.ts";
 import { readTierDriftCount } from "./frontmatter-tiers.ts";
@@ -1269,6 +1273,25 @@ function checkEntities(vault: string, issues: DoctorIssue[]): void {
         message:
           `${entity.id} declares '${edge.relation}: [[${edge.target}]]' but no entity ` +
           "with that id exists in the registry.",
+      });
+    }
+  }
+
+  // semantic-retrieval-precision (t_47fd9523): opt-in, proposal-only
+  // alias-merge candidates. Off by default → this block is a no-op and
+  // the report is byte-identical to the baseline. The doctor is
+  // synchronous and embeds nothing, so it uses the deterministic lexical
+  // (jaccard-over-names) layer; the embedding layer lives on the CLI/MCP
+  // reader. Candidates are NOMINATIONS — never an auto-merge.
+  const dedupCfg = resolveEntitySemanticDedupConfig();
+  if (dedupCfg.enabled) {
+    for (const c of entityLexicalAliasCandidates(vault, { threshold: dedupCfg.lexicalThreshold })) {
+      issues.push({
+        severity: "warning",
+        code: "entity-alias-candidate",
+        message:
+          `possible alias-merge: '${c.name_a}' (${c.a}) ~ '${c.name_b}' (${c.b}) ` +
+          `[${c.method} ${c.similarity}]. Review and add an alias to merge — never auto-merged.`,
       });
     }
   }

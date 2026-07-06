@@ -22,6 +22,7 @@ export const SEARCH_ERROR_CODES = [
   "EMBEDDING_PROVIDER_TIMEOUT",
   "EMBEDDING_DIMENSION_MISMATCH",
   "EMBEDDING_COST_GATE",
+  "RERANK_PROVIDER_HTTP",
   "INDEX_LOCKED",
   "INVALID_INPUT",
 ] as const;
@@ -586,6 +587,38 @@ export interface ResolvedEmbeddingConfig {
 }
 
 /**
+ * Optional cross-encoder rerank stage (retrieval-precision-quality-loop,
+ * card A). A learned final reader step that re-scores the top-K fused
+ * candidates jointly against the query, appended after the heuristic
+ * reranks. Off by default (`enabled: false`), in which case the stage is
+ * a zero-cost no-op and result ordering is byte-identical to the
+ * pre-feature baseline. When enabled, the endpoint (OpenAI-compatible
+ * `/rerank`) is resolved fail-closed through
+ * `resolveOpenAiCompatEndpoint`; on any endpoint error the stage degrades
+ * to the heuristic ordering and never throws into the hot path.
+ */
+export interface ResolvedRerankConfig {
+  readonly enabled: boolean;
+  /** OpenAI-compatible base URL (trailing slashes stripped) or null. */
+  readonly baseUrl: string | null;
+  readonly model: string | null;
+  /** Env var NAME the API key is read from (never the key itself). */
+  readonly envKey: string | null;
+  /** API key resolved from `envKey` at config-resolution time, else null. */
+  readonly apiKey: string | null;
+  /** How many top fused candidates to re-score. Must be >= 1. */
+  readonly topK: number;
+  /**
+   * Relevance floor in the cross-encoder's score space. A reranked
+   * candidate scoring below this is not promoted above candidates the
+   * heuristic ranker placed higher; it sinks below the qualifying
+   * candidates but is never dropped (result count is preserved). Default
+   * 0 promotes every candidate a non-negative-scoring endpoint returns.
+   */
+  readonly minScore: number;
+}
+
+/**
  * Recall-quality tunables (v0.13.0). Each layer is bounded and
  * deterministic; the defaults enable the layer while leaving a clear
  * off switch (`mmrLambda = 1`, `maxHops = 0`). A vault that never opts
@@ -738,6 +771,12 @@ export interface ResolvedSearchConfig {
   readonly rrfK: number;
   readonly semantic: ResolvedEmbeddingConfig;
   readonly recall: ResolvedRecallConfig;
+  /**
+   * Optional cross-encoder rerank stage (retrieval-precision-quality-loop,
+   * card A). Off by default; when off the reader tail is byte-identical to
+   * the pre-feature baseline.
+   */
+  readonly rerank: ResolvedRerankConfig;
   /**
    * Grace window (ms) the `o2b search watch` shutdown waits for an
    * in-flight index pass to settle at a cooperative boundary before

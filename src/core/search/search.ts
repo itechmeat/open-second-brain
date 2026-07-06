@@ -80,6 +80,8 @@ import type { StructuredRecallQueryDocument } from "./structured-query.ts";
 import { expandQuery } from "./query-expansion.ts";
 import { applyTunedParameters, loadTunedParameters } from "./tuning.ts";
 import { resolveRecallProfile } from "./profiles.ts";
+import { applyCrossEncoderRerank } from "./rerank/index.ts";
+import { emitGatedTelemetry } from "../brain/continuity/emit.ts";
 
 interface SemanticPolicy {
   /** caller asked for semantic on or off (true), or accepted the default (false). */
@@ -122,6 +124,14 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     synMax: r.synonymMaxTerms,
     relPol: r.relationPolarityEnabled,
     lw: r.learnedWeightsEnabled,
+    // Cross-encoder rerank re-orders the cached outcome, so a toggle or
+    // knob change must invalidate cached rows (the endpoint identity is
+    // omitted - a key rotation on the same model does not change ordering
+    // semantics, and secrets never belong in a cache key).
+    rrk: config.rerank.enabled,
+    rrkModel: config.rerank.model,
+    rrkTopK: config.rerank.topK,
+    rrkMin: config.rerank.minScore,
   });
 }
 
@@ -750,12 +760,20 @@ export async function search(
     // off by default keep results byte-identical.
     const scoreFloor = opts.threshold ?? 0;
     const rerankActive = opts.rerank === true;
+    // Cross-encoder rerank (retrieval-precision-quality-loop, card A): the
+    // learned final reader step re-scores the top-K fused candidates. When
+    // it is on, the candidate pool must be at least `top_k` wide so a
+    // genuinely-relevant hit the heuristic ranker placed deep can be pulled
+    // into the final window. Off by default keeps the pool byte-identical.
+    const crossEncoderActive = config.rerank.enabled;
     const maxHops = opts.maxHops ?? config.recall.maxHops;
     const traversalActive = maxHops > 0;
     const baseRankLimit =
       hasFrontmatterFilter || hasStructuredExclusions ? Math.max(limit * 5, 50) : limit;
     const rankLimit =
-      mmrActive || traversalActive ? Math.max(baseRankLimit, limit * 3, 30) : baseRankLimit;
+      mmrActive || traversalActive || crossEncoderActive
+        ? Math.max(baseRankLimit, limit * 3, 30, crossEncoderActive ? config.rerank.topK : 0)
+        : baseRankLimit;
 
     // Rank → traverse → diversify → property filter → visibility scope,
     // for a given candidate cap. Returns the pre-visibility count, the
@@ -895,7 +913,20 @@ export async function search(
       opts.reinforce !== undefined
         ? applyReinforceBoost(polarized, loadReinforceStrengths(config.vault))
         : polarized;
-    const sliced = reinforced.slice(0, limit);
+    // Cross-encoder rerank (retrieval-precision-quality-loop, card A): the
+    // final reader step, appended AFTER every heuristic rerank. Disabled
+    // (default) returns the pool unchanged (byte-identical); enabled but
+    // unconfigured throws a typed config error; enabled + a request-time
+    // endpoint error degrades to the heuristic ordering and records one
+    // fail-open telemetry warning. Runs over the widened pool so a deep
+    // candidate can be promoted into the final `limit` window below.
+    const reranked = await applyCrossEncoderRerank(reinforced, query, config.rerank, {
+      onTelemetry: (event) =>
+        emitGatedTelemetry(event.status === "error", () => {
+          warnings.push(`rerank_degraded: ${event.reason ?? "endpoint error"}`);
+        }),
+    });
+    const sliced = reranked.slice(0, limit);
     // Explainability: when learned weights affected this ranking, every
     // surfaced result says so (acceptance: "search explanations show
     // when learned weights affected a result").

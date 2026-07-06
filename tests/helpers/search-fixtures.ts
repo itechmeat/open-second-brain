@@ -11,7 +11,11 @@ import {
   DEFAULT_VAULT_IGNORE_PATHS,
   type VaultIgnoreRule,
 } from "../../src/core/vault-scope/defaults.ts";
-import type { ResolvedSearchConfig, ResolvedEmbeddingConfig } from "../../src/core/search/types.ts";
+import type {
+  ResolvedSearchConfig,
+  ResolvedEmbeddingConfig,
+  ResolvedRerankConfig,
+} from "../../src/core/search/types.ts";
 
 export function createTempVault(prefix: string): {
   vault: string;
@@ -75,6 +79,8 @@ export function makeConfig(opts: {
   selfTuningEnabled?: boolean;
   /** RRF damping constant; defaults to 60. */
   rrfK?: number;
+  /** Optional cross-encoder rerank overrides; defaults to disabled. */
+  rerank?: Partial<ResolvedRerankConfig>;
 }): ResolvedSearchConfig {
   const baseSemantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: false,
@@ -129,6 +135,16 @@ export function makeConfig(opts: {
       selfTuningEnabled: opts.selfTuningEnabled ?? false,
       chainStopEnabled: false,
       chainStopScore: 0.8,
+    }),
+    rerank: Object.freeze({
+      enabled: false,
+      baseUrl: null,
+      model: null,
+      envKey: null,
+      apiKey: null,
+      topK: 20,
+      minScore: 0,
+      ...opts.rerank,
     }),
     shutdownGraceMs: 5_000,
     resumeReindex: false,
