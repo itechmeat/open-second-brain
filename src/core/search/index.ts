@@ -71,7 +71,7 @@ export {
   type SearchSessionFocus,
 } from "./session-focus.ts";
 export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-gate.ts";
-export { buildEvidencePack, type EvidencePack } from "./evidence-pack.ts";
+export { buildEvidencePack, serializeEvidencePack, type EvidencePack } from "./evidence-pack.ts";
 export {
   loadProviderRegistry,
   addProviderProfile,
