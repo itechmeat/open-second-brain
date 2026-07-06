@@ -33,7 +33,7 @@ import { relationFromFrontmatterField } from "../graph/relation-vocab.ts";
 import { normalizeRelationTarget } from "../graph/frontmatter-relations.ts";
 import { buildAliasIndex } from "./link-graph/alias-index.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
-import { listLogDates, readLogDay } from "./log-jsonl.ts";
+import { listLogShardFiles, readLogDay } from "./log-jsonl.ts";
 import { brainDirs } from "./paths.ts";
 import { normalizeDerivedKeys } from "./preference.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
@@ -264,12 +264,17 @@ function collectLog(
   push: (target: string, ref: BacklinkRef) => void,
 ): void {
   if (!existsSync(dir)) return;
-  // Shard-aware (Memory Integrity Suite): merged per-day reads.
-  for (const date of listLogDates(vault)) {
+  // Shard-aware (Memory Integrity Suite): merged per-day reads. List the
+  // log directory once and share it across every date's readLogDay call
+  // instead of one readdirSync+sort per date (this loop can span a
+  // vault's entire log history).
+  const shards = listLogShardFiles(vault);
+  const dates = [...new Set(shards.map((f) => f.date))].toSorted();
+  for (const date of dates) {
     const source = `log-${date}`;
     let entries;
     try {
-      entries = readLogDay(vault, date).entries;
+      entries = readLogDay(vault, date, shards).entries;
     } catch {
       continue;
     }

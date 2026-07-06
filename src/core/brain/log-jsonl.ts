@@ -53,7 +53,7 @@ const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 // that does not match are NOT log shards.
 const LOG_FILE_RE = /^(\d{4}-\d{2}-\d{2})(?:\.([a-z0-9-]{1,32}))?\.(jsonl|md)$/;
 
-interface LogShardFile {
+export interface LogShardFile {
   readonly date: string;
   /** Empty string for the legacy un-sharded pair. */
   readonly shardId: string;
@@ -62,8 +62,13 @@ interface LogShardFile {
   readonly name: string;
 }
 
-/** Every recognised log file under `Brain/log/`, sorted by name. */
-function listLogShardFiles(vault: string): LogShardFile[] {
+/**
+ * Every recognised log file under `Brain/log/`, sorted by name. Exported
+ * so a caller that reads MANY dates in one operation (e.g. the backlink
+ * index) can list once and pass the result to {@link readLogDay} instead
+ * of paying one `readdirSync` + sort per date.
+ */
+export function listLogShardFiles(vault: string): LogShardFile[] {
   const dir = brainDirs(vault).log;
   if (!existsSync(dir)) return [];
   const out: LogShardFile[] = [];
@@ -126,10 +131,19 @@ export function listLogMarkdownFiles(vault: string): Array<{ date: string; path:
  * markdown is the fallback. When no file exists, returns an empty
  * result with `source: "jsonl"` (a convenient default — the caller
  * treats it as "no events for that date" regardless of source).
+ *
+ * `preloadedShards` lets a caller iterating many dates in one operation
+ * (e.g. `collectLog`) list the directory once and pass the result in,
+ * instead of every call re-running `readdirSync` + sort - output is
+ * identical either way, this only skips redundant directory scans.
  */
-export function readLogDay(vault: string, date: string): ReadLogDayResult {
+export function readLogDay(
+  vault: string,
+  date: string,
+  preloadedShards?: ReadonlyArray<LogShardFile>,
+): ReadLogDayResult {
   const validDate = validateIsoDate(date);
-  const shards = listLogShardFiles(vault).filter((f) => f.date === validDate);
+  const shards = (preloadedShards ?? listLogShardFiles(vault)).filter((f) => f.date === validDate);
   if (shards.length === 0) return { entries: [], source: "jsonl", warnings: [] };
 
   // Group by shard id; per shard prefer .jsonl over .md.
