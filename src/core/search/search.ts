@@ -225,6 +225,29 @@ async function openReadOrSelfHeal(config: ResolvedSearchConfig): Promise<Store> 
   }
 }
 
+/**
+ * Bounds for the public `limit` option. CLI validates against the same
+ * ceiling before calling in; MCP applies its own, lower `MCP_LIMIT_MAX`
+ * (token-budget conscious) - the two ceilings are deliberately different,
+ * this just gives the shared one a name instead of a bare `100` literal.
+ */
+export const SEARCH_LIMIT_MIN = 1;
+export const SEARCH_LIMIT_MAX = 100;
+
+/**
+ * Semantic candidate-pool over-fetch policy: rank more than `limit` rows
+ * so downstream filtering (property/visibility scope, MMR diversify) has
+ * enough headroom to still fill the final window. `floor` is the minimum
+ * pool size regardless of `limit`; `overfetch` is the multiplier applied
+ * to `limit` itself.
+ */
+const POOL_OVERFETCH = 5;
+const POOL_FLOOR = 50;
+
+function semanticPoolSize(limit: number): number {
+  return Math.max(limit * POOL_OVERFETCH, POOL_FLOOR);
+}
+
 export async function search(
   config: ResolvedSearchConfig,
   opts: SearchOptions,
@@ -245,7 +268,7 @@ export async function search(
     profileParams ?? (config.recall.selfTuningEnabled ? loadTunedParameters(config.vault) : null);
   if (tuned !== null) config = applyTunedParameters(config, tuned);
   const expandActive = opts.expand ?? (tuned !== null && tuned.expansion);
-  const limit = Math.max(1, Math.min(100, opts.limit ?? 10));
+  const limit = Math.max(SEARCH_LIMIT_MIN, Math.min(SEARCH_LIMIT_MAX, opts.limit ?? 10));
   if (opts.threshold !== undefined && (!Number.isFinite(opts.threshold) || opts.threshold < 0)) {
     throw new SearchError("INVALID_INPUT", "threshold must be a finite number >= 0");
   }
@@ -410,7 +433,7 @@ export async function search(
     }
     if (policy.wantSemantic) {
       const semOutcome = await runSemanticPhase(store, config, semanticLaneQuery ?? query, {
-        limit: Math.max(limit * 5, 50),
+        limit: semanticPoolSize(limit),
         pathPrefix,
         explicit: policy.explicit,
       });
@@ -474,7 +497,7 @@ export async function search(
       if (terms.length >= 2) {
         const broadened = runFtsQueryDetailed(store, terms[0]!, {
           expandedTerms: terms.slice(1),
-          limit: Math.max(limit * 5, 50),
+          limit: semanticPoolSize(limit),
           pathPrefix: pathPrefix ?? null,
         });
         for (const w of broadened.warnings) warnings.push(w);
@@ -530,7 +553,7 @@ export async function search(
       if (plan.fire) {
         const targeted = runFtsQueryDetailed(store, plan.terms[0]!, {
           expandedTerms: plan.terms.slice(1),
-          limit: Math.max(limit * 5, 50),
+          limit: semanticPoolSize(limit),
           pathPrefix: pathPrefix ?? null,
         });
         for (const w of targeted.warnings) warnings.push(w);
@@ -769,7 +792,7 @@ export async function search(
     const maxHops = opts.maxHops ?? config.recall.maxHops;
     const traversalActive = maxHops > 0;
     const baseRankLimit =
-      hasFrontmatterFilter || hasStructuredExclusions ? Math.max(limit * 5, 50) : limit;
+      hasFrontmatterFilter || hasStructuredExclusions ? semanticPoolSize(limit) : limit;
     const rankLimit =
       mmrActive || traversalActive || crossEncoderActive
         ? Math.max(baseRankLimit, limit * 3, 30, crossEncoderActive ? config.rerank.topK : 0)
@@ -893,7 +916,7 @@ export async function search(
       assembled.visible.length < assembled.preVisibility &&
       assembled.capHit
     ) {
-      const wideCap = Math.max(limit * 5, 50, limit * 3, 30);
+      const wideCap = Math.max(semanticPoolSize(limit), limit * 3, 30);
       if (wideCap > rankLimit) assembled = assemble(wideCap);
     }
     const excluded = applyStructuredExclusions(assembled.visible, structured);

@@ -153,12 +153,22 @@ These are the places where two surfaces can silently disagree.
   and `src/core/search/search.ts:248` - three independent limit bounds
   (CLI 1..100, MCP 1..50, core clamp to 100) and duplicated
   semantic/keyword-only precedence.
-- **Fix:** `normalizeSearchRequest(rawOpts)` in core returning validated
-  `SearchOptions`; export named limit constants that both surfaces import
-  (MCP keeps its lower ceiling as an explicit named constant, not a magic
-  number). Core stops silently re-clamping what the surfaces validated.
-- **Risk:** medium - behavior at the boundaries must be pinned by tests
-  first (limit 0, 51 via MCP, 101 via CLI).
+- **Done (narrow slice):** exported `SEARCH_LIMIT_MIN`/`SEARCH_LIMIT_MAX`
+  from `core/search/search.ts` and pointed the CLI's `--limit` validation
+  at them instead of a bare `100` literal that happened to match core's
+  clamp by coincidence. MCP's own `MCP_LIMIT_MAX = 50` was already a named
+  constant (not a magic number as the original finding assumed) and is
+  deliberately lower for its token budget - left as-is.
+- **Deliberately not done:** the `normalizeSearchRequest(rawOpts)` unifier
+  and "core stops silently re-clamping" behavior change. On inspection the
+  CLI/MCP semantic-vs-keyword-only precedence is NOT pure duplication - the
+  CLI rejects `--semantic` + `--keyword-only` together (`CliError`), MCP has
+  no equivalent conflict check - unifying them is a policy decision (should
+  MCP also reject the combination?), not a refactor, and core's clamp is a
+  safety net for any caller that does not pre-validate (not yet fully
+  audited). Doing this safely needs the boundary-pinning tests the original
+  risk note called for; deferred rather than rushed.
+- **Risk:** minimal for the done slice; the deferred part stays medium.
 
 ### 1.5 Property-filter parsing: share semantics, keep syntax adapters
 

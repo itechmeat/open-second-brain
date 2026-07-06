@@ -105,7 +105,7 @@ export {
   type IndexVaultOptions,
   type IndexProgressEvent,
 } from "./indexer.ts";
-export { search, expandHit } from "./search.ts";
+export { search, expandHit, SEARCH_LIMIT_MIN, SEARCH_LIMIT_MAX } from "./search.ts";
 export {
   captureRecallFeedback,
   computeLearnedWeights,

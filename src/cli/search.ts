@@ -52,6 +52,8 @@ import {
   serializeEvidencePack,
   serializeSearchCard,
   serializeIndexStatus,
+  SEARCH_LIMIT_MIN,
+  SEARCH_LIMIT_MAX,
 } from "../core/search/index.ts";
 import type {
   IndexCheckReport,
@@ -534,8 +536,8 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     throw new CliError("query string is required when --query-doc has no searchable lanes");
   }
   const limitNum = Number(flags["limit"] ?? "10");
-  if (!Number.isInteger(limitNum) || limitNum < 1 || limitNum > 100) {
-    throw new CliError("--limit must be an integer in 1..100");
+  if (!Number.isInteger(limitNum) || limitNum < SEARCH_LIMIT_MIN || limitNum > SEARCH_LIMIT_MAX) {
+    throw new CliError(`--limit must be an integer in ${SEARCH_LIMIT_MIN}..${SEARCH_LIMIT_MAX}`);
   }
   const disclosureRaw = typeof flags["disclosure"] === "string" ? flags["disclosure"] : undefined;
   if (disclosureRaw !== undefined && disclosureRaw !== "full" && disclosureRaw !== "cards") {
