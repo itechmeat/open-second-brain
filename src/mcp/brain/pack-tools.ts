@@ -58,14 +58,8 @@ async function toolBrainContextPack(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const maxRaw = args["max_tokens"];
-  const maxTokens =
-    typeof maxRaw === "number"
-      ? maxRaw
-      : typeof maxRaw === "string" && /^[0-9]+$/.test(maxRaw.trim())
-        ? Number.parseInt(maxRaw.trim(), 10)
-        : Number.NaN;
-  if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
+  const maxTokens = coercePositiveInteger("brain_context_pack", "max_tokens", args["max_tokens"]);
+  if (maxTokens === undefined) {
     throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
