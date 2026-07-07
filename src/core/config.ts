@@ -523,6 +523,22 @@ export function resolveGenerationTraceEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Route-level MCP latency metrics gate (context-pack-economics-
+ * observability suite). Default OFF: the `mcp_route_latency` continuity
+ * path stays dormant unless `mcp_route_metrics_enabled: "true"`, when the
+ * MCP server records one payload-safe latency record per tool call (tool
+ * name, scope, status, duration, and argument key names only - never
+ * argument values). Fail-open: a failed record never fails the call.
+ */
+export function resolveMcpRouteMetricsEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_MCP_ROUTE_METRICS_ENABLED",
+    "mcp_route_metrics_enabled",
+    configPath,
+  );
+}
+
+/**
  * Optional external judge command for the memory benchmark (Memory
  * Observability Suite, t_882c396a). Unset (the default) means the
  * judge phase is skipped - the harness itself never calls an LLM.

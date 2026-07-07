@@ -4,7 +4,8 @@
  * class, including handshake instructions and error semantics.
  */
 
-import { resolveAgentName } from "../core/config.ts";
+import { resolveAgentName, resolveMcpRouteMetricsEnabled } from "../core/config.ts";
+import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-route-metrics.ts";
 import { buildInstructions } from "./instructions.ts";
 import {
   INTERNAL_ERROR,
@@ -78,6 +79,13 @@ export class MCPServer {
   private readonly scope: ToolScope;
   private readonly artifactStore: ArtifactStore;
   private readonly capabilityReport: ToolCapabilityReport;
+  /**
+   * Route-level latency metrics gate (config `mcp_route_metrics_enabled`),
+   * resolved once at construction. Off by default; when on, every tool
+   * call is timed and a payload-safe `mcp_route_latency` continuity
+   * record is emitted (fail-open).
+   */
+  private readonly routeMetricsEnabled: boolean;
 
   constructor(opts: MCPServerOptions, runtimeOpts: MCPServerRuntimeOptions = {}) {
     this.vault = opts.vault;
@@ -92,6 +100,7 @@ export class MCPServer {
     });
     this.tools = evaluated.tools;
     this.capabilityReport = evaluated.report;
+    this.routeMetricsEnabled = resolveMcpRouteMetricsEnabled(this.configPath ?? undefined);
     const runId = runtimeOpts.artifactRunId ?? `run-${process.pid}-${Date.now().toString(36)}`;
     this.artifactStore = new ArtifactStore({ vault: this.vault, runId });
     // Best-effort housekeeping: clear prior processes' stale artifacts.
@@ -116,7 +125,43 @@ export class MCPServer {
   /** Public method for CLI tool-call bridge — the legacy code reached into `_tools`. */
   async callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const tool = findTool(this.tools, name);
-    return toolResult(tool, await tool.handler(this.context, args));
+    return toolResult(tool, await this.invokeToolHandler(tool, args));
+  }
+
+  /**
+   * Single seam through which every tool handler runs, for both the CLI
+   * bridge (`callTool`) and the JSON-RPC `tools/call` path. With route
+   * metrics off it is a transparent pass-through; with them on it times
+   * the handler and emits one payload-safe `mcp_route_latency` record
+   * (status `error` on throw), then re-raises so error handling upstream
+   * is unchanged. The emit is gated and fail-open, so it can never fail
+   * or slow-fail the call beyond one synchronous continuity append.
+   */
+  private async invokeToolHandler(
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (!this.routeMetricsEnabled) return tool.handler(this.context, args);
+    const start = performance.now();
+    let status: McpRouteStatus = "ok";
+    try {
+      return await tool.handler(this.context, args);
+    } catch (exc) {
+      status = "error";
+      throw exc;
+    } finally {
+      emitMcpRouteLatency(
+        this.vault,
+        {
+          tool: tool.name,
+          scope: this.scope,
+          status,
+          durationMs: performance.now() - start,
+          argKeys: Object.keys(args),
+        },
+        this.routeMetricsEnabled,
+      );
+    }
   }
 
   /** Process one JSON-RPC request or notification. Returns null for notifications. */
@@ -248,7 +293,7 @@ export class MCPServer {
     }
     const args = argsRaw as Record<string, unknown>;
     try {
-      const structured = await tool.handler(this.context, args);
+      const structured = await this.invokeToolHandler(tool, args);
       return buildMcpToolResult(tool, structured, this.artifactStore);
     } catch (exc) {
       if (exc instanceof MCPError) throw exc;

@@ -22,6 +22,13 @@ import {
   type RecallTelemetryStatus,
 } from "../../core/brain/recall-telemetry.ts";
 import {
+  isMcpRouteStatus,
+  listMcpRouteLatency,
+  summarizeMcpRouteLatency,
+  type McpRouteLatencyFilter,
+  type McpRouteStatus,
+} from "../../core/brain/mcp-route-metrics.ts";
+import {
   describeSessionRecall,
   expandSessionRecall,
   searchSessionRecall,
@@ -273,6 +280,50 @@ function coerceRecallTelemetryStatus(raw: unknown): RecallTelemetryStatus | unde
   return trimmed;
 }
 
+// ----- brain_route_metrics (context-pack-economics-observability) -----------
+
+async function toolBrainRouteMetrics(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_route_metrics", args, "operation");
+  const filter = routeMetricsFilter(args);
+
+  if (operation === "list") {
+    const records = listMcpRouteLatency(ctx.vault, filter);
+    return { vault_path: ctx.vault, total: records.length, records };
+  }
+  if (operation === "summary") {
+    const summary = summarizeMcpRouteLatency(ctx.vault, filter);
+    return { ...summary };
+  }
+  throw new MCPError(INVALID_PARAMS, "brain_route_metrics: operation must be list or summary");
+}
+
+function routeMetricsFilter(args: Record<string, unknown>): McpRouteLatencyFilter {
+  const tool = optionalStringArg("brain_route_metrics", args, "tool");
+  const status = coerceRouteMetricsStatus(args["status"]);
+  const since = optionalStringArg("brain_route_metrics", args, "since");
+  const until = optionalStringArg("brain_route_metrics", args, "until");
+  const limit = coercePositiveInteger("brain_route_metrics", "limit", args["limit"]);
+  return {
+    ...(tool !== undefined ? { tool } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  };
+}
+
+function coerceRouteMetricsStatus(raw: unknown): McpRouteStatus | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isMcpRouteStatus(trimmed)) {
+    throw new MCPError(INVALID_PARAMS, "brain_route_metrics: status must be ok or error");
+  }
+  return trimmed;
+}
+
 // ----- brain_knowledge_gaps (t_97091fff) -----------------------------------
 
 async function toolBrainKnowledgeGaps(
@@ -466,6 +517,47 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRecallTelemetry,
+  },
+  {
+    name: "brain_route_metrics",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Route-level MCP latency: list mcp_route_latency records or summarize per-tool latency (count, errors, min/avg/max, p50/p95/p99) slowest-first to find slow surfaces by endpoint. Emitted only when mcp_route_metrics_enabled is on; payload-safe (tool, scope, status, duration, arg keys). Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["list", "summary"],
+          description: "list for raw records; summary for per-tool latency roll-up.",
+        },
+        tool: {
+          type: "string",
+          description: "Optional filter by MCP tool name.",
+        },
+        status: {
+          type: "string",
+          enum: ["ok", "error"],
+          description: "Optional filter by call status.",
+        },
+        since: {
+          type: "string",
+          description: "Optional inclusive lower timestamp bound.",
+        },
+        until: {
+          type: "string",
+          description: "Optional inclusive upper timestamp bound.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum record count for list.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainRouteMetrics,
   },
   {
     name: "brain_knowledge_gaps",

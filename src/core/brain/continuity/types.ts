@@ -19,6 +19,7 @@ export type ContinuityRecordKind =
   | "session_summary_node"
   | "session_summary_digest"
   | "generation_report"
+  | "mcp_route_latency"
   | "host_memory_write"
   | "source_invalidation";
 

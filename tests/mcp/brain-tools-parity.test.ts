@@ -22,7 +22,10 @@
  * bridge — persists native built-in-memory writes as durable
  * host_memory_write continuity records); the dashboard-context-trace
  * release added `brain_event_trace` (joins logged Brain events to the
- * continuity records attached to them by shared correlation ids).
+ * continuity records attached to them by shared correlation ids); the
+ * context-pack-economics-observability release added
+ * `brain_route_metrics` (route-level MCP tool latency read over opt-in
+ * `mcp_route_latency` continuity records).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -86,6 +89,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_research_report",
   "brain_retention",
   "brain_review_candidates",
+  "brain_route_metrics",
   "brain_secrets",
   "brain_session_describe",
   "brain_session_expand",

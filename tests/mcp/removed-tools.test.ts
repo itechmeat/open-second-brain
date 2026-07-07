@@ -149,5 +149,6 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   // + brain_event_trace (dashboard-context-trace: event→trace join) = 87.
   // + brain_search_expand (progressive disclosure: search→expand→transcript) = 88.
   // + brain_knowledge_gaps (cross-query demand log, t_97091fff) = 89.
-  expect(list.result.tools.length).toBe(89);
+  // + brain_route_metrics (route-level MCP latency, context-pack-economics-observability) = 90.
+  expect(list.result.tools.length).toBe(90);
 });

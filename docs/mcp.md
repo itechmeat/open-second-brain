@@ -50,6 +50,7 @@ flags for a narrower per-process full server.
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`. Each item carries a structural `epistemic` status (`observed` \| `derived` \| `hypothesis` \| `plan` \| `unknown`) plus `evidence_refs` derived from existing graph metadata; fields are absent when the status is `unknown`.     | `max_tokens`                                   |
 | `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
 | `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls.                                            | `operation`                                    |
+| `brain_route_metrics`       | List or summarise opt-in route-level MCP tool latency (`mcp_route_latency` records); `summary` rolls each tool up into count, error count, and min/avg/max + p50/p95/p99 latency, slowest-first. Emitted only when `mcp_route_metrics_enabled` is on; payload-safe (tool, scope, status, duration, arg key names). Read-only. | `operation`                                    |
 | `brain_knowledge_gaps`      | Aggregate the persisted cross-query demand log into recurring queries the vault answers poorly, ranked by frequency × (1 − IDF-weighted coverage). Read-only; the log is written only by opt-in recall telemetry.                              | —                                              |
 | `brain_generation_reports`  | Inbound, opt-in LLM generation tracing: `record` posts a generation's usage for a handoff (gated, default off; stores prompt hash + token counts only); `list`/`summary` read records and join them to memory paths. Kernel never calls an LLM. | `action`                                       |
 | `brain_obligation`          | Recurring obligations under `Brain/obligations/` with a deterministic cadence-driven next-due date: `add`, `done` (advances next_due by one cadence interval), `list` (optionally overdue-only), `show`, `remove`. Cadences: daily/weekly/biweekly/monthly/quarterly/yearly/every-<N>-days. | `operation`                                    |
@@ -336,6 +337,15 @@ decision when the `recall_gate_telemetry` config key is `"true"`
 (default off) - decision, stable reason, host, SHA-256 prompt prefix;
 never the raw prompt. `brain_recall_telemetry` gains `gate_list` /
 `gate_summary` operations.
+
+The MCP server emits one `mcp_route_latency` continuity record per tool
+call when the `mcp_route_metrics_enabled` config key
+(`OPEN_SECOND_BRAIN_MCP_ROUTE_METRICS_ENABLED`) is `"true"` (default
+off): tool name, scope, status (`ok`/`error`), duration, and the sorted
+set of argument KEY NAMES only - never argument values. The emit is
+gated and fail-open, so it can never fail or slow-fail the call it
+measures beyond one synchronous continuity append. `brain_route_metrics`
+reads them back (`operation: "list"|"summary"`).
 
 The full observability contract behind these tools - event kinds,
 always-on vs opt-in status, correlation IDs, payload safety, and the
