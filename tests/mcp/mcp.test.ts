@@ -212,6 +212,7 @@ describe("tool listing", () => {
         "brain_sources",
         "brain_switch_vault",
         "brain_context_pack",
+        "brain_context_pack_outcome",
         "brain_unlinked_mentions",
         "brain_moc_audit",
         "brain_stale_scan",
@@ -573,7 +574,8 @@ describe("stdio loop", () => {
     // + brain_knowledge_gaps (cross-query demand log, t_97091fff) = 89.
     // + brain_route_metrics (route-level MCP latency, context-pack-economics-observability) = 90.
     // + brain_token_impact (durable token-impact ledger, context-pack-economics-observability) = 91.
-    expect(list.result.tools.length).toBe(91);
+    // + brain_context_pack_outcome (agent-operable outcome loop, context-pack-economics-observability) = 92.
+    expect(list.result.tools.length).toBe(92);
   });
 
   test("returns parse error for invalid JSON", async () => {

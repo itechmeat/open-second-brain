@@ -22,6 +22,7 @@ export type ContinuityRecordKind =
   | "mcp_route_latency"
   | "token_impact"
   | "token_impact_outcome"
+  | "context_pack_outcome"
   | "host_memory_write"
   | "source_invalidation";
 

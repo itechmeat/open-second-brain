@@ -151,5 +151,6 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   // + brain_knowledge_gaps (cross-query demand log, t_97091fff) = 89.
   // + brain_route_metrics (route-level MCP latency, context-pack-economics-observability) = 90.
   // + brain_token_impact (durable token-impact ledger, context-pack-economics-observability) = 91.
-  expect(list.result.tools.length).toBe(91);
+  // + brain_context_pack_outcome (agent-operable outcome loop, context-pack-economics-observability) = 92.
+  expect(list.result.tools.length).toBe(92);
 });

@@ -27,7 +27,10 @@
  * `brain_route_metrics` (route-level MCP tool latency read over opt-in
  * `mcp_route_latency` continuity records) and `brain_token_impact` (durable
  * token-impact ledger: tokenizer-exact prompt-token deltas kept strictly
- * separate from a modeled, outcome-calibrated inference-avoidance estimate).
+ * separate from a modeled, outcome-calibrated inference-avoidance estimate)
+ * and `brain_context_pack_outcome` (agent-operable outcome loop: a compact
+ * per-sample outcome row keeping the exact/modeled/observed token signals
+ * strictly separate, composing the token-impact ledger's calibration).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -50,6 +53,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_codegraph_report",
   "brain_context",
   "brain_context_pack",
+  "brain_context_pack_outcome",
   "brain_context_presets",
   "brain_context_receipts",
   "brain_create_note",

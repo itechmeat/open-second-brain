@@ -558,6 +558,27 @@ export function resolveTokenImpactLedgerEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Agent-operable context-pack outcome-loop gate (context-pack-economics-
+ * observability suite, C5). Default OFF: the `context_pack_outcome`
+ * continuity path (and its composed `token_impact_outcome` calibration
+ * write) stays dormant unless `context_pack_outcome_enabled: "true"`, when
+ * an opt-in `post` to `brain_context_pack_outcome` records one compact
+ * outcome row - first-pass/repair/retry counters plus the three strictly
+ * separate token signals (exact / modeled / observed) - correlated to a
+ * carried context-pack quality-sample id. Payload-safe: counts and an
+ * opaque sample id only, never raw prompts, completions, or recalled text.
+ * Fail-open: a failed write never fails the caller. Read paths (list/
+ * summary) ignore the gate so historical aggregates stay inspectable.
+ */
+export function resolveContextPackOutcomeEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_CONTEXT_PACK_OUTCOME_ENABLED",
+    "context_pack_outcome_enabled",
+    configPath,
+  );
+}
+
+/**
  * Optional external judge command for the memory benchmark (Memory
  * Observability Suite, t_882c396a). Unset (the default) means the
  * judge phase is skipped - the harness itself never calls an LLM.
