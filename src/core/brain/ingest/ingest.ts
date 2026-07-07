@@ -19,12 +19,17 @@
  * genuine connection to prior material; a freshly created entity is not.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname, relative } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
-import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../../vault.ts";
+import {
+  formatFrontmatter,
+  parseFrontmatter,
+  slugify,
+  writeFrontmatterAtomic,
+} from "../../vault.ts";
 import { isoSecond } from "../time.ts";
 import { sourcePagePath } from "../paths.ts";
 import { intakeExtraction, type ExtractionIntake } from "../intake/extract-intake.ts";
@@ -33,6 +38,7 @@ import {
   sourceIdentityHash,
   type Provenance,
 } from "../provenance/provenance.ts";
+import { updateManifest } from "./content-manifest.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
 export const BRAIN_SOURCE_KIND = "brain-source";
@@ -122,8 +128,24 @@ export function ingestSource(
     .filter((section) => section.length > 0)
     .join("\n\n");
 
-  mkdirSync(dirname(absPath), { recursive: true });
-  writeFrontmatterAtomic(absPath, meta, body, { overwrite: true });
+  // Idempotent no-op: only rewrite the summary page when its bytes would
+  // actually change. A byte-identical rewrite would churn the mtime and wake
+  // the index watcher for nothing; skipping it keeps a re-ingest of an
+  // unchanged source truly inert.
+  const nextContents = formatFrontmatter(meta, body);
+  const unchanged = existed && readFileSync(absPath, "utf8") === nextContents;
+  if (!unchanged) {
+    mkdirSync(dirname(absPath), { recursive: true });
+    writeFrontmatterAtomic(absPath, meta, body, { overwrite: true });
+  }
+
+  // Record the source's CONTENT hash so a future re-ingest can classify it
+  // `unchanged` and skip the extraction pass. Only when the source resolves to
+  // a real file inside the vault - URL and other identity-only sources have no
+  // bytes to hash and must leave the manifest untouched (backward-compatible).
+  if (existsSync(join(vault, canonicalSource))) {
+    updateManifest(vault, [canonicalSource]);
+  }
 
   return {
     summaryPath: canonicalNotePath(relative(vault, absPath)),
