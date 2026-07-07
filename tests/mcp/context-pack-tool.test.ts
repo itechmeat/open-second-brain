@@ -188,6 +188,44 @@ describe("brain_context_pack tool — round trip", () => {
     });
   });
 
+  test("density ranking is gated off by default (no density field emitted)", async () => {
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-core.md"),
+      "---\nid: pref-core\ntopic: x\nprinciple: p\ntier: core\ncreated_at: 2026-05-01T00:00:00Z\n---\n\n[[a]] [[b]]\n",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { max_tokens: 10_000 });
+    const items = out["items"] as Array<Record<string, unknown>>;
+    expect(items[0]!["density"]).toBeUndefined();
+  });
+
+  test("density_ranking_context_pack config gate ranks the denser page first within a tier", async () => {
+    atomicWriteFileSync(
+      configPath,
+      `vault: ${vault}\nagent_name: claude\ndensity_ranking_context_pack: "true"\n`,
+    );
+    // Older but dense: evidence refs + links → high value per token.
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-dense.md"),
+      '---\nid: pref-dense\ntopic: x\nprinciple: p\ntier: core\ncreated_at: 2026-01-01T00:00:00Z\n_evidenced_by: ["[[s1]]", "[[s2]]"]\n---\n\n[[a]] [[b]] [[c]]\n',
+    );
+    // Newer but sparse: long low-signal body → low value per token.
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-sparse.md"),
+      "---\nid: pref-sparse\ntopic: x\nprinciple: p\ntier: core\ncreated_at: 2026-06-01T00:00:00Z\n---\n\n" +
+        "ordinary filler prose with no structural signal at all ".repeat(3) +
+        "\n",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { max_tokens: 10_000 });
+    const items = out["items"] as Array<{ id: string; density?: number }>;
+    expect(items.map((i) => i.id)).toEqual(["pref-dense", "pref-sparse"]);
+    expect(typeof items[0]!.density).toBe("number");
+    expect(items[0]!.density!).toBeGreaterThan(items[1]!.density!);
+  });
+
   test("rejects non-positive max_tokens via INVALID_PARAMS", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

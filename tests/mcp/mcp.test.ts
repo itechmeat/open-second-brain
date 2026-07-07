@@ -212,6 +212,7 @@ describe("tool listing", () => {
         "brain_sources",
         "brain_switch_vault",
         "brain_context_pack",
+        "brain_context_pack_outcome",
         "brain_unlinked_mentions",
         "brain_moc_audit",
         "brain_stale_scan",
@@ -293,6 +294,10 @@ describe("tool listing", () => {
         "brain_agenda",
         // Hermes on_memory_write host bridge (memory-subsystem-alignment).
         "brain_memory_bridge",
+        // Route-level MCP latency (context-pack-economics-observability).
+        "brain_route_metrics",
+        // Durable token-impact ledger (context-pack-economics-observability).
+        "brain_token_impact",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -567,7 +572,10 @@ describe("stdio loop", () => {
     // + brain_event_trace (dashboard-context-trace: event→trace join) = 87.
     // + brain_search_expand (progressive disclosure: search→expand→transcript) = 88.
     // + brain_knowledge_gaps (cross-query demand log, t_97091fff) = 89.
-    expect(list.result.tools.length).toBe(89);
+    // + brain_route_metrics (route-level MCP latency, context-pack-economics-observability) = 90.
+    // + brain_token_impact (durable token-impact ledger, context-pack-economics-observability) = 91.
+    // + brain_context_pack_outcome (agent-operable outcome loop, context-pack-economics-observability) = 92.
+    expect(list.result.tools.length).toBe(92);
   });
 
   test("returns parse error for invalid JSON", async () => {

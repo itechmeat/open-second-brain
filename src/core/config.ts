@@ -353,6 +353,22 @@ export function resolveSearchFocusContextPack(configPath?: string): boolean {
 }
 
 /**
+ * Context-pack density-ranking gate (impact-per-token allocation,
+ * t_affa3bd9). Default OFF: brain_context_pack orders purely by tier →
+ * recency unless `density_ranking_context_pack: "true"` (or the env
+ * override), keeping the default pack byte-identical. When on, a
+ * deterministic value-per-token density score breaks within-tier ties
+ * (after session focus, before recency).
+ */
+export function resolveDensityRankingContextPack(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_DENSITY_RANKING_CONTEXT_PACK",
+    "density_ranking_context_pack",
+    configPath,
+  );
+}
+
+/**
  * Post-compaction pinned-anchor survival audit gate
  * (session-lifecycle-capture-durability, t_12c8b256). Default OFF: the
  * `o2b brain post-compact-audit` entry is a no-op unless
@@ -502,6 +518,62 @@ export function resolveGenerationTraceEnabled(configPath?: string): boolean {
   return resolveConfigFlag(
     "OPEN_SECOND_BRAIN_GENERATION_TRACE_ENABLED",
     "generation_trace_enabled",
+    configPath,
+  );
+}
+
+/**
+ * Route-level MCP latency metrics gate (context-pack-economics-
+ * observability suite). Default OFF: the `mcp_route_latency` continuity
+ * path stays dormant unless `mcp_route_metrics_enabled: "true"`, when the
+ * MCP server records one payload-safe latency record per tool call (tool
+ * name, scope, status, duration, and argument key names only - never
+ * argument values). Fail-open: a failed record never fails the call.
+ */
+export function resolveMcpRouteMetricsEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_MCP_ROUTE_METRICS_ENABLED",
+    "mcp_route_metrics_enabled",
+    configPath,
+  );
+}
+
+/**
+ * Token-impact + context-pack-quality ledger gate (context-pack-economics-
+ * observability suite). Default OFF: the `token_impact` / `token_impact_outcome`
+ * continuity paths stay dormant unless `token_impact_ledger_enabled: "true"`,
+ * when opt-in `record`/`outcome` posts to `brain_token_impact` persist the
+ * tokenizer-exact prompt-token delta (baseline vs packed, method-labelled)
+ * and modeled inference-avoidance calibration. Payload-safe: counts and an
+ * opaque pack id only, never raw prompts or recalled text. Fail-open: a
+ * failed write never fails the caller. Read paths (list/summary) ignore the
+ * gate so historical aggregates stay inspectable after it is turned off.
+ */
+export function resolveTokenImpactLedgerEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_TOKEN_IMPACT_LEDGER_ENABLED",
+    "token_impact_ledger_enabled",
+    configPath,
+  );
+}
+
+/**
+ * Agent-operable context-pack outcome-loop gate (context-pack-economics-
+ * observability suite, C5). Default OFF: the `context_pack_outcome`
+ * continuity path (and its composed `token_impact_outcome` calibration
+ * write) stays dormant unless `context_pack_outcome_enabled: "true"`, when
+ * an opt-in `post` to `brain_context_pack_outcome` records one compact
+ * outcome row - first-pass/repair/retry counters plus the three strictly
+ * separate token signals (exact / modeled / observed) - correlated to a
+ * carried context-pack quality-sample id. Payload-safe: counts and an
+ * opaque sample id only, never raw prompts, completions, or recalled text.
+ * Fail-open: a failed write never fails the caller. Read paths (list/
+ * summary) ignore the gate so historical aggregates stay inspectable.
+ */
+export function resolveContextPackOutcomeEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_CONTEXT_PACK_OUTCOME_ENABLED",
+    "context_pack_outcome_enabled",
     configPath,
   );
 }

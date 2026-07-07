@@ -24,17 +24,32 @@ export const ACTIVE_TRUNCATION_NOTICE =
  * The preamble (everything before the first `## `) shares priority 0
  * with Confirmed. Unknown future sections sit between most-applied
  * and quarantine.
+ *
+ * Exported so the proactive budget-pressure probe
+ * (`active-budget-pressure.ts`) ranks eviction candidates against the
+ * exact same drop order this reactive truncation uses - the two
+ * surfaces must never disagree about which section goes first.
  */
-const SECTION_PRIORITIES: ReadonlyArray<{ readonly prefix: string; readonly priority: number }> = [
+export const SECTION_PRIORITIES: ReadonlyArray<{
+  readonly prefix: string;
+  readonly priority: number;
+}> = [
   { prefix: "## Confirmed", priority: 0 },
   { prefix: "## Most-applied", priority: 1 },
   { prefix: "## Quarantine", priority: 3 },
   { prefix: "## Recently retired", priority: 4 },
 ];
 
-const UNKNOWN_SECTION_PRIORITY = 2;
+/**
+ * Priority shared by the preamble and any priority-0 section (Confirmed).
+ * A section at this priority is a live rule/config the pressure probe
+ * treats as a keep-guard: it is never proposed as an eviction candidate.
+ */
+export const KEEP_GUARD_PRIORITY = 0;
 
-function priorityFor(heading: string): number {
+export const UNKNOWN_SECTION_PRIORITY = 2;
+
+export function priorityFor(heading: string): number {
   for (const { prefix, priority } of SECTION_PRIORITIES) {
     if (heading.startsWith(prefix)) return priority;
   }
@@ -44,8 +59,11 @@ function priorityFor(heading: string): number {
 /**
  * Split a rendered active.md body into `## `-delimited sections,
  * keeping the preamble attached to the front of the first slice.
+ *
+ * Exported for reuse by the budget-pressure probe so both surfaces
+ * split identically.
  */
-function splitSections(body: string): BudgetSection[] {
+export function splitSections(body: string): BudgetSection[] {
   const lines = body.split("\n");
   const sections: BudgetSection[] = [];
   let currentKey = "preamble";

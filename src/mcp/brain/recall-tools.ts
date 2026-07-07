@@ -22,6 +22,34 @@ import {
   type RecallTelemetryStatus,
 } from "../../core/brain/recall-telemetry.ts";
 import {
+  isMcpRouteStatus,
+  listMcpRouteLatency,
+  summarizeMcpRouteLatency,
+  type McpRouteLatencyFilter,
+  type McpRouteStatus,
+} from "../../core/brain/mcp-route-metrics.ts";
+import {
+  emitTokenImpact,
+  isTokenCountMethod,
+  isTokenImpactOutcome,
+  listTokenImpact,
+  recordTokenImpactOutcome,
+  summarizeTokenImpact,
+  type TokenCountMethod,
+  type TokenImpactFilter,
+  type TokenImpactOutcome,
+} from "../../core/brain/token-impact.ts";
+import {
+  emitContextPackOutcome,
+  listContextPackOutcomes,
+  summarizeContextPackOutcomes,
+  type ContextPackOutcomeFilter,
+} from "../../core/brain/context-pack-outcome.ts";
+import {
+  resolveContextPackOutcomeEnabled,
+  resolveTokenImpactLedgerEnabled,
+} from "../../core/config.ts";
+import {
   describeSessionRecall,
   expandSessionRecall,
   searchSessionRecall,
@@ -273,6 +301,407 @@ function coerceRecallTelemetryStatus(raw: unknown): RecallTelemetryStatus | unde
   return trimmed;
 }
 
+// ----- brain_route_metrics (context-pack-economics-observability) -----------
+
+async function toolBrainRouteMetrics(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_route_metrics", args, "operation");
+  const filter = routeMetricsFilter(args);
+
+  if (operation === "list") {
+    const records = listMcpRouteLatency(ctx.vault, filter);
+    return { vault_path: ctx.vault, total: records.length, records };
+  }
+  if (operation === "summary") {
+    const summary = summarizeMcpRouteLatency(ctx.vault, filter);
+    return { vault_path: ctx.vault, ...summary };
+  }
+  throw new MCPError(INVALID_PARAMS, "brain_route_metrics: operation must be list or summary");
+}
+
+function routeMetricsFilter(args: Record<string, unknown>): McpRouteLatencyFilter {
+  const tool = optionalStringArg("brain_route_metrics", args, "tool");
+  const status = coerceRouteMetricsStatus(args["status"]);
+  const since = optionalStringArg("brain_route_metrics", args, "since");
+  const until = optionalStringArg("brain_route_metrics", args, "until");
+  const limit = coercePositiveInteger("brain_route_metrics", "limit", args["limit"]);
+  return {
+    ...(tool !== undefined ? { tool } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  };
+}
+
+function coerceRouteMetricsStatus(raw: unknown): McpRouteStatus | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isMcpRouteStatus(trimmed)) {
+    throw new MCPError(INVALID_PARAMS, "brain_route_metrics: status must be ok or error");
+  }
+  return trimmed;
+}
+
+// ----- brain_token_impact (context-pack-economics-observability) ------------
+
+/**
+ * Durable token-impact + context-pack-quality ledger. `record`/`outcome`
+ * write opt-in samples (gated on `token_impact_ledger_enabled`, payload-safe:
+ * counts + opaque pack id only); `list`/`summary` read the ledger regardless
+ * of the gate so historical aggregates stay inspectable.
+ */
+async function toolBrainTokenImpact(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_token_impact", args, "operation");
+
+  if (operation === "record") {
+    const baselineTokens = coerceNonNegativeInteger(
+      "brain_token_impact",
+      "baseline_tokens",
+      args["baseline_tokens"],
+    );
+    const packedTokens = coerceNonNegativeInteger(
+      "brain_token_impact",
+      "packed_tokens",
+      args["packed_tokens"],
+    );
+    if (baselineTokens === undefined || packedTokens === undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_token_impact: record requires baseline_tokens and packed_tokens (non-negative integers)",
+      );
+    }
+    const method = coerceTokenCountMethod(args["method"]) ?? "fallback";
+    const modeledAvoided = coerceNonNegativeTokenValue(
+      "brain_token_impact",
+      "modeled_avoided_inferences",
+      args["modeled_avoided_inferences"],
+    );
+    const modeledPerInference = coerceNonNegativeTokenValue(
+      "brain_token_impact",
+      "modeled_tokens_per_inference",
+      args["modeled_tokens_per_inference"],
+    );
+    const enabled = resolveTokenImpactLedgerEnabled(ctx.configPath ?? undefined);
+    const record = emitTokenImpact(
+      ctx.vault,
+      {
+        baselineTokens,
+        packedTokens,
+        method,
+        ...tokenImpactCorrelation(args),
+        ...(modeledAvoided !== undefined ? { modeledAvoidedInferences: modeledAvoided } : {}),
+        ...(modeledPerInference !== undefined
+          ? { modeledTokensPerInference: modeledPerInference }
+          : {}),
+      },
+      enabled || undefined,
+    );
+    if (record === null) {
+      return { vault_path: ctx.vault, recorded: false, enabled };
+    }
+    return {
+      vault_path: ctx.vault,
+      recorded: true,
+      enabled,
+      id: record.id,
+      method,
+      baseline_tokens: baselineTokens,
+      packed_tokens: packedTokens,
+      delta_tokens: baselineTokens - packedTokens,
+    };
+  }
+
+  if (operation === "outcome") {
+    const outcome = coerceTokenImpactOutcome(args["outcome"]);
+    if (outcome === undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_token_impact: outcome requires outcome (first_pass | repair | retry)",
+      );
+    }
+    const tokensPerInference = coerceNonNegativeTokenValue(
+      "brain_token_impact",
+      "tokens_per_inference",
+      args["tokens_per_inference"],
+    );
+    const enabled = resolveTokenImpactLedgerEnabled(ctx.configPath ?? undefined);
+    const record = recordTokenImpactOutcome(
+      ctx.vault,
+      {
+        outcome,
+        ...tokenImpactCorrelation(args),
+        ...(tokensPerInference !== undefined ? { tokensPerInference } : {}),
+      },
+      enabled || undefined,
+    );
+    if (record === null) {
+      return { vault_path: ctx.vault, recorded: false, enabled };
+    }
+    return { vault_path: ctx.vault, recorded: true, enabled, id: record.id, outcome };
+  }
+
+  const filter = tokenImpactFilter(args);
+  if (operation === "list") {
+    const records = listTokenImpact(ctx.vault, filter);
+    return { vault_path: ctx.vault, total: records.length, records };
+  }
+  if (operation === "summary") {
+    return { vault_path: ctx.vault, ...summarizeTokenImpact(ctx.vault, filter) };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_token_impact: operation must be record, outcome, list, or summary",
+  );
+}
+
+function tokenImpactCorrelation(args: Record<string, unknown>): {
+  host?: string;
+  sessionId?: string;
+  turnId?: string;
+  packId?: string;
+} {
+  const host = optionalStringArg("brain_token_impact", args, "host");
+  const sessionId = optionalStringArg("brain_token_impact", args, "session_id");
+  const turnId = optionalStringArg("brain_token_impact", args, "turn_id");
+  const packId = optionalStringArg("brain_token_impact", args, "pack_id");
+  return {
+    ...(host !== undefined ? { host } : {}),
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(turnId !== undefined ? { turnId } : {}),
+    ...(packId !== undefined ? { packId } : {}),
+  };
+}
+
+function tokenImpactFilter(args: Record<string, unknown>): TokenImpactFilter {
+  const host = optionalStringArg("brain_token_impact", args, "host");
+  const packId = optionalStringArg("brain_token_impact", args, "pack_id");
+  const method = coerceTokenCountMethod(args["method"]);
+  const since = optionalStringArg("brain_token_impact", args, "since");
+  const until = optionalStringArg("brain_token_impact", args, "until");
+  const limit = coercePositiveInteger("brain_token_impact", "limit", args["limit"]);
+  const maxSamples = coercePositiveInteger(
+    "brain_token_impact",
+    "max_samples",
+    args["max_samples"],
+  );
+  return {
+    ...(host !== undefined ? { host } : {}),
+    ...(packId !== undefined ? { packId } : {}),
+    ...(method !== undefined ? { method } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(maxSamples !== undefined ? { maxSamples } : {}),
+  };
+}
+
+function coerceTokenCountMethod(raw: unknown): TokenCountMethod | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isTokenCountMethod(trimmed)) {
+    throw new MCPError(INVALID_PARAMS, "brain_token_impact: method must be exact or fallback");
+  }
+  return trimmed;
+}
+
+function coerceTokenImpactOutcome(raw: unknown): TokenImpactOutcome | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isTokenImpactOutcome(trimmed)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_token_impact: outcome must be first_pass, repair, or retry",
+    );
+  }
+  return trimmed;
+}
+
+function coerceNonNegativeInteger(tool: string, field: string, raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "number") {
+    if (!Number.isInteger(raw) || raw < 0) {
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
+    }
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
+    }
+    return Number.parseInt(trimmed, 10);
+  }
+  throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
+}
+
+function coerceNonNegativeTokenValue(
+  tool: string,
+  field: string,
+  raw: unknown,
+): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  // Reject empty/whitespace-only strings explicitly: Number("") and
+  // Number("   ".trim()) both coerce to 0 and would otherwise be written to the
+  // durable ledger as a fabricated zero. Mirrors coerceNonNegativeInteger above.
+  if (typeof raw === "string" && raw.trim() === "") {
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative number`);
+  }
+  const value = typeof raw === "string" ? Number(raw.trim()) : raw;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative number`);
+  }
+  return value;
+}
+
+// ----- brain_context_pack_outcome (context-pack-economics-observability) ----
+
+/**
+ * Agent-operable context-pack outcome loop. `post` writes one compact
+ * outcome row (gated on `context_pack_outcome_enabled`, payload-safe:
+ * counters + an opaque sample id only) AND composes the C3 ledger by posting
+ * a matching first-pass/repair/retry calibration record. `list`/`summary`
+ * read the rows regardless of the gate so historical aggregates stay
+ * inspectable. The three token signals (exact/modeled/observed) stay strictly
+ * separate; a field the caller omits is never invented.
+ */
+async function toolBrainContextPackOutcome(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_context_pack_outcome", args, "operation");
+
+  if (operation === "post") {
+    const sampleId = requiredStringArg("brain_context_pack_outcome", args, "sample_id");
+    const firstPassSuccess = coerceBoolean(args["first_pass_success"]);
+    if (firstPassSuccess === undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_pack_outcome: post requires first_pass_success (boolean)",
+      );
+    }
+    const repairRequired = coerceBoolean(args["repair_required"]);
+    const retryCount = coerceNonNegativeInteger(
+      "brain_context_pack_outcome",
+      "retry_count",
+      args["retry_count"],
+    );
+    const followUpTokens = coerceNonNegativeInteger(
+      "brain_context_pack_outcome",
+      "follow_up_tokens",
+      args["follow_up_tokens"],
+    );
+    const exact = coerceNonNegativeTokenValue(
+      "brain_context_pack_outcome",
+      "exact_prompt_token_savings",
+      args["exact_prompt_token_savings"],
+    );
+    const modeled = coerceNonNegativeTokenValue(
+      "brain_context_pack_outcome",
+      "modeled_inference_avoidance",
+      args["modeled_inference_avoidance"],
+    );
+    const observed = coerceNonNegativeTokenValue(
+      "brain_context_pack_outcome",
+      "observed_provider_tokens",
+      args["observed_provider_tokens"],
+    );
+    const enabled = resolveContextPackOutcomeEnabled(ctx.configPath ?? undefined);
+    const record = emitContextPackOutcome(
+      ctx.vault,
+      {
+        sampleId,
+        firstPassSuccess,
+        ...contextPackOutcomeCorrelation(args),
+        // Omit-don't-invent: only forward fields the caller actually supplied.
+        ...(repairRequired !== undefined ? { repairRequired } : {}),
+        ...(retryCount !== undefined ? { retryCount } : {}),
+        ...(followUpTokens !== undefined ? { followUpTokens } : {}),
+        ...(exact !== undefined ? { exactPromptTokenSavings: exact } : {}),
+        ...(modeled !== undefined ? { modeledInferenceAvoidance: modeled } : {}),
+        ...(observed !== undefined ? { observedProviderTokens: observed } : {}),
+      },
+      enabled || undefined,
+    );
+    if (record === null) {
+      return { vault_path: ctx.vault, recorded: false, enabled };
+    }
+    return {
+      vault_path: ctx.vault,
+      recorded: true,
+      enabled,
+      id: record.id,
+      sample_id: sampleId,
+      first_pass_success: firstPassSuccess,
+    };
+  }
+
+  const filter = contextPackOutcomeFilter(args);
+  if (operation === "list") {
+    const records = listContextPackOutcomes(ctx.vault, filter);
+    return { vault_path: ctx.vault, total: records.length, records };
+  }
+  if (operation === "summary") {
+    return { vault_path: ctx.vault, ...summarizeContextPackOutcomes(ctx.vault, filter) };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_context_pack_outcome: operation must be post, list, or summary",
+  );
+}
+
+function contextPackOutcomeCorrelation(args: Record<string, unknown>): {
+  host?: string;
+  sessionId?: string;
+  turnId?: string;
+} {
+  const host = optionalStringArg("brain_context_pack_outcome", args, "host");
+  const sessionId = optionalStringArg("brain_context_pack_outcome", args, "session_id");
+  const turnId = optionalStringArg("brain_context_pack_outcome", args, "turn_id");
+  return {
+    ...(host !== undefined ? { host } : {}),
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(turnId !== undefined ? { turnId } : {}),
+  };
+}
+
+function contextPackOutcomeFilter(args: Record<string, unknown>): ContextPackOutcomeFilter {
+  const host = optionalStringArg("brain_context_pack_outcome", args, "host");
+  const sampleId = optionalStringArg("brain_context_pack_outcome", args, "sample_id");
+  const since = optionalStringArg("brain_context_pack_outcome", args, "since");
+  const until = optionalStringArg("brain_context_pack_outcome", args, "until");
+  const limit = coercePositiveInteger("brain_context_pack_outcome", "limit", args["limit"]);
+  const maxSamples = coercePositiveInteger(
+    "brain_context_pack_outcome",
+    "max_samples",
+    args["max_samples"],
+  );
+  return {
+    ...(host !== undefined ? { host } : {}),
+    ...(sampleId !== undefined ? { sampleId } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(maxSamples !== undefined ? { maxSamples } : {}),
+  };
+}
+
+function coerceBoolean(raw: unknown): boolean | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "boolean") return raw;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_context_pack_outcome: boolean fields must be true or false",
+  );
+}
+
 // ----- brain_knowledge_gaps (t_97091fff) -----------------------------------
 
 async function toolBrainKnowledgeGaps(
@@ -466,6 +895,198 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRecallTelemetry,
+  },
+  {
+    name: "brain_route_metrics",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Route-level MCP latency: list mcp_route_latency records or summarize per-tool latency (count, errors, min/avg/max, p50/p95/p99) slowest-first to find slow surfaces by endpoint. Emitted only when mcp_route_metrics_enabled is on; payload-safe (tool, scope, status, duration, arg keys). Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["list", "summary"],
+          description: "list for raw records; summary for per-tool latency roll-up.",
+        },
+        tool: {
+          type: "string",
+          description: "Optional filter by MCP tool name.",
+        },
+        status: {
+          type: "string",
+          enum: ["ok", "error"],
+          description: "Optional filter by call status.",
+        },
+        since: {
+          type: "string",
+          description: "Optional inclusive lower timestamp bound.",
+        },
+        until: {
+          type: "string",
+          description: "Optional inclusive upper timestamp bound.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum record count for list.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainRouteMetrics,
+  },
+  {
+    name: "brain_token_impact",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Durable value-of-memory ledger. `record`: a pack's tokenizer-exact prompt-token delta (baseline−packed; method exact|fallback) + optional modeled inference-avoidance. `outcome` calibrates the model. `summary` keeps EXACT separate from MODELED; `list` reads samples. Gated write; payload-safe.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["record", "outcome", "list", "summary"],
+          description: "record/outcome write opt-in samples; list/summary read the durable ledger.",
+        },
+        baseline_tokens: {
+          type: "integer",
+          minimum: 0,
+          description: "record: prompt-token cost WITHOUT the memory layer's compaction/selection.",
+        },
+        packed_tokens: {
+          type: "integer",
+          minimum: 0,
+          description: "record: prompt-token cost the memory layer actually shipped.",
+        },
+        method: {
+          type: "string",
+          enum: ["exact", "fallback"],
+          description:
+            "How the counts were obtained: a real tokenizer (exact) or a heuristic estimate (fallback, the default). Also a list/summary filter.",
+        },
+        modeled_avoided_inferences: {
+          type: "number",
+          minimum: 0,
+          description:
+            "record (optional): modeled count of inferences (repairs/retries) the layer avoided.",
+        },
+        modeled_tokens_per_inference: {
+          type: "number",
+          minimum: 0,
+          description: "record (optional): modeled average prompt tokens per avoided inference.",
+        },
+        outcome: {
+          type: "string",
+          enum: ["first_pass", "repair", "retry"],
+          description: "outcome: the observed result used to calibrate the modeled ledger.",
+        },
+        tokens_per_inference: {
+          type: "number",
+          minimum: 0,
+          description: "outcome (optional): observed prompt tokens for this inference.",
+        },
+        pack_id: {
+          type: "string",
+          description:
+            "Opaque correlation id (a receipt id or request hash) — never a raw prompt. Also a list/summary filter.",
+        },
+        host: { type: "string", description: "Optional host/runtime label; also a filter." },
+        session_id: { type: "string", description: "Optional session id recorded on the sample." },
+        turn_id: { type: "string", description: "Optional turn id recorded on the sample." },
+        since: { type: "string", description: "Optional inclusive lower timestamp bound." },
+        until: { type: "string", description: "Optional inclusive upper timestamp bound." },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum record count for list.",
+        },
+        max_samples: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional cap on the most-recent samples aggregated by summary.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainTokenImpact,
+  },
+  {
+    name: "brain_context_pack_outcome",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Agent-operable context-pack outcome loop. `post` records a compact outcome row for a carried sample id — first-pass/repair/retry counters plus three SEPARATE token signals (exact, modeled, observed) — and calibrates the token-impact ledger. `list`/`summary` read rows. Gated, payload-safe.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["post", "list", "summary"],
+          description: "post writes one opt-in outcome row; list/summary read the durable ledger.",
+        },
+        sample_id: {
+          type: "string",
+          description:
+            "post: the carried recall/context-pack quality-sample id (a context-receipt id or opaque request hash) — never a raw prompt. Also a list/summary filter.",
+        },
+        first_pass_success: {
+          type: "boolean",
+          description: "post: whether the packed context led to a first-pass success.",
+        },
+        repair_required: {
+          type: "boolean",
+          description: "post (optional): whether the agent had to repair the first completion.",
+        },
+        retry_count: {
+          type: "integer",
+          minimum: 0,
+          description: "post (optional): how many retries the completion needed.",
+        },
+        follow_up_tokens: {
+          type: "integer",
+          minimum: 0,
+          description: "post (optional): tokens spent on follow-up turns after the first pass.",
+        },
+        exact_prompt_token_savings: {
+          type: "number",
+          minimum: 0,
+          description:
+            "post (optional): EXACT tokenizer-aware prompt-token savings (a measurement). Kept separate from the modeled and observed signals.",
+        },
+        modeled_inference_avoidance: {
+          type: "number",
+          minimum: 0,
+          description:
+            "post (optional): MODELED confidence-banded inference-avoidance estimate (a model). Kept separate from the exact and observed signals.",
+        },
+        observed_provider_tokens: {
+          type: "number",
+          minimum: 0,
+          description:
+            "post (optional): OBSERVED provider-reported token usage. Kept separate from the exact and modeled signals; also calibrates the token-impact ledger.",
+        },
+        host: { type: "string", description: "Optional host/runtime label; also a filter." },
+        session_id: { type: "string", description: "Optional session id recorded on the row." },
+        turn_id: { type: "string", description: "Optional turn id recorded on the row." },
+        since: { type: "string", description: "Optional inclusive lower timestamp bound." },
+        until: { type: "string", description: "Optional inclusive upper timestamp bound." },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum record count for list.",
+        },
+        max_samples: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional cap on the most-recent rows aggregated by summary.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainContextPackOutcome,
   },
   {
     name: "brain_knowledge_gaps",

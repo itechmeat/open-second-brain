@@ -41,6 +41,7 @@ import { join, relative } from "node:path";
 
 import { REMOVED_TOOLS } from "../removed-surfaces.ts";
 import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
+import { computeActiveBudgetPressure } from "./active-budget-pressure.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
@@ -64,6 +65,7 @@ import {
   BRAIN_GUARDRAIL_DEFAULTS,
   BRAIN_HEALTH_DEFAULTS,
   BrainConfigError,
+  INJECT_BUDGET_CHARS_DEFAULT,
   loadBrainConfigDetailed,
   resolveHealth,
 } from "./policy.ts";
@@ -73,7 +75,7 @@ import {
   type VerificationDeltaSummaryCounts,
 } from "./trust/compute-verification-delta.ts";
 import { checkInstructionFileCeiling } from "./trust/instruction-file-ceiling.ts";
-import { brainConfigPath, brainDirs } from "./paths.ts";
+import { brainActivePath, brainConfigPath, brainDirs } from "./paths.ts";
 import { BrainStatusFolderMismatchError, parsePreference, parseRetired } from "./preference.ts";
 import {
   reconcileSemanticHealth,
@@ -362,6 +364,16 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
   // how far the run got.
   try {
     checkDanglingWorkruns(vault, issues);
+  } catch {
+    /* doctor never throws */
+  }
+  // Proactive active-memory budget-pressure watermark (C4). When the
+  // rendered active.md is crossing its injection byte budget, warn
+  // BEFORE the reactive truncation silently drops content and list the
+  // sections an operator could archive to relieve pressure. Quiet on
+  // healthy vaults (empty output = healthy); suggestions only.
+  try {
+    checkActiveBudgetPressure(vault, issues, cfg?.active?.inject_budget_chars);
   } catch {
     /* doctor never throws */
   }
@@ -1169,6 +1181,58 @@ function checkDanglingWorkruns(vault: string, issues: DoctorIssue[]): void {
         "subsequent dream invocations will continue normally.",
     });
   }
+}
+
+/**
+ * `active-budget-pressure` (C4, context-pack-economics-observability):
+ * proactive watermark over `Brain/active.md`. Reads the rendered body,
+ * measures its fill-rate against the SessionStart injection byte budget
+ * (`active.inject_budget_chars`, else the default), and - only when
+ * pressure crosses the warn threshold - emits ONE warning naming the
+ * ranked eviction candidates an operator could archive to relieve it.
+ *
+ * "Empty output = healthy": a healthy or missing active.md produces no
+ * warning. The candidates are SUGGESTIONS surfaced for the operator /
+ * dream; nothing here mutates the vault - the reactive truncation in
+ * `active-budget.ts` is the only thing that ever drops content, and it
+ * does so at render time, not here.
+ */
+function checkActiveBudgetPressure(
+  vault: string,
+  issues: DoctorIssue[],
+  injectBudgetChars: number | undefined,
+): void {
+  const path = brainActivePath(vault);
+  if (!existsSync(path)) return;
+  let body: string;
+  try {
+    [, body] = parseFrontmatter(path);
+  } catch {
+    // A corrupted active.md is a derived-view problem the dream loop
+    // rewrites; not this probe's concern.
+    return;
+  }
+  const budget = injectBudgetChars ?? INJECT_BUDGET_CHARS_DEFAULT;
+  const pressure = computeActiveBudgetPressure(body.trim(), budget);
+  if (pressure.status === "healthy") return; // quiet on healthy vaults
+
+  const pct = Math.round(pressure.fillRate * 100);
+  const ranked = pressure.candidates
+    .map((c) => `${c.sectionKey.replace(/^## /, "")} (${c.bytes}B)`)
+    .join(", ");
+  const suggestion =
+    pressure.candidates.length > 0
+      ? ` Archive candidates, highest-priority-to-drop first: ${ranked}.`
+      : " No stale sections to archive - trim the confirmed rule set instead.";
+  issues.push({
+    severity: "warning",
+    code: "active-budget-pressure",
+    path,
+    message:
+      `active.md is at ${pct}% of the ${budget}-char injection budget (${pressure.status}).` +
+      " Content will be dropped at inject time once it overflows." +
+      suggestion,
+  });
 }
 
 /**

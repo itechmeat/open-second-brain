@@ -5,6 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.0] - 2026-07-07
+
+An economics and observability layer for the context pack. Five new
+opt-in surfaces make the value of memory measurable and close the
+quality feedback loop, each off by default with byte-identical output
+when unconfigured. The kernel still calls no LLM.
+
+### Added
+
+- **Value-per-token density ranking in the context pack.** With
+  `density_ranking_context_pack` on (default off), the context-pack
+  builder adds a deterministic density comparator that breaks within-tier
+  ties after session focus and before recency, ordering candidates by
+  structural signal per estimated token rather than only by freshness.
+  Tier stays the coarse gate so a peripheral page never outranks a core
+  one; off/absent keeps the density field off the item and the ordering
+  byte-identical. The score is a language-agnostic count (evidence-ref
+  grounding plus `[[wikilink]]` connectivity plus a fixed epistemic
+  weight), never a wordlist or LLM judgement.
+- **Durable token-impact ledger.** With `token_impact_ledger_enabled`
+  on (default off), every context pack posts one `token_impact` sample
+  carrying the tokenizer-exact prompt-token delta
+  (`baseline_tokens` − `packed_tokens`, labelled `method: exact` or
+  `fallback`) plus an optional modeled inference-avoidance estimate.
+  `brain_token_impact` `record` posts a sample, `outcome` posts a
+  `first_pass` / `repair` / `retry` result used only to calibrate the
+  modeled figure, and `summary` keeps the two ledgers strictly
+  separate: `prompt_token_delta` reports the measured net, saved, and
+  added tokens with a per-method split, while
+  `modeled_inference_avoidance` reports the raw modeled figure and a
+  `calibrated_savings_tokens` value dampened by the observed
+  first-pass rate (null until an outcome exists, uncalibrated not
+  zero). `list` reads raw samples. Writes are payload-safe (counts and
+  an opaque `pack_id` only); reads ignore the gate. Aggregates are
+  recomputed from the continuity store on every read, so they survive
+  restarts.
+- **Agent-operable context-pack outcome loop.** With
+  `context_pack_outcome_enabled` on (default off),
+  `brain_context_pack_outcome` `post` records one compact outcome row
+  for a carried context-pack quality-sample id: first-pass, repair,
+  and retry counters plus three strictly separate token signals
+  (`exact_prompt_token_savings`, `modeled_inference_avoidance`,
+  `observed_provider_tokens`), and composes the token-impact ledger
+  by posting a matching first-pass, repair, and retry calibration
+  outcome. `list` and `summary` read the rows keeping the signals
+  separate. A field the caller omits is never invented; writes are
+  payload-safe (counters and an opaque `sample_id` only); reads ignore
+  the gate.
+- **Route-level MCP tool latency metrics.** With
+  `mcp_route_metrics_enabled` on (default off), the MCP server emits
+  one `mcp_route_latency` continuity record per tool call: tool name,
+  scope, status (`ok` / `error`), duration, and the sorted set of
+  argument key names only, never argument values. `brain_route_metrics`
+  `list` returns raw records and `summary` rolls each tool up into
+  count, error count, min, avg, max, and p50, p95, p99 latency ordered
+  slowest-first, so an operator can identify which endpoint blocks an
+  agent turn by route rather than by aggregate benchmark. Read-only;
+  the emit is gated and fail-open.
+- **Proactive active-memory budget-pressure watermark.** The active
+  budget now reports a pressure signal before the pack is forced to
+  trim, so an operator or agent can react to approaching limits
+  instead of only observing the trim after it happens. The signal is
+  derived from existing budget metadata; behavior is byte-identical
+  when no consumer reads it.
+
 ## [1.24.0] - 2026-07-06
 
 A hardening and correctness pass over the PR #121 refactor. Thirteen fixes

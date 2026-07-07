@@ -22,7 +22,15 @@
  * bridge — persists native built-in-memory writes as durable
  * host_memory_write continuity records); the dashboard-context-trace
  * release added `brain_event_trace` (joins logged Brain events to the
- * continuity records attached to them by shared correlation ids).
+ * continuity records attached to them by shared correlation ids); the
+ * context-pack-economics-observability release added
+ * `brain_route_metrics` (route-level MCP tool latency read over opt-in
+ * `mcp_route_latency` continuity records) and `brain_token_impact` (durable
+ * token-impact ledger: tokenizer-exact prompt-token deltas kept strictly
+ * separate from a modeled, outcome-calibrated inference-avoidance estimate)
+ * and `brain_context_pack_outcome` (agent-operable outcome loop: a compact
+ * per-sample outcome row keeping the exact/modeled/observed token signals
+ * strictly separate, composing the token-impact ledger's calibration).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -45,6 +53,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_codegraph_report",
   "brain_context",
   "brain_context_pack",
+  "brain_context_pack_outcome",
   "brain_context_presets",
   "brain_context_receipts",
   "brain_create_note",
@@ -86,6 +95,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_research_report",
   "brain_retention",
   "brain_review_candidates",
+  "brain_route_metrics",
   "brain_secrets",
   "brain_session_describe",
   "brain_session_expand",
@@ -96,6 +106,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_stale_scan",
   "brain_switch_vault",
   "brain_tiers",
+  "brain_token_impact",
   "brain_trigger",
   "brain_truth",
   "brain_tune",
