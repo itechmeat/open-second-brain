@@ -35,6 +35,7 @@ import {
   rememberKey,
 } from "./idempotency-ledger.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
+import { normalizeExpirationDate } from "./expiration.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
 import { allocateSlug, brainDirs, validateIsoDate } from "./paths.ts";
@@ -112,6 +113,16 @@ export interface WriteSignalInput {
    */
   readonly valid_from?: string;
   readonly recorded_at?: string;
+  /**
+   * Caller-settable expiration (C5 / t_a82b674e). ISO date
+   * (`YYYY-MM-DD`) or full timestamp. Additive and optional: absent →
+   * the write is byte-identical to the historical path. When present it
+   * is validated and stamped into frontmatter; the default read/list
+   * path drops a signal past this date unless the caller opts into
+   * `showExpired`. Orthogonal to dream retirement — the file is never
+   * deleted or moved on expiry.
+   */
+  readonly expiration_date?: string;
   /**
    * Vault portability suite (v0.22.0). Opt-in: when true and `raw` is
    * present, the body is stored through the deterministic codec and a
@@ -331,6 +342,12 @@ export function writeSignal(
   if (sanitised.recorded_at && sanitised.recorded_at.trim()) {
     metadata["recorded_at"] = sanitised.recorded_at.trim();
   }
+  // Caller-settable expiration (C5): validated + emitted only when
+  // supplied so legacy / live writes stay byte-identical. Reader-side
+  // support is via parseSignal's optional read + the expiration filter.
+  if (sanitised.expiration_date && sanitised.expiration_date.trim()) {
+    metadata["expiration_date"] = normalizeExpirationDate(sanitised.expiration_date);
+  }
 
   // Opt-in codec (v0.22.0): store the raw body compressed and stamp a
   // `_raw_codec` marker so the reader expands it. Default path is verbatim.
@@ -542,6 +559,9 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
     ...(dedup_hash !== undefined ? { dedup_hash } : {}),
     ...(session_ref !== undefined ? { session_ref } : {}),
     ...readBiTemporal(meta, path),
+    ...(readOptionalTrimmedString(meta, "expiration_date", path) !== undefined
+      ? { expiration_date: readOptionalTrimmedString(meta, "expiration_date", path) }
+      : {}),
   };
   return Object.freeze(result);
 }

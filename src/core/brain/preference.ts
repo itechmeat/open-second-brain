@@ -66,6 +66,7 @@ import {
 import type { PageLifecycle } from "./page-meta/lifecycle.ts";
 import type { PageTier } from "./page-meta/tier.ts";
 import { computeContentHash } from "./content-hash.ts";
+import { normalizeExpirationDate } from "./expiration.ts";
 import {
   computePayloadHash,
   IdempotencyPayloadMismatchError,
@@ -190,6 +191,16 @@ export interface WritePreferenceInput {
    */
   readonly valid_from?: string;
   readonly valid_until?: string;
+  /**
+   * Caller-settable expiration (C5 / t_a82b674e). ISO date
+   * (`YYYY-MM-DD`) or full timestamp. Additive and optional: absent →
+   * the write is byte-identical to the historical path. When present it
+   * is validated and stamped into frontmatter; the default read/list
+   * path drops a preference past this date unless the caller opts into
+   * `showExpired`. Orthogonal to dream retirement — the file is never
+   * moved to `Brain/retired/` on expiry.
+   */
+  readonly expiration_date?: string;
   /** Optional extra tags merged after the canonical set. */
   readonly extraTags?: ReadonlyArray<string>;
   /** Free-form "How to apply" prose (rendered as a section). */
@@ -541,6 +552,12 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   // callers stay byte-identical.
   if (input.valid_from?.trim()) metadata["valid_from"] = input.valid_from.trim();
   if (input.valid_until?.trim()) metadata["valid_until"] = input.valid_until.trim();
+  // Caller-settable expiration (C5): validated + emitted only when
+  // supplied so legacy callers stay byte-identical. Reader-side support
+  // is via parsePreference's optional-scalar read + the expiration filter.
+  if (input.expiration_date?.trim()) {
+    metadata["expiration_date"] = normalizeExpirationDate(input.expiration_date);
+  }
   // Freshness trend (t_ee09a6ce): stamped by the dream refresh pass;
   // emitted only when supplied so legacy callers stay byte-identical.
   if (input.freshness_trend?.trim()) metadata["freshness_trend"] = input.freshness_trend.trim();
@@ -763,6 +780,9 @@ export function parsePreference(
     ...(provenance !== null ? { provenance } : {}),
     ...(optionalScalarString(meta, "freshness_trend") !== undefined
       ? { freshness_trend: optionalScalarString(meta, "freshness_trend") }
+      : {}),
+    ...(optionalScalarString(meta, "expiration_date") !== undefined
+      ? { expiration_date: optionalScalarString(meta, "expiration_date") }
       : {}),
     ...(optionalScalarString(meta, "supersedes") !== undefined
       ? { supersedes: optionalScalarString(meta, "supersedes") }
