@@ -353,6 +353,22 @@ export function resolveSearchFocusContextPack(configPath?: string): boolean {
 }
 
 /**
+ * Context-pack density-ranking gate (impact-per-token allocation,
+ * t_affa3bd9). Default OFF: brain_context_pack orders purely by tier →
+ * recency unless `density_ranking_context_pack: "true"` (or the env
+ * override), keeping the default pack byte-identical. When on, a
+ * deterministic value-per-token density score breaks within-tier ties
+ * (after session focus, before recency).
+ */
+export function resolveDensityRankingContextPack(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_DENSITY_RANKING_CONTEXT_PACK",
+    "density_ranking_context_pack",
+    configPath,
+  );
+}
+
+/**
  * Post-compaction pinned-anchor survival audit gate
  * (session-lifecycle-capture-durability, t_12c8b256). Default OFF: the
  * `o2b brain post-compact-audit` entry is a no-op unless

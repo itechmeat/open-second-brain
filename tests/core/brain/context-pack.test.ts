@@ -192,6 +192,97 @@ describe("packContext", () => {
     expect(dedupedPack.items[1]!.referenceHint).toBe("see pref-first");
   });
 
+  test("densityRanking OFF is byte-identical to the option being absent", () => {
+    writePref("older-dense", {
+      topic: "x",
+      principle: "dense body",
+      body: "[[a]] [[b]] grounded",
+      tier: "core",
+      created_at: "2026-01-01T00:00:00Z",
+    });
+    writePref("newer-sparse", {
+      topic: "x",
+      principle: "sparse body",
+      body: "plain",
+      tier: "core",
+      created_at: "2026-06-01T00:00:00Z",
+    });
+
+    const absent = packContext(vault, { maxTokens: 10_000 });
+    const off = packContext(vault, { maxTokens: 10_000, densityRanking: false });
+    expect(JSON.stringify(off)).toBe(JSON.stringify(absent));
+    // Recency wins with density off: the newer sparse page leads.
+    expect(off.items.map((i) => i.id)).toEqual(["pref-newer-sparse", "pref-older-dense"]);
+    expect(off.items.every((i) => i.density === undefined)).toBe(true);
+  });
+
+  // A long, low-signal body: many tokens, no links, no evidence - so its
+  // value-per-token density is unambiguously low.
+  const SPARSE_BODY =
+    "just some ordinary filler prose without any structural signal at all ".repeat(3);
+
+  test("densityRanking ON: a denser older page outranks a sparser newer one within a tier", () => {
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-older-dense.md"),
+      [
+        "---",
+        "id: pref-older-dense",
+        "topic: x",
+        "principle: dense body",
+        "tier: core",
+        "created_at: 2026-01-01T00:00:00Z",
+        '_evidenced_by: ["[[sig-1]]", "[[sig-2]]"]',
+        "---",
+        "",
+        "[[a]] [[b]] [[c]] grounded",
+      ].join("\n"),
+    );
+    writePref("newer-sparse", {
+      topic: "x",
+      principle: "sparse body",
+      body: SPARSE_BODY,
+      tier: "core",
+      created_at: "2026-06-01T00:00:00Z",
+    });
+
+    const r = packContext(vault, { maxTokens: 10_000, densityRanking: true });
+    expect(r.items.map((i) => i.id)).toEqual(["pref-older-dense", "pref-newer-sparse"]);
+    // The score that broke the tie is surfaced on the leading item.
+    expect(r.items[0]!.density).toBeGreaterThan(r.items[1]!.density!);
+  });
+
+  test("densityRanking ON: a peripheral page never outranks a core one regardless of density", () => {
+    // A maximally dense peripheral page: evidence refs + many links.
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-dense-peripheral.md"),
+      [
+        "---",
+        "id: pref-dense-peripheral",
+        "topic: x",
+        "principle: dense peripheral",
+        "tier: peripheral",
+        "created_at: 2026-06-01T00:00:00Z",
+        '_evidenced_by: ["[[e1]]", "[[e2]]", "[[e3]]"]',
+        "---",
+        "",
+        "[[a]] [[b]] [[c]] [[d]]",
+      ].join("\n"),
+    );
+    // A minimally dense core page: long low-signal body, no links/evidence.
+    writePref("sparse-core", {
+      topic: "x",
+      principle: "sparse core",
+      body: SPARSE_BODY,
+      tier: "core",
+      created_at: "2026-01-01T00:00:00Z",
+    });
+
+    const r = packContext(vault, { maxTokens: 10_000, densityRanking: true });
+    expect(r.items.map((i) => i.id)).toEqual(["pref-sparse-core", "pref-dense-peripheral"]);
+    // Tier is the coarse gate even though the peripheral page is denser.
+    expect(r.items[1]!.density).toBeGreaterThan(r.items[0]!.density!);
+  });
+
   test("stops when next page would exceed budget", () => {
     writePref("a", {
       topic: "x",

@@ -32,6 +32,7 @@ import {
   type EpistemicStatus,
 } from "./provenance/epistemic.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
+import { densityScore } from "./context-density.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
@@ -88,6 +89,13 @@ export interface ContextPackItem extends ContextTransformAnnotations {
   readonly epistemic: EpistemicStatus;
   /** `evidenced_by` wikilinks grounding this item; empty when it cites none. */
   readonly evidenceRefs: ReadonlyArray<string>;
+  /**
+   * Value-per-token density score (impact-per-token allocation,
+   * t_affa3bd9): structural signal per estimated token that broke this
+   * item's within-tier tie. Present only when `densityRanking` is on;
+   * absent otherwise so the default report stays byte-identical.
+   */
+  readonly density?: number;
   /** Present when the surfaced body was filtered or explicitly trusted. */
   readonly safety?: ContextSafetyReport;
 }
@@ -163,6 +171,19 @@ export interface ContextPackOptions {
    * on the `search_focus_context_pack` config key.
    */
   readonly sessionFocus?: SearchSessionFocus | null;
+  /**
+   * Value-per-token density ranking (impact-per-token allocation,
+   * t_affa3bd9). When true, a deterministic density score (structural
+   * signal per estimated token) breaks ties WITHIN a tier - inserted
+   * into the sort AFTER `sessionFocus` and BEFORE recency, so the full
+   * chain is tier → focus → density → recency → id. Tier stays the
+   * coarse gate: a peripheral page can never outrank a core one, and an
+   * active session focus always dominates a static content heuristic.
+   * Omitted/false keeps the density map empty and the ordering
+   * byte-identical to the legacy tier → recency pack. Callers gate this
+   * on the `density_ranking_context_pack` config key.
+   */
+  readonly densityRanking?: boolean;
 }
 
 interface Candidate {
@@ -302,6 +323,24 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     }
   }
 
+  // Value-per-token density (impact-per-token allocation, t_affa3bd9):
+  // computed once per candidate ONLY when opted in, so with the flag off
+  // the map is empty, the density comparator is a no-op, and the sort
+  // stays byte-identical to the legacy tier → recency ordering.
+  const densityRanking = opts.densityRanking === true;
+  const densityScoreById = new Map<string, number>();
+  if (densityRanking) {
+    for (const c of candidates) {
+      densityScoreById.set(
+        c.id,
+        densityScore(
+          { body: c.body, evidenceRefs: c.evidenceRefs, epistemic: c.epistemic },
+          c.tokens,
+        ),
+      );
+    }
+  }
+
   candidates.sort((a, b) => {
     const tierA = TIER_ORDER.indexOf(a.tier);
     const tierB = TIER_ORDER.indexOf(b.tier);
@@ -309,6 +348,12 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     const focusA = focusScore.get(a.id) ?? 0;
     const focusB = focusScore.get(b.id) ?? 0;
     if (focusA !== focusB) return focusB - focusA;
+    // Density breaks within-tier ties after focus, before recency. The
+    // map is empty when the flag is off, so both sides read 0 and the
+    // comparator falls straight through to recency → id.
+    const densA = densityScoreById.get(a.id) ?? 0;
+    const densB = densityScoreById.get(b.id) ?? 0;
+    if (densA !== densB) return densB - densA;
     if (a.createdAtMs !== b.createdAtMs) return b.createdAtMs - a.createdAtMs;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
@@ -352,6 +397,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       trimmed,
       epistemic: c.epistemic,
       evidenceRefs: c.evidenceRefs,
+      ...(densityRanking ? { density: densityScoreById.get(c.id) ?? 0 } : {}),
       ...(c.safety ? { safety: c.safety } : {}),
     });
     used += tokens;

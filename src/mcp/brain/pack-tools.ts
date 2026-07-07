@@ -9,6 +9,7 @@
  */
 
 import {
+  resolveDensityRankingContextPack,
   resolveRecallAdequacyThresholds,
   resolveSearchFocusContextPack,
 } from "../../core/config.ts";
@@ -110,8 +111,13 @@ async function toolBrainContextPack(
       sessionFocus = null;
     }
   }
+  // Density-ranking wiring (impact-per-token allocation, t_affa3bd9):
+  // gated on the density_ranking_context_pack config key (default off)
+  // so the default pack stays byte-identical to the tier → recency order.
+  const densityRanking = resolveDensityRankingContextPack(ctx.configPath ?? undefined);
   const report = packContext(ctx.vault, {
     maxTokens,
+    ...(densityRanking ? { densityRanking: true } : {}),
     ...(sessionFocus !== null ? { sessionFocus } : {}),
     ...(query ? { query } : {}),
     ...(includeLanes ? { includeLanes: true } : {}),
@@ -146,6 +152,7 @@ async function toolBrainContextPack(
       trimmed: i.trimmed,
       epistemic: i.epistemic,
       ...(i.evidenceRefs.length > 0 ? { evidence_refs: i.evidenceRefs } : {}),
+      ...(i.density !== undefined ? { density: i.density } : {}),
       ...(i.originalRank !== undefined ? { original_rank: i.originalRank } : {}),
       ...(i.stableRank !== undefined ? { stable_rank: i.stableRank } : {}),
       ...(i.dedupedFrom !== undefined ? { deduped_from: i.dedupedFrom } : {}),
