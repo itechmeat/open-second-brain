@@ -21,8 +21,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import {
@@ -46,17 +45,12 @@ import {
   type VerifyResult,
 } from "../types.ts";
 import { defaultRegistry } from "../registry.ts";
+// The sidecar snapshot logic is shared with the live session-bracketing
+// wrapper (E1) so the static and wrapped paths render byte-identical sidecars.
+import { renderAiderSidecar, resolveAiderSidecarPath } from "./aider-wrapper.ts";
 
 const TARGET = "aider";
 const LABEL = "Aider";
-
-function repoRoot(): string {
-  return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
-}
-
-function templatePath(): string {
-  return join(repoRoot(), "templates", "install", "aider-context.md.tmpl");
-}
 
 function resolveConfPath(env: InstallEnv): string {
   if (env.env["AIDER_CONFIG"]) return env.env["AIDER_CONFIG"];
@@ -66,8 +60,7 @@ function resolveConfPath(env: InstallEnv): string {
 }
 
 function resolveSidecarPath(env: InstallEnv, opts: { aiderContextPath?: string }): string {
-  if (opts.aiderContextPath) return opts.aiderContextPath;
-  return join(env.vault, ".open-second-brain", "aider-context.md");
+  return resolveAiderSidecarPath(env, opts);
 }
 
 function readSafe(path: string): string {
@@ -84,17 +77,6 @@ function fileMtimeMs(path: string): number | null {
   } catch {
     return null;
   }
-}
-
-function resolveAgentName(env: InstallEnv, payload: McpPayload): string {
-  return payload.full.env?.["VAULT_AGENT_NAME"] ?? env.env["VAULT_AGENT_NAME"] ?? "agent";
-}
-
-function renderTemplate(env: InstallEnv, payload: McpPayload): string {
-  const tpl = readFileSync(templatePath(), "utf8");
-  return tpl
-    .replace(/\{\{VAULT\}\}/g, env.vault)
-    .replace(/\{\{AGENT_NAME\}\}/g, resolveAgentName(env, payload));
 }
 
 function renderManagedBody(sidecarPath: string): string {
@@ -195,7 +177,7 @@ export const aiderAdapter: InstallAdapter = {
     }
 
     // Render sidecar
-    const sidecarContent = renderTemplate(env, payload);
+    const sidecarContent = renderAiderSidecar(env, payload);
     if (!opts.dryRun) {
       ensureParent(sidecar);
       atomicWriteFileSync(sidecar, sidecarContent);

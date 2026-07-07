@@ -81,6 +81,20 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("tool-arg", "string-array"),
     ]),
     command(
+      "aider",
+      "Session-bracketing memory wrapper for Aider",
+      [],
+      [
+        command("wrap", "Run Aider bracketed with live memory load + write-back", [
+          flag("session-id", "string"),
+          flag("aider-bin", "string"),
+          flag("chat-history", "string"),
+          flag("vault", "string"),
+          flag("config", "string"),
+        ]),
+      ],
+    ),
+    command(
       "brain",
       "Brain memory verbs",
       [],

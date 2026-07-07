@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Session-bracketing memory wrapper for Aider (E1). Thin convenience entry
+# for `o2b aider wrap` — regenerate the live context sidecar, run Aider with
+# it injected, then capture the session back into the Brain. Everything passed
+# here is forwarded to `o2b aider wrap` (use `-- <aider args...>` to reach
+# Aider's own flags).
+
+# Follow symlink so the repo root is correct even when invoked through
+# a package-manager bin shim or a symlink in ~/.local/bin.
+SELF=$(realpath -- "${BASH_SOURCE[0]}")
+SCRIPT_DIR=$(cd -- "$(dirname -- "$SELF")" && pwd)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+
+# shellcheck source=./_bun-precheck.sh
+. "$SCRIPT_DIR/_bun-precheck.sh"
+
+# shellcheck source=./_macos-sqlite.sh
+. "$SCRIPT_DIR/_macos-sqlite.sh"
+
+exec bun run "$REPO_ROOT/src/cli/main.ts" aider wrap "$@"
