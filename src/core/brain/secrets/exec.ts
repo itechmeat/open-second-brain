@@ -86,6 +86,17 @@ export async function runWithSecret(
 ): Promise<RunWithSecretResult> {
   if (argv.length === 0) throw new Error("secret run: a command is required after --");
   const command = argv.join(" ");
+  // The audit trail is long-lived. The custody store's own secret never
+  // reaches argv, but an agent may pass some OTHER credential as a bare
+  // positional argument; scrub the logged command through the bare-token
+  // and infra passes so a foreign secret is not persisted in cleartext.
+  // The raw `command` still drives the allowlist match and the denial error
+  // (the agent already holds its own input).
+  const auditCommand = redactRawOutput(command, {
+    redactTokens: true,
+    redactInfra: true,
+    maxInput: Number.POSITIVE_INFINITY,
+  });
   const resolved = resolveSecretForExec(vault, name, ctx);
   if (!matchesAllowlist(resolved.allow, command)) {
     appendAuditRecord(join(brainDirs(vault).log, "secret-custody"), {
@@ -94,7 +105,7 @@ export async function runWithSecret(
       action: "secret_exec_denied",
       target: resolved.name,
       ok: false,
-      details: { command, allow: resolved.allow },
+      details: { command: auditCommand, allow: resolved.allow },
     });
     throw new SecretExecDeniedError(resolved.name, command, resolved.allow);
   }
@@ -105,7 +116,7 @@ export async function runWithSecret(
     action: "secret_exec_started",
     target: resolved.name,
     ok: true,
-    details: { command, env_var: resolved.env_var },
+    details: { command: auditCommand, env_var: resolved.env_var },
   });
 
   const childEnv: Record<string, string> = {};

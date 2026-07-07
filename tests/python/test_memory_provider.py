@@ -293,7 +293,8 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
         self.assertEqual({s["name"] for s in schemas}, set(MEMORY_TOOLS))
         for schema in schemas:
             self.assertTrue(schema["description"])
-            self.assertEqual(schema["inputSchema"].get("type"), "object")
+            # static_tool_schemas() remaps inputSchema -> parameters
+            self.assertEqual(schema["parameters"].get("type"), "object")
 
     def test_get_tool_schemas_after_initialize_keeps_name_set(self):
         bridge = FakeBrainBridge(tools=self._curated_live_tools())

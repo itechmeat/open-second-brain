@@ -24,7 +24,7 @@ import {
   writeFrontmatterAtomic,
 } from "../vault.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
-import { planHealEnrichment } from "./heal-enrich.ts";
+import { planHealEnrichmentPrepared, prepareHealPhrases } from "./heal-enrich.ts";
 
 export interface HealRunResult {
   /** Pages scanned (outside the Brain root). */
@@ -72,6 +72,11 @@ export function runHealEnrichment(vault: string): HealRunResult {
     ownTokens.set(p.path, own);
   }
 
+  // Sort + regex-escape the whole known set ONCE; per page we only exclude
+  // that page's own few terms (see planHealEnrichmentPrepared) instead of
+  // re-sorting and recompiling the K-phrase set from scratch.
+  const prepared = prepareHealPhrases([...known]);
+
   const changed: string[] = [];
   for (const p of pages) {
     let meta;
@@ -84,8 +89,7 @@ export function runHealEnrichment(vault: string): HealRunResult {
     }
     // Never link a page to its own title or aliases.
     const own = ownTokens.get(p.path) ?? new Set<string>();
-    const others = [...known].filter((k) => !own.has(k));
-    const plan = planHealEnrichment({ frontmatter: meta, body }, others);
+    const plan = planHealEnrichmentPrepared({ frontmatter: meta, body }, prepared, own);
     if (!plan.changed) continue;
 
     const newMeta = plan.title !== undefined ? { ...meta, title: plan.title } : meta;

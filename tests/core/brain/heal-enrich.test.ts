@@ -14,7 +14,10 @@ import { describe, expect, test } from "bun:test";
 import {
   deriveTitleFromContent,
   linkExactMentions,
+  linkExactMentionsPrepared,
   planHealEnrichment,
+  planHealEnrichmentPrepared,
+  prepareHealPhrases,
 } from "../../../src/core/brain/heal-enrich.ts";
 
 describe("deriveTitleFromContent", () => {
@@ -99,5 +102,53 @@ describe("planHealEnrichment", () => {
     expect(plan.changed).toBe(false);
     expect(plan.title).toBeUndefined();
     expect(plan.body).toBeUndefined();
+  });
+});
+
+describe("prepared-set path is byte-identical to the excluded-list path", () => {
+  // Full known set; several phrases where one page's own multi-word title
+  // ("Foo Bar") contains another known phrase ("Bar") as a whole sub-token
+  // - the exact case where a naive compile-once-then-post-filter would
+  // diverge. The prepared path must match the excluded-list reference.
+  const known = ["Bar", "Foo Bar", "Acme Corp", "Acme", "Widget"];
+  const bodies = [
+    "Foo Bar mentions Bar and Widget here",
+    "Acme Corp and Acme both appear, plus `Widget` in code",
+    "[[Foo Bar]] already linked; Bar again",
+    "nothing relevant",
+    "Bar Foo Bar Bar",
+  ];
+  const excludeSets: ReadonlyArray<ReadonlyArray<string>> = [
+    ["Foo Bar"], // page owns the multi-word title containing "Bar"
+    ["Acme Corp"],
+    [],
+    ["Widget"],
+    ["Bar"],
+  ];
+
+  const prepared = prepareHealPhrases(known);
+
+  for (const body of bodies) {
+    for (const exclude of excludeSets) {
+      test(`link "${body.slice(0, 20)}" excluding [${exclude.join(",")}]`, () => {
+        const reference = linkExactMentions(
+          body,
+          known.filter((k) => !new Set(exclude).has(k)),
+        );
+        const viaPrepared = linkExactMentionsPrepared(body, prepared, new Set(exclude));
+        expect(viaPrepared).toBe(reference);
+      });
+    }
+  }
+
+  test("planHealEnrichmentPrepared matches planHealEnrichment on the excluded list", () => {
+    const page = { frontmatter: { title: "Foo Bar" }, body: "Foo Bar links Bar and Widget" };
+    const exclude = new Set(["Foo Bar"]);
+    const reference = planHealEnrichment(
+      page,
+      known.filter((k) => !exclude.has(k)),
+    );
+    const viaPrepared = planHealEnrichmentPrepared(page, prepared, exclude);
+    expect(viaPrepared).toEqual(reference);
   });
 });

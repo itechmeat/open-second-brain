@@ -70,6 +70,92 @@ when unconfigured. The kernel still calls no LLM.
   derived from existing budget metadata; behavior is byte-identical
   when no consumer reads it.
 
+## [1.24.0] - 2026-07-06
+
+A hardening and correctness pass over the PR #121 refactor. Thirteen fixes
+across four classes land as one minor because the `basename` column addition
+forces a `LATEST_SCHEMA_VERSION` bump and reindex on upgrade, and because the
+`created_at` validation tightening turns previously-accepted garbage into
+`INVALID_PARAMS`. The kernel still calls no LLM, and every new field is off or
+absent by default with byte-identical output when unconfigured.
+
+### Added
+
+- **Self-heal on an unreadable search index.** `openReadOrSelfHeal` now rebuilds
+  on `INDEX_UNREADABLE` alongside the existing `INDEX_MISSING` and
+  `SCHEMA_MISMATCH` cases, so a corrupted but present index self-heals instead of
+  surfacing a raw read error.
+
+### Changed
+
+- **`basename` column and index in the search store.** Resolved-wikilink
+  discovery is now an equality join over a populated `documents.basename` column
+  instead of a `documents` SUBSTR scan per link, removing a scan that grew with
+  vault age. The column requires a `LATEST_SCHEMA_VERSION` bump, so every
+  existing install reindexes once on next open. The reindex is absorbed together
+  with the Han-bigram tokenizer change below, so users pay one reindex, not two.
+- **Hot-path memoization.** The entity index, backlink index, and heal regex are
+  now memoized with mtime and generation keys so they are not rebuilt on every
+  query. The memos are opt-in by construction: they introduce a bounded staleness
+  window (a write inside mtime granularity can serve one stale read), which is
+  documented at the call site and pinned by write-then-read invalidation tests.
+- **`links normalize --mode short` rewritten over a basename-to-paths Map.**
+  Output is byte-identical to before, captured by a characterization fixture.
+- **Continuity latest-record queries exit early in reverse chronological order.**
+  The working-memory recompute no longer scans the full history when only the
+  most recent record is needed.
+
+### Fixed
+
+- **Search index rebuild race and crash-restore clobber.** A separate reindex
+  lock (`acquireReindexLock` / `isReindexInProgress`, distinct from the per-Store
+  writer lock) now guards the staging build so a concurrent reindex cannot swap
+  an empty staging database over the live index, and the crash-restore preamble
+  no longer clobbers a freshly built index with a stale `.bak`. Three regression
+  tests pin the path.
+- **`created_at` validation tightened.** Continuity and query-demand records now
+  require a full canonical UTC timestamp; a `YYYY-MM`-prefix timestamp that was
+  previously accepted now fails with a structured `INVALID_PARAMS`. This is the
+  contract-tightening gate that places these fixes behind a minor version.
+- **Surrogate-safe card snippet truncation.** Snippet truncation now cuts on code
+  points instead of UTF-16 code units, so an emoji or other astral character at
+  the boundary no longer splits into a lone U+FFFD on the `cards` disclosure
+  surface.
+- **Second-precision `since` / `until` filtering.** Filter bounds run through
+  timestamp normalization before the lexical compare, so millisecond and second
+  precision are handled consistently and up to a second of records is no longer
+  dropped at each boundary.
+- **Secret-exec audit redaction.** The `command` field logged by the secret-exec
+  path is now redacted before it reaches the audit trail, so a foreign bare
+  credential is no longer persisted in cleartext.
+- **Han-bigram tokenizer restricted to contiguous Han spans.** The CJK bigram
+  pass no longer emits cross-script bigrams (`n实`) for mixed tokens, matching
+  the docstring's Han-only scope. Pure-Han and pure-ASCII tokenization are
+  unchanged.
+
+## [1.23.1] - 2026-07-06
+
+### Fixed
+
+- **`o2b init` fails on native Windows** -- `resolve()` produces backslash
+  paths that `setConfigValue()` rejects via `CONFIG_VALUE_REJECTED_CHARS`.
+  Vault path is now normalized to forward slashes before persisting; forward
+  slashes work identically in Node/Bun fs APIs on Windows. (#119)
+- **Hermes memory provider bridge fails on Windows** -- `scripts/o2b` is a
+  bash script that `subprocess.Popen` cannot execute directly (Windows
+  delegates to `cmd.exe`, not a POSIX shell). Added `_resolve_command()`
+  which detects the platform and falls back to `bun run <entry> mcp` when
+  `o2b` is not available as a native executable.
+- **`detectTooling()` fails to find tools on Windows** -- PATH was split on
+  `:` only (POSIX); now uses `;` on Windows. Executable probing now honours
+  `PATHEXT` (`.exe`, `.cmd`, `.bat`, `.com`) instead of hardcoding `.exe`.
+- **MCP `inputSchema` not recognized by Hermes adapters (all platforms)** --
+  Hermes adapters (Anthropic, OpenAI, Bedrock) expect tool schemas under
+  `parameters`, but MCP serves them as `inputSchema`. Without this remap
+  brain tools had no visible arguments on any OS. Both live and static
+  fallback schemas now remap `inputSchema` -> `parameters` at the provider
+  boundary.
+
 ## [1.23.0] - 2026-07-05
 
 Two optional precision layers that complete the retrieval-precision loop
@@ -6270,6 +6356,8 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.24.0]: https://github.com/itechmeat/open-second-brain/compare/v1.23.1...v1.24.0
+[1.23.1]: https://github.com/itechmeat/open-second-brain/compare/v1.23.0...v1.23.1
 [1.23.0]: https://github.com/itechmeat/open-second-brain/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/itechmeat/open-second-brain/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/itechmeat/open-second-brain/compare/v1.20.0...v1.21.0

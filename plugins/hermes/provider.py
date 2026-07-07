@@ -13,7 +13,9 @@ are added alongside.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import threading
 from pathlib import Path
 from typing import Any
@@ -89,6 +91,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._bridge = self._bridge_override or McpBrainBridge(
             vault=config.resolve_vault(),
             repo_root=self._repo_root(),
+            command=self._resolve_command(),
         )
         try:
             self._bridge.start()
@@ -103,6 +106,44 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         without it ``skill_auto_attach`` returns an empty list."""
         root = Path(__file__).resolve().parents[2]
         return str(root) if (root / "skills").is_dir() else None
+
+    @classmethod
+    def _resolve_command(cls) -> tuple[str, ...]:
+        """Determine the right argv prefix for the ``o2b mcp`` subprocess.
+
+        On POSIX, ``scripts/o2b`` is a bash wrapper that ``install-cli`` may
+        have symlinked into ``~/.local/bin``; ``shutil.which("o2b")`` finds it
+        and ``Popen`` can execute it directly.
+
+        On Windows, bash scripts are not directly executable by
+        ``subprocess.Popen`` (it delegates to ``cmd.exe``, not a POSIX shell).
+        Even if ``o2b`` were on PATH, Popen would fail with ``[WinError 193]``
+        or ``[WinError 2]``.  The correct cross-platform fallback is to invoke
+        the TypeScript entry point through ``bun run``, which works identically
+        on every OS.
+
+        Resolution order:
+        1. POSIX + ``o2b`` in PATH → ``("o2b", "mcp")``
+        2. ``bun`` in PATH + repo root has ``src/cli/main.ts`` →
+           ``("bun", "run", "<entry>", "mcp")``
+        3. Fallback → ``("o2b", "mcp")`` (will surface a clear Popen error)
+        """
+        # On non-Windows, a globally installed o2b works out of the box.
+        if os.name != "nt" and shutil.which("o2b"):
+            return ("o2b", "mcp")
+
+        # Resolve via the repo-local TypeScript entry point + bun.
+        root = cls._repo_root()
+        if root:
+            entry = Path(root) / "src" / "cli" / "main.ts"
+            if entry.is_file():
+                bun = shutil.which("bun")
+                if bun:
+                    return (bun, "run", str(entry), "mcp")
+
+        # Last resort: hope o2b is reachable (e.g. npm global install on
+        # Windows created an o2b.cmd shim, or the user's shell can run it).
+        return ("o2b", "mcp")
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         """Return the memory-relevant subset of the server's advertised tools.
@@ -119,7 +160,16 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             tools = self._bridge.list_tools()
         except Exception:  # noqa: BLE001 - static fallback rather than a crash
             return static_tool_schemas()
-        return [t for t in tools if t.get("name") in MEMORY_TOOLS]
+        filtered = []
+        for t in tools:
+            if t.get("name") not in MEMORY_TOOLS:
+                continue
+            # MCP uses "inputSchema"; Hermes adapters expect "parameters"
+            if "inputSchema" in t and "parameters" not in t:
+                t = dict(t)
+                t["parameters"] = t.pop("inputSchema")
+            filtered.append(t)
+        return filtered
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **_kwargs: Any) -> str:
         """Forward an agent tool invocation to the TS core over the bridge.
