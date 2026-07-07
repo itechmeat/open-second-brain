@@ -539,6 +539,25 @@ export function resolveMcpRouteMetricsEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Token-impact + context-pack-quality ledger gate (context-pack-economics-
+ * observability suite). Default OFF: the `token_impact` / `token_impact_outcome`
+ * continuity paths stay dormant unless `token_impact_ledger_enabled: "true"`,
+ * when opt-in `record`/`outcome` posts to `brain_token_impact` persist the
+ * tokenizer-exact prompt-token delta (baseline vs packed, method-labelled)
+ * and modeled inference-avoidance calibration. Payload-safe: counts and an
+ * opaque pack id only, never raw prompts or recalled text. Fail-open: a
+ * failed write never fails the caller. Read paths (list/summary) ignore the
+ * gate so historical aggregates stay inspectable after it is turned off.
+ */
+export function resolveTokenImpactLedgerEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_TOKEN_IMPACT_LEDGER_ENABLED",
+    "token_impact_ledger_enabled",
+    configPath,
+  );
+}
+
+/**
  * Optional external judge command for the memory benchmark (Memory
  * Observability Suite, t_882c396a). Unset (the default) means the
  * judge phase is skipped - the harness itself never calls an LLM.

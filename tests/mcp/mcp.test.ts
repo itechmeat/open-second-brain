@@ -295,6 +295,8 @@ describe("tool listing", () => {
         "brain_memory_bridge",
         // Route-level MCP latency (context-pack-economics-observability).
         "brain_route_metrics",
+        // Durable token-impact ledger (context-pack-economics-observability).
+        "brain_token_impact",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.
@@ -570,7 +572,8 @@ describe("stdio loop", () => {
     // + brain_search_expand (progressive disclosure: search→expand→transcript) = 88.
     // + brain_knowledge_gaps (cross-query demand log, t_97091fff) = 89.
     // + brain_route_metrics (route-level MCP latency, context-pack-economics-observability) = 90.
-    expect(list.result.tools.length).toBe(90);
+    // + brain_token_impact (durable token-impact ledger, context-pack-economics-observability) = 91.
+    expect(list.result.tools.length).toBe(91);
   });
 
   test("returns parse error for invalid JSON", async () => {

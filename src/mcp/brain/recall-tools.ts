@@ -29,6 +29,18 @@ import {
   type McpRouteStatus,
 } from "../../core/brain/mcp-route-metrics.ts";
 import {
+  emitTokenImpact,
+  isTokenCountMethod,
+  isTokenImpactOutcome,
+  listTokenImpact,
+  recordTokenImpactOutcome,
+  summarizeTokenImpact,
+  type TokenCountMethod,
+  type TokenImpactFilter,
+  type TokenImpactOutcome,
+} from "../../core/brain/token-impact.ts";
+import { resolveTokenImpactLedgerEnabled } from "../../core/config.ts";
+import {
   describeSessionRecall,
   expandSessionRecall,
   searchSessionRecall,
@@ -324,6 +336,214 @@ function coerceRouteMetricsStatus(raw: unknown): McpRouteStatus | undefined {
   return trimmed;
 }
 
+// ----- brain_token_impact (context-pack-economics-observability) ------------
+
+/**
+ * Durable token-impact + context-pack-quality ledger. `record`/`outcome`
+ * write opt-in samples (gated on `token_impact_ledger_enabled`, payload-safe:
+ * counts + opaque pack id only); `list`/`summary` read the ledger regardless
+ * of the gate so historical aggregates stay inspectable.
+ */
+async function toolBrainTokenImpact(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operation = optionalStringArg("brain_token_impact", args, "operation");
+
+  if (operation === "record") {
+    const baselineTokens = coerceNonNegativeInteger(
+      "brain_token_impact",
+      "baseline_tokens",
+      args["baseline_tokens"],
+    );
+    const packedTokens = coerceNonNegativeInteger(
+      "brain_token_impact",
+      "packed_tokens",
+      args["packed_tokens"],
+    );
+    if (baselineTokens === undefined || packedTokens === undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_token_impact: record requires baseline_tokens and packed_tokens (non-negative integers)",
+      );
+    }
+    const method = coerceTokenCountMethod(args["method"]) ?? "fallback";
+    const modeledAvoided = coerceNonNegativeTokenValue(
+      "brain_token_impact",
+      "modeled_avoided_inferences",
+      args["modeled_avoided_inferences"],
+    );
+    const modeledPerInference = coerceNonNegativeTokenValue(
+      "brain_token_impact",
+      "modeled_tokens_per_inference",
+      args["modeled_tokens_per_inference"],
+    );
+    const enabled = resolveTokenImpactLedgerEnabled(ctx.configPath ?? undefined);
+    const record = emitTokenImpact(
+      ctx.vault,
+      {
+        baselineTokens,
+        packedTokens,
+        method,
+        ...tokenImpactCorrelation(args),
+        ...(modeledAvoided !== undefined ? { modeledAvoidedInferences: modeledAvoided } : {}),
+        ...(modeledPerInference !== undefined
+          ? { modeledTokensPerInference: modeledPerInference }
+          : {}),
+      },
+      enabled || undefined,
+    );
+    if (record === null) {
+      return { vault_path: ctx.vault, recorded: false, enabled };
+    }
+    return {
+      vault_path: ctx.vault,
+      recorded: true,
+      enabled,
+      id: record.id,
+      method,
+      baseline_tokens: baselineTokens,
+      packed_tokens: packedTokens,
+      delta_tokens: baselineTokens - packedTokens,
+    };
+  }
+
+  if (operation === "outcome") {
+    const outcome = coerceTokenImpactOutcome(args["outcome"]);
+    if (outcome === undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_token_impact: outcome requires outcome (first_pass | repair | retry)",
+      );
+    }
+    const tokensPerInference = coerceNonNegativeTokenValue(
+      "brain_token_impact",
+      "tokens_per_inference",
+      args["tokens_per_inference"],
+    );
+    const enabled = resolveTokenImpactLedgerEnabled(ctx.configPath ?? undefined);
+    const record = recordTokenImpactOutcome(
+      ctx.vault,
+      {
+        outcome,
+        ...tokenImpactCorrelation(args),
+        ...(tokensPerInference !== undefined ? { tokensPerInference } : {}),
+      },
+      enabled || undefined,
+    );
+    if (record === null) {
+      return { vault_path: ctx.vault, recorded: false, enabled };
+    }
+    return { vault_path: ctx.vault, recorded: true, enabled, id: record.id, outcome };
+  }
+
+  const filter = tokenImpactFilter(args);
+  if (operation === "list") {
+    const records = listTokenImpact(ctx.vault, filter);
+    return { vault_path: ctx.vault, total: records.length, records };
+  }
+  if (operation === "summary") {
+    return { vault_path: ctx.vault, ...summarizeTokenImpact(ctx.vault, filter) };
+  }
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_token_impact: operation must be record, outcome, list, or summary",
+  );
+}
+
+function tokenImpactCorrelation(args: Record<string, unknown>): {
+  host?: string;
+  sessionId?: string;
+  turnId?: string;
+  packId?: string;
+} {
+  const host = optionalStringArg("brain_token_impact", args, "host");
+  const sessionId = optionalStringArg("brain_token_impact", args, "session_id");
+  const turnId = optionalStringArg("brain_token_impact", args, "turn_id");
+  const packId = optionalStringArg("brain_token_impact", args, "pack_id");
+  return {
+    ...(host !== undefined ? { host } : {}),
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(turnId !== undefined ? { turnId } : {}),
+    ...(packId !== undefined ? { packId } : {}),
+  };
+}
+
+function tokenImpactFilter(args: Record<string, unknown>): TokenImpactFilter {
+  const host = optionalStringArg("brain_token_impact", args, "host");
+  const packId = optionalStringArg("brain_token_impact", args, "pack_id");
+  const method = coerceTokenCountMethod(args["method"]);
+  const since = optionalStringArg("brain_token_impact", args, "since");
+  const until = optionalStringArg("brain_token_impact", args, "until");
+  const limit = coercePositiveInteger("brain_token_impact", "limit", args["limit"]);
+  const maxSamples = coercePositiveInteger(
+    "brain_token_impact",
+    "max_samples",
+    args["max_samples"],
+  );
+  return {
+    ...(host !== undefined ? { host } : {}),
+    ...(packId !== undefined ? { packId } : {}),
+    ...(method !== undefined ? { method } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(maxSamples !== undefined ? { maxSamples } : {}),
+  };
+}
+
+function coerceTokenCountMethod(raw: unknown): TokenCountMethod | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isTokenCountMethod(trimmed)) {
+    throw new MCPError(INVALID_PARAMS, "brain_token_impact: method must be exact or fallback");
+  }
+  return trimmed;
+}
+
+function coerceTokenImpactOutcome(raw: unknown): TokenImpactOutcome | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isTokenImpactOutcome(trimmed)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_token_impact: outcome must be first_pass, repair, or retry",
+    );
+  }
+  return trimmed;
+}
+
+function coerceNonNegativeInteger(tool: string, field: string, raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "number") {
+    if (!Number.isInteger(raw) || raw < 0) {
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
+    }
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
+    }
+    return Number.parseInt(trimmed, 10);
+  }
+  throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
+}
+
+function coerceNonNegativeTokenValue(
+  tool: string,
+  field: string,
+  raw: unknown,
+): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const value = typeof raw === "string" ? Number(raw.trim()) : raw;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative number`);
+  }
+  return value;
+}
+
 // ----- brain_knowledge_gaps (t_97091fff) -----------------------------------
 
 async function toolBrainKnowledgeGaps(
@@ -558,6 +778,82 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRouteMetrics,
+  },
+  {
+    name: "brain_token_impact",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Durable value-of-memory ledger. `record`: a pack's tokenizer-exact prompt-token delta (baseline−packed; method exact|fallback) + optional modeled inference-avoidance. `outcome` calibrates the model. `summary` keeps EXACT separate from MODELED; `list` reads samples. Gated write; payload-safe.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["record", "outcome", "list", "summary"],
+          description: "record/outcome write opt-in samples; list/summary read the durable ledger.",
+        },
+        baseline_tokens: {
+          type: "integer",
+          minimum: 0,
+          description: "record: prompt-token cost WITHOUT the memory layer's compaction/selection.",
+        },
+        packed_tokens: {
+          type: "integer",
+          minimum: 0,
+          description: "record: prompt-token cost the memory layer actually shipped.",
+        },
+        method: {
+          type: "string",
+          enum: ["exact", "fallback"],
+          description:
+            "How the counts were obtained: a real tokenizer (exact) or a heuristic estimate (fallback, the default). Also a list/summary filter.",
+        },
+        modeled_avoided_inferences: {
+          type: "number",
+          minimum: 0,
+          description:
+            "record (optional): modeled count of inferences (repairs/retries) the layer avoided.",
+        },
+        modeled_tokens_per_inference: {
+          type: "number",
+          minimum: 0,
+          description: "record (optional): modeled average prompt tokens per avoided inference.",
+        },
+        outcome: {
+          type: "string",
+          enum: ["first_pass", "repair", "retry"],
+          description: "outcome: the observed result used to calibrate the modeled ledger.",
+        },
+        tokens_per_inference: {
+          type: "number",
+          minimum: 0,
+          description: "outcome (optional): observed prompt tokens for this inference.",
+        },
+        pack_id: {
+          type: "string",
+          description:
+            "Opaque correlation id (a receipt id or request hash) — never a raw prompt. Also a list/summary filter.",
+        },
+        host: { type: "string", description: "Optional host/runtime label; also a filter." },
+        session_id: { type: "string", description: "Optional session id recorded on the sample." },
+        turn_id: { type: "string", description: "Optional turn id recorded on the sample." },
+        since: { type: "string", description: "Optional inclusive lower timestamp bound." },
+        until: { type: "string", description: "Optional inclusive upper timestamp bound." },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum record count for list.",
+        },
+        max_samples: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional cap on the most-recent samples aggregated by summary.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    handler: toolBrainTokenImpact,
   },
   {
     name: "brain_knowledge_gaps",
