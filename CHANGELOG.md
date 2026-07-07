@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.25.0] - 2026-07-07
 
-An economics and observability layer for the context pack. Four new
+An economics and observability layer for the context pack. Five new
 opt-in surfaces make the value of memory measurable and close the
 quality feedback loop, each off by default with byte-identical output
 when unconfigured. The kernel still calls no LLM.
 
 ### Added
 
+- **Value-per-token density ranking in the context pack.** With
+  `density_ranking_context_pack` on (default off), the context-pack
+  builder adds a deterministic density comparator that breaks within-tier
+  ties after session focus and before recency, ordering candidates by
+  structural signal per estimated token rather than only by freshness.
+  Tier stays the coarse gate so a peripheral page never outranks a core
+  one; off/absent keeps the density field off the item and the ordering
+  byte-identical. The score is a language-agnostic count (evidence-ref
+  grounding plus `[[wikilink]]` connectivity plus a fixed epistemic
+  weight), never a wordlist or LLM judgement.
 - **Durable token-impact ledger.** With `token_impact_ledger_enabled`
   on (default off), every context pack posts one `token_impact` sample
   carrying the tokenizer-exact prompt-token delta

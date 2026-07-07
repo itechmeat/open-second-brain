@@ -100,11 +100,16 @@ export function emitMcpRouteLatency<G>(
     }
     const createdAt = input.createdAt ?? new Date().toISOString();
     const argKeys = normalizeArgKeys(input.argKeys);
+    // Guard against non-finite durations: Math.round/Math.max pass NaN/Infinity
+    // through, and JSON.stringify silently turns them into null, corrupting the
+    // persisted record. Not reachable from the server seam today (always a
+    // performance.now() diff) but hardened for future misuse.
+    const safeDurationMs = Number.isFinite(input.durationMs) ? input.durationMs : 0;
     const payload: Record<string, unknown> = {
       tool,
       ...(input.scope !== undefined ? { scope: input.scope } : {}),
       status: input.status,
-      duration_ms: Math.max(0, Math.round(input.durationMs)),
+      duration_ms: Math.max(0, Math.round(safeDurationMs)),
       ...(argKeys.length > 0 ? { arg_keys: argKeys } : {}),
     };
     return appendContinuityRecord(vault, {

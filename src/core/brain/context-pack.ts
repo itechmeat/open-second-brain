@@ -397,7 +397,17 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       trimmed,
       epistemic: c.epistemic,
       evidenceRefs: c.evidenceRefs,
-      ...(densityRanking ? { density: densityScoreById.get(c.id) ?? 0 } : {}),
+      // When the per-memory char budget trimmed this item, recompute density
+      // from the emitted (post-trim) body/tokens so the surfaced value reflects
+      // the actual content/token-cost the agent receives, not the pre-budget
+      // candidate. Untrimmed items reuse the pre-computed score.
+      ...(densityRanking
+        ? {
+            density: trimmed
+              ? densityScore({ body, evidenceRefs: c.evidenceRefs, epistemic: c.epistemic }, tokens)
+              : (densityScoreById.get(c.id) ?? 0),
+          }
+        : {}),
       ...(c.safety ? { safety: c.safety } : {}),
     });
     used += tokens;

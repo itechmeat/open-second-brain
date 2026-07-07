@@ -316,7 +316,7 @@ async function toolBrainRouteMetrics(
   }
   if (operation === "summary") {
     const summary = summarizeMcpRouteLatency(ctx.vault, filter);
-    return { ...summary };
+    return { vault_path: ctx.vault, ...summary };
   }
   throw new MCPError(INVALID_PARAMS, "brain_route_metrics: operation must be list or summary");
 }
@@ -546,6 +546,12 @@ function coerceNonNegativeTokenValue(
   raw: unknown,
 ): number | undefined {
   if (raw === undefined || raw === null) return undefined;
+  // Reject empty/whitespace-only strings explicitly: Number("") and
+  // Number("   ".trim()) both coerce to 0 and would otherwise be written to the
+  // durable ledger as a fabricated zero. Mirrors coerceNonNegativeInteger above.
+  if (typeof raw === "string" && raw.trim() === "") {
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative number`);
+  }
   const value = typeof raw === "string" ? Number(raw.trim()) : raw;
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative number`);

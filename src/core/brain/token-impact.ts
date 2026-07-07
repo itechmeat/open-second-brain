@@ -395,13 +395,22 @@ function resolveModeled(
   ) {
     return null;
   }
-  const avoided = nonNegativeCount(
-    "modeled_avoided_inferences",
-    input.modeledAvoidedInferences ?? 0,
-  );
+  // Partial modeled input would otherwise default the missing field to 0 and
+  // look like an exact measurement. Require both together; the throw fail-opens
+  // to null (emitGatedTelemetry swallows it), matching the "omit, don't invent"
+  // honesty goal stated in this module's header.
+  if (
+    input.modeledAvoidedInferences === undefined ||
+    input.modeledTokensPerInference === undefined
+  ) {
+    throw new TypeError(
+      "token impact: modeledAvoidedInferences and modeledTokensPerInference must both be supplied together",
+    );
+  }
+  const avoided = nonNegativeCount("modeled_avoided_inferences", input.modeledAvoidedInferences);
   const perInference = nonNegativeCount(
     "modeled_tokens_per_inference",
-    input.modeledTokensPerInference ?? 0,
+    input.modeledTokensPerInference,
   );
   return { avoided, perInference, savings: round1(avoided * perInference) };
 }
