@@ -586,8 +586,9 @@ export const VERB_HELP: Record<string, string> = {
     "       o2b brain context-presets diff <preset-id> [current-value flags] [--override <path>...] [--json]\n" +
     "Dry-run model-aware context budget preset diagnostics. Never writes config.\n",
   "pre-compact-extract":
-    "usage: o2b brain pre-compact-extract --vault <path> --session-id <id> --turn-start <id> --turn-end <id> --text <text> [--host <name>] [--max-chars <n>] [--json]\n" +
-    "Extract Decision/Commitment/Outcome/Rule/Open question lines into idempotent continuity records.\n",
+    "usage: o2b brain pre-compact-extract --vault <path> --session-id <id> --turn-start <id> --turn-end <id> --text <text> [--host <name>] [--max-chars <n>] [--dry-run] [--json]\n" +
+    "Extract Decision/Commitment/Outcome/Rule/Open question lines into idempotent continuity records.\n" +
+    "--dry-run previews the candidate records without writing to the vault (predicts the real extraction byte-for-byte).\n",
   "post-compact-audit":
     "usage: o2b brain post-compact-audit [--session-id <id>] [--no-reassert] [--force] [--vault <path>] [--json]\n" +
     "Reads a { session_id, messages } JSON document from stdin. Detects a Hermes compaction, audits which pinned anchors survived in the active (non-summary) region, and re-asserts only the drifted ones. Gated by post_compact_survival_audit (default off); --force overrides the gate.\n",

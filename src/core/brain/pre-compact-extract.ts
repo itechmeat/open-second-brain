@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 
-import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
-import type { ContinuityRecord, ContinuitySourceRef } from "./continuity/types.ts";
+import {
+  appendContinuityRecord,
+  buildContinuityRecord,
+  listContinuityRecords,
+} from "./continuity/store.ts";
+import type {
+  AppendContinuityRecordInput,
+  ContinuityRecord,
+  ContinuitySourceRef,
+} from "./continuity/types.ts";
 
 export type PreCompactExtractType =
   | "decision"
@@ -25,6 +33,16 @@ export interface PreCompactExtractInput {
    * one. Absent by default - omitted records stay byte-identical (t_c181f92b).
    */
   readonly interrupted?: boolean;
+  /**
+   * Preview mode (C2 / t_2c6cf3e2). When true, return the candidate
+   * records extraction WOULD append WITHOUT touching the vault — no
+   * `appendContinuityRecord`, no log event, no dream/retire trigger. Each
+   * returned record is built through the SAME `buildContinuityRecord`
+   * path the real write uses, so the preview predicts the real extraction
+   * byte-for-byte. Absent/false → existing write-committing behavior,
+   * byte-identical. Mirrors the `opts.dryRun` idiom in session `import.ts`.
+   */
+  readonly dryRun?: boolean;
 }
 
 export interface PreCompactExtractResult {
@@ -60,6 +78,12 @@ export function extractPreCompactRecords(
   const extracted = extractLines(sanitizePreCompactText(boundedText));
   const createdAt = input.createdAt ?? new Date().toISOString();
   const host = input.host?.trim();
+  // Preview mode reuses the exact record builder but never writes, so the
+  // candidate output predicts the real extraction byte-for-byte (C2).
+  const persist: (recordInput: AppendContinuityRecordInput) => ContinuityRecord =
+    input.dryRun === true
+      ? buildContinuityRecord
+      : (recordInput) => appendContinuityRecord(vault, recordInput);
 
   for (const item of extracted) {
     try {
@@ -77,7 +101,7 @@ export function extractPreCompactRecords(
         continue;
       }
       records.push(
-        appendContinuityRecord(vault, {
+        persist({
           kind: "pre_compact_extract",
           createdAt,
           sourceRefs,

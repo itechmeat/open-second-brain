@@ -451,7 +451,15 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                    'interrupted close '
                                                                    '(SIGHUP/SIGTERM/force-quit/'
                                                                    'restart-drain). Absent by '
-                                                                   'default.'}},
+                                                                   'default.'},
+                                    'dry_run': {'type': 'boolean',
+                                                'description': 'When true, PREVIEW the candidate '
+                                                               'records extraction would append '
+                                                               'WITHOUT writing to the vault (no '
+                                                               'continuity record, no dream/retire '
+                                                               'trigger). Preview output predicts '
+                                                               'the real extraction byte-for-byte. '
+                                                               'Absent by default.'}},
                      'required': ['session_id', 'turn_start', 'turn_end', 'text'],
                      'additionalProperties': False}},
 )

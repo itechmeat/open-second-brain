@@ -74,4 +74,25 @@ describe("brain_pre_compact_extract tool", () => {
     );
     expect(JSON.stringify(first)).not.toContain("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo");
   });
+
+  test("dry_run previews candidate records without persisting", async () => {
+    const args = {
+      session_id: "session-preview",
+      turn_start: "turn-1",
+      turn_end: "turn-1",
+      text: "Decision: Preview only.",
+    };
+    const preview = await callExtract({ ...args, dry_run: true });
+    expect(preview).toMatchObject({ count: 1, dry_run: true, errors: [] });
+
+    // The preview's logical identity (timestamp-independent dedupe_key)
+    // matches the record the real path later appends — the preview predicts
+    // real extraction. (record `id` folds in the ms-precise createdAt, which
+    // differs between two un-pinned calls, so compare dedupe_key.)
+    const real = await callExtract(args);
+    expect(real).toMatchObject({ count: 1, dry_run: false });
+    const key = (recs: unknown): string =>
+      (recs as Array<{ payload: { dedupe_key: string } }>)[0]!.payload.dedupe_key;
+    expect(key(preview.records)).toBe(key(real.records));
+  });
 });
