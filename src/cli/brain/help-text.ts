@@ -480,6 +480,7 @@ export const VERB_HELP: Record<string, string> = {
     "                                [--format auto|<registered-adapter>]\n" +
     "                                [--agent <name>] [--since <ISO>] [--dry-run] [--recall]\n" +
     "                                [--ingest-scope <label>] [--filter-role <role> ...] [--filter-text <substring>]\n" +
+    "                                [--preserve-event-time]\n" +
     "                                [--recall-session-id <id>] [--recall-summary-group-size <n>] [--json]\n" +
     "Extract signals from a registered agent session .jsonl file (or\n" +
     "directory of .jsonl files). Two extraction paths run in parallel:\n" +
@@ -487,6 +488,11 @@ export const VERB_HELP: Record<string, string> = {
     "tool_use calls. Dedup against the inbox by normalised payload hash.\n" +
     "With --recall, also stores normalized turns in the continuity-backed\n" +
     "session recall DAG.\n" +
+    "With --preserve-event-time, each signal is stamped with its turn's\n" +
+    "original timestamp (created_at/recorded_at/valid_from) instead of the\n" +
+    "import wall-clock, so backfilling an old log stays historically\n" +
+    "faithful. Turns with an absent/unparseable/future timestamp fall back\n" +
+    "to now.\n" +
     "Autodetect failure exits 2 — pass --format to override.\n",
   merge:
     "usage: o2b brain merge <keep-pref-id> <drop-pref-id>\n" +

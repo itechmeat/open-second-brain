@@ -88,6 +88,46 @@ export interface ImportSessionOptions {
   readonly filterRoles?: ReadonlyArray<SessionTurn["role"]>;
   /** Optional case-insensitive substring filter on turn text. */
   readonly filterTextIncludes?: string;
+  /**
+   * Per-row event-time backfill (A2 / t_7526e8d3). When true, each
+   * emitted signal is stamped with its turn's ORIGINAL
+   * `SessionTurn.timestamp` (`created_at` / `recorded_at` / `valid_from`
+   * and the filename calendar day) instead of the import wall-clock, so
+   * backfilling an old session log stays historically faithful and
+   * recency-based reconciliation can trust the timestamps. A turn whose
+   * timestamp is absent, unparseable, at/before the Unix epoch (the
+   * adapter's "no timestamp" sentinel), or future-dated relative to
+   * `now` falls back to `now` deterministically — no throw, no
+   * future-dated or epoch signal. Default off → byte-identical to the
+   * wall-clock path.
+   */
+  readonly preserveEventTime?: boolean;
+}
+
+/**
+ * Resolve the effective stamp instant for an emitted signal under the
+ * per-row event-time backfill (A2). Returns whether the instant came
+ * from the turn (so the caller stamps the bi-temporal slots) or fell
+ * back to `now` (so the file stays byte-identical to the wall-clock
+ * path — no `recorded_at` / `valid_from` keys).
+ *
+ * The usable window is `epoch < ts <= now`: a timestamp at or before the
+ * Unix epoch is the adapter's synthesized "no timestamp" sentinel
+ * (`new Date(0)`), a future timestamp would mint a nonsensical
+ * forward-dated signal during backfill, and an unparseable value is
+ * `NaN` — all three fall back to `now`.
+ */
+export function resolveEventInstant(
+  turnTimestamp: string | undefined,
+  now: Date,
+  preserve: boolean,
+): { readonly instant: Date; readonly fromTurn: boolean } {
+  if (!preserve || !turnTimestamp) return { instant: now, fromTurn: false };
+  const ms = Date.parse(turnTimestamp);
+  if (!Number.isFinite(ms) || ms <= 0 || ms > now.getTime()) {
+    return { instant: now, fromTurn: false };
+  }
+  return { instant: new Date(ms), fromTurn: true };
 }
 
 export interface ImportSessionResult {
@@ -202,6 +242,8 @@ export async function importSession(
     agent: string;
     note?: string;
     turnId: string;
+    /** Origin turn's ISO timestamp; used for per-row event-time backfill. */
+    eventTimestamp?: string;
     dedupHash: string;
   }): void => {
     if (dedup.has(input.dedupHash)) {
@@ -215,15 +257,24 @@ export async function importSession(
       return;
     }
     const sessionRef = `${sessionKey}#${input.turnId}`;
+    // Per-row event-time (A2): stamp the turn's original instant when
+    // preservation is on and the timestamp is usable; otherwise fall
+    // back to `now` and emit NO bi-temporal slots (byte-identical path).
+    const { instant, fromTurn } = resolveEventInstant(
+      input.eventTimestamp,
+      now,
+      opts.preserveEventTime === true,
+    );
     try {
       const res = writeSignal(vault, {
         topic: input.topic,
         signal: input.signal,
         agent: input.agent,
         principle: input.principle,
-        created_at: isoSecond(now),
-        date: isoDate(now),
+        created_at: isoSecond(instant),
+        date: isoDate(instant),
         slug: input.topic,
+        ...(fromTurn ? { recorded_at: isoSecond(instant), valid_from: isoSecond(instant) } : {}),
         ...(input.scope ? { scope: input.scope } : {}),
         source: [`[[${sessionRef}]]`],
         source_type: BRAIN_SIGNAL_SOURCE_TYPE.session,
@@ -334,6 +385,7 @@ export async function importSession(
           agent: m.agent ?? agentLabelForTurn(turn, adapter.id, opts.agent),
           ...(m.note ? { note: m.note } : {}),
           turnId: turn.turnId,
+          eventTimestamp: turn.timestamp,
           dedupHash: hash,
         });
       }
@@ -364,6 +416,7 @@ export async function importSession(
         agent: v.agent ?? agentLabelForTurn(turn, adapter.id, opts.agent),
         ...(v.raw ? { note: v.raw } : {}),
         turnId: call.id ?? turn.turnId,
+        eventTimestamp: turn.timestamp,
         dedupHash: hash,
       });
     }

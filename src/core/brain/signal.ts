@@ -92,6 +92,19 @@ export interface WriteSignalInput {
    */
   readonly origin_vault?: string;
   /**
+   * Bi-temporal event-time slots (A2 / t_7526e8d3). Additive and
+   * optional: absent → the written file is byte-identical to the
+   * historical path. When supplied they flow into the SAME frontmatter
+   * keys the read-side (`readBiTemporal`) already parses, so no reader
+   * change is needed. Backfill / batch-import stamps these with the
+   * record's ORIGINAL event-time (`valid_from` = when it happened;
+   * `recorded_at` = the record time recency reconciliation trusts) so
+   * an imported old session stays historically faithful instead of
+   * being mis-stamped with the import wall-clock.
+   */
+  readonly valid_from?: string;
+  readonly recorded_at?: string;
+  /**
    * Vault portability suite (v0.22.0). Opt-in: when true and `raw` is
    * present, the body is stored through the deterministic codec and a
    * `_raw_codec` marker is stamped so `parseSignal` expands it on read.
@@ -258,6 +271,15 @@ export function writeSignal(
   }
   if (sanitised.origin_vault && sanitised.origin_vault.trim()) {
     metadata["origin_vault"] = sanitised.origin_vault.trim();
+  }
+  // Bi-temporal event-time slots (A2): emitted only when supplied, so
+  // legacy / live writes stay byte-identical. The read-side already
+  // parses these keys via readBiTemporal.
+  if (sanitised.valid_from && sanitised.valid_from.trim()) {
+    metadata["valid_from"] = sanitised.valid_from.trim();
+  }
+  if (sanitised.recorded_at && sanitised.recorded_at.trim()) {
+    metadata["recorded_at"] = sanitised.recorded_at.trim();
   }
 
   // Opt-in codec (v0.22.0): store the raw body compressed and stamp a

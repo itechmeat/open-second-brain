@@ -84,9 +84,20 @@ async function toolBrainFeedback(
   const agent =
     normalizeAgentArgument(validated.value.agent ?? null) ??
     resolveAgentName(ctx.configPath ?? undefined);
+  // Per-row event-time (A2 / t_7526e8d3): an optional caller-supplied
+  // `event_time` lets a backfilled / imported "remember" carry when it
+  // actually happened instead of the wall-clock. When present and valid,
+  // it drives the signal's `created_at` / filename day and the
+  // bi-temporal `valid_from` / `recorded_at` slots. The audit log and any
+  // force-confirmed preference stay stamped at the real write moment
+  // (`now`) so the audit chronology is not rewritten. Absent →
+  // byte-identical to the historical wall-clock path.
+  const eventTime = coerceIsoDate(args, "event_time");
   const now = new Date();
-  const date = isoDate(now);
   const createdAt = isoSecond(now);
+  const signalStamp = eventTime ?? now;
+  const signalCreatedAt = isoSecond(signalStamp);
+  const signalDate = isoDate(signalStamp);
   const slug = deriveSlug(topic);
 
   // Vault-configured fallback scope (`feedback.default_scope`). Applied
@@ -106,12 +117,15 @@ async function toolBrainFeedback(
     signal: signalRaw as BrainSignalSign,
     agent,
     principle,
-    created_at: createdAt,
-    date,
+    created_at: signalCreatedAt,
+    date: signalDate,
     slug,
     ...(scope ? { scope } : {}),
     ...(source && source.length > 0 ? { source: [...source] } : {}),
     ...(raw ? { raw } : {}),
+    // Stamp the bi-temporal slots only when an explicit event_time was
+    // supplied, so a live "remember" stays byte-identical.
+    ...(eventTime ? { valid_from: signalCreatedAt, recorded_at: signalCreatedAt } : {}),
   };
   const sigResult = writeSignal(ctx.vault, signalInput, writeOpts);
   // t_936a1a61: fail-soft mirror into the shared namespace AFTER the
@@ -486,6 +500,11 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "boolean",
           description:
             "When true, also creates an immediately-active confirmed `pref-*` alongside the inbox signal, skipping the dream-pass promotion step.",
+        },
+        event_time: {
+          type: "string",
+          description:
+            "Optional ISO-8601 event-time for a backfilled signal (when it actually happened). Stamps `created_at`/`valid_from`/`recorded_at`; absent uses wall-clock.",
         },
       },
       required: ["topic", "signal", "principle"],
