@@ -24,8 +24,16 @@
  * identical files — a property exercised by the roundtrip test.
  */
 
+import { join, relative } from "node:path";
+
 import type { FrontmatterMap } from "../types.ts";
 import { sanitiseTextField } from "../redactor.ts";
+import {
+  computePayloadHash,
+  IdempotencyPayloadMismatchError,
+  lookupKey,
+  rememberKey,
+} from "./idempotency-ledger.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
@@ -111,6 +119,18 @@ export interface WriteSignalInput {
    * Default (absent/false) writes the raw body verbatim - byte-identical.
    */
   readonly rawCodec?: boolean;
+  /**
+   * Client-supplied idempotency key (C1 / t_213f356b). Additive and
+   * optional: absent → the write is byte-identical to the historical
+   * path. When present, the writer hashes the SEMANTIC payload (topic,
+   * sign, principle, scope, source, raw, capture fields — never the
+   * timestamp/slug) and consults the idempotency ledger before writing.
+   * A repeat with the same key + same payload is a deduped no-op; the
+   * same key + a different payload throws
+   * {@link IdempotencyPayloadMismatchError} rather than silently
+   * appending a second, conflicting signal.
+   */
+  readonly idempotency_key?: string;
 }
 
 export interface WriteSignalOptions {
@@ -149,6 +169,13 @@ export function resolveEffectiveScope(
 export interface WriteSignalResult {
   readonly path: string;
   readonly id: string;
+  /**
+   * Set to `true` when an `idempotency_key` matched a prior write with an
+   * identical payload, so this call was a deduped no-op (no new file). The
+   * returned `path`/`id` point at the ORIGINAL signal. Absent on a normal
+   * (first) write, so existing callers are unaffected.
+   */
+  readonly deduped?: boolean;
 }
 
 export interface ParseSignalOptions {
@@ -214,6 +241,29 @@ export function writeSignal(
     throw new Error(
       `signal field 'source_type' must be 'live', 'inline', or 'session'; got ${JSON.stringify(sanitised.source_type)}`,
     );
+  }
+
+  // Idempotency consult (C1): when a client key is supplied, hash the
+  // semantic payload and check the ledger BEFORE allocating a slug or
+  // touching disk. A prior write with the same key short-circuits here —
+  // matching payload dedupes (return the original coordinates), a
+  // differing payload throws rather than writing a conflicting signal.
+  const idKey = sanitised.idempotency_key?.trim();
+  let contentHash: string | undefined;
+  if (idKey) {
+    contentHash = computePayloadHash(signalPayloadFields(sanitised));
+    const existing = lookupKey(vault, idKey);
+    if (existing) {
+      if (existing.contentHash === contentHash) {
+        const ref = (existing.ref ?? {}) as { id?: string; path?: string };
+        return {
+          path: ref.path ? join(vault, ref.path) : "",
+          id: ref.id ?? "",
+          deduped: true,
+        };
+      }
+      throw new IdempotencyPayloadMismatchError(idKey, existing.contentHash, contentHash);
+    }
   }
 
   const dirs = brainDirs(vault);
@@ -300,7 +350,40 @@ export function writeSignal(
     vaultForRelativePath: vault,
   });
 
+  // Record the key AFTER the file lands so a future retry dedupes. `ref`
+  // stores the vault-relative path + id so the dedupe branch above can
+  // return the original coordinates without re-deriving them.
+  if (idKey && contentHash !== undefined) {
+    rememberKey(vault, {
+      key: idKey,
+      contentHash,
+      createdAt: sanitised.created_at,
+      ref: { id, path: relative(vault, allocated.path) },
+    });
+  }
+
   return { path: allocated.path, id };
+}
+
+/**
+ * The semantic identity of a signal for idempotency hashing: the fields
+ * that make two signals "the same content". Timestamps, the calendar
+ * date, the allocated slug, and portability markers are intentionally
+ * excluded so a retry with a later wall-clock still dedupes.
+ */
+function signalPayloadFields(input: WriteSignalInput): Record<string, unknown> {
+  return {
+    topic: input.topic.trim(),
+    signal: input.signal,
+    agent: input.agent.trim(),
+    principle: input.principle.trim(),
+    scope: input.scope?.trim(),
+    source: input.source ? [...input.source] : undefined,
+    raw: input.raw,
+    source_type: input.source_type,
+    schema_type: input.schema_type?.trim(),
+    session_ref: input.session_ref?.trim(),
+  };
 }
 
 // ----- Sanitisation --------------------------------------------------------

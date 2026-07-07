@@ -93,6 +93,10 @@ async function toolBrainFeedback(
   // (`now`) so the audit chronology is not rewritten. Absent →
   // byte-identical to the historical wall-clock path.
   const eventTime = coerceIsoDate(args, "event_time");
+  // Optional client idempotency key (C1 / t_213f356b): forwarded to the
+  // signal writer so a retried / double-delivered feedback call dedupes
+  // instead of appending a second signal. Absent → historical behaviour.
+  const idempotencyKey = coerceStr(args, "idempotency_key", false);
   const now = new Date();
   const createdAt = isoSecond(now);
   const signalStamp = eventTime ?? now;
@@ -126,8 +130,25 @@ async function toolBrainFeedback(
     // Stamp the bi-temporal slots only when an explicit event_time was
     // supplied, so a live "remember" stays byte-identical.
     ...(eventTime ? { valid_from: signalCreatedAt, recorded_at: signalCreatedAt } : {}),
+    ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
   };
   const sigResult = writeSignal(ctx.vault, signalInput, writeOpts);
+  // A deduped signal means this whole feedback call is a retry of one
+  // already recorded — skip the log event, the shared-namespace mirror,
+  // and any force-confirmed pref so the retry stays a true no-op.
+  if (sigResult.deduped) {
+    return {
+      kind: "signal",
+      deduped: true,
+      signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
+      signal_absolute_path: resolve(sigResult.path),
+      signal_id: sigResult.id,
+      path: vaultRelativeSafe(ctx.vault, sigResult.path),
+      absolute_path: resolve(sigResult.path),
+      id: sigResult.id,
+      agent,
+    };
+  }
   // t_936a1a61: fail-soft mirror into the shared namespace AFTER the
   // primary write; `mirror` is reported only when the key is configured.
   const sharedNamespace = resolveSharedNamespace(ctx.configPath);
@@ -505,6 +526,11 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description:
             "Optional ISO-8601 event-time for a backfilled signal (when it actually happened). Stamps `created_at`/`valid_from`/`recorded_at`; absent uses wall-clock.",
+        },
+        idempotency_key: {
+          type: "string",
+          description:
+            "Optional client key that dedupes retried calls: same key + same payload is a no-op; same key + different payload is rejected.",
         },
       },
       required: ["topic", "signal", "principle"],

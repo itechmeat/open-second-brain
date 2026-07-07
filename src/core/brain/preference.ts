@@ -34,7 +34,7 @@
  */
 
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { formatFrontmatter, parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
@@ -66,6 +66,12 @@ import {
 import type { PageLifecycle } from "./page-meta/lifecycle.ts";
 import type { PageTier } from "./page-meta/tier.ts";
 import { computeContentHash } from "./content-hash.ts";
+import {
+  computePayloadHash,
+  IdempotencyPayloadMismatchError,
+  lookupKey,
+  rememberKey,
+} from "./idempotency-ledger.ts";
 import { appendPrefAudit } from "./pref-audit.ts";
 import { PREF_AUDIT_OP } from "./types.ts";
 
@@ -189,6 +195,18 @@ export interface WritePreferenceInput {
   /** Free-form "How to apply" prose (rendered as a section). */
   readonly howToApply?: string;
   /**
+   * Client-supplied idempotency key (C1 / t_213f356b). Additive and
+   * optional: absent → the write is byte-identical to the historical
+   * path. When present, the writer hashes the identity-defining fields
+   * (slug, topic, principle, scope, status, evidenced_by — never the
+   * timestamps or dream-owned counters) and consults the idempotency
+   * ledger. A repeat with the same key + same payload is a deduped no-op;
+   * the same key + a different payload throws
+   * {@link IdempotencyPayloadMismatchError}. Used by the force-confirmed
+   * feedback path and by C4's session checkpoint.
+   */
+  readonly idempotency_key?: string;
+  /**
    * Recent `apply-evidence applied` rows for this pref, derived from
    * `Brain/log/`. Newest first. Used by {@link renderPreferenceBody}
    * to render `## Recent applications` so the file mirrors what the
@@ -213,6 +231,12 @@ export interface ParsePreferenceOptions {
 export interface WritePreferenceResult {
   readonly path: string;
   readonly id: string;
+  /**
+   * Set to `true` when an `idempotency_key` matched a prior write with an
+   * identical payload, so this call was a deduped no-op. Absent on a
+   * normal write, so existing callers are unaffected.
+   */
+  readonly deduped?: boolean;
 }
 
 export interface MoveToRetiredOptions {
@@ -291,6 +315,21 @@ export function writePreference(
   const path = preferencePath(vault, slug);
   const id = `pref-${slug}`;
 
+  // Idempotency consult (C1): a repeat with the same key + same payload
+  // dedupes; the same key + a different payload throws before any write.
+  const idKey = input.idempotency_key?.trim();
+  let idContentHash: string | undefined;
+  if (idKey) {
+    idContentHash = computePayloadHash(preferencePayloadFields(input, slug));
+    const existing = lookupKey(vault, idKey);
+    if (existing) {
+      if (existing.contentHash === idContentHash) {
+        return { path, id, deduped: true };
+      }
+      throw new IdempotencyPayloadMismatchError(idKey, existing.contentHash, idContentHash);
+    }
+  }
+
   let metadata = preferenceFrontmatter(input, id);
   const body = renderPreferenceBody(input);
 
@@ -318,7 +357,10 @@ export function writePreference(
     try {
       const next = formatFrontmatter(metadata, body);
       const prev = readFileSync(path, "utf8");
-      if (next === prev) return { path, id };
+      if (next === prev) {
+        recordPreferenceKey(vault, idKey, idContentHash, input.created_at, id, path);
+        return { path, id };
+      }
     } catch {
       // Fall through to the atomic write — a read failure should not
       // prevent a legitimate update.
@@ -331,7 +373,49 @@ export function writePreference(
     vaultForRelativePath: vault,
   });
 
+  recordPreferenceKey(vault, idKey, idContentHash, input.created_at, id, path);
   return { path, id };
+}
+
+/**
+ * The identity-defining fields of a preference for idempotency hashing.
+ * Timestamps, dream-owned counters, and confidence are excluded so a
+ * retried write (or a force-confirmed re-record) with the same rule
+ * dedupes regardless of when it arrives.
+ */
+function preferencePayloadFields(
+  input: WritePreferenceInput,
+  slug: string,
+): Record<string, unknown> {
+  return {
+    slug,
+    topic: input.topic.trim(),
+    principle: sanitisePrinciple(input.principle),
+    scope: input.scope?.trim(),
+    status: input.status,
+    evidenced_by: [...input.evidenced_by],
+  };
+}
+
+/**
+ * Record the idempotency key after a successful preference write so a
+ * future retry dedupes. No-op when no key was supplied.
+ */
+function recordPreferenceKey(
+  vault: string,
+  idKey: string | undefined,
+  contentHash: string | undefined,
+  createdAt: string,
+  id: string,
+  path: string,
+): void {
+  if (!idKey || contentHash === undefined) return;
+  rememberKey(vault, {
+    key: idKey,
+    contentHash,
+    createdAt,
+    ref: { id, path: relative(vault, path) },
+  });
 }
 
 /**
