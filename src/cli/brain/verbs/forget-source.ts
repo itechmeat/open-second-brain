@@ -92,6 +92,13 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
     info("  re-run with --confirm to delete");
     return 0;
   } catch (err) {
-    return fail((err as Error).message ?? String(err));
+    const message = (err as Error).message ?? String(err);
+    // In `--json` mode automation expects a parseable envelope even on a
+    // runtime failure; a plain-text `fail()` would break the JSON contract.
+    if (flags["json"]) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
   }
 }
