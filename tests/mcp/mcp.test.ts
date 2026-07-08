@@ -289,6 +289,9 @@ describe("tool listing", () => {
         // Knowledge Provenance Suite (v1.7.0).
         "brain_intake_entities",
         "brain_ingest_source",
+        // Source cleanup: search + delete by exact source file (C6, v1.x).
+        "brain_search_by_source",
+        "brain_delete_by_source",
         "brain_research_report",
         "brain_derive_fact",
         // Calendar integration: recurring obligations + agenda synthesis.
@@ -578,7 +581,9 @@ describe("stdio loop", () => {
     // + brain_token_impact (durable token-impact ledger, context-pack-economics-observability) = 91.
     // + brain_context_pack_outcome (agent-operable outcome loop, context-pack-economics-observability) = 92.
     // + brain_session_checkpoint (batch checkpoint save, memory-signal-provenance-lifecycle C4) = 93.
-    expect(list.result.tools.length).toBe(93);
+    // + brain_search_by_source / brain_delete_by_source (delete & search by exact
+    //   source file, memory-signal-provenance-lifecycle C6) = 95.
+    expect(list.result.tools.length).toBe(95);
   });
 
   test("returns parse error for invalid JSON", async () => {

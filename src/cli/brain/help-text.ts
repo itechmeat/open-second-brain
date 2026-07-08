@@ -111,6 +111,7 @@ Brain verbs (observing memory):
   weekly              7-day synthesis: transitions, retired, contradictions, vault delta
   project             Link project directories to their owning vault (link/list/remove/status)
   source              Read-only recall sources of the active vault (add/list/remove)
+  forget-source       Find/delete entries derived from an exact source file (dry-run by default)
   links               Normalize wikilink path format (preserve/full/short); dry-run by default
   profile             Materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
   sgrep               Grep-shaped semantic search: o2b brain sgrep <query> [path]
@@ -131,6 +132,14 @@ Common flags:
 `;
 
 export const VERB_HELP: Record<string, string> = {
+  "forget-source":
+    "usage: o2b brain forget-source <source> [--confirm] [--include-originals] [--vault <path>] [--json]\n" +
+    "Find and delete every Brain entry derived from an EXACT source file. Dry-run by\n" +
+    "default: reports the blast radius and deletes nothing. --confirm deletes the\n" +
+    "single-purpose derived entries + ingest index artifacts (summary page + manifest\n" +
+    "entry); shared/aggregate pages are reported, never deleted. --include-originals\n" +
+    "also removes the original source file outside Brain/. Confirmed runs write an\n" +
+    "auditable source_invalidation continuity record.\n",
   init:
     "usage: o2b brain init [--vault <path>] [--force] [--primary-agent <name>] [--json]\n" +
     "Bootstrap <vault>/Brain/. Requires `o2b init` to have run first.\n" +

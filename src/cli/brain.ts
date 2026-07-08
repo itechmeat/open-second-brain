@@ -73,6 +73,7 @@ import {
   cmdBrainScanInline,
   cmdBrainEntity,
   cmdBrainImportSession,
+  cmdBrainForgetSource,
   cmdBrainHandoff,
   cmdBrainIntention,
   cmdBrainProject,
@@ -270,6 +271,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainProject(rest);
       case "source":
         return await cmdBrainSource(rest);
+      case "forget-source":
+        return await cmdBrainForgetSource(rest);
       case "links":
         return await cmdBrainLinks(rest);
       case "profile":
