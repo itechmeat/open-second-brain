@@ -30,7 +30,11 @@
  * separate from a modeled, outcome-calibrated inference-avoidance estimate)
  * and `brain_context_pack_outcome` (agent-operable outcome loop: a compact
  * per-sample outcome row keeping the exact/modeled/observed token signals
- * strictly separate, composing the token-impact ledger's calibration).
+ * strictly separate, composing the token-impact ledger's calibration); the
+ * memory-signal-provenance-lifecycle release added `brain_ingest_batch_plan`
+ * (deterministic large-folder ingest planner: skips unchanged sources via the
+ * content-hash manifest and shards the remainder into size+count-bounded
+ * batches for parallel-subagent dispatch).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -72,6 +76,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_hygiene",
   "brain_idea_discovery",
   "brain_idea_lineage",
+  "brain_ingest_batch_plan",
   "brain_ingest_source",
   "brain_intake_entities",
   "brain_intent_review",

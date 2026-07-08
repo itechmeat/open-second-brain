@@ -289,6 +289,8 @@ describe("tool listing", () => {
         // Knowledge Provenance Suite (v1.7.0).
         "brain_intake_entities",
         "brain_ingest_source",
+        // Large-folder ingest planner (memory-signal-provenance-lifecycle A3).
+        "brain_ingest_batch_plan",
         // Source cleanup: search + delete by exact source file (C6, v1.x).
         "brain_search_by_source",
         "brain_delete_by_source",
@@ -583,7 +585,9 @@ describe("stdio loop", () => {
     // + brain_session_checkpoint (batch checkpoint save, memory-signal-provenance-lifecycle C4) = 93.
     // + brain_search_by_source / brain_delete_by_source (delete & search by exact
     //   source file, memory-signal-provenance-lifecycle C6) = 95.
-    expect(list.result.tools.length).toBe(95);
+    // + brain_ingest_batch_plan (large-folder ingest planner,
+    //   memory-signal-provenance-lifecycle A3) = 96.
+    expect(list.result.tools.length).toBe(96);
   });
 
   test("returns parse error for invalid JSON", async () => {

@@ -205,6 +205,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("json", "boolean"),
           ],
         ),
+        command(
+          "batch-plan",
+          "Plan a large-folder ingest into bounded parallel batches (skips unchanged sources)",
+          [
+            flag("vault", "string"),
+            flag("max-bytes", "string"),
+            flag("max-files", "string"),
+            flag("json", "boolean"),
+          ],
+        ),
         command("links", "Normalize wikilink path format across Brain notes"),
         command("bridges", "Propose, accept, or dismiss embedding-near bridge links"),
         command("clusters", "Detect link-graph communities and materialize cluster notes"),
