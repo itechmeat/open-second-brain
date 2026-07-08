@@ -150,7 +150,7 @@ export interface DetectNoteContradictionsOptions {
  * subject; otherwise it reads as positive. No sentiment analysis and no
  * per-language vocabulary beyond the injected marker set.
  */
-function deriveNoteStance(
+export function deriveNoteStance(
   tokens: ReadonlySet<string>,
   negationMarkers: ReadonlySet<string>,
 ): BrainSignalSign {
@@ -167,7 +167,7 @@ function deriveNoteStance(
  * with no scoring span falls back to its first non-empty span, or the
  * trimmed whole text. Deterministic for a given input.
  */
-function extractSpan(text: string, subjectTokens: ReadonlySet<string>): string {
+export function extractSpan(text: string, subjectTokens: ReadonlySet<string>): string {
   const segments = text
     .split(/(?<=[.!?。！？])\s+|\n+/u)
     .map((s) => s.trim())
