@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.1] - 2026-07-08
+
+An upstream-alignment guard release. Two regression suites now pin Open Second Brain's Hermes-facing surface against two landed upstream Hermes changes, with no source edits and no runtime behavior changes. The kernel still calls no LLM.
+
+### Added
+
+- **Structural invariant tests for the memory-provider tool schemas.** A new `NormalizeContractTests` suite in `tests/python/test_static_schemas.py` asserts that every entry `get_tool_schemas()` exports, on both the static-fallback and the live-bridge code paths, is flat (no `{type: function}` wrapper nested anywhere) and carries a non-empty top-level `name`, exactly the preconditions core's new shared `normalize_tool_schema()` (upstream Hermes PR #52140) relies on. A companion `ProviderNormalizeSurvivalTests` case drives the provider's live-listing path with a mixed tool list (a curated tool, a non-curated tool, and an accidentally pre-wrapped entry) and asserts only the curated, flat, named tools survive, so a strict-provider turn (DeepSeek) can no longer be disabled by a malformed schema. The `inputSchema` to `parameters` remap is also shown to preserve the curated name set, count, and order, and to be idempotent with deep-copied output.
+- **Repeated in-place-compaction regression under a stable session id.** A new `InPlaceCompactionLifecycleTests` suite in `tests/python/test_memory_provider.py` drives `sync_turn` followed by repeated `on_pre_compress` and `on_session_end` with one fixed session id (the new `compression.in_place` default flipped by upstream Hermes PR #52658) and asserts exactly-once flush semantics: `brain_pre_compact_extract` fires once per boundary that has buffered turns, the in-memory buffer is cleared between flushes with no double-flush or clobber, and no duplicate Brain session writes accumulate across repeated in-place compaction. The provider is shown to make no assumption that the session id rotates.
+
 ## [1.26.0] - 2026-07-08
 
 A memory-signal provenance and lifecycle integrity layer that closes five gaps in one coherent scope. Every new surface is additive and byte-identical when off, and the kernel still calls no LLM.

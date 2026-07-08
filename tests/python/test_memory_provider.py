@@ -607,6 +607,101 @@ class ProviderLifecycleTests(unittest.TestCase):
         provider.shutdown()
 
 
+class InPlaceCompactionLifecycleTests(unittest.TestCase):
+    """Regression guards for Hermes PR #52658 (compression.in_place default
+    False->True). Compaction now keeps ONE durable session id instead of
+    rotating it, so the provider must flush exactly once per boundary that has
+    buffered turns, clear its buffer between flushes (no double-flush /
+    clobber), and make no assumption that the session id rotates.
+    """
+
+    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+
+    def setUp(self):
+        self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
+
+    def tearDown(self):
+        for k in self._ENV_KEYS:
+            os.environ.pop(k, None)
+            if self._saved[k] is not None:
+                os.environ[k] = self._saved[k]
+
+    def _init(self, bridge, session_id):
+        provider = OpenSecondBrainMemoryProvider(bridge=bridge)
+        provider.initialize(session_id, hermes_home="/tmp/hh")
+        return provider
+
+    @staticmethod
+    def _extract_calls(bridge):
+        return [a for n, a in bridge.calls if n == "brain_pre_compact_extract"]
+
+    def test_repeated_in_place_compaction_flushes_each_boundary_once_with_stable_session_id(self):
+        bridge = FakeBrainBridge(results={"brain_pre_compact_extract": {"structuredContent": {}}})
+        provider = self._init(bridge, "sess-stable")
+
+        # Buffer a turn, then fire boundary #1 (in-place compaction).
+        provider.sync_turn("u1", "a1", session_id="sess-stable")
+        provider._drain_captures()
+        provider.on_pre_compress([])  # boundary #1: flushes the buffered turn
+
+        # Boundary #2 uses the SAME (non-rotating) session id but no new turn
+        # was buffered; the buffer was cleared by #1, so it must NOT re-flush.
+        provider.on_pre_compress([])  # boundary #2: zero extract calls
+        # A final session end (still the same stable id) also adds nothing.
+        provider.on_session_end([])   # zero extract calls
+
+        extract_calls = self._extract_calls(bridge)
+        self.assertEqual(len(extract_calls), 1)
+        # The single flush carried the stable session id, never a rotated one.
+        self.assertEqual(extract_calls[0]["session_id"], "sess-stable")
+        self.assertIn("u1", extract_calls[0]["text"])
+        self.assertIn("a1", extract_calls[0]["text"])
+
+        # Now buffer NEW turns between boundary #1 and a later boundary and
+        # assert the next boundary flushes only the new turns — no re-flush of
+        # #1's content, proving no duplicate/clobbered writes accumulate under
+        # a stable id.
+        provider.sync_turn("u2", "a2", session_id="sess-stable")
+        provider._drain_captures()
+        provider.on_pre_compress([])  # boundary #3: flushes only u2/a2
+
+        extract_calls = self._extract_calls(bridge)
+        self.assertEqual(len(extract_calls), 2)
+        second = extract_calls[1]
+        self.assertEqual(second["session_id"], "sess-stable")
+        self.assertIn("u2", second["text"])
+        self.assertNotIn("u1", second["text"])
+        self.assertNotIn("a1", second["text"])
+
+    def test_stable_session_id_does_not_assume_rotation(self):
+        # Decision guard: the provider makes NO assumption that session_id
+        # changes across compaction. Passing the same id to repeated sync_turn
+        # + on_pre_compress produces independent, dedup-safe flushes — each
+        # carries only the turns buffered since the previous boundary, keyed by
+        # the one stable id (the TS core dedupes by content hash downstream).
+        bridge = FakeBrainBridge(results={"brain_pre_compact_extract": {"structuredContent": {}}})
+        provider = self._init(bridge, "sess-stable")
+
+        for tag in ("t1", "t2", "t3"):
+            provider.sync_turn(f"u-{tag}", f"a-{tag}", session_id="sess-stable")
+            provider._drain_captures()
+            provider.on_pre_compress([])
+
+        extract_calls = self._extract_calls(bridge)
+        self.assertEqual(len(extract_calls), 3)
+        # Every flush used the one stable id; none assumed a rotated/new id.
+        self.assertEqual({c["session_id"] for c in extract_calls}, {"sess-stable"})
+        # Each flush is independent — it carries only its own turn, so repeated
+        # in-place compaction under one id cannot clobber a prior boundary.
+        self.assertIn("u-t1", extract_calls[0]["text"])
+        self.assertNotIn("u-t2", extract_calls[0]["text"])
+        self.assertIn("u-t3", extract_calls[2]["text"])
+        self.assertNotIn("u-t1", extract_calls[2]["text"])
+        # turn_end reflects the per-boundary buffer size (1), not a cumulative
+        # count — no unbounded growth across in-place compaction cycles.
+        self.assertTrue(all(c["turn_end"] == 1 for c in extract_calls))
+
+
 class _ScriptedReader:
     """Readline source that yields pre-built JSON-RPC frames in order."""
 
