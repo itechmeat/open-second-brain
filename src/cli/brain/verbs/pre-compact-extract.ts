@@ -12,6 +12,7 @@ export async function cmdBrainPreCompactExtract(argv: string[]): Promise<number>
     text: { type: "string" },
     host: { type: "string" },
     "max-chars": { type: "string" },
+    "dry-run": { type: "boolean" },
   });
   const vault = stringRequired(flags["vault"], "--vault");
   const sessionId = stringRequired(flags["session-id"], "--session-id");
@@ -26,8 +27,12 @@ export async function cmdBrainPreCompactExtract(argv: string[]): Promise<number>
     text,
     ...(stringOptional(flags["host"]) !== undefined ? { host: stringOptional(flags["host"]) } : {}),
     ...(maxChars !== undefined ? { maxChars: positiveInteger(maxChars, "--max-chars") } : {}),
+    ...(flags["dry-run"] === true ? { dryRun: true } : {}),
   });
-  writeOutput({ count: result.records.length, ...result }, flags["json"] === true);
+  writeOutput(
+    { count: result.records.length, dry_run: flags["dry-run"] === true, ...result },
+    flags["json"] === true,
+  );
   return 0;
 }
 

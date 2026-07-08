@@ -64,7 +64,20 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                        'alongside the inbox '
                                                                        'signal, skipping the '
                                                                        'dream-pass promotion '
-                                                                       'step.'}},
+                                                                       'step.'},
+                                    'event_time': {'type': 'string',
+                                                   'description': 'Optional ISO-8601 event-time for '
+                                                                  'a backfilled signal (when it '
+                                                                  'actually happened). Stamps '
+                                                                  '`created_at`/`valid_from`/'
+                                                                  '`recorded_at`; absent uses '
+                                                                  'wall-clock.'},
+                                    'idempotency_key': {'type': 'string',
+                                                        'description': 'Optional client key that '
+                                                                       'dedupes retried calls: same '
+                                                                       'key + same payload is a '
+                                                                       'no-op; same key + different '
+                                                                       'payload is rejected.'}},
                      'required': ['topic', 'signal', 'principle'],
                      'additionalProperties': False}},
     {'name': 'brain_apply_evidence',
@@ -165,6 +178,13 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                               'description': 'Topic slug to aggregate signals + '
                                                              'active/retired preference + log '
                                                              'events.'},
+                                    'show_expired': {'type': 'boolean',
+                                                     'description': 'Topic mode only: include '
+                                                                    'memories past their '
+                                                                    '`expiration_date`. Default '
+                                                                    'false (expired memories are '
+                                                                    'silently dropped from the '
+                                                                    'result).'},
                                     'since': {'type': 'string',
                                               'description': 'ISO-8601 timestamp; returns every '
                                                              'Brain log event with timestamp >= '
@@ -324,13 +344,23 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                      'additionalProperties': False}},
     {'name': 'brain_recall_gate',
      'description': 'Classify whether an automatic recall/surfacing attempt should run. '
-                    'Diagnostics only; does not search.',
+                    'Diagnostics only; does not search. Pass `scores` (a recall attempt\'s '
+                    'top-k relevance scores) to also get an adequacy verdict — sufficient '
+                    '(proceed) / weak (re_recall) / insufficient (abstain + escalate).',
      'inputSchema': {'type': 'object',
                      'properties': {'prompt': {'type': 'string', 'minLength': 1, 'maxLength': 4000},
                                     'previous_prompt': {'type': 'string', 'maxLength': 4000},
                                     'explicit': {'type': 'boolean'},
                                     'telemetry_host': {'type': 'string', 'maxLength': 200},
-                                    'session_id': {'type': 'string', 'maxLength': 512}},
+                                    'session_id': {'type': 'string', 'maxLength': 512},
+                                    'scores': {'type': 'array',
+                                               'maxItems': 200,
+                                               'items': {'type': 'number'},
+                                               'description': 'Optional top-k recall relevance '
+                                                              'scores. When given, the gate adds '
+                                                              'an adequacy verdict: '
+                                                              'sufficient/proceed, weak/re_recall, '
+                                                              'or insufficient/abstain.'}},
                      'required': ['prompt'],
                      'additionalProperties': False}},
     {'name': 'brain_context',
@@ -406,6 +436,15 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                      'description': 'Optional host/runtime name '
                                                                     'for emitted receipts; '
                                                                     'defaults to `mcp`.'},
+                                    'recall_scores': {'type': 'array',
+                                                       'maxItems': 200,
+                                                       'items': {'type': 'number'},
+                                                       'description': 'Optional relevance scores '
+                                                                      'of the recall behind this '
+                                                                      'material. When given, the '
+                                                                      'response adds an adequacy '
+                                                                      'verdict (level + action) and '
+                                                                      'persists it in the receipt.'},
                                     'telemetry': {'type': 'boolean',
                                                   'description': 'When true, emit an opt-in recall '
                                                                  'telemetry record for this '
@@ -451,7 +490,13 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                    'interrupted close '
                                                                    '(SIGHUP/SIGTERM/force-quit/'
                                                                    'restart-drain). Absent by '
-                                                                   'default.'}},
+                                                                   'default.'},
+                                    'dry_run': {'type': 'boolean',
+                                                'description': 'Preview the candidate records '
+                                                               'extraction would append WITHOUT '
+                                                               'writing to the vault (no '
+                                                               'continuity record, no dream/retire '
+                                                               'trigger). Absent by default.'}},
                      'required': ['session_id', 'turn_start', 'turn_end', 'text'],
                      'additionalProperties': False}},
 )

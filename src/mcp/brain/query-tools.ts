@@ -135,7 +135,10 @@ async function toolBrainQuery(
     }
 
     if (topic !== null) {
-      const res = queryByTopic(ctx.vault, topic);
+      // Expiration opt-in (C5): default drops memories past their
+      // expiration_date; show_expired re-includes them for audit.
+      const showExpired = coerceBoolOptional(args, "show_expired") ?? false;
+      const res = queryByTopic(ctx.vault, topic, { showExpired });
       const resultCount = res.signals.length + res.all_log_events.length;
       emitQueryTelemetry(resultCount > 0 ? "ok" : "empty", resultCount);
       const topicPrefOwner =
@@ -380,6 +383,7 @@ function serializeSignal(s: BrainSignal): Record<string, unknown> {
     ...(s.scope !== undefined ? { scope: s.scope } : {}),
     ...(s.source !== undefined ? { source: [...s.source] } : {}),
     ...(s.raw !== undefined ? { raw: s.raw } : {}),
+    ...(s.expiration_date !== undefined ? { expiration_date: s.expiration_date } : {}),
   };
 }
 
@@ -428,6 +432,7 @@ function serializePreference(p: BrainPreference | BrainRetired): Record<string, 
     tags: [...p.tags],
     ...(p.supersedes !== undefined ? { supersedes: p.supersedes } : {}),
     ...(p.aliases !== undefined ? { aliases: [...p.aliases] } : {}),
+    ...(p.expiration_date !== undefined ? { expiration_date: p.expiration_date } : {}),
   };
 }
 
@@ -478,6 +483,11 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         topic: {
           type: "string",
           description: "Topic slug to aggregate signals + active/retired preference + log events.",
+        },
+        show_expired: {
+          type: "boolean",
+          description:
+            "Topic mode only: include memories past their `expiration_date`. Default false (expired memories are silently dropped from the result).",
         },
         since: {
           type: "string",

@@ -100,7 +100,18 @@ export function appendContinuityRecord(
   vault: string,
   input: AppendContinuityRecordInput,
 ): ContinuityRecord {
-  return appendRecord(vault, buildRecord(input));
+  return appendRecord(vault, buildContinuityRecord(input));
+}
+
+/**
+ * Build the exact continuity record {@link appendContinuityRecord} would
+ * persist, WITHOUT touching disk. Same validation, payload sanitisation,
+ * and dedup id as the append path — so a caller can preview a record and
+ * trust it byte-for-byte predicts the real write. Used by the dry-run
+ * extraction preview (C2 / t_2c6cf3e2).
+ */
+export function buildContinuityRecord(input: AppendContinuityRecordInput): ContinuityRecord {
+  return buildRecord(input);
 }
 
 /**

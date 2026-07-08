@@ -16,6 +16,7 @@ export type ContinuityRecordKind =
   | "pre_compact_extract"
   | "post_compact_audit"
   | "session_turn"
+  | "recent_turn"
   | "session_summary_node"
   | "session_summary_digest"
   | "generation_report"

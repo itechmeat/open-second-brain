@@ -52,6 +52,8 @@ export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
 export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
 export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
 export const BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
+/** Declared-thesis register pages: `Brain/theses/thesis-<slug>.md` (D3). */
+export const BRAIN_THESES_REL = posix.join(BRAIN_ROOT_REL, "theses");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
 /** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
@@ -271,6 +273,17 @@ export function obligationsArchiveDir(vault: string): string {
 /** A single obligation page: `Brain/obligations/<slug>.md`. */
 export function obligationPath(vault: string, slug: string): string {
   return ensureInsideVault(join(vault, BRAIN_OBLIGATIONS_REL, `${slug}.md`), vault);
+}
+
+/** Declared-thesis register pages dir: `Brain/theses/`. */
+export function thesesDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_THESES_REL), vault);
+}
+
+/** A single thesis page: `Brain/theses/thesis-<slug>.md`. */
+export function thesisPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_THESES_REL, `thesis-${s}.md`), vault);
 }
 
 /** Proposal scan watermark path: `Brain/procedural-memory/proposal-watermark.json`. */

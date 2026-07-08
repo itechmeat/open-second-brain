@@ -152,5 +152,10 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   // + brain_route_metrics (route-level MCP latency, context-pack-economics-observability) = 90.
   // + brain_token_impact (durable token-impact ledger, context-pack-economics-observability) = 91.
   // + brain_context_pack_outcome (agent-operable outcome loop, context-pack-economics-observability) = 92.
-  expect(list.result.tools.length).toBe(92);
+  // + brain_session_checkpoint (batch checkpoint save, memory-signal-provenance-lifecycle C4) = 93.
+  // + brain_search_by_source / brain_delete_by_source (delete & search by exact
+  //   source file, memory-signal-provenance-lifecycle C6) = 95.
+  // + brain_ingest_batch_plan (large-folder ingest planner,
+  //   memory-signal-provenance-lifecycle A3) = 96.
+  expect(list.result.tools.length).toBe(96);
 });

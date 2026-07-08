@@ -457,8 +457,9 @@ async function toolBrainPreCompactExtract(
       : {}),
     ...(maxChars !== undefined ? { maxChars } : {}),
     ...(coerceBool(args, "interrupted") === true ? { interrupted: true } : {}),
+    ...(coerceBool(args, "dry_run") === true ? { dryRun: true } : {}),
   });
-  return { count: result.records.length, ...result };
+  return { count: result.records.length, dry_run: coerceBool(args, "dry_run") === true, ...result };
 }
 
 // ----- session recall DAG --------------------------------------------------
@@ -824,6 +825,11 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "boolean",
           description:
             "When true, mark the extracted records as flushed by an interrupted close (SIGHUP/SIGTERM/force-quit/restart-drain). Absent by default.",
+        },
+        dry_run: {
+          type: "boolean",
+          description:
+            "Preview the candidate records extraction would append WITHOUT writing to the vault (no continuity record, no dream/retire trigger). Absent by default.",
         },
       },
       required: ["session_id", "turn_start", "turn_end", "text"],

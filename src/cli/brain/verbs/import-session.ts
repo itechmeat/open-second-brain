@@ -34,6 +34,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     "ingest-scope": { type: "string" },
     "filter-role": { type: "string-array" },
     "filter-text": { type: "string" },
+    "preserve-event-time": { type: "boolean" },
     json: { type: "boolean" },
   });
   if (positional.length < 1) return fail("brain import-session requires a <path> argument");
@@ -65,6 +66,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     }
   }
   const filterText = normalizeFlagString(flags["filter-text"] as string | undefined);
+  const preserveEventTime = Boolean(flags["preserve-event-time"]);
 
   const formatRaw = flags["format"] as string | undefined;
   let format: SessionAdapterId | undefined;
@@ -99,6 +101,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
           ...(ingestScope !== null ? { ingestScope } : {}),
           ...(filterRoles.length > 0 ? { filterRoles } : {}),
           ...(filterText !== null ? { filterTextIncludes: filterText } : {}),
+          ...(preserveEventTime ? { preserveEventTime } : {}),
         })
       : {
           files: [
@@ -115,6 +118,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
               ...(ingestScope !== null ? { ingestScope } : {}),
               ...(filterRoles.length > 0 ? { filterRoles } : {}),
               ...(filterText !== null ? { filterTextIncludes: filterText } : {}),
+              ...(preserveEventTime ? { preserveEventTime } : {}),
             }),
           ],
           warnings: [],

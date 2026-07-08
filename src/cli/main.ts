@@ -25,6 +25,7 @@ import { ensureVaultCurrent } from "../core/maintenance/ensure-current.ts";
 import { doctor } from "../core/doctor.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
+import { handleAiderSubcommand } from "./aider.ts";
 import { handleBrainSubcommand } from "./brain.ts";
 import { handleDisciplineSubcommand } from "./discipline.ts";
 import { handlePartnerSubcommand } from "./partner.ts";
@@ -711,6 +712,9 @@ Commands:
   help                      Print this help text; --json prints command metadata
   completions               Print shell completions for bash, zsh, fish, elvish, nushell, powershell
 
+Aider (session-bracketing memory wrapper):
+  aider wrap                Run Aider bracketed with live memory load + write-back
+
 Brain (observing memory):
   brain init                Bootstrap <vault>/Brain/ skeleton (idempotent)
   brain feedback            Record a taste signal into Brain/inbox/
@@ -757,6 +761,7 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
   if (
     rest.length === 1 &&
     (rest[0] === "-h" || rest[0] === "--help") &&
+    command !== "aider" &&
     command !== "brain" &&
     command !== "vault"
   ) {
@@ -835,6 +840,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return cmdHelp(rest);
       case "completions":
         return cmdCompletions(rest);
+      case "aider":
+        return await handleAiderSubcommand(rest);
       case "brain":
         return await handleBrainSubcommand(rest);
       case "discipline":

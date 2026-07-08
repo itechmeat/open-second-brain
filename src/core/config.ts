@@ -384,6 +384,21 @@ export function resolvePostCompactSurvivalAudit(configPath?: string): boolean {
 }
 
 /**
+ * Post-compaction verbatim recent-turns re-surface gate (C3 / t_92317f91).
+ * Default OFF: the bounded last-N-turns buffer is captured and readable on
+ * demand, but nothing is auto-surfaced into the post-compaction context
+ * unless `recent_turns_resurface: "true"`, so unchanged installs stay
+ * byte-identical.
+ */
+export function resolveRecentTurnsResurface(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_RECENT_TURNS_RESURFACE",
+    "recent_turns_resurface",
+    configPath,
+  );
+}
+
+/**
  * SessionEnd handoff-note gate (Agent Surface Suite, t_28afa4d2).
  * Default OFF: lifecycle capture writes no handoff note unless
  * `session_handoff: "true"`.

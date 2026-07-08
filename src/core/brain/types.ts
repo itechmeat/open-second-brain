@@ -396,6 +396,14 @@ export interface BrainSignal {
   readonly valid_until?: string;
   /** Bi-temporal transaction-time (additive optional, v0.10.18). */
   readonly recorded_at?: string;
+  /**
+   * Caller-settable expiration (C5 / t_a82b674e). ISO date (`YYYY-MM-DD`)
+   * or full timestamp. Additive optional — absent on legacy signals. The
+   * default read/list path drops a signal past this date unless the
+   * caller opts into `showExpired`. Orthogonal to dream retirement: a
+   * lapsed signal is filtered on read, never deleted or moved.
+   */
+  readonly expiration_date?: string;
 }
 
 /**
@@ -511,6 +519,15 @@ export interface BrainPreference {
    * which is the dream-pass promotion moment). Additive optional.
    */
   readonly recorded_at?: string;
+  /**
+   * Caller-settable expiration (C5 / t_a82b674e). ISO date (`YYYY-MM-DD`)
+   * or full timestamp. Additive optional — absent on legacy preferences.
+   * The default read/list path drops a preference past this date unless
+   * the caller opts into `showExpired`. Orthogonal to dream's heuristic
+   * retirement: a lapsed preference is filtered on read, never moved to
+   * `Brain/retired/` (audit trail preserved).
+   */
+  readonly expiration_date?: string;
 }
 
 /**

@@ -81,6 +81,20 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("tool-arg", "string-array"),
     ]),
     command(
+      "aider",
+      "Session-bracketing memory wrapper for Aider",
+      [],
+      [
+        command("wrap", "Run Aider bracketed with live memory load + write-back", [
+          flag("session-id", "string"),
+          flag("aider-bin", "string"),
+          flag("chat-history", "string"),
+          flag("vault", "string"),
+          flag("config", "string"),
+        ]),
+      ],
+    ),
+    command(
       "brain",
       "Brain memory verbs",
       [],
@@ -181,6 +195,26 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("intention", "Manage scoped current-intention chains"),
         command("project", "Link project directories to their owning vault"),
         command("source", "Manage read-only recall sources of the active vault"),
+        command(
+          "forget-source",
+          "Find and delete entries derived from an exact source file (dry-run by default)",
+          [
+            flag("vault", "string"),
+            flag("confirm", "boolean"),
+            flag("include-originals", "boolean"),
+            flag("json", "boolean"),
+          ],
+        ),
+        command(
+          "batch-plan",
+          "Plan a large-folder ingest into bounded parallel batches (skips unchanged sources)",
+          [
+            flag("vault", "string"),
+            flag("max-bytes", "string"),
+            flag("max-files", "string"),
+            flag("json", "boolean"),
+          ],
+        ),
         command("links", "Normalize wikilink path format across Brain notes"),
         command("bridges", "Propose, accept, or dismiss embedding-near bridge links"),
         command("clusters", "Detect link-graph communities and materialize cluster notes"),

@@ -30,8 +30,15 @@
  */
 
 import { existsSync } from "node:fs";
+import { join, relative } from "node:path";
 
 import { sanitiseTextField } from "../redactor.ts";
+import {
+  computePayloadHash,
+  IdempotencyPayloadMismatchError,
+  lookupKey,
+  rememberKey,
+} from "./idempotency-ledger.ts";
 import { appendLogEvent, type AppendLogEventResult, type BrainLogEntry } from "./log.ts";
 import { parsePreference } from "./preference.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
@@ -109,6 +116,16 @@ export interface AppendApplyEvidenceInput {
    * absent outcome, only `success`/`failure` persist in the log.
    */
   readonly outcome?: BrainApplyOutcome;
+  /**
+   * Client-supplied idempotency key (C1 / t_213f356b). Additive and
+   * optional: absent → byte-identical to the historical append path.
+   * When present, the appender hashes the semantic payload (pref id,
+   * artifact, result, agent, note, outcome) and consults the idempotency
+   * ledger before appending. A repeat with the same key + same payload is
+   * a deduped no-op (no second log row); the same key + a different
+   * payload throws {@link IdempotencyPayloadMismatchError}.
+   */
+  readonly idempotency_key?: string;
 }
 
 export interface AppendApplyEvidenceOptions {
@@ -131,6 +148,13 @@ export interface AppendApplyEvidenceResult {
   readonly logged_at: string;
   /** Absolute path of the log file the event landed in. */
   readonly log_path: string;
+  /**
+   * Set to `true` when an `idempotency_key` matched a prior append with an
+   * identical payload, so this call was a deduped no-op (no second row).
+   * The returned `logged_at`/`log_path` point at the ORIGINAL event.
+   * Absent on a normal append.
+   */
+  readonly deduped?: boolean;
 }
 
 /**
@@ -232,11 +256,44 @@ export function appendApplyEvidence(
   const trimmedNote = note?.trim();
   if (trimmedNote) body["note"] = trimmedNote;
 
+  // Idempotency consult (C1): a repeat with the same key + same payload
+  // dedupes (no second row); the same key + a different payload throws
+  // before appending. The hash covers the rendered event body — exactly
+  // what would land in the log.
+  const idKey = input.idempotency_key?.trim();
+  let idContentHash: string | undefined;
+  if (idKey) {
+    idContentHash = computePayloadHash(body);
+    const existing = lookupKey(vault, idKey);
+    if (existing) {
+      if (existing.contentHash === idContentHash) {
+        const ref = (existing.ref ?? {}) as { logged_at?: string; log_path?: string };
+        return {
+          logged_at: ref.logged_at ?? timestamp,
+          log_path: ref.log_path ? join(vault, ref.log_path) : "",
+          deduped: true,
+        };
+      }
+      throw new IdempotencyPayloadMismatchError(idKey, existing.contentHash, idContentHash);
+    }
+  }
+
   const entry: BrainLogEntry = {
     timestamp,
     eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
     body,
   };
   const result: AppendLogEventResult = appendLogEvent(vault, entry);
+
+  // Record the key AFTER the row lands so a future retry dedupes.
+  if (idKey && idContentHash !== undefined) {
+    rememberKey(vault, {
+      key: idKey,
+      contentHash: idContentHash,
+      createdAt: timestamp,
+      ref: { logged_at: timestamp, log_path: relative(vault, result.logPath) },
+    });
+  }
+
   return { logged_at: timestamp, log_path: result.logPath };
 }

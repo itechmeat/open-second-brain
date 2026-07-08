@@ -30,6 +30,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { brainDirs } from "./paths.ts";
+import { filterExpired, isExpired } from "./expiration.ts";
 import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
@@ -97,6 +98,18 @@ export interface QueryByTopicResult {
    * payload field resolves to the same id.
    */
   readonly all_log_events: ReadonlyArray<BrainLogEntry>;
+}
+
+/**
+ * Read-path options for the list surfaces (C5 / t_a82b674e). Default
+ * behaviour drops any signal / preference past its `expiration_date`;
+ * `showExpired` re-includes them for audit / recall of lapsed memories.
+ */
+export interface QueryByTopicOptions {
+  /** When true, expired memories are kept in the result. Default false. */
+  readonly showExpired?: boolean;
+  /** Wall clock the expiration is compared against. Defaults to `new Date()`. */
+  readonly now?: Date;
 }
 
 // ----- Public API -----------------------------------------------------------
@@ -186,7 +199,11 @@ export function queryByPreference(vault: string, pref_id: string): QueryByPrefer
  * retired), and every log entry mentioning the preference id (active
  * or retired form). Unknown topic → empty result with `preference: null`.
  */
-export function queryByTopic(vault: string, topic: string): QueryByTopicResult {
+export function queryByTopic(
+  vault: string,
+  topic: string,
+  options: QueryByTopicOptions = {},
+): QueryByTopicResult {
   const want = topic.trim();
   if (!want) {
     return Object.freeze({
@@ -196,8 +213,11 @@ export function queryByTopic(vault: string, topic: string): QueryByTopicResult {
     });
   }
 
+  const now = options.now ?? new Date();
+  const showExpired = options.showExpired ?? false;
+
   const dirs = brainDirs(vault);
-  const signals: BrainSignal[] = [];
+  let signals: BrainSignal[] = [];
 
   // Collect signals from both inbox/ and inbox/processed/. We do not
   // recurse — `inbox/processed/` is the only allowed sub-folder of
@@ -206,12 +226,29 @@ export function queryByTopic(vault: string, topic: string): QueryByTopicResult {
   collectSignals(dirs.inbox, want, signals);
   collectSignals(dirs.processed, want, signals);
   signals.sort((a, b) => a.created_at.localeCompare(b.created_at));
+  // Expiration filter (C5): drop signals past their expiration_date
+  // unless the caller opts into showExpired. The files stay on disk —
+  // this is a read-path filter, orthogonal to dream retirement.
+  signals = filterExpired(signals, { now, showExpired });
 
   // Current rule — prefer the active preference; fall back to retired.
   let preference: BrainPreference | BrainRetired | null = null;
   preference = findPreferenceForTopic(dirs.preferences, want, "preference");
   if (!preference) {
     preference = findPreferenceForTopic(dirs.retired, want, "retired");
+  }
+  // Expiration filter (C5): an active preference past its expiration_date
+  // is dropped from the default result (surfaced only under showExpired).
+  // A retired preference carries no live expiration and is never filtered
+  // here — it is already out of the loop.
+  if (
+    !showExpired &&
+    preference !== null &&
+    preference.kind === "brain-preference" &&
+    preference.expiration_date !== undefined &&
+    isExpired(preference.expiration_date, now)
+  ) {
+    preference = null;
   }
 
   // All log events whose `preference` payload resolves to the topic's
