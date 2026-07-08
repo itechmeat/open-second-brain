@@ -266,7 +266,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: BATCH_PLAN_TOOL,
     description:
-      "Plan a large-folder ingest into bounded parallel batches. Discovers ingestible (text-bearing) files under `source_dir` (a vault path), skips those unchanged since last ingest via the content-hash manifest, and packs the new/modified remainder into batches bounded by `max_batch_bytes` and `max_batch_files`. Read-only, deterministic; the caller dispatches each batch as a parallel subagent. No model, no OCR.",
+      "Plan a folder ingest into bounded parallel batches. Walks `source_dir` for ingestible files, skips unchanged ones via the content-hash manifest, and packs the new/modified remainder into batches bounded by `max_batch_bytes`/`max_batch_files`. Read-only; the caller dispatches each batch.",
     inputSchema: {
       type: "object",
       properties: {
