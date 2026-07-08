@@ -242,7 +242,12 @@ function directMatch(
 
   const kind = classifyKind(vault, absPath);
   const sourceLinks = stringArrayField(meta, "source");
-  const evidencedBy = stringArrayField(meta, "evidenced_by");
+  // Managed `_evidenced_by` links take precedence over the legacy plain key
+  // (see evidencedByLinks). Reading only the plain key here let a preference
+  // whose evidence lives in `_evidenced_by` slip past the foreign-evidence
+  // guard in computeDeletable and be auto-deleted as a first-pass wikilink
+  // match, even when it is a shared fold.
+  const evidencedBy = evidencedByLinks(meta);
   const base = {
     absPath,
     path: vaultRelative(absPath, vault),
@@ -373,7 +378,11 @@ function computeDeletable(
   // A signal citing a second source is a shared observation — report it.
   if (!tracesSolelyToSource(raw, canonical)) return false;
   // A preference folded from any foreign signal is a shared fold — report it.
-  if (raw.match === "evidenced_by") {
+  // This holds however the preference was first matched: a second-pass
+  // `evidenced_by` fold OR a first-pass `[[source]]` wikilink match that also
+  // carries evidence links. Keying only on match === "evidenced_by" let a
+  // wikilink-matched shared preference reach `--confirm` deletion.
+  if (raw.kind === "preference" && raw.evidencedBy.length > 0) {
     const targets = raw.evidencedBy.map((link) => wikilinkTarget(link));
     if (!targets.every((t) => derivedSignalIds.has(t))) return false;
   }
@@ -496,28 +505,13 @@ export function deleteBySource(
   // Confirmed path — delete the derived entries first, then (opt-in) the
   // originals, then drop the manifest entry (an index artifact).
   const deleted: string[] = [];
-  for (const entry of derived) {
-    if (removeFile(vault, entry.path)) deleted.push(entry.path);
-  }
-  if (includeOriginals) {
-    for (const original of originals) {
-      if (removeFile(vault, original)) deleted.push(original);
-    }
-  }
-
   let manifestEntryRemoved = false;
-  if (manifestKey !== null && existsSync(manifestPath(vault))) {
-    const entries = { ...readManifest(vault).entries };
-    if (entries[manifestKey] !== undefined) {
-      delete entries[manifestKey];
-      manifestEntryRemoved = writeManifestAtomic(vault, entries);
-    }
-  }
 
   // Audit only a run that actually changed something; a no-op re-run writes
-  // no record (idempotent).
-  let auditRecordId: string | null = null;
-  if (deleted.length > 0 || manifestEntryRemoved) {
+  // no record (idempotent). Factored so both the success path AND a partial
+  // failure can persist the record of what was already removed.
+  const writeInvalidationAudit = (): string | null => {
+    if (deleted.length === 0 && !manifestEntryRemoved) return null;
     const agent = opts.agent?.trim() ? opts.agent.trim() : "delete_by_source";
     const record = appendContinuitySourceInvalidation(vault, {
       createdAt: isoSecond(opts.now ?? new Date()),
@@ -527,8 +521,41 @@ export function deleteBySource(
         `${manifestEntryRemoved ? " and the ingest manifest entry" : ""}` +
         `${includeOriginals ? " (originals included)" : ""}`,
     });
-    auditRecordId = record.id;
+    return record.id;
+  };
+
+  let auditRecordId: string | null = null;
+  try {
+    for (const entry of derived) {
+      if (removeFile(vault, entry.path)) deleted.push(entry.path);
+    }
+    if (includeOriginals) {
+      for (const original of originals) {
+        if (removeFile(vault, original)) deleted.push(original);
+      }
+    }
+
+    if (manifestKey !== null && existsSync(manifestPath(vault))) {
+      const entries = { ...readManifest(vault).entries };
+      if (entries[manifestKey] !== undefined) {
+        delete entries[manifestKey];
+        manifestEntryRemoved = writeManifestAtomic(vault, entries);
+      }
+    }
+  } catch (err) {
+    // A removeFile (or manifest write) that throws mid-cleanup would otherwise
+    // exit before the audit append, leaving already-deleted paths with no
+    // record for a retry to reconstruct. Persist what was removed so far, then
+    // rethrow; never let an audit-write error mask the original failure.
+    try {
+      writeInvalidationAudit();
+    } catch {
+      /* swallow: the original error below is the one that matters */
+    }
+    throw err;
   }
+
+  auditRecordId = writeInvalidationAudit();
 
   return Object.freeze({
     source: canonical,

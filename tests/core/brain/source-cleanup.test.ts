@@ -250,3 +250,42 @@ describe("deleteBySource — confirmed cleanup", () => {
     expect(second.auditRecordId).toBeNull();
   });
 });
+
+describe("deleteBySource — shared preference via managed _evidenced_by (CR #127.7)", () => {
+  test("a wikilink-matched preference evidenced by a FOREIGN signal is reported, never deleted", () => {
+    seedContaminatedVault();
+
+    // A signal that derives from the OTHER (legit) source — foreign to SOURCE.
+    const foreign = writeSignal(vault, {
+      topic: "external",
+      signal: "positive",
+      agent: "tester",
+      principle: "Derived from a legitimate, unrelated source.",
+      created_at: "2026-06-01T00:00:00Z",
+      date: "2026-06-01",
+      slug: "external-derived",
+      source: [`[[${OTHER_SOURCE}]]`],
+    });
+
+    // A shared preference whose evidence lives in the MANAGED `_evidenced_by`
+    // key (points at the foreign signal), and whose body also mentions
+    // [[SOURCE]]. It is a shared fold: deleting SOURCE must NOT remove it.
+    const sharedPref = join(vault, "Brain", "preferences", "pref-shared-external.md");
+    writeFileSync(
+      sharedPref,
+      `---\nid: pref-shared-external\n_evidenced_by: ["[[${foreign.id}]]"]\n---\n` +
+        `A shared preference that also mentions [[${SOURCE}]] in prose.\n`,
+      "utf8",
+    );
+
+    const plan = deleteBySource(vault, SOURCE, { confirm: true, now: NOW });
+
+    const rel = "Brain/preferences/pref-shared-external.md";
+    // It must be reported as a protected mention, not queued for deletion.
+    expect(plan.mentions.some((m) => m.path === rel)).toBe(true);
+    expect(plan.derived.some((d) => d.path === rel)).toBe(false);
+    expect(plan.deleted).not.toContain(rel);
+    // And it survives on disk.
+    expect(existsSync(sharedPref)).toBe(true);
+  });
+});
