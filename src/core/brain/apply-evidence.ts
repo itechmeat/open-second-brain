@@ -37,6 +37,7 @@ import {
   computePayloadHash,
   IdempotencyPayloadMismatchError,
   lookupKey,
+  REMEMBER_KEY_STATUS,
   rememberKey,
 } from "./idempotency-ledger.ts";
 import { appendLogEvent, type AppendLogEventResult, type BrainLogEntry } from "./log.ts";
@@ -285,14 +286,35 @@ export function appendApplyEvidence(
   };
   const result: AppendLogEventResult = appendLogEvent(vault, entry);
 
-  // Record the key AFTER the row lands so a future retry dedupes.
+  // Record the key AFTER the row lands so a future retry dedupes. Under a
+  // concurrent same-key race the unlocked lookupKey above can miss a rival
+  // write; rememberKey re-checks under its shard lock and returns the verdict,
+  // which we MUST act on (the ledger never throws — the writer decides).
   if (idKey && idContentHash !== undefined) {
-    rememberKey(vault, {
+    const remembered = rememberKey(vault, {
       key: idKey,
       contentHash: idContentHash,
       createdAt: timestamp,
       ref: { logged_at: timestamp, log_path: relative(vault, result.logPath) },
     });
+    if (remembered.status === REMEMBER_KEY_STATUS.payload_mismatch) {
+      throw new IdempotencyPayloadMismatchError(
+        idKey,
+        remembered.record.contentHash,
+        idContentHash,
+      );
+    }
+    if (remembered.status === REMEMBER_KEY_STATUS.duplicate_match) {
+      // A rival process won the key with the same payload between our unlocked
+      // lookup and this locked record; report the winner's row as the deduped
+      // result instead of a second normal write.
+      const ref = (remembered.record.ref ?? {}) as { logged_at?: string; log_path?: string };
+      return {
+        logged_at: ref.logged_at ?? timestamp,
+        log_path: ref.log_path ? join(vault, ref.log_path) : result.logPath,
+        deduped: true,
+      };
+    }
   }
 
   return { logged_at: timestamp, log_path: result.logPath };

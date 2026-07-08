@@ -156,6 +156,11 @@ function checkpointPayloadFields(input: SessionCheckpointInput): Record<string, 
     learnings: input.learnings ? [...input.learnings] : undefined,
     next_steps: input.nextSteps ? [...input.nextSteps] : undefined,
     diary: input.diary,
+    // `host` and `sourceTurnIds` are written to disk (appendSessionSummary), so
+    // a retry with the same session id but different provenance must raise the
+    // mismatch error rather than silently deduping.
+    host: input.host,
+    source_turn_ids: input.sourceTurnIds ? [...input.sourceTurnIds] : undefined,
   };
 }
 

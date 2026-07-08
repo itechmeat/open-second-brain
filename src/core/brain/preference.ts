@@ -405,6 +405,10 @@ function preferencePayloadFields(
     scope: input.scope?.trim(),
     status: input.status,
     evidenced_by: [...input.evidenced_by],
+    // `owner` drives owner-scoped visibility and is written to frontmatter,
+    // so a retry that only changes it must NOT silently dedupe — fold it into
+    // the idempotency hash (mirrors the write path at recordPreference).
+    owner: input.owner?.trim(),
   };
 }
 
