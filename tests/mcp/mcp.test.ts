@@ -248,6 +248,8 @@ describe("tool listing", () => {
         "brain_file_context",
         // Session Knowledge Synthesis Suite (v1.11.0).
         "brain_session_summary",
+        // Batch checkpoint save (memory-signal-provenance-lifecycle C4).
+        "brain_session_checkpoint",
         "brain_idea_lineage",
         "brain_note_history",
         // Schema admin + watchdog recovery probes.
@@ -575,7 +577,8 @@ describe("stdio loop", () => {
     // + brain_route_metrics (route-level MCP latency, context-pack-economics-observability) = 90.
     // + brain_token_impact (durable token-impact ledger, context-pack-economics-observability) = 91.
     // + brain_context_pack_outcome (agent-operable outcome loop, context-pack-economics-observability) = 92.
-    expect(list.result.tools.length).toBe(92);
+    // + brain_session_checkpoint (batch checkpoint save, memory-signal-provenance-lifecycle C4) = 93.
+    expect(list.result.tools.length).toBe(93);
   });
 
   test("returns parse error for invalid JSON", async () => {

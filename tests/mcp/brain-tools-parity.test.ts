@@ -97,6 +97,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_review_candidates",
   "brain_route_metrics",
   "brain_secrets",
+  "brain_session_checkpoint",
   "brain_session_describe",
   "brain_session_expand",
   "brain_session_grep",

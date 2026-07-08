@@ -14,6 +14,16 @@ import {
   type SessionSummaryDigest,
 } from "../../core/brain/session-summary.ts";
 import {
+  saveSessionCheckpoint,
+  SessionCheckpointError,
+  type CheckpointSignalInput,
+  type SessionCheckpointResult,
+} from "../../core/brain/session-checkpoint.ts";
+import { IdempotencyPayloadMismatchError } from "../../core/brain/idempotency-ledger.ts";
+import { resolveAgentName } from "../../core/config.ts";
+import { normalizeAgentArgument } from "../../core/agent-identity.ts";
+import type { BrainSignalSign } from "../../core/brain/types.ts";
+import {
   traceIdeaLineage,
   IdeaLineageError,
   type IdeaLineageResult,
@@ -108,6 +118,115 @@ async function toolBrainSessionSummary(
       : undefined;
   const digests = listSessionSummaries(ctx.vault, sessionId !== undefined ? { sessionId } : {});
   return { count: digests.length, digests: digests.map(serializeDigest) };
+}
+
+const CHECKPOINT_TOOL = "brain_session_checkpoint";
+
+/** Parse the `signals` array into checkpoint signal inputs. Only STRUCTURAL
+ * problems (not-an-array, an item that is not an object, a mistyped
+ * scalar) are protocol errors here. SEMANTIC validity — a bad sign, a
+ * missing topic / principle — is deliberately passed through so the kernel
+ * attempts the write and collects the failure as a `partial` item (status
+ * "mixed"), rather than aborting the whole batch. */
+function parseCheckpointSignals(
+  args: Record<string, unknown>,
+): ReadonlyArray<CheckpointSignalInput> {
+  const value = args["signals"];
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new MCPError(INVALID_PARAMS, `${CHECKPOINT_TOOL}: signals must be an array`);
+  }
+  return value.map((raw, index) => {
+    if (typeof raw !== "object" || raw === null) {
+      throw new MCPError(INVALID_PARAMS, `${CHECKPOINT_TOOL}: signals[${index}] must be an object`);
+    }
+    const item = raw as Record<string, unknown>;
+    const topic = typeof item["topic"] === "string" ? item["topic"] : "";
+    const principle = typeof item["principle"] === "string" ? item["principle"] : "";
+    // Sign passed through verbatim; the writer rejects an out-of-enum value
+    // and the kernel surfaces it as a `partial` item.
+    const sign = item["signal"] as BrainSignalSign;
+    const scope = typeof item["scope"] === "string" ? item["scope"] : undefined;
+    const rawText = typeof item["raw"] === "string" ? item["raw"] : undefined;
+    const source = stringArrayField(item["source"], `signals[${index}].source`);
+    return {
+      topic,
+      signal: sign,
+      principle,
+      ...(scope !== undefined ? { scope } : {}),
+      ...(rawText !== undefined ? { raw: rawText } : {}),
+      ...(source !== undefined ? { source } : {}),
+    } satisfies CheckpointSignalInput;
+  });
+}
+
+function stringArrayField(value: unknown, name: string): ReadonlyArray<string> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
+    throw new MCPError(INVALID_PARAMS, `${CHECKPOINT_TOOL}: ${name} must be an array of strings`);
+  }
+  return value as ReadonlyArray<string>;
+}
+
+function serializeCheckpoint(result: SessionCheckpointResult): Record<string, unknown> {
+  return {
+    status: result.status,
+    session_id: result.sessionId,
+    deduped: result.deduped,
+    signals: result.signals.map((s) => ({ id: s.id, path: s.path, deduped: s.deduped })),
+    summary: result.summary === null ? null : { id: result.summary.id },
+    diary_written: result.diaryWritten,
+    partial: result.partial.map((p) => ({
+      kind: p.kind,
+      ...(p.index !== undefined ? { index: p.index } : {}),
+      ...(p.topic !== undefined ? { topic: p.topic } : {}),
+      reason: p.reason,
+    })),
+  };
+}
+
+async function toolBrainSessionCheckpoint(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const sessionIdRaw = args["session_id"];
+  if (typeof sessionIdRaw !== "string" || sessionIdRaw.trim().length === 0) {
+    throw new MCPError(INVALID_PARAMS, `${CHECKPOINT_TOOL}: session_id is required`);
+  }
+  const agentArg = typeof args["agent"] === "string" ? args["agent"] : null;
+  const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+  const signals = parseCheckpointSignals(args);
+  const request = typeof args["request"] === "string" ? args["request"] : undefined;
+  const decisions = stringArrayField(args["decisions"], "decisions");
+  const learnings = stringArrayField(args["learnings"], "learnings");
+  const nextSteps = stringArrayField(args["next_steps"], "next_steps");
+  const sourceTurnIds = stringArrayField(args["source_turn_ids"], "source_turn_ids");
+  const host = typeof args["host"] === "string" ? args["host"] : undefined;
+  const diary = typeof args["diary"] === "string" ? args["diary"] : undefined;
+
+  try {
+    const result = saveSessionCheckpoint(ctx.vault, {
+      sessionId: sessionIdRaw.trim(),
+      agent,
+      signals,
+      ...(request !== undefined ? { request } : {}),
+      ...(decisions !== undefined ? { decisions } : {}),
+      ...(learnings !== undefined ? { learnings } : {}),
+      ...(nextSteps !== undefined ? { nextSteps } : {}),
+      ...(sourceTurnIds !== undefined ? { sourceTurnIds } : {}),
+      ...(host !== undefined ? { host } : {}),
+      ...(diary !== undefined ? { diary } : {}),
+    });
+    return serializeCheckpoint(result);
+  } catch (error) {
+    if (
+      error instanceof SessionCheckpointError ||
+      error instanceof IdempotencyPayloadMismatchError
+    ) {
+      throw new MCPError(INVALID_PARAMS, error.message);
+    }
+    throw error;
+  }
 }
 
 const LINEAGE_TOOL = "brain_idea_lineage";
@@ -230,6 +349,58 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainSessionSummary,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
+  {
+    name: CHECKPOINT_TOOL,
+    description:
+      "Batch-save a whole session's signals + a decisions/learnings/next_steps summary + optional diary in one idempotent round-trip, keyed by session_id. A same-content retry dedupes; a different-content retry is payload_mismatch. Items needing review return in `partial` (status 'mixed'), never dropped.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Session id; the idempotency key." },
+        agent: { type: "string", description: "Identity stamped on written signals (optional)." },
+        signals: {
+          type: "array",
+          description: "Extracted memories to persist as signals.",
+          items: {
+            type: "object",
+            properties: {
+              topic: { type: "string", description: "Stable kebab-slug topic." },
+              signal: {
+                type: "string",
+                enum: ["positive", "negative"],
+                description: "positive = rule to follow; negative = to avoid.",
+              },
+              principle: { type: "string", description: "One-line rule formulation." },
+              scope: { type: "string", description: "Soft category (optional)." },
+              raw: { type: "string", description: "Verbatim source quote (optional)." },
+              source: {
+                type: "array",
+                items: { type: "string" },
+                description: "Wikilinks to triggering artifacts (optional).",
+              },
+            },
+            required: ["topic", "signal", "principle"],
+            additionalProperties: false,
+          },
+        },
+        request: { type: "string", description: "One-line session goal." },
+        decisions: { type: "array", items: { type: "string" }, description: "Decisions made." },
+        learnings: { type: "array", items: { type: "string" }, description: "Things learned." },
+        next_steps: { type: "array", items: { type: "string" }, description: "Follow-up actions." },
+        source_turn_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Turn ids the summary was distilled from.",
+        },
+        host: { type: "string", description: "Originating runtime (claude, codex, ...)." },
+        diary: { type: "string", description: "Optional narrative diary line for the Brain log." },
+      },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSessionCheckpoint,
     previewBudget: MCP_PREVIEW_BUDGET,
   },
   {
