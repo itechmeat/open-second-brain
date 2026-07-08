@@ -133,6 +133,26 @@ describe("writePreference idempotency key", () => {
       IdempotencyPayloadMismatchError,
     );
   });
+
+  test("same key + different owner throws (CR #127.4)", () => {
+    const base = {
+      slug: "rule-owner",
+      topic: "coding",
+      principle: "prefer X",
+      created_at: "2026-05-14T10:00:00Z",
+      unconfirmed_until: "2026-05-14T10:00:00Z",
+      status: "confirmed" as const,
+      evidenced_by: ["[[sig-1]]"],
+      idempotency_key: "pref-key-owner",
+      owner: "alice",
+    };
+    writePreference(vault, base);
+    // `owner` drives owner-scoped visibility, so a retry that only changes it
+    // must raise the mismatch rather than silently deduping under the old owner.
+    expect(() => writePreference(vault, { ...base, owner: "bob" })).toThrow(
+      IdempotencyPayloadMismatchError,
+    );
+  });
 });
 
 describe("appendApplyEvidence idempotency key", () => {

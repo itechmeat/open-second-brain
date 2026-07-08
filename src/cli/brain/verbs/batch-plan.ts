@@ -11,7 +11,7 @@
  */
 
 import { planBatches } from "../../../core/brain/ingest/batch-plan.ts";
-import { brainVerbContext, fail, info, ok, okJson, parse } from "../helpers.ts";
+import { brainVerbContext, fail, info, ok, okJson, parse, usageError } from "../helpers.ts";
 
 /** Default caps, mirroring the MCP surface (1 MiB / 25 files per batch). */
 const DEFAULT_MAX_BATCH_BYTES = 1024 * 1024;
@@ -35,7 +35,7 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
   });
   const sourceDir = positional[0];
   if (!sourceDir) {
-    return fail(
+    return usageError(
       "usage: o2b brain batch-plan <source-dir> [--max-bytes N] [--max-files N] [--json]",
     );
   }
