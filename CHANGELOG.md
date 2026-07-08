@@ -25,6 +25,14 @@ A memory-signal provenance and lifecycle integrity layer that closes five gaps i
 - **Declared-thesis register with new-note monitor.** A new `Brain/theses/` frontmatter kind records operator positions (statement, supporting and counter evidence, last-updated, falsification criterion). A monitor evaluates each newly-ingested note against active theses, flagging support or contradiction, reuses the obligations cadence machinery for a staleness check and a thesis-graveyard pass, and alerts when incoming evidence matches a thesis documented falsification scenario.
 - **Session-bracketing memory wrapper for Aider.** A new `scripts/o2b-aider` wrapper (also `o2b aider wrap`) brackets an Aider session: it re-renders the static context sidecar at start, execs the Aider binary with the injected `read:` context, and at session end runs the write-back half (capture and persist the session into the Brain), mirroring Hermes `prefetch`, `sync_turn`, and `on_session_end`. The install-time sidecar adapter stays as the fallback for users who do not run through the wrapper.
 
+### Fixed
+
+- **Shared preference no longer deletable by `forget-source`.** `deleteBySource` now reads a preference's managed `_evidenced_by` links (not only the legacy `evidenced_by` key) and applies the foreign-evidence guard to preferences matched by a `[[source]]` wikilink, so a preference folded from any foreign signal is reported, never auto-deleted on `--confirm`.
+- **Provenance folded into idempotency hashes.** The preference idempotency hash now includes `owner`, and the session-checkpoint hash now includes `host` and `sourceTurnIds`, so a retry that changes only owner-visibility or checkpoint provenance raises `IdempotencyPayloadMismatchError` instead of silently deduping under the wrong scope.
+- **Apply-evidence honors the idempotency ledger verdict.** `appendApplyEvidence` now acts on `rememberKey`'s return value: a concurrent same-key write with a different payload raises the mismatch error, and a same-payload race returns the winner's row as a deduped result instead of a second normal write.
+- **Partial `forget-source` cleanup stays auditable.** A `removeFile` failure mid-cleanup now still writes the `source_invalidation` audit record for the paths already removed before rethrowing, so a retry can reconstruct the state.
+- **CLI error contracts.** `brain batch-plan` with no `<source-dir>` now exits 2 as a usage error, and `brain forget-source --json` emits a parseable `{ ok: false, message }` envelope on a runtime failure instead of plain-text stderr.
+
 ## [1.25.0] - 2026-07-07
 
 An economics and observability layer for the context pack. Five new
