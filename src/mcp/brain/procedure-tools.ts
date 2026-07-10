@@ -16,6 +16,8 @@ import {
 import {
   listProceduralMemory,
   markProceduralMemoryUsed,
+  recordProceduralOutcome,
+  rankProceduralMemory,
   reconcileProceduralMemory,
 } from "../../core/brain/procedural-memory.ts";
 import { readProceduralGraph, rebuildProceduralGraph } from "../../core/brain/procedural-graph.ts";
@@ -93,7 +95,9 @@ async function toolBrainProceduralMemory(
   }
   if (operation === "list") {
     const entries = listProceduralMemory(ctx.vault);
-    return { total: entries.length, entries };
+    // Opt-in success-rate ranking (t_703f7b18); default order unchanged.
+    const ordered = args["ranked"] === true ? rankProceduralMemory(entries) : entries;
+    return { total: ordered.length, entries: ordered };
   }
   if (operation === "mark_used") {
     const id = requiredStringArg("brain_procedural_memory", args, "id");
@@ -103,9 +107,24 @@ async function toolBrainProceduralMemory(
     }
     return { ...updated };
   }
+  if (operation === "mark_outcome") {
+    const id = requiredStringArg("brain_procedural_memory", args, "id");
+    const outcome = requiredStringArg("brain_procedural_memory", args, "outcome");
+    if (outcome !== "success" && outcome !== "failure") {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_procedural_memory: outcome must be 'success' or 'failure'",
+      );
+    }
+    const updated = recordProceduralOutcome(ctx.vault, id, outcome);
+    if (!updated) {
+      throw new MCPError(INVALID_PARAMS, `brain_procedural_memory: unknown entry id: ${id}`);
+    }
+    return { ...updated };
+  }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_procedural_memory: operation must be one of reconcile|list|mark_used",
+    "brain_procedural_memory: operation must be one of reconcile|list|mark_used|mark_outcome",
   );
 }
 
@@ -225,13 +244,13 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_procedural_memory",
     description:
-      "Reconcile/list procedural memory index and update usage sidecar (reconcile, list, mark_used).",
+      "Reconcile/list procedural memory and update the usage + outcome sidecar (reconcile, list, mark_used, mark_outcome). list accepts ranked:true to order by validated success rate.",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["reconcile", "list", "mark_used"],
+          enum: ["reconcile", "list", "mark_used", "mark_outcome"],
           description: "Tool operation.",
         },
         roots: {
@@ -241,7 +260,16 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         id: {
           type: "string",
-          description: "Procedural entry id for mark_used.",
+          description: "Procedural entry id for mark_used / mark_outcome.",
+        },
+        outcome: {
+          type: "string",
+          enum: ["success", "failure"],
+          description: "Host-reported result for mark_outcome.",
+        },
+        ranked: {
+          type: "boolean",
+          description: "list only: order entries by validated success rate.",
         },
       },
       required: ["operation"],

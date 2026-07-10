@@ -87,6 +87,7 @@ test("expandRegisteredProvider resolves to openai-compat with the env key", () =
     baseUrl: nim.baseUrl,
     model: nim.defaultModel,
     apiKey: "secret-123",
+    apiKeys: ["secret-123"],
   });
 });
 
@@ -94,6 +95,32 @@ test("expandRegisteredProvider yields a null apiKey when the env var is unset", 
   const registry = addProviderProfile(vault, nim);
   const expanded = expandRegisteredProvider("nvidia-nim", registry, {});
   expect(expanded?.apiKey).toBeNull();
+  expect(expanded?.apiKeys).toEqual([]);
+});
+
+test("a profile envKey may be an ordered probe list; the first present key wins", () => {
+  const registry = addProviderProfile(vault, {
+    ...nim,
+    envKey: ["NIM_PRIMARY", "NIM_SECONDARY", "NIM_TERTIARY"],
+  });
+  // primary unset, secondary + tertiary set -> secondary wins, tertiary is the fallback.
+  const expanded = expandRegisteredProvider("nvidia-nim", registry, {
+    NIM_SECONDARY: "key-b",
+    NIM_TERTIARY: "key-c",
+  });
+  expect(expanded?.apiKey).toBe("key-b");
+  expect(expanded?.apiKeys).toEqual(["key-b", "key-c"]);
+});
+
+test("probe-list profiles round-trip through the registry file", () => {
+  addProviderProfile(vault, { ...nim, envKey: ["A_KEY", "B_KEY"] });
+  const loaded = getProviderProfile(vault, "nvidia-nim");
+  expect(loaded?.envKey).toEqual(["A_KEY", "B_KEY"]);
+});
+
+test("an empty probe list is rejected", () => {
+  expect(() => addProviderProfile(vault, { ...nim, envKey: [] })).toThrow(/env/i);
+  expect(() => addProviderProfile(vault, { ...nim, envKey: ["  "] })).toThrow(/env/i);
 });
 
 test("expandRegisteredProvider returns null for an unknown name", () => {

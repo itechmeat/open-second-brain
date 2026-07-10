@@ -280,3 +280,41 @@ describe("brain_recall_telemetry tool", () => {
     }
   });
 });
+
+describe("brain_observed_use tool (t_65588d8b)", () => {
+  test("records verdicts and surfaces them via observed_reuse", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const rec = await callTool(server, "brain_observed_use", {
+      entries: [
+        { id: "1", path: "a.md", verdict: "USED" },
+        { id: "2", path: "b.md", verdict: "CONTRADICTED" },
+      ],
+    });
+    expect(rec.recorded).toBe(2);
+
+    const reuse = await callTelemetry(server, { operation: "observed_reuse" });
+    expect(reuse.total).toBe(2);
+    const artifacts = reuse.artifacts as Array<Record<string, unknown>>;
+    const a = artifacts.find((x) => x.key === "a.md");
+    expect(a?.score).toBe(1);
+    const b = artifacts.find((x) => x.key === "b.md");
+    expect(b?.score).toBe(0);
+  });
+
+  test("rejects an invalid verdict", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 9,
+      method: "tools/call",
+      params: {
+        name: "brain_observed_use",
+        arguments: { entries: [{ id: "1", verdict: "MAYBE" }] },
+      },
+    })) as { error?: { code: number } };
+    expect(response.error?.code).toBe(INVALID_PARAMS);
+  });
+});

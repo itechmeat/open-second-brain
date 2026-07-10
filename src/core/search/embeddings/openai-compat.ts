@@ -20,8 +20,15 @@
 import { SearchError } from "../types.ts";
 import type { ResolvedEmbeddingConfig } from "../types.ts";
 import type { EmbeddingProvider } from "./provider.ts";
-
-const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+import {
+  AUTH_STATUSES,
+  RETRYABLE_STATUSES,
+  Semaphore,
+  chunkArray,
+  jittered,
+  sleep,
+  unitNormaliseInPlace,
+} from "./http-util.ts";
 
 interface OpenAiEmbeddingResponse {
   readonly data: ReadonlyArray<{
@@ -29,52 +36,6 @@ interface OpenAiEmbeddingResponse {
     readonly index: number;
   }>;
   readonly model?: string;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((res) => setTimeout(res, ms));
-}
-
-function jittered(base: number): number {
-  const jitter = base * 0.25 * (Math.random() * 2 - 1); // ±25%
-  return Math.max(0, base + jitter);
-}
-
-class Semaphore {
-  private permits: number;
-  private readonly waiters: Array<() => void> = [];
-  constructor(n: number) {
-    this.permits = Math.max(1, n | 0);
-  }
-  async acquire(): Promise<void> {
-    if (this.permits > 0) {
-      this.permits--;
-      return;
-    }
-    await new Promise<void>((res) => this.waiters.push(res));
-    this.permits--;
-  }
-  release(): void {
-    this.permits++;
-    const next = this.waiters.shift();
-    if (next) next();
-  }
-}
-
-function unitNormaliseInPlace(v: number[]): number[] {
-  let s = 0;
-  for (const x of v) s += x * x;
-  const norm = Math.sqrt(s);
-  if (norm === 0) return v;
-  for (let i = 0; i < v.length; i++) v[i] = (v[i] ?? 0) / norm;
-  return v;
-}
-
-function chunkArray<T>(arr: ReadonlyArray<T>, size: number): T[][] {
-  const step = Math.max(1, size | 0);
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += step) out.push(arr.slice(i, i + step) as T[]);
-  return out;
 }
 
 interface ResolvedHttp {
@@ -102,6 +63,16 @@ function resolveHttp(config: ResolvedEmbeddingConfig): ResolvedHttp {
   return { url: `${base}/embeddings`, apiKey: config.apiKey };
 }
 
+/**
+ * Ordered API-key failover list. Uses `config.apiKeys` when present and
+ * non-empty, otherwise the single resolved key. `resolveHttp` has already
+ * guaranteed a non-empty first key, so the list is never empty.
+ */
+function resolveKeys(config: ResolvedEmbeddingConfig, fallbackKey: string): string[] {
+  const list = (config.apiKeys ?? []).map((k) => k.trim()).filter((k) => k !== "");
+  return list.length > 0 ? list : [fallbackKey];
+}
+
 export interface OpenAICompatProviderOptions {
   /** Override default `[1000, 2000]` ms backoffs (used by tests). */
   readonly backoffMs?: ReadonlyArray<number>;
@@ -114,6 +85,9 @@ export class OpenAICompatProvider implements EmbeddingProvider {
   private readonly config: ResolvedEmbeddingConfig;
   private readonly http: ResolvedHttp;
   private readonly backoffMs: ReadonlyArray<number>;
+  /** Ordered probe keys; `activeKeyIndex` pins the first that authenticates. */
+  private readonly keys: ReadonlyArray<string>;
+  private activeKeyIndex = 0;
 
   constructor(config: ResolvedEmbeddingConfig, opts?: OpenAICompatProviderOptions) {
     this.config = config;
@@ -121,6 +95,11 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     this.model = config.model!;
     this._dimension = config.dimension;
     this.backoffMs = opts?.backoffMs ?? [1000, 2000];
+    this.keys = resolveKeys(config, this.http.apiKey);
+  }
+
+  private get activeKey(): string {
+    return this.keys[this.activeKeyIndex] ?? this.http.apiKey;
   }
 
   get dimension(): number | null {
@@ -191,7 +170,48 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     }
   }
 
+  /**
+   * Embed one batch with transient-retry AND multi-key failover: run the
+   * active key through the full transient-retry budget; on an auth error
+   * (HTTP 401/403) advance to the next probe key and retry, pinning the
+   * first key that authenticates. Bounded by the number of keys, so a
+   * fully-invalid probe list terminates and surfaces the auth error. With
+   * a single key the outer loop runs once - byte-identical to before.
+   */
   private async embedBatchWithRetry(
+    texts: string[],
+    opts?: { maxAttempts?: number; parentSignal?: AbortSignal },
+  ): Promise<number[][]> {
+    let lastError: SearchError | null = null;
+    for (let keyAttempt = 0; keyAttempt < this.keys.length; keyAttempt++) {
+      const usedKeyIndex = this.activeKeyIndex;
+      try {
+        return await this.embedBatchOnKey(texts, opts);
+      } catch (e) {
+        const err =
+          e instanceof SearchError ? e : new SearchError("EMBEDDING_PROVIDER_HTTP", String(e));
+        lastError = err;
+        if (!this.isAuthError(err)) throw err;
+        if (usedKeyIndex === this.activeKeyIndex && this.activeKeyIndex < this.keys.length - 1) {
+          // We are the first to see this key fail; advance to the next.
+          this.activeKeyIndex++;
+        } else if (this.activeKeyIndex <= usedKeyIndex) {
+          // No further key to fail over to; surface the auth error.
+          throw err;
+        }
+        // Otherwise a concurrent batch already advanced the key; retry with it.
+      }
+    }
+    throw lastError ?? new SearchError("EMBEDDING_PROVIDER_HTTP", "key failover exhausted");
+  }
+
+  private isAuthError(e: SearchError): boolean {
+    if (e.code !== "EMBEDDING_PROVIDER_HTTP") return false;
+    const m = e.message.match(/HTTP (\d+)/);
+    return m ? AUTH_STATUSES.has(Number(m[1])) : false;
+  }
+
+  private async embedBatchOnKey(
     texts: string[],
     opts?: { maxAttempts?: number; parentSignal?: AbortSignal },
   ): Promise<number[][]> {
@@ -241,7 +261,7 @@ export class OpenAICompatProvider implements EmbeddingProvider {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${this.http.apiKey}`,
+          authorization: `Bearer ${this.activeKey}`,
         },
         body: JSON.stringify({
           model: this.model,

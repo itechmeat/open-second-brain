@@ -14,12 +14,13 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { loadBenchFixture } from "../../../core/bench/fixture.ts";
+import { loadLocomoFixture } from "../../../core/bench/locomo.ts";
 import { runMemoryBench } from "../../../core/bench/phases.ts";
 import { defaultConfigPath, resolveBenchJudgeCmd } from "../../../core/config.ts";
 import { fail, parse } from "../helpers.ts";
 
 const USAGE =
-  "usage: o2b brain bench memory --fixture <name|path> [--resume <run-id>] [--runs-dir <dir>] [--json]";
+  "usage: o2b brain bench memory --fixture <name|path> [--suite locomo] [--resume <run-id>] [--runs-dir <dir>] [--json]";
 
 const DEFAULT_RUNS_DIR = join(".open-second-brain", "bench-runs");
 const REPO_FIXTURE_DIR = join("tests", "fixtures", "bench");
@@ -28,12 +29,17 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
   if (argv[0] !== "memory") return fail(USAGE);
   const { flags } = parse(argv.slice(1), {
     fixture: { type: "string" },
+    suite: { type: "string" },
     resume: { type: "string" },
     "runs-dir": { type: "string" },
     json: { type: "boolean" },
   });
   const fixtureFlag = typeof flags["fixture"] === "string" ? flags["fixture"].trim() : "";
   if (fixtureFlag === "") return fail(USAGE);
+  const suite = typeof flags["suite"] === "string" ? flags["suite"].trim() : "";
+  if (suite !== "" && suite !== "locomo") {
+    return fail(`brain bench memory: unknown --suite '${suite}' (supported: locomo)`);
+  }
   const fixturePath = resolveFixturePath(fixtureFlag);
   if (fixturePath === null) {
     return fail(
@@ -41,7 +47,10 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
     );
   }
 
-  const fixture = loadBenchFixture(fixturePath);
+  // The LoCoMo suite loads a LoCoMo-shaped dataset and converts it to a
+  // BenchFixture; the default path loads a native fixture directly.
+  const fixture =
+    suite === "locomo" ? loadLocomoFixture(fixturePath) : loadBenchFixture(fixturePath);
   const runsDir = resolve(
     typeof flags["runs-dir"] === "string" && flags["runs-dir"].trim() !== ""
       ? flags["runs-dir"].trim()

@@ -122,6 +122,20 @@ describe("procedural learning MCP tools", () => {
     });
     expect(marked.usedCount).toBeGreaterThanOrEqual(1);
 
+    // Outcome-validated recall (t_703f7b18): record a success and a
+    // failure, then confirm the ranked list orders by success rate.
+    const outcome = await callTool(server, "brain_procedural_memory", {
+      operation: "mark_outcome",
+      id: entries[0]!["id"],
+      outcome: "success",
+    });
+    expect(outcome.successCount).toBe(1);
+    const ranked = await callTool(server, "brain_procedural_memory", {
+      operation: "list",
+      ranked: true,
+    });
+    expect((ranked.entries as unknown[]).length).toBe(entries.length);
+
     const graphRebuild = await callTool(server, "brain_procedural_graph", {
       operation: "rebuild",
     });

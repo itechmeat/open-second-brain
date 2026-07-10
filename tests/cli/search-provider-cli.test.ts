@@ -105,3 +105,66 @@ test("provider show of an unknown name exits non-zero", async () => {
   const show = await runCli(["search", "provider", "show", "ghost"], { env: env() });
   expect(show.returncode).not.toBe(0);
 });
+
+test("provider presets lists the curated catalog without a vault", async () => {
+  const presets = await runCli(["search", "provider", "presets", "--json"], { env: {} });
+  expect(presets.returncode).toBe(0);
+  const arr = JSON.parse(presets.stdout);
+  expect(Array.isArray(arr)).toBe(true);
+  expect(arr.length).toBeGreaterThan(0);
+  expect(arr[0]).toHaveProperty("model");
+  expect(arr[0]).toHaveProperty("dimension");
+});
+
+test("provider add without --model defaults to the recommended preset", async () => {
+  const add = await runCli(
+    ["search", "provider", "add", "defaulted", "--base-url", "https://x/v1", "--env-key", "K"],
+    { env: env() },
+  );
+  expect(add.returncode).toBe(0);
+  const show = await runCli(["search", "provider", "show", "defaulted", "--json"], { env: env() });
+  const profile = JSON.parse(show.stdout);
+  expect(profile.defaultModel).toBe("intfloat/multilingual-e5-small");
+});
+
+test("provider add with a custom --model persists it verbatim", async () => {
+  await runCli(
+    [
+      "search",
+      "provider",
+      "add",
+      "custom",
+      "--base-url",
+      "https://x/v1",
+      "--model",
+      "acme/custom-embed-9000",
+      "--env-key",
+      "K",
+    ],
+    { env: env() },
+  );
+  const show = await runCli(["search", "provider", "show", "custom", "--json"], { env: env() });
+  expect(JSON.parse(show.stdout).defaultModel).toBe("acme/custom-embed-9000");
+});
+
+test("provider add accepts a comma-separated --env-key probe list", async () => {
+  const add = await runCli(
+    [
+      "search",
+      "provider",
+      "add",
+      "multi",
+      "--base-url",
+      "https://x/v1",
+      "--model",
+      "m",
+      "--env-key",
+      "PRIMARY_KEY,SECONDARY_KEY",
+    ],
+    { env: env() },
+  );
+  expect(add.returncode).toBe(0);
+  const list = await runCli(["search", "provider", "list", "--json"], { env: env() });
+  const arr = JSON.parse(list.stdout);
+  expect(arr[0].envKey).toEqual(["PRIMARY_KEY", "SECONDARY_KEY"]);
+});

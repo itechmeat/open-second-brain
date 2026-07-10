@@ -95,6 +95,12 @@ export {
   type ApplyCrossEncoderRerankOptions,
   type RerankTelemetryEvent,
 } from "./rerank/index.ts";
+export { LocalRerankProvider, scoreLocalRerank } from "./rerank/local.ts";
+export {
+  runRerankEvalGate,
+  type RerankEvalGateOptions,
+  type RerankEvalGateResult,
+} from "./rerank-eval-gate.ts";
 
 export { resolveIndexPath } from "./paths.ts";
 export {
@@ -106,6 +112,8 @@ export {
   type IndexProgressEvent,
 } from "./indexer.ts";
 export { search, expandHit, SEARCH_LIMIT_MIN, SEARCH_LIMIT_MAX } from "./search.ts";
+export { planReadShortlist, planRead } from "./graph-prepass.ts";
+export type { GraphPrepassOptions, GraphPrepassResult, ShouldReadEntry } from "./graph-prepass.ts";
 export {
   captureRecallFeedback,
   computeLearnedWeights,
@@ -145,6 +153,9 @@ const DEFAULTS = {
   shutdownGraceSeconds: 5,
   resumeReindex: false,
   chainStopScore: 0.8,
+  trigramPrefilterEnabled: false,
+  trigramPrefilterMinChunks: 5000,
+  trigramPrefilterMaxSelectivity: 0.5,
   rerankTopK: 20,
   rerankMinScore: 0,
 };
@@ -286,14 +297,21 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
 
 function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {
   if (raw === null) return DEFAULTS.provider;
-  if (raw === "openai-compat" || raw === "disabled" || raw === "local") return raw;
+  if (raw === "openai-compat" || raw === "disabled" || raw === "local" || raw === "zeroentropy") {
+    return raw;
+  }
   throw new SearchError(
     "INVALID_INPUT",
-    `embedding_provider must be 'openai-compat', 'local', 'disabled', or a registered provider name, got '${raw}'`,
+    `embedding_provider must be 'openai-compat', 'zeroentropy', 'local', 'disabled', or a registered provider name, got '${raw}'`,
   );
 }
 
-const BUILTIN_PROVIDERS: ReadonlySet<string> = new Set(["openai-compat", "disabled", "local"]);
+const BUILTIN_PROVIDERS: ReadonlySet<string> = new Set([
+  "openai-compat",
+  "disabled",
+  "local",
+  "zeroentropy",
+]);
 
 /**
  * Resolve a non-built-in `embedding_provider` name against the registry.
@@ -413,6 +431,11 @@ export function resolveSearchConfig(opts: {
   const baseUrl = explicitBaseUrl ?? registryExpansion?.baseUrl ?? null;
   const model = explicitModel ?? registryExpansion?.model ?? null;
   const apiKey = explicitApiKey ?? registryExpansion?.apiKey ?? null;
+  // Multi-key failover list: an explicit key is single-valued; otherwise
+  // use the registry profile's ordered probe list. Empty when no key.
+  const apiKeys: ReadonlyArray<string> = explicitApiKey
+    ? [explicitApiKey]
+    : (registryExpansion?.apiKeys ?? (apiKey ? [apiKey] : []));
   const dimRaw = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_DIM", "embedding_dimension");
   const dimension =
     dimRaw === null ? null : parseInteger(dimRaw, 0, "embedding_dimension", { min: 1 });
@@ -446,6 +469,7 @@ export function resolveSearchConfig(opts: {
     baseUrl,
     model,
     apiKey,
+    apiKeys: Object.freeze(apiKeys),
     dimension,
     timeoutMs,
     concurrency,
@@ -506,8 +530,22 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.rerankMinScore,
     "search_rerank_min_score",
   );
+  const rerankKindRaw = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_SEARCH_RERANK_KIND",
+    "search_rerank_kind",
+  );
+  if (rerankKindRaw !== null && rerankKindRaw !== "openai-compat" && rerankKindRaw !== "local") {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `search_rerank_kind must be 'openai-compat' or 'local', got '${rerankKindRaw}'`,
+    );
+  }
+  const rerankKind = rerankKindRaw === "local" ? "local" : "openai-compat";
   const rerank: ResolvedRerankConfig = Object.freeze({
     enabled: rerankEnabled,
+    kind: rerankKind,
     baseUrl: rerankBaseUrl,
     model: rerankModel,
     envKey: rerankEnvKey,
@@ -651,6 +689,37 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.chainStopScore,
     "search_chain_stop_score",
   );
+  const trigramPrefilterEnabled = parseBool(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_TRIGRAM_PREFILTER",
+      "search_trigram_prefilter_enabled",
+    ),
+    DEFAULTS.trigramPrefilterEnabled,
+    "search_trigram_prefilter_enabled",
+  );
+  const trigramPrefilterMinChunks = parseInteger(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_TRIGRAM_MIN_CHUNKS",
+      "search_trigram_prefilter_min_chunks",
+    ),
+    DEFAULTS.trigramPrefilterMinChunks,
+    "search_trigram_prefilter_min_chunks",
+    { min: 0 },
+  );
+  const trigramPrefilterMaxSelectivity = parseFloat01(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_TRIGRAM_MAX_SELECTIVITY",
+      "search_trigram_prefilter_max_selectivity",
+    ),
+    DEFAULTS.trigramPrefilterMaxSelectivity,
+    "search_trigram_prefilter_max_selectivity",
+  );
   const shutdownGraceSeconds = parseInteger(
     envOrConfig(
       env,
@@ -688,6 +757,9 @@ export function resolveSearchConfig(opts: {
     selfTuningEnabled,
     chainStopEnabled,
     chainStopScore,
+    trigramPrefilterEnabled,
+    trigramPrefilterMinChunks,
+    trigramPrefilterMaxSelectivity,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({

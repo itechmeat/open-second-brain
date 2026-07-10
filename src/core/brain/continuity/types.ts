@@ -25,6 +25,7 @@ export type ContinuityRecordKind =
   | "token_impact_outcome"
   | "context_pack_outcome"
   | "host_memory_write"
+  | "recall_observed_use"
   | "source_invalidation";
 
 export type ContinuityPayload = Readonly<Record<string, unknown>>;

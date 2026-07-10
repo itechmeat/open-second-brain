@@ -56,6 +56,8 @@ export interface ScoreBreakdown {
   readonly entity: number;
   readonly activation: number;
   readonly coAccess: number;
+  /** Observed-reuse boost (t_65588d8b); 0 when no verdicts apply. */
+  readonly reuse: number;
   readonly link: number;
   readonly recency: number;
   readonly tier: number;
@@ -570,10 +572,17 @@ export interface SearchOutcome {
 
 export interface ResolvedEmbeddingConfig {
   readonly enabled: boolean;
-  readonly provider: "openai-compat" | "disabled" | "local";
+  readonly provider: "openai-compat" | "disabled" | "local" | "zeroentropy";
   readonly baseUrl: string | null;
   readonly model: string | null;
   readonly apiKey: string | null;
+  /**
+   * Ordered API-key failover list (multi-key fallback). When present and
+   * non-empty, the provider starts on the first key and, on an auth error
+   * (HTTP 401/403), fails over to the next, pinning the first that works.
+   * Absent/empty means single-key behaviour over `apiKey` (byte-identical).
+   */
+  readonly apiKeys?: ReadonlyArray<string>;
   readonly dimension: number | null;
   readonly timeoutMs: number;
   readonly concurrency: number;
@@ -599,6 +608,13 @@ export interface ResolvedEmbeddingConfig {
  */
 export interface ResolvedRerankConfig {
   readonly enabled: boolean;
+  /**
+   * Reranker backend (Retrieval & Ranking Quality, t_9f95ebb6).
+   * "openai-compat" (default) resolves a remote `/rerank` endpoint;
+   * "local" uses the bundled offline deterministic reranker, which needs
+   * no base_url / model / key and never touches the network.
+   */
+  readonly kind: "openai-compat" | "local";
   /** OpenAI-compatible base URL (trailing slashes stripped) or null. */
   readonly baseUrl: string | null;
   readonly model: string | null;
@@ -732,6 +748,22 @@ export interface ResolvedRecallConfig {
   readonly chainStopEnabled: boolean;
   /** Normalized-score threshold in [0, 1] that triggers the chain-stop. */
   readonly chainStopScore: number;
+  /**
+   * Trigram candidate prefilter (Retrieval & Ranking Quality, t_4a672b84).
+   * Off by default: when true and a query qualifies (a term of at least 3
+   * chars, non-CJK), the trigram FTS5 shadow contributes an additional
+   * candidate source that broadens large-vault keyword recall with
+   * substring / partial-token matches (a strict superset of substring
+   * matches - it never drops a result). Disabled -> byte-identical.
+   */
+  readonly trigramPrefilterEnabled: boolean;
+  /** Minimum corpus chunk count before the trigram prefilter engages. */
+  readonly trigramPrefilterMinChunks: number;
+  /**
+   * Skip the trigram source when its candidate set exceeds this fraction
+   * of the corpus (low selectivity - not worth widening the pool). [0, 1].
+   */
+  readonly trigramPrefilterMaxSelectivity: number;
 }
 
 export interface ResolvedSearchConfig {

@@ -222,6 +222,8 @@ describe("tool listing", () => {
         "brain_context_receipts",
         "brain_event_trace",
         "brain_recall_telemetry",
+        // Observed-use verdict feeding recall ranking (Retrieval & Ranking Quality).
+        "brain_observed_use",
         "brain_knowledge_gaps",
         "brain_context_presets",
         "brain_pre_compact_extract",
@@ -591,7 +593,9 @@ describe("stdio loop", () => {
     //   memory-signal-provenance-lifecycle A3) = 96.
     // + brain_distill_source (source distillation into atomic claims,
     //   ingestion-import-robustness t_2e2e959f) = 97.
-    expect(list.result.tools.length).toBe(97);
+    // + brain_observed_use (session-end observed-use verdict feeding recall
+    //   ranking, retrieval-ranking-quality t_65588d8b) = 98.
+    expect(list.result.tools.length).toBe(98);
   });
 
   test("returns parse error for invalid JSON", async () => {

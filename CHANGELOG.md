@@ -5,9 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.27.1] - 2026-07-10
+## [1.28.0] - 2026-07-10
 
-A robustness fix for the Hermes memory provider's executable resolution. No kernel behavior changes.
+A retrieval and ranking quality release: embedding-layer robustness, faster and smarter candidate retrieval, a fully offline reranker with a per-store eval gate, ranking signals learned from real outcomes, and a named benchmark to score the whole. Every new surface is additive and off by default where it changes an existing path; the release adds no new dependency and no ML runtime, and the kernel still calls no LLM.
+
+### Added
+
+- **Curated embedding-model presets and a recommended default.** A static, shippable catalog of known-good multilingual-first embedding models (with native dimensions and guidance) is surfaced at provider registration via `o2b search provider presets`; `provider add` defaults `--model` to the recommended model when omitted. Advisory only - a custom `--model` stays first-class and verbatim. No server, no network.
+- **Native ZeroEntropy embedding provider.** `zeroentropy` is now a first-class embedding provider calling the native `POST {base}/models/embed` API directly over `fetch` (no SDK, no dependency), with Bearer auth, input-order-preserving vectors, and Matryoshka `dimensions` when configured. It reuses the shared retry/backoff and `ping` contract; the resolved-provider union stays closed.
+- **Trigram candidate prefilter for large-vault search.** A native SQLite FTS5 `trigram` shadow index (schema v9, populated in-place by a reindex-safe migration, no dependency) backs an opt-in prefilter that merges substring / partial-token candidates the word tokenizer misses into the keyword pool - a strict superset of substring matches, so it never drops a result. It engages only past a corpus-size floor and skips short, CJK, and low-selectivity queries. Off by default (byte-identical); knobs fold into the query-cache fingerprint.
+- **Graph-index query pre-pass with multi-hop BFS.** A new read planner (`o2b search plan`) ranks seed notes by title match and wikilink degree over index metadata, connects them through multi-hop BFS on the link graph, and returns a `should_read` shortlist - surfacing notes reachable only via several hops that the 1-hop link boost misses. An `index_only` mode answers from title / degree / link metadata with zero note bodies hydrated. Pure-stdlib.
+- **Bundled offline reranker and per-store reranker eval gate.** A deterministic, dependency-free `local` reranker (coverage / proximity / density blend) behind the existing rerank interface makes reranking work fully offline with no model runtime or network, selected via `search_rerank_kind=local`. A new evaluation gate runs the recall benchmark rerank-off vs rerank-on and recommends enabling only when it lifts ranking without regressing hit@k.
+- **Session-end observed-use verdict feeding recall ranking.** A new `recall_observed_use` continuity record captures a USED / IGNORED / CONTRADICTED verdict per injected memory - classified deterministically from transcript token overlap plus a structural stance flip (no LLM) or supplied by the host via the new `brain_observed_use` MCP tool (mirroring `brain_apply_evidence`). The folded observed-reuse rate becomes a preferred, capped recall-ranking signal so demonstrably reused memories outrank merely-predicted-important ones; contradictions demote. Inspectable via `brain_recall_telemetry observed_reuse`. Byte-identical when no verdicts exist.
+- **LoCoMo benchmark suite.** `o2b brain bench memory --suite locomo` converts a LoCoMo-shaped dataset into the existing staged harness's fixture and runs it as a parallel named suite (`locomo-*`), so runs are comparable to the published long-conversation-memory literature. OSB's six categories stay canonical; the run is deterministic and network-free by default, with the LLM judge opt-in. Ships a small committed sample dataset.
+
+### Changed
+
+- **Multi-key fallback for the embeddings API key.** A provider profile's `envKey` may now be an ordered probe list (a single string still works and stays byte-identical); resolution takes the first present key and the `OpenAICompatProvider` fails over to the next on an HTTP 401/403, pinning the first that authenticates. `o2b search provider add --env-key A,B` registers a probe list. Rerank stays single-key. Removes the single point of failure in the only networked path without touching the LLM-free kernel.
+- **Outcome-validated procedural recall.** Procedural entries and their usage sidecar gain additive success / failure counters (outcome-free vaults stay byte-identical), a host-supplied `recordProceduralOutcome` (deterministic, no LLM), and success-rate ranking that surfaces proven procedures and sinks failing ones, with the usage count as the neutral prior for unproven ones. Exposed via `brain_procedural_memory mark_outcome` and `list ranked:true`.
+
+
 
 ### Fixed
 
@@ -6412,6 +6429,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.28.0]: https://github.com/itechmeat/open-second-brain/compare/v1.27.1...v1.28.0
 [1.27.1]: https://github.com/itechmeat/open-second-brain/compare/v1.27.0...v1.27.1
 [1.27.0]: https://github.com/itechmeat/open-second-brain/compare/v1.26.1...v1.27.0
 [1.24.0]: https://github.com/itechmeat/open-second-brain/compare/v1.23.1...v1.24.0

@@ -1,0 +1,58 @@
+{
+  "name": "sample",
+  "sessions": [
+    {
+      "session_id": "s1",
+      "turns": [
+        {
+          "speaker": "Alice",
+          "text": "The project deadline milestone slipped and is now set for Friday.",
+          "timestamp": "2026-01-05T10:00:00Z"
+        },
+        {
+          "speaker": "Bob",
+          "text": "Understood, I will move the milestone review to Friday morning.",
+          "timestamp": "2026-01-05T10:01:00Z"
+        }
+      ]
+    },
+    {
+      "session_id": "s2",
+      "turns": [
+        {
+          "speaker": "Alice",
+          "text": "The budget for an additional headcount was approved by finance.",
+          "timestamp": "2026-01-06T09:00:00Z"
+        },
+        {
+          "speaker": "Bob",
+          "text": "Great, I will brief the recruiter about the approved headcount budget.",
+          "timestamp": "2026-01-06T09:02:00Z"
+        }
+      ]
+    }
+  ],
+  "qa": [
+    {
+      "id": "locomo-q1",
+      "question": "deadline milestone",
+      "answer": "Friday",
+      "category": "single-hop",
+      "evidence_sessions": ["s1"]
+    },
+    {
+      "id": "locomo-q2",
+      "question": "budget headcount recruiter",
+      "answer": "approved",
+      "category": "single-hop",
+      "evidence_sessions": ["s2"]
+    },
+    {
+      "id": "locomo-q3",
+      "question": "milestone review Friday",
+      "answer": "Friday",
+      "category": "temporal-reasoning",
+      "evidence_sessions": ["s1"]
+    }
+  ]
+}

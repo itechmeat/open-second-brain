@@ -155,6 +155,61 @@ test("embed() throws EMBEDDING_PROVIDER_HTTP after exhausting retries on 5xx", a
   expect(server.callCount()).toBe(3);
 });
 
+test("embed() fails over to the next key on 401 and pins the working key", async () => {
+  const seenKeys: string[] = [];
+  server.setHandler((req) => {
+    const auth = req.headers["authorization"] ?? "";
+    const key = auth.replace(/^Bearer\s+/i, "");
+    seenKeys.push(key);
+    if (key === "stale-key") return { status: 401, body: { error: "invalid_api_key" } };
+    const body = req.body as { input: string[]; model: string };
+    const data = body.input.map((_, idx) => ({
+      object: "embedding",
+      embedding: [1, 0, 0, 0],
+      index: idx,
+    }));
+    return { status: 200, body: { data, model: body.model } };
+  });
+
+  const p = new OpenAICompatProvider(
+    cfg({ apiKeys: ["stale-key", "good-key"], dimension: 4, batchSize: 1, concurrency: 1 }),
+    { backoffMs: [5, 5] },
+  );
+  // First call fails over stale -> good; second call must reuse the pinned good key.
+  const out1 = await p.embed(["a"]);
+  const out2 = await p.embed(["b"]);
+  expect(out1.length).toBe(1);
+  expect(out2.length).toBe(1);
+  expect(seenKeys[0]).toBe("stale-key");
+  expect(seenKeys.slice(1)).toEqual(["good-key", "good-key"]);
+});
+
+test("embed() surfaces the auth error when every probe key fails", async () => {
+  server.setHandler(() => ({ status: 401, body: { error: "invalid_api_key" } }));
+  const p = new OpenAICompatProvider(cfg({ apiKeys: ["a", "b"] }), { backoffMs: [5, 5] });
+  let err: SearchError | null = null;
+  try {
+    await p.embed(["x"]);
+  } catch (e) {
+    err = e as SearchError;
+  }
+  expect(err?.code).toBe("EMBEDDING_PROVIDER_HTTP");
+  expect(err?.message).toContain("401");
+});
+
+test("embed() with a single key fails fast on 401 (byte-identical single-key path)", async () => {
+  server.setHandler(() => ({ status: 401, body: { error: "invalid_api_key" } }));
+  const p = new OpenAICompatProvider(cfg(), { backoffMs: [5, 5] });
+  let err: SearchError | null = null;
+  try {
+    await p.embed(["x"]);
+  } catch (e) {
+    err = e as SearchError;
+  }
+  expect(err?.code).toBe("EMBEDDING_PROVIDER_HTTP");
+  expect(server.callCount()).toBe(1);
+});
+
 test("embed() honours per-request timeout via AbortController", async () => {
   server.setHandler(() => ({ status: 200, body: { data: [] }, delayMs: 200 }));
   const p = new OpenAICompatProvider(cfg({ timeoutMs: 30 }), { backoffMs: [5, 5] });

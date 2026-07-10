@@ -72,6 +72,7 @@ test("explicit config keys resolve, with the api key read from env-key", () => {
   const cfg = resolveSearchConfig({ vault: tmp, configPath });
   expect(cfg.rerank).toEqual({
     enabled: true,
+    kind: "openai-compat",
     baseUrl: "https://api.example.com/v1/",
     model: "rerank-1",
     envKey: "MY_RERANK_KEY",

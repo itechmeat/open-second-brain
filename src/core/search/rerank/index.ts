@@ -104,23 +104,35 @@ export async function applyCrossEncoderRerank(
   // Invariant 1: disabled -> zero-cost no-op, byte-identical input.
   if (!config.enabled) return results;
 
-  // Invariant 2: fail closed when enabled-but-unconfigured. Resolution
-  // throws a typed SearchError; we deliberately do NOT catch it - a
-  // misconfiguration is an operator error, not a hot-path degrade.
-  const endpoint = resolveOpenAiCompatEndpoint(
-    {
-      enabled: true,
-      baseUrl: config.baseUrl,
-      model: config.model,
-      envKey: config.envKey,
-      apiKey: config.apiKey,
-      env: opts.env,
-    },
-    "search_rerank",
-  );
-  // resolveOpenAiCompatEndpoint only returns null when `enabled` is false,
-  // which we ruled out above; the narrowing keeps TypeScript honest.
-  if (endpoint === null) return results;
+  // Resolve the provider. The bundled offline reranker ("local") needs no
+  // endpoint - it is deterministic and network-free. The remote
+  // "openai-compat" path resolves fail-closed (Invariant 2): a misconfigured
+  // endpoint throws a typed SearchError (an operator error, not a hot-path
+  // degrade). An injected provider (tests) bypasses both.
+  let provider = opts.provider;
+  if (!provider) {
+    if (config.kind === "local") {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { LocalRerankProvider } = require("./local.ts") as typeof import("./local.ts");
+      provider = new LocalRerankProvider();
+    } else {
+      const endpoint = resolveOpenAiCompatEndpoint(
+        {
+          enabled: true,
+          baseUrl: config.baseUrl,
+          model: config.model,
+          envKey: config.envKey,
+          apiKey: config.apiKey,
+          env: opts.env,
+        },
+        "search_rerank",
+      );
+      // resolveOpenAiCompatEndpoint only returns null when `enabled` is
+      // false, which we ruled out above; the narrowing keeps TS honest.
+      if (endpoint === null) return results;
+      provider = makeRerankProvider(endpoint, { timeoutMs: opts.timeoutMs });
+    }
+  }
 
   if (results.length === 0) return results;
 
@@ -128,8 +140,6 @@ export async function applyCrossEncoderRerank(
   const head = results.slice(0, topK);
   const tail = results.slice(topK);
   const documents = head.map((r) => r.content);
-
-  const provider = opts.provider ?? makeRerankProvider(endpoint, { timeoutMs: opts.timeoutMs });
 
   let scores: number[];
   try {

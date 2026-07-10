@@ -17,6 +17,7 @@ import type { FrontmatterMap } from "../types.ts";
 import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
 import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../graph/agent-scope.ts";
 import { makeProvider } from "./embeddings/provider.ts";
+import { isLowSelectivity, planTrigramPrefilter } from "./trigram-prefilter.ts";
 import {
   composeWeightProfiles,
   fnv1aHex,
@@ -26,6 +27,7 @@ import {
   readLearnedWeights,
 } from "./feedback.ts";
 import { parseFreshnessTrend } from "../brain/temporal/freshness-trend.ts";
+import { observedReuseRates } from "../brain/observed-use.ts";
 import { effectiveActivation, halfLifeDays, resolveActivationKind } from "./activation/decay.ts";
 import {
   ACCESS_EVENT_PATHS_CAP,
@@ -133,6 +135,11 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     rrkModel: config.rerank.model,
     rrkTopK: config.rerank.topK,
     rrkMin: config.rerank.minScore,
+    // Trigram prefilter augments the candidate pool, so a toggle or
+    // selectivity change must invalidate cached rows.
+    tri: r.trigramPrefilterEnabled,
+    triMin: r.trigramPrefilterMinChunks,
+    triSel: r.trigramPrefilterMaxSelectivity,
   });
 }
 
@@ -443,6 +450,38 @@ export async function search(
         for (const w of kwOutcome.warnings) warnings.push(w);
       }
     }
+    // Trigram candidate source (t_4a672b84): opt-in. On large vaults, merge
+    // substring / partial-token matches the word tokenizer missed into the
+    // keyword candidate pool. A strict superset of substring matches, so it
+    // only ADDS candidates (deduped by chunkId; existing keyword hits keep
+    // their bm25). Skipped for short/CJK/low-selectivity queries and when
+    // disabled - leaving kwHits byte-identical.
+    if (
+      config.recall.trigramPrefilterEnabled &&
+      store.chunkCount() >= config.recall.trigramPrefilterMinChunks
+    ) {
+      const trigramPlan = planTrigramPrefilter(query);
+      if (trigramPlan.mode === "match") {
+        const corpus = store.chunkCount();
+        const cand = store.trigramCandidates(trigramPlan.ftsQuery, {
+          limit: limit * config.recall.poolMultiplier,
+          pathPrefix,
+        });
+        if (
+          cand.length > 0 &&
+          !isLowSelectivity(cand.length, corpus, config.recall.trigramPrefilterMaxSelectivity)
+        ) {
+          const seen = new Set(kwHits.map((h) => h.chunkId));
+          for (const h of cand) {
+            if (!seen.has(h.chunkId)) {
+              kwHits.push(h);
+              seen.add(h.chunkId);
+            }
+          }
+        }
+      }
+    }
+
     const intentProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;
     // Learned recall weights (recall-trust-suite): opt-in multipliers
     // derived from explicit feedback compose with the intent profile.
@@ -776,6 +815,25 @@ export async function search(
       if (byDoc.size > 0) trendByDoc = byDoc;
     }
 
+    // Observed-reuse boost (t_65588d8b): fold the session-end USED/IGNORED/
+    // CONTRADICTED verdicts into a per-document reuse score and map it onto
+    // each candidate chunk. Keyed by path (else id) to match how verdicts
+    // are recorded. Empty (byte-identical) when no verdicts exist.
+    let reuseRateByChunk: ReadonlyMap<number, number> | undefined;
+    {
+      const reuse = observedReuseRates(config.vault);
+      if (reuse.size > 0) {
+        const byChunk = new Map<number, number>();
+        for (const chunkId of idsList) {
+          const h = hydrated.get(chunkId);
+          if (h === undefined) continue;
+          const entry = reuse.get(h.path) ?? reuse.get(`${h.documentId}:${chunkId}`);
+          if (entry !== undefined && entry.score > 0) byChunk.set(chunkId, entry.score);
+        }
+        if (byChunk.size > 0) reuseRateByChunk = byChunk;
+      }
+    }
+
     // When a property filter is active, overfetch the ranked
     // candidates so the post-filter result set still has a chance
     // of producing `limit` matching rows. Without this, the
@@ -849,6 +907,7 @@ export async function search(
           ...(activationByChunk !== undefined ? { activationByChunk } : {}),
           ...(coAccessByChunk !== undefined ? { coAccessByChunk } : {}),
           ...(trendByDoc !== undefined ? { trendByDoc } : {}),
+          ...(reuseRateByChunk !== undefined ? { reuseRateByChunk } : {}),
         },
         {
           keywordWeight: opts.keywordWeight ?? config.keywordWeight,

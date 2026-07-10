@@ -12,6 +12,7 @@ import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../../core/sear
 import { loadTunedParameters, resetTuning, tuneRecall } from "../../core/search/tuning.ts";
 import { listGateTelemetry, summarizeGateTelemetry } from "../../core/brain/gate-telemetry.ts";
 import { computeMemoryCostMeter } from "../../core/brain/memory-cost-meter.ts";
+import { observedReuseRates } from "../../core/brain/observed-use.ts";
 import {
   isRecallTelemetryMode,
   isRecallTelemetryStatus,
@@ -211,6 +212,15 @@ async function toolBrainRecallTelemetry(
     });
     return { ...summary };
   }
+  // Observed-use blend (t_65588d8b): the folded per-artifact
+  // USED/IGNORED/CONTRADICTED reuse signal that recall ranking prefers over
+  // predicted importance. Exposed here so the blend is inspectable.
+  if (operation === "observed_reuse") {
+    const artifacts = [...observedReuseRates(ctx.vault).entries()]
+      .map(([key, r]) => ({ key, ...r }))
+      .toSorted((a, b) => (a.score !== b.score ? b.score - a.score : a.key < b.key ? -1 : 1));
+    return { vault_path: ctx.vault, total: artifacts.length, artifacts };
+  }
   // Write-vs-read cost meter (memory cost meter): folds write volume
   // against the read telemetry above. Period-based; mode/status/host/limit
   // do not apply to the write side, so reject them to mirror the CLI's
@@ -245,7 +255,7 @@ async function toolBrainRecallTelemetry(
   }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_recall_telemetry: operation must be list, summary, gate_list, gate_summary, or cost",
+    "brain_recall_telemetry: operation must be list, summary, gate_list, gate_summary, observed_reuse, or cost",
   );
 }
 
@@ -843,9 +853,9 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         operation: {
           type: "string",
-          enum: ["list", "summary", "gate_list", "gate_summary", "cost"],
+          enum: ["list", "summary", "gate_list", "gate_summary", "observed_reuse", "cost"],
           description:
-            "list/summary for recall telemetry; gate_list/gate_summary for recall-gate decisions; cost for the write-vs-read cost meter.",
+            "list/summary for recall telemetry; gate_list/gate_summary for gate decisions; observed_reuse for the observed-use ranking signal; cost for the cost meter.",
         },
         mode: {
           type: "string",
