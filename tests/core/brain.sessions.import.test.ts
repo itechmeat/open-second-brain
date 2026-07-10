@@ -296,3 +296,49 @@ describe("importSessionPath (directory walk)", () => {
     expect(result.warnings.length).toBe(1);
   });
 });
+
+describe("per-skill invocation telemetry", () => {
+  function writeSkillSession(path: string): void {
+    writeFileSync(
+      path,
+      [
+        '{"parentUuid":null,"sessionId":"sk","entrypoint":"sdk-cli","type":"user","message":{"role":"user","content":"do a release"},"uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z"}',
+        '{"parentUuid":"u1","sessionId":"sk","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"get_skill","input":{"name":"release"}}]},"uuid":"a1","timestamp":"2026-06-01T10:00:01.000Z"}',
+        '{"parentUuid":"a1","sessionId":"sk","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"c2","name":"Skill","input":{"command":"release"}}]},"uuid":"a2","timestamp":"2026-06-01T10:00:02.000Z"}',
+        '{"parentUuid":"a2","sessionId":"sk","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"c3","name":"get_skill","input":{"name":"triage"}}]},"uuid":"a3","timestamp":"2026-06-01T10:00:03.000Z"}',
+        "",
+      ].join("\n"),
+    );
+  }
+
+  test("counts get_skill / Skill invocations and derives per-skill usage", async () => {
+    const { deriveSkillUsage } = await import("../../src/core/brain/skill-usage.ts");
+    const fixture = join(tmp, "skills.jsonl");
+    writeSkillSession(fixture);
+
+    const res = await importSession(tmp, fixture, { agent: "test" });
+    expect(res.skill_invocations).toBe(3);
+
+    const usage = deriveSkillUsage(tmp);
+    expect(usage.map((u) => [u.skill, u.invocationCount])).toEqual([
+      ["release", 2],
+      ["triage", 1],
+    ]);
+  });
+
+  test("a dry run records no invocations and re-import is idempotent", async () => {
+    const { deriveSkillUsage } = await import("../../src/core/brain/skill-usage.ts");
+    const fixture = join(tmp, "skills.jsonl");
+    writeSkillSession(fixture);
+
+    const dry = await importSession(tmp, fixture, { agent: "test", dryRun: true });
+    expect(dry.skill_invocations).toBe(0);
+    expect(deriveSkillUsage(tmp)).toEqual([]);
+
+    await importSession(tmp, fixture, { agent: "test" });
+    // Re-importing the same session dedupes rather than double-counting.
+    await importSession(tmp, fixture, { agent: "test" });
+    const usage = deriveSkillUsage(tmp);
+    expect(usage.find((u) => u.skill === "release")!.invocationCount).toBe(2);
+  });
+});

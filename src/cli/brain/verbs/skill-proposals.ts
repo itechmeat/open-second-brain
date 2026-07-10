@@ -4,6 +4,7 @@ import {
   listPendingSkillProposals,
   rejectSkillProposal,
 } from "../../../core/brain/skill-proposals.ts";
+import { deriveSkillUsage } from "../../../core/brain/skill-usage.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
@@ -13,7 +14,28 @@ export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
   if (sub === "list") return list(rest);
   if (sub === "accept") return accept(rest);
   if (sub === "reject") return reject(rest);
-  throw new CliError("brain skill-proposals: expected learn, list, accept, or reject");
+  if (sub === "usage") return usage(rest);
+  throw new CliError("brain skill-proposals: expected learn, list, accept, reject, or usage");
+}
+
+function usage(argv: string[]): number {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const vault = brainVerbContext(flags).vault;
+  const rows = deriveSkillUsage(vault);
+
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify({ total: rows.length, usage: rows }, null, 2) + "\n");
+    return 0;
+  }
+
+  process.stdout.write(`${rows.length} skill(s) with recorded invocations:\n`);
+  for (const row of rows) {
+    process.stdout.write(`  ${row.skill}  invocations=${row.invocationCount}\n`);
+  }
+  return 0;
 }
 
 function learn(argv: string[]): number {

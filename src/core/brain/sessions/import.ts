@@ -29,6 +29,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node
 import { basename, join, resolve } from "node:path";
 
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
+import { appendContinuityRecord } from "../continuity/store.ts";
 import { discoverMarkersDetailed } from "../inline.ts";
 import { writeSignal } from "../signal.ts";
 import { importSessionRecall } from "../session-recall.ts";
@@ -39,6 +40,7 @@ import {
   SessionImportError,
   type SessionAdapter,
   type SessionAdapterId,
+  type SessionToolCall,
   type SessionTurn,
 } from "./types.ts";
 import { validateBrainFeedbackInput } from "./validate-feedback.ts";
@@ -137,6 +139,8 @@ export interface ImportSessionResult {
   readonly signals_created: number;
   readonly signals_deduped: number;
   readonly tool_replays: number;
+  /** Per-skill invocations captured as skill_invoked continuity records. */
+  readonly skill_invocations: number;
   readonly malformed: number;
   readonly filtered_turns: number;
   /** Capture-boundary verdict for this file (Memory Integrity Suite). */
@@ -222,6 +226,7 @@ export async function importSession(
   let signalsCreated = 0;
   let signalsDeduped = 0;
   let toolReplays = 0;
+  let skillInvocations = 0;
   let malformed = 0;
   let filteredTurns = 0;
   let suppressedTurns = 0;
@@ -313,6 +318,7 @@ export async function importSession(
       signals_created: 0,
       signals_deduped: 0,
       tool_replays: 0,
+      skill_invocations: 0,
       malformed: 0,
       filtered_turns: 0,
       boundary_decision: boundaryDecision,
@@ -394,6 +400,30 @@ export async function importSession(
     // Path B — brain_feedback tool_use replay.
     if (!mayWrite) continue;
     for (const call of turn.toolCalls ?? []) {
+      // Per-skill invocation telemetry (t_56a12bde): count real skill
+      // invocations across runtimes as append-only skill_invoked records.
+      // Deterministic and idempotent across re-imports (the source ref keys on
+      // the session + call id + skill, so re-running dedupes rather than
+      // double-counts). Skipped on a dry run.
+      const invokedSkill = resolveInvokedSkill(call);
+      if (invokedSkill !== null && opts.dryRun !== true) {
+        try {
+          appendContinuityRecord(vault, {
+            kind: "skill_invoked",
+            createdAt: invocationTimestamp(turn.timestamp, now),
+            sourceRefs: [{ id: `${sessionKey}:${call.id ?? turn.turnId}:${invokedSkill}` }],
+            payload: {
+              skill: invokedSkill,
+              agent: agentLabelForTurn(turn, adapter.id, opts.agent),
+              tool: call.name,
+              runtime: adapter.id,
+            },
+          });
+          skillInvocations++;
+        } catch {
+          // Telemetry is best-effort; a failed append never fails the import.
+        }
+      }
       if (call.name !== "brain_feedback") continue;
       const validated = validateBrainFeedbackInput(call.input);
       if (!validated.ok) {
@@ -460,6 +490,7 @@ export async function importSession(
     signals_created: signalsCreated,
     signals_deduped: signalsDeduped,
     tool_replays: toolReplays,
+    skill_invocations: skillInvocations,
     malformed,
     boundary_decision: boundaryDecision,
     suppressed_turns: suppressedTurns,
@@ -481,6 +512,38 @@ export async function importSession(
 function agentLabelForTurn(turn: SessionTurn, adapter: SessionAdapterId, fallback: string): string {
   void turn; // reserved for future per-turn role-aware fallback
   return getAdapter(adapter).defaultAgent.trim() || fallback;
+}
+
+/**
+ * Extract the invoked skill name from a tool call, or null when the call is
+ * not a skill invocation. Counts an actual skill fetch (`get_skill`, however
+ * namespaced by the runtime) and the host-native `Skill` tool; discovery
+ * (`list_skills`) and per-turn relevance scoring (`skills_attach`) are not
+ * invocations and are ignored.
+ */
+function resolveInvokedSkill(call: SessionToolCall): string | null {
+  const input = call.input ?? {};
+  const pick = (key: string): string | null => {
+    const value = input[key];
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  };
+  const name = call.name;
+  if (name === "get_skill" || name.endsWith("__get_skill")) {
+    return pick("name") ?? pick("skill");
+  }
+  if (name === "Skill") {
+    return pick("command") ?? pick("skill") ?? pick("name");
+  }
+  return null;
+}
+
+/** ISO-second timestamp for an invocation: the turn's own time when valid. */
+function invocationTimestamp(turnTimestamp: string | undefined, now: Date): string {
+  if (turnTimestamp) {
+    const ms = Date.parse(turnTimestamp);
+    if (Number.isFinite(ms) && ms > 0 && ms <= now.getTime()) return isoSecond(new Date(ms));
+  }
+  return isoSecond(now);
 }
 
 export async function importSessionPath(
