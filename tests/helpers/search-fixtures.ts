@@ -145,6 +145,7 @@ export function makeConfig(opts: {
     }),
     rerank: Object.freeze({
       enabled: false,
+      kind: "openai-compat",
       baseUrl: null,
       model: null,
       envKey: null,

@@ -606,6 +606,13 @@ export interface ResolvedEmbeddingConfig {
  */
 export interface ResolvedRerankConfig {
   readonly enabled: boolean;
+  /**
+   * Reranker backend (Retrieval & Ranking Quality, t_9f95ebb6).
+   * "openai-compat" (default) resolves a remote `/rerank` endpoint;
+   * "local" uses the bundled offline deterministic reranker, which needs
+   * no base_url / model / key and never touches the network.
+   */
+  readonly kind: "openai-compat" | "local";
   /** OpenAI-compatible base URL (trailing slashes stripped) or null. */
   readonly baseUrl: string | null;
   readonly model: string | null;

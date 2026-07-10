@@ -42,6 +42,7 @@ function result(id: number, content: string): BrainSearchResult {
 
 const BASE: ResolvedRerankConfig = Object.freeze({
   enabled: false,
+  kind: "openai-compat",
   baseUrl: null,
   model: null,
   envKey: null,

@@ -95,6 +95,12 @@ export {
   type ApplyCrossEncoderRerankOptions,
   type RerankTelemetryEvent,
 } from "./rerank/index.ts";
+export { LocalRerankProvider, scoreLocalRerank } from "./rerank/local.ts";
+export {
+  runRerankEvalGate,
+  type RerankEvalGateOptions,
+  type RerankEvalGateResult,
+} from "./rerank-eval-gate.ts";
 
 export { resolveIndexPath } from "./paths.ts";
 export {
@@ -524,8 +530,22 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.rerankMinScore,
     "search_rerank_min_score",
   );
+  const rerankKindRaw = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_SEARCH_RERANK_KIND",
+    "search_rerank_kind",
+  );
+  if (rerankKindRaw !== null && rerankKindRaw !== "openai-compat" && rerankKindRaw !== "local") {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `search_rerank_kind must be 'openai-compat' or 'local', got '${rerankKindRaw}'`,
+    );
+  }
+  const rerankKind = rerankKindRaw === "local" ? "local" : "openai-compat";
   const rerank: ResolvedRerankConfig = Object.freeze({
     enabled: rerankEnabled,
+    kind: rerankKind,
     baseUrl: rerankBaseUrl,
     model: rerankModel,
     envKey: rerankEnvKey,

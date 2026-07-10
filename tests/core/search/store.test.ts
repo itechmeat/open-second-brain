@@ -66,6 +66,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     }),
     rerank: Object.freeze({
       enabled: false,
+      kind: "openai-compat",
       baseUrl: null,
       model: null,
       envKey: null,
