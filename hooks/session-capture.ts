@@ -9,10 +9,7 @@ import { join } from "node:path";
 
 import { resolveAgentName, resolveVault } from "../src/core/config.ts";
 import { captureSessionLifecycleEvent } from "../src/core/brain/session-lifecycle.ts";
-import {
-  armProcessCeiling,
-  resolveHookCeilingMs,
-} from "../src/core/reliability/process-ceiling.ts";
+import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { normalizeHookPayload, readHookInput } from "./lib/stdin.ts";
 
@@ -23,7 +20,6 @@ async function main(): Promise<void> {
   let auditVault: string | null = null;
   const disarm = armProcessCeiling({
     ceilingMs: resolveHookCeilingMs(),
-    label: "session-capture",
     onExpire: () => {
       if (auditVault === null) return;
       try {

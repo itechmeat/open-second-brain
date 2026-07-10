@@ -4,7 +4,7 @@ import {
   DEFAULT_HOOK_CEILING_MS,
   armProcessCeiling,
   resolveHookCeilingMs,
-} from "../../../src/core/reliability/process-ceiling.ts";
+} from "../../hooks/lib/process-ceiling.ts";
 
 test("armProcessCeiling schedules at the configured ceiling and self-terminates on expiry", () => {
   let scheduledMs = -1;
@@ -14,7 +14,6 @@ test("armProcessCeiling schedules at the configured ceiling and self-terminates 
 
   const disarm = armProcessCeiling({
     ceilingMs: 55_000,
-    label: "test-hook",
     onExpire: () => {
       expired = true;
     },
@@ -48,7 +47,6 @@ test("disarming before the ceiling clears the timer and never exits", () => {
 
   const disarm = armProcessCeiling({
     ceilingMs: 1_000,
-    label: "test-hook",
     exit: (code) => exits.push(code),
     setTimer: () => ({ id: 42 }),
     clearTimer: (handle) => {
@@ -68,7 +66,6 @@ test("an onExpire that throws still lets the process exit", () => {
   let fired: (() => void) | null = null;
   armProcessCeiling({
     ceilingMs: 10,
-    label: "test-hook",
     onExpire: () => {
       throw new Error("audit blew up");
     },

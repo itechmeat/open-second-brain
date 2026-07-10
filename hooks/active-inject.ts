@@ -37,10 +37,7 @@ import { budgetActiveBody } from "../src/core/brain/active-budget.ts";
 import { INJECT_BUDGET_CHARS_DEFAULT, loadBrainConfig } from "../src/core/brain/policy.ts";
 import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { ensureVaultCurrent } from "../src/core/maintenance/ensure-current.ts";
-import {
-  armProcessCeiling,
-  resolveHookCeilingMs,
-} from "../src/core/reliability/process-ceiling.ts";
+import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { loadInjectContextFailOpen } from "../src/core/brain/inject-failopen.ts";
 import { collectRuntimeNotices, renderRuntimeNotices } from "../src/core/brain/runtime-notices.ts";
@@ -75,7 +72,6 @@ async function main(): Promise<void> {
   let auditVault: string | null = null;
   const disarm = armProcessCeiling({
     ceilingMs: resolveHookCeilingMs(),
-    label: "active-inject",
     onExpire: () => auditHook(auditVault, "hook_ceiling_exceeded", { hook: "active-inject" }),
   });
   try {

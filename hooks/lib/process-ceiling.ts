@@ -43,8 +43,6 @@ export function resolveHookCeilingMs(
 export interface ProcessCeilingOptions {
   /** Hard deadline in milliseconds. */
   readonly ceilingMs: number;
-  /** Hook name, carried into the audit side effect. */
-  readonly label: string;
   /** Best-effort side effect run just before exit (e.g. an audit line). */
   readonly onExpire?: () => void;
   /** Exit hook; defaults to `process.exit`. Injectable for tests. */
