@@ -9,6 +9,8 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { mkdirSync, writeFileSync } from "node:fs";
+
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listEntities } from "../../src/core/brain/entities/registry.ts";
@@ -75,5 +77,37 @@ describe("brain_ingest_source", () => {
     await expect(
       handler(ctx, { summary: "x", entities: [{ category: "concept", name: "A" }] }),
     ).rejects.toThrow(MCPError);
+  });
+});
+
+describe("brain_ingest_batch_plan resume (t_ba1fa5f6)", () => {
+  const batchPlan = INGEST_TOOLS.find((t) => t.name === "brain_ingest_batch_plan")!.handler;
+
+  test("returns a plan_id and a resumed plan excludes ingested items", async () => {
+    mkdirSync(join(vault, "Docs"), { recursive: true });
+    writeFileSync(join(vault, "Docs", "a.md"), "alpha", "utf8");
+    writeFileSync(join(vault, "Docs", "b.md"), "bravo", "utf8");
+
+    const first = await batchPlan(ctx, { source_dir: "Docs" });
+    expect(first["plan_id"]).toMatch(/^[0-9a-f]{16}$/);
+    expect(first["total_files"]).toBe(2);
+    expect(first["resumed_completed"]).toBe(0);
+
+    // Ingest one file through the source tool, carrying the plan id so the
+    // checkpoint records it.
+    await handler(ctx, {
+      source_path: "Docs/a.md",
+      summary: "Alpha.",
+      entities: [{ category: "concept", name: "Alpha" }],
+      plan_id: first["plan_id"],
+    });
+
+    const resumed = await batchPlan(ctx, { source_dir: "Docs", resume: true });
+    expect(resumed["plan_id"]).toBe(first["plan_id"]);
+    expect(resumed["resumed_completed"]).toBe(1);
+    const files = (resumed["batches"] as Array<{ files: Array<{ path: string }> }>).flatMap((b) =>
+      b.files.map((f) => f.path),
+    );
+    expect(files).toEqual(["Docs/b.md"]);
   });
 });

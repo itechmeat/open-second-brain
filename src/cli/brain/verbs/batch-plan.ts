@@ -31,12 +31,13 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     vault: { type: "string" },
     "max-bytes": { type: "string" },
     "max-files": { type: "string" },
+    resume: { type: "boolean" },
     json: { type: "boolean" },
   });
   const sourceDir = positional[0];
   if (!sourceDir) {
     return usageError(
-      "usage: o2b brain batch-plan <source-dir> [--max-bytes N] [--max-files N] [--json]",
+      "usage: o2b brain batch-plan <source-dir> [--max-bytes N] [--max-files N] [--resume] [--json]",
     );
   }
 
@@ -44,7 +45,8 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     const { vault } = brainVerbContext(flags);
     const maxBatchBytes = parseCap(flags["max-bytes"], "--max-bytes", DEFAULT_MAX_BATCH_BYTES);
     const maxBatchFiles = parseCap(flags["max-files"], "--max-files", DEFAULT_MAX_BATCH_FILES);
-    const plan = planBatches(vault, sourceDir, { maxBatchBytes, maxBatchFiles });
+    const resume = flags["resume"] === true;
+    const plan = planBatches(vault, sourceDir, { maxBatchBytes, maxBatchFiles, resume });
 
     if (flags["json"]) {
       okJson({
@@ -54,6 +56,8 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
         total_files: plan.totalFiles,
         total_bytes: plan.totalBytes,
         skipped: [...plan.skipped],
+        plan_id: plan.planId,
+        resumed_completed: plan.resumedCompleted,
         batches: plan.batches.map((b) => ({
           index: b.index,
           total_bytes: b.totalBytes,
@@ -63,10 +67,11 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
       return 0;
     }
 
-    ok(`batch-plan: ${plan.sourceDir}`);
+    ok(`batch-plan: ${plan.sourceDir} (plan ${plan.planId})`);
     ok(
       `  ${plan.totalFiles} file(s) to ingest in ${plan.batches.length} batch(es); ` +
-        `${plan.skipped.length} unchanged skipped`,
+        `${plan.skipped.length} unchanged skipped` +
+        (plan.resumedCompleted > 0 ? `; ${plan.resumedCompleted} resumed (checkpointed)` : ""),
     );
     for (const b of plan.batches) {
       ok(`  batch ${b.index}: ${b.files.length} file(s), ${b.totalBytes} byte(s)`);

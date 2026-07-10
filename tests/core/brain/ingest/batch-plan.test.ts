@@ -16,6 +16,7 @@ import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { updateManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { planBatches } from "../../../../src/core/brain/ingest/batch-plan.ts";
+import { recordCompleted } from "../../../../src/core/brain/ingest/checkpoint.ts";
 
 let vault: string;
 let configHome: string;
@@ -164,5 +165,65 @@ describe("planBatches — determinism + empty", () => {
 
   test("a non-existent source dir is a hard error, not an empty plan", () => {
     expect(() => planBatches(vault, "Nope", { maxBatchBytes: 100, maxBatchFiles: 10 })).toThrow();
+  });
+});
+
+describe("planBatches — resume (t_ba1fa5f6)", () => {
+  test("resume excludes checkpointed items but keeps the plan id stable", () => {
+    writeSized("Big/a.md", 100);
+    writeSized("Big/b.md", 100);
+    writeSized("Big/c.md", 100);
+
+    // Fresh plan sees all three; its id is derived from the full discovered set.
+    const fresh = planBatches(vault, "Big", { maxBatchBytes: 10_000, maxBatchFiles: 100 });
+    expect(fresh.totalFiles).toBe(3);
+    expect(fresh.resumedCompleted).toBe(0);
+
+    // Simulate an interruption after two items completed.
+    recordCompleted(vault, fresh.planId, "Big", ["Big/a.md", "Big/b.md"], new Date());
+
+    const resumed = planBatches(vault, "Big", {
+      maxBatchBytes: 10_000,
+      maxBatchFiles: 100,
+      resume: true,
+    });
+    expect(resumed.planId).toBe(fresh.planId);
+    expect(allPlannedPaths(resumed)).toEqual(["Big/c.md"]);
+    expect(resumed.totalFiles).toBe(1);
+    expect(resumed.resumedCompleted).toBe(2);
+  });
+
+  test("without resume the checkpoint is ignored", () => {
+    writeSized("Big/a.md", 100);
+    writeSized("Big/b.md", 100);
+    const planId = planBatches(vault, "Big", {
+      maxBatchBytes: 10_000,
+      maxBatchFiles: 100,
+    }).planId;
+    recordCompleted(vault, planId, "Big", ["Big/a.md"], new Date());
+
+    const plan = planBatches(vault, "Big", { maxBatchBytes: 10_000, maxBatchFiles: 100 });
+    expect(plan.totalFiles).toBe(2);
+    expect(plan.resumedCompleted).toBe(0);
+  });
+
+  test("OSB_INGEST_NO_CHECKPOINT makes resume a no-op (nothing excluded)", () => {
+    writeSized("Big/a.md", 100);
+    writeSized("Big/b.md", 100);
+    const fresh = planBatches(vault, "Big", { maxBatchBytes: 10_000, maxBatchFiles: 100 });
+    try {
+      process.env["OSB_INGEST_NO_CHECKPOINT"] = "1";
+      // record is inert under the opt-out, and so is the resume read.
+      recordCompleted(vault, fresh.planId, "Big", ["Big/a.md"], new Date());
+      const plan = planBatches(vault, "Big", {
+        maxBatchBytes: 10_000,
+        maxBatchFiles: 100,
+        resume: true,
+      });
+      expect(plan.totalFiles).toBe(2);
+      expect(plan.resumedCompleted).toBe(0);
+    } finally {
+      delete process.env["OSB_INGEST_NO_CHECKPOINT"];
+    }
   });
 });

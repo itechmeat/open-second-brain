@@ -69,9 +69,12 @@ New module `src/core/brain/ingest/checkpoint.ts`, modeled on
 
 Wiring:
 - `planBatches` gains `opts.resume?: boolean`. When resuming it computes the
-  stable `planId` from the discovered set, reads the checkpoint, and excludes
-  already-completed paths (on top of manifest-`unchanged` skipping). `BatchPlan`
-  gains `planId` and `resumedCompleted` (count excluded via checkpoint).
+  stable `planId` from the full discovered set, reads the checkpoint, and
+  excludes already-completed paths *before* content-hash classification - so a
+  resumed plan never re-hashes completed items (the fast-path that keeps a
+  large-vault resume near-free). The content manifest stays authoritative for
+  everything the checkpoint does not cover. `BatchPlan` gains `planId` and
+  `resumedCompleted` (count excluded via the checkpoint).
 - `ingestSource` gains `opts.planId?: string`. On a successful ingest of a
   vault-file source, when a `planId` is set and checkpointing is enabled, it
   records the source path into that plan's checkpoint. The content manifest stays
