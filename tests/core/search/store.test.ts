@@ -60,6 +60,9 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
       selfTuningEnabled: false,
       chainStopEnabled: false,
       chainStopScore: 0.8,
+      trigramPrefilterEnabled: false,
+      trigramPrefilterMinChunks: 5000,
+      trigramPrefilterMaxSelectivity: 0.5,
     }),
     rerank: Object.freeze({
       enabled: false,

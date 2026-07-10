@@ -1586,6 +1586,57 @@ export class Store {
     }));
   }
 
+  /**
+   * Trigram candidate lookup over the `chunk_trigram` FTS5 shadow (v9).
+   * Returns bm25-ordered keyword hits whose content matches the trigram
+   * query - a strict superset of exact substring matches for the query's
+   * terms, used as an opt-in candidate source that broadens large-vault
+   * keyword recall (substring / partial-token matches the word tokenizer
+   * misses). Fails soft to an empty list if the trigram table is absent
+   * (a migrated-but-not-reindexed index always has it via the v9 rebuild).
+   */
+  trigramCandidates(
+    trigramQuery: string,
+    opts: { readonly limit: number; readonly pathPrefix?: string | null },
+  ): KeywordHit[] {
+    const limit = Math.max(1, opts.limit | 0);
+    const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
+    try {
+      if (prefix) {
+        const rows = this.db
+          .query<
+            { chunk_id: number; document_id: number; bm25: number },
+            [string, string, string, number]
+          >(
+            "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_trigram) AS bm25 " +
+              "FROM chunk_trigram " +
+              "JOIN chunks c ON c.id = chunk_trigram.rowid " +
+              "JOIN documents d ON d.id = c.document_id " +
+              "WHERE chunk_trigram MATCH ? AND substr(d.path, 1, length(?)) = ? " +
+              "ORDER BY bm25 ASC LIMIT ?",
+          )
+          .all(trigramQuery, prefix, prefix, limit);
+        return rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 }));
+      }
+      const rows = this.db
+        .query<{ chunk_id: number; document_id: number; bm25: number }, [string, number]>(
+          "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_trigram) AS bm25 " +
+            "FROM chunk_trigram JOIN chunks c ON c.id = chunk_trigram.rowid " +
+            "WHERE chunk_trigram MATCH ? ORDER BY bm25 ASC LIMIT ?",
+        )
+        .all(trigramQuery, limit);
+      return rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Total indexed chunk count - used to judge trigram-prefilter selectivity. */
+  chunkCount(): number {
+    const row = this.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM chunks").get();
+    return row?.n ?? 0;
+  }
+
   semanticTopK(
     queryVector: ReadonlyArray<number> | Float32Array,
     opts: { readonly limit: number; readonly pathPrefix?: string | null },

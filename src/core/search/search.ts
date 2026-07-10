@@ -17,6 +17,7 @@ import type { FrontmatterMap } from "../types.ts";
 import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
 import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../graph/agent-scope.ts";
 import { makeProvider } from "./embeddings/provider.ts";
+import { isLowSelectivity, planTrigramPrefilter } from "./trigram-prefilter.ts";
 import {
   composeWeightProfiles,
   fnv1aHex,
@@ -133,6 +134,11 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     rrkModel: config.rerank.model,
     rrkTopK: config.rerank.topK,
     rrkMin: config.rerank.minScore,
+    // Trigram prefilter augments the candidate pool, so a toggle or
+    // selectivity change must invalidate cached rows.
+    tri: r.trigramPrefilterEnabled,
+    triMin: r.trigramPrefilterMinChunks,
+    triSel: r.trigramPrefilterMaxSelectivity,
   });
 }
 
@@ -443,6 +449,38 @@ export async function search(
         for (const w of kwOutcome.warnings) warnings.push(w);
       }
     }
+    // Trigram candidate source (t_4a672b84): opt-in. On large vaults, merge
+    // substring / partial-token matches the word tokenizer missed into the
+    // keyword candidate pool. A strict superset of substring matches, so it
+    // only ADDS candidates (deduped by chunkId; existing keyword hits keep
+    // their bm25). Skipped for short/CJK/low-selectivity queries and when
+    // disabled - leaving kwHits byte-identical.
+    if (
+      config.recall.trigramPrefilterEnabled &&
+      store.chunkCount() >= config.recall.trigramPrefilterMinChunks
+    ) {
+      const trigramPlan = planTrigramPrefilter(query);
+      if (trigramPlan.mode === "match") {
+        const corpus = store.chunkCount();
+        const cand = store.trigramCandidates(trigramPlan.ftsQuery, {
+          limit: limit * config.recall.poolMultiplier,
+          pathPrefix,
+        });
+        if (
+          cand.length > 0 &&
+          !isLowSelectivity(cand.length, corpus, config.recall.trigramPrefilterMaxSelectivity)
+        ) {
+          const seen = new Set(kwHits.map((h) => h.chunkId));
+          for (const h of cand) {
+            if (!seen.has(h.chunkId)) {
+              kwHits.push(h);
+              seen.add(h.chunkId);
+            }
+          }
+        }
+      }
+    }
+
     const intentProfile = config.recall.intentEnabled ? plan.weightProfile : undefined;
     // Learned recall weights (recall-trust-suite): opt-in multipliers
     // derived from explicit feedback compose with the intent profile.

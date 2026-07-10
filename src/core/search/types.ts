@@ -739,6 +739,22 @@ export interface ResolvedRecallConfig {
   readonly chainStopEnabled: boolean;
   /** Normalized-score threshold in [0, 1] that triggers the chain-stop. */
   readonly chainStopScore: number;
+  /**
+   * Trigram candidate prefilter (Retrieval & Ranking Quality, t_4a672b84).
+   * Off by default: when true and a query qualifies (a term of at least 3
+   * chars, non-CJK), the trigram FTS5 shadow contributes an additional
+   * candidate source that broadens large-vault keyword recall with
+   * substring / partial-token matches (a strict superset of substring
+   * matches - it never drops a result). Disabled -> byte-identical.
+   */
+  readonly trigramPrefilterEnabled: boolean;
+  /** Minimum corpus chunk count before the trigram prefilter engages. */
+  readonly trigramPrefilterMinChunks: number;
+  /**
+   * Skip the trigram source when its candidate set exceeds this fraction
+   * of the corpus (low selectivity - not worth widening the pool). [0, 1].
+   */
+  readonly trigramPrefilterMaxSelectivity: number;
 }
 
 export interface ResolvedSearchConfig {

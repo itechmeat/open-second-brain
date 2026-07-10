@@ -145,6 +145,9 @@ const DEFAULTS = {
   shutdownGraceSeconds: 5,
   resumeReindex: false,
   chainStopScore: 0.8,
+  trigramPrefilterEnabled: false,
+  trigramPrefilterMinChunks: 5000,
+  trigramPrefilterMaxSelectivity: 0.5,
   rerankTopK: 20,
   rerankMinScore: 0,
 };
@@ -664,6 +667,37 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.chainStopScore,
     "search_chain_stop_score",
   );
+  const trigramPrefilterEnabled = parseBool(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_TRIGRAM_PREFILTER",
+      "search_trigram_prefilter_enabled",
+    ),
+    DEFAULTS.trigramPrefilterEnabled,
+    "search_trigram_prefilter_enabled",
+  );
+  const trigramPrefilterMinChunks = parseInteger(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_TRIGRAM_MIN_CHUNKS",
+      "search_trigram_prefilter_min_chunks",
+    ),
+    DEFAULTS.trigramPrefilterMinChunks,
+    "search_trigram_prefilter_min_chunks",
+    { min: 0 },
+  );
+  const trigramPrefilterMaxSelectivity = parseFloat01(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_TRIGRAM_MAX_SELECTIVITY",
+      "search_trigram_prefilter_max_selectivity",
+    ),
+    DEFAULTS.trigramPrefilterMaxSelectivity,
+    "search_trigram_prefilter_max_selectivity",
+  );
   const shutdownGraceSeconds = parseInteger(
     envOrConfig(
       env,
@@ -701,6 +735,9 @@ export function resolveSearchConfig(opts: {
     selfTuningEnabled,
     chainStopEnabled,
     chainStopScore,
+    trigramPrefilterEnabled,
+    trigramPrefilterMinChunks,
+    trigramPrefilterMaxSelectivity,
   });
 
   const base: ResolvedSearchConfig = Object.freeze({

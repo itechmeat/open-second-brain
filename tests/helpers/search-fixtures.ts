@@ -81,6 +81,10 @@ export function makeConfig(opts: {
   rrfK?: number;
   /** Optional cross-encoder rerank overrides; defaults to disabled. */
   rerank?: Partial<ResolvedRerankConfig>;
+  /** Trigram candidate prefilter; defaults to false (opt-in). */
+  trigramPrefilterEnabled?: boolean;
+  /** Minimum corpus chunks before the trigram prefilter engages; defaults to 5000. */
+  trigramPrefilterMinChunks?: number;
 }): ResolvedSearchConfig {
   const baseSemantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: false,
@@ -135,6 +139,9 @@ export function makeConfig(opts: {
       selfTuningEnabled: opts.selfTuningEnabled ?? false,
       chainStopEnabled: false,
       chainStopScore: 0.8,
+      trigramPrefilterEnabled: opts.trigramPrefilterEnabled ?? false,
+      trigramPrefilterMinChunks: opts.trigramPrefilterMinChunks ?? 5000,
+      trigramPrefilterMaxSelectivity: 0.5,
     }),
     rerank: Object.freeze({
       enabled: false,

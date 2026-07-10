@@ -16,7 +16,7 @@ import { SearchError } from "./types.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 8;
+export const LATEST_SCHEMA_VERSION = 9;
 
 /**
  * The wikilink-resolution basename of a stored document path: the final
@@ -365,6 +365,48 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
         "UPDATE documents SET basename = ? WHERE id = ?",
       );
       for (const row of rows) update.run(documentBasename(row.path), row.id);
+    },
+  },
+  {
+    // v9 (Retrieval & Ranking Quality) - opt-in trigram candidate index.
+    // A second FTS5 shadow over the same `fts_content` column, tokenized
+    // with the built-in `trigram` tokenizer, so a query can gather
+    // substring / partial-token candidates that the `unicode61` word
+    // tokenizer misses. Read only when `search_trigram_prefilter_enabled`
+    // is on; otherwise it is inert extra index data and result ordering is
+    // byte-identical. Additive and reindex-safe: `rebuild` populates it
+    // from existing chunks in-place, and dedicated triggers keep it in
+    // sync. No new dependency - the trigram tokenizer ships with SQLite.
+    version: 9,
+    up(db) {
+      db.exec(`
+        DROP TRIGGER IF EXISTS chunks_tri_ai;
+        DROP TRIGGER IF EXISTS chunks_tri_ad;
+        DROP TRIGGER IF EXISTS chunks_tri_au;
+        DROP TABLE IF EXISTS chunk_trigram;
+
+        CREATE VIRTUAL TABLE chunk_trigram USING fts5(
+          fts_content,
+          content='chunks',
+          content_rowid='id',
+          tokenize='trigram'
+        );
+
+        CREATE TRIGGER chunks_tri_ai AFTER INSERT ON chunks BEGIN
+          INSERT INTO chunk_trigram(rowid, fts_content) VALUES (new.id, new.fts_content);
+        END;
+        CREATE TRIGGER chunks_tri_ad AFTER DELETE ON chunks BEGIN
+          INSERT INTO chunk_trigram(chunk_trigram, rowid, fts_content)
+            VALUES('delete', old.id, old.fts_content);
+        END;
+        CREATE TRIGGER chunks_tri_au AFTER UPDATE ON chunks BEGIN
+          INSERT INTO chunk_trigram(chunk_trigram, rowid, fts_content)
+            VALUES('delete', old.id, old.fts_content);
+          INSERT INTO chunk_trigram(rowid, fts_content) VALUES (new.id, new.fts_content);
+        END;
+
+        INSERT INTO chunk_trigram(chunk_trigram) VALUES('rebuild');
+      `);
     },
   },
 ]);
