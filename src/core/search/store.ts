@@ -1795,6 +1795,23 @@ export class Store {
    * The traversal layer surfaces this when a linked document is not
    * already a relevance hit.
    */
+  /**
+   * Document id -> { path, title } for every indexed document, reading
+   * ONLY the `documents` table (never chunk bodies). The graph query
+   * pre-pass uses this for its index-only short-circuit so it can rank and
+   * answer from index metadata with zero note bodies hydrated.
+   */
+  documentTitles(): Map<number, { readonly path: string; readonly title: string | null }> {
+    const out = new Map<number, { path: string; title: string | null }>();
+    const rows = this.db
+      .query<{ id: number; path: string; title: string | null }, []>(
+        "SELECT id, path, title FROM documents",
+      )
+      .all();
+    for (const r of rows) out.set(r.id, { path: r.path, title: r.title });
+    return out;
+  }
+
   representativeChunks(documentIds: ReadonlyArray<number>): Map<number, HydratedChunk> {
     const out = new Map<number, HydratedChunk>();
     if (documentIds.length === 0) return out;

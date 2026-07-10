@@ -49,6 +49,7 @@ import {
   addRerankProviderProfile,
   removeRerankProviderProfile,
   getRerankProviderProfile,
+  planRead,
   serializeEvidencePack,
   serializeSearchCard,
   serializeIndexStatus,
@@ -90,6 +91,7 @@ const KNOWN_VERBS = new Set([
   "weights",
   "provider",
   "rerank-provider",
+  "plan",
   "watch",
 ]);
 
@@ -129,6 +131,8 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
         return await cmdSearchProvider(rest);
       case "rerank-provider":
         return await cmdSearchRerankProvider(rest);
+      case "plan":
+        return await cmdSearchPlan(rest);
       default:
         process.stderr.write(`error: unknown search verb: ${verb}\n`);
         return 2;
@@ -552,6 +556,45 @@ async function cmdSearchRerankProvider(argv: ReadonlyArray<string>): Promise<num
       addRerankProviderProfile(vault, { ...profile, envKey: formatEnvKey(profile.envKey) }),
     remove: removeRerankProviderProfile,
   });
+}
+
+// ─── plan (graph-index query pre-pass) ───────────────────────────────────────
+
+async function cmdSearchPlan(argv: ReadonlyArray<string>): Promise<number> {
+  const { flags, positional } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    db: { type: "string" },
+    hops: { type: "string", default: "2" },
+    limit: { type: "string", default: "10" },
+    "index-only": { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const query = positional.join(" ").trim();
+  if (query === "")
+    throw new CliError('usage: o2b search plan "<query>" [--index-only] [--hops N]');
+  const cfg = resolveConfig(flags);
+  const plan = await planRead(cfg, query, {
+    indexOnly: flags["index-only"] === true,
+    maxHops: Number(flags["hops"] ?? "2"),
+    shortlistLimit: Number(flags["limit"] ?? "10"),
+  });
+  if (flags["json"] === true) {
+    process.stdout.write(JSON.stringify(plan) + "\n");
+    return 0;
+  }
+  process.stdout.write(`${plan.mode} (notes read: ${plan.notesRead})\n`);
+  if (plan.shortlist.length === 0) {
+    process.stdout.write("  no candidates\n");
+    return 0;
+  }
+  for (const e of plan.shortlist) {
+    const title = e.title ?? "(untitled)";
+    process.stdout.write(
+      `  ${e.path}  "${title}"  hops=${e.hops} degree=${e.degree} [${e.reasons.join(",")}]\n`,
+    );
+  }
+  return 0;
 }
 
 // ─── query ────────────────────────────────────────────────────────────────────

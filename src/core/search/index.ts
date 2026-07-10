@@ -106,6 +106,8 @@ export {
   type IndexProgressEvent,
 } from "./indexer.ts";
 export { search, expandHit, SEARCH_LIMIT_MIN, SEARCH_LIMIT_MAX } from "./search.ts";
+export { planReadShortlist, planRead } from "./graph-prepass.ts";
+export type { GraphPrepassOptions, GraphPrepassResult, ShouldReadEntry } from "./graph-prepass.ts";
 export {
   captureRecallFeedback,
   computeLearnedWeights,
