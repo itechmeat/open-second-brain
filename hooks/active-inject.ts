@@ -43,6 +43,7 @@ import {
 } from "../src/core/reliability/process-ceiling.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { loadInjectContextFailOpen } from "../src/core/brain/inject-failopen.ts";
+import { collectRuntimeNotices, renderRuntimeNotices } from "../src/core/brain/runtime-notices.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 
@@ -162,12 +163,26 @@ async function main(): Promise<void> {
  * genuine read error so the fail-open loader degrades to the last-good cache.
  */
 function assembleActiveContext(vault: string): string {
-  const activePath = brainActivePath(vault);
-  if (!existsSync(activePath)) return "";
+  // Runtime-state notices ride the same injection surface as active.md so the
+  // agent is proactively aware of a degraded/transient condition (semantic
+  // search fell back to lexical, index missing/rebuilding, read-only vault)
+  // without a diagnostic round-trip. Best-effort and computed with no network;
+  // an empty list keeps the injected body byte-identical to before.
+  const noticesBlock = renderRuntimeNotices(collectRuntimeNotices(vault));
 
-  // A read failure here is a genuine error (permissions, fs stall), not a
-  // "nothing to inject" signal - let it propagate so the caller degrades to
-  // the cached last-good body rather than silently dropping the injection.
+  const activePath = brainActivePath(vault);
+  const activeBody = existsSync(activePath) ? readActiveBody(vault, activePath) : "";
+
+  const parts = [noticesBlock, activeBody].filter((p) => p.length > 0);
+  return parts.join("\n\n");
+}
+
+/**
+ * Read + budget the active.md / lessons.md body. Returns an empty string when
+ * the body is empty; throws on a genuine read error (permissions, fs stall) so
+ * the fail-open loader degrades to the last-good cache.
+ */
+function readActiveBody(vault: string, activePath: string): string {
   const body = readFileSync(activePath, "utf8");
 
   // Drop the `kind: brain-active / generated_at` frontmatter - it

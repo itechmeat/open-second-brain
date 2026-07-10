@@ -464,6 +464,8 @@ describe("tool calls", () => {
     expect(names.has("vault_writeable")).toBe(true);
     expect(names.has("claude_manifest")).toBe(true);
     expect(names.has("hermes_manifest")).toBe(true);
+    // Runtime-state notices ride the pull surface too (array, empty when clean).
+    expect(Array.isArray(s.notices)).toBe(true);
   });
 
   test("unknown tool returns method-not-found", async () => {

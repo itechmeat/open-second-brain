@@ -25,6 +25,7 @@ import { discoverConfig, redactMapping } from "../core/config.ts";
 import { REMOVED_TOOLS } from "../core/removed-surfaces.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
+import { collectRuntimeNotices } from "../core/brain/runtime-notices.ts";
 import { isDir } from "../core/fs-utils.ts";
 import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
@@ -204,12 +205,19 @@ async function toolVaultHealth(
     ok: r.ok,
     message: r.message,
   }));
+  // Runtime-state notices (transient operational conditions) surfaced for
+  // pull consumers, mirroring the proactive SessionStart injection push.
+  const notices = collectRuntimeNotices(ctx.vault, {
+    configPath: ctx.configPath ?? undefined,
+  }).map((n) => ({ code: n.code, severity: n.severity, message: n.message }));
+
   return {
     vault_path: ctx.vault,
     config_path: ctx.configPath ? String(ctx.configPath) : null,
     repo_root: repoRoot ? String(repoRoot) : null,
     ok: payload.every((c) => c.ok),
     checks: payload,
+    notices,
   };
 }
 
