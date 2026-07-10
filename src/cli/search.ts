@@ -574,10 +574,18 @@ async function cmdSearchPlan(argv: ReadonlyArray<string>): Promise<number> {
   if (query === "")
     throw new CliError('usage: o2b search plan "<query>" [--index-only] [--hops N]');
   const cfg = resolveConfig(flags);
+  const maxHops = Number(flags["hops"] ?? "2");
+  const shortlistLimit = Number(flags["limit"] ?? "10");
+  if (!Number.isInteger(maxHops) || maxHops < 0) {
+    throw new CliError(`--hops must be a non-negative integer, got '${flags["hops"]}'`);
+  }
+  if (!Number.isInteger(shortlistLimit) || shortlistLimit < 1) {
+    throw new CliError(`--limit must be a positive integer, got '${flags["limit"]}'`);
+  }
   const plan = await planRead(cfg, query, {
     indexOnly: flags["index-only"] === true,
-    maxHops: Number(flags["hops"] ?? "2"),
-    shortlistLimit: Number(flags["limit"] ?? "10"),
+    maxHops,
+    shortlistLimit,
   });
   if (flags["json"] === true) {
     process.stdout.write(JSON.stringify(plan) + "\n");

@@ -176,6 +176,7 @@ function buildReasons(parts: {
   entityBoost?: number;
   activationBoost?: number;
   coAccessBoost?: number;
+  reuseBoost?: number;
   trend?: string;
   trendMul?: number;
   sessionFocus?: number;
@@ -193,6 +194,9 @@ function buildReasons(parts: {
   }
   if (parts.coAccessBoost && parts.coAccessBoost > 0) {
     reasons.push(`co_access: ${fmt(parts.coAccessBoost)}`);
+  }
+  if (parts.reuseBoost && parts.reuseBoost > 0) {
+    reasons.push(`observed_reuse: ${fmt(parts.reuseBoost)}`);
   }
   if (parts.trend !== undefined && parts.trendMul !== undefined && parts.trendMul !== 1) {
     reasons.push(`freshness_trend: ${parts.trend} x${fmt(parts.trendMul)}`);
@@ -222,6 +226,7 @@ function buildBreakdown(parts: {
   entityBoost?: number;
   activationBoost?: number;
   coAccessBoost?: number;
+  reuseBoost?: number;
   trendMul?: number;
   sessionFocus?: number;
   rrf?: number;
@@ -233,6 +238,7 @@ function buildBreakdown(parts: {
     entity: parts.entityBoost ?? 0,
     activation: parts.activationBoost ?? 0,
     coAccess: parts.coAccessBoost ?? 0,
+    reuse: parts.reuseBoost ?? 0,
     link: parts.linkBoost,
     recency: parts.recency,
     tier: parts.tierMul,
@@ -440,6 +446,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         recencyBoost: recency,
         searchType: c.searchType,
         reasons: buildReasons({
+          reuseBoost,
           keywordScore: c.keywordScore,
           semanticScore: semanticEnabled ? c.semanticScore : 0,
           linkBoost,
@@ -453,6 +460,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           rrf: rrfByChunk !== null ? rrf : 0,
         }),
         breakdown: buildBreakdown({
+          reuseBoost,
           keywordScore: c.keywordScore,
           semanticScore: semanticEnabled ? c.semanticScore : 0,
           linkBoost,

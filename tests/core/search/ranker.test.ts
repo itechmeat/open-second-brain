@@ -79,6 +79,10 @@ test("observed-reuse boost lifts an equally-relevant chunk (t_65588d8b)", () => 
   const c1 = boosted.find((r) => r.chunkId === 1)!;
   const c2 = boosted.find((r) => r.chunkId === 2)!;
   expect(c2.score).toBeGreaterThan(c1.score);
+  // Explainability: the boost surfaces in reasons and the breakdown.
+  expect(c2.reasons.some((r) => r.startsWith("observed_reuse:"))).toBe(true);
+  expect(c2.breakdown!.reuse).toBeGreaterThan(0);
+  expect(c1.breakdown!.reuse).toBe(0);
 });
 
 test("score is clamped to [0,1] even with boosts", () => {

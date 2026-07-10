@@ -58,6 +58,19 @@ function asString(value: unknown, field: string): string {
   return value;
 }
 
+/**
+ * A non-empty, parseable timestamp string. Validated here so a bad value
+ * fails with a field-identifying `LocomoParseError` at parse time rather
+ * than a bare `RangeError` when `locomoToBenchFixture` normalises it.
+ */
+function asValidTimestamp(value: unknown, field: string): string {
+  const s = asString(value, field);
+  if (Number.isNaN(new Date(s).getTime())) {
+    throw new LocomoParseError(`LoCoMo dataset: ${field} must be a valid date, got '${s}'`);
+  }
+  return s;
+}
+
 /** Parse and validate a raw LoCoMo dataset. Fail-fast with a named error. */
 export function parseLocomoDataset(raw: unknown): LocomoDataset {
   if (raw === null || typeof raw !== "object") {
@@ -87,7 +100,7 @@ export function parseLocomoDataset(raw: unknown): LocomoDataset {
       return {
         speaker: asString(td["speaker"], `sessions[${i}].turns[${j}].speaker`),
         text: asString(td["text"], `sessions[${i}].turns[${j}].text`),
-        timestamp: asString(td["timestamp"], `sessions[${i}].turns[${j}].timestamp`),
+        timestamp: asValidTimestamp(td["timestamp"], `sessions[${i}].turns[${j}].timestamp`),
       };
     });
     return { session_id: sessionId, turns };

@@ -855,7 +855,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: ["list", "summary", "gate_list", "gate_summary", "observed_reuse", "cost"],
           description:
-            "list/summary for recall telemetry; gate_list/gate_summary for recall-gate decisions; cost for the write-vs-read cost meter.",
+            "list/summary for recall telemetry; gate_list/gate_summary for gate decisions; observed_reuse for the observed-use ranking signal; cost for the cost meter.",
         },
         mode: {
           type: "string",

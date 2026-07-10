@@ -42,6 +42,7 @@ export function projectScoreBreakdown(result: BrainSearchResult): ScoreBreakdown
     entity: 0,
     activation: 0,
     coAccess: 0,
+    reuse: 0,
     link: result.linkBoost,
     recency: result.recencyBoost,
     tier: 1,

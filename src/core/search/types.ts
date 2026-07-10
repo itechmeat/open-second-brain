@@ -56,6 +56,8 @@ export interface ScoreBreakdown {
   readonly entity: number;
   readonly activation: number;
   readonly coAccess: number;
+  /** Observed-reuse boost (t_65588d8b); 0 when no verdicts apply. */
+  readonly reuse: number;
   readonly link: number;
   readonly recency: number;
   readonly tier: number;

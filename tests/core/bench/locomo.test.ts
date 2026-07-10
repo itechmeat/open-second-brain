@@ -53,6 +53,20 @@ test("running the LoCoMo suite produces an o2b.bench.v1 report deterministically
   expect(report.quality.total).toBe(3);
 }, 30_000);
 
+test("parseLocomoDataset rejects an unparseable turn timestamp", () => {
+  expect(() =>
+    parseLocomoDataset({
+      sessions: [
+        {
+          session_id: "s1",
+          turns: [{ speaker: "A", text: "hi there", timestamp: "not-a-date" }],
+        },
+      ],
+      qa: [{ id: "q", question: "what", evidence_sessions: ["s1"] }],
+    }),
+  ).toThrow(/valid date/);
+});
+
 test("parseLocomoDataset rejects a QA with no evidence sessions", () => {
   expect(() =>
     locomoToBenchFixture(

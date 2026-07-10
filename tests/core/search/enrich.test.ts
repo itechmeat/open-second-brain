@@ -43,6 +43,7 @@ test("projects the ranker breakdown verbatim when present", () => {
     entity: 0.02,
     activation: 0,
     coAccess: 0,
+    reuse: 0,
     link: 0.01,
     recency: 0.03,
     tier: 1.2,
