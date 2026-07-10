@@ -23,6 +23,25 @@ export interface ProceduralMemoryEntry {
   readonly version: string | null;
   readonly lastUsedAt: string | null;
   readonly usedCount: number;
+  /**
+   * Outcome-validated recall (t_703f7b18). Times this procedure was applied
+   * and the host reported the downstream result. `successRate` ranks recall
+   * (see {@link rankProceduralMemory}); usage count is the fallback prior
+   * for procedures with no recorded outcomes. Additive: absent in an
+   * outcome-free vault (defaults 0), so pre-outcome indexes read identically.
+   */
+  readonly successCount: number;
+  readonly failureCount: number;
+}
+
+/** Host-reported outcome of applying a procedure. */
+export type ProceduralOutcome = "success" | "failure";
+
+interface UsageRecord {
+  readonly usedCount: number;
+  readonly lastUsedAt: string | null;
+  readonly successCount: number;
+  readonly failureCount: number;
 }
 
 export interface ProceduralReconcileOptions {
@@ -49,6 +68,8 @@ export function reconcileProceduralMemory(
       ...entry,
       lastUsedAt: used?.lastUsedAt ?? old?.lastUsedAt ?? null,
       usedCount: used?.usedCount ?? old?.usedCount ?? 0,
+      successCount: used?.successCount ?? old?.successCount ?? 0,
+      failureCount: used?.failureCount ?? old?.failureCount ?? 0,
     } satisfies ProceduralMemoryEntry;
   });
 
@@ -86,10 +107,52 @@ export function listProceduralMemory(vault: string): ReadonlyArray<ProceduralMem
       entries?: Array<ProceduralMemoryEntry>;
     };
     if (!Array.isArray(parsed.entries)) return Object.freeze([]);
-    return Object.freeze(parsed.entries);
+    // Normalize additive outcome fields so a pre-outcome index (written
+    // before t_703f7b18) reads with defaults instead of `undefined`.
+    return Object.freeze(
+      parsed.entries.map((entry) =>
+        Object.freeze({
+          ...entry,
+          successCount: typeof entry.successCount === "number" ? entry.successCount : 0,
+          failureCount: typeof entry.failureCount === "number" ? entry.failureCount : 0,
+        }),
+      ),
+    );
   } catch {
     return Object.freeze([]);
   }
+}
+
+/**
+ * Validated success rate in [0, 1], or null when the procedure has no
+ * recorded outcomes yet. `successes / (successes + failures)`.
+ */
+export function proceduralSuccessRate(entry: ProceduralMemoryEntry): number | null {
+  const total = entry.successCount + entry.failureCount;
+  return total > 0 ? entry.successCount / total : null;
+}
+
+/**
+ * Rank procedures by validated success rate, not raw usage (t_703f7b18).
+ * Proven-successful procedures rise, proven-failing ones sink, and
+ * procedures with no recorded outcomes sit in a neutral band ordered by
+ * the usage prior (usedCount then recency). Deterministic; no LLM.
+ */
+export function rankProceduralMemory(
+  entries: ReadonlyArray<ProceduralMemoryEntry>,
+): ReadonlyArray<ProceduralMemoryEntry> {
+  const NEUTRAL = 0.5;
+  const key = (e: ProceduralMemoryEntry): number => proceduralSuccessRate(e) ?? NEUTRAL;
+  return [...entries].toSorted((a, b) => {
+    const ra = key(a);
+    const rb = key(b);
+    if (ra !== rb) return rb - ra;
+    if (a.usedCount !== b.usedCount) return b.usedCount - a.usedCount;
+    const la = a.lastUsedAt ?? "";
+    const lb = b.lastUsedAt ?? "";
+    if (la !== lb) return la < lb ? 1 : -1;
+    return a.id.localeCompare(b.id);
+  });
 }
 
 export function markProceduralMemoryUsed(
@@ -117,6 +180,52 @@ export function markProceduralMemoryUsed(
   usage.set(id, {
     usedCount: (prev?.usedCount ?? 0) + 1,
     lastUsedAt: now.toISOString(),
+    successCount: prev?.successCount ?? 0,
+    failureCount: prev?.failureCount ?? 0,
+  });
+  writeUsageMap(vault, usage);
+  const graph = rebuildProceduralGraph(vault);
+  rebuildProceduralHints(vault, { graph });
+
+  return next.find((entry) => entry.id === id) ?? null;
+}
+
+/**
+ * Record the host-reported OUTCOME of applying a procedure (t_703f7b18).
+ * Increments successCount or failureCount on the entry and the usage
+ * sidecar; does NOT touch usedCount or lastUsedAt (that is
+ * {@link markProceduralMemoryUsed}). The kernel never infers the outcome -
+ * it is a structured enum supplied by the host, mirroring
+ * `brain_apply_evidence`. Returns the updated entry, or null for an
+ * unknown id. The fold is order-insensitive.
+ */
+export function recordProceduralOutcome(
+  vault: string,
+  id: string,
+  outcome: ProceduralOutcome,
+): ProceduralMemoryEntry | null {
+  const entries = listProceduralMemory(vault);
+  const target = entries.find((entry) => entry.id === id);
+  if (!target) return null;
+
+  const next = entries.map((entry) =>
+    entry.id === id
+      ? {
+          ...entry,
+          successCount: entry.successCount + (outcome === "success" ? 1 : 0),
+          failureCount: entry.failureCount + (outcome === "failure" ? 1 : 0),
+        }
+      : entry,
+  );
+  writeIndex(vault, next);
+
+  const usage = readUsageMap(vault);
+  const prev = usage.get(id);
+  usage.set(id, {
+    usedCount: prev?.usedCount ?? target.usedCount,
+    lastUsedAt: prev?.lastUsedAt ?? target.lastUsedAt,
+    successCount: (prev?.successCount ?? 0) + (outcome === "success" ? 1 : 0),
+    failureCount: (prev?.failureCount ?? 0) + (outcome === "failure" ? 1 : 0),
   });
   writeUsageMap(vault, usage);
   const graph = rebuildProceduralGraph(vault);
@@ -152,6 +261,8 @@ function collectEntries(vault: string, roots: ReadonlyArray<string>): Procedural
         version: asStringOrNull(fm["version"]),
         lastUsedAt: null,
         usedCount: 0,
+        successCount: 0,
+        failureCount: 0,
       });
     }
   }
@@ -241,13 +352,11 @@ function writeIndex(vault: string, entries: ReadonlyArray<ProceduralMemoryEntry>
   atomicWriteFileSync(path, `${payload}\n`);
 }
 
-function readUsageMap(
-  vault: string,
-): Map<string, { usedCount: number; lastUsedAt: string | null }> {
+function readUsageMap(vault: string): Map<string, UsageRecord> {
   const path = proceduralMemoryUsagePath(vault);
   if (!existsSync(path)) return new Map();
 
-  const out = new Map<string, { usedCount: number; lastUsedAt: string | null }>();
+  const out = new Map<string, UsageRecord>();
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (!line.trim()) continue;
     try {
@@ -257,6 +366,8 @@ function readUsageMap(
       out.set(id, {
         usedCount: typeof parsed["usedCount"] === "number" ? parsed["usedCount"] : 0,
         lastUsedAt: typeof parsed["lastUsedAt"] === "string" ? parsed["lastUsedAt"] : null,
+        successCount: typeof parsed["successCount"] === "number" ? parsed["successCount"] : 0,
+        failureCount: typeof parsed["failureCount"] === "number" ? parsed["failureCount"] : 0,
       });
     } catch {
       continue;
@@ -265,23 +376,23 @@ function readUsageMap(
   return out;
 }
 
-function writeUsageMap(
-  vault: string,
-  usage: ReadonlyMap<string, { usedCount: number; lastUsedAt: string | null }>,
-): void {
+function writeUsageMap(vault: string, usage: ReadonlyMap<string, UsageRecord>): void {
   const path = proceduralMemoryUsagePath(vault);
   mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
   const lines: string[] = [];
   for (const [id, value] of [...usage.entries()].toSorted((left, right) =>
     left[0].localeCompare(right[0]),
   )) {
-    lines.push(
-      JSON.stringify({
-        id,
-        usedCount: value.usedCount,
-        lastUsedAt: value.lastUsedAt,
-      }),
-    );
+    // Omit zero outcome counters so an outcome-free vault's usage file stays
+    // byte-identical to the pre-t_703f7b18 format.
+    const record: Record<string, unknown> = {
+      id,
+      usedCount: value.usedCount,
+      lastUsedAt: value.lastUsedAt,
+    };
+    if (value.successCount > 0) record["successCount"] = value.successCount;
+    if (value.failureCount > 0) record["failureCount"] = value.failureCount;
+    lines.push(JSON.stringify(record));
   }
   atomicWriteFileSync(path, `${lines.join("\n")}${lines.length > 0 ? "\n" : ""}`);
 }
