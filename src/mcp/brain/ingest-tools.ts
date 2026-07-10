@@ -10,6 +10,7 @@
  */
 
 import { planBatches, type BatchPlan } from "../../core/brain/ingest/batch-plan.ts";
+import { clearCheckpoint } from "../../core/brain/ingest/checkpoint.ts";
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
 import { IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
 import {
@@ -40,6 +41,7 @@ async function toolBrainIngestSource(
 ): Promise<Record<string, unknown>> {
   const sourcePath = coerceStr(args, "source_path", true)!;
   const summary = coerceStr(args, "summary", true)!;
+  const planId = coerceStr(args, "plan_id", false) ?? undefined;
   const parsed = parseExtractionIntakeArgs(args, TOOL);
   const agent =
     parsed.agent && parsed.agent.trim().length > 0
@@ -50,7 +52,7 @@ async function toolBrainIngestSource(
     const res = ingestSource(
       ctx.vault,
       { sourcePath, summary, extraction: parsed.intake },
-      { agent, now: new Date() },
+      { agent, now: new Date(), ...(planId !== undefined ? { planId } : {}) },
     );
     return {
       summary_path: res.summaryPath,
@@ -127,6 +129,8 @@ function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
     total_files: plan.totalFiles,
     total_bytes: plan.totalBytes,
     skipped: [...plan.skipped],
+    plan_id: plan.planId,
+    resumed_completed: plan.resumedCompleted,
     batches: plan.batches.map((b) => ({
       index: b.index,
       total_bytes: b.totalBytes,
@@ -154,7 +158,13 @@ async function toolBrainIngestBatchPlan(
     1,
     Number.MAX_SAFE_INTEGER,
   );
-  const plan = planBatches(ctx.vault, sourceDir, { maxBatchBytes, maxBatchFiles });
+  const resume = coerceBoolOptional(args, "resume") ?? false;
+  const plan = planBatches(ctx.vault, sourceDir, { maxBatchBytes, maxBatchFiles, resume });
+  // A resumed plan that comes back empty is fully drained: drop its checkpoint
+  // (the content manifest is the authoritative final state from here on).
+  if (resume && plan.batches.length === 0) {
+    clearCheckpoint(ctx.vault, plan.planId);
+  }
   return serializeBatchPlan(plan);
 }
 
@@ -208,6 +218,11 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agent: {
           type: "string",
           description: "Optional agent identity override; defaults to the server-resolved name.",
+        },
+        plan_id: {
+          type: "string",
+          description:
+            "Optional batch-plan id (from brain_ingest_batch_plan). When set, a successful ingest records this source into that plan's resume checkpoint.",
         },
       },
       required: ["source_path", "summary", "entities"],
@@ -283,6 +298,11 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description: `File-count cap per batch. Default ${DEFAULT_MAX_BATCH_FILES}.`,
+        },
+        resume: {
+          type: "boolean",
+          description:
+            "Resume an interrupted plan: exclude items already recorded completed in this plan's checkpoint. Default false.",
         },
       },
       required: ["source_dir"],

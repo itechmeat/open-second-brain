@@ -25,21 +25,44 @@ import {
   resolveSafeguardTimeoutMs,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
+import { evaluateStaleness } from "../../../core/brain/staleness.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
-import { parseFrontmatter } from "../../../core/vault.ts";
+import { listVaultPages, parseFrontmatter } from "../../../core/vault.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
-  "usage: o2b brain clusters run [--min-size N] [--batch-size N] | list  [--vault <path>] [--json]";
+  "usage: o2b brain clusters run [--min-size N] [--batch-size N] [--if-stale] | list  [--vault <path>] [--json]";
+
+/** Vault-relative directory holding the materialized cluster notes. */
+const CLUSTERS_DIR_REL = join("Brain", "clusters");
+
+/**
+ * Compare the materialized cluster notes against the vault's notes (their
+ * inputs) for the `--if-stale` fast-path. Cluster notes are excluded from the
+ * input set so an output never counts as its own input.
+ */
+function clustersStaleness(vault: string): ReturnType<typeof evaluateStaleness> {
+  const clustersDir = join(vault, CLUSTERS_DIR_REL);
+  const inputs = listVaultPages(vault)
+    .map((p) => p.path)
+    .filter((p) => !p.startsWith(clustersDir));
+  const outputs = existsSync(clustersDir)
+    ? readdirSync(clustersDir)
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => join(clustersDir, f))
+    : [];
+  return evaluateStaleness(inputs, outputs);
+}
 
 export async function cmdBrainClusters(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
     vault: { type: "string" },
     "min-size": { type: "string" },
     "batch-size": { type: "string" },
+    "if-stale": { type: "boolean" },
     json: { type: "boolean" },
   });
   const asJson = flags["json"] === true;
@@ -95,6 +118,31 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
     if (batchSize === false) {
       process.stderr.write("brain clusters run: --batch-size must be a positive integer\n");
       return 2;
+    }
+
+    // Staleness fast-path (t_845fe240): when the materialized cluster notes are
+    // already newer than every input note, skip the recompute entirely. Opt-in
+    // so the default behavior is unchanged; records a freshness-skip metric.
+    if (flags["if-stale"] === true) {
+      const staleness = clustersStaleness(vault);
+      if (staleness.fresh) {
+        try {
+          appendMetric(vault, {
+            surface: "communities",
+            runAt: isoSecond(new Date()),
+            payload: {
+              skipped: "fresh",
+              newest_input_ms: staleness.newestInputMs ?? 0,
+              oldest_output_ms: staleness.oldestOutputMs ?? 0,
+            },
+          });
+        } catch {
+          // Metrics are observability, not correctness.
+        }
+        if (asJson) okJson({ communities: 0, skipped: "fresh" });
+        else ok("clusters run: outputs already fresh - skipped (--if-stale)");
+        return 0;
+      }
     }
 
     const searchConfig = resolveSearchConfig({ vault, configPath: config ?? undefined });

@@ -49,8 +49,21 @@ export interface MemorySourceBackend {
   readonly label: string;
   /** Default memory directory for a vault under this runtime. */
   discoverMemoryDir(vault: string): string;
-  /** Parse one memory file's text. */
-  parseMemoryFile(text: string): MemorySourceParse;
+  /**
+   * The basenames under `dir` this backend parses, in deterministic order.
+   * A per-file backend (Claude Code) returns its `*.md` files minus the
+   * index; a collection backend (mem0 / generic JSON) returns its `*.json`
+   * export files. The import core reads each returned basename and feeds its
+   * text to {@link parseMemoryEntries}.
+   */
+  discoverMemoryFiles(dir: string): string[];
+  /**
+   * Parse one memory file's text into 0..N entries. A per-file format yields
+   * exactly one entry (feedback or skip); a collection format (a JSON export
+   * holding many memories) yields one entry per record. The single seam that
+   * lets one source file map to many Brain preferences.
+   */
+  parseMemoryEntries(text: string): MemorySourceParse[];
   /** Render a parsed entry as a Brain preference markdown body. */
   renderPreference(input: MemoryRenderInput): string;
   /** Deterministic name -> preference-slug transform. */

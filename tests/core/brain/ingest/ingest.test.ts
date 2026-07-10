@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -19,6 +19,7 @@ import {
   upsertEntity,
 } from "../../../../src/core/brain/entities/registry.ts";
 import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
+import { computePlanId, readCheckpoint } from "../../../../src/core/brain/ingest/checkpoint.ts";
 
 let vault: string;
 let configHome: string;
@@ -101,5 +102,23 @@ describe("ingestSource", () => {
     expect(res.summaryPath).toBeTruthy();
     const restaking = getEntity(vault, { category: "concept", query: "Restaking" });
     expect(restaking?.body).toContain("[[Articles/restaking-primer.md]]");
+  });
+
+  test("planId records the ingested vault-file source into the plan checkpoint (t_ba1fa5f6)", () => {
+    // The checkpoint is only recorded for a real vault file, so materialize it.
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, "Articles", "restaking-primer.md"), "content", "utf8");
+    const planId = computePlanId("Articles", ["Articles/restaking-primer.md"]);
+    ingestSource(vault, INPUT, { agent: "claude", now: NOW, planId });
+    const cp = readCheckpoint(vault, planId);
+    expect(cp?.completed).toEqual(["Articles/restaking-primer.md"]);
+  });
+
+  test("without planId no checkpoint is written", () => {
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, "Articles", "restaking-primer.md"), "content", "utf8");
+    const planId = computePlanId("Articles", ["Articles/restaking-primer.md"]);
+    ingestSource(vault, INPUT, { agent: "claude", now: NOW });
+    expect(readCheckpoint(vault, planId)).toBeNull();
   });
 });

@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -142,6 +142,39 @@ test("run without --batch-size omits the batches field", async () => {
   await index();
   const run = await runCli(["brain", "clusters", "run", "--vault", vault, "--json"]);
   expect(JSON.parse(run.stdout)).not.toHaveProperty("batches");
+});
+
+test("run --if-stale skips when outputs are already fresh (t_845fe240)", async () => {
+  await index();
+  const first = await runCli(["brain", "clusters", "run", "--vault", vault, "--json"]);
+  expect(first.returncode).toBe(0);
+  // Nothing changed since the materialization → outputs fresh → skip.
+  const second = await runCli([
+    "brain",
+    "clusters",
+    "run",
+    "--vault",
+    vault,
+    "--if-stale",
+    "--json",
+  ]);
+  expect(second.returncode).toBe(0);
+  expect(JSON.parse(second.stdout)).toMatchObject({ skipped: "fresh" });
+  const skipMetric = listMetrics(vault, { surface: "communities" }).some(
+    (m) => (m.payload as { skipped?: string }).skipped === "fresh",
+  );
+  expect(skipMetric).toBe(true);
+});
+
+test("run --if-stale recomputes after an input note changes (t_845fe240)", async () => {
+  await index();
+  await runCli(["brain", "clusters", "run", "--vault", vault]);
+  // Make an input note strictly newer than the materialized outputs.
+  const future = Date.now() / 1000 + 100;
+  utimesSync(join(vault, "team-a.md"), future, future);
+  const r = await runCli(["brain", "clusters", "run", "--vault", vault, "--if-stale", "--json"]);
+  expect(r.returncode).toBe(0);
+  expect(JSON.parse(r.stdout).skipped).toBeUndefined();
 });
 
 test("usage errors exit 2", async () => {

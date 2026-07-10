@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0] - 2026-07-10
+
+An ingestion and import robustness layer that hardens and extends the source pipeline in one coherent scope: interrupted batches resume, more memory stores import, deterministic refresh skips when nothing changed, and sources distill into citeable claims. Every new surface is additive and off by default where it changes an existing path; the kernel still calls no LLM.
+
+### Added
+
+- **Resumable per-item batch checkpointing.** A plan-scoped checkpoint under `<vault>/.open-second-brain/ingest-checkpoints/<plan_id>.json` records completed items union-as-you-go, so an interrupted large-folder ingest resumes at the item boundary instead of re-planning from scratch. `planBatches` accepts `resume`, which excludes checkpointed items before content-hash classification (a fast-path that avoids re-hashing completed work on a large-vault resume) and returns a stable `plan_id` plus a `resumed_completed` count; `ingestSource` records completion when handed a `plan_id`. The `brain_ingest_batch_plan` MCP tool gains `resume` and returns `plan_id`, clearing a drained plan; `brain_ingest_source` and the `o2b brain batch-plan --resume` CLI carry it through. The content-hash manifest stays the authoritative final state. Opt out with `OSB_INGEST_NO_CHECKPOINT`.
+- **mem0 and generic-JSON memory-store importers.** The `MemorySourceBackend` seam widened from one-file-one-entry to discover-files plus parse-entries, so a single JSON export maps to many Brain preferences. New `mem0` and `generic` backends parse a memory export (a top-level array or a `results`/`memories`/`entries` envelope) into preferences on the shared render path; the `claude` backend stays byte-identical. The `o2b brain import-claude-memory` CLI gains `--from`/`--backend` to select a non-default backend and can be pointed at a single export file. Unknown ids fail loudly with the registered list.
+- **Staleness fast-path for deterministic refresh.** A reusable mtime staleness gate plus an opt-in `o2b brain clusters run --if-stale` that no-ops when the materialized `Brain/clusters/` notes are already newer than every input note, recording a freshness-skip metric and skipping the recompute entirely. Default behavior is unchanged; the `>=` comparison errs toward recompute, and a missing input never forces a needless rebuild.
+- **Source distillation into atomic claims.** A new `o2b brain distill` CLI verb and `brain_distill_source` MCP tool condense a source into agent-supplied atomic claims, each with an optional source block id, and write an idempotent `Brain/distillations/` page that cites each claim as `[[source#^block]]` alongside a Sources provenance section and a content sha256 the verifier can reproduce. Provider-agnostic: the core runs no model, validates claims structurally, and rewrites one page per source in place.
+
 ## [1.26.1] - 2026-07-08
 
 An upstream-alignment guard release. Two regression suites now pin Open Second Brain's Hermes-facing surface against two landed upstream Hermes changes, with no source edits and no runtime behavior changes. The kernel still calls no LLM.
@@ -6393,6 +6404,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.27.0]: https://github.com/itechmeat/open-second-brain/compare/v1.26.1...v1.27.0
 [1.24.0]: https://github.com/itechmeat/open-second-brain/compare/v1.23.1...v1.24.0
 [1.23.1]: https://github.com/itechmeat/open-second-brain/compare/v1.23.0...v1.23.1
 [1.23.0]: https://github.com/itechmeat/open-second-brain/compare/v1.22.0...v1.23.0

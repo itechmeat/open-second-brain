@@ -27,6 +27,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, posix, relative } from "node:path";
 
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
+import { computePlanId, readCheckpoint } from "./checkpoint.ts";
 import { classifyPaths, readManifest } from "./content-manifest.ts";
 
 /**
@@ -54,6 +55,13 @@ export interface BatchPlanOptions {
    * {@link DEFAULT_INGESTIBLE_EXTENSIONS}.
    */
   readonly extensions?: readonly string[];
+  /**
+   * Resume an interrupted plan (t_ba1fa5f6): when true, items already recorded
+   * in this plan's checkpoint are excluded from the batches, on top of the
+   * manifest-`unchanged` skip. The plan id is derived from the full discovered
+   * set so it is stable across resumes. Absent → a fresh, checkpoint-blind plan.
+   */
+  readonly resume?: boolean;
 }
 
 /** One file selected for (re-)ingest, with the reason it was selected. */
@@ -89,6 +97,16 @@ export interface BatchPlan {
   readonly totalFiles: number;
   /** Total bytes across all batches. */
   readonly totalBytes: number;
+  /**
+   * Stable id for this plan (t_ba1fa5f6), derived from the source dir and the
+   * full discovered path set. The key an interrupted run resumes against.
+   */
+  readonly planId: string;
+  /**
+   * Count of new/modified items excluded because this plan's checkpoint already
+   * recorded them completed. Zero on a fresh plan or when `resume` is off.
+   */
+  readonly resumedCompleted: number;
 }
 
 /**
@@ -127,8 +145,23 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   collectIngestible(dirAbs, extensions, discovered);
   const relPaths = discovered.map((abs) => canonicalNotePath(toPosixRel(vault, abs))).toSorted();
 
+  // The plan id keys on the FULL discovered set, so it is identical before and
+  // after an interruption regardless of how many items have completed.
+  const planId = computePlanId(dirRel, relPaths);
+
+  // On resume, drop items this plan's checkpoint already recorded completed
+  // BEFORE classification, so those items are not re-hashed at all - the
+  // resume fast-path that keeps a large-vault resume near-free. The content
+  // manifest stays authoritative for anything the checkpoint does not cover.
+  const completed =
+    opts.resume === true
+      ? new Set(readCheckpoint(vault, planId)?.completed ?? [])
+      : new Set<string>();
+  const toClassify = relPaths.filter((p) => !completed.has(p));
+  const resumedCompleted = relPaths.length - toClassify.length;
+
   // Consult A1's manifest: only `new`/`modified` sources are worth ingesting.
-  const classification = classifyPaths(vault, relPaths, readManifest(vault));
+  const classification = classifyPaths(vault, toClassify, readManifest(vault));
   const skipped = [...classification.unchanged].toSorted();
 
   // Build the planned-file list, tagging each with why it was selected, in
@@ -152,6 +185,8 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     skipped,
     totalFiles: planned.length,
     totalBytes: planned.reduce((sum, f) => sum + f.bytes, 0),
+    planId,
+    resumedCompleted,
   };
 }
 

@@ -11,7 +11,15 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, utimesSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runCli } from "../helpers/run-cli.ts";
+import { runCli as baseRunCli, type RunCliOptions, type RunResult } from "../helpers/run-cli.ts";
+
+// The install/uninstall adapters resolve the target home directory from the
+// environment at module-load time, so they need a fresh child process per call
+// to honor this test's per-case temp HOME (the in-process fast path shares one
+// already-loaded module graph). Force the subprocess path for every call here.
+function runCli(args: ReadonlyArray<string>, opts: RunCliOptions = {}): Promise<RunResult> {
+  return baseRunCli(args, { ...opts, subprocess: true });
+}
 
 let vault: string;
 let home: string;

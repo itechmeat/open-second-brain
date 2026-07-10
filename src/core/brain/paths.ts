@@ -62,6 +62,8 @@ export const BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
 export const BRAIN_SOURCES_REL = posix.join(BRAIN_ROOT_REL, "sources");
 /** Cited research report pages: `Brain/reports/<date>-<slug>.md` (v1.7.0). */
 export const BRAIN_REPORTS_REL = posix.join(BRAIN_ROOT_REL, "reports");
+/** Source-distillation pages: `Brain/distillations/dist-<slug>.md` (t_2e2e959f). */
+export const BRAIN_DISTILLATIONS_REL = posix.join(BRAIN_ROOT_REL, "distillations");
 export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
 /**
  * Ephemeral MCP tool-result artifacts (v0.18.0). Dot-directory so the
@@ -186,6 +188,12 @@ export function preferencePath(vault: string, slug: string): string {
 export function sourcePagePath(vault: string, slug: string): string {
   const s = validateSlug(slug);
   return ensureInsideVault(join(vault, BRAIN_SOURCES_REL, `src-${s}.md`), vault);
+}
+
+/** Source-distillation page: `Brain/distillations/dist-<slug>.md`. */
+export function distillationPagePath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_DISTILLATIONS_REL, `dist-${s}.md`), vault);
 }
 
 /** Cited research report page: `Brain/reports/<date>-<slug>.md`. */

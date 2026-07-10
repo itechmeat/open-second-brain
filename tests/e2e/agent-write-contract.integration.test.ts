@@ -99,7 +99,7 @@ test("panel session: four lenses, synthesis, committed decision note", () => {
 test("backend registry renders a preference through the claude adapter", () => {
   const backend = resolveMemoryBackend(configPath);
   expect(backend.id).toBe("claude");
-  const parsed = backend.parseMemoryFile(
+  const parsed = backend.parseMemoryEntries(
     [
       "---",
       "name: prefer_pipelines",
@@ -110,7 +110,7 @@ test("backend registry renders a preference through the claude adapter", () => {
       "",
       "Use pipeline() by default.",
     ].join("\n"),
-  );
+  )[0]!;
   if (parsed.kind !== "feedback") throw new Error("expected feedback parse");
   const rendered = backend.renderPreference({
     name: parsed.name,
