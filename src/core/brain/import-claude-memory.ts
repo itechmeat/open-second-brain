@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { appendLogEvent } from "./log.ts";
@@ -103,48 +103,65 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   // any duplicate into the skipped list with a clear reason.
   const seenPrefIds = new Map<string, string>();
 
-  for (const name of readdirSync(opts.memoryDir).toSorted()) {
-    if (name === "MEMORY.md") continue;
-    if (!name.endsWith(".md")) continue;
-    const text = readFileSync(join(opts.memoryDir, name), "utf8");
-    const parsed = backend.parseMemoryFile(text);
-    if (parsed.kind === "skip") {
-      skipped.push({ basename: name, reason: parsed.skipReason });
-      continue;
-    }
-    const slug = backend.slugifyName(parsed.name);
-    const prefId = `pref-${slug}`;
-    const dupOf = seenPrefIds.get(prefId);
-    if (dupOf) {
-      skipped.push({
-        basename: name,
-        reason: `duplicate target preference id ${prefId} (also produced by ${dupOf}); rename the memory entry to disambiguate`,
+  // A backend either walks a directory of per-memory files (Claude Code) or is
+  // pointed at a single export file that holds many records (mem0 / generic
+  // JSON). When `memoryDir` resolves to a file, that file is the sole input and
+  // its extension is trusted (the operator chose it); otherwise the backend's
+  // own `discoverMemoryFiles` selects the ingestible basenames.
+  const memIsFile = statSync(opts.memoryDir).isFile();
+  const baseDir = memIsFile ? dirname(opts.memoryDir) : opts.memoryDir;
+  const files = memIsFile
+    ? [basename(opts.memoryDir)]
+    : backend.discoverMemoryFiles(opts.memoryDir);
+
+  for (const name of files) {
+    const text = readFileSync(join(baseDir, name), "utf8");
+    const entries = backend.parseMemoryEntries(text);
+    const multi = entries.length > 1;
+    entries.forEach((parsed, idx) => {
+      // The manifest/dedup key is the source basename for a single-entry file
+      // (byte-identical to the pre-seam Claude behavior) and `basename#slug`
+      // for one of many entries in a collection file, so a single JSON export
+      // maps to many preferences without colliding manifest rows.
+      if (parsed.kind === "skip") {
+        skipped.push({ basename: multi ? `${name}#${idx}` : name, reason: parsed.skipReason });
+        return;
+      }
+      const slug = backend.slugifyName(parsed.name);
+      const prefId = `pref-${slug}`;
+      const entryKey = multi ? `${name}#${slug}` : name;
+      const dupOf = seenPrefIds.get(prefId);
+      if (dupOf) {
+        skipped.push({
+          basename: entryKey,
+          reason: `duplicate target preference id ${prefId} (also produced by ${dupOf}); rename the memory entry to disambiguate`,
+        });
+        return;
+      }
+      seenPrefIds.set(prefId, entryKey);
+      // preferencePath adds pref- prefix itself, so pass just the slug
+      const prefFile = preferencePath(opts.vault, slug);
+      const manifestEntry = manifest.imports[entryKey];
+      const plan = planAction({
+        basename: entryKey,
+        prefId,
+        sha256: parsed.bodySha256,
+        inManifest: manifestEntry ? { sha256: manifestEntry.sha256 } : null,
+        prefExists: existsSync(prefFile),
       });
-      continue;
-    }
-    seenPrefIds.set(prefId, name);
-    // preferencePath adds pref- prefix itself, so pass just the slug
-    const prefFile = preferencePath(opts.vault, slug);
-    const manifestEntry = manifest.imports[name];
-    const plan = planAction({
-      basename: name,
-      prefId,
-      sha256: parsed.bodySha256,
-      inManifest: manifestEntry ? { sha256: manifestEntry.sha256 } : null,
-      prefExists: existsSync(prefFile),
+      plans.push(plan);
+      if (plan.action === "CREATE" || plan.action === "RECREATE" || plan.action === "UPDATE") {
+        const body = backend.renderPreference({
+          name: parsed.name,
+          description: parsed.description,
+          body: parsed.body,
+          memoryPath: join(baseDir, name),
+          importedAt,
+          bodySha256: parsed.bodySha256,
+        });
+        filesToWrite.push({ plan, body, sha256: parsed.bodySha256, slug });
+      }
     });
-    plans.push(plan);
-    if (plan.action === "CREATE" || plan.action === "RECREATE" || plan.action === "UPDATE") {
-      const body = backend.renderPreference({
-        name: parsed.name,
-        description: parsed.description,
-        body: parsed.body,
-        memoryPath: join(opts.memoryDir, name),
-        importedAt,
-        bodySha256: parsed.bodySha256,
-      });
-      filesToWrite.push({ plan, body, sha256: parsed.bodySha256, slug });
-    }
   }
 
   const conflicts = plans.filter((p) => p.action === "CONFLICT");

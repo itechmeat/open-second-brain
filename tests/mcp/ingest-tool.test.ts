@@ -88,7 +88,7 @@ describe("brain_ingest_batch_plan resume (t_ba1fa5f6)", () => {
     writeFileSync(join(vault, "Docs", "a.md"), "alpha", "utf8");
     writeFileSync(join(vault, "Docs", "b.md"), "bravo", "utf8");
 
-    const first = await batchPlan(ctx, { source_dir: "Docs" });
+    const first = (await batchPlan(ctx, { source_dir: "Docs" })) as Record<string, unknown>;
     expect(first["plan_id"]).toMatch(/^[0-9a-f]{16}$/);
     expect(first["total_files"]).toBe(2);
     expect(first["resumed_completed"]).toBe(0);
@@ -102,7 +102,10 @@ describe("brain_ingest_batch_plan resume (t_ba1fa5f6)", () => {
       plan_id: first["plan_id"],
     });
 
-    const resumed = await batchPlan(ctx, { source_dir: "Docs", resume: true });
+    const resumed = (await batchPlan(ctx, { source_dir: "Docs", resume: true })) as Record<
+      string,
+      unknown
+    >;
     expect(resumed["plan_id"]).toBe(first["plan_id"]);
     expect(resumed["resumed_completed"]).toBe(1);
     const files = (resumed["batches"] as Array<{ files: Array<{ path: string }> }>).flatMap((b) =>

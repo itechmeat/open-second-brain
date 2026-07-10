@@ -1,6 +1,9 @@
 import { defaultConfigPath } from "../../../core/config.ts";
 import { importClaudeMemory, ConflictsError } from "../../../core/brain/import-claude-memory.ts";
-import { resolveMemoryBackend } from "../../../core/brain/agent-backend/registry.ts";
+import {
+  getMemoryBackend,
+  resolveMemoryBackend,
+} from "../../../core/brain/agent-backend/registry.ts";
 import { resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number> {
@@ -13,6 +16,7 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
   let yes = false;
   let asJson = false;
   let vaultFlag: string | undefined;
+  let backendId: string | undefined;
 
   const consumeValue = (flag: string, next: string | undefined): string | null => {
     if (next === undefined || next.startsWith("--")) {
@@ -34,6 +38,12 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
       const v = consumeValue("--memory", argv[++i]);
       if (v === null) return 2;
       memory = v;
+      continue;
+    }
+    if (a === "--from" || a === "--backend") {
+      const v = consumeValue(a, argv[++i]);
+      if (v === null) return 2;
+      backendId = v;
       continue;
     }
     if (a === "--dry-run") {
@@ -82,13 +92,16 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
   }
 
   const vault = resolveBrainVault(vaultFlag, config);
-  // t_53f9f67f: the memory-format backend is config-selected
-  // (`memory_backend`, default claude) - unknown ids fail loudly here,
-  // before any filesystem work.
-  const backend = resolveMemoryBackend(config);
-  const memDir = memory ?? backend.discoverMemoryDir(vault);
 
   try {
+    // t_53f9f67f/t_ac9d2588: the memory-format backend is `--from`-selected,
+    // else config-selected (`memory_backend`, default claude). Unknown ids fail
+    // loudly with the registered list, before any filesystem work. mem0/generic
+    // have no default location, so their `discoverMemoryDir` throws unless
+    // `--memory` was given - caught here, not crashed.
+    const backend =
+      backendId !== undefined ? getMemoryBackend(backendId) : resolveMemoryBackend(config);
+    const memDir = memory ?? backend.discoverMemoryDir(vault);
     const res = importClaudeMemory({
       vault,
       memoryDir: memDir,

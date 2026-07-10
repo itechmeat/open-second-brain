@@ -84,4 +84,53 @@ describe("o2b brain import-claude-memory CLI", () => {
     expect(res.returncode).toBe(2);
     expect(res.stderr).toMatch(/--apply.*--dry-run|--dry-run.*--apply/);
   });
+
+  test("--from mem0 imports a mem0 export (t_ac9d2588)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "o2b-cm-cli-mem0-"));
+    const vault = join(tmp, "vault");
+    const config = join(tmp, "config.yaml");
+    const env = { OPEN_SECOND_BRAIN_CONFIG: config };
+    await runCli(["init", "--vault", vault, "--name", "Test"], { env });
+    await runCli(["brain", "init", "--vault", vault], { env });
+    const exportFile = join(tmp, "mem0-export.json");
+    writeFileSync(
+      exportFile,
+      JSON.stringify([{ name: "from-mem0", memory: "Imported from mem0." }]),
+      "utf8",
+    );
+    const res = await runCli(
+      [
+        "brain",
+        "import-claude-memory",
+        "--vault",
+        vault,
+        "--from",
+        "mem0",
+        "--memory",
+        exportFile,
+        "--dry-run",
+        "--allow-arbitrary-memory-path",
+      ],
+      { env },
+    );
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("CREATE pref-from-mem0");
+    rmSync(tmp, { recursive: true });
+  });
+
+  test("--from with an unknown backend fails loudly", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "o2b-cm-cli-badbackend-"));
+    const vault = join(tmp, "vault");
+    const config = join(tmp, "config.yaml");
+    const env = { OPEN_SECOND_BRAIN_CONFIG: config };
+    await runCli(["init", "--vault", vault, "--name", "Test"], { env });
+    await runCli(["brain", "init", "--vault", vault], { env });
+    const res = await runCli(
+      ["brain", "import-claude-memory", "--vault", vault, "--from", "nope"],
+      { env },
+    );
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toMatch(/unknown memory backend 'nope'/);
+    rmSync(tmp, { recursive: true });
+  });
 });
