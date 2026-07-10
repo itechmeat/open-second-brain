@@ -49,6 +49,7 @@ import { planUninstall, renderPlan } from "./uninstall.ts";
 import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
 import { cmdInitInteractive } from "./install/init-interactive.ts";
+import { buildOnboardingChecklist, renderOnboardingChecklist } from "./onboarding.ts";
 import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
@@ -160,6 +161,33 @@ async function cmdInit(argv: string[]): Promise<number> {
     process.stdout.write(`timezone persisted to: ${configPath}\n`);
   }
   writeSearchInitBlock(configPath);
+  // Guided first-run onboarding: turn the bare init into a walked-through
+  // checklist of state-aware next steps (t_84500f39). Additive - the search
+  // block above is unchanged. Best-effort: a checklist failure must never fail
+  // the init that already persisted config.
+  try {
+    const checklist = buildOnboardingChecklist(resolvedVault, { configPath });
+    process.stdout.write(renderOnboardingChecklist(checklist));
+  } catch {
+    // onboarding is advisory; never break init
+  }
+  return 0;
+}
+
+async function cmdOnboarding(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const checklist = buildOnboardingChecklist(vault, { configPath: config });
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify(checklist, sortedReplacer, 2) + "\n");
+    return 0;
+  }
+  process.stdout.write(renderOnboardingChecklist(checklist));
   return 0;
 }
 
@@ -835,6 +863,7 @@ const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "discipline",
   "partner",
   "doctor",
+  "onboarding",
 ]);
 
 async function dispatchCommand(command: string, rest: string[]): Promise<number> {
@@ -846,6 +875,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await cmdInit(rest);
       case "doctor":
         return await cmdDoctor(rest);
+      case "onboarding":
+        return await cmdOnboarding(rest);
       case "export-config":
         return await cmdExportConfig(rest);
       case "index":

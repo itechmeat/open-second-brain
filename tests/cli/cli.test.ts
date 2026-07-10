@@ -203,6 +203,38 @@ describe("doctor", () => {
   });
 });
 
+describe("onboarding", () => {
+  test("init prints the guided onboarding checklist after the search block", async () => {
+    const vault = join(tmp, "ob-vault");
+    const config = join(tmp, "ob-config.yaml");
+    const r = await runCli(["init", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config, XDG_CONFIG_HOME: "", VAULT_DIR: "" },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("initialized vault");
+    expect(r.stdout).toContain("Next steps:");
+    expect(r.stdout).toContain("o2b search index");
+  });
+
+  test("o2b onboarding re-runs the checklist and supports --json", async () => {
+    const vault = join(tmp, "ob-vault2");
+    const config = join(tmp, "ob-config2.yaml");
+    const env = { OPEN_SECOND_BRAIN_CONFIG: config, XDG_CONFIG_HOME: "", VAULT_DIR: "" };
+    await runCli(["init", "--vault", vault], { env });
+
+    const text = await runCli(["onboarding", "--vault", vault, "--config", config], { env });
+    expect(text.returncode).toBe(0);
+    expect(text.stdout).toContain("Next steps:");
+
+    const json = await runCli(["onboarding", "--vault", vault, "--config", config, "--json"], {
+      env,
+    });
+    const parsed = JSON.parse(json.stdout);
+    expect(Array.isArray(parsed.steps)).toBe(true);
+    expect(parsed.steps.find((s: { id: string }) => s.id === "vault_configured").done).toBe(true);
+  });
+});
+
 describe("index", () => {
   test("errors when no vault anywhere", async () => {
     const cfg = join(tmp, "config.yaml");
