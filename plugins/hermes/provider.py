@@ -111,33 +111,41 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
     def _resolve_command(cls) -> tuple[str, ...]:
         """Determine the right argv prefix for the ``o2b mcp`` subprocess.
 
-        On POSIX, ``scripts/o2b`` is a bash wrapper that ``install-cli`` may
-        have symlinked into ``~/.local/bin``; ``shutil.which("o2b")`` finds it
-        and ``Popen`` can execute it directly.
-
-        On Windows, bash scripts are not directly executable by
-        ``subprocess.Popen`` (it delegates to ``cmd.exe``, not a POSIX shell).
-        Even if ``o2b`` were on PATH, Popen would fail with ``[WinError 193]``
-        or ``[WinError 2]``.  The correct cross-platform fallback is to invoke
-        the TypeScript entry point through ``bun run``, which works identically
-        on every OS.
-
-        Resolution order:
-        1. POSIX + ``o2b`` in PATH → ``("o2b", "mcp")``
-        2. ``bun`` in PATH + repo root has ``src/cli/main.ts`` →
-           ``("bun", "run", "<entry>", "mcp")``
-        3. Fallback → ``("o2b", "mcp")`` (will surface a clear Popen error)
+        Hermes memory providers can run with a tiny inherited ``PATH``. Resolve
+        absolute executable paths before falling back to bare command names.
         """
-        # On non-Windows, a globally installed o2b works out of the box.
-        if os.name != "nt" and shutil.which("o2b"):
-            return ("o2b", "mcp")
+        path_dirs = [
+            Path.home() / ".local" / "bin",
+            Path.home() / ".bun" / "bin",
+            Path.home() / ".hermes" / "node" / "bin",
+            Path("/opt/homebrew/bin"),
+            Path("/usr/local/bin"),
+            Path("/usr/bin"),
+            Path("/bin"),
+        ]
 
-        # Resolve via the repo-local TypeScript entry point + bun.
+        def find_exe(name: str) -> str | None:
+            found = shutil.which(name)
+            if found:
+                return found
+            for directory in path_dirs:
+                candidate = directory / name
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate)
+            return None
+
+        # On non-Windows, a globally installed or user-local o2b works directly.
+        if os.name != "nt":
+            o2b = find_exe("o2b")
+            if o2b:
+                return (o2b, "mcp")
+
+        # Resolve via repo-local TypeScript entry point + bun.
         root = cls._repo_root()
         if root:
             entry = Path(root) / "src" / "cli" / "main.ts"
             if entry.is_file():
-                bun = shutil.which("bun")
+                bun = find_exe("bun")
                 if bun:
                     return (bun, "run", str(entry), "mcp")
 

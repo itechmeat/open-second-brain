@@ -342,6 +342,21 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
         self.assertEqual(json.loads(result), {"ok": True})
         self.assertEqual(bridge.calls, [("brain_note", {"text": "hi"})])
 
+    def test_resolve_command_uses_user_local_o2b_when_path_is_tiny(self):
+        saved_path = os.environ.get("PATH")
+        try:
+            os.environ["PATH"] = ""
+            command = OpenSecondBrainMemoryProvider._resolve_command()
+        finally:
+            if saved_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = saved_path
+
+        self.assertNotEqual(command[0], "o2b")
+        self.assertTrue(Path(command[0]).is_absolute())
+        self.assertIn(command[1], {"mcp", "run"})
+
 
 class CliTests(unittest.TestCase):
     _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
