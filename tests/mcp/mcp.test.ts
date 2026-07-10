@@ -291,6 +291,8 @@ describe("tool listing", () => {
         "brain_ingest_source",
         // Large-folder ingest planner (memory-signal-provenance-lifecycle A3).
         "brain_ingest_batch_plan",
+        // Source distillation into atomic claims (ingestion-import-robustness t_2e2e959f).
+        "brain_distill_source",
         // Source cleanup: search + delete by exact source file (C6, v1.x).
         "brain_search_by_source",
         "brain_delete_by_source",
@@ -587,7 +589,9 @@ describe("stdio loop", () => {
     //   source file, memory-signal-provenance-lifecycle C6) = 95.
     // + brain_ingest_batch_plan (large-folder ingest planner,
     //   memory-signal-provenance-lifecycle A3) = 96.
-    expect(list.result.tools.length).toBe(96);
+    // + brain_distill_source (source distillation into atomic claims,
+    //   ingestion-import-robustness t_2e2e959f) = 97.
+    expect(list.result.tools.length).toBe(97);
   });
 
   test("returns parse error for invalid JSON", async () => {

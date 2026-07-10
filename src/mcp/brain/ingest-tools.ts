@@ -222,7 +222,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         plan_id: {
           type: "string",
           description:
-            "Optional batch-plan id (from brain_ingest_batch_plan). When set, a successful ingest records this source into that plan's resume checkpoint so an interrupted batch resumes at the item boundary.",
+            "Optional batch-plan id (from brain_ingest_batch_plan). When set, a successful ingest records this source into that plan's resume checkpoint.",
         },
       },
       required: ["source_path", "summary", "entities"],
@@ -302,7 +302,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         resume: {
           type: "boolean",
           description:
-            "Resume an interrupted plan: exclude items already recorded completed in this plan's checkpoint (on top of the unchanged skip). A drained resumed plan clears its checkpoint. Default false.",
+            "Resume an interrupted plan: exclude items already recorded completed in this plan's checkpoint. Default false.",
         },
       },
       required: ["source_dir"],

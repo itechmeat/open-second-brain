@@ -65,7 +65,7 @@ export const DISTILL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Distill one source into atomic claims with block-level provenance. Supply `source_path` (vault path or URL) and `claims`: a non-empty array of { text, block? } where `block` is the source's Obsidian block id (`^abc`). OSB writes one idempotent distillation page listing each claim with its `[[source#^block]]` citation and a Sources section. No model, no extraction.",
+      "Distill one source into atomic claims with block-level provenance. Supply `source_path` (vault path or URL) and `claims`: a non-empty array of { text, block? } (`block` is the source's Obsidian block id). Writes one idempotent page citing each claim as `[[source#^block]]`. No model.",
     inputSchema: {
       type: "object",
       properties: {
