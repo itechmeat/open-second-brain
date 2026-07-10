@@ -52,7 +52,7 @@ import { cmdInitInteractive } from "./install/init-interactive.ts";
 import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
-import { startHttp } from "../mcp/http.ts";
+import { startHttp, isLoopbackHost } from "../mcp/http.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
@@ -459,8 +459,13 @@ async function cmdMcp(argv: string[]): Promise<number> {
   }
   const host = flags["host"] as string;
   const apiKey = flags["api-key"] as string | undefined;
-  if (transport === "http" && (apiKey === undefined || apiKey === "")) {
-    process.stderr.write("o2b mcp: --api-key is required when --transport http is used\n");
+  // Bearer is optional on a loopback bind (the loopback bind + Host/Origin
+  // rebinding guard are the baseline defence) but mandatory on a non-loopback
+  // host, which would otherwise expose the Brain unauthenticated on the network.
+  if (transport === "http" && !isLoopbackHost(host) && (apiKey === undefined || apiKey === "")) {
+    process.stderr.write(
+      "o2b mcp: --api-key is required when --transport http binds a non-loopback --host\n",
+    );
     return 2;
   }
 

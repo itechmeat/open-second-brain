@@ -1,9 +1,45 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { JSONRPC_VERSION, PROTOCOL_VERSION, startHttp } from "../../src/mcp/index.ts";
+
+interface RawResponse {
+  readonly status: number;
+  readonly body: string;
+}
+
+/**
+ * Raw HTTP request with fully-controllable headers (fetch forbids overriding
+ * Host). Used to exercise the DNS-rebinding guard.
+ */
+function rawRequest(
+  url: string,
+  opts: { method?: string; headers?: Record<string, string>; body?: string } = {},
+): Promise<RawResponse> {
+  const u = new URL(url);
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        hostname: u.hostname,
+        port: u.port,
+        path: u.pathname,
+        method: opts.method ?? "GET",
+        headers: opts.headers ?? {},
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on("error", reject);
+    if (opts.body !== undefined) req.write(opts.body);
+    req.end();
+  });
+}
 
 interface JsonObject {
   readonly [key: string]: any;
@@ -41,8 +77,88 @@ async function post(
 }
 
 describe("Streamable HTTP MCP transport", () => {
-  test("refuses to start without an API key", async () => {
-    await expect(startHttp({ vault }, { host: "127.0.0.1", port: 0 })).rejects.toThrow(/api-key/i);
+  test("refuses to bind a non-loopback host without an API key", async () => {
+    await expect(startHttp({ vault }, { host: "0.0.0.0", port: 0 })).rejects.toThrow(/api-key/i);
+  });
+
+  test("starts on loopback without an API key (guards are the baseline)", async () => {
+    const handle = await startHttp({ vault }, { host: "127.0.0.1", port: 0 });
+    try {
+      const res = await post(
+        handle.url,
+        rpc("initialize", 1, { protocolVersion: PROTOCOL_VERSION, capabilities: {} }),
+      );
+      expect(res.status).toBe(200);
+      const body = await responseJson(res);
+      expect(body.result.protocolVersion).toBe(PROTOCOL_VERSION);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  test("GET /health returns 200 without a bearer", async () => {
+    const handle = await startHttp({ vault }, { apiKey: "secret", host: "127.0.0.1", port: 0 });
+    try {
+      const res = await rawRequest(`${handle.url}/health`, { method: "GET" });
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body).status).toBe("ok");
+    } finally {
+      await handle.close();
+    }
+  });
+
+  test("rejects a mismatched Host header (DNS-rebinding guard)", async () => {
+    const handle = await startHttp({ vault }, { apiKey: "secret", host: "127.0.0.1", port: 0 });
+    try {
+      const res = await rawRequest(handle.url, {
+        method: "POST",
+        headers: { host: "evil.example.com", "content-type": "application/json" },
+        body: JSON.stringify(rpc("ping", 1)),
+      });
+      expect(res.status).toBe(403);
+      expect(res.body).toContain("Host not allowed");
+    } finally {
+      await handle.close();
+    }
+  });
+
+  test("rejects a cross-origin Origin header", async () => {
+    const handle = await startHttp({ vault }, { apiKey: "secret", host: "127.0.0.1", port: 0 });
+    try {
+      const res = await rawRequest(handle.url, {
+        method: "POST",
+        headers: {
+          host: `127.0.0.1:${handle.port}`,
+          origin: "http://evil.example.com",
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(rpc("ping", 1)),
+      });
+      expect(res.status).toBe(403);
+      expect(res.body).toContain("Origin not allowed");
+    } finally {
+      await handle.close();
+    }
+  });
+
+  test("accepts a loopback Origin", async () => {
+    const handle = await startHttp({ vault }, { apiKey: "secret", host: "127.0.0.1", port: 0 });
+    try {
+      const res = await rawRequest(handle.url, {
+        method: "POST",
+        headers: {
+          host: `127.0.0.1:${handle.port}`,
+          origin: `http://127.0.0.1:${handle.port}`,
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(rpc("ping", 1)),
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await handle.close();
+    }
   });
 
   test("uses generic 401 for missing and wrong API keys", async () => {

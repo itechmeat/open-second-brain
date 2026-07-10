@@ -37,14 +37,21 @@ export async function startHttp(
   runtimeOpts: MCPServerRuntimeOptions = {},
 ): Promise<HttpServerHandle> {
   const apiKey = opts.apiKey ?? null;
-  if (apiKey === null || apiKey === "") {
-    throw new Error("HTTP MCP transport requires --api-key");
-  }
   const host = opts.host ?? "127.0.0.1";
+  // Safe by default: on the loopback default a bearer is optional (the
+  // loopback bind + Host/Origin rebinding guard are the baseline defence).
+  // Binding to a NON-loopback interface exposes the Brain on the network, so
+  // a bearer is mandatory there - no permissive fallback.
+  if (!isLoopbackHost(host) && (apiKey === null || apiKey === "")) {
+    throw new Error(
+      "HTTP MCP transport bound to a non-loopback host requires --api-key " +
+        `(host=${host}); refusing to expose an unauthenticated endpoint on the network`,
+    );
+  }
   const port = opts.port ?? 0;
   const mcp = new MCPServer(ctx, runtimeOpts);
   const server = createServer(async (req, res) => {
-    await handleHttpRequest(mcp, apiKey, req, res);
+    await handleHttpRequest(mcp, apiKey, host, req, res);
   });
   server.listen(port, host);
   await once(server, "listening");
@@ -74,11 +81,39 @@ export async function serveHttp(
 
 async function handleHttpRequest(
   mcp: MCPServer,
-  apiKey: string,
+  apiKey: string | null,
+  boundHost: string,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  if (!authorized(req, apiKey)) {
+  // DNS-rebinding guard (always enforced, never bypassable): a malicious web
+  // page that resolves its own domain to 127.0.0.1 still sends its Host /
+  // Origin, so rejecting any non-loopback Host/Origin blocks the rebind even
+  // when the socket is loopback-bound.
+  if (!hostAllowed(req, boundHost)) {
+    res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Forbidden: Host not allowed\n");
+    return;
+  }
+  if (!originAllowed(req, boundHost)) {
+    res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Forbidden: Origin not allowed\n");
+    return;
+  }
+
+  const path = (req.url ?? "/").split("?")[0];
+
+  // Health endpoint: an unauthenticated liveness probe (still behind the Host
+  // guard), so a supervisor can check the transport without a bearer.
+  if (req.method === "GET" && path === "/health") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", transport: "http" }) + "\n");
+    return;
+  }
+
+  // Bearer is optional on loopback (guards are the baseline) but enforced when
+  // configured; a non-loopback bind always has a key (see startHttp).
+  if (apiKey !== null && apiKey !== "" && !authorized(req, apiKey)) {
     res.writeHead(401, { "content-type": "text/plain; charset=utf-8" });
     res.end("Unauthorized\n");
     return;
@@ -138,6 +173,56 @@ function authorized(req: IncomingMessage, apiKey: string): boolean {
   const presented = bearerToken(req.headers.authorization) ?? firstHeader(req.headers["x-api-key"]);
   if (presented === undefined) return false;
   return constantTimeEqual(presented, apiKey);
+}
+
+/** Canonical loopback host names a rebinding guard trusts. */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+export function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_HOSTS.has(normaliseHostname(host));
+}
+
+/** Strip a port and IPv6 brackets, lowercase - `[::1]:8080` -> `::1`. */
+function normaliseHostname(value: string): string {
+  let host = value.trim().toLowerCase();
+  if (host.startsWith("[")) {
+    // Bracketed IPv6, optionally with :port after the bracket.
+    const end = host.indexOf("]");
+    return end === -1 ? host.slice(1) : host.slice(1, end);
+  }
+  // IPv4/hostname: drop a trailing :port (a bare IPv6 has multiple colons).
+  const colon = host.indexOf(":");
+  if (colon !== -1 && host.indexOf(":", colon + 1) === -1) host = host.slice(0, colon);
+  return host;
+}
+
+/**
+ * The `Host` header must name a loopback address or the exact bound host.
+ * A present-but-foreign Host is the DNS-rebinding signal and is rejected; an
+ * absent Host (uncommon; not a browser rebind) is allowed.
+ */
+function hostAllowed(req: IncomingMessage, boundHost: string): boolean {
+  const host = req.headers.host;
+  if (host === undefined) return true;
+  const hostname = normaliseHostname(host);
+  return isLoopbackHost(hostname) || hostname === normaliseHostname(boundHost);
+}
+
+/**
+ * When an `Origin` is present (a browser request), its host must be loopback
+ * or the bound host; a cross-origin browser request is rejected. A missing
+ * Origin (non-browser client) is allowed.
+ */
+function originAllowed(req: IncomingMessage, boundHost: string): boolean {
+  const origin = firstHeader(req.headers.origin);
+  if (origin === undefined || origin === "" || origin === "null") return origin !== "null";
+  let hostname: string;
+  try {
+    hostname = new URL(origin).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return isLoopbackHost(hostname) || hostname === normaliseHostname(boundHost);
 }
 
 function bearerToken(value: string | undefined): string | undefined {
