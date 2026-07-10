@@ -83,6 +83,7 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_feedback: "write; returns a small fixed-shape ack",
   brain_apply_evidence: "write; returns a small fixed-shape ack",
   brain_note: "write; returns a small fixed-shape ack",
+  brain_observed_use: "write; returns a small fixed-shape ack (records/aggregates count)",
   brain_create_note: "write; returns the created note path and a created flag",
   brain_pinned_context: "pinned.md is operator-curated and small by practice",
   brain_recall_feedback: "write; returns one event receipt plus bounded weights",
