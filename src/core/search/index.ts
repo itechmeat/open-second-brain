@@ -413,6 +413,11 @@ export function resolveSearchConfig(opts: {
   const baseUrl = explicitBaseUrl ?? registryExpansion?.baseUrl ?? null;
   const model = explicitModel ?? registryExpansion?.model ?? null;
   const apiKey = explicitApiKey ?? registryExpansion?.apiKey ?? null;
+  // Multi-key failover list: an explicit key is single-valued; otherwise
+  // use the registry profile's ordered probe list. Empty when no key.
+  const apiKeys: ReadonlyArray<string> = explicitApiKey
+    ? [explicitApiKey]
+    : (registryExpansion?.apiKeys ?? (apiKey ? [apiKey] : []));
   const dimRaw = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_DIM", "embedding_dimension");
   const dimension =
     dimRaw === null ? null : parseInteger(dimRaw, 0, "embedding_dimension", { min: 1 });
@@ -446,6 +451,7 @@ export function resolveSearchConfig(opts: {
     baseUrl,
     model,
     apiKey,
+    apiKeys: Object.freeze(apiKeys),
     dimension,
     timeoutMs,
     concurrency,

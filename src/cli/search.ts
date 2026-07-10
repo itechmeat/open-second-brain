@@ -351,7 +351,25 @@ interface CliRegistryProfile {
   readonly name: string;
   readonly baseUrl: string;
   readonly defaultModel: string;
-  readonly envKey: string;
+  readonly envKey: string | ReadonlyArray<string>;
+}
+
+/** Render an env-key that may be a single name or an ordered probe list. */
+function formatEnvKey(envKey: string | ReadonlyArray<string>): string {
+  return typeof envKey === "string" ? envKey : envKey.join(",");
+}
+
+/**
+ * Parse a `--env-key` flag into a single name or an ordered probe list.
+ * Accepts a comma-separated list so multi-key failover is CLI-registrable;
+ * a single name stays a plain string (byte-identical single-key profile).
+ */
+function parseEnvKeyFlag(raw: string): string | string[] {
+  const parts = raw
+    .split(",")
+    .map((k) => k.trim())
+    .filter((k) => k !== "");
+  return parts.length <= 1 ? (parts[0] ?? "") : parts;
 }
 
 /**
@@ -367,6 +385,11 @@ interface ProviderRegistryOps<T extends CliRegistryProfile> {
   readonly get: (vault: string, name: string) => T | null;
   readonly add: (vault: string, profile: CliRegistryProfile) => ReadonlyArray<T>;
   readonly remove: (vault: string, name: string) => { removed: boolean };
+  /**
+   * When true, `--env-key` accepts a comma-separated probe list for
+   * multi-key failover (embedding provider only). Rerank stays single-key.
+   */
+  readonly multiKey?: boolean;
 }
 
 /**
@@ -409,7 +432,9 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
       return 0;
     }
     for (const p of registry) {
-      process.stdout.write(`${p.name}  ${p.baseUrl}  model=${p.defaultModel}  env=${p.envKey}\n`);
+      process.stdout.write(
+        `${p.name}  ${p.baseUrl}  model=${p.defaultModel}  env=${formatEnvKey(p.envKey)}\n`,
+      );
     }
     return 0;
   }
@@ -424,7 +449,7 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
     process.stdout.write(
       json
         ? JSON.stringify(profile) + "\n"
-        : `${profile.name}\n  base-url:  ${profile.baseUrl}\n  model:     ${profile.defaultModel}\n  env-key:   ${profile.envKey}\n`,
+        : `${profile.name}\n  base-url:  ${profile.baseUrl}\n  model:     ${profile.defaultModel}\n  env-key:   ${formatEnvKey(profile.envKey)}\n`,
     );
     return 0;
   }
@@ -451,13 +476,15 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
       `${verb} add requires --base-url, --model, and --env-key (the env var NAME holding the API key)`,
     );
   }
-  const registry = ops.add(cfg.vault, { name, baseUrl, defaultModel: model, envKey });
+  const envKeyValue = ops.multiKey ? parseEnvKeyFlag(envKey) : envKey;
+  const registry = ops.add(cfg.vault, { name, baseUrl, defaultModel: model, envKey: envKeyValue });
   const added = registry.find((p) => p.name === name)!;
   if (json) {
     process.stdout.write(JSON.stringify(added) + "\n");
   } else {
+    const envHint = Array.isArray(envKeyValue) ? envKeyValue.join(" or ") : envKeyValue;
     process.stdout.write(
-      `added ${kind} '${name}' (set ${envKey} in the environment to supply its key)\n`,
+      `added ${kind} '${name}' (set ${envHint} in the environment to supply its key)\n`,
     );
   }
   return 0;
@@ -471,6 +498,7 @@ async function cmdSearchProvider(argv: ReadonlyArray<string>): Promise<number> {
     get: getProviderProfile,
     add: addProviderProfile,
     remove: removeProviderProfile,
+    multiKey: true,
   });
 }
 
@@ -482,7 +510,9 @@ async function cmdSearchRerankProvider(argv: ReadonlyArray<string>): Promise<num
     kind: "rerank provider",
     load: loadRerankRegistry,
     get: getRerankProviderProfile,
-    add: addRerankProviderProfile,
+    // Rerank stays single-key; coerce any probe-list shape back to a string.
+    add: (vault, profile) =>
+      addRerankProviderProfile(vault, { ...profile, envKey: formatEnvKey(profile.envKey) }),
     remove: removeRerankProviderProfile,
   });
 }

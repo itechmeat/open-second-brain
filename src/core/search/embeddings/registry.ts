@@ -24,8 +24,19 @@ export interface ProviderProfile {
   readonly name: string;
   readonly baseUrl: string;
   readonly defaultModel: string;
-  /** Environment variable NAME the API key is read from (never the key). */
-  readonly envKey: string;
+  /**
+   * Environment variable NAME(s) the API key is read from (never the key).
+   * A single string keeps the original single-key behaviour; an ordered
+   * list is a probe list resolved first-present-wins, with the remaining
+   * present keys kept as request-time failover candidates.
+   */
+  readonly envKey: string | ReadonlyArray<string>;
+}
+
+/** Normalise `envKey` (string | list) to an ordered list of env-var names. */
+function envKeyList(envKey: ProviderProfile["envKey"]): string[] {
+  const raw = typeof envKey === "string" ? [envKey] : [...envKey];
+  return raw.map((k) => k.trim()).filter((k) => k !== "");
 }
 
 /** Built-in provider names a profile may not reuse. */
@@ -41,6 +52,11 @@ export function providerRegistryPath(vault: string): string {
   return join(vault, "Brain", "search", "embedding-providers.json");
 }
 
+function isEnvKey(value: unknown): value is string | ReadonlyArray<string> {
+  if (typeof value === "string") return true;
+  return Array.isArray(value) && value.every((k) => typeof k === "string");
+}
+
 function isProfile(value: unknown): value is ProviderProfile {
   if (value === null || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
@@ -48,7 +64,7 @@ function isProfile(value: unknown): value is ProviderProfile {
     typeof v["name"] === "string" &&
     typeof v["baseUrl"] === "string" &&
     typeof v["defaultModel"] === "string" &&
-    typeof v["envKey"] === "string"
+    isEnvKey(v["envKey"])
   );
 }
 
@@ -98,8 +114,11 @@ function validateProfile(profile: ProviderProfile): void {
   if (profile.defaultModel.trim() === "") {
     throw new SearchError("INVALID_INPUT", "provider default-model must not be empty");
   }
-  if (profile.envKey.trim() === "") {
-    throw new SearchError("INVALID_INPUT", "provider env-key must not be empty");
+  if (envKeyList(profile.envKey).length === 0) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      "provider env-key must not be empty (and a probe list must hold at least one non-empty name)",
+    );
   }
 }
 
@@ -109,11 +128,14 @@ function validateProfile(profile: ProviderProfile): void {
  */
 export function addProviderProfile(vault: string, profile: ProviderProfile): ProviderProfile[] {
   validateProfile(profile);
+  const keys = envKeyList(profile.envKey);
   const normalised: ProviderProfile = Object.freeze({
     name: profile.name.trim(),
     baseUrl: profile.baseUrl.trim(),
     defaultModel: profile.defaultModel.trim(),
-    envKey: profile.envKey.trim(),
+    // Preserve the single-string shape for single-key profiles so existing
+    // registry files stay byte-identical; store a list only when given one.
+    envKey: typeof profile.envKey === "string" ? keys[0]! : Object.freeze(keys),
   });
   const without = loadProviderRegistry(vault).filter((p) => p.name !== normalised.name);
   const next = [...without, normalised];
@@ -142,13 +164,18 @@ export interface ExpandedProvider {
   readonly provider: "openai-compat";
   readonly baseUrl: string;
   readonly model: string;
+  /** First present probe key (backward-compatible single value); null if none set. */
   readonly apiKey: string | null;
+  /** All present probe keys in profile order; request-time failover candidates. */
+  readonly apiKeys: ReadonlyArray<string>;
 }
 
 /**
- * Expand a registered provider name into `openai-compat` config, reading
- * the API key from `env[profile.envKey]`. Returns null when the name is
- * not registered (the caller then falls back to built-in resolution).
+ * Expand a registered provider name into `openai-compat` config, resolving
+ * the API key(s) from the profile's `envKey` probe list (first-present
+ * wins; the rest are kept as failover candidates). Returns null when the
+ * name is not registered (the caller then falls back to built-in
+ * resolution).
  */
 export function expandRegisteredProvider(
   name: string,
@@ -157,11 +184,14 @@ export function expandRegisteredProvider(
 ): ExpandedProvider | null {
   const profile = registry.find((p) => p.name === name);
   if (!profile) return null;
-  const apiKey = env[profile.envKey];
+  const present = envKeyList(profile.envKey)
+    .map((varName) => env[varName])
+    .filter((v): v is string => v !== undefined && v !== "");
   return Object.freeze({
     provider: "openai-compat" as const,
     baseUrl: profile.baseUrl,
     model: profile.defaultModel,
-    apiKey: apiKey !== undefined && apiKey !== "" ? apiKey : null,
+    apiKey: present[0] ?? null,
+    apiKeys: Object.freeze(present),
   });
 }

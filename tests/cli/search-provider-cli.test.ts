@@ -105,3 +105,25 @@ test("provider show of an unknown name exits non-zero", async () => {
   const show = await runCli(["search", "provider", "show", "ghost"], { env: env() });
   expect(show.returncode).not.toBe(0);
 });
+
+test("provider add accepts a comma-separated --env-key probe list", async () => {
+  const add = await runCli(
+    [
+      "search",
+      "provider",
+      "add",
+      "multi",
+      "--base-url",
+      "https://x/v1",
+      "--model",
+      "m",
+      "--env-key",
+      "PRIMARY_KEY,SECONDARY_KEY",
+    ],
+    { env: env() },
+  );
+  expect(add.returncode).toBe(0);
+  const list = await runCli(["search", "provider", "list", "--json"], { env: env() });
+  const arr = JSON.parse(list.stdout);
+  expect(arr[0].envKey).toEqual(["PRIMARY_KEY", "SECONDARY_KEY"]);
+});

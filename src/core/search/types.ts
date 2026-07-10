@@ -574,6 +574,13 @@ export interface ResolvedEmbeddingConfig {
   readonly baseUrl: string | null;
   readonly model: string | null;
   readonly apiKey: string | null;
+  /**
+   * Ordered API-key failover list (multi-key fallback). When present and
+   * non-empty, the provider starts on the first key and, on an auth error
+   * (HTTP 401/403), fails over to the next, pinning the first that works.
+   * Absent/empty means single-key behaviour over `apiKey` (byte-identical).
+   */
+  readonly apiKeys?: ReadonlyArray<string>;
   readonly dimension: number | null;
   readonly timeoutMs: number;
   readonly concurrency: number;
