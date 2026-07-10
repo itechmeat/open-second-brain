@@ -51,6 +51,36 @@ test("union of keyword + semantic produces hybrid scoring", () => {
   expect(map.get(3)?.searchType).toBe("semantic");
 });
 
+test("observed-reuse boost lifts an equally-relevant chunk (t_65588d8b)", () => {
+  const kw: KeywordHit[] = [
+    { chunkId: 1, documentId: 10, bm25: -3 },
+    { chunkId: 2, documentId: 11, bm25: -3 },
+  ];
+  const hydrated = new Map<number, HydratedChunk>([
+    [1, hyd(1, 10, OLD_MTIME)],
+    [2, hyd(2, 11, OLD_MTIME)],
+  ]);
+  const base = {
+    keyword: kw,
+    semantic: [] as SemanticHit[],
+    hydrated,
+    inboundLinkSources: new Map<number, ReadonlySet<number>>(),
+    tagsByDoc: new Map<number, ReadonlySet<string>>(),
+  };
+  const opts = { keywordWeight: 0.6, semanticWeight: 0.4, limit: 10, nowMs: NOW };
+
+  // Without a reuse signal, the two chunks are tied.
+  const neutral = rankResults(base, opts);
+  expect(neutral[0]!.score).toBeCloseTo(neutral[1]!.score, 6);
+
+  // With chunk 2 carrying a high observed-reuse score, it must lead.
+  const boosted = rankResults({ ...base, reuseRateByChunk: new Map([[2, 1]]) }, opts);
+  expect(boosted[0]!.chunkId).toBe(2);
+  const c1 = boosted.find((r) => r.chunkId === 1)!;
+  const c2 = boosted.find((r) => r.chunkId === 2)!;
+  expect(c2.score).toBeGreaterThan(c1.score);
+});
+
 test("score is clamped to [0,1] even with boosts", () => {
   const ranked = rankResults(
     {

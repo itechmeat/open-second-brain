@@ -27,6 +27,7 @@ import {
   readLearnedWeights,
 } from "./feedback.ts";
 import { parseFreshnessTrend } from "../brain/temporal/freshness-trend.ts";
+import { observedReuseRates } from "../brain/observed-use.ts";
 import { effectiveActivation, halfLifeDays, resolveActivationKind } from "./activation/decay.ts";
 import {
   ACCESS_EVENT_PATHS_CAP,
@@ -814,6 +815,25 @@ export async function search(
       if (byDoc.size > 0) trendByDoc = byDoc;
     }
 
+    // Observed-reuse boost (t_65588d8b): fold the session-end USED/IGNORED/
+    // CONTRADICTED verdicts into a per-document reuse score and map it onto
+    // each candidate chunk. Keyed by path (else id) to match how verdicts
+    // are recorded. Empty (byte-identical) when no verdicts exist.
+    let reuseRateByChunk: ReadonlyMap<number, number> | undefined;
+    {
+      const reuse = observedReuseRates(config.vault);
+      if (reuse.size > 0) {
+        const byChunk = new Map<number, number>();
+        for (const chunkId of idsList) {
+          const h = hydrated.get(chunkId);
+          if (h === undefined) continue;
+          const entry = reuse.get(h.path) ?? reuse.get(`${h.documentId}:${chunkId}`);
+          if (entry !== undefined && entry.score > 0) byChunk.set(chunkId, entry.score);
+        }
+        if (byChunk.size > 0) reuseRateByChunk = byChunk;
+      }
+    }
+
     // When a property filter is active, overfetch the ranked
     // candidates so the post-filter result set still has a chance
     // of producing `limit` matching rows. Without this, the
@@ -887,6 +907,7 @@ export async function search(
           ...(activationByChunk !== undefined ? { activationByChunk } : {}),
           ...(coAccessByChunk !== undefined ? { coAccessByChunk } : {}),
           ...(trendByDoc !== undefined ? { trendByDoc } : {}),
+          ...(reuseRateByChunk !== undefined ? { reuseRateByChunk } : {}),
         },
         {
           keywordWeight: opts.keywordWeight ?? config.keywordWeight,

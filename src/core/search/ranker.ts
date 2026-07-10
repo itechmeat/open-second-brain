@@ -64,6 +64,14 @@ export interface RankerInputs {
    * entries (and the absent map) stay neutral.
    */
   readonly trendByDoc?: ReadonlyMap<number, string>;
+  /**
+   * Optional observed-reuse score per chunk in [0, 1] (t_65588d8b): the
+   * folded USED-vs-CONTRADICTED rate of the chunk's document, the preferred
+   * outcome signal over predicted importance. Missing entries (and the
+   * absent map) contribute zero boost, so a vault with no observed-use
+   * verdicts ranks bit-identically.
+   */
+  readonly reuseRateByChunk?: ReadonlyMap<number, number>;
 }
 
 /** Freshness-trend multipliers on the relevance portion. */
@@ -396,6 +404,14 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
       }
     }
     const coAccessBoost = Math.min(0.03, coAccessRaw);
+    // Observed-reuse boost (t_65588d8b): the folded USED-vs-CONTRADICTED
+    // rate of the chunk's document. Capped at 0.06 - larger than the
+    // activation / co-access caps so a memory the agent demonstrably reused
+    // outranks one merely predicted-important, yet still a bounded re-ranker
+    // that never floats an irrelevant chunk. Zero (byte-identical) when no
+    // observed-use verdicts exist.
+    const reuseRate = clamp01(inputs.reuseRateByChunk?.get(c.chunkId) ?? 0);
+    const reuseBoost = Math.min(0.06, reuseRate * 0.06);
     const sessionFocus = scoreSessionFocusTarget(hyd, opts.sessionFocus, nowMs);
     const score = clamp01(
       weighted * tierMul * trendMul +
@@ -404,6 +420,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         entityBoost +
         activationBoost +
         coAccessBoost +
+        reuseBoost +
         sessionFocus,
     );
 

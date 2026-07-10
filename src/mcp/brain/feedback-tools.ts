@@ -41,6 +41,11 @@ import { appendBrainNote } from "../../core/brain/note.ts";
 import { mirrorSignal, resolveSharedNamespace } from "../../core/brain/shared-namespace.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
+import {
+  emitObservedUse,
+  isObservedUseVerdict,
+  type ObservedUseEntry,
+} from "../../core/brain/observed-use.ts";
 import { coerceStr, coerceBool, coerceIsoDate } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 
@@ -432,6 +437,56 @@ async function toolBrainApplyEvidence(
   }
 }
 
+// ----- brain_observed_use (t_65588d8b) -------------------------------------
+
+/**
+ * Record session-end observed-use verdicts (USED / IGNORED / CONTRADICTED)
+ * per injected memory, mirroring `brain_apply_evidence`: the host supplies
+ * already-structured verdicts (no LLM in the kernel), which are folded into
+ * the observed-reuse ranking signal. The kernel only stores and aggregates.
+ */
+async function toolBrainObservedUse(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const rawEntries = args["entries"];
+  if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
+    throw new MCPError(INVALID_PARAMS, "argument 'entries' must be a non-empty array");
+  }
+  const entries: ObservedUseEntry[] = rawEntries.map((raw, i) => {
+    if (raw === null || typeof raw !== "object") {
+      throw new MCPError(INVALID_PARAMS, `entries[${i}] must be an object`);
+    }
+    const e = raw as Record<string, unknown>;
+    const id = typeof e["id"] === "string" ? e["id"].trim() : "";
+    if (id === "") throw new MCPError(INVALID_PARAMS, `entries[${i}].id is required`);
+    const verdict = e["verdict"];
+    if (!isObservedUseVerdict(verdict)) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `entries[${i}].verdict must be 'USED', 'IGNORED', or 'CONTRADICTED'`,
+      );
+    }
+    const path = typeof e["path"] === "string" && e["path"] !== "" ? e["path"] : undefined;
+    return { id, verdict, ...(path ? { path } : {}) };
+  });
+
+  const host = coerceStr(args, "host", false) ?? "mcp";
+  const sessionId = coerceStr(args, "session_id", false) ?? undefined;
+  const turnId = coerceStr(args, "turn_id", false) ?? undefined;
+  const record = emitObservedUse(ctx.vault, {
+    host,
+    ...(sessionId ? { sessionId } : {}),
+    ...(turnId ? { turnId } : {}),
+    entries,
+  });
+  return {
+    recorded: entries.length,
+    record_id: record.id,
+    created_at: record.createdAt,
+  };
+}
+
 // ----- brain_note (§32B, v0.10.8) ------------------------------------------
 
 /**
@@ -637,5 +692,39 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainNote,
+  },
+  {
+    name: "brain_observed_use",
+    description:
+      "Record session-end observed-use verdicts (USED/IGNORED/CONTRADICTED) per injected memory. The host supplies structured verdicts; the kernel stores and aggregates them into the observed-reuse recall-ranking signal (no LLM).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entries: {
+          type: "array",
+          description: "One verdict per injected memory.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "Injected memory id (e.g. docId:chunkId)." },
+              path: { type: "string", description: "Vault-relative path when known." },
+              verdict: {
+                type: "string",
+                enum: ["USED", "IGNORED", "CONTRADICTED"],
+                description: "Observed use of this memory in the session.",
+              },
+            },
+            required: ["id", "verdict"],
+            additionalProperties: false,
+          },
+        },
+        host: { type: "string", description: "Host label; defaults to 'mcp'." },
+        session_id: { type: "string", description: "Correlation id for the session." },
+        turn_id: { type: "string", description: "Correlation id for the prompt-submit turn." },
+      },
+      required: ["entries"],
+      additionalProperties: false,
+    },
+    handler: toolBrainObservedUse,
   },
 ]);
