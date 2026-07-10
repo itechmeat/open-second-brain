@@ -44,6 +44,7 @@ export const RESERVED_PROVIDER_NAMES: ReadonlyArray<string> = Object.freeze([
   "openai-compat",
   "disabled",
   "local",
+  "zeroentropy",
 ]);
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]*$/;

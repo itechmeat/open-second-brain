@@ -570,7 +570,7 @@ export interface SearchOutcome {
 
 export interface ResolvedEmbeddingConfig {
   readonly enabled: boolean;
-  readonly provider: "openai-compat" | "disabled" | "local";
+  readonly provider: "openai-compat" | "disabled" | "local" | "zeroentropy";
   readonly baseUrl: string | null;
   readonly model: string | null;
   readonly apiKey: string | null;

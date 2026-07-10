@@ -286,14 +286,21 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
 
 function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {
   if (raw === null) return DEFAULTS.provider;
-  if (raw === "openai-compat" || raw === "disabled" || raw === "local") return raw;
+  if (raw === "openai-compat" || raw === "disabled" || raw === "local" || raw === "zeroentropy") {
+    return raw;
+  }
   throw new SearchError(
     "INVALID_INPUT",
-    `embedding_provider must be 'openai-compat', 'local', 'disabled', or a registered provider name, got '${raw}'`,
+    `embedding_provider must be 'openai-compat', 'zeroentropy', 'local', 'disabled', or a registered provider name, got '${raw}'`,
   );
 }
 
-const BUILTIN_PROVIDERS: ReadonlySet<string> = new Set(["openai-compat", "disabled", "local"]);
+const BUILTIN_PROVIDERS: ReadonlySet<string> = new Set([
+  "openai-compat",
+  "disabled",
+  "local",
+  "zeroentropy",
+]);
 
 /**
  * Resolve a non-built-in `embedding_provider` name against the registry.

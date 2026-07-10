@@ -44,6 +44,12 @@ export function makeProvider(config: ResolvedEmbeddingConfig): EmbeddingProvider
       require("./openai-compat.ts") as typeof import("./openai-compat.ts");
     return new OpenAICompatProvider(config);
   }
+  if (config.provider === "zeroentropy") {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { ZeroEntropyProvider } =
+      require("./zeroentropy.ts") as typeof import("./zeroentropy.ts");
+    return new ZeroEntropyProvider(config);
+  }
   throw new SearchError(
     "INVALID_INPUT",
     `unknown embedding_provider '${String((config as { provider?: string }).provider)}'`,
