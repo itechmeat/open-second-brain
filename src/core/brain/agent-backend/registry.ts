@@ -9,12 +9,16 @@
 
 import { discoverConfig } from "../../config.ts";
 import { claudeMemoryBackend } from "./claude.ts";
+import { genericMemoryBackend } from "./generic.ts";
+import { mem0MemoryBackend } from "./mem0.ts";
 import type { MemorySourceBackend } from "./types.ts";
 
 export const DEFAULT_MEMORY_BACKEND_ID = "claude";
 
 const REGISTRY: ReadonlyMap<string, MemorySourceBackend> = new Map([
   [claudeMemoryBackend.id, claudeMemoryBackend],
+  [mem0MemoryBackend.id, mem0MemoryBackend],
+  [genericMemoryBackend.id, genericMemoryBackend],
 ]);
 
 /** Registered backends in registration order. */

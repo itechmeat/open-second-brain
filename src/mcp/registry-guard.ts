@@ -91,6 +91,7 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   schema_apply_mutations: "write; returns a bounded mutation receipt",
   brain_intake_entities: "write; returns created/updated id lists and a relation count",
   brain_ingest_source: "write; returns the summary path plus bounded id lists",
+  brain_distill_source: "write; returns the distillation path plus a claim count and source hash",
   brain_research_report: "write; returns the report path and a finding count",
   brain_derive_fact: "write; returns one derived preference id, its level and premises",
   brain_memory_bridge:

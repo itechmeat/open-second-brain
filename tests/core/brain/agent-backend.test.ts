@@ -49,9 +49,9 @@ const MEMORY_FILE = [
   "**How to apply:** Use neutral punctuation.",
 ].join("\n");
 
-test("registry lists the claude backend and resolves it by id", () => {
+test("registry lists the registered backends and resolves them by id", () => {
   const ids = listMemoryBackends().map((b) => b.id);
-  expect(ids).toEqual(["claude"]);
+  expect(ids).toEqual(["claude", "mem0", "generic"]);
   expect(getMemoryBackend("claude").id).toBe("claude");
   expect(DEFAULT_MEMORY_BACKEND_ID).toBe("claude");
 });
@@ -75,8 +75,9 @@ test("resolveMemoryBackend defaults to claude and honors the memory_backend conf
 });
 
 test("the claude adapter is byte-identical to the claude-memory modules", () => {
-  const parsed = claudeMemoryBackend.parseMemoryFile(MEMORY_FILE);
-  expect(parsed).toEqual(parseClaudeMemoryFile(MEMORY_FILE));
+  const entries = claudeMemoryBackend.parseMemoryEntries(MEMORY_FILE);
+  expect(entries).toEqual([parseClaudeMemoryFile(MEMORY_FILE)]);
+  const parsed = entries[0]!;
   if (parsed.kind !== "feedback") throw new Error("fixture must parse as feedback");
 
   expect(claudeMemoryBackend.slugifyName(parsed.name)).toBe(slugifyMemoryName(parsed.name));

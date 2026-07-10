@@ -38,6 +38,7 @@ import {
   sourceIdentityHash,
   type Provenance,
 } from "../provenance/provenance.ts";
+import { recordCompleted } from "./checkpoint.ts";
 import { updateManifest } from "./content-manifest.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
@@ -55,6 +56,13 @@ export interface IngestSourceInput {
 export interface IngestSourceOptions {
   readonly agent: string;
   readonly now: Date;
+  /**
+   * Batch-plan id (t_ba1fa5f6). When set, a successful ingest of a vault-file
+   * source records the source into that plan's resume checkpoint
+   * (union-as-you-go). The content manifest stays the authoritative final
+   * state; the checkpoint only tracks plan progress. Absent → no checkpoint.
+   */
+  readonly planId?: string;
 }
 
 export interface IngestSourceResult {
@@ -145,6 +153,17 @@ export function ingestSource(
   // bytes to hash and must leave the manifest untouched (backward-compatible).
   if (existsSync(join(vault, canonicalSource))) {
     updateManifest(vault, [canonicalSource]);
+    // Record plan-scoped progress so an interrupted batch resumes at the item
+    // boundary (t_ba1fa5f6). Only for real vault files - a URL/identity-only
+    // source has no place in a folder plan's checkpoint. Best-effort: a
+    // checkpoint write failure must never fail the ingest that already landed.
+    if (opts.planId !== undefined && opts.planId.length > 0) {
+      try {
+        recordCompleted(vault, opts.planId, dirname(canonicalSource), [canonicalSource], opts.now);
+      } catch {
+        // Checkpointing is a resumability optimization, not correctness.
+      }
+    }
   }
 
   return {

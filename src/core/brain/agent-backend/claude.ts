@@ -8,6 +8,8 @@
  * modules directly (regression-tested).
  */
 
+import { readdirSync } from "node:fs";
+
 import { defaultMemoryDir } from "../claude-memory-paths.ts";
 import { parseClaudeMemoryFile } from "../claude-memory-parser.ts";
 import { renderPreferenceFromMemory, slugifyMemoryName } from "../claude-memory-render.ts";
@@ -19,8 +21,17 @@ export const claudeMemoryBackend: MemorySourceBackend = Object.freeze({
   discoverMemoryDir(vault: string): string {
     return defaultMemoryDir(vault);
   },
-  parseMemoryFile(text: string): MemorySourceParse {
-    return parseClaudeMemoryFile(text);
+  discoverMemoryFiles(dir: string): string[] {
+    // One memory file per `.md`, minus the human-facing index. Sorted for a
+    // deterministic import order - identical to the walk the core used before
+    // the seam widened.
+    return readdirSync(dir)
+      .toSorted()
+      .filter((name) => name !== "MEMORY.md" && name.endsWith(".md"));
+  },
+  parseMemoryEntries(text: string): MemorySourceParse[] {
+    // A Claude memory file is exactly one entry (feedback or skip).
+    return [parseClaudeMemoryFile(text)];
   },
   renderPreference(input: MemoryRenderInput): string {
     return renderPreferenceFromMemory(input);
