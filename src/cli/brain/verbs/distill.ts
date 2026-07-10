@@ -61,17 +61,18 @@ export async function cmdBrainDistill(argv: string[]): Promise<number> {
   });
   const source = positional[0];
   if (!source) return fail(USAGE);
-
-  const claimsRaw =
-    typeof flags["claims"] === "string"
-      ? (flags["claims"] as string)
-      : typeof flags["claims-file"] === "string"
-        ? readFileSync(flags["claims-file"] as string, "utf8")
-        : null;
-  if (claimsRaw === null) return fail(USAGE);
+  if (typeof flags["claims"] !== "string" && typeof flags["claims-file"] !== "string") {
+    return fail(USAGE);
+  }
 
   try {
     const { config, vault } = brainVerbContext(flags);
+    // Read the claims source inside the try so a missing --claims-file is a
+    // clean error, not an uncaught throw.
+    const claimsRaw =
+      typeof flags["claims"] === "string"
+        ? (flags["claims"] as string)
+        : readFileSync(flags["claims-file"] as string, "utf8");
     const claims = parseClaims(claimsRaw);
     const res = distillSource(
       vault,
