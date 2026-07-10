@@ -24,7 +24,7 @@ import { coerceBoolOptional, coerceInt, coerceStr } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
-import { wrapToolErrors } from "./shared.ts";
+import { enforceCountGuard, readCountGuardArgs, wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_ingest_source";
 const SEARCH_TOOL = "brain_search_by_source";
@@ -81,6 +81,10 @@ function serializePlan(plan: SourceCleanupPlan): Record<string, unknown> {
     confirmed: plan.confirmed,
     include_originals: plan.includeOriginals,
     blast_radius: plan.blastRadius,
+    // Honest matched-vs-changed accounting: `matched` is what the plan would
+    // touch; `changed` is what was actually removed (0 on a dry run).
+    matched: plan.blastRadius,
+    changed: plan.deleted.length,
     derived: plan.derived.map(serializeEntry),
     mentions: plan.mentions.map(serializeEntry),
     originals: [...plan.originals],
@@ -89,6 +93,15 @@ function serializePlan(plan: SourceCleanupPlan): Record<string, unknown> {
     manifest_entry_removed: plan.manifestEntryRemoved,
     audit_record_id: plan.auditRecordId,
   };
+}
+
+/** The vault-relative identities a cleanup plan would touch (for guard output). */
+function planMatchList(plan: SourceCleanupPlan): string[] {
+  return [
+    ...plan.derived.map((e) => e.match ?? e.id),
+    ...plan.mentions.map((e) => e.match ?? e.id),
+    ...plan.originals,
+  ];
 }
 
 async function toolBrainSearchBySource(
@@ -112,12 +125,27 @@ async function toolBrainDeleteBySource(
   const confirm = coerceBoolOptional(args, "confirm") ?? false;
   const includeOriginals = coerceBoolOptional(args, "include_originals") ?? false;
   const agent = coerceStr(args, "agent", false) ?? undefined;
-  const plan = deleteBySource(ctx.vault, sourceFile, {
-    confirm,
+  const { expect, strict } = readCountGuardArgs(args);
+  const now = new Date();
+  const baseOpts = {
     includeOriginals,
-    now: new Date(),
+    now,
     ...(agent !== undefined ? { agent } : {}),
+  };
+
+  // Compute the (non-destructive) plan first so the count guard can assert the
+  // blast radius BEFORE anything is deleted; only then confirm the removal.
+  const preview = deleteBySource(ctx.vault, sourceFile, { confirm: false, ...baseOpts });
+  enforceCountGuard({
+    matched: preview.blastRadius,
+    expect,
+    strict,
+    willMutate: confirm,
+    matchList: planMatchList(preview),
   });
+  const plan = confirm
+    ? deleteBySource(ctx.vault, sourceFile, { confirm: true, ...baseOpts })
+    : preview;
   return serializePlan(plan);
 }
 
@@ -270,6 +298,16 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agent: {
           type: "string",
           description: "Optional agent identity recorded in the audit reason.",
+        },
+        expect: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Count guard: assert the blast radius equals N. On mismatch the op aborts without deleting and returns the matched list.",
+        },
+        strict: {
+          type: "boolean",
+          description: "Refuse a confirmed deletion that carries no `expect` guard. Default false.",
         },
       },
       required: ["source_file"],

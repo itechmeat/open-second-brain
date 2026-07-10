@@ -12,6 +12,7 @@
  */
 
 import { deleteBySource } from "../../../core/brain/source-cleanup.ts";
+import { CountGuardError, assertExpectedCount } from "../../../core/brain/count-guard.ts";
 import { brainVerbContext, fail, info, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
@@ -19,22 +20,55 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
     vault: { type: "string" },
     confirm: { type: "boolean" },
     "include-originals": { type: "boolean" },
+    expect: { type: "string" },
+    strict: { type: "boolean" },
     json: { type: "boolean" },
   });
   const sourceFile = positional[0];
   if (!sourceFile) {
     return fail(
-      "usage: o2b brain forget-source <source> [--confirm] [--include-originals] [--json]",
+      "usage: o2b brain forget-source <source> [--confirm] [--include-originals] " +
+        "[--expect N] [--strict] [--json]",
     );
   }
 
+  const expectRaw = flags["expect"] as string | undefined;
+  let expect: number | null = null;
+  if (expectRaw !== undefined) {
+    const n = Number(expectRaw);
+    if (!Number.isInteger(n) || n < 0) {
+      return fail("--expect must be a non-negative integer");
+    }
+    expect = n;
+  }
+  const strict = flags["strict"] === true;
+  const confirm = flags["confirm"] === true;
+  const includeOriginals = flags["include-originals"] === true;
+
   try {
     const { vault } = brainVerbContext(flags);
-    const plan = deleteBySource(vault, sourceFile, {
-      confirm: flags["confirm"] === true,
-      includeOriginals: flags["include-originals"] === true,
-      now: new Date(),
+    const now = new Date();
+    // Preview first so the count guard asserts the blast radius before any
+    // deletion; only then confirm.
+    const preview = deleteBySource(vault, sourceFile, {
+      confirm: false,
+      includeOriginals,
+      now,
     });
+    assertExpectedCount({
+      matched: preview.blastRadius,
+      expect,
+      strict,
+      willMutate: confirm,
+      matchList: [
+        ...preview.derived.map((e) => e.match ?? e.path),
+        ...preview.mentions.map((e) => e.match ?? e.path),
+        ...preview.originals,
+      ],
+    });
+    const plan = confirm
+      ? deleteBySource(vault, sourceFile, { confirm: true, includeOriginals, now })
+      : preview;
 
     if (flags["json"]) {
       okJson({
@@ -42,6 +76,8 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
         confirmed: plan.confirmed,
         include_originals: plan.includeOriginals,
         blast_radius: plan.blastRadius,
+        matched: plan.blastRadius,
+        changed: plan.deleted.length,
         derived: plan.derived.map((e) => ({
           path: e.path,
           kind: e.kind,
