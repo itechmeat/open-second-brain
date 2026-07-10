@@ -1,5 +1,5 @@
 name: open-second-brain
-version: "1.27.0"
+version: "1.27.1"
 description: "Open Second Brain - native Hermes memory provider backed by an Obsidian-compatible Markdown vault."
 author: "Open Second Brain contributors"
 memory_provider: true

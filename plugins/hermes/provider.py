@@ -18,7 +18,10 @@ import re
 import shutil
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 from . import config
 from ._base import MemoryProvider
@@ -50,6 +53,53 @@ _CONFIG_KEYS: tuple[str, ...] = ("vault", "agent_name", "timezone")
 
 # Token budget for the recall slice fetched on each prefetch.
 _PREFETCH_MAX_TOKENS = 1024
+
+
+def _fallback_exe_dirs() -> tuple[Path, ...]:
+    """Directories scanned for an executable when a tiny inherited ``PATH``
+    hides it from ``shutil.which``. Computed per call so it tracks the current
+    ``$HOME`` (and stays patchable in tests)."""
+    home = Path.home()
+    return (
+        home / ".local" / "bin",
+        home / ".bun" / "bin",
+        home / ".hermes" / "node" / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+        Path("/usr/bin"),
+        Path("/bin"),
+    )
+
+
+def _find_executable(name: str, search_dirs: Iterable[Path] | None = None) -> str | None:
+    """Resolve ``name`` to an absolute executable path.
+
+    ``shutil.which`` (which honours ``PATH``) wins when it can see the binary.
+    Hermes can start the provider from a process with a minimal inherited
+    ``PATH``; then ``which`` returns nothing even though the executable exists
+    in a user-local bin, so fall back to scanning a curated directory set.
+
+    On Windows the scan appends ``PATHEXT`` suffixes (``.EXE``/``.CMD``/...) to
+    a bare name and does not gate on the POSIX execute bit, which has no meaning
+    there; on POSIX it matches the exact name and requires ``X_OK``.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    dirs = tuple(search_dirs) if search_dirs is not None else _fallback_exe_dirs()
+    if os.name == "nt" and not os.path.splitext(name)[1]:
+        exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep) if e]
+        candidate_names = [name + ext for ext in exts]
+    else:
+        candidate_names = [name]
+    for directory in dirs:
+        for candidate_name in candidate_names:
+            candidate = directory / candidate_name
+            if not candidate.is_file():
+                continue
+            if os.name == "nt" or os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
 
 
 class OpenSecondBrainMemoryProvider(MemoryProvider):
@@ -111,33 +161,28 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
     def _resolve_command(cls) -> tuple[str, ...]:
         """Determine the right argv prefix for the ``o2b mcp`` subprocess.
 
-        On POSIX, ``scripts/o2b`` is a bash wrapper that ``install-cli`` may
-        have symlinked into ``~/.local/bin``; ``shutil.which("o2b")`` finds it
-        and ``Popen`` can execute it directly.
+        Hermes memory providers can run with a tiny inherited ``PATH``, so
+        resolve absolute executable paths via :func:`_find_executable` (which
+        scans user-local and system bins when ``PATH`` hides the binary) before
+        falling back to a bare command name.
 
-        On Windows, bash scripts are not directly executable by
-        ``subprocess.Popen`` (it delegates to ``cmd.exe``, not a POSIX shell).
-        Even if ``o2b`` were on PATH, Popen would fail with ``[WinError 193]``
-        or ``[WinError 2]``.  The correct cross-platform fallback is to invoke
-        the TypeScript entry point through ``bun run``, which works identically
-        on every OS.
-
-        Resolution order:
-        1. POSIX + ``o2b`` in PATH → ``("o2b", "mcp")``
-        2. ``bun`` in PATH + repo root has ``src/cli/main.ts`` →
-           ``("bun", "run", "<entry>", "mcp")``
-        3. Fallback → ``("o2b", "mcp")`` (will surface a clear Popen error)
+        On Windows the ``scripts/o2b`` bash wrapper is not directly executable
+        by ``subprocess.Popen``, so the o2b branch is POSIX-only; the
+        cross-platform path is the repo-local TypeScript entry point via
+        ``bun run``.
         """
-        # On non-Windows, a globally installed o2b works out of the box.
-        if os.name != "nt" and shutil.which("o2b"):
-            return ("o2b", "mcp")
+        # On non-Windows, a globally installed or user-local o2b works directly.
+        if os.name != "nt":
+            o2b = _find_executable("o2b")
+            if o2b:
+                return (o2b, "mcp")
 
-        # Resolve via the repo-local TypeScript entry point + bun.
+        # Resolve via repo-local TypeScript entry point + bun.
         root = cls._repo_root()
         if root:
             entry = Path(root) / "src" / "cli" / "main.ts"
             if entry.is_file():
-                bun = shutil.which("bun")
+                bun = _find_executable("bun")
                 if bun:
                     return (bun, "run", str(entry), "mcp")
 
