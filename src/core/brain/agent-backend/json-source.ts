@@ -15,8 +15,10 @@
  */
 
 import { createHash } from "node:crypto";
+import { readdirSync } from "node:fs";
 
-import type { MemorySourceParse } from "./types.ts";
+import { renderPreferenceFromMemory, slugifyMemoryName } from "../claude-memory-render.ts";
+import type { MemoryRenderInput, MemorySourceBackend, MemorySourceParse } from "./types.ts";
 
 /** Cap for a description synthesized from a record's body. */
 const DERIVED_DESCRIPTION_MAX = 200;
@@ -103,4 +105,65 @@ export function buildFeedbackEntry(input: {
   const description = input.description.trim() || deriveDescription(body);
   const bodySha256 = createHash("sha256").update(body).digest("hex");
   return { kind: "feedback", name, description, body, bodySha256 };
+}
+
+/** Config for a JSON memory-store backend built by {@link makeJsonBackend}. */
+export interface JsonBackendConfig {
+  /** Stable selector for the `memory_backend` config key / `--from`. */
+  readonly id: string;
+  /** Human-readable name for messages. */
+  readonly label: string;
+  /** Keys under which the export nests its record array. */
+  readonly collectionKeys: readonly string[];
+  /** Record keys tried in order for the memory body text. */
+  readonly bodyKeys: readonly string[];
+  /** Prefix for a whole-file parse error (e.g. `mem0 export`). */
+  readonly errorPrefix: string;
+  /** Noun for a per-record skip (e.g. `mem0 record`). */
+  readonly recordNoun: string;
+  /** Message thrown when no `--memory` was given (no default location). */
+  readonly noDefaultDirMessage: string;
+}
+
+/**
+ * Build a JSON memory-store backend from a small config. mem0 and the generic
+ * catch-all differ only in their id/label, which keys hold the record array and
+ * the body text, and their diagnostic wording - everything else (name/
+ * description selection, `.json` discovery, the shared Claude render/slug, and
+ * the no-default-location guard) is identical, so it lives here once.
+ */
+export function makeJsonBackend(cfg: JsonBackendConfig): MemorySourceBackend {
+  return Object.freeze({
+    id: cfg.id,
+    label: cfg.label,
+    discoverMemoryDir(_vault: string): string {
+      throw new Error(cfg.noDefaultDirMessage);
+    },
+    discoverMemoryFiles(dir: string): string[] {
+      return readdirSync(dir)
+        .toSorted()
+        .filter((name) => name.toLowerCase().endsWith(".json"));
+    },
+    parseMemoryEntries(text: string): MemorySourceParse[] {
+      const res = readJsonItems(text, cfg.collectionKeys);
+      if ("error" in res) return [{ kind: "skip", skipReason: `${cfg.errorPrefix} ${res.error}` }];
+      return res.items.map((item) => {
+        if (item === null || typeof item !== "object" || Array.isArray(item)) {
+          return { kind: "skip", skipReason: `${cfg.recordNoun} is not an object` };
+        }
+        const rec = item as Record<string, unknown>;
+        return buildFeedbackEntry({
+          name: firstString(rec, ["name", "title", "id"]),
+          description: firstString(rec, ["description"]) || metadataString(rec, "description"),
+          body: firstString(rec, cfg.bodyKeys),
+        });
+      });
+    },
+    renderPreference(input: MemoryRenderInput): string {
+      return renderPreferenceFromMemory(input);
+    },
+    slugifyName(name: string): string {
+      return slugifyMemoryName(name);
+    },
+  });
 }

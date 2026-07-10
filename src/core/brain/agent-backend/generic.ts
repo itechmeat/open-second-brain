@@ -11,53 +11,23 @@
  *   [ { "name": "no-shouting", "description": "Tone rule", "body": "Never..." } ]
  *
  * Missing name/description fall back to a body-derived value, so a minimal
- * `[{ "body": "..." }]` still imports. Rendering and slugging delegate to the
- * shared Claude-memory render functions for a uniform Brain preference format.
+ * `[{ "body": "..." }]` still imports. Built from the shared JSON-backend
+ * factory (see {@link makeJsonBackend}); rendering and slugging reuse the
+ * Claude-memory functions for a uniform Brain preference format.
  *
  * Pointed at a single dump file via `--memory`; no per-vault default location.
  */
 
-import { readdirSync } from "node:fs";
+import { makeJsonBackend } from "./json-source.ts";
+import type { MemorySourceBackend } from "./types.ts";
 
-import { renderPreferenceFromMemory, slugifyMemoryName } from "../claude-memory-render.ts";
-import { buildFeedbackEntry, firstString, metadataString, readJsonItems } from "./json-source.ts";
-import type { MemoryRenderInput, MemorySourceBackend, MemorySourceParse } from "./types.ts";
-
-/** Keys under which a generic dump nests its record array. */
-const COLLECTION_KEYS = ["memories", "entries", "data"] as const;
-
-export const genericMemoryBackend: MemorySourceBackend = Object.freeze({
+export const genericMemoryBackend: MemorySourceBackend = makeJsonBackend({
   id: "generic",
   label: "Generic JSON",
-  discoverMemoryDir(_vault: string): string {
-    throw new Error(
-      "the generic backend has no default memory location - pass the dump with --memory <dump.json>",
-    );
-  },
-  discoverMemoryFiles(dir: string): string[] {
-    return readdirSync(dir)
-      .toSorted()
-      .filter((name) => name.toLowerCase().endsWith(".json"));
-  },
-  parseMemoryEntries(text: string): MemorySourceParse[] {
-    const res = readJsonItems(text, COLLECTION_KEYS);
-    if ("error" in res) return [{ kind: "skip", skipReason: `generic dump ${res.error}` }];
-    return res.items.map((item) => {
-      if (item === null || typeof item !== "object" || Array.isArray(item)) {
-        return { kind: "skip", skipReason: "generic record is not an object" };
-      }
-      const rec = item as Record<string, unknown>;
-      return buildFeedbackEntry({
-        name: firstString(rec, ["name", "title", "id"]),
-        description: firstString(rec, ["description"]) || metadataString(rec, "description"),
-        body: firstString(rec, ["body", "text", "memory", "content"]),
-      });
-    });
-  },
-  renderPreference(input: MemoryRenderInput): string {
-    return renderPreferenceFromMemory(input);
-  },
-  slugifyName(name: string): string {
-    return slugifyMemoryName(name);
-  },
+  collectionKeys: ["memories", "entries", "data"],
+  bodyKeys: ["body", "text", "memory", "content"],
+  errorPrefix: "generic dump",
+  recordNoun: "generic record",
+  noDefaultDirMessage:
+    "the generic backend has no default memory location - pass the dump with --memory <dump.json>",
 });

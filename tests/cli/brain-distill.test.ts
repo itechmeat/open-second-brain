@@ -47,15 +47,17 @@ test("distills a source into a citeable claims page", async () => {
   expect(existsSync(join(vault, out.distillation_path))).toBe(true);
 });
 
-test("an empty claim list is a usage error", async () => {
+test("an empty claim list is rejected (validation error, exit 1)", async () => {
   const res = await runCli(
     ["brain", "distill", "Articles/src.md", "--claims", "[]", "--vault", vault],
     { env },
   );
-  expect(res.returncode).not.toBe(0);
+  expect(res.returncode).toBe(1);
 });
 
-test("missing --claims is a usage error", async () => {
-  const res = await runCli(["brain", "distill", "Articles/src.md", "--vault", vault], { env });
-  expect(res.returncode).not.toBe(0);
+test("missing <source> or --claims is a usage error (exit 2)", async () => {
+  const noSource = await runCli(["brain", "distill", "--claims", "[]", "--vault", vault], { env });
+  expect(noSource.returncode).toBe(2);
+  const noClaims = await runCli(["brain", "distill", "Articles/src.md", "--vault", vault], { env });
+  expect(noClaims.returncode).toBe(2);
 });

@@ -51,6 +51,18 @@ export interface DistillClaim {
   readonly block?: string;
 }
 
+/**
+ * Normalize one agent-supplied claim record into a {@link DistillClaim}. Shared
+ * by the CLI and MCP surfaces so both accept the same shape: a `text` string and
+ * an optional `block` id (a leading `^` sigil is stripped; an empty block is
+ * dropped). Structural validation of the block id happens later, in `validate`.
+ */
+export function normalizeClaim(rec: Record<string, unknown>): DistillClaim {
+  const text = typeof rec["text"] === "string" ? rec["text"] : "";
+  const block = typeof rec["block"] === "string" ? rec["block"].replace(/^\^/, "") : undefined;
+  return { text, ...(block !== undefined && block.length > 0 ? { block } : {}) };
+}
+
 export interface DistillSourceInput {
   /** Source identity: a vault-relative path or a URL. Canonicalized on write. */
   readonly sourcePath: string;
@@ -152,6 +164,7 @@ export function distillSource(
       source_path: canonicalSource,
       source_hash: sourceHash,
       provenance: provenance.level,
+      agent: opts.agent,
       claim_count: input.claims.length,
       created_at: createdAt,
       updated_at: updatedAt,

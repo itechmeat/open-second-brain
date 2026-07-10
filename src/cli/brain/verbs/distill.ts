@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import {
   distillSource,
   DistillValidationError,
+  normalizeClaim,
   type DistillClaim,
 } from "../../../core/brain/distill/distill-source.ts";
 import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
@@ -44,10 +45,7 @@ function parseClaims(raw: string): DistillClaim[] {
     if (item === null || typeof item !== "object" || Array.isArray(item)) {
       throw new Error(`claim ${i} must be an object with a text field`);
     }
-    const rec = item as Record<string, unknown>;
-    const text = typeof rec["text"] === "string" ? rec["text"] : "";
-    const block = typeof rec["block"] === "string" ? rec["block"].replace(/^\^/, "") : undefined;
-    return { text, ...(block !== undefined && block.length > 0 ? { block } : {}) };
+    return normalizeClaim(item as Record<string, unknown>);
   });
 }
 
@@ -60,9 +58,15 @@ export async function cmdBrainDistill(argv: string[]): Promise<number> {
     json: { type: "boolean" },
   });
   const source = positional[0];
-  if (!source) return fail(USAGE);
+  // Usage errors exit 2 (the command's documented contract), distinct from the
+  // operational exit 1 the catch below returns.
+  if (!source) {
+    process.stderr.write(`${USAGE}\n`);
+    return 2;
+  }
   if (typeof flags["claims"] !== "string" && typeof flags["claims-file"] !== "string") {
-    return fail(USAGE);
+    process.stderr.write(`${USAGE}\n`);
+    return 2;
   }
 
   try {

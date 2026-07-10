@@ -11,6 +11,7 @@
 import {
   distillSource,
   DistillValidationError,
+  normalizeClaim,
   type DistillClaim,
 } from "../../core/brain/distill/distill-source.ts";
 import { resolveAgentName } from "../../core/config.ts";
@@ -31,10 +32,7 @@ function parseClaims(args: Record<string, unknown>): DistillClaim[] {
     if (item === null || typeof item !== "object" || Array.isArray(item)) {
       throw new MCPError(INVALID_PARAMS, `${TOOL}: claim ${i} must be an object`);
     }
-    const rec = item as Record<string, unknown>;
-    const text = typeof rec["text"] === "string" ? rec["text"] : "";
-    const block = typeof rec["block"] === "string" ? rec["block"].replace(/^\^/, "") : undefined;
-    return { text, ...(block !== undefined && block.length > 0 ? { block } : {}) };
+    return normalizeClaim(item as Record<string, unknown>);
   });
 }
 
