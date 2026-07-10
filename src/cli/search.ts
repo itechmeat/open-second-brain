@@ -64,6 +64,11 @@ import type {
   SearchSessionFocus,
   SearchOutcome,
 } from "../core/search/index.ts";
+import {
+  EMBEDDING_MODEL_PRESETS,
+  RECOMMENDED_EMBEDDING_MODEL,
+  type EmbeddingModelPreset,
+} from "../core/search/embeddings/presets.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { IndexWatchPlanner } from "../core/search/index-watch.ts";
 import { IndexWatchRunner } from "../core/search/watch-runner.ts";
@@ -390,6 +395,13 @@ interface ProviderRegistryOps<T extends CliRegistryProfile> {
    * multi-key failover (embedding provider only). Rerank stays single-key.
    */
   readonly multiKey?: boolean;
+  /**
+   * Curated model catalog surfaced via the `presets` action and used as the
+   * `--model` default when omitted (embedding provider only). Advisory.
+   */
+  readonly presets?: ReadonlyArray<EmbeddingModelPreset>;
+  /** Recommended default model string when `--model` is omitted. */
+  readonly recommendedModel?: string;
 }
 
 /**
@@ -403,9 +415,12 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
 ): Promise<number> {
   const { verb, kind } = ops;
   const action = argv[0];
-  if (!action || !["add", "list", "show", "remove"].includes(action)) {
+  const allowed = ops.presets
+    ? ["add", "list", "show", "remove", "presets"]
+    : ["add", "list", "show", "remove"];
+  if (!action || !allowed.includes(action)) {
     throw new CliError(
-      `usage: o2b search ${verb} <add NAME --base-url U --model M --env-key K | list | show NAME | remove NAME> [--json]`,
+      `usage: o2b search ${verb} <add NAME --base-url U [--model M] --env-key K | list | show NAME | remove NAME${ops.presets ? " | presets" : ""}> [--json]`,
     );
   }
   const { flags, positional } = parseFlags(argv.slice(1), {
@@ -417,8 +432,23 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
     "env-key": { type: "string" },
     json: { type: "boolean" },
   });
-  const cfg = resolveConfig(flags);
   const json = flags["json"] === true;
+
+  // `presets` is a static catalog listing; it needs no vault/config.
+  if (action === "presets" && ops.presets) {
+    if (json) {
+      process.stdout.write(JSON.stringify(ops.presets) + "\n");
+      return 0;
+    }
+    process.stdout.write(`curated embedding models (recommended: ${ops.recommendedModel}):\n`);
+    for (const p of ops.presets) {
+      const tag = p.multilingual ? "multilingual" : "monolingual";
+      process.stdout.write(`  ${p.model}\n    dim=${p.dimension} ${tag} - ${p.note}\n`);
+    }
+    return 0;
+  }
+
+  const cfg = resolveConfig(flags);
   const name = typeof positional[0] === "string" ? positional[0] : undefined;
 
   if (action === "list") {
@@ -469,11 +499,15 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
   if (!name)
     throw new CliError(`usage: o2b search ${verb} add NAME --base-url U --model M --env-key K`);
   const baseUrl = typeof flags["base-url"] === "string" ? (flags["base-url"] as string) : undefined;
-  const model = typeof flags["model"] === "string" ? (flags["model"] as string) : undefined;
+  const flagModel = typeof flags["model"] === "string" ? (flags["model"] as string) : undefined;
   const envKey = typeof flags["env-key"] === "string" ? (flags["env-key"] as string) : undefined;
+  // `--model` may be omitted when the registry has a recommended default
+  // (embedding provider); custom models remain first-class and verbatim.
+  const model = flagModel ?? ops.recommendedModel;
+  const modelHint = ops.recommendedModel ? "[--model M]" : "--model M";
   if (!baseUrl || !model || !envKey) {
     throw new CliError(
-      `${verb} add requires --base-url, --model, and --env-key (the env var NAME holding the API key)`,
+      `${verb} add requires --base-url, ${modelHint}, and --env-key (the env var NAME holding the API key)`,
     );
   }
   const envKeyValue = ops.multiKey ? parseEnvKeyFlag(envKey) : envKey;
@@ -483,8 +517,9 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
     process.stdout.write(JSON.stringify(added) + "\n");
   } else {
     const envHint = Array.isArray(envKeyValue) ? envKeyValue.join(" or ") : envKeyValue;
+    const modelNote = flagModel ? "" : ` (defaulted --model to recommended '${model}')`;
     process.stdout.write(
-      `added ${kind} '${name}' (set ${envHint} in the environment to supply its key)\n`,
+      `added ${kind} '${name}'${modelNote} (set ${envHint} in the environment to supply its key)\n`,
     );
   }
   return 0;
@@ -499,6 +534,8 @@ async function cmdSearchProvider(argv: ReadonlyArray<string>): Promise<number> {
     add: addProviderProfile,
     remove: removeProviderProfile,
     multiKey: true,
+    presets: EMBEDDING_MODEL_PRESETS,
+    recommendedModel: RECOMMENDED_EMBEDDING_MODEL,
   });
 }
 
