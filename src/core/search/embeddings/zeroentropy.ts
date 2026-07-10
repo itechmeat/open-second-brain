@@ -111,7 +111,7 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
         if (cancel.signal.aborted) return;
         const vectors = await this.embedBatchWithRetry(
           batch.map((b) => b.text),
-          { parentSignal: cancel.signal },
+          { maxAttempts: this.config.maxRetries, parentSignal: cancel.signal },
         );
         for (let i = 0; i < vectors.length; i++) {
           out[batch[i]!.originalIndex] = vectors[i]!;

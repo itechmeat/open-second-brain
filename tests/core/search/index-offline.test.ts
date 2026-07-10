@@ -97,6 +97,7 @@ test("the semantic backend is declared when embeddings are computed", async () =
         concurrency: 2,
         batchSize: 8,
         costGateUsd: 0,
+        maxRetries: 3,
       },
     });
 

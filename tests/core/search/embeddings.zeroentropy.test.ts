@@ -20,6 +20,7 @@ function cfg(overrides: Partial<ResolvedEmbeddingConfig> = {}): ResolvedEmbeddin
     concurrency: 2,
     batchSize: 32,
     costGateUsd: 0,
+    maxRetries: 3,
     ...overrides,
   });
 }

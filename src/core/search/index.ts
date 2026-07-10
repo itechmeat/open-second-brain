@@ -138,6 +138,7 @@ const DEFAULTS = {
   timeoutMs: 10_000,
   concurrency: 4,
   batchSize: 32,
+  maxRetries: 6,
   costGateUsd: 0,
   mmrLambda: 0.7,
   maxHops: 1,
@@ -291,6 +292,9 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
     min: 1,
   });
   validateIntegerRange(config.semantic.batchSize, "embedding_batch_size", {
+    min: 1,
+  });
+  validateIntegerRange(config.semantic.maxRetries, "embedding_max_retries", {
     min: 1,
   });
 }
@@ -457,6 +461,12 @@ export function resolveSearchConfig(opts: {
     "embedding_batch_size",
     { min: 1 },
   );
+  const maxRetries = parseInteger(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_MAX_RETRIES", "embedding_max_retries"),
+    DEFAULTS.maxRetries,
+    "embedding_max_retries",
+    { min: 1 },
+  );
   const costGateUsd = parseNonNegativeFloat(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_COST_GATE", "embedding_cost_gate_usd"),
     DEFAULTS.costGateUsd,
@@ -474,6 +484,7 @@ export function resolveSearchConfig(opts: {
     timeoutMs,
     concurrency,
     batchSize,
+    maxRetries,
     costGateUsd,
   });
 

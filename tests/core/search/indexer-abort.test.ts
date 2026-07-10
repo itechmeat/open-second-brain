@@ -126,6 +126,7 @@ test("aborting between embed batches stops further embedding but keeps committed
         concurrency: 1,
         batchSize: 1,
         costGateUsd: 0,
+        maxRetries: 3,
       },
     });
     // Index documents first (no embeddings), so the abort isolates the

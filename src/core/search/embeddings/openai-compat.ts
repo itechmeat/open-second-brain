@@ -128,6 +128,7 @@ export class OpenAICompatProvider implements EmbeddingProvider {
         const vectors = await this.embedBatchWithRetry(
           batch.map((b) => b.text),
           {
+            maxAttempts: this.config.maxRetries,
             parentSignal: cancel.signal,
           },
         );
