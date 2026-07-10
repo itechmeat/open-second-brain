@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -35,6 +36,7 @@ from plugins.hermes.bridge import (  # noqa: E402
 from plugins.hermes.provider import (  # noqa: E402
     MEMORY_TOOLS,
     OpenSecondBrainMemoryProvider,
+    _find_executable,
 )
 from plugins.hermes.cli import register_cli  # noqa: E402
 
@@ -342,20 +344,54 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
         self.assertEqual(json.loads(result), {"ok": True})
         self.assertEqual(bridge.calls, [("brain_note", {"text": "hi"})])
 
+    @unittest.skipIf(os.name == "nt", "o2b bash wrapper is POSIX-only")
     def test_resolve_command_uses_user_local_o2b_when_path_is_tiny(self):
-        saved_path = os.environ.get("PATH")
-        try:
-            os.environ["PATH"] = ""
-            command = OpenSecondBrainMemoryProvider._resolve_command()
-        finally:
-            if saved_path is None:
-                os.environ.pop("PATH", None)
-            else:
-                os.environ["PATH"] = saved_path
+        # A tiny inherited PATH hides o2b from shutil.which; the fallback scan
+        # must still find a real user-local o2b. Hermetic: a fake ~/.local/bin
+        # under a temp HOME, so the assertion never depends on what the test
+        # machine happens to have installed.
+        with tempfile.TemporaryDirectory() as home:
+            local_bin = Path(home) / ".local" / "bin"
+            local_bin.mkdir(parents=True)
+            fake_o2b = local_bin / "o2b"
+            fake_o2b.write_text("#!/bin/sh\n")
+            os.chmod(fake_o2b, 0o755)
 
-        self.assertNotEqual(command[0], "o2b")
+            with (
+                patch.dict(os.environ, {"PATH": ""}),
+                patch.object(Path, "home", return_value=Path(home)),
+                patch("shutil.which", return_value=None),
+            ):
+                command = OpenSecondBrainMemoryProvider._resolve_command()
+
+        self.assertEqual(command, (str(fake_o2b), "mcp"))
         self.assertTrue(Path(command[0]).is_absolute())
-        self.assertIn(command[1], {"mcp", "run"})
+
+    def test_find_executable_prefers_which(self):
+        with patch("shutil.which", return_value="/somewhere/on/path/o2b"):
+            self.assertEqual(_find_executable("o2b"), "/somewhere/on/path/o2b")
+
+    def test_find_executable_returns_none_when_nothing_resolves(self):
+        with tempfile.TemporaryDirectory() as empty, patch("shutil.which", return_value=None):
+            self.assertIsNone(_find_executable("o2b", search_dirs=[Path(empty)]))
+
+    def test_find_executable_matches_windows_pathext_suffix(self):
+        # On Windows a bare `bun` never matches on disk; the scan must try the
+        # PATHEXT suffixes (bun.CMD / bun.EXE). Execute-bit gating is a POSIX
+        # concept and must be skipped there. Build the Path objects before
+        # patching os.name, since pathlib picks its flavour at instantiation.
+        with tempfile.TemporaryDirectory() as bindir:
+            bindir_path = Path(bindir)
+            shim = bindir_path / "bun.CMD"
+            shim.write_text("@echo off\n")
+            with (
+                patch("os.name", "nt"),
+                patch("os.pathsep", ";"),
+                patch.dict(os.environ, {"PATHEXT": ".COM;.EXE;.BAT;.CMD"}),
+                patch("shutil.which", return_value=None),
+            ):
+                resolved = _find_executable("bun", search_dirs=[bindir_path])
+        self.assertEqual(resolved, str(shim))
 
 
 class CliTests(unittest.TestCase):

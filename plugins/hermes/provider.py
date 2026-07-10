@@ -18,7 +18,10 @@ import re
 import shutil
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 from . import config
 from ._base import MemoryProvider
@@ -50,6 +53,53 @@ _CONFIG_KEYS: tuple[str, ...] = ("vault", "agent_name", "timezone")
 
 # Token budget for the recall slice fetched on each prefetch.
 _PREFETCH_MAX_TOKENS = 1024
+
+
+def _fallback_exe_dirs() -> tuple[Path, ...]:
+    """Directories scanned for an executable when a tiny inherited ``PATH``
+    hides it from ``shutil.which``. Computed per call so it tracks the current
+    ``$HOME`` (and stays patchable in tests)."""
+    home = Path.home()
+    return (
+        home / ".local" / "bin",
+        home / ".bun" / "bin",
+        home / ".hermes" / "node" / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+        Path("/usr/bin"),
+        Path("/bin"),
+    )
+
+
+def _find_executable(name: str, search_dirs: Iterable[Path] | None = None) -> str | None:
+    """Resolve ``name`` to an absolute executable path.
+
+    ``shutil.which`` (which honours ``PATH``) wins when it can see the binary.
+    Hermes can start the provider from a process with a minimal inherited
+    ``PATH``; then ``which`` returns nothing even though the executable exists
+    in a user-local bin, so fall back to scanning a curated directory set.
+
+    On Windows the scan appends ``PATHEXT`` suffixes (``.EXE``/``.CMD``/...) to
+    a bare name and does not gate on the POSIX execute bit, which has no meaning
+    there; on POSIX it matches the exact name and requires ``X_OK``.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    dirs = tuple(search_dirs) if search_dirs is not None else _fallback_exe_dirs()
+    if os.name == "nt" and not os.path.splitext(name)[1]:
+        exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep) if e]
+        candidate_names = [name + ext for ext in exts]
+    else:
+        candidate_names = [name]
+    for directory in dirs:
+        for candidate_name in candidate_names:
+            candidate = directory / candidate_name
+            if not candidate.is_file():
+                continue
+            if os.name == "nt" or os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
 
 
 class OpenSecondBrainMemoryProvider(MemoryProvider):
@@ -111,32 +161,19 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
     def _resolve_command(cls) -> tuple[str, ...]:
         """Determine the right argv prefix for the ``o2b mcp`` subprocess.
 
-        Hermes memory providers can run with a tiny inherited ``PATH``. Resolve
-        absolute executable paths before falling back to bare command names.
+        Hermes memory providers can run with a tiny inherited ``PATH``, so
+        resolve absolute executable paths via :func:`_find_executable` (which
+        scans user-local and system bins when ``PATH`` hides the binary) before
+        falling back to a bare command name.
+
+        On Windows the ``scripts/o2b`` bash wrapper is not directly executable
+        by ``subprocess.Popen``, so the o2b branch is POSIX-only; the
+        cross-platform path is the repo-local TypeScript entry point via
+        ``bun run``.
         """
-        path_dirs = [
-            Path.home() / ".local" / "bin",
-            Path.home() / ".bun" / "bin",
-            Path.home() / ".hermes" / "node" / "bin",
-            Path("/opt/homebrew/bin"),
-            Path("/usr/local/bin"),
-            Path("/usr/bin"),
-            Path("/bin"),
-        ]
-
-        def find_exe(name: str) -> str | None:
-            found = shutil.which(name)
-            if found:
-                return found
-            for directory in path_dirs:
-                candidate = directory / name
-                if candidate.is_file() and os.access(candidate, os.X_OK):
-                    return str(candidate)
-            return None
-
         # On non-Windows, a globally installed or user-local o2b works directly.
         if os.name != "nt":
-            o2b = find_exe("o2b")
+            o2b = _find_executable("o2b")
             if o2b:
                 return (o2b, "mcp")
 
@@ -145,7 +182,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         if root:
             entry = Path(root) / "src" / "cli" / "main.ts"
             if entry.is_file():
-                bun = find_exe("bun")
+                bun = _find_executable("bun")
                 if bun:
                     return (bun, "run", str(entry), "mcp")
 

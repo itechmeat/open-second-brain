@@ -1,6 +1,6 @@
 {
   "name": "open-second-brain",
-  "version": "1.27.0",
+  "version": "1.27.1",
   "private": false,
   "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw.",
   "keywords": [

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.1] - 2026-07-10
+
+A robustness fix for the Hermes memory provider's executable resolution. No kernel behavior changes.
+
+### Fixed
+
+- **Resolve `o2b`/`bun` when the memory provider inherits a tiny `PATH`.** When Hermes starts the provider from a process with a minimal inherited `PATH`, `shutil.which("o2b")` cannot see a user-local install and `subprocess.Popen` later fails with `No such file or directory: 'o2b'`. Resolution now falls back to a curated scan of user-local and system executable directories (`~/.local/bin`, `~/.bun/bin`, `~/.hermes/node/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`) and uses the resolved absolute path for both `o2b` and `bun`. `shutil.which` still wins first, the POSIX-only `o2b` branch and the repo-local `bun run <entry> mcp` fallback are preserved, and on Windows the scan matches `PATHEXT` suffixes rather than gating on the POSIX execute bit.
+
 ## [1.27.0] - 2026-07-10
 
 An ingestion and import robustness layer that hardens and extends the source pipeline in one coherent scope: interrupted batches resume, more memory stores import, deterministic refresh skips when nothing changed, and sources distill into citeable claims. Every new surface is additive and off by default where it changes an existing path; the kernel still calls no LLM.
@@ -6404,6 +6412,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.27.1]: https://github.com/itechmeat/open-second-brain/compare/v1.27.0...v1.27.1
 [1.27.0]: https://github.com/itechmeat/open-second-brain/compare/v1.26.1...v1.27.0
 [1.24.0]: https://github.com/itechmeat/open-second-brain/compare/v1.23.1...v1.24.0
 [1.23.1]: https://github.com/itechmeat/open-second-brain/compare/v1.23.0...v1.23.1
