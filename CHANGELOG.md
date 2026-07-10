@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.29.0] - 2026-07-10
+
+An operability, safety, and first-run release that makes Open Second Brain robust and pleasant to set up and operate: a guided first-run checklist, actionable config diagnostics, resilient hooks and rate-limit handling, safe mutating operations, a hardened optional HTTP transport, and usage visibility. Every new surface is additive and off by default or byte-identical when its condition is absent; the release adds no new dependency and the kernel still calls no LLM.
+
+### Added
+
+- **Guided first-run onboarding checklist.** `o2b init` now prints a state-aware, ordered set of next steps beyond search indexing (vault config, Brain scaffold, first index, agent identity, an optional embedding key, a first feedback signal, session import, and a health check), each with a done flag and a copy-pasteable command. A re-runnable `o2b onboarding` verb (text or `--json`) shows the same checklist any time. It reuses the runtime-notice and doctor-remediation surfaces; read-only, no network, no model.
+- **Config-validator remediation.** The install/config doctor's `CheckResult` gains an optional `fix` field carrying a copy-pasteable remediation command, populated in every failing check (`mkdir`/`chmod` for vault and config, `o2b update` for a missing or invalid manifest). `o2b doctor` renders it under failing checks, gains a scriptable `--json` report (per-check `fix` plus an aggregate `{total, failed}` summary) and a summary line, and surfaces `fix` through `vault_health` and the OpenClaw doctor. The 0/1 exit stays the scriptable gate - the doctor becomes a self-service repair tool.
+- **Runtime-state notice channel.** A deterministic, no-network, no-LLM probe surfaces OSB's own transient conditions - semantic search degraded (enabled but no embedding key resolved), the search index missing or rebuilding, and a read-only vault - as notices that ride the existing SessionStart injection surface (prepended only when a condition holds, so a healthy vault stays byte-identical) and fold into `vault_health` for pull consumers. Default on; opt out with `OPEN_SECOND_BRAIN_RUNTIME_NOTICES=false`.
+- **Hook process self-watchdog and fail-open context load.** A lifecycle hook now arms a hard time ceiling on itself (default 55s, override `OPEN_SECOND_BRAIN_HOOK_CEILING_MS`): a healthy run exits normally, and a hung hook self-terminates at the deadline with an audit line instead of orphaning a process or blocking the agent. SessionStart context assembly runs fail-open - a slow or failing assembly degrades to the last-good cached body (or empty), never a partial or poisoned write. Distinct from the `brain_watchdog` vault-health probe.
+- **Expectation and strict count guards on mutating ops.** `--expect N` asserts how many items a mutation will touch and `--strict` refuses a guardless mutation; on a mismatch the op aborts before writing and surfaces the matched list. Wired into delete-by-source, hygiene apply, and dream run (MCP and CLI), each reporting honest `matched` vs `changed` counts. The atomic writer gains an opt-in content-equality short-circuit that skips an identical write (no mtime churn). No block-query DSL; guards default off.
+- **Per-skill invocation telemetry.** How often each installed skill is actually invoked is captured as an append-only `skill_invoked` continuity record, emitted from the session-import tool-call scan across Claude Code and opencode logs (`get_skill` and the host-native `Skill`; discovery and attach are not invocations). Counts are derived read-side, deduped by content-address id so re-import is idempotent, and surfaced via `brain_skill_proposals` `operation: usage` and `o2b brain skill-proposals usage`. Deterministic, no LLM; distinct from proposal ranking and outcome-weighted recall.
+
+### Changed
+
+- **Configurable embedding retry budget for 429/5xx.** The embedding provider's per-batch transient-retry budget is now runtime-configurable via `embedding_max_retries` / `OPEN_SECOND_BRAIN_EMBEDDING_MAX_RETRIES`, with the default raised from a hardcoded 3 to 6, threaded into both the OpenAI-compatible and ZeroEntropy providers, so a reindex against a strict-RPM account no longer exhausts the budget and silently drops chunks. `ping()` still probes once and multi-key auth failover stays independent; the concurrency knob already exists as `embedding_concurrency`.
+- **Hardened optional loopback HTTP transport.** The opt-in `o2b mcp --transport http` server gains a mandatory, non-bypassable Host/Origin DNS-rebinding guard (a foreign Host or cross-origin/opaque Origin is rejected before auth) and an unauthenticated `GET /health` liveness probe. The bearer token is now optional on a loopback bind (loopback + guards are the baseline defence) but mandatory on a non-loopback host - the server refuses to expose an unauthenticated endpoint on the network, with no permissive fallback. stdio stays the default transport.
+
 ## [1.28.0] - 2026-07-10
 
 A retrieval and ranking quality release: embedding-layer robustness, faster and smarter candidate retrieval, a fully offline reranker with a per-store eval gate, ranking signals learned from real outcomes, and a named benchmark to score the whole. Every new surface is additive and off by default where it changes an existing path; the release adds no new dependency and no ML runtime, and the kernel still calls no LLM.
@@ -6429,6 +6447,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.29.0]: https://github.com/itechmeat/open-second-brain/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/itechmeat/open-second-brain/compare/v1.27.1...v1.28.0
 [1.27.1]: https://github.com/itechmeat/open-second-brain/compare/v1.27.0...v1.27.1
 [1.27.0]: https://github.com/itechmeat/open-second-brain/compare/v1.26.1...v1.27.0
