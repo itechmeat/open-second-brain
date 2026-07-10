@@ -162,6 +162,7 @@ export default definePluginEntry({
             name: r.name,
             ok: r.ok,
             message: r.message,
+            ...(r.fix !== undefined ? { fix: r.fix } : {}),
           })),
         };
         return {

@@ -220,6 +220,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     vault: { type: "string" },
     config: { type: "string" },
     repo: { type: "string" },
+    json: { type: "boolean" },
   });
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
@@ -235,12 +236,33 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     process.stderr.write(`error: doctor failed: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
-  let allOk = true;
+  const failed = results.filter((r) => !r.ok).length;
+
+  if (flags["json"]) {
+    const payload = {
+      ok: failed === 0,
+      checks: results.map((r) => ({
+        name: r.name,
+        ok: r.ok,
+        message: r.message,
+        ...(r.fix !== undefined ? { fix: r.fix } : {}),
+      })),
+      summary: { total: results.length, failed },
+    };
+    process.stdout.write(JSON.stringify(payload, sortedReplacer, 2) + "\n");
+    return failed === 0 ? 0 : 1;
+  }
+
   for (const r of results) {
     process.stdout.write(`[${r.ok ? "OK" : "FAIL"}] ${r.name}: ${r.message}\n`);
-    if (!r.ok) allOk = false;
+    // Attach the copy-pasteable remediation right under a failing check so an
+    // operator can fix it without leaving the doctor output.
+    if (!r.ok && r.fix) process.stdout.write(`       fix: ${r.fix}\n`);
   }
-  return allOk ? 0 : 1;
+  // Scriptable aggregate: a summary line plus the 0/1 exit make `o2b doctor`
+  // usable as a setup/CI gate.
+  process.stdout.write(`\ndoctor: ${results.length} checks, ${failed} failed\n`);
+  return failed === 0 ? 0 : 1;
 }
 
 async function cmdExportConfig(argv: string[]): Promise<number> {
@@ -807,6 +829,7 @@ const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "vault",
   "discipline",
   "partner",
+  "doctor",
 ]);
 
 async function dispatchCommand(command: string, rest: string[]): Promise<number> {

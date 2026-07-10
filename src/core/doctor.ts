@@ -21,9 +21,21 @@ import { isFile } from "./fs-utils.ts";
 import { checkCodegraph } from "./partner/codegraph.ts";
 import type { CheckResult } from "./types.ts";
 
+/**
+ * Shipped plugin manifests are generated artifacts, not hand-edited files, so
+ * a missing / malformed / schema-invalid manifest is repaired by re-syncing
+ * the plugin checkout rather than a bespoke per-file edit.
+ */
+const MANIFEST_FIX = "o2b update";
+
 export function checkVaultWriteable(vault: string): CheckResult {
   if (!existsSync(vault)) {
-    return { name: "vault_writeable", ok: false, message: `vault directory missing: ${vault}` };
+    return {
+      name: "vault_writeable",
+      ok: false,
+      message: `vault directory missing: ${vault}`,
+      fix: `mkdir -p "${vault}"`,
+    };
   }
   const probe = join(vault, ".open-second-brain-doctor-test");
   try {
@@ -35,6 +47,7 @@ export function checkVaultWriteable(vault: string): CheckResult {
       name: "vault_writeable",
       ok: false,
       message: `cannot write to vault: ${(exc as Error).message ?? exc}`,
+      fix: `chmod u+rwx "${vault}"`,
     };
   }
   return { name: "vault_writeable", ok: true, message: `vault exists and is writable: ${vault}` };
@@ -54,6 +67,7 @@ export function checkConfigWriteable(config: string): CheckResult {
       name: "config_writeable",
       ok: false,
       message: `cannot write config ${config}: ${(exc as Error).message ?? exc}`,
+      fix: `mkdir -p "${dirname(config)}" && chmod u+rwx "${dirname(config)}"`,
     };
   }
   return { name: "config_writeable", ok: true, message: `config writable: ${config}` };
@@ -67,7 +81,7 @@ interface JsonLoadResult {
 function loadJsonManifest(path: string, name: string): JsonLoadResult {
   if (!isFile(path)) {
     return {
-      result: { name, ok: false, message: `missing: ${path}` },
+      result: { name, ok: false, message: `missing: ${path}`, fix: MANIFEST_FIX },
       data: null,
     };
   }
@@ -76,13 +90,18 @@ function loadJsonManifest(path: string, name: string): JsonLoadResult {
     data = JSON.parse(readFileSync(path, "utf8"));
   } catch (exc) {
     return {
-      result: { name, ok: false, message: `invalid JSON: ${path} (${(exc as Error).message})` },
+      result: {
+        name,
+        ok: false,
+        message: `invalid JSON: ${path} (${(exc as Error).message})`,
+        fix: MANIFEST_FIX,
+      },
       data: null,
     };
   }
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return {
-      result: { name, ok: false, message: `invalid manifest object: ${path}` },
+      result: { name, ok: false, message: `invalid manifest object: ${path}`, fix: MANIFEST_FIX },
       data: null,
     };
   }
@@ -150,6 +169,7 @@ export function checkCodexManifest(path: string): CheckResult {
       name: "codex_manifest",
       ok: false,
       message: `schema invalid: ${path} (${problems.join("; ")})`,
+      fix: MANIFEST_FIX,
     };
   }
   return { name: "codex_manifest", ok: true, message: `valid Codex manifest: ${path}` };
@@ -203,6 +223,7 @@ export function checkClaudeManifest(path: string): CheckResult {
       name: "claude_manifest",
       ok: false,
       message: `schema invalid: ${path} (${problems.join("; ")})`,
+      fix: MANIFEST_FIX,
     };
   }
   return { name: "claude_manifest", ok: true, message: `valid Claude manifest: ${path}` };
@@ -210,7 +231,7 @@ export function checkClaudeManifest(path: string): CheckResult {
 
 export function checkHermesManifest(path: string): CheckResult {
   if (!isFile(path)) {
-    return { name: "hermes_manifest", ok: false, message: `missing: ${path}` };
+    return { name: "hermes_manifest", ok: false, message: `missing: ${path}`, fix: MANIFEST_FIX };
   }
   let text: string;
   try {
@@ -220,6 +241,7 @@ export function checkHermesManifest(path: string): CheckResult {
       name: "hermes_manifest",
       ok: false,
       message: `invalid text: ${path} (${(exc as Error).message ?? exc})`,
+      fix: MANIFEST_FIX,
     };
   }
   const required = ["name", "version", "description"];
@@ -232,6 +254,7 @@ export function checkHermesManifest(path: string): CheckResult {
       name: "hermes_manifest",
       ok: false,
       message: `schema invalid: ${path} (missing ${missing.join(", ")})`,
+      fix: MANIFEST_FIX,
     };
   }
   return { name: "hermes_manifest", ok: true, message: `readable Hermes manifest: ${path}` };
@@ -253,6 +276,7 @@ export function checkOpenclawManifest(path: string): CheckResult {
       name: "openclaw_manifest",
       ok: false,
       message: `schema invalid: ${path} (${problems.join("; ")})`,
+      fix: MANIFEST_FIX,
     };
   }
   return { name: "openclaw_manifest", ok: true, message: `valid OpenClaw manifest: ${path}` };
@@ -276,6 +300,7 @@ export function checkOpenclawInstallability(repoRoot: string): CheckResult[] {
       name: "openclaw_package_json_extensions",
       ok: false,
       message: "package.json missing or empty openclaw.extensions array",
+      fix: MANIFEST_FIX,
     });
     return results;
   }
@@ -291,6 +316,7 @@ export function checkOpenclawInstallability(repoRoot: string): CheckResult[] {
         name: `openclaw_entry_invalid_${typeof entry}`,
         ok: false,
         message: `extension entry must be a string, got: ${typeof entry}`,
+        fix: MANIFEST_FIX,
       });
       continue;
     }
@@ -306,6 +332,7 @@ export function checkOpenclawInstallability(repoRoot: string): CheckResult[] {
         name: `openclaw_entry_${entry}`,
         ok: false,
         message: `missing extension entry: ${entry}`,
+        fix: MANIFEST_FIX,
       });
     }
   }

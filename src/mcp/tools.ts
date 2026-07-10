@@ -204,6 +204,7 @@ async function toolVaultHealth(
     name: r.name,
     ok: r.ok,
     message: r.message,
+    ...(r.fix !== undefined ? { fix: r.fix } : {}),
   }));
   // Runtime-state notices (transient operational conditions) surfaced for
   // pull consumers, mirroring the proactive SessionStart injection push.

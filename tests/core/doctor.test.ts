@@ -38,6 +38,16 @@ describe("checkVaultWriteable", () => {
     expect(r.ok).toBe(false);
     expect(r.message.toLowerCase()).toContain("missing");
   });
+
+  test("a passing check carries no remediation fix", () => {
+    expect(checkVaultWriteable(tmp).fix).toBeUndefined();
+  });
+
+  test("a failing check carries a copy-pasteable remediation fix", () => {
+    const r = checkVaultWriteable(join(tmp, "does_not_exist"));
+    expect(typeof r.fix).toBe("string");
+    expect((r.fix ?? "").length).toBeGreaterThan(0);
+  });
 });
 
 describe("checkConfigWriteable", () => {
