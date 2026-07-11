@@ -140,7 +140,7 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_health",
     description:
-      "Semantic-health report: contradictory confirmed preferences (opposite sign of record, same subject), recurring concepts with no dedicated preference, confirmed preferences running on stale evidence, and bursts of preferences confirmed together within a short window (batch-ingest inflation). Returns the per-domain findings plus a clean/watch/investigate verdict. Read-only.",
+      "Semantic-health report: contradictory confirmed preferences (opposite sign, same subject), recurring concepts with no dedicated preference, stale evidence, and preference-confirmation bursts (batch inflation). Per-domain findings plus a clean/watch/investigate verdict. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
