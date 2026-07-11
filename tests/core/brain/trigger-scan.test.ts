@@ -32,6 +32,15 @@ const HEALTH: SemanticHealthReport = {
   ],
   conceptGaps: [],
   staleClaims: [{ id: "pref-old", lastEvidenceAt: "2026-01-01T00:00:00Z", ageDays: 120 }],
+  batchInflation: [
+    {
+      ids: ["pref-c", "pref-d"],
+      windowStart: "2026-05-01T00:00:00.000Z",
+      windowEnd: "2026-05-01T00:10:00.000Z",
+      count: 2,
+      topics: ["a", "b"],
+    },
+  ],
 };
 
 const RETENTION: RetentionReviewReport = {
@@ -63,9 +72,9 @@ const RETENTION: RetentionReviewReport = {
   ],
 };
 
-test("candidatesFromHealth normalizes contradictions and stale claims", () => {
+test("candidatesFromHealth normalizes contradictions, stale claims, and batch inflation", () => {
   const candidates = candidatesFromHealth(HEALTH);
-  expect(candidates).toHaveLength(2);
+  expect(candidates).toHaveLength(3);
   const contradiction = candidates[0]!;
   expect(contradiction.kind).toBe("contradiction");
   expect(contradiction.urgency).toBe("high");
@@ -75,6 +84,11 @@ test("candidatesFromHealth normalizes contradictions and stale claims", () => {
   const stale = candidates[1]!;
   expect(stale.kind).toBe("stale_claim");
   expect(stale.cooldownKey).toBe("stale_claim:pref-old");
+  const inflation = candidates[2]!;
+  expect(inflation.kind).toBe("batch_inflation");
+  expect(inflation.urgency).toBe("low");
+  expect(inflation.cooldownKey).toBe("batch_inflation:pref-c:pref-d");
+  expect(inflation.sourceArtifacts).toEqual(["[[pref-c]]", "[[pref-d]]"]);
 });
 
 test("candidatesFromRetention keeps only park and prune actions", () => {

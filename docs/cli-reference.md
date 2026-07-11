@@ -229,6 +229,7 @@ The schema pack gains four additive ontology fields (`labels`, `link_constraints
 ```text
 o2b brain bridges             discover [--max N] [--min-similarity X] | list | accept <source> <target> | dismiss <source> <target> - embedding-near link proposals over the vec index, reviewable artifact, accept writes one related: wikilink
 o2b brain clusters            run [--min-size N] [--batch-size N] | list - graph-wide community detection; derived digests under Brain/clusters/, regenerated per run; --batch-size materializes in chunks with isolated, reported per-batch failures
+o2b brain vitals               [--orphan-threshold N] - aggregate governance scorecard over confirmed preferences: domain_diversity (scope entropy), connectivity_index (mean evidenced_by count), orphan_preferences (below threshold, default 2), gap_pressure (open concept-gap findings ÷ preference count, reused from doctor); records the vault_vitals metric
 o2b brain benchmark           run --dataset <path> [--k N] [--expand] - hit@k + MRR against the live hybrid recall; records the recall_benchmark metric
 o2b brain tune                run --dataset <path> [--k N] | status | reset - bounded self-tuning grid judged by the benchmark; persisted to Brain/search/tuning.json
 o2b search <query> --expand   deterministic lex/vec/hyde expansion of a bare query (stopword-stripped lex, entity-context vec line, template hyde passage)

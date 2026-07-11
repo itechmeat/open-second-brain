@@ -52,6 +52,7 @@ Brain verbs (observing memory):
   label               Controlled-vocabulary classification: assign, remove, show note labels
   bridges             Embedding-near link proposals: discover, list, accept, dismiss
   clusters            Link-graph communities: detect and materialize cluster notes
+  vitals              Aggregate governance scorecard: diversity, connectivity, gap pressure
   co-occurrence       Suggest edges between entities co-referenced from the same notes
   file-context        Surface prior vault work that mentions a file path
   benchmark           Recall quality benchmark: hit@k and MRR over a fixed dataset
@@ -322,6 +323,15 @@ export const VERB_HELP: Record<string, string> = {
     "by internal degree, shared entities, density, no LLM prose - removes\n" +
     "stale generated notes, and records one communities metric. list reads\n" +
     "the generated notes back. Fail-soft without an index.\n",
+  vitals:
+    "usage: o2b brain vitals [--orphan-threshold N] [--vault <path>] [--json]\n" +
+    "Aggregate governance scorecard over confirmed Brain/preferences/, four\n" +
+    "numbers the per-item hygiene lints don't surface: domain_diversity\n" +
+    "(normalised Shannon entropy of the scope distribution), connectivity_index\n" +
+    "(mean evidenced_by count per preference), orphan_preferences (confirmed\n" +
+    "preferences below --orphan-threshold evidence items, default 2), and\n" +
+    "gap_pressure (open concept-gap findings, reused from `doctor`, divided by\n" +
+    "preference count). Records one vault_vitals metric. Read-only.\n",
   "co-occurrence":
     "usage: o2b brain co-occurrence [--min-co N] [--min-score X] [--limit N] [--write]  [--vault <path>] [--json]\n" +
     "Suggest relationship edges between entities repeatedly co-referenced from\n" +

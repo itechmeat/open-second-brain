@@ -32,6 +32,7 @@ export const TRIGGER_KINDS = [
   "contradiction",
   "stale_claim",
   "concept_gap",
+  "batch_inflation",
   "retention_action",
   "knowledge_gap",
   "open_question",

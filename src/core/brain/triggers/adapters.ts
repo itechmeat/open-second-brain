@@ -49,6 +49,21 @@ export function candidatesFromHealth(
       }),
     );
   }
+  for (const finding of report.batchInflation) {
+    out.push(
+      Object.freeze({
+        kind: "batch_inflation" as const,
+        urgency: "low" as const,
+        reason:
+          `${finding.count} preferences confirmed together ` +
+          `(${finding.windowStart} to ${finding.windowEnd}) across topics ${finding.topics.join(", ")}`,
+        suggestedAction: "Review the batch for near-duplicates or preferences that should merge",
+        sourceArtifacts: Object.freeze(finding.ids.map((id) => `[[${id}]]`)),
+        contextSnippets: Object.freeze([`count: ${finding.count}`]),
+        cooldownKey: `batch_inflation:${finding.ids[0]}:${finding.ids[finding.ids.length - 1]}`,
+      }),
+    );
+  }
   return Object.freeze(out);
 }
 

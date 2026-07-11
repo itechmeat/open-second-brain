@@ -64,6 +64,7 @@ writes, and a metric record is a summary, not a report.
 | `self_tuning` | `o2b brain tune run`, MCP `brain_tune` | `chosen`, `evaluated`, `best_mrr`, `dataset_hash` |
 | `dream_stage` | `o2b brain dream stage` / `apply`, MCP `brain_dream` (since 1.0.0) | `action` (`stage`/`apply`), `run_id`, `proposals`, `sources`, `changed`; apply adds `new_unconfirmed`, `confirmed`, `retired` counts |
 | `prompt_prefix` | decision-panel commit (opt-in `promptPrefixMetric`), context-pack consume (opt-in `promptPrefix`) | `kind` (`write_session`/`context_pack`), `prefix_hash` (sha-256 of the stable preamble), `prefix_chars`, `call_count`, `stable_count` |
+| `vault_vitals` | `o2b brain vitals` | `preferences_scanned`, `domain_diversity`, `connectivity_index`, `orphan_count`, `gap_pressure` |
 
 Payload fields marked "(lane runs)" appear only on maintenance-lane
 emissions. All fields are additive-optional from a consumer's point

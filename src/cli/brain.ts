@@ -43,6 +43,7 @@ import {
   cmdBrainLabel,
   cmdBrainBridges,
   cmdBrainClusters,
+  cmdBrainVitals,
   cmdBrainCoOccurrence,
   cmdBrainFileContext,
   cmdBrainBenchmark,
@@ -221,6 +222,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainBridges(rest);
       case "clusters":
         return await cmdBrainClusters(rest);
+      case "vitals":
+        return await cmdBrainVitals(rest);
       case "co-occurrence":
         return await cmdBrainCoOccurrence(rest);
       case "file-context":
