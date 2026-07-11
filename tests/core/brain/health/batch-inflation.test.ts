@@ -9,7 +9,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { detectBatchInflation } from "../../../../src/core/brain/health/batch-inflation.ts";
-import { BRAIN_PREFERENCE_STATUS, type BrainPreferenceStatus } from "../../../../src/core/brain/types.ts";
+import {
+  BRAIN_PREFERENCE_STATUS,
+  type BrainPreferenceStatus,
+} from "../../../../src/core/brain/types.ts";
 
 function pref(
   id: string,

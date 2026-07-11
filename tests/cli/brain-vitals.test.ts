@@ -83,7 +83,10 @@ test("connectivity_index averages evidenced_by length over confirmed prefs only"
   pref("b", "coding", ["[[sig-4]]"]); // 1
   pref("c", "coding", ["[[sig-5]]", "[[sig-6]]"], "unconfirmed"); // excluded
   const r = await runCli(["brain", "vitals", "--vault", vault, "--json"]);
-  const parsed = JSON.parse(r.stdout) as { connectivity_index: number; preferences_scanned: number };
+  const parsed = JSON.parse(r.stdout) as {
+    connectivity_index: number;
+    preferences_scanned: number;
+  };
   expect(parsed.preferences_scanned).toBe(2); // unconfirmed excluded
   expect(parsed.connectivity_index).toBe(2); // (3 + 1) / 2
 });

@@ -115,7 +115,10 @@ function scopeDiversity(prefs: ReadonlyArray<BrainPreference>): {
  * open". A doctor failure degrades `gap_pressure` to `0` rather than
  * failing the whole report: vitals is observability, not correctness.
  */
-export function computeVaultVitals(vault: string, opts: VaultVitalsOptions = {}): VaultVitalsReport {
+export function computeVaultVitals(
+  vault: string,
+  opts: VaultVitalsOptions = {},
+): VaultVitalsReport {
   const orphanThreshold = opts.orphanThreshold ?? 2;
   const prefs = readConfirmedPreferences(vault);
   const { diversity, distribution } = scopeDiversity(prefs);
