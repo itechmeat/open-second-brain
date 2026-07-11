@@ -492,6 +492,42 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
 
 // ----- Semantic health (v0.14.0) --------------------------------------------
 
+/**
+ * Compute only the semantic-health report, skipping the structural
+ * doctor sweep. {@link runDoctor} attaches the identical report via its
+ * inline pass; a caller that needs nothing but the semantic findings
+ * (e.g. vault vitals reading `conceptGaps` for gap pressure) can call
+ * this directly instead of paying for the full config / signals /
+ * backlinks / logs / entities sweep. Both paths route through the same
+ * {@link checkSemanticHealth} detector over the same inputs
+ * (`readAllPreferenceRecords`, `resolveHealth(cfg)` or the defaults, and
+ * `now`), so the findings are byte-for-byte identical.
+ *
+ * Best-effort and never throws: returns `undefined` only when the pass
+ * itself throws, mirroring `runDoctor`'s attach-on-success contract. Any
+ * lint issues the pass would emit into the doctor stream are discarded
+ * here, which is exactly what a report-only caller wants.
+ */
+export function computeSemanticHealth(
+  vault: string,
+  opts: { readonly now?: Date } = {},
+): SemanticHealthReport | undefined {
+  const now = opts.now ?? new Date();
+  let cfg;
+  try {
+    cfg = loadBrainConfigDetailed(vault).config;
+  } catch {
+    cfg = undefined;
+  }
+  try {
+    const prefRecords = readAllPreferenceRecords(vault);
+    const health = cfg ? resolveHealth(cfg) : BRAIN_HEALTH_DEFAULTS;
+    return checkSemanticHealth(vault, prefRecords, [], health, now);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Minimal signal projection the semantic-health pass needs. */
 interface SignalSignRecord {
   readonly id: string;

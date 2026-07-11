@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.30.0] - 2026-07-11
+
+A governance-visibility release that adds two aggregate views over the preference set the existing per-item hygiene lints could not answer, plus an efficiency refinement to how one of them sources its data. Both new surfaces are additive and read-only over `Brain/preferences/`; the release adds no new dependency and the kernel still calls no LLM.
+
+### Added
+
+- **Aggregate governance scorecard (`o2b brain vitals`).** A single read-only scorecard over confirmed preferences that the per-item lints (`doctor`, `health`, `moc-audit`) do not surface: `domain_diversity` (normalised Shannon entropy of the `scope` distribution), `connectivity_index` (mean `evidenced_by` count per preference), `orphan_preferences` (confirmed preferences below an evidence threshold, default 2, `--orphan-threshold`), and `gap_pressure` (open `concept-gap` findings, reused from the semantic-health pass, divided by preference count). Text or `--json`; records one `vault_vitals` metric per run, following the existing `clusters`/`benchmark` surface pattern.
+- **Batch-concept-inflation lint.** The existing `duplicate-preferences` lint only catches near-identical pairs (Jaccard >= 0.7 within one topic/scope). `detectBatchInflation` is a deterministic, non-overlapping window scan over confirmed preferences' `confirmed_at` timestamps (default 24h window, burst size >= 5, both configurable) that flags a burst of individually-distinct preferences confirmed together - the signal that a batch or concurrent ingestion session skipped its dedup/consolidation pass. Wired end to end: `reconcileSemanticHealth`, the `batch-concept-inflation` doctor lint, `o2b brain health` (CLI) and `brain_health` (MCP), and a new `batch_inflation` Workspace Insight trigger kind.
+
+### Changed
+
+- **Vault vitals sources `gap_pressure` from a semantic-only health pass.** `computeVaultVitals` now calls a new exported `computeSemanticHealth` instead of the full `runDoctor` sweep to read the open concept-gap count. Both route through the same detector over the same inputs, so `gap_pressure` is byte-for-byte identical (proven by an equivalence test), but vitals no longer pays for the structural config, signals, backlinks, logs, and entities checks it never reads. `runDoctor`'s own report is unchanged.
+
 ## [1.29.0] - 2026-07-10
 
 An operability, safety, and first-run release that makes Open Second Brain robust and pleasant to set up and operate: a guided first-run checklist, actionable config diagnostics, resilient hooks and rate-limit handling, safe mutating operations, a hardened optional HTTP transport, and usage visibility. Every new surface is additive and off by default or byte-identical when its condition is absent; the release adds no new dependency and the kernel still calls no LLM.
@@ -6447,6 +6460,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.30.0]: https://github.com/itechmeat/open-second-brain/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/itechmeat/open-second-brain/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/itechmeat/open-second-brain/compare/v1.27.1...v1.28.0
 [1.27.1]: https://github.com/itechmeat/open-second-brain/compare/v1.27.0...v1.27.1

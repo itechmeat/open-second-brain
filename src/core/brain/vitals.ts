@@ -18,8 +18,8 @@
  *                            threshold (thin backing, candidates for
  *                            re-confirmation or retirement).
  *   - `gap_pressure`       — open `concept-gap` findings (reused from
- *                            {@link runDoctor}'s semantic-health pass,
- *                            not recomputed here) divided by preference
+ *                            {@link computeSemanticHealth}'s pass, not
+ *                            recomputed here) divided by preference
  *                            count: are gaps piling up faster than
  *                            they're being distilled into preferences?
  *
@@ -34,7 +34,7 @@ import { join } from "node:path";
 
 import { brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
-import { runDoctor } from "./doctor.ts";
+import { computeSemanticHealth } from "./doctor.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
 
 export interface VaultVitalsOptions {
@@ -110,10 +110,12 @@ function scopeDiversity(prefs: ReadonlyArray<BrainPreference>): {
 
 /**
  * Compute the vault vitals scorecard. `gap_pressure`'s numerator reuses
- * {@link runDoctor}'s semantic-health `conceptGaps` count rather than
+ * {@link computeSemanticHealth}'s `conceptGaps` count rather than
  * re-running the detector — one source of truth for "how many gaps are
- * open". A doctor failure degrades `gap_pressure` to `0` rather than
- * failing the whole report: vitals is observability, not correctness.
+ * open" — and takes the semantic-only path so vitals does not pay for
+ * the full structural doctor sweep just to read one number. A pass
+ * failure degrades `gap_pressure` to `0` rather than failing the whole
+ * report: vitals is observability, not correctness.
  */
 export function computeVaultVitals(
   vault: string,
@@ -133,11 +135,15 @@ export function computeVaultVitals(
     .map((p) => ({ id: p.id, scope: p.scope, evidence_count: p.evidenced_by.length }))
     .toSorted((a, b) => a.evidence_count - b.evidence_count || a.id.localeCompare(b.id));
 
+  // Semantic-only path: same detector `runDoctor` runs, without the
+  // structural sweep vitals never reads. `computeSemanticHealth` already
+  // swallows its own failures (returns undefined); the guard is belt and
+  // suspenders so gap_pressure degrades to 0 rather than failing.
   let gapCount = 0;
   try {
-    gapCount = runDoctor(vault).semantic_health?.conceptGaps.length ?? 0;
+    gapCount = computeSemanticHealth(vault)?.conceptGaps.length ?? 0;
   } catch {
-    // Vitals is observability, not correctness — a doctor failure
+    // Vitals is observability, not correctness — a probe failure
     // should not block the rest of the report.
   }
   const gapPressure = prefs.length > 0 ? round2(gapCount / prefs.length) : 0;
