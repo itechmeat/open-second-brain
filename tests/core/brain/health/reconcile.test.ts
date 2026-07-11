@@ -30,6 +30,8 @@ function pref(
     principle: "",
     evidenced_by: [],
     last_evidence_at: null,
+    confirmed_at: "2026-05-01T00:00:00Z",
+    topic: "t",
     ...over,
   };
 }
@@ -120,5 +122,40 @@ describe("reconcileSemanticHealth", () => {
     );
     expect(report.conceptGaps.map((g) => g.term)).toContain("kanban");
     expect(report.verdict).toBe("watch");
+  });
+
+  test("a burst of preferences confirmed together yields a watch verdict", () => {
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [
+          pref({ id: "pref-a", confirmed_at: "2026-05-01T00:00:00Z" }),
+          pref({ id: "pref-b", confirmed_at: "2026-05-01T00:10:00Z" }),
+        ],
+        signSignById: signs,
+        corpusPrinciples: [],
+        coveredTopics: [],
+      },
+      { ...config, batchInflationMinBurstSize: 2 },
+    );
+    expect(report.batchInflation).toHaveLength(1);
+    expect(report.batchInflation[0]!.ids).toEqual(["pref-a", "pref-b"]);
+    expect(report.verdict).toBe("watch");
+  });
+
+  test("below the burst threshold stays clean", () => {
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [
+          pref({ id: "pref-a", confirmed_at: "2026-05-01T00:00:00Z" }),
+          pref({ id: "pref-b", confirmed_at: "2026-05-01T00:10:00Z" }),
+        ],
+        signSignById: signs,
+        corpusPrinciples: [],
+        coveredTopics: [],
+      },
+      config, // default minBurstSize is 5
+    );
+    expect(report.batchInflation).toEqual([]);
+    expect(report.verdict).toBe("clean");
   });
 });

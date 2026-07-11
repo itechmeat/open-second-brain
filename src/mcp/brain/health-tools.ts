@@ -102,6 +102,13 @@ async function toolBrainHealth(
       last_evidence_at: s.lastEvidenceAt,
       age_days: s.ageDays,
     })),
+    batch_inflation: (sh?.batchInflation ?? []).map((b) => ({
+      ids: b.ids,
+      window_start: b.windowStart,
+      window_end: b.windowEnd,
+      count: b.count,
+      topics: b.topics,
+    })),
   };
 }
 
@@ -133,7 +140,7 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_health",
     description:
-      "Semantic-health report: contradictory confirmed preferences (opposite sign of record, same subject), recurring concepts with no dedicated preference, and confirmed preferences running on stale evidence. Returns the per-domain findings plus a clean/watch/investigate verdict. Read-only.",
+      "Semantic-health report: contradictory confirmed preferences (opposite sign of record, same subject), recurring concepts with no dedicated preference, confirmed preferences running on stale evidence, and bursts of preferences confirmed together within a short window (batch-ingest inflation). Returns the per-domain findings plus a clean/watch/investigate verdict. Read-only.",
     inputSchema: {
       type: "object",
       properties: {

@@ -583,6 +583,17 @@ function checkSemanticHealth(
         " Re-confirm or retire it.",
     });
   }
+  for (const b of report.batchInflation) {
+    issues.push({
+      severity: "warning",
+      code: "batch-concept-inflation",
+      message:
+        `${b.count} preferences confirmed within one window (${b.windowStart} to ${b.windowEnd}): ` +
+        `${b.ids.map((id) => `[[${id}]]`).join(", ")} across topics ${b.topics.join(", ")}. ` +
+        "A batch this size confirmed together usually means dedup/consolidation was skipped - " +
+        "review for near-duplicates or preferences that should merge before the next dream pass.",
+    });
+  }
 
   return report;
 }

@@ -23,9 +23,16 @@ import {
   type PreferenceForStaleClaim,
   type StaleClaimFinding,
 } from "./stale-claim.ts";
+import {
+  detectBatchInflation,
+  type BatchInflationFinding,
+  type PreferenceForBatchInflation,
+} from "./batch-inflation.ts";
 
 /** A preference shape sufficient for every semantic-health detector. */
-export type PreferenceForHealth = PreferenceForContradiction & PreferenceForStaleClaim;
+export type PreferenceForHealth = PreferenceForContradiction &
+  PreferenceForStaleClaim &
+  PreferenceForBatchInflation;
 
 export interface SemanticHealthInput {
   readonly preferences: ReadonlyArray<PreferenceForHealth>;
@@ -40,6 +47,8 @@ export interface SemanticHealthConfig {
   readonly contradictionJaccard: number;
   readonly conceptGapMinFrequency: number;
   readonly staleClaimMaxAgeDays: number;
+  readonly batchInflationWindowHours?: number;
+  readonly batchInflationMinBurstSize?: number;
   readonly now: Date;
 }
 
@@ -50,6 +59,7 @@ export interface SemanticHealthReport {
   readonly contradictions: ReadonlyArray<ContradictionFinding>;
   readonly conceptGaps: ReadonlyArray<ConceptGapFinding>;
   readonly staleClaims: ReadonlyArray<StaleClaimFinding>;
+  readonly batchInflation: ReadonlyArray<BatchInflationFinding>;
   readonly verdict: SemanticHealthVerdict;
 }
 
@@ -67,14 +77,23 @@ export function reconcileSemanticHealth(
     maxAgeDays: config.staleClaimMaxAgeDays,
     now: config.now,
   });
+  const batchInflation = detectBatchInflation(input.preferences, {
+    ...(config.batchInflationWindowHours !== undefined
+      ? { windowHours: config.batchInflationWindowHours }
+      : {}),
+    ...(config.batchInflationMinBurstSize !== undefined
+      ? { minBurstSize: config.batchInflationMinBurstSize }
+      : {}),
+  });
 
   // A contradiction between two confirmed preferences is the most
   // serious finding - two active rules disagree, so an agent will apply
-  // a coin-flip. Gaps and stale claims are quality nudges, not active
-  // conflicts, so they only raise a watch.
+  // a coin-flip. Gaps, stale claims, and batch-inflation bursts are
+  // quality nudges, not active conflicts, so they only raise a watch.
   let verdict: SemanticHealthVerdict = "clean";
   if (contradictions.length > 0) verdict = "investigate";
-  else if (conceptGaps.length > 0 || staleClaims.length > 0) verdict = "watch";
+  else if (conceptGaps.length > 0 || staleClaims.length > 0 || batchInflation.length > 0)
+    verdict = "watch";
 
-  return { contradictions, conceptGaps, staleClaims, verdict };
+  return { contradictions, conceptGaps, staleClaims, batchInflation, verdict };
 }

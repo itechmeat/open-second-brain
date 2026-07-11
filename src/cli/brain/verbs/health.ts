@@ -35,6 +35,7 @@ export async function cmdBrainHealth(argv: string[]): Promise<number> {
     contradictions: [],
     conceptGaps: [],
     staleClaims: [],
+    batchInflation: [],
   };
 
   if (flags["json"]) {
@@ -55,10 +56,16 @@ export async function cmdBrainHealth(argv: string[]): Promise<number> {
   for (const s of sh.staleClaims) {
     process.stdout.write(`[stale-claim] ${s.id} (${s.ageDays}d since ${s.lastEvidenceAt})\n`);
   }
+  for (const b of sh.batchInflation) {
+    process.stdout.write(
+      `[batch-inflation] ${b.count} confirmed ${b.windowStart}..${b.windowEnd}: ${b.ids.join(", ")}\n`,
+    );
+  }
   if (
     sh.contradictions.length === 0 &&
     sh.conceptGaps.length === 0 &&
-    sh.staleClaims.length === 0
+    sh.staleClaims.length === 0 &&
+    sh.batchInflation.length === 0
   ) {
     ok("brain health: clean");
   }
