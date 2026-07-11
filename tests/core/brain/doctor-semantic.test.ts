@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runDoctor } from "../../../src/core/brain/doctor.ts";
+import { computeSemanticHealth, runDoctor } from "../../../src/core/brain/doctor.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
@@ -106,5 +106,25 @@ describe("runDoctor semantic health", () => {
   test("does not throw on a vault and always returns a semantic_health report", () => {
     expect(() => runDoctor(vault, { now: NOW })).not.toThrow();
     expect(runDoctor(vault, { now: NOW }).semantic_health).toBeDefined();
+  });
+
+  test("computeSemanticHealth returns exactly runDoctor's semantic_health report", () => {
+    // The semantic-only path (used by vault vitals) must be byte-for-byte
+    // equal to the report the full doctor attaches: same detector, same
+    // inputs, just without the structural sweep. A non-trivial vault
+    // (contradiction) exercises the findings, not just empty domains.
+    const pos = sig("tabs-pos", BRAIN_SIGNAL_SIGN.positive, "use tabs");
+    const neg = sig("tabs-neg", BRAIN_SIGNAL_SIGN.negative, "use spaces");
+    confirmedPref("tabs-rule", "tabs-rule", "always indent source with tabs not spaces", [
+      `[[${pos}]]`,
+    ]);
+    confirmedPref("spaces-rule", "spaces-rule", "never indent source with tabs always spaces", [
+      `[[${neg}]]`,
+    ]);
+
+    const standalone = computeSemanticHealth(vault, { now: NOW });
+    const viaDoctor = runDoctor(vault, { now: NOW }).semantic_health;
+    expect(standalone).toEqual(viaDoctor);
+    expect(standalone?.conceptGaps).toEqual(viaDoctor?.conceptGaps);
   });
 });
