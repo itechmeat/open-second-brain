@@ -27,6 +27,7 @@ export { cmdBrainForesight } from "./foresight.ts";
 export { cmdBrainLabel } from "./label.ts";
 export { cmdBrainBridges } from "./bridges.ts";
 export { cmdBrainClusters } from "./clusters.ts";
+export { cmdBrainVitals } from "./vitals.ts";
 export { cmdBrainCoOccurrence } from "./co-occurrence.ts";
 export { cmdBrainFileContext } from "./file-context.ts";
 export { cmdBrainBenchmark } from "./benchmark.ts";
