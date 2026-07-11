@@ -104,7 +104,7 @@ That is the day-to-day picture. The full capability surface, every CLI verb, and
 
 ## Safety
 
-- Plain Markdown on your filesystem. No daemon, no background writes. The MCP server is a stdio subprocess that exits with the parent runtime.
+- Plain Markdown on your filesystem. No daemon, no background writes. The MCP server is a stdio subprocess that exits with the parent runtime. An optional HTTP transport (`o2b mcp --transport http`) is off by default and safe by design: it binds loopback (`127.0.0.1`), enforces a Host/Origin DNS-rebinding guard on every request, and exposes an unauthenticated `GET /health` liveness probe. A bearer token (`--api-key`) is optional on loopback and mandatory when binding a non-loopback host - the server refuses to expose an unauthenticated endpoint on the network.
 - Your vault is the only source of truth - no hidden state, no cloud copy.
 - Brain mutations (`dream`, `merge`, `upgrade`) take a pre-run snapshot with a SHA-256 sidecar; `o2b brain rollback` aborts on drift unless `--force-rollback`.
 - Secrets are not supposed to live in the vault. Daily logs and config exports run through a best-effort redactor, `$secret:NAME` references resolve from the local environment and are never stored, and Brain redaction strips `<private>...</private>` regions before storage.

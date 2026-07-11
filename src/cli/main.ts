@@ -49,10 +49,11 @@ import { planUninstall, renderPlan } from "./uninstall.ts";
 import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
 import { cmdInitInteractive } from "./install/init-interactive.ts";
+import { buildOnboardingChecklist, renderOnboardingChecklist } from "./onboarding.ts";
 import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
-import { startHttp } from "../mcp/http.ts";
+import { startHttp, isLoopbackHost } from "../mcp/http.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
@@ -160,6 +161,33 @@ async function cmdInit(argv: string[]): Promise<number> {
     process.stdout.write(`timezone persisted to: ${configPath}\n`);
   }
   writeSearchInitBlock(configPath);
+  // Guided first-run onboarding: turn the bare init into a walked-through
+  // checklist of state-aware next steps (t_84500f39). Additive - the search
+  // block above is unchanged. Best-effort: a checklist failure must never fail
+  // the init that already persisted config.
+  try {
+    const checklist = buildOnboardingChecklist(resolvedVault, { configPath });
+    process.stdout.write(renderOnboardingChecklist(checklist));
+  } catch {
+    // onboarding is advisory; never break init
+  }
+  return 0;
+}
+
+async function cmdOnboarding(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
+  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const checklist = buildOnboardingChecklist(vault, { configPath: config });
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify(checklist, sortedReplacer, 2) + "\n");
+    return 0;
+  }
+  process.stdout.write(renderOnboardingChecklist(checklist));
   return 0;
 }
 
@@ -220,6 +248,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     vault: { type: "string" },
     config: { type: "string" },
     repo: { type: "string" },
+    json: { type: "boolean" },
   });
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
@@ -235,12 +264,33 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     process.stderr.write(`error: doctor failed: ${(exc as Error).message ?? exc}\n`);
     return 1;
   }
-  let allOk = true;
+  const failed = results.filter((r) => !r.ok).length;
+
+  if (flags["json"]) {
+    const payload = {
+      ok: failed === 0,
+      checks: results.map((r) => ({
+        name: r.name,
+        ok: r.ok,
+        message: r.message,
+        ...(r.fix !== undefined ? { fix: r.fix } : {}),
+      })),
+      summary: { total: results.length, failed },
+    };
+    process.stdout.write(JSON.stringify(payload, sortedReplacer, 2) + "\n");
+    return failed === 0 ? 0 : 1;
+  }
+
   for (const r of results) {
     process.stdout.write(`[${r.ok ? "OK" : "FAIL"}] ${r.name}: ${r.message}\n`);
-    if (!r.ok) allOk = false;
+    // Attach the copy-pasteable remediation right under a failing check so an
+    // operator can fix it without leaving the doctor output.
+    if (!r.ok && r.fix) process.stdout.write(`       fix: ${r.fix}\n`);
   }
-  return allOk ? 0 : 1;
+  // Scriptable aggregate: a summary line plus the 0/1 exit make `o2b doctor`
+  // usable as a setup/CI gate.
+  process.stdout.write(`\ndoctor: ${results.length} checks, ${failed} failed\n`);
+  return failed === 0 ? 0 : 1;
 }
 
 async function cmdExportConfig(argv: string[]): Promise<number> {
@@ -437,8 +487,13 @@ async function cmdMcp(argv: string[]): Promise<number> {
   }
   const host = flags["host"] as string;
   const apiKey = flags["api-key"] as string | undefined;
-  if (transport === "http" && (apiKey === undefined || apiKey === "")) {
-    process.stderr.write("o2b mcp: --api-key is required when --transport http is used\n");
+  // Bearer is optional on a loopback bind (the loopback bind + Host/Origin
+  // rebinding guard are the baseline defence) but mandatory on a non-loopback
+  // host, which would otherwise expose the Brain unauthenticated on the network.
+  if (transport === "http" && !isLoopbackHost(host) && (apiKey === undefined || apiKey === "")) {
+    process.stderr.write(
+      "o2b mcp: --api-key is required when --transport http binds a non-loopback --host\n",
+    );
     return 2;
   }
 
@@ -807,6 +862,8 @@ const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "vault",
   "discipline",
   "partner",
+  "doctor",
+  "onboarding",
 ]);
 
 async function dispatchCommand(command: string, rest: string[]): Promise<number> {
@@ -818,6 +875,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await cmdInit(rest);
       case "doctor":
         return await cmdDoctor(rest);
+      case "onboarding":
+        return await cmdOnboarding(rest);
       case "export-config":
         return await cmdExportConfig(rest);
       case "index":

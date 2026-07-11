@@ -12,6 +12,45 @@ import { formatLocalTimestamp } from "../../core/brain/present-time.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext } from "../tools.ts";
 import { coerceBool } from "../coerce.ts";
+import {
+  CountGuardError,
+  assertExpectedCount,
+  type CountGuardOptions,
+} from "../../core/brain/count-guard.ts";
+
+/**
+ * Read the shared `--expect` / `--strict` count-guard arguments from an MCP
+ * tool payload. `expect` absent means no assertion; a non-integer or negative
+ * value is a client error.
+ */
+export function readCountGuardArgs(args: Record<string, unknown>): {
+  expect: number | null;
+  strict: boolean;
+} {
+  const raw = args["expect"];
+  let expect: number | null = null;
+  if (raw !== undefined && raw !== null) {
+    const n = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isInteger(n) || n < 0) {
+      throw new MCPError(INVALID_PARAMS, "'expect' must be a non-negative integer");
+    }
+    expect = n;
+  }
+  return { expect, strict: coerceBool(args, "strict") === true };
+}
+
+/**
+ * Run the count guard, mapping a {@link CountGuardError} to INVALID_PARAMS so
+ * the caller (not the server) is blamed for the mismatch / guardless mutation.
+ */
+export function enforceCountGuard(opts: CountGuardOptions): void {
+  try {
+    assertExpectedCount(opts);
+  } catch (err) {
+    if (err instanceof CountGuardError) throw new MCPError(INVALID_PARAMS, err.message);
+    throw err;
+  }
+}
 
 export const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 

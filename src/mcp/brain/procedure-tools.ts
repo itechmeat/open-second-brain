@@ -13,6 +13,7 @@ import {
   listPendingSkillProposals,
   rejectSkillProposal,
 } from "../../core/brain/skill-proposals.ts";
+import { deriveSkillUsage } from "../../core/brain/skill-usage.ts";
 import {
   listProceduralMemory,
   markProceduralMemoryUsed,
@@ -68,9 +69,16 @@ async function toolBrainSkillProposals(
     const reviewed = rejectSkillProposal(ctx.vault, slug, { note });
     return { ...reviewed };
   }
+  if (operation === "usage") {
+    // Per-skill invocation telemetry (t_56a12bde): deterministic counts
+    // derived from skill_invoked continuity records, distinct from proposing
+    // or ranking. Real usage evidence for the dream/synthesis pass.
+    const usage = deriveSkillUsage(ctx.vault);
+    return { total: usage.length, usage };
+  }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_skill_proposals: operation must be one of learn|list|accept|reject",
+    "brain_skill_proposals: operation must be one of learn|list|accept|reject|usage",
   );
 }
 
@@ -213,13 +221,13 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_skill_proposals",
     description:
-      "Learn/list/review deterministic skill proposals from continuity records (learn, list, accept, reject).",
+      "Learn/list/review deterministic skill proposals from continuity records (learn, list, accept, reject), and read per-skill invocation usage counts (usage).",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["learn", "list", "accept", "reject"],
+          enum: ["learn", "list", "accept", "reject", "usage"],
           description: "Tool operation.",
         },
         min_support: {

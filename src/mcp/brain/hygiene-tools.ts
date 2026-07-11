@@ -34,7 +34,7 @@ import { coerceBool } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tools.ts";
-import { vaultRelativeSafe } from "./shared.ts";
+import { enforceCountGuard, readCountGuardArgs, vaultRelativeSafe } from "./shared.ts";
 
 function coerceStringArray(args: Record<string, unknown>, key: string): string[] | undefined {
   const raw = args[key];
@@ -143,6 +143,16 @@ async function toolBrainHygiene(
     throw new MCPError(INVALID_PARAMS, "apply requires explicit finding 'ids' from a prior scan");
   }
   const plan = buildHygienePlan(report, { ids });
+  const { expect, strict } = readCountGuardArgs(args);
+  // Guard on the selected findings BEFORE applying so an unexpected blast
+  // radius aborts without touching the vault.
+  enforceCountGuard({
+    matched: plan.selected.length,
+    expect,
+    strict,
+    willMutate: !dryRun,
+    matchList: plan.selected.map((finding) => finding.id),
+  });
   const result = await applyHygienePlan(ctx.vault, plan, {
     dryRun,
     agent: resolveAgentName(ctx.configPath ?? undefined),
@@ -156,6 +166,9 @@ async function toolBrainHygiene(
     unknown_ids: plan.unknown_ids,
     planned: result.planned,
     applied: result.applied,
+    // Honest matched-vs-changed: findings selected vs. findings actually applied.
+    matched: plan.selected.length,
+    changed: result.applied.length,
     errors: result.errors,
   };
 }
@@ -187,6 +200,16 @@ export const HYGIENE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         dry_run: {
           type: "boolean",
           description: "Preview apply/refresh with zero writes.",
+        },
+        expect: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Count guard (apply mode): assert exactly N findings will be applied. On mismatch the apply aborts without writing.",
+        },
+        strict: {
+          type: "boolean",
+          description: "Refuse a guardless apply (no `expect`). Default false.",
         },
       },
       additionalProperties: false,

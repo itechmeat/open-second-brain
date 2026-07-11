@@ -77,6 +77,7 @@ test("makeProvider returns a LocalProvider for provider 'local'", () => {
     concurrency: 1,
     batchSize: 1,
     costGateUsd: 0,
+    maxRetries: 3,
   });
   const p = makeProvider(config);
   expect(p).toBeInstanceOf(LocalProvider);
@@ -96,6 +97,7 @@ test("makeProvider local needs no api key", () => {
     concurrency: 1,
     batchSize: 1,
     costGateUsd: 0,
+    maxRetries: 3,
   });
   expect(() => makeProvider(config)).not.toThrow();
   expect(makeProvider(config).dimension).toBe(LOCAL_DEFAULT_DIMENSION);

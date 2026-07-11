@@ -18,6 +18,13 @@ export interface CheckResult {
   readonly name: string;
   readonly ok: boolean;
   readonly message: string;
+  /**
+   * Optional copy-pasteable remediation command for a failing check, turning
+   * the doctor from a diagnostic into a self-service repair tool. Present only
+   * on failures with a deterministic fix; omitted on passing checks and on
+   * failures with no single obvious command.
+   */
+  readonly fix?: string;
 }
 
 /** Outcome pair from `installCli`. */

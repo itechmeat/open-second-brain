@@ -13,6 +13,7 @@
 
 import { resolveAgentName } from "../../../core/config.ts";
 import { dream } from "../../../core/brain/dream.ts";
+import { CountGuardError, assertExpectedCount } from "../../../core/brain/count-guard.ts";
 import {
   applyDreamBundle,
   discardDreamBundle,
@@ -39,6 +40,8 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     "dry-run": { type: "boolean" },
     now: { type: "string" },
     agent: { type: "string" },
+    expect: { type: "string" },
+    strict: { type: "boolean" },
     json: { type: "boolean" },
   });
   const asJson = flags["json"] === true;
@@ -179,6 +182,41 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
   }
 
   // action === "run": the legacy inline pass.
+  const expectRaw = flags["expect"] as string | undefined;
+  let expect: number | null = null;
+  if (expectRaw !== undefined) {
+    const n = Number(expectRaw);
+    if (!Number.isInteger(n) || n < 0) return fail("--expect must be a non-negative integer");
+    expect = n;
+  }
+  const strict = flags["strict"] === true;
+  // Only pay for a preview pass when a guard is requested.
+  if (expect !== null || strict) {
+    try {
+      const preview = dream(vault, {
+        ...(now !== null ? { now } : {}),
+        dryRun: true,
+        ...(agent ? { agentName: agent } : {}),
+      });
+      const matchList = [
+        ...preview.new_unconfirmed,
+        ...preview.confirmed,
+        ...preview.retired.map((r) => r.id),
+        ...preview.moved_to_processed,
+      ];
+      assertExpectedCount({
+        matched: matchList.length,
+        expect,
+        strict,
+        willMutate: !flags["dry-run"],
+        matchList,
+      });
+    } catch (exc) {
+      if (exc instanceof CountGuardError) return fail(exc.message);
+      return fail(`dream preview failed: ${(exc as Error).message ?? exc}`);
+    }
+  }
+
   let summary;
   try {
     summary = dream(vault, {

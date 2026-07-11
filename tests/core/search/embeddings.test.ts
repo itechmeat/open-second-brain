@@ -21,6 +21,7 @@ function cfg(overrides: Partial<ResolvedEmbeddingConfig> = {}): ResolvedEmbeddin
     concurrency: 2,
     batchSize: 32,
     costGateUsd: 0,
+    maxRetries: 3,
     ...overrides,
   });
 }
@@ -155,6 +156,40 @@ test("embed() throws EMBEDDING_PROVIDER_HTTP after exhausting retries on 5xx", a
   expect(server.callCount()).toBe(3);
 });
 
+test("embed() honours a configurable maxRetries budget on 429", async () => {
+  let calls = 0;
+  server.setHandler((req) => {
+    calls++;
+    if (calls < 5) return { status: 429, body: { error: "rate limited" } };
+    return {
+      status: 200,
+      body: {
+        data: [{ object: "embedding", embedding: [0.5, 0.5, 0.5, 0.5], index: 0 }],
+        model: (req.body as { model: string }).model,
+      },
+    };
+  });
+
+  // Five attempts allowed: four 429s then a 200 succeeds on the fifth.
+  const p = new OpenAICompatProvider(cfg({ maxRetries: 5 }), { backoffMs: [1, 1, 1, 1] });
+  const out = await p.embed(["rate"]);
+  expect(out.length).toBe(1);
+  expect(calls).toBe(5);
+});
+
+test("embed() gives up at the maxRetries ceiling on sustained 429", async () => {
+  server.setHandler(() => ({ status: 429, body: { error: "rate limited" } }));
+  const p = new OpenAICompatProvider(cfg({ maxRetries: 2 }), { backoffMs: [1] });
+  let err: SearchError | null = null;
+  try {
+    await p.embed(["x"]);
+  } catch (e) {
+    err = e as SearchError;
+  }
+  expect(err?.code).toBe("EMBEDDING_PROVIDER_HTTP");
+  expect(server.callCount()).toBe(2);
+});
+
 test("embed() fails over to the next key on 401 and pins the working key", async () => {
   const seenKeys: string[] = [];
   server.setHandler((req) => {
@@ -271,6 +306,7 @@ test("makeProvider returns NullProvider when semantic is disabled", () => {
     concurrency: 1,
     batchSize: 1,
     costGateUsd: 0,
+    maxRetries: 3,
   });
   expect(p).toBeInstanceOf(NullProvider);
 });
@@ -288,6 +324,7 @@ test("makeProvider throws when key is missing under openai-compat", () => {
       concurrency: 1,
       batchSize: 1,
       costGateUsd: 0,
+      maxRetries: 3,
     }),
   ).toThrow(/embedding_api_key/);
 });

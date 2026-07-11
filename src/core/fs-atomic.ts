@@ -13,22 +13,57 @@
 
 import {
   closeSync,
+  existsSync,
   fsyncSync,
   linkSync,
   mkdirSync,
   openSync,
+  readFileSync,
   renameSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-export function atomicWriteFileSync(target: string, contents: string): void {
+export interface AtomicWriteOptions {
+  /**
+   * Skip the write when the target already holds byte-identical content. Off
+   * by default (a write always happens). When on, an unchanged target is left
+   * untouched - no temp file, no rename, no mtime bump - which stops spurious
+   * churn in a vault the user is also hand-editing.
+   */
+  readonly skipIfUnchanged?: boolean;
+}
+
+/**
+ * Atomic overwrite. Returns `true` when it wrote, `false` when
+ * `skipIfUnchanged` short-circuited an identical write.
+ */
+export function atomicWriteFileSync(
+  target: string,
+  contents: string,
+  opts: AtomicWriteOptions = {},
+): boolean {
+  if (opts.skipIfUnchanged && isUnchanged(target, contents)) return false;
   withTempFile(target, contents, (tmpPath) => {
     // POSIX `rename(2)` is atomic and clobbers an existing target — that's
     // exactly the "overwrite" semantic we want. No exclusivity guarantee.
     renameSync(tmpPath, target);
   });
+  return true;
+}
+
+/**
+ * True when `target` exists and already holds byte-identical `contents`. A
+ * read error is treated as "changed" so a genuine write still proceeds.
+ */
+function isUnchanged(target: string, contents: string): boolean {
+  if (!existsSync(target)) return false;
+  try {
+    return readFileSync(target, "utf8") === contents;
+  } catch {
+    return false;
+  }
 }
 
 export interface AtomicWriteTextOptions {
@@ -41,20 +76,28 @@ export interface AtomicWriteTextOptions {
    * persist a payload their own parser would reject.
    */
   readonly validate?: (candidate: string) => void;
+  /**
+   * Skip the write when the target already holds byte-identical content.
+   * Off by default. The validate hook still runs first so a rejected
+   * payload never counts as "unchanged".
+   */
+  readonly skipIfUnchanged?: boolean;
 }
 
 /**
  * Validated atomic overwrite for sensitive text files (configs,
  * schema documents). Same temp-file + fsync + rename pipeline as
  * {@link atomicWriteFileSync}, plus a validation hook and a private
- * default mode.
+ * default mode. Returns `true` when it wrote, `false` when
+ * `skipIfUnchanged` short-circuited an identical write.
  */
 export function atomicWriteText(
   targetPath: string,
   candidate: string,
   opts: AtomicWriteTextOptions = {},
-): void {
+): boolean {
   opts.validate?.(candidate);
+  if (opts.skipIfUnchanged && isUnchanged(targetPath, candidate)) return false;
   withTempFile(
     targetPath,
     candidate,
@@ -63,6 +106,7 @@ export function atomicWriteText(
     },
     opts.mode ?? 0o600,
   );
+  return true;
 }
 
 /**

@@ -153,6 +153,36 @@ describe("doctor", () => {
     expect(r.stdout).toContain("[FAIL]");
   });
 
+  test("prints a copy-pasteable fix and an aggregate summary for a failure", async () => {
+    const r = await runCli(["doctor", "--vault", "/nonexistent/path"]);
+    expect(r.returncode).toBe(1);
+    expect(r.stdout).toContain("fix: mkdir -p");
+    expect(r.stdout).toMatch(/doctor: \d+ checks, [1-9]\d* failed/);
+  });
+
+  test("--json emits a scriptable report with fix and summary", async () => {
+    const r = await runCli(["doctor", "--vault", "/nonexistent/path", "--json"]);
+    expect(r.returncode).toBe(1);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.summary.failed).toBeGreaterThan(0);
+    const failing = parsed.checks.find((c: { ok: boolean }) => !c.ok);
+    expect(typeof failing.fix).toBe("string");
+    expect(failing.fix.length).toBeGreaterThan(0);
+  });
+
+  test("--json on a healthy vault reports ok with zero failures", async () => {
+    const r = await runCli(["doctor", "--vault", tmp, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: "", XDG_CONFIG_HOME: "", VAULT_DIR: "" },
+    });
+    expect(r.returncode).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.summary.failed).toBe(0);
+    // A passing check omits the remediation fix.
+    expect(parsed.checks.every((c: { fix?: string }) => c.fix === undefined)).toBe(true);
+  });
+
   test("with --repo checks manifests", async () => {
     const vault = createSandboxVault(tmp);
     const repo = createPluginRepo(tmp, true);
@@ -170,6 +200,38 @@ describe("doctor", () => {
     expect(r.returncode).toBe(1);
     expect(r.stdout).toContain("[FAIL] claude_manifest");
     expect(r.stdout).toContain("[FAIL] codex_manifest");
+  });
+});
+
+describe("onboarding", () => {
+  test("init prints the guided onboarding checklist after the search block", async () => {
+    const vault = join(tmp, "ob-vault");
+    const config = join(tmp, "ob-config.yaml");
+    const r = await runCli(["init", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config, XDG_CONFIG_HOME: "", VAULT_DIR: "" },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("initialized vault");
+    expect(r.stdout).toContain("Next steps:");
+    expect(r.stdout).toContain("o2b search index");
+  });
+
+  test("o2b onboarding re-runs the checklist and supports --json", async () => {
+    const vault = join(tmp, "ob-vault2");
+    const config = join(tmp, "ob-config2.yaml");
+    const env = { OPEN_SECOND_BRAIN_CONFIG: config, XDG_CONFIG_HOME: "", VAULT_DIR: "" };
+    await runCli(["init", "--vault", vault], { env });
+
+    const text = await runCli(["onboarding", "--vault", vault, "--config", config], { env });
+    expect(text.returncode).toBe(0);
+    expect(text.stdout).toContain("Next steps:");
+
+    const json = await runCli(["onboarding", "--vault", vault, "--config", config, "--json"], {
+      env,
+    });
+    const parsed = JSON.parse(json.stdout);
+    expect(Array.isArray(parsed.steps)).toBe(true);
+    expect(parsed.steps.find((s: { id: string }) => s.id === "vault_configured").done).toBe(true);
   });
 });
 

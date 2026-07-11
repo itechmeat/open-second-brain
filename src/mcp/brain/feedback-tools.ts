@@ -47,7 +47,7 @@ import {
   type ObservedUseEntry,
 } from "../../core/brain/observed-use.ts";
 import { coerceStr, coerceBool, coerceIsoDate } from "../coerce.ts";
-import { vaultRelativeSafe } from "./shared.ts";
+import { enforceCountGuard, readCountGuardArgs, vaultRelativeSafe } from "./shared.ts";
 
 /**
  * Build the slug used in the signal / preference filename. We never let
@@ -242,6 +242,21 @@ async function toolBrainFeedback(
 
 // ----- brain_dream ---------------------------------------------------------
 
+/** The set of preference ids a dream summary would create/confirm/retire/move. */
+function dreamChangeList(summary: {
+  readonly new_unconfirmed: ReadonlyArray<string>;
+  readonly confirmed: ReadonlyArray<string>;
+  readonly retired: ReadonlyArray<{ readonly id: string }>;
+  readonly moved_to_processed: ReadonlyArray<string>;
+}): string[] {
+  return [
+    ...summary.new_unconfirmed,
+    ...summary.confirmed,
+    ...summary.retired.map((r) => r.id),
+    ...summary.moved_to_processed,
+  ];
+}
+
 async function toolBrainDream(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -324,11 +339,31 @@ async function toolBrainDream(
     }
   }
 
+  const { expect, strict } = readCountGuardArgs(args);
+  // Only pay for a preview pass when a guard is actually requested; otherwise
+  // the run is byte-identical to before.
+  if (expect !== null || strict) {
+    const preview = dream(ctx.vault, {
+      dryRun: true,
+      ...(nowDate ? { now: nowDate } : {}),
+      ...(agent ? { agentName: agent } : {}),
+    });
+    const previewList = dreamChangeList(preview);
+    enforceCountGuard({
+      matched: previewList.length,
+      expect,
+      strict,
+      willMutate: !dryRun,
+      matchList: previewList,
+    });
+  }
+
   const summary = dream(ctx.vault, {
     dryRun,
     ...(nowDate ? { now: nowDate } : {}),
     ...(agent ? { agentName: agent } : {}),
   });
+  const changeList = dreamChangeList(summary);
 
   // The summary is already a Plain Old Frozen Object — JSON-serialise
   // verbatim. We surface `snapshot_path` / `log_path` as vault-relative
@@ -336,6 +371,10 @@ async function toolBrainDream(
   return {
     run_id: summary.run_id,
     changed: summary.changed,
+    // Honest matched-vs-changed: `matched` is what the pass would touch;
+    // `changed_count` is what it actually wrote (0 on a dry run).
+    matched: changeList.length,
+    changed_count: dryRun ? 0 : changeList.length,
     dry_run: dryRun,
     new_unconfirmed: [...summary.new_unconfirmed],
     confirmed: [...summary.confirmed],
@@ -623,6 +662,16 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description:
             "Optional caller identity; a mismatch with the configured primary agent emits a warning. Defaults to the server-resolved name.",
+        },
+        expect: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "action=run count guard: assert the pass will create/confirm/retire/move exactly N preferences. On mismatch it aborts without writing.",
+        },
+        strict: {
+          type: "boolean",
+          description: "action=run: refuse a guardless run (no `expect`). Default false.",
         },
       },
       additionalProperties: false,

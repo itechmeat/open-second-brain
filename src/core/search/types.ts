@@ -588,6 +588,15 @@ export interface ResolvedEmbeddingConfig {
   readonly concurrency: number;
   readonly batchSize: number;
   /**
+   * Per-batch transient-retry budget (attempts, not extra retries) for
+   * 429 / 5xx / network errors. Default 6, raised from the former hardcoded
+   * 3 so an agent reindexing against a strict-RPM embedding account does not
+   * exhaust the budget and silently drop chunks. Configurable via
+   * `embedding_max_retries` / `OPEN_SECOND_BRAIN_EMBEDDING_MAX_RETRIES`.
+   * Multi-key auth failover (`apiKeys`) is independent of this count.
+   */
+  readonly maxRetries: number;
+  /**
    * Spend ceiling in USD for a single embedding run (Embedding Provider
    * Suite). 0 (default) disables the gate. When positive, an embedding
    * run whose estimated cost exceeds this is refused unless forced.

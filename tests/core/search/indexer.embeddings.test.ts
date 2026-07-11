@@ -40,6 +40,7 @@ function semanticConfig(model = "fake-model", dim = 4) {
       concurrency: 2,
       batchSize: 8,
       costGateUsd: 0,
+      maxRetries: 3,
     },
   });
 }
@@ -104,6 +105,7 @@ test("--embeddings without a key throws EMBEDDING_KEY_MISSING", async () => {
       concurrency: 1,
       batchSize: 8,
       costGateUsd: 0,
+      maxRetries: 3,
     },
   });
   let err: SearchError | null = null;

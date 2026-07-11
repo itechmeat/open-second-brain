@@ -12,6 +12,7 @@
 
 import { applyHygienePlan } from "../../../core/brain/hygiene/apply.ts";
 import { buildHygienePlan } from "../../../core/brain/hygiene/plan.ts";
+import { assertExpectedCount } from "../../../core/brain/count-guard.ts";
 import { resolveConflictFindings } from "../../../core/brain/hygiene/resolve-conflicts.ts";
 import { runHygieneScan } from "../../../core/brain/hygiene/scan.ts";
 import {
@@ -61,9 +62,20 @@ export async function cmdBrainHygiene(argv: string[]): Promise<number> {
     detectors: { type: "string" },
     ids: { type: "string" },
     "dry-run": { type: "boolean" },
+    expect: { type: "string" },
+    strict: { type: "boolean" },
     json: { type: "boolean" },
   });
   const { config, vault } = brainVerbContext(flags);
+
+  const expectRaw = flags["expect"] as string | undefined;
+  let expect: number | null = null;
+  if (expectRaw !== undefined) {
+    const n = Number(expectRaw);
+    if (!Number.isInteger(n) || n < 0) return fail("--expect must be a non-negative integer");
+    expect = n;
+  }
+  const strict = flags["strict"] === true;
 
   let detectors: HygieneDetectorId[] | undefined;
   try {
@@ -108,6 +120,17 @@ export async function cmdBrainHygiene(argv: string[]): Promise<number> {
     return fail("apply requires --ids <finding-id,...> from a prior scan");
   }
   const plan = buildHygienePlan(report, { ids });
+  try {
+    assertExpectedCount({
+      matched: plan.selected.length,
+      expect,
+      strict,
+      willMutate: !flags["dry-run"],
+      matchList: plan.selected.map((finding) => finding.id),
+    });
+  } catch (exc) {
+    return fail((exc as Error).message);
+  }
   let result;
   try {
     result = await applyHygienePlan(vault, plan, {

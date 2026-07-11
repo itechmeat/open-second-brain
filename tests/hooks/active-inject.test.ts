@@ -39,6 +39,9 @@ async function runHook(payload: unknown, env: Record<string, string> = {}): Prom
   const inherited: Record<string, string> = {
     PATH: process.env["PATH"] ?? "",
     HOME: configHome,
+    // Isolate the active.md injection behaviour from the runtime-notice
+    // channel by default; the dedicated notice test re-enables it.
+    OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "false",
   };
   const proc = Bun.spawn(["bun", "run", HOOK], {
     stdin: "pipe",
@@ -245,5 +248,36 @@ describe("active-inject hook", () => {
     const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+  });
+
+  test("prepends a runtime-notice block when a transient condition holds", async () => {
+    writeActive(
+      "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n",
+    );
+    // Notices on (override the harness default); no search index exists in
+    // this bare vault, so the index-missing notice fires and rides the surface.
+    const r = await runHook(
+      { hook_event_name: "SessionStart" },
+      { VAULT_DIR: vault, OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "true" },
+    );
+    expect(r.exit).toBe(0);
+    const injected: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    expect(injected).toContain("Runtime notices:");
+    expect(injected).toContain("Search index is not built");
+    // The active body still follows the notice block.
+    expect(injected).toContain("pref-foo");
+    expect(injected.indexOf("Runtime notices:")).toBeLessThan(injected.indexOf("pref-foo"));
+  });
+
+  test("injects notices alone when there is no active.md body", async () => {
+    // No active.md at all; the notice channel still surfaces the condition.
+    const r = await runHook(
+      { hook_event_name: "SessionStart" },
+      { VAULT_DIR: vault, OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "true" },
+    );
+    expect(r.exit).toBe(0);
+    const injected: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    expect(injected).toContain("Runtime notices:");
+    expect(injected).toContain("Search index is not built");
   });
 });

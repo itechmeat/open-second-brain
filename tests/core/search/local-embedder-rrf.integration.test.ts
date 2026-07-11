@@ -46,6 +46,7 @@ function localConfig(fusionMode: "linear" | "rrf" = "linear") {
       concurrency: 2,
       batchSize: 8,
       costGateUsd: 0,
+      maxRetries: 3,
     },
   });
 }

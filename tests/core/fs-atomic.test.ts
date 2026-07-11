@@ -143,3 +143,34 @@ describe("atomicWriteText", () => {
     expect(readFileSync(target, "utf8")).toBe("second\n");
   });
 });
+
+describe("skipIfUnchanged short-circuit", () => {
+  test("atomicWriteFileSync returns true on a real write and false on a no-op", () => {
+    const target = join(tmp, "noop.txt");
+    // First write to a fresh path always writes.
+    expect(atomicWriteFileSync(target, "body\n", { skipIfUnchanged: true })).toBe(true);
+    const firstMtime = statSync(target).mtimeMs;
+
+    // Identical content short-circuits: no write, mtime unchanged.
+    expect(atomicWriteFileSync(target, "body\n", { skipIfUnchanged: true })).toBe(false);
+    expect(statSync(target).mtimeMs).toBe(firstMtime);
+
+    // Different content writes and reports the change.
+    expect(atomicWriteFileSync(target, "changed\n", { skipIfUnchanged: true })).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe("changed\n");
+  });
+
+  test("without the flag an identical write still rewrites (default unchanged)", () => {
+    const target = join(tmp, "always.txt");
+    atomicWriteFileSync(target, "body\n");
+    // Default behaviour returns true and rewrites.
+    expect(atomicWriteFileSync(target, "body\n")).toBe(true);
+  });
+
+  test("atomicWriteText short-circuits identical content too", () => {
+    const target = join(tmp, "text.txt");
+    expect(atomicWriteText(target, "hello", { skipIfUnchanged: true })).toBe(true);
+    expect(atomicWriteText(target, "hello", { skipIfUnchanged: true })).toBe(false);
+    expect(atomicWriteText(target, "world", { skipIfUnchanged: true })).toBe(true);
+  });
+});

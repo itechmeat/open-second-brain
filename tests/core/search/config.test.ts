@@ -26,6 +26,7 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_EMBEDDING_TIMEOUT",
   "OPEN_SECOND_BRAIN_EMBEDDING_CONCURRENCY",
   "OPEN_SECOND_BRAIN_EMBEDDING_BATCH",
+  "OPEN_SECOND_BRAIN_EMBEDDING_MAX_RETRIES",
   "OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE",
   "OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE",
   "OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE",
@@ -79,6 +80,22 @@ test("defaults are returned when config and env are empty", () => {
   // defaults, not the legacy `search_ignore_paths` plumbing.
   expect(ignoreRaws).toContain(".obsidian");
   expect(ignoreRaws).toContain("Brain/.snapshots");
+});
+
+test("embedding retry budget defaults to 6 and is overridable via env and config", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).semantic.maxRetries).toBe(6);
+
+  writeFileSync(configPath, `vault: "${tmp}"\nembedding_max_retries: "9"\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).semantic.maxRetries).toBe(9);
+
+  process.env["OPEN_SECOND_BRAIN_EMBEDDING_MAX_RETRIES"] = "2";
+  expect(resolveSearchConfig({ vault: tmp, configPath }).semantic.maxRetries).toBe(2);
+});
+
+test("embedding retry budget below 1 is rejected", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nembedding_max_retries: "0"\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(/embedding_max_retries/);
 });
 
 test("recall recency defaults to the Weibull curve params", () => {

@@ -42,6 +42,7 @@ function semanticConfig() {
       concurrency: 2,
       batchSize: 8,
       costGateUsd: 0,
+      maxRetries: 3,
     },
   });
 }
@@ -347,6 +348,7 @@ test("explicit --semantic without vec extension throws (configured-down case)", 
       concurrency: 1,
       batchSize: 8,
       costGateUsd: 0,
+      maxRetries: 3,
     },
   });
   await indexVault(cfg);

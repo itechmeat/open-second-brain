@@ -44,6 +44,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("config", "string"),
       flag("repo", "string"),
     ]),
+    command("onboarding", "Show the guided first-run setup checklist", [
+      flag("vault", "string"),
+      flag("config", "string"),
+    ]),
     command("export-config", "Write a redacted config snapshot", [
       flag("config", "string"),
       flag("output", "string"),
