@@ -197,11 +197,26 @@ function normaliseHostname(value: string): string {
 }
 
 /**
+ * DNS rebinding exploits a LOOPBACK-bound server reached from a victim's
+ * browser (a malicious site rebinds its own domain to 127.0.0.1). The guard is
+ * therefore meaningful only for a loopback bind, where the trusted Host set is
+ * the enumerable loopback names. A non-loopback bind is an explicit network
+ * exposure that always carries a mandatory bearer (see startHttp), so the
+ * bearer - not a Host allowlist we cannot enumerate for a wildcard bind - is
+ * the auth boundary there; blocking the machine's real IP / DNS Host would
+ * make `0.0.0.0` unusable. Skip the guard for non-loopback binds.
+ */
+function hostGuardApplies(boundHost: string): boolean {
+  return isLoopbackHost(boundHost);
+}
+
+/**
  * The `Host` header must name a loopback address or the exact bound host.
  * A present-but-foreign Host is the DNS-rebinding signal and is rejected; an
  * absent Host (uncommon; not a browser rebind) is allowed.
  */
 function hostAllowed(req: IncomingMessage, boundHost: string): boolean {
+  if (!hostGuardApplies(boundHost)) return true;
   const host = req.headers.host;
   if (host === undefined) return true;
   const hostname = normaliseHostname(host);
@@ -214,6 +229,7 @@ function hostAllowed(req: IncomingMessage, boundHost: string): boolean {
  * Origin (non-browser client) is allowed.
  */
 function originAllowed(req: IncomingMessage, boundHost: string): boolean {
+  if (!hostGuardApplies(boundHost)) return true;
   const origin = firstHeader(req.headers.origin);
   if (origin === undefined || origin === "" || origin === "null") return origin !== "null";
   let hostname: string;

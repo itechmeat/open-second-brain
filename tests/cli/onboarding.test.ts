@@ -54,6 +54,17 @@ test("recording a first preference flips the feedback step to done", () => {
   expect(stepById(vault, "first_feedback").done).toBe(true);
 });
 
+test("a local embedding provider is semantic-ready without an API key", () => {
+  writeFileSync(
+    configPath,
+    `vault: "${vault}"\nsearch_semantic_enabled: "true"\nembedding_provider: "local"\n`,
+    "utf8",
+  );
+  // No embedding key, but a local provider needs none - the optional semantic
+  // step is satisfied, matching the runtime-notice logic.
+  expect(stepById(vault, "semantic_search").done).toBe(true);
+});
+
 test("the checklist renders a human-readable block with checkboxes and commands", () => {
   const checklist = buildOnboardingChecklist(vault, { configPath, env: {} });
   const text = renderOnboardingChecklist(checklist);

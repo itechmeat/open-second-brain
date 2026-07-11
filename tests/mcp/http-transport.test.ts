@@ -142,6 +142,43 @@ describe("Streamable HTTP MCP transport", () => {
     }
   });
 
+  test("a non-loopback (0.0.0.0) bind accepts the machine's real Host/Origin", async () => {
+    // Binding a wildcard is an explicit network exposure gated by the mandatory
+    // bearer; the DNS-rebinding Host/Origin guard (a loopback-only concern)
+    // must not reject the machine's real IP / DNS Host, which would make
+    // 0.0.0.0 unusable. We connect over loopback but present a foreign Host.
+    const handle = await startHttp({ vault }, { apiKey: "secret", host: "0.0.0.0", port: 0 });
+    try {
+      const res = await rawRequest(`http://127.0.0.1:${handle.port}`, {
+        method: "POST",
+        headers: {
+          host: "box.internal.example",
+          origin: "http://box.internal.example",
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(rpc("ping", 1)),
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  test("a non-loopback bind still enforces the bearer", async () => {
+    const handle = await startHttp({ vault }, { apiKey: "secret", host: "0.0.0.0", port: 0 });
+    try {
+      const res = await rawRequest(`http://127.0.0.1:${handle.port}`, {
+        method: "POST",
+        headers: { host: "box.internal.example", "content-type": "application/json" },
+        body: JSON.stringify(rpc("ping", 1)),
+      });
+      expect(res.status).toBe(401);
+    } finally {
+      await handle.close();
+    }
+  });
+
   test("accepts a loopback Origin", async () => {
     const handle = await startHttp({ vault }, { apiKey: "secret", host: "127.0.0.1", port: 0 });
     try {

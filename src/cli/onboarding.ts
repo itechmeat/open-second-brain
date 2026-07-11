@@ -74,7 +74,10 @@ export function buildOnboardingChecklist(
   const agentNamed =
     (typeof config["agent_name"] === "string" && config["agent_name"].length > 0) ||
     (typeof config["agentName"] === "string" && config["agentName"].length > 0);
-  const semanticReady = search.semantic.enabled && Boolean(search.semantic.apiKey);
+  // A local (or disabled) provider needs no embedding key, so semantic search
+  // is "ready" without one - mirroring the runtime-notice `networked` logic.
+  const networked = search.semantic.provider !== "local" && search.semantic.provider !== "disabled";
+  const semanticReady = search.semantic.enabled && (!networked || Boolean(search.semantic.apiKey));
   const hasFirstSignal =
     countMarkdown(join(vault, "Brain", "preferences")) > 0 ||
     countMarkdown(join(vault, "Brain", "inbox")) > 0;
