@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
-import { TUNING_SCHEMA_VERSION } from "../../../src/core/search/tuning.ts";
+import { TUNING_SCHEMA_VERSION } from "../../../src/core/search/tuning-store.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 let vault: string;

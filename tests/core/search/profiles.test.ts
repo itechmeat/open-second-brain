@@ -16,7 +16,7 @@ import {
 import {
   TUNING_POOL_MULTIPLIERS,
   TUNING_TRAVERSAL_DEPTHS,
-} from "../../../src/core/search/tuning.ts";
+} from "../../../src/core/search/tuning-store.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 
 test("the three profiles resolve to distinct knob tuples", () => {

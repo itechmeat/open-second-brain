@@ -9,7 +9,8 @@
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { appendMetric } from "../../core/brain/metrics.ts";
 import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../../core/search/benchmark.ts";
-import { loadTunedParameters, resetTuning, tuneRecall } from "../../core/search/tuning.ts";
+import { tuneRecall } from "../../core/search/tuning.ts";
+import { loadTunedParameters, resetTuning } from "../../core/search/tuning-store.ts";
 import { listGateTelemetry, summarizeGateTelemetry } from "../../core/brain/gate-telemetry.ts";
 import { computeMemoryCostMeter } from "../../core/brain/memory-cost-meter.ts";
 import { observedReuseRates } from "../../core/brain/observed-use.ts";
