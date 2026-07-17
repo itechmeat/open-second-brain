@@ -32,27 +32,137 @@
  * misses as warnings separately; the parser itself is silent.
  */
 
-const KNOWN_KINDS: ReadonlySet<string> = new Set(["feedback"]);
+const KNOWN_KINDS: ReadonlySet<string> = new Set(["feedback", "loop", "set"]);
 const KNOWN_SIGNALS: ReadonlyArray<string> = ["positive", "negative"];
 
-export type MarkerKind = "feedback";
+/**
+ * Required `key=value` fields per marker kind. The single generalisation
+ * of the old feedback-specific `topic` / `principle` hard-require. The
+ * feedback row reproduces the historical requirement byte-for-byte; the
+ * `set` row adds the write-back triple. `loop` is absent here because it
+ * is validated structurally by the close-form decision table, not by a
+ * flat presence check.
+ */
+const REQUIRED_FIELDS: Record<"feedback" | "set", ReadonlyArray<string>> = {
+  feedback: ["topic", "principle"],
+  set: ["note", "field", "value"],
+};
+
+export type MarkerKind = "feedback" | "loop" | "set";
 export type MarkerSignal = "positive" | "negative";
 export type MarkerShape = "inline" | "block";
+export type LoopForm = "open" | "close";
 
+/**
+ * One shape for every marker kind. Per-kind fields are optional and
+ * additive so existing feedback consumers keep compiling unchanged; a
+ * given marker only ever carries the fields for its own `kind`. Use
+ * {@link isFeedbackMarker} to narrow to the feedback field set before
+ * reading `topic` / `signal` / `principle`.
+ */
 export interface ParsedMarker {
   readonly kind: MarkerKind;
-  readonly signal: MarkerSignal;
-  readonly topic: string;
-  readonly principle: string;
+  // ── feedback (kind === "feedback") ──
+  readonly signal?: MarkerSignal;
+  readonly topic?: string;
+  readonly principle?: string;
   readonly scope?: string;
   readonly agent?: string;
+  /** Feedback free-note, or the `set` target note (`note=` in both). */
   readonly note?: string;
   readonly source?: ReadonlyArray<string>;
+  // ── loop (kind === "loop") ──
+  /** `open` for a live loop, `close` for the structural close token. */
+  readonly loop?: LoopForm;
+  /** Open-loop free text (absent on a close token). */
+  readonly text?: string;
+  /** Explicit or close-token loop id (optional on open loops). */
+  readonly id?: string;
+  // ── set (kind === "set") ──
+  readonly field?: string;
+  readonly value?: string;
+  // ── common ──
   /** 1-based line number where the marker starts in the source file. */
   readonly originLine: number;
   /** Verbatim text of the source marker — for rewriter / audit. */
   readonly originText: string;
   readonly shape: MarkerShape;
+}
+
+/**
+ * A {@link ParsedMarker} narrowed to `kind === "feedback"`, where the
+ * feedback fields are guaranteed present. Produced by
+ * {@link isFeedbackMarker}.
+ */
+export type FeedbackMarker = ParsedMarker & {
+  readonly kind: "feedback";
+  readonly signal: MarkerSignal;
+  readonly topic: string;
+  readonly principle: string;
+};
+
+/**
+ * Type guard: true only for feedback markers. Signal-emitting consumers
+ * (`scanInline`, `captureMarkers`, `importSession`) filter on this so
+ * loop / set markers are never consumed, rewritten, or turned into
+ * signals — loops are live-derived and set markers belong to the
+ * guarded write-back verb.
+ */
+export function isFeedbackMarker(marker: ParsedMarker): marker is FeedbackMarker {
+  return marker.kind === "feedback";
+}
+
+function requiredFieldsPresent(
+  kind: "feedback" | "set",
+  fields: Record<string, string | string[]>,
+): boolean {
+  for (const key of REQUIRED_FIELDS[kind]) {
+    const value = fields[key];
+    // Non-empty string only. An array (repeated key) or empty value
+    // fails - matching the historical `!topic || !principle` reject.
+    if (typeof value !== "string" || value.length === 0) return false;
+  }
+  return true;
+}
+
+/**
+ * Apply the fixed close-form decision table to a tokenised loop body,
+ * shared by the inline and block parsers:
+ *
+ *   (a) first token `close` + exactly one id + nothing else -> close;
+ *   (b) first token `close` + id + extra content            -> reject;
+ *   (c) anything else -> open loop, text = remaining tokens joined,
+ *       optional single id; empty text -> reject.
+ */
+function classifyLoop(input: {
+  readonly words: ReadonlyArray<string>;
+  readonly idValue: string | null;
+  readonly idCount: number;
+  readonly originLine: number;
+  readonly originText: string;
+  readonly shape: MarkerShape;
+}): ParsedMarker | null {
+  const { words, idValue, idCount, originLine, originText, shape } = input;
+  if (words.length >= 1 && words[0] === "close" && idCount >= 1) {
+    if (words.length === 1 && idCount === 1 && idValue !== null) {
+      return { kind: "loop", loop: "close", id: idValue, originLine, originText, shape };
+    }
+    // `close` with extra free text or more than one id - ambiguous.
+    return null;
+  }
+  // Open loop. A second id pair is ambiguous; reject rather than guess.
+  if (idCount > 1) return null;
+  const text = words.join(" ").trim();
+  if (text.length === 0) return null;
+  return {
+    kind: "loop",
+    loop: "open",
+    text,
+    ...(idValue !== null && idCount === 1 ? { id: idValue } : {}),
+    originLine,
+    originText,
+    shape,
+  };
 }
 
 export interface MarkerDiscoveryResult {
@@ -71,13 +181,18 @@ export interface MarkerDiscoveryResult {
  * Token-by-token state machine. Accepts:
  *   - whitespace at start of line
  *   - `@osb` literal
- *   - two positional tokens: `kind` (must be in KNOWN_KINDS) and
- *     `signal` (must be in KNOWN_SIGNALS)
- *   - any number of `key=value` pairs. `value` is either unquoted
- *     (no whitespace) or `"..."` with `\"` and `\\` escapes.
+ *   - a positional `kind` token (must be in KNOWN_KINDS)
+ *   - the remaining grammar per kind:
+ *       feedback -> positional `signal` (KNOWN_SIGNALS) then any number
+ *                   of `key=value` pairs (topic + principle required);
+ *       set      -> `key=value` pairs (note + field + value required);
+ *       loop     -> free text plus an optional `id=` pair, resolved by
+ *                   the close-form decision table (see classifyLoop).
+ *   - a `value` is either unquoted (no whitespace) or `"..."` with `\"`
+ *     and `\\` escapes.
  *
- * Returns null on any structural deviation. Required fields
- * (`topic`, `principle`) must be present.
+ * Returns null on any structural deviation - the walker treats null as
+ * "not a marker" and moves on.
  */
 export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | null {
   const originText = line;
@@ -101,39 +216,23 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
   if (kindToken === null || !KNOWN_KINDS.has(kindToken)) return null;
   skipWs();
 
-  // Positional `signal`.
+  if (kindToken === "loop") return parseLoopBody();
+  if (kindToken === "set") return parseSetBody();
+
+  // ----- feedback (positional signal + key=value pairs) -------------------
   const signalToken = readBareToken();
   if (signalToken === null || !KNOWN_SIGNALS.includes(signalToken)) return null;
   skipWs();
 
-  const fields: Record<string, string | string[]> = {};
-  while (i < n) {
-    const key = readKey();
-    if (key === null) return null;
-    if (i >= n || line[i] !== "=") return null;
-    i++; // consume '='
-    const value = readValue();
-    if (value === null) return null;
-    if (fields[key] === undefined) {
-      fields[key] = value;
-    } else {
-      // Second occurrence: promote to array. (Rare in inline form;
-      // mainly there so `source=a source=b` works.)
-      const prev = fields[key];
-      fields[key] = Array.isArray(prev) ? [...prev, value] : [prev, value];
-    }
-    skipWs();
-  }
-
-  const topic = typeof fields["topic"] === "string" ? fields["topic"] : null;
-  const principle = typeof fields["principle"] === "string" ? fields["principle"] : null;
-  if (!topic || !principle) return null;
+  const fields = collectFields();
+  if (fields === null) return null;
+  if (!requiredFieldsPresent("feedback", fields)) return null;
 
   const out: ParsedMarker = {
-    kind: kindToken as MarkerKind,
+    kind: "feedback",
     signal: signalToken as MarkerSignal,
-    topic,
-    principle,
+    topic: fields["topic"] as string,
+    principle: fields["principle"] as string,
     ...(typeof fields["scope"] === "string" ? { scope: fields["scope"] } : {}),
     ...(typeof fields["agent"] === "string" ? { agent: fields["agent"] } : {}),
     ...(typeof fields["note"] === "string" ? { note: fields["note"] } : {}),
@@ -150,10 +249,87 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
   };
   return out;
 
+  // ----- per-kind bodies ---------------------------------------------------
+  function parseSetBody(): ParsedMarker | null {
+    const setFields = collectFields();
+    if (setFields === null) return null;
+    if (!requiredFieldsPresent("set", setFields)) return null;
+    return {
+      kind: "set",
+      note: setFields["note"] as string,
+      field: setFields["field"] as string,
+      value: setFields["value"] as string,
+      originLine: lineNo,
+      originText,
+      shape: "inline",
+    };
+  }
+
+  function parseLoopBody(): ParsedMarker | null {
+    // Tokenise the remainder into bare free-text words plus at most one
+    // structural `id=` pair. Only a leading `id=` is treated specially;
+    // any other `word=...` stays free text.
+    const words: string[] = [];
+    let idValue: string | null = null;
+    let idCount = 0;
+    while (i < n) {
+      skipWs();
+      if (i >= n) break;
+      if (line.startsWith("id=", i)) {
+        i += 3; // consume `id=`
+        const v = readValue();
+        if (v === null) return null;
+        idValue = v;
+        idCount++;
+        continue;
+      }
+      const word = readWord();
+      if (word === null) return null;
+      words.push(word);
+    }
+    return classifyLoop({
+      words,
+      idValue,
+      idCount,
+      originLine: lineNo,
+      originText,
+      shape: "inline",
+    });
+  }
+
   // ----- nested readers ----------------------------------------------------
+  function collectFields(): Record<string, string | string[]> | null {
+    const collected: Record<string, string | string[]> = {};
+    while (i < n) {
+      const key = readKey();
+      if (key === null) return null;
+      if (i >= n || line[i] !== "=") return null;
+      i++; // consume '='
+      const value = readValue();
+      if (value === null) return null;
+      if (collected[key] === undefined) {
+        collected[key] = value;
+      } else {
+        // Second occurrence: promote to array. (Rare in inline form;
+        // mainly there so `source=a source=b` works.)
+        const prev = collected[key];
+        collected[key] = Array.isArray(prev) ? [...prev, value] : [prev, value];
+      }
+      skipWs();
+    }
+    return collected;
+  }
   function readBareToken(): string | null {
     const start = i;
     while (i < n && line[i] !== " " && line[i] !== "\t" && line[i] !== "=") i++;
+    if (i === start) return null;
+    return line.slice(start, i);
+  }
+  function readWord(): string | null {
+    // Whole whitespace-delimited word verbatim (brackets, punctuation,
+    // and any `=` past position 0 are part of the loop's free text).
+    const start = i;
+    while (i < n && line[i] !== " " && line[i] !== "\t") i++;
     if (i === start) return null;
     return line.slice(start, i);
   }
@@ -265,17 +441,52 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
 
   const kind = typeof fields["kind"] === "string" ? fields["kind"] : null;
   if (kind === null || !KNOWN_KINDS.has(kind)) return null;
+
+  if (kind === "loop") {
+    // Loop block: a required `text:` free-text field plus an optional
+    // `id:` field, run through the same close-form decision table as
+    // the inline form (the id is a field here, not inline in the text).
+    const textField = typeof fields["text"] === "string" ? fields["text"] : null;
+    if (textField === null) return null;
+    const idField = typeof fields["id"] === "string" ? fields["id"] : null;
+    const words = textField
+      .trim()
+      .split(/\s+/)
+      .filter((w) => w.length > 0);
+    const idCount = idField !== null && idField.length > 0 ? 1 : 0;
+    return classifyLoop({
+      words,
+      idValue: idCount === 1 ? idField : null,
+      idCount,
+      originLine: fenceStartLine,
+      originText: body,
+      shape: "block",
+    });
+  }
+
+  if (kind === "set") {
+    if (!requiredFieldsPresent("set", fields)) return null;
+    return {
+      kind: "set",
+      note: fields["note"] as string,
+      field: fields["field"] as string,
+      value: fields["value"] as string,
+      originLine: fenceStartLine,
+      originText: body,
+      shape: "block",
+    };
+  }
+
+  // Feedback.
   const signal = typeof fields["signal"] === "string" ? fields["signal"] : null;
   if (signal === null || !KNOWN_SIGNALS.includes(signal)) return null;
-  const topic = typeof fields["topic"] === "string" ? fields["topic"] : null;
-  const principle = typeof fields["principle"] === "string" ? fields["principle"] : null;
-  if (!topic || !principle) return null;
+  if (!requiredFieldsPresent("feedback", fields)) return null;
 
   return {
-    kind: kind as MarkerKind,
+    kind: "feedback",
     signal: signal as MarkerSignal,
-    topic,
-    principle,
+    topic: fields["topic"] as string,
+    principle: fields["principle"] as string,
     ...(typeof fields["scope"] === "string" ? { scope: fields["scope"] } : {}),
     ...(typeof fields["agent"] === "string" ? { agent: fields["agent"] } : {}),
     ...(typeof fields["note"] === "string" ? { note: fields["note"] } : {}),

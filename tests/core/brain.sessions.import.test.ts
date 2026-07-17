@@ -79,6 +79,29 @@ describe("importSession", () => {
     expect(res.signals_deduped).toBe(1);
   });
 
+  test("imports only feedback markers, ignoring loop and set kinds", async () => {
+    const fixturePath = join(tmp, "kinds.jsonl");
+    const userText =
+      "@osb feedback negative topic=kept principle=p\\n" +
+      "@osb loop follow up on vendor id=vendor\\n" +
+      "@osb set note=Roadmap field=completion value=65";
+    writeFileSync(
+      fixturePath,
+      [
+        '{"parentUuid":null,"sessionId":"k","entrypoint":"sdk-cli","type":"user","message":{"role":"user","content":"' +
+          userText +
+          '"},"uuid":"u1","timestamp":"2026-05-16T10:00:01.000Z"}',
+        "",
+      ].join("\n"),
+    );
+    const res = await importSession(tmp, fixturePath, { agent: "test" });
+    // Only the feedback marker becomes a signal.
+    expect(res.signals_created).toBe(1);
+    const inbox = readdirSync(brainDirs(tmp).inbox).filter((n) => n.startsWith("sig-"));
+    expect(inbox.length).toBe(1);
+    expect(readFileSync(join(brainDirs(tmp).inbox, inbox[0]!), "utf8")).toMatch(/topic: kept/);
+  });
+
   test("is idempotent on re-run (zero new signals)", async () => {
     const first = await importSession(tmp, CLAUDE, { agent: "test" });
     expect(first.signals_created).toBeGreaterThan(0);

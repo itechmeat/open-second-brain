@@ -29,7 +29,7 @@ import { Dirent, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
-import { discoverMarkersDetailed } from "./inline.ts";
+import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
 import { loadNotesConfigSafe } from "./policy.ts";
@@ -163,7 +163,10 @@ export async function scanInline(
     }
     const discovery = discoverMarkersDetailed(content);
     malformed += discovery.malformed;
-    const markers = discovery.markers;
+    // Feedback markers only: loop markers are live-derived and never
+    // consumed, and set markers belong to the guarded write-back verb.
+    // Both must not be turned into signals or rewritten here.
+    const markers = discovery.markers.filter(isFeedbackMarker);
     if (markers.length === 0) continue;
     found += markers.length;
     filesWithMarkers.push({ path: filePath, markers: markers.length });
