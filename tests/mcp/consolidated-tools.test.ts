@@ -59,6 +59,7 @@ describe("brain_brief", () => {
     { view: "monthly", args: { month: "2026-05" } },
     { view: "operator", args: { include_dream: false } },
     { view: "digest", args: { since: "2026-05-01T00:00:00Z", until: "2026-05-03T00:00:00Z" } },
+    { view: "today" },
   ];
 
   for (const { view, args } of CASES) {
@@ -68,6 +69,24 @@ describe("brain_brief", () => {
       expect(typeof result).toBe("object");
     });
   }
+
+  test("view=today returns the four-section dashboard envelope", async () => {
+    const result = (await run("brain_brief", { view: "today" })) as Record<string, unknown>;
+    expect(typeof result["text"]).toBe("string");
+    expect(result["obligations"]).toBeDefined();
+    expect(result["open_loops"]).toBeDefined();
+    expect(result["recent_activity"]).toBeDefined();
+    expect(result["totals"]).toBeDefined();
+    expect(result["errors"]).toBeDefined();
+    expect(result["text"]).toContain("## Obligations");
+  });
+
+  test("today is advertised in the brain_brief view enum", () => {
+    const tool = findTool(TOOLS, "brain_brief");
+    const view = (tool.inputSchema as { properties: { view: { enum: readonly string[] } } })
+      .properties.view;
+    expect(view.enum).toContain("today");
+  });
 
   test("invalid view raises a clear error", async () => {
     await expect(run("brain_brief", { view: "hourly" })).rejects.toThrow(/view/);

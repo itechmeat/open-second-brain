@@ -115,6 +115,8 @@ import {
   cmdBrainRecurrence,
   cmdBrainObligation,
   cmdBrainAgenda,
+  cmdBrainToday,
+  cmdBrainApplyMarkers,
   cmdBrainAttentionFlows,
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,
@@ -366,6 +368,10 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainObligation(rest);
       case "agenda":
         return await cmdBrainAgenda(rest);
+      case "today":
+        return await cmdBrainToday(rest);
+      case "apply-markers":
+        return await cmdBrainApplyMarkers(rest);
       case "session-grep":
         return await cmdBrainSessionGrep(rest);
       case "session-describe":
