@@ -13,7 +13,8 @@
 import { readFileSync } from "node:fs";
 
 import { parseRecallBenchmarkDataset } from "../../../core/search/benchmark.ts";
-import { loadTunedParameters, resetTuning, tuneRecall } from "../../../core/search/tuning.ts";
+import { tuneRecall } from "../../../core/search/tuning.ts";
+import { loadTunedParameters, resetTuning } from "../../../core/search/tuning-store.ts";
 import { appendMetric } from "../../../core/brain/metrics.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";

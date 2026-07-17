@@ -17,7 +17,7 @@ import {
 import { resolveAgentName } from "../../core/config.ts";
 import { coerceStr } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_distill_source";

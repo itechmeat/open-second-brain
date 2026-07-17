@@ -16,8 +16,8 @@
  *                     are the positive case).
  */
 
-import type { DoctorIssue, TrustVerdict } from "../doctor.ts";
 import type { DreamWarning } from "../dream.ts";
+import type { DoctorIssue, TrustVerdict } from "../types.ts";
 import type { VerificationDeltaSummaryCounts } from "./compute-verification-delta.ts";
 
 const DEFAULT_DRIFT_WATCH_THRESHOLD = 3;

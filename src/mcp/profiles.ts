@@ -17,7 +17,7 @@
  */
 
 import type { RuntimeCapabilityWindow } from "./capabilities.ts";
-import type { ToolScope } from "./tools.ts";
+import type { ToolScope } from "./tool-contract.ts";
 
 export interface ToolSurfaceProfile {
   readonly name: string;

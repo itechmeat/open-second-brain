@@ -19,7 +19,8 @@ import { budgetActiveBody } from "../src/core/brain/active-budget.ts";
 import { parseFrontmatterText } from "../src/core/vault.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import { buildInstructions } from "../src/mcp/instructions.ts";
-import { buildToolTable, type ToolDefinition } from "../src/mcp/tools.ts";
+import { buildToolTable } from "../src/mcp/tools.ts";
+import type { ToolDefinition } from "../src/mcp/tool-contract.ts";
 
 interface ToolRow {
   readonly name: string;

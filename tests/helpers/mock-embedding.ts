@@ -10,7 +10,7 @@
 
 import { createHash } from "node:crypto";
 
-import type { EmbeddingProvider } from "../../src/core/search/embeddings/provider.ts";
+import type { EmbeddingProvider } from "../../src/core/search/embeddings/contract.ts";
 
 export class MockEmbeddingProvider implements EmbeddingProvider {
   readonly name = "mock";

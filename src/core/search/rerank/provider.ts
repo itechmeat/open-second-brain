@@ -19,18 +19,7 @@
  */
 
 import type { OpenAiCompatEndpoint } from "../embeddings/provider-resolve.ts";
-
-export interface RerankProvider {
-  readonly name: string;
-  readonly model: string;
-  /**
-   * Score each document's relevance to the query. Returns an array of the
-   * same length as `documents`, aligned by index. Higher is more relevant.
-   * Throws on any provider/transport failure — the caller
-   * ({@link applyCrossEncoderRerank}) is responsible for the fail-open.
-   */
-  rerank(query: string, documents: ReadonlyArray<string>): Promise<number[]>;
-}
+import type { RerankProvider } from "./contract.ts";
 
 /**
  * Build the default OpenAI-compatible cross-encoder rerank provider for a

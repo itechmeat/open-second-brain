@@ -25,7 +25,7 @@ import {
   deriveIdentityType,
   ENTITY_DEDUP_EMBEDDING_THRESHOLD,
 } from "../../../src/core/brain/entities/semantic-dedup.ts";
-import type { EmbeddingProvider } from "../../../src/core/search/embeddings/provider.ts";
+import type { EmbeddingProvider } from "../../../src/core/search/embeddings/contract.ts";
 
 let vault: string;
 let configHome: string;

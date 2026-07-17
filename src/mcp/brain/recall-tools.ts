@@ -9,7 +9,8 @@
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { appendMetric } from "../../core/brain/metrics.ts";
 import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../../core/search/benchmark.ts";
-import { loadTunedParameters, resetTuning, tuneRecall } from "../../core/search/tuning.ts";
+import { tuneRecall } from "../../core/search/tuning.ts";
+import { loadTunedParameters, resetTuning } from "../../core/search/tuning-store.ts";
 import { listGateTelemetry, summarizeGateTelemetry } from "../../core/brain/gate-telemetry.ts";
 import { computeMemoryCostMeter } from "../../core/brain/memory-cost-meter.ts";
 import { observedReuseRates } from "../../core/brain/observed-use.ts";
@@ -58,7 +59,7 @@ import {
 import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/brain/query-demand.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
 

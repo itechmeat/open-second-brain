@@ -4,42 +4,9 @@ import {
   significantTerms,
   termIncludedIn,
 } from "./coverage.ts";
-import type { CompletenessReport, CoverageReport } from "./coverage.ts";
+import type { CoverageReport } from "./coverage.ts";
 import { formatLinePointer } from "./line-numbering.ts";
-import type { BrainSearchResult } from "./types.ts";
-
-export interface EvidenceRecord {
-  readonly path: string;
-  readonly documentId: number;
-  readonly chunkId: number;
-  /**
-   * Read-time line-anchored citation for this chunk, formatted
-   * `path:Lstart-Lend` (or `path:Lstart` for a single line) from the chunk's
-   * 1-based `startLine`/`endLine`. Resolves by opening the file and slicing
-   * the range with {@link extractLineRange}; the stored bytes are never
-   * mutated, so the pointer stays valid across idempotent re-mining.
-   */
-  readonly linePointer: string;
-  readonly matchedTerms: ReadonlyArray<string>;
-  readonly missingTerms: ReadonlyArray<string>;
-  readonly supportCoverage: number;
-  readonly terminalState: boolean;
-  readonly whyRetrieved: ReadonlyArray<string>;
-  readonly droppedCandidateReasons: ReadonlyArray<string>;
-}
-
-/**
- * One per-token recall-union record (recall-trust-suite, Feature C): a
- * document fetched specifically because it covers a significant term
- * the ranked result set left uncovered. Union records live in the pack
- * only — the primary `results` contract stays untouched.
- */
-export interface EvidenceUnionRecord {
-  readonly term: string;
-  readonly path: string;
-  readonly documentId: number;
-  readonly chunkId: number;
-}
+import type { BrainSearchResult, EvidencePack, EvidenceUnionRecord } from "./types.ts";
 
 /**
  * Verification extras computed by the coverage engine when the search
@@ -48,37 +15,6 @@ export interface EvidenceUnionRecord {
 export interface EvidenceVerification {
   readonly coverage: CoverageReport;
   readonly unionRecords: ReadonlyArray<EvidenceUnionRecord>;
-}
-
-export interface EvidencePack {
-  readonly significantTerms: ReadonlyArray<string>;
-  readonly matchedTerms: ReadonlyArray<string>;
-  readonly missingTerms: ReadonlyArray<string>;
-  readonly supportCoverage: number;
-  readonly records: ReadonlyArray<EvidenceRecord>;
-  readonly droppedCandidates: ReadonlyArray<{
-    readonly path: string;
-    readonly reason: string;
-  }>;
-  readonly abstention: string | null;
-  /**
-   * IDF-weighted support coverage (Feature C): the share of the query's
-   * IDF mass the covered terms carry. Present only when the search ran
-   * with coverage verification.
-   */
-  readonly idfWeightedCoverage?: number;
-  /** Rare (high-signal) significant terms per the corpus statistics. */
-  readonly rareTerms?: ReadonlyArray<string>;
-  /** Rare terms no returned record covers — the abstention trigger. */
-  readonly uncoveredRareTerms?: ReadonlyArray<string>;
-  /** Per-token recall union for uncovered significant terms. */
-  readonly unionRecords?: ReadonlyArray<EvidenceUnionRecord>;
-  /**
-   * Search-completeness guard (Feature E): verdict + false-absence
-   * report from the same coverage engine. Present only when the search
-   * ran with coverage verification.
-   */
-  readonly completeness?: CompletenessReport;
 }
 
 /**

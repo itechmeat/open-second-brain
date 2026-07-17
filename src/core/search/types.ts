@@ -5,9 +5,6 @@
  */
 
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
-import type { EvidencePack } from "./evidence-pack.ts";
-import type { SearchSessionFocus } from "./session-focus.ts";
-import type { StructuredRecallQueryDocument } from "./structured-query.ts";
 
 export type { VaultIgnoreRule };
 
@@ -142,6 +139,23 @@ export interface BrainSearchResult {
  * rule and keeps ranking bit-identical.
  */
 export type QueryIntent = "neutral" | "exact" | "entity" | "broad";
+
+/** One parsed `lex:` lane of a structured recall query document. */
+export interface StructuredLexLane {
+  readonly include: ReadonlyArray<string>;
+  readonly exclude: ReadonlyArray<string>;
+}
+
+/**
+ * A parsed structured recall query document: explicit intent plus the
+ * lex / vec / hyde retrieval lanes. Parsed by `structured-query.ts`.
+ */
+export interface StructuredRecallQueryDocument {
+  readonly intent: QueryIntent | null;
+  readonly lex: StructuredLexLane;
+  readonly vec: ReadonlyArray<string>;
+  readonly hyde: ReadonlyArray<string>;
+}
 
 /**
  * Per-query ranking multipliers emitted by the query plan. Each is a
@@ -369,6 +383,102 @@ export interface ExpandHitResult {
   readonly note: ExpandedNote;
   readonly raw_content: ReadonlyArray<ExpandedRawChunk>;
   readonly next_cursor: string | null;
+}
+
+/** Active session-focus steering. Persisted/parsed by `session-focus.ts`. */
+export interface SearchSessionFocus {
+  readonly query: string | null;
+  readonly pathPrefix: string | null;
+  readonly expiresAt: number | null;
+}
+
+/** One bounded grid point in the self-tuning parameter space (`tuning.ts`). */
+export interface TunedParameters {
+  readonly poolMultiplier: number;
+  readonly traversalDepth: number;
+  readonly learnedWeights: boolean;
+  readonly expansion: boolean;
+}
+
+export interface EvidenceRecord {
+  readonly path: string;
+  readonly documentId: number;
+  readonly chunkId: number;
+  /**
+   * Read-time line-anchored citation for this chunk, formatted
+   * `path:Lstart-Lend` (or `path:Lstart` for a single line) from the chunk's
+   * 1-based `startLine`/`endLine`. Resolves by opening the file and slicing
+   * the range with {@link extractLineRange}; the stored bytes are never
+   * mutated, so the pointer stays valid across idempotent re-mining.
+   */
+  readonly linePointer: string;
+  readonly matchedTerms: ReadonlyArray<string>;
+  readonly missingTerms: ReadonlyArray<string>;
+  readonly supportCoverage: number;
+  readonly terminalState: boolean;
+  readonly whyRetrieved: ReadonlyArray<string>;
+  readonly droppedCandidateReasons: ReadonlyArray<string>;
+}
+
+/**
+ * One per-token recall-union record (recall-trust-suite, Feature C): a
+ * document fetched specifically because it covers a significant term
+ * the ranked result set left uncovered. Union records live in the pack
+ * only — the primary `results` contract stays untouched.
+ */
+export interface EvidenceUnionRecord {
+  readonly term: string;
+  readonly path: string;
+  readonly documentId: number;
+  readonly chunkId: number;
+}
+
+export type CompletenessVerdict = "complete" | "partial" | "sparse";
+
+/**
+ * Search-completeness guard (Feature E): a deterministic verdict over
+ * how well the returned results cover the query, plus the
+ * false-absence guard — uncovered terms the corpus DOES contain. A
+ * summarizer seeing a term in `uncoveredButPresentInCorpus` cannot
+ * honestly claim the vault has nothing on it.
+ */
+export interface CompletenessReport {
+  readonly verdict: CompletenessVerdict;
+  readonly idfWeightedCoverage: number;
+  readonly coveredTerms: ReadonlyArray<string>;
+  readonly uncoveredTerms: ReadonlyArray<string>;
+  readonly uncoveredButPresentInCorpus: ReadonlyArray<string>;
+}
+
+export interface EvidencePack {
+  readonly significantTerms: ReadonlyArray<string>;
+  readonly matchedTerms: ReadonlyArray<string>;
+  readonly missingTerms: ReadonlyArray<string>;
+  readonly supportCoverage: number;
+  readonly records: ReadonlyArray<EvidenceRecord>;
+  readonly droppedCandidates: ReadonlyArray<{
+    readonly path: string;
+    readonly reason: string;
+  }>;
+  readonly abstention: string | null;
+  /**
+   * IDF-weighted support coverage (Feature C): the share of the query's
+   * IDF mass the covered terms carry. Present only when the search ran
+   * with coverage verification.
+   */
+  readonly idfWeightedCoverage?: number;
+  /** Rare (high-signal) significant terms per the corpus statistics. */
+  readonly rareTerms?: ReadonlyArray<string>;
+  /** Rare terms no returned record covers — the abstention trigger. */
+  readonly uncoveredRareTerms?: ReadonlyArray<string>;
+  /** Per-token recall union for uncovered significant terms. */
+  readonly unionRecords?: ReadonlyArray<EvidenceUnionRecord>;
+  /**
+   * Search-completeness guard (Feature E): verdict + false-absence
+   * report from the same coverage engine. Present only when the search
+   * ran with coverage verification.
+   */
+  readonly completeness?: CompletenessReport;
 }
 
 export interface SearchOptions {

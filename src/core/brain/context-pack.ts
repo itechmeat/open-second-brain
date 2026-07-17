@@ -58,11 +58,8 @@ import {
   type ContextLanesReport,
 } from "./context-lanes.ts";
 import { buildAttentionContextBlock } from "./attention-flows.ts";
-import {
-  scoreSessionFocusTarget,
-  sessionFocusIsActive,
-  type SearchSessionFocus,
-} from "../search/session-focus.ts";
+import { scoreSessionFocusTarget, sessionFocusIsActive } from "../search/session-focus.ts";
+import type { SearchSessionFocus } from "../search/types.ts";
 
 const TIER_ORDER: ReadonlyArray<PageTier> = [
   PAGE_TIER.core,

@@ -27,7 +27,7 @@ import {
 } from "../../core/brain/types.ts";
 import type { BrainLogEntry } from "../../core/brain/log.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
   coerceStr,

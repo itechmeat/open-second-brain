@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.30.1] - 2026-07-17
+
+A structural maintenance release with zero behavior change: every import cycle in the TypeScript source tree is removed and the largest source file is decomposed. The analysis and the verification gate come from code-ranker (v5.0.3); the full suite (5687 tests) is byte-for-byte green before and after.
+
+### Changed
+
+- **All seven import cycles removed from `src/`.** Dependency inversion at the type level, cycle by cycle: doctor/trust and procedural-* shapes move to the leaf module `src/core/brain/types.ts`; `LinkOutputFormat` moves from `config.ts` to its only consumer `wikilink.ts`; the ~35-file `src/mcp` component dissolves into a one-directional layering over a new `src/mcp/tool-contract.ts` contract leaf; `src/core/search` gains `embeddings/contract.ts`, `rerank/contract.ts`, and `embeddings/configured-provider.ts` while `search/types.ts` becomes a pure leaf; and a new `search/tuning-store.ts` splits the tuned-parameter read side from the grid optimizer, closing the last `search -> tuning -> benchmark` triangle. `code-ranker` now reports zero `cycle.chain` violations and zero cycles in the file graph.
+- **`src/core/search/search.ts` decomposed.** The worst-ranked file in the tree (maintainability index -85.8, cognitive complexity 442, 1722 lines) keeps only the `search()` orchestration; progressive disclosure (`cards.ts`), structured-lane application (`structured-lanes.ts`), the semantic phase (`semantic-phase.ts`), frontmatter result filters (`result-filters.ts`), graph expansion phases (`graph-phases.ts`), and evidence-pack coverage (`evidence-verification.ts`) move to focused leaf modules with byte-identical function bodies.
+
 ## [1.30.0] - 2026-07-11
 
 A governance-visibility release that adds two aggregate views over the preference set the existing per-item hygiene lints could not answer, plus an efficiency refinement to how one of them sources its data. Both new surfaces are additive and read-only over `Brain/preferences/`; the release adds no new dependency and the kernel still calls no LLM.
@@ -6460,6 +6469,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.30.1]: https://github.com/itechmeat/open-second-brain/compare/v1.30.0...v1.30.1
 [1.30.0]: https://github.com/itechmeat/open-second-brain/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/itechmeat/open-second-brain/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/itechmeat/open-second-brain/compare/v1.27.1...v1.28.0

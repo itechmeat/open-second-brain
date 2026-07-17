@@ -9,7 +9,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildToolTable, findTool, type ServerContext } from "../../src/mcp/tools.ts";
+import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 let tmp: string;
 let vault: string;

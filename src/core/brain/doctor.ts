@@ -89,26 +89,19 @@ import {
   BRAIN_LOG_EVENT_KIND,
   BRAIN_PREFERENCE_STATUS,
   type BrainConfig,
+  type DoctorIssue,
+  type InstructionFileCeilingWarning,
   type ResolvedBrainHealthConfig,
+  type TrustVerdict,
 } from "./types.ts";
 import { normaliseWikilinkTarget, parseArtifactRef } from "./wikilink.ts";
 
 // ----- Public types ---------------------------------------------------------
-
-export type DoctorSeverity = "warning" | "error";
-
-/**
- * One structured finding. `code` is a stable identifier so callers can
- * filter or aggregate without parsing the `message`.
- */
-export interface DoctorIssue {
-  readonly severity: DoctorSeverity;
-  readonly code: string;
-  /** Vault-absolute path of the offending file, when known. */
-  readonly path?: string;
-  /** Human-readable description, suitable for `--text` rendering. */
-  readonly message: string;
-}
+//
+// `DoctorSeverity`, `DoctorIssue`, `TrustVerdict`, and
+// `InstructionFileCeilingWarning` live in `./types.ts` — a leaf module
+// with no imports of its own — so the `trust/` helpers below can depend
+// on those shapes without importing this file.
 
 export interface RunDoctorOptions {
   /**
@@ -146,13 +139,6 @@ export interface RunDoctorOptions {
 }
 
 /**
- * Aggregate verdict introduced in v0.10.16. Compresses doctor errors,
- * dream warnings, and verification-delta counts into one of three
- * states an operator can act on at a glance.
- */
-export type TrustVerdict = "clean" | "watch" | "investigate";
-
-/**
  * Compact counts attached to a `RunDoctorResult` so callers can render
  * a one-line "verification delta: X drift, Y regression, Z missing"
  * summary without re-walking the vault. Full per-entry detail lives
@@ -163,21 +149,6 @@ export interface VerificationDeltaSummary {
   readonly drift: number;
   readonly regression: number;
   readonly missing_evidence: number;
-}
-
-/**
- * Warning entry produced by the instruction-file-ceiling helper
- * (v0.10.16). Doctor surfaces these as a parallel array so the
- * trust verdict has structured input without having to grep the
- * generic `warnings` list.
- */
-export interface InstructionFileCeilingWarning {
-  /** Vault-relative path of the offending instruction file. */
-  readonly path: string;
-  /** Observed line count. */
-  readonly lines: number;
-  /** Configured ceiling at the time of the check. */
-  readonly ceiling: number;
 }
 
 /**

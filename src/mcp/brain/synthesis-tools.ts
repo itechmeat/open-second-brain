@@ -30,7 +30,7 @@ import {
 } from "../../core/brain/idea-lineage.ts";
 import { decomposeNoteHistory } from "../../core/brain/note-history.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 
 const SUMMARY_TOOL = "brain_session_summary";

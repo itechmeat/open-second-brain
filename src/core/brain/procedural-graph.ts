@@ -11,7 +11,7 @@ import {
   skillProposalPendingPath,
   skillProposalRejectedPath,
 } from "./paths.ts";
-import type { ProceduralMemoryEntry } from "./procedural-memory.ts";
+import type { ProceduralMemoryEntry } from "./types.ts";
 
 export type ProceduralGraphNodeKind = "procedure" | "skill" | "runbook" | "proposal" | "entity";
 export type ProceduralGraphEdgeKind =

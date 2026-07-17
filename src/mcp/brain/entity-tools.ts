@@ -15,7 +15,7 @@ import { validateEntityCategory } from "../../core/brain/entities/canonical.ts";
 import { switchProfile, listProfiles } from "../../core/brain/portability/profiles.ts";
 import { defaultConfigPath } from "../../core/config.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr } from "../coerce.ts";
 

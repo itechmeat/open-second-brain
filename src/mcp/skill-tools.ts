@@ -20,7 +20,7 @@ import { discoverSkills, readSkillFile, skillRoots, SkillError } from "../core/s
 import { coerceInt, coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
-import type { ServerContext, ToolDefinition } from "./tools.ts";
+import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 
 function rootsFor(ctx: ServerContext): string[] {
   const skillsDir = resolveSkillsDir(ctx.configPath ?? undefined);

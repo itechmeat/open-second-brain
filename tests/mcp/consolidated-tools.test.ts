@@ -15,7 +15,8 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import { buildToolTable, findTool, type ServerContext } from "../../src/mcp/tools.ts";
+import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 let tmp: string;
 let vault: string;

@@ -37,8 +37,8 @@ import {
   COMPLETENESS_COMPLETE_THRESHOLD,
   COMPLETENESS_PARTIAL_THRESHOLD,
   significantTerms,
-  type CompletenessVerdict,
 } from "../search/coverage.ts";
+import type { CompletenessVerdict } from "../search/types.ts";
 
 /** Longest single normalized term kept; longer tokens are dropped as a
  * privacy guard (a 40+ char alnum run is far likelier a secret/id than a

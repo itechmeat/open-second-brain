@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import type { DoctorIssue } from "../../../../src/core/brain/doctor.ts";
 import type { DreamWarning } from "../../../../src/core/brain/dream.ts";
+import type { DoctorIssue } from "../../../../src/core/brain/types.ts";
 import { computeTrustVerdict } from "../../../../src/core/brain/trust/compute-trust-verdict.ts";
 import type { VerificationDeltaSummaryCounts } from "../../../../src/core/brain/trust/compute-verification-delta.ts";
 

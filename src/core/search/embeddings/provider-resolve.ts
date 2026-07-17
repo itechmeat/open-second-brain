@@ -18,29 +18,7 @@
  *     provider resolution is not re-implemented per feature.
  */
 
-import { discoverConfig } from "../../config.ts";
 import { SearchError } from "../types.ts";
-import { makeProvider, type EmbeddingProvider } from "./provider.ts";
-import { resolveSearchConfig } from "../index.ts";
-
-/**
- * Resolve the vault's configured embedding provider. Returns `null` when
- * semantic search is disabled (the null provider) or when resolution
- * throws — callers then fall back to a deterministic path rather than
- * failing. Mirrors the inline guard in the hygiene dedup detector.
- */
-export function resolveConfiguredEmbeddingProvider(
-  vault: string,
-  opts: { readonly configPath?: string } = {},
-): EmbeddingProvider | null {
-  try {
-    const configPath = opts.configPath ?? discoverConfig().path;
-    const provider = makeProvider(resolveSearchConfig({ vault, configPath }).semantic);
-    return provider.name === "null" ? null : provider;
-  } catch {
-    return null;
-  }
-}
 
 /** A fully-resolved OpenAI-compatible endpoint (base_url + model + key). */
 export interface OpenAiCompatEndpoint {

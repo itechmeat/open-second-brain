@@ -8,34 +8,7 @@ import { parseFrontmatter } from "../vault.ts";
 import { rebuildProceduralHints } from "./procedural-hints.ts";
 import { rebuildProceduralGraph } from "./procedural-graph.ts";
 import { proceduralMemoryIndexPath, proceduralMemoryUsagePath } from "./paths.ts";
-
-export type ProceduralEntryKind = "skill" | "runbook" | "procedure";
-
-export interface ProceduralMemoryEntry {
-  readonly id: string;
-  readonly kind: ProceduralEntryKind;
-  readonly sourcePath: string;
-  readonly title: string;
-  readonly triggers: ReadonlyArray<string>;
-  readonly tags: ReadonlyArray<string>;
-  readonly permissions: ReadonlyArray<string>;
-  readonly source: string | null;
-  readonly version: string | null;
-  readonly lastUsedAt: string | null;
-  readonly usedCount: number;
-  /**
-   * Outcome-validated recall (t_703f7b18). Times this procedure was applied
-   * and the host reported the downstream result. `successRate` ranks recall
-   * (see {@link rankProceduralMemory}); usage count is the fallback prior
-   * for procedures with no recorded outcomes. Additive: absent in an
-   * outcome-free vault (defaults 0), so pre-outcome indexes read identically.
-   */
-  readonly successCount: number;
-  readonly failureCount: number;
-}
-
-/** Host-reported outcome of applying a procedure. */
-export type ProceduralOutcome = "success" | "failure";
+import type { ProceduralEntryKind, ProceduralMemoryEntry, ProceduralOutcome } from "./types.ts";
 
 interface UsageRecord {
   readonly usedCount: number;

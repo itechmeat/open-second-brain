@@ -10,7 +10,7 @@ import { type RecallTelemetryOptions } from "../../core/brain/recall-telemetry.t
 import { isoSecond } from "../../core/brain/time.ts";
 import { formatLocalTimestamp } from "../../core/brain/present-time.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext } from "../tools.ts";
+import type { ServerContext } from "../tool-contract.ts";
 import { coerceBool } from "../coerce.ts";
 import {
   CountGuardError,

@@ -9,7 +9,7 @@
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { collectMaintenanceActions } from "../../core/brain/maintenance/collect.ts";
 import { runDoctor } from "../../core/brain/doctor.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 

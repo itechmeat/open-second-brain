@@ -28,8 +28,6 @@
 
 import { basename } from "node:path";
 
-import type { LinkOutputFormat } from "../config.ts";
-
 /*
  * Canonical wikilink regex variants.
  *
@@ -257,6 +255,9 @@ export const MAX_PREF_LINK_TITLE_LEN = 80;
  * signal and external-artifact wikilinks stay bare-id because they have
  * no useful title source.
  */
+/** Where a wikilink renders to: Obsidian `[[wikilink]]` or portable `[markdown](path)`. */
+export type LinkOutputFormat = "wikilink" | "markdown";
+
 export function renderPrefLink(input: {
   readonly id: string;
   readonly principle?: string;

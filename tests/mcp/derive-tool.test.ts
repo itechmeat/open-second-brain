@@ -15,7 +15,7 @@ import { brainConfigPath, preferencePath } from "../../src/core/brain/paths.ts";
 import { writePreference, parsePreference } from "../../src/core/brain/preference.ts";
 import { DERIVE_TOOLS } from "../../src/mcp/brain/derive-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
-import type { ServerContext } from "../../src/mcp/tools.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 let vault: string;
 let configHome: string;

@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { buildMcpToolResult } from "../../src/mcp/server.ts";
 import { ArtifactStore } from "../../src/mcp/artifact-store.ts";
-import type { ToolDefinition } from "../../src/mcp/tools.ts";
+import type { ToolDefinition } from "../../src/mcp/tool-contract.ts";
 
 let tmp: string;
 let vault: string;

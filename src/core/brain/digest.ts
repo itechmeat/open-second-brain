@@ -38,14 +38,11 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import type { LinkOutputFormat } from "../config.ts";
-
 import { backlinkCount, buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
 import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summary.ts";
 import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
-import type { TrustVerdict } from "./doctor.ts";
 import { collectMaintenanceActions } from "./maintenance/collect.ts";
 import type { ActionItem } from "./maintenance/action-scorer.ts";
 import {
@@ -53,7 +50,7 @@ import {
   MOST_APPLIED_WINDOW_DAYS_DEFAULT,
   loadBrainConfig,
 } from "./policy.ts";
-import { normaliseWikilinkTarget, renderPrefLink } from "./wikilink.ts";
+import { normaliseWikilinkTarget, renderPrefLink, type LinkOutputFormat } from "./wikilink.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
@@ -63,7 +60,7 @@ import {
   BRAIN_PREFERENCE_STATUS,
   BRAIN_RETIRED_REASON,
 } from "./types.ts";
-import type { BrainConfidence, BrainPreference, BrainRetired } from "./types.ts";
+import type { BrainConfidence, BrainPreference, BrainRetired, TrustVerdict } from "./types.ts";
 
 // ----- Public types ---------------------------------------------------------
 

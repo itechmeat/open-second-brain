@@ -17,7 +17,7 @@ import {
   applyCrossEncoderRerank,
   type RerankTelemetryEvent,
 } from "../../../src/core/search/rerank/index.ts";
-import type { RerankProvider } from "../../../src/core/search/rerank/provider.ts";
+import type { RerankProvider } from "../../../src/core/search/rerank/contract.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import type { BrainSearchResult, ResolvedRerankConfig } from "../../../src/core/search/types.ts";
 

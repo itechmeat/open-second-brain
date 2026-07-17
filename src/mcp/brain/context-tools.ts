@@ -35,7 +35,7 @@ import {
   type PinnedOperation,
 } from "../../core/brain/pinned.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStr, coerceInt } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 

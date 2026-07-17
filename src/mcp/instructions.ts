@@ -8,7 +8,7 @@
  * the deferred full server.
  */
 
-import type { ToolScope } from "./tools.ts";
+import type { ToolScope } from "./tool-contract.ts";
 
 export interface BuildInstructionsOpts {
   /** Resolved agent identity (e.g. "hermes-vps-agent"). */

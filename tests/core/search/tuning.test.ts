@@ -13,13 +13,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { defaultTuningGrid, tuneRecall } from "../../../src/core/search/tuning.ts";
 import {
   applyTunedParameters,
-  defaultTuningGrid,
   loadTunedParameters,
   resetTuning,
-  tuneRecall,
-} from "../../../src/core/search/tuning.ts";
+} from "../../../src/core/search/tuning-store.ts";
 import { parseRecallBenchmarkDataset } from "../../../src/core/search/benchmark.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";

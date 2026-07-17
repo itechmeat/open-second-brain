@@ -19,28 +19,28 @@
  *     is enabled (`search_self_tuning_enabled` /
  *     `OPEN_SECOND_BRAIN_SEARCH_SELF_TUNING`), values re-validated
  *     against the grid bounds on every read, fail-soft to defaults.
+ *
+ * The persisted read/reset side (`loadTunedParameters`, `resetTuning`)
+ * and `applyTunedParameters` live in `tuning-store.ts`, a leaf module:
+ * `search()` needs the tuned-parameter READ path but must not pull in
+ * this module's `runRecallBenchmark` dependency, which itself calls
+ * back into `search()`.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 
 import { runRecallBenchmark } from "./benchmark.ts";
 import type { RecallBenchmarkDataset } from "./benchmark.ts";
-import type { ResolvedSearchConfig } from "./types.ts";
-
-export const TUNING_SCHEMA_VERSION = "o2b.tuning.v1";
-
-/** Bounded grid axes - loadTunedParameters enforces these on read. */
-export const TUNING_POOL_MULTIPLIERS: ReadonlyArray<number> = Object.freeze([3, 4, 5]);
-export const TUNING_TRAVERSAL_DEPTHS: ReadonlyArray<number> = Object.freeze([1, 2]);
-
-export interface TunedParameters {
-  readonly poolMultiplier: number;
-  readonly traversalDepth: number;
-  readonly learnedWeights: boolean;
-  readonly expansion: boolean;
-}
+import {
+  applyTunedParameters,
+  TUNING_POOL_MULTIPLIERS,
+  TUNING_SCHEMA_VERSION,
+  TUNING_TRAVERSAL_DEPTHS,
+  tuningPath,
+} from "./tuning-store.ts";
+import type { ResolvedSearchConfig, TunedParameters } from "./types.ts";
 
 export interface TuningEvaluation {
   readonly params: TunedParameters;
@@ -78,30 +78,6 @@ export function defaultTuningGrid(): TunedParameters[] {
   // Stable order with the all-defaults combo first: the sort above
   // already yields (3,1,false,false) first; keep insertion order.
   return grid;
-}
-
-/**
- * A config with one grid point applied. Always disarms
- * `selfTuningEnabled` so an applied config can never re-apply itself.
- */
-export function applyTunedParameters(
-  config: ResolvedSearchConfig,
-  params: TunedParameters,
-): ResolvedSearchConfig {
-  return Object.freeze({
-    ...config,
-    recall: Object.freeze({
-      ...config.recall,
-      poolMultiplier: params.poolMultiplier,
-      maxHops: params.traversalDepth,
-      learnedWeightsEnabled: params.learnedWeights,
-      selfTuningEnabled: false,
-    }),
-  });
-}
-
-function tuningPath(vault: string): string {
-  return join(vault, "Brain", "search", "tuning.json");
 }
 
 /**
@@ -164,46 +140,4 @@ export async function tuneRecall(
     evaluated: Object.freeze(evaluated),
     datasetHash,
   });
-}
-
-/**
- * The persisted tuned parameters, re-validated against the grid
- * bounds. Fail-soft: missing file, torn JSON, or any out-of-bounds
- * value reads as null (search falls back to configured defaults).
- */
-export function loadTunedParameters(vault: string): TunedParameters | null {
-  const path = tuningPath(vault);
-  if (!existsSync(path)) return null;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    const chosen = (parsed as { chosen?: unknown }).chosen;
-    if (chosen === null || typeof chosen !== "object") return null;
-    const c = chosen as Record<string, unknown>;
-    if (
-      typeof c["poolMultiplier"] !== "number" ||
-      !TUNING_POOL_MULTIPLIERS.includes(c["poolMultiplier"]) ||
-      typeof c["traversalDepth"] !== "number" ||
-      !TUNING_TRAVERSAL_DEPTHS.includes(c["traversalDepth"]) ||
-      typeof c["learnedWeights"] !== "boolean" ||
-      typeof c["expansion"] !== "boolean"
-    ) {
-      return null;
-    }
-    return Object.freeze({
-      poolMultiplier: c["poolMultiplier"],
-      traversalDepth: c["traversalDepth"],
-      learnedWeights: c["learnedWeights"],
-      expansion: c["expansion"],
-    });
-  } catch {
-    return null;
-  }
-}
-
-/** Delete the persisted tuning state. Returns true when it existed. */
-export function resetTuning(vault: string): boolean {
-  const path = tuningPath(vault);
-  if (!existsSync(path)) return false;
-  rmSync(path);
-  return true;
 }
