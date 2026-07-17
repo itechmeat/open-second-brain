@@ -12,11 +12,9 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseFrontmatter } from "../vault.ts";
 import type { FrontmatterMap } from "../types.ts";
-import { isVisible, normalizeVisibilityScope, pageVisibility } from "../graph/visibility.ts";
-import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../graph/agent-scope.ts";
-import { makeProvider } from "./embeddings/provider.ts";
+import { normalizeVisibilityScope } from "../graph/visibility.ts";
+import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { isLowSelectivity, planTrigramPrefilter } from "./trigram-prefilter.ts";
 import {
   composeWeightProfiles,
@@ -39,69 +37,54 @@ import {
 import { extractEntities } from "./entities.ts";
 import { expandQueryEntities } from "./entity-alias.ts";
 import {
-  buildCoverageReport,
   COMPLETENESS_COMPLETE_THRESHOLD,
   planTargetedRetry,
   significantTerms,
-  termIncludedIn,
-  type CoverageReport,
 } from "./coverage.ts";
-import {
-  buildEvidencePack,
-  downrankTerminalEvidenceResults,
-  isTerminalStatus,
-} from "./evidence-pack.ts";
-import type { EvidenceVerification } from "./evidence-pack.ts";
+import { buildEvidencePack, downrankTerminalEvidenceResults } from "./evidence-pack.ts";
 import { runFtsQueryDetailed } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
 import { buildQueryPlan } from "./query-plan.ts";
 import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "./query-cache.ts";
 import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from "./synonyms.ts";
-import { filterByProperties } from "./property-filter.ts";
-import { applyRelationPolarity } from "./relation-polarity.ts";
 import { rankResults } from "./ranker.ts";
-import { deriveTrust, detectHybridDegrade, rerankByRelevance } from "./enrich.ts";
+import { detectHybridDegrade, rerankByRelevance } from "./enrich.ts";
 import { applyReinforceBoost, loadReinforceStrengths, reinforceFingerprint } from "./reinforce.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
 import { applyTemporalBridge } from "./temporal-bridge.ts";
 import { resolveTimeRange } from "./time-range.ts";
 import { eventTimeInRange, parseValidityWindow, type ValidityWindow } from "./validity.ts";
-import { expandByTraversal, type TraversalOptions } from "./traversal.ts";
 import { Store } from "./store.ts";
-import { formatLinePointer } from "./line-numbering.ts";
 import { SearchError } from "./types.ts";
 import type {
   BrainSearchResult,
-  EvidenceUnionRecord,
-  ExpandHitInput,
-  ExpandHitResult,
   ResolvedSearchConfig,
-  SearchCard,
   SearchOptions,
   SearchOutcome,
-  StructuredRecallQueryDocument,
 } from "./types.ts";
 import { expandQuery } from "./query-expansion.ts";
 import { applyTunedParameters, loadTunedParameters } from "./tuning-store.ts";
 import { resolveRecallProfile } from "./profiles.ts";
 import { applyCrossEncoderRerank } from "./rerank/index.ts";
 import { emitGatedTelemetry } from "../brain/continuity/emit.ts";
-
-interface SemanticPolicy {
-  /** caller asked for semantic on or off (true), or accepted the default (false). */
-  readonly explicit: boolean;
-  /** does the caller want semantic at all? */
-  readonly wantSemantic: boolean;
-}
-
-function resolveSemanticPolicy(config: ResolvedSearchConfig, opts: SearchOptions): SemanticPolicy {
-  if (opts.keywordOnly === true) {
-    return { explicit: true, wantSemantic: false };
-  }
-  if (opts.semantic === true) return { explicit: true, wantSemantic: true };
-  if (opts.semantic === false) return { explicit: true, wantSemantic: false };
-  return { explicit: false, wantSemantic: config.semantic.enabled };
-}
+import {
+  addStructuredReasons,
+  applyStructuredExclusions,
+  structuredKeywordQuery,
+  structuredSemanticQuery,
+} from "./structured-lanes.ts";
+import { resolveSemanticPolicy, runSemanticPhase, semanticPoolSize } from "./semantic-phase.ts";
+import { toSearchCard } from "./cards.ts";
+import {
+  applyAgentScope,
+  applyPropertyFilter,
+  applyVisibilityScope,
+  attachTrustMetadata,
+  buildTerminalPaths,
+  readCachedFrontmatter,
+} from "./result-filters.ts";
+import { applyRelationPolarityPhase, applyTraversal } from "./graph-phases.ts";
+import { buildEvidenceVerification, coverageOverChunks } from "./evidence-verification.ts";
 
 /**
  * A compact fingerprint of the resolved-config fields that change search
@@ -152,62 +135,6 @@ function assertSafePathPrefix(prefix: string | undefined): string | undefined {
   return prefix;
 }
 
-function structuredKeywordQuery(
-  query: string,
-  structured: StructuredRecallQueryDocument | undefined,
-): string {
-  if (!structured || structured.lex.include.length === 0) return query;
-  return structured.lex.include.join(" ");
-}
-
-function structuredSemanticQuery(
-  structured: StructuredRecallQueryDocument | undefined,
-): string | null {
-  if (!structured) return null;
-  const text = [...structured.vec, ...structured.hyde].join("\n\n").trim();
-  return text.length > 0 ? text : null;
-}
-
-function includesFolded(haystack: string, needle: string): boolean {
-  return haystack.toLocaleLowerCase().includes(needle.toLocaleLowerCase());
-}
-
-function applyStructuredExclusions(
-  results: ReadonlyArray<BrainSearchResult>,
-  structured: StructuredRecallQueryDocument | undefined,
-): ReadonlyArray<BrainSearchResult> {
-  if (!structured || structured.lex.exclude.length === 0) return results;
-  return results.filter((result) => {
-    const haystack = `${result.path}\n${result.title ?? ""}\n${result.content}`;
-    return !structured.lex.exclude.some((term) => includesFolded(haystack, term));
-  });
-}
-
-function addStructuredReasons(
-  results: ReadonlyArray<BrainSearchResult>,
-  structured: StructuredRecallQueryDocument | undefined,
-): ReadonlyArray<BrainSearchResult> {
-  if (!structured) return results;
-  return results.map((result) => {
-    const additions: string[] = [];
-    if (structured.lex.include.length > 0 && result.keywordScore > 0) {
-      additions.push(`lane:lex/fts5 ${result.keywordScore.toFixed(3)}`);
-    }
-    if (structured.vec.length > 0 && result.semanticScore > 0) {
-      additions.push(`lane:vec/semantic ${result.semanticScore.toFixed(3)}`);
-    }
-    if (structured.hyde.length > 0 && result.semanticScore > 0) {
-      additions.push(`lane:hyde/semantic ${result.semanticScore.toFixed(3)}`);
-    }
-    if (structured.intent !== null) additions.push(`intent:${structured.intent}`);
-    if (additions.length === 0) return result;
-    return Object.freeze({
-      ...result,
-      reasons: Object.freeze([...result.reasons, ...additions]),
-    });
-  });
-}
-
 /**
  * Open the index for reading, self-healing a stale, absent, or unreadable
  * index. After a plugin upgrade the on-disk index can be a different schema
@@ -246,39 +173,6 @@ async function openReadOrSelfHeal(config: ResolvedSearchConfig): Promise<Store> 
  */
 export const SEARCH_LIMIT_MIN = 1;
 export const SEARCH_LIMIT_MAX = 100;
-
-/**
- * Semantic candidate-pool over-fetch policy: rank more than `limit` rows
- * so downstream filtering (property/visibility scope, MMR diversify) has
- * enough headroom to still fill the final window. `floor` is the minimum
- * pool size regardless of `limit`; `overfetch` is the multiplier applied
- * to `limit` itself.
- */
-const POOL_OVERFETCH = 5;
-const POOL_FLOOR = 50;
-
-function semanticPoolSize(limit: number): number {
-  return Math.max(limit * POOL_OVERFETCH, POOL_FLOOR);
-}
-
-/**
- * One frontmatter read per (vault, path) pair, shared across every filter
- * stage of a single `search()` call. `parseFrontmatter` never throws (a
- * read failure resolves to empty metadata internally), so caching the raw
- * result changes no call site's fallback behaviour - it only stops the
- * same file being read and parsed once per stage instead of once total.
- */
-function readCachedFrontmatter(
-  cache: Map<string, FrontmatterMap>,
-  vault: string,
-  path: string,
-): FrontmatterMap {
-  const cached = cache.get(path);
-  if (cached !== undefined) return cached;
-  const [meta] = parseFrontmatter(join(vault, path));
-  cache.set(path, meta);
-  return meta;
-}
 
 export async function search(
   config: ResolvedSearchConfig,
@@ -1189,167 +1083,6 @@ export async function search(
   }
 }
 
-/** Max chars of a layer-1 card snippet — enough to judge a hit, cheap to carry. */
-const CARD_SNIPPET_CHARS = 240;
-/** Default layer-3 raw-chunk page size for `expandHit`. */
-const DEFAULT_EXPAND_RAW_LIMIT = 10;
-
-/**
- * Project a ranked result into a layer-1 card (progressive disclosure):
- * identity + score + the same `reasons`, a whitespace-collapsed snippet
- * capped at {@link CARD_SNIPPET_CHARS}, and a `path:Lstart-Lend` pointer
- * (D2 grammar) over the chunk's stored line span. No full content.
- */
-function toSearchCard(result: BrainSearchResult): SearchCard {
-  return Object.freeze({
-    chunkId: result.chunkId,
-    documentId: result.documentId,
-    path: result.path,
-    title: result.title,
-    score: result.score,
-    reasons: result.reasons,
-    snippet: cardSnippet(result.content),
-    pointer: formatLinePointer(result.path, result.startLine, result.endLine),
-    ...(result.origin !== undefined ? { origin: result.origin } : {}),
-  });
-}
-
-export function cardSnippet(content: string): string {
-  const collapsed = content.replace(/\s+/g, " ").trim();
-  // Truncate on code points, not UTF-16 units: a raw `.slice` can cut an
-  // astral character (emoji, rare CJK) mid-surrogate-pair, shipping a lone
-  // surrogate that renders as U+FFFD. Spreading into an array iterates by
-  // code point, so the cap never splits a character.
-  const points = [...collapsed];
-  return points.length <= CARD_SNIPPET_CHARS
-    ? collapsed
-    : `${points.slice(0, CARD_SNIPPET_CHARS).join("")}...`;
-}
-
-/**
- * Progressive disclosure (D3): layers 2 and 3 of a hit the agent already
- * holds as a layer-1 card. Given the card's `chunkId`, reconstruct the
- * fuller note (layer 2) from the document's stored chunks and return a
- * paginated slice of those raw chunks (layer 3), mirroring
- * `expandSessionRecall`'s cursor contract.
- *
- * Read-only by construction: it opens the index in read mode and never
- * self-heals — a card can only exist because a prior search built the
- * index, and a rebuild would WRITE it. The layer-2/3 data is pure store
- * reads (`hydrateChunks` + `getChunksByDocument`), never a new index.
- */
-export async function expandHit(
-  config: ResolvedSearchConfig,
-  input: ExpandHitInput,
-): Promise<ExpandHitResult> {
-  if (!Number.isInteger(input.chunkId) || input.chunkId < 1) {
-    throw new SearchError("INVALID_INPUT", "chunkId must be a positive integer");
-  }
-  const store = await Store.open(config, { mode: "read" });
-  try {
-    const hit = store.hydrateChunks([input.chunkId]).get(input.chunkId);
-    if (hit === undefined) {
-      throw new SearchError("INVALID_INPUT", `chunk not found: ${input.chunkId}`);
-    }
-    // Document chunks in `chunkIndex` order: the fuller note (layer 2) is
-    // their concatenation; the raw transcript (layer 3) is the same rows.
-    const chunks = store.getChunksByDocument(hit.documentId);
-    const lineStart = chunks.length > 0 ? chunks[0]!.startLine : hit.startLine;
-    const lineEnd = chunks.length > 0 ? chunks[chunks.length - 1]!.endLine : hit.endLine;
-    const note = Object.freeze({
-      documentId: hit.documentId,
-      path: hit.path,
-      title: hit.title,
-      lineStart,
-      lineEnd,
-      pointer: formatLinePointer(hit.path, lineStart, lineEnd),
-      content: chunks.map((c) => c.content).join("\n"),
-    });
-
-    const offset = Math.max(0, Number.parseInt(input.cursor ?? "0", 10) || 0);
-    const rawLimit = Math.max(1, input.rawLimit ?? DEFAULT_EXPAND_RAW_LIMIT);
-    const page = chunks.slice(offset, offset + rawLimit).map((c) =>
-      Object.freeze({
-        chunkId: c.id,
-        chunkIndex: c.chunkIndex,
-        startLine: c.startLine,
-        endLine: c.endLine,
-        pointer: formatLinePointer(hit.path, c.startLine, c.endLine),
-        content: c.content,
-      }),
-    );
-    const nextOffset = offset + rawLimit;
-    return Object.freeze({
-      chunkId: input.chunkId,
-      note,
-      raw_content: Object.freeze(page),
-      next_cursor: nextOffset < chunks.length ? String(nextOffset) : null,
-    });
-  } finally {
-    await store.close();
-  }
-}
-
-/**
- * Walk outbound links from the ranked hits and merge in related
- * documents. Fetches the outbound adjacency level-by-level (each
- * document fetched once) up to `maxHops`, then delegates the bounded
- * scoring to the pure `expandByTraversal`.
- */
-function applyTraversal(
-  store: Store,
-  ranked: BrainSearchResult[],
-  opts: TraversalOptions,
-): BrainSearchResult[] {
-  const seedDocIds = Array.from(new Set(ranked.map((r) => r.documentId)));
-  const present = new Set(seedDocIds);
-  const outbound = new Map<number, ReadonlyArray<number>>();
-  const seen = new Set<number>(seedDocIds);
-  let level = new Set<number>(seedDocIds);
-
-  for (let hop = 0; hop < opts.maxHops && level.size > 0; hop++) {
-    const toFetch = Array.from(level).filter((id) => !outbound.has(id));
-    if (toFetch.length === 0) break;
-    const adjacency = store.outboundLinkTargets(toFetch);
-    const next = new Set<number>();
-    for (const [src, targets] of adjacency) {
-      outbound.set(src, targets);
-      for (const t of targets) {
-        if (!seen.has(t)) {
-          seen.add(t);
-          next.add(t);
-        }
-      }
-    }
-    level = next;
-  }
-
-  const expansionIds = Array.from(seen).filter((id) => !present.has(id));
-  if (expansionIds.length === 0) return ranked;
-  const reps = store.representativeChunks(expansionIds);
-
-  return expandByTraversal(
-    {
-      ranked,
-      outbound,
-      expansionDoc: (docId) => {
-        const h = reps.get(docId);
-        if (!h) return null;
-        return {
-          documentId: h.documentId,
-          chunkId: h.chunkId,
-          path: h.path,
-          title: h.title,
-          content: h.content,
-          startLine: h.startLine,
-          endLine: h.endLine,
-        };
-      },
-    },
-    opts,
-  );
-}
-
 /** A token in at least this share of the corpus is treated as common. */
 const COMMON_TOKEN_CORPUS_SHARE = 0.5;
 /**
@@ -1386,337 +1119,4 @@ function highFrequencyTokens(store: Store, query: string): ReadonlySet<string> {
     if (freq >= MIN_COMMON_DOCUMENT_FREQUENCY && freq >= threshold) common.add(token);
   }
   return common;
-}
-
-/**
- * Build the set of terminal-state paths for evidence-pack downranking.
- * Reads each unique candidate path's frontmatter `status:` field once
- * and includes the path when the declared status is terminal (controlled
- * vocabulary). A missing or unreadable status is non-terminal. This is
- * the language-agnostic replacement for scanning note prose for English
- * status words.
- */
-function buildTerminalPaths(
-  vault: string,
-  results: ReadonlyArray<BrainSearchResult>,
-  frontmatterCache: Map<string, FrontmatterMap>,
-): ReadonlySet<string> {
-  const terminal = new Set<string>();
-  const seen = new Set<string>();
-  for (const r of results) {
-    if (seen.has(r.path)) continue;
-    seen.add(r.path);
-    try {
-      const meta = readCachedFrontmatter(frontmatterCache, vault, r.path);
-      if (isTerminalStatus((meta as Record<string, unknown>)["status"])) terminal.add(r.path);
-    } catch {
-      // Unreadable frontmatter is non-terminal.
-    }
-  }
-  return terminal;
-}
-
-/** Cap on extra records fetched per uncovered term (Feature C union). */
-const UNION_RECORDS_PER_TERM = 2;
-/** Cap on the total recall-union fetch per query. */
-const UNION_RECORDS_TOTAL = 8;
-
-/**
- * Coverage verification for evidence-pack mode (recall-trust-suite,
- * Feature C): corpus document frequencies for the significant terms,
- * the covered-term set over the returned results, and a bounded
- * per-token recall union — for each term the ranked set left uncovered,
- * fetch up to {@link UNION_RECORDS_PER_TERM} records that DO cover it
- * (evidence can span records the primary ranking never surfaced).
- */
-/**
- * IDF-weighted coverage of the query over a candidate POOL (the partial
- * self-correcting retry trigger, t_8eb5ca32). Mirrors the result-set
- * coverage in {@link buildEvidenceVerification} but scores the
- * pre-ranking candidate chunks: a term is covered when any candidate's
- * path/title/content contains it. Corpus document frequencies and the
- * document count come from the store, exactly as the result-set pass
- * does, so the two reports share one definition of "covered" and one
- * IDF scale.
- */
-function coverageOverChunks(
-  store: Store,
-  query: string,
-  chunkIds: ReadonlyArray<number>,
-): CoverageReport {
-  const terms = significantTerms(query);
-  const dfByTerm = store.documentFrequencies(terms);
-  const documentCount = store.counts().documents;
-  const hydrated = store.hydrateChunks(chunkIds);
-  const covered = new Set<string>();
-  for (const h of hydrated.values()) {
-    const haystack = `${h.path}\n${h.title ?? ""}\n${h.content}`;
-    for (const t of terms) {
-      if (!covered.has(t) && termIncludedIn(haystack, t)) covered.add(t);
-    }
-  }
-  return buildCoverageReport({
-    significantTerms: terms,
-    coveredTerms: covered,
-    documentCount,
-    dfByTerm,
-  });
-}
-
-function buildEvidenceVerification(
-  store: Store,
-  query: string,
-  results: ReadonlyArray<BrainSearchResult>,
-  pathPrefix: string | undefined,
-): EvidenceVerification {
-  const terms = significantTerms(query);
-  const dfByTerm = store.documentFrequencies(terms);
-  const documentCount = store.counts().documents;
-  const covered = new Set<string>();
-  for (const r of results) {
-    const haystack = `${r.path}\n${r.title ?? ""}\n${r.content}`;
-    for (const t of terms) {
-      if (!covered.has(t) && termIncludedIn(haystack, t)) covered.add(t);
-    }
-  }
-  const coverage = buildCoverageReport({
-    significantTerms: terms,
-    coveredTerms: covered,
-    documentCount,
-    dfByTerm,
-  });
-
-  const unionRecords: EvidenceUnionRecord[] = [];
-  for (const t of coverage.terms) {
-    if (t.covered || t.df === 0) continue; // nothing in the corpus covers a df=0 term
-    if (unionRecords.length >= UNION_RECORDS_TOTAL) break;
-    const outcome = runFtsQueryDetailed(store, t.term, {
-      limit: UNION_RECORDS_PER_TERM,
-      pathPrefix,
-    });
-    const ids = outcome.hits.map((h) => h.chunkId);
-    const hydrated = store.hydrateChunks(ids);
-    for (const hit of outcome.hits) {
-      if (unionRecords.length >= UNION_RECORDS_TOTAL) break;
-      const h = hydrated.get(hit.chunkId);
-      if (!h) continue;
-      unionRecords.push(
-        Object.freeze({
-          term: t.term,
-          path: h.path,
-          documentId: h.documentId,
-          chunkId: h.chunkId,
-        }),
-      );
-    }
-  }
-  return Object.freeze({ coverage, unionRecords: Object.freeze(unionRecords) });
-}
-
-/**
- * Fetch the typed relation edges declared by the pool's documents and
- * delegate the polarity adjustment to the pure `applyRelationPolarity`.
- * Successor pull-in reuses the traversal layer's representative-chunk
- * mechanism (document head as the surfaced chunk).
- */
-function applyRelationPolarityPhase(
-  store: Store,
-  ranked: ReadonlyArray<BrainSearchResult>,
-  includeSuperseded: boolean,
-): ReadonlyArray<BrainSearchResult> {
-  if (ranked.length === 0) return ranked;
-  const docIds = Array.from(new Set(ranked.map((r) => r.documentId)));
-  const edges = store.typedRelationEdgesForDocuments(docIds);
-  if (edges.length === 0) return ranked;
-
-  const present = new Set(docIds);
-  const successorIds = Array.from(
-    new Set(
-      edges
-        .map((e) => e.targetDocumentId)
-        .filter((id): id is number => id !== null && !present.has(id)),
-    ),
-  );
-  const reps = store.representativeChunks(successorIds);
-
-  return applyRelationPolarity(
-    {
-      ranked,
-      edges,
-      successorDoc: (docId) => {
-        const h = reps.get(docId);
-        if (!h) return null;
-        return {
-          documentId: h.documentId,
-          chunkId: h.chunkId,
-          path: h.path,
-          title: h.title,
-          content: h.content,
-          startLine: h.startLine,
-          endLine: h.endLine,
-        };
-      },
-    },
-    { includeSuperseded },
-  );
-}
-
-function applyPropertyFilter(
-  ranked: ReadonlyArray<BrainSearchResult>,
-  filters: ReadonlyMap<string, ReadonlyArray<string>>,
-  vault: string,
-  frontmatterCache: Map<string, FrontmatterMap>,
-): ReadonlyArray<BrainSearchResult> {
-  const reader = (path: string): Record<string, unknown> | null => {
-    try {
-      return readCachedFrontmatter(frontmatterCache, vault, path) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  };
-  return filterByProperties(ranked, filters, reader);
-}
-
-/**
- * Stamp inline trust metadata (Search & Recall Quality Suite) onto each
- * result: age from the document mtime, plus the superseded / conflict
- * flags from the typed relations the result already carries. Read-time
- * and never stored. One `statSync` per surfaced result (≤ limit); a path
- * that cannot be stat'd is left without trust rather than reporting a
- * bogus age.
- */
-function attachTrustMetadata(
-  vault: string,
-  results: ReadonlyArray<BrainSearchResult>,
-): ReadonlyArray<BrainSearchResult> {
-  const nowMs = Date.now();
-  return results.map((r) => {
-    let mtimeMs: number;
-    try {
-      mtimeMs = statSync(join(vault, r.path)).mtimeMs;
-    } catch {
-      return r;
-    }
-    return Object.freeze({
-      ...r,
-      trust: deriveTrust({ mtimeMs, nowMs, ...(r.relations ? { relations: r.relations } : {}) }),
-    });
-  });
-}
-
-function applyVisibilityScope(
-  ranked: ReadonlyArray<BrainSearchResult>,
-  scope: ReadonlySet<string>,
-  vault: string,
-  frontmatterCache: Map<string, FrontmatterMap>,
-): ReadonlyArray<BrainSearchResult> {
-  const tagsFor = (path: string): string[] => {
-    try {
-      return pageVisibility(readCachedFrontmatter(frontmatterCache, vault, path));
-    } catch {
-      return [];
-    }
-  };
-  return ranked.filter((r) => isVisible(tagsFor(r.path), scope));
-}
-
-function applyAgentScope(
-  ranked: ReadonlyArray<BrainSearchResult>,
-  scope: string,
-  vault: string,
-  frontmatterCache: Map<string, FrontmatterMap>,
-): ReadonlyArray<BrainSearchResult> {
-  // Fail-closed sentinel: a page whose frontmatter cannot be parsed has
-  // an unknowable owner, so under an active scope it is dropped rather
-  // than leaked. This is stricter than visibility scoping's fail-open
-  // default - deliberate, because agent-scope is an isolation boundary.
-  const UNPARSEABLE = " unparseable-owner";
-  const ownerFor = (path: string): string => {
-    try {
-      return pageOwner(readCachedFrontmatter(frontmatterCache, vault, path)) ?? "";
-    } catch {
-      return UNPARSEABLE;
-    }
-  };
-  return ranked.filter((r) => {
-    const owner = ownerFor(r.path);
-    if (owner === UNPARSEABLE) return false; // fail closed
-    return isOwnerVisible(owner === "" ? null : owner, scope);
-  });
-}
-
-interface SemanticPhaseOutcome {
-  readonly attempted: boolean;
-  readonly hits: ReturnType<Store["semanticTopK"]>;
-  readonly warnings: string[];
-}
-
-async function runSemanticPhase(
-  store: Store,
-  config: ResolvedSearchConfig,
-  query: string,
-  opts: { limit: number; pathPrefix: string | undefined; explicit: boolean },
-): Promise<SemanticPhaseOutcome> {
-  const warnings: string[] = [];
-
-  const counts = store.counts();
-  if (counts.embeddings === 0) {
-    warnings.push("no compatible embeddings; run: o2b search index --embeddings");
-    return { attempted: false, hits: [], warnings };
-  }
-
-  if (!store.vecLoaded()) {
-    if (opts.explicit) {
-      throw new SearchError(
-        "VEC_EXTENSION_UNAVAILABLE",
-        "semantic search unavailable: sqlite-vec extension not loaded",
-      );
-    }
-    warnings.push("sqlite-vec unavailable, semantic disabled this session");
-    return { attempted: false, hits: [], warnings };
-  }
-  if (!config.semantic.enabled) {
-    // Defensive: should be handled at policy layer, but in case caller
-    // forced wantSemantic without enabling, treat as implicit warning.
-    warnings.push("semantic not enabled in config; using keyword-only");
-    return { attempted: false, hits: [], warnings };
-  }
-  // The offline local provider needs no key; every remote provider does.
-  if (config.semantic.provider !== "local" && !config.semantic.apiKey) {
-    if (opts.explicit) {
-      throw new SearchError("EMBEDDING_KEY_MISSING", "embedding key not configured");
-    }
-    warnings.push("embedding key not configured; semantic disabled");
-    return { attempted: false, hits: [], warnings };
-  }
-
-  let queryVec: number[];
-  try {
-    const provider = makeProvider(config.semantic);
-    const vectors = await provider.embed([query]);
-    queryVec = vectors[0] ?? [];
-  } catch (e) {
-    if (opts.explicit) {
-      // Defensive: provider methods are expected to throw SearchError,
-      // but wrap anything else (e.g. an unexpected runtime failure)
-      // so callers always see a typed code rather than a bare Error.
-      if (e instanceof SearchError) throw e;
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new SearchError("EMBEDDING_PROVIDER_HTTP", `embedding provider failure: ${msg}`);
-    }
-    const msg = e instanceof Error ? e.message : String(e);
-    warnings.push(`embedding provider unavailable: ${msg}`);
-    return { attempted: false, hits: [], warnings };
-  }
-
-  if (queryVec.length === 0) {
-    warnings.push("embedding provider returned an empty vector; semantic skipped");
-    return { attempted: false, hits: [], warnings };
-  }
-
-  const hits = store.semanticTopK(queryVec, {
-    limit: opts.limit,
-    pathPrefix: opts.pathPrefix,
-  });
-  return { attempted: true, hits, warnings };
 }

@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { cardSnippet } from "../../../src/core/search/search.ts";
+import { cardSnippet } from "../../../src/core/search/cards.ts";
 
 const CARD_SNIPPET_CHARS = 240;
 const REPLACEMENT_CHAR = "�";
