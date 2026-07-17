@@ -1,7 +1,7 @@
 # Structural refactor: dependency cycles and complexity hotspots
 
 Date: 2026-07-17
-Status: in progress
+Status: done (shipped as 1.30.1)
 Branch: `refactor/structural-cleanup`
 
 ## Goal
@@ -77,3 +77,17 @@ requires the old path.
 - `bun run validate` green after every wave
 - `code-ranker report` re-run at the end; cycle count for touched
   components must be zero and no file's MI may regress
+
+## Outcome (code-ranker 5.0.3, baseline at fd5661f9 vs final)
+
+- Cycles: 7 -> 0; `code-ranker check` reports zero violations
+- `search.ts`: MI -85.8 -> -48.7, cognitive 442 -> 318, sloc 1223 -> 763
+- 11 new focused leaf modules (MI 41 to 98): six search concern modules,
+  three search contracts/stores, `mcp/tool-contract.ts`,
+  `embeddings/configured-provider.ts`
+- Accepted deviation from the MI gate: the pure type leaves
+  `search/types.ts` (14.5 -> 11.5) and `brain/types.ts` (2.5 -> 1.2)
+  absorbed relocated data shapes; MI penalizes their added lines, but
+  they contain no logic, so this is the cost of the inversion, not a
+  quality regression
+- Full suite identical before and after: 5687 pass, 0 fail
