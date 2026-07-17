@@ -40,6 +40,7 @@
 
 import { readFileSync } from "node:fs";
 
+import { sanitiseTextField } from "../redactor.ts";
 import { parseFrontmatter } from "../vault.ts";
 import {
   assignNoteAttribute,
@@ -58,6 +59,16 @@ import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 
 /** The `marker_writeback` guardrail flag name, surfaced in refusals. */
 export const MARKER_WRITEBACK_GUARDRAIL = "marker_writeback";
+
+/**
+ * Max length for `prior_value` / `new_value` as sanitised onto the
+ * `attribute-write` log event body. Mirrors the cap other single-line
+ * Brain log fields use (e.g. `appendBrainNote`'s `NOTE_TEXT_MAX_LEN`).
+ * The frontmatter attribute values themselves are already validated
+ * single-line by `validateAttributeAssignment`; this is a belt-and-
+ * braces cap for the log surface only.
+ */
+const ATTRIBUTE_LOG_VALUE_MAX_LEN = 4096;
 
 /**
  * Stable per-marker verdict. The CLI verb renders these labels, so they
@@ -298,8 +309,19 @@ export async function applyMarkerWritebacks(
         body: {
           note: resolvedPath,
           field: normalizedField,
-          prior_value: priorValue ?? "null",
-          new_value: normalizedValue,
+          // Sanitised for the LOG surface only (best-effort secret
+          // redaction, matching apply-evidence's use of
+          // `sanitiseTextField`); the frontmatter mutation above already
+          // wrote `normalizedValue` verbatim, so redaction here never
+          // touches the actual data write.
+          prior_value: sanitiseTextField(priorValue ?? "null", {
+            maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
+            singleLine: true,
+          }),
+          new_value: sanitiseTextField(normalizedValue, {
+            maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
+            singleLine: true,
+          }),
           source_path: file,
           source_line: String(marker.originLine),
           agent: opts.agent,

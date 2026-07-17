@@ -268,6 +268,44 @@ describe("apply mode - happy path", () => {
   });
 });
 
+describe("apply mode - log redaction", () => {
+  test("writes the verbatim value to frontmatter but redacts secret-shaped values in the log event", async () => {
+    writeConfig({ markerWriteback: true });
+    writePaper("Notes/paper.md");
+    writeSource("Notes/first.md", "@osb set note=paper field=status value=api_key=oldsecret1");
+    writeSource("Notes/second.md", "@osb set note=paper field=status value=api_key=abcd1234");
+
+    await applyMarkerWritebacks(vault, {
+      files: ["Notes/first.md"],
+      apply: true,
+      agent: "a",
+      now: NOW,
+    });
+    const report = await applyMarkerWritebacks(vault, {
+      files: ["Notes/second.md"],
+      apply: true,
+      agent: "a",
+      now: NOW,
+    });
+
+    expect(report.entries[0]!.status).toBe("applied");
+
+    // The note's frontmatter carries the operator's value verbatim -
+    // redaction is for the log surface, not the data write.
+    expect(attrsOf("Notes/paper.md")).toEqual({ status: "api_key=abcd1234" });
+
+    // The attribute-write log events redact both the prior and new
+    // secret-shaped values, mirroring apply-evidence's use of
+    // `sanitiseTextField`.
+    const events = attributeWriteEvents();
+    expect(events).toHaveLength(2);
+    expect(events[0]!.body["new_value"]).toBe("api_key=***REDACTED***");
+    const body = events[1]!.body;
+    expect(body["prior_value"]).toBe("api_key=***REDACTED***");
+    expect(body["new_value"]).toBe("api_key=***REDACTED***");
+  });
+});
+
 describe("apply mode - cross-file line shift", () => {
   // Regression: a later source file whose `set` marker targets an
   // earlier source note grows that note's frontmatter by a line, which
