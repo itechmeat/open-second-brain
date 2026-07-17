@@ -23,13 +23,12 @@ import {
   WIKI_LINK_FORMATS,
   type WikiLinkFormat,
 } from "./brain/link-graph/format-wikilink.ts";
+import type { LinkOutputFormat } from "./brain/wikilink.ts";
 import type { ConfigDiscovery } from "./types.ts";
 
 const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"] as const;
 
 const CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
-
-export type LinkOutputFormat = "wikilink" | "markdown";
 
 /**
  * Resolve the location of the plugin config file.

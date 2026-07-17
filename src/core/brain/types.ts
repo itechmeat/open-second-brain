@@ -817,6 +817,36 @@ export type BrainLogEvent =
   | BrainNoteLogEvent
   | BrainSessionLifecycleLogEvent;
 
+// ----- Procedural memory entry shapes ---------------------------------------
+
+export type ProceduralEntryKind = "skill" | "runbook" | "procedure";
+
+/** Host-reported outcome of applying a procedure. */
+export type ProceduralOutcome = "success" | "failure";
+
+export interface ProceduralMemoryEntry {
+  readonly id: string;
+  readonly kind: ProceduralEntryKind;
+  readonly sourcePath: string;
+  readonly title: string;
+  readonly triggers: ReadonlyArray<string>;
+  readonly tags: ReadonlyArray<string>;
+  readonly permissions: ReadonlyArray<string>;
+  readonly source: string | null;
+  readonly version: string | null;
+  readonly lastUsedAt: string | null;
+  readonly usedCount: number;
+  /**
+   * Outcome-validated recall (t_703f7b18). Times this procedure was applied
+   * and the host reported the downstream result. `successRate` ranks recall
+   * (see {@link rankProceduralMemory}); usage count is the fallback prior
+   * for procedures with no recorded outcomes. Additive: absent in an
+   * outcome-free vault (defaults 0), so pre-outcome indexes read identically.
+   */
+  readonly successCount: number;
+  readonly failureCount: number;
+}
+
 // ----- Configuration (`Brain/_brain.yaml`) ----------------------------------
 
 export interface BrainDreamConfig {
@@ -1364,4 +1394,49 @@ export interface ResolvedBrainHealthConfig {
   readonly concept_gap_min_frequency: number;
   readonly stale_claim_max_age_days: number;
   readonly remediation_step_cap: number;
+}
+
+// ----- Doctor / trust-layer shapes -------------------------------------------
+//
+// Shared between `doctor.ts` and the `trust/` helpers it calls
+// (`compute-trust-verdict.ts`, `instruction-file-ceiling.ts`,
+// `operator-summary.ts`). Living here — a plain-data leaf module with
+// no imports of its own — lets those helpers depend on the shapes
+// without importing `doctor.ts` itself.
+
+export type DoctorSeverity = "warning" | "error";
+
+/**
+ * One structured finding. `code` is a stable identifier so callers can
+ * filter or aggregate without parsing the `message`.
+ */
+export interface DoctorIssue {
+  readonly severity: DoctorSeverity;
+  readonly code: string;
+  /** Vault-absolute path of the offending file, when known. */
+  readonly path?: string;
+  /** Human-readable description, suitable for `--text` rendering. */
+  readonly message: string;
+}
+
+/**
+ * Aggregate verdict introduced in v0.10.16. Compresses doctor errors,
+ * dream warnings, and verification-delta counts into one of three
+ * states an operator can act on at a glance.
+ */
+export type TrustVerdict = "clean" | "watch" | "investigate";
+
+/**
+ * Warning entry produced by the instruction-file-ceiling helper
+ * (v0.10.16). Doctor surfaces these as a parallel array so the
+ * trust verdict has structured input without having to grep the
+ * generic `warnings` list.
+ */
+export interface InstructionFileCeilingWarning {
+  /** Vault-relative path of the offending instruction file. */
+  readonly path: string;
+  /** Observed line count. */
+  readonly lines: number;
+  /** Configured ceiling at the time of the check. */
+  readonly ceiling: number;
 }
