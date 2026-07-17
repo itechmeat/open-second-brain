@@ -168,12 +168,6 @@ export async function applyMarkerWritebacks(
   const pack = loadSchemaPack(vault);
   const nowIso = (opts.now ?? new Date()).toISOString();
   const entries: MarkerWritebackEntry[] = [];
-  // Marker-consumption rewrites are deferred out of the file loop and run
-  // together after every mutation has landed. Each job targets a distinct
-  // source file, and `rewriteMarkers` locks per parent directory, so the
-  // batch is race-free even when two sources share a folder.
-  const rewriteJobs: Array<{ readonly absSource: string; readonly ops: ReadonlyArray<RewriteOp> }> =
-    [];
 
   for (const file of opts.files) {
     const absSource = resolveNotePath(vault, file, { mustExist: true });
@@ -330,6 +324,14 @@ export async function applyMarkerWritebacks(
     }
 
     // ---- 5. Consume exactly the applied markers in this file. ----------
+    // Rewrite at the END of this file's own iteration, before any later
+    // source file runs. A later source whose `set` marker targets a note
+    // processed earlier grows that note's frontmatter by a line, shifting
+    // every body-marker line in it; `rewriteMarkers` trusts
+    // `op.marker.originLine` verbatim, so deferring this past the later
+    // mutation would point the rewrite at a stale line. Consuming now
+    // keeps the line live.
+    //
     // Re-discover from the freshly-written file so line numbers are
     // correct even when a marker's target was the source file itself (a
     // frontmatter write shifts body lines). Match applied markers to the
@@ -347,11 +349,13 @@ export async function applyMarkerWritebacks(
         const [match] = queue.splice(idx, 1);
         ops.push({ marker, signalId: match!.signalId });
       }
-      rewriteJobs.push({ absSource, ops });
+      // Sequential by design: this file's markers must be consumed before a
+      // later source mutates and line-shifts this note, or the rewrite would
+      // land on a stale line.
+      // oxlint-disable-next-line no-await-in-loop
+      await rewriteMarkers(absSource, ops);
     }
   }
-
-  await Promise.all(rewriteJobs.map((job) => rewriteMarkers(job.absSource, job.ops)));
 
   let appliedCount = 0;
   let pendingCount = 0;

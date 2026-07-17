@@ -268,6 +268,81 @@ describe("apply mode - happy path", () => {
   });
 });
 
+describe("apply mode - cross-file line shift", () => {
+  // Regression: a later source file whose `set` marker targets an
+  // earlier source note grows that note's frontmatter by a line, which
+  // shifts every body-marker line in the earlier note. Consuming markers
+  // per file at the end of that file's own iteration (before any later
+  // mutation runs) keeps `rewriteMarkers` pointed at the live line, so
+  // both markers are consumed and a second run applies nothing.
+  test("earlier note's body marker is consumed before a later source grows its frontmatter", async () => {
+    writeConfig({ markerWriteback: true });
+    writePaper("Notes/c.md");
+    // Note A is both a source file (its body carries a marker targeting
+    // C) and the target of B's marker. Written by hand so the marker
+    // lives in the body, below the frontmatter.
+    const aPath = join(vault, "Notes/a.md");
+    mkdirSync(join(aPath, ".."), { recursive: true });
+    writeFileSync(
+      aPath,
+      [
+        "---",
+        "type: paper",
+        "title: A Paper",
+        "---",
+        "",
+        "# A Paper",
+        "",
+        "@osb set note=Notes/c.md field=status value=queued",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeSource("Notes/b.md", "@osb set note=Notes/a.md field=year value=2026");
+
+    const report = await applyMarkerWritebacks(vault, {
+      files: ["Notes/a.md", "Notes/b.md"],
+      apply: true,
+      agent: "a",
+      now: NOW,
+    });
+
+    // Both markers applied.
+    expect(report.appliedCount).toBe(2);
+    expect(attrsOf("Notes/c.md")).toEqual({ status: "queued" });
+    expect(attrsOf("Notes/a.md")).toEqual({ year: "2026" });
+
+    // Both markers consumed at the correct lines: A's body marker (which
+    // B's frontmatter write shifted down) still carries the sentinel and
+    // still references C, and B's marker carries the sentinel referencing
+    // A. No unconsumed `@osb set` survives in either file.
+    const aSrc = readSource("Notes/a.md");
+    expect(aSrc).toContain("@osb✓ [[Notes/c.md]] set note=Notes/c.md field=status value=queued");
+    expect(aSrc).not.toContain("\n@osb set");
+    const bSrc = readSource("Notes/b.md");
+    expect(bSrc).toContain("@osb✓ [[Notes/a.md]] set note=Notes/a.md field=year value=2026");
+    expect(bSrc).not.toContain("\n@osb set");
+
+    // Exactly one attribute-write event per mutation.
+    const events = attributeWriteEvents();
+    expect(events).toHaveLength(2);
+    expect(events.filter((e) => e.body["note"] === "Notes/c.md")).toHaveLength(1);
+    expect(events.filter((e) => e.body["note"] === "Notes/a.md")).toHaveLength(1);
+
+    // A second run applies nothing: no entries, no new events.
+    const second = await applyMarkerWritebacks(vault, {
+      files: ["Notes/a.md", "Notes/b.md"],
+      apply: true,
+      agent: "a",
+      now: NOW,
+    });
+    expect(second.entries).toHaveLength(0);
+    expect(second.appliedCount).toBe(0);
+    expect(second.pendingCount).toBe(0);
+    expect(attributeWriteEvents()).toHaveLength(2);
+  });
+});
+
 describe("apply mode - per-marker isolation", () => {
   test("an ambiguous target fails that marker with candidates; others still apply", async () => {
     writeConfig({ markerWriteback: true, readPaths: ["Notes", "Archive"] });
