@@ -25,19 +25,16 @@
  * file), not a new signal.
  */
 
-import { Dirent, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative, sep } from "node:path";
 
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
-import { BRAIN_ROOT_REL } from "./paths.ts";
-import { loadNotesConfigSafe } from "./policy.ts";
+import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "./notes/note-walk.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
-import { matchIgnore, resolveVaultScope, type VaultIgnoreRule } from "../vault-scope/index.ts";
-import { loadVaultMap, resolveTokens } from "./portability/role-tokens.ts";
 
 const MAX_FILE_SIZE_BYTES = 1_048_576; // 1 MiB
 
@@ -92,14 +89,10 @@ export async function scanInline(
   // fall back to `notes.read_paths` from `_brain.yaml`. An empty
   // resolved list means "no folders to scan" — return immediately so
   // the agent never walks the vault without an operator opt-in.
-  const explicitPaths = (opts.paths ?? []).filter((p) => p.trim().length > 0);
-  // v0.22.0: resolve `{{role}}` tokens in read paths via the optional
-  // vault-map (user content folders only); absent map -> paths unchanged.
-  const vaultMap = loadVaultMap(vault);
-  const resolvedPaths = (
-    explicitPaths.length > 0 ? explicitPaths : [...loadNotesConfigSafe(vault).read_paths]
-  ).map((p) => resolveTokens(vaultMap, p));
-  if (resolvedPaths.length === 0) {
+  // v0.22.0: read-path `{{role}}` tokens are resolved inside
+  // resolveNoteRoots via the optional vault-map.
+  const roots = resolveNoteRoots(vault, opts.paths);
+  if (roots.length === 0) {
     return Object.freeze({
       scanned: 0,
       found: 0,
@@ -110,7 +103,6 @@ export async function scanInline(
       filesWithMarkers: Object.freeze([]) as ReadonlyArray<ScanInlineFileSummary>,
     });
   }
-  const includePrefixes = resolvedPaths.map((p) => normalisePrefix(p));
 
   // Build dedup index once per run. Parse failures get surfaced
   // through the per-file errors array so the JSON report exposes
@@ -119,38 +111,22 @@ export async function scanInline(
     onError: (path, message) => errors.push({ path, message }),
   });
 
-  // Effective rule set (v0.10.9):
-  //   - shared `vault.ignore_paths` from Brain/_brain.yaml (or defaults)
-  //   - hardcoded `Brain` name-rule: scan-inline must never recurse
-  //     into the derived layer regardless of operator policy
-  //   - user `--exclude` entries, classified as path-prefix rules
-  const scope = resolveVaultScope(vault);
-  const rules: VaultIgnoreRule[] = [
-    ...scope.rules,
-    // `path` (not `name`) so the hard-skip targets only the top-level
-    // `<vault>/Brain/` directory; a project file like
-    // `projects/Brain/notes.md` keeps being scanned.
-    { raw: BRAIN_ROOT_REL, kind: "path" },
-    ...(opts.exclude ?? []).map(
-      (raw): VaultIgnoreRule => ({ raw: normalisePrefix(raw), kind: "path" }),
-    ),
-  ];
+  // Effective rule set (v0.10.9): shared `vault.ignore_paths`, the hard
+  // `Brain/` root skip, and any `--exclude` prefixes - all assembled by
+  // the shared walker helper.
+  const rules = buildNoteWalkRules(vault, opts.exclude);
 
-  for (const filePath of walkVault(vault, includePrefixes, rules)) {
-    scanned++;
-    let stat;
-    try {
-      stat = statSync(filePath);
-    } catch {
-      continue;
-    }
-    if (stat.size > MAX_FILE_SIZE_BYTES) {
+  for (const file of walkMarkdownFiles(vault, roots, rules, {
+    maxFileSizeBytes: MAX_FILE_SIZE_BYTES,
+    onOversize: (oversize, size) => {
       errors.push({
-        path: filePath,
-        message: `file too large to scan (${stat.size} bytes; cap ${MAX_FILE_SIZE_BYTES})`,
+        path: oversize.absPath,
+        message: `file too large to scan (${size} bytes; cap ${MAX_FILE_SIZE_BYTES})`,
       });
-      continue;
-    }
+    },
+  })) {
+    const filePath = file.absPath;
+    scanned++;
     let content: string;
     try {
       content = readFileSync(filePath, "utf8");
@@ -240,56 +216,4 @@ export async function scanInline(
     errors: Object.freeze(errors),
     filesWithMarkers: Object.freeze(filesWithMarkers),
   });
-}
-
-// ----- Walker ---------------------------------------------------------------
-
-function normalisePrefix(rel: string): string {
-  // POSIX-normalise: replace OS-native separator with `/` FIRST, then
-  // strip leading/trailing slashes. On Windows `notes\\` must become
-  // `notes` (not `notes/`), so the separator conversion has to happen
-  // before the slash trim. `matchIgnore` expects POSIX rel-paths.
-  return rel
-    .split(sep)
-    .join("/")
-    .replace(/^\/+|\/+$/g, "");
-}
-
-function* walkVault(
-  vault: string,
-  includePrefixes: ReadonlyArray<string>,
-  rules: ReadonlyArray<VaultIgnoreRule>,
-): Generator<string> {
-  const stack: Array<{ abs: string; rel: string }> = [{ abs: vault, rel: "" }];
-  while (stack.length > 0) {
-    const { abs: dir, rel: relDir } = stack.pop()!;
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const full = join(dir, entry.name);
-      const relPosix = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
-
-      if (matchIgnore(relPosix, rules).excluded) continue;
-
-      if (entry.isDirectory()) {
-        // Include-narrowing applies only to files: descend so subtree
-        // files under an include prefix are still reached.
-        stack.push({ abs: full, rel: relPosix });
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (!entry.name.endsWith(".md")) continue;
-
-      if (includePrefixes.length > 0) {
-        const matches = includePrefixes.some((p) => relPosix === p || relPosix.startsWith(p + "/"));
-        if (!matches) continue;
-      }
-
-      yield full;
-    }
-  }
 }

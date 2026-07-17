@@ -17,25 +17,20 @@
  *     one lists every candidate path so the caller can disambiguate
  *     rather than the resolver guessing.
  *
- * The basename walk mirrors (does not import - `scan-inline.ts` may be
- * under concurrent edit and its walker is not exported) the same
- * rules `scanInline` applies in `src/core/brain/inline-scan.ts`:
- * `notes.read_paths` roots, `vault.ignore_paths` exclusion via
- * `matchIgnore`, and a hard skip of the `Brain/` machinery root. The
- * per-file size cap `scanInline` applies before reading marker content
- * does not apply here - this resolver only reads directory entries and
- * filenames, never file bytes, so there is nothing for a size cap to
- * guard against.
+ * The basename walk uses the shared note walker
+ * ({@link walkMarkdownFiles}): `notes.read_paths` roots,
+ * `vault.ignore_paths` exclusion via `matchIgnore`, and a hard skip of
+ * the `Brain/` machinery root. The per-file size cap `scanInline`
+ * applies before reading marker content does not apply here - this
+ * resolver only reads directory entries and filenames, never file
+ * bytes, so it passes no cap.
  */
 
-import { readdirSync, type Dirent } from "node:fs";
-import { join, sep } from "node:path";
+import { sep } from "node:path";
 
 import { resolveNotePath } from "../note-path.ts";
 import { ANCHORED_WIKILINK_RE, normaliseWikilinkTarget } from "../wikilink.ts";
-import { BRAIN_ROOT_REL } from "../paths.ts";
-import { loadNotesConfigSafe } from "../policy.ts";
-import { matchIgnore, resolveVaultScope, type VaultIgnoreRule } from "../../vault-scope/index.ts";
+import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "./note-walk.ts";
 
 /** Machine-readable reason a {@link resolveNoteTarget} call was refused. */
 export type NoteTitleResolutionErrorCode =
@@ -158,62 +153,17 @@ interface NoteBasenameEntry {
  * an import).
  */
 function collectNoteBasenames(vault: string): ReadonlyArray<NoteBasenameEntry> {
-  const readPaths = loadNotesConfigSafe(vault)
-    .read_paths.map(normalisePrefix)
-    .filter((p) => p.length > 0);
-  if (readPaths.length === 0) return [];
+  const roots = resolveNoteRoots(vault);
+  if (roots.length === 0) return [];
 
-  const scope = resolveVaultScope(vault);
-  const rules: VaultIgnoreRule[] = [...scope.rules, { raw: BRAIN_ROOT_REL, kind: "path" }];
+  const rules = buildNoteWalkRules(vault);
 
   const out: NoteBasenameEntry[] = [];
-  for (const relPath of walkNoteRoots(vault, readPaths, rules)) {
+  for (const { relPath } of walkMarkdownFiles(vault, roots, rules)) {
     const segments = relPath.split("/");
     const filename = segments[segments.length - 1]!;
     const title = filename.endsWith(".md") ? filename.slice(0, -".md".length) : filename;
     out.push({ relPath, title });
   }
   return out;
-}
-
-function normalisePrefix(rel: string): string {
-  return rel
-    .split(sep)
-    .join("/")
-    .replace(/^\/+|\/+$/g, "");
-}
-
-function* walkNoteRoots(
-  vault: string,
-  includePrefixes: ReadonlyArray<string>,
-  rules: ReadonlyArray<VaultIgnoreRule>,
-): Generator<string> {
-  const stack: Array<{ abs: string; rel: string }> = [{ abs: vault, rel: "" }];
-  while (stack.length > 0) {
-    const { abs: dir, rel: relDir } = stack.pop()!;
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const full = join(dir, entry.name);
-      const relPosix = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
-
-      if (matchIgnore(relPosix, rules).excluded) continue;
-
-      if (entry.isDirectory()) {
-        stack.push({ abs: full, rel: relPosix });
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (!entry.name.endsWith(".md")) continue;
-
-      const matches = includePrefixes.some((p) => relPosix === p || relPosix.startsWith(p + "/"));
-      if (!matches) continue;
-
-      yield relPosix;
-    }
-  }
 }
