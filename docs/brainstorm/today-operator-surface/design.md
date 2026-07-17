@@ -1,6 +1,6 @@
 # Today operator surface - dashboard, merged timeline, open loops, marker write-back
 
-**Status:** approved
+**Status:** implemented (shipping as 1.31.0)
 **Author:** claude-dev-agent (via feature-release-playbook)
 **Audience:** implementation
 

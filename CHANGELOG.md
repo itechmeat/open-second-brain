@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.31.0] - 2026-07-17
+
+A today-operator-surface release: one read-only dashboard answering "what matters right now", a chronologically merged activity timeline, prose-native open loops, and a guarded write-back that turns prose markers into schema-validated frontmatter mutations. Every read surface is live-derived on demand and never stored; the single write path is opt-in, deterministic, and audited. No new dependency; the kernel still calls no LLM.
+
+### Added
+
+- **Today dashboard (`o2b brain today`, `brain_brief view=today`).** A read-only, multi-section operator overview: due and overdue obligations (reusing the obligation store's own due math), open loops, a recent-activity timeline, and totals. Every section is an independent live query re-derived on demand - nothing is stored, so nothing drifts. Sections are fault-isolated: a section that fails to compute reports an explicit per-section error entry while the rest still render, never a silent healthy-looking blank. Text or `--json`; `--lookback-days` and `--limit` bound the activity window.
+- **Merged chronological activity timeline.** `buildActivityTimeline` renders the Brain log's `TimelineIndex` as one newest-first typed bullet list across all event kinds - `- [<kind>] <field>=<value> pairs · <relative age>` - instead of the section-grouped brief. Tags are the event-kind strings themselves and text derivation is a fixed structural field-priority walk, so the surface stays language-agnostic with no display-name table.
+- **Open-loop prose markers with survive-until-closed semantics.** The `@osb` marker grammar gains a `loop` kind: `@osb loop <text>` (optional `id=`) keeps an informal intention visible on the dashboard until a structural close token `@osb loop close id=<id>` appears anywhere in scanned prose. Loop ids derive deterministically from normalized text (sha256 prefix) or an explicit `id=`; loop markers are never consumed by any scanner; duplicates and orphan closes are reported, not guessed away. Lighter-weight than an obligation - the gap between formal cadence commitments and one-off notes.
+- **Guarded marker write-back (`o2b brain apply-markers`).** The grammar also gains a `set` kind: `@osb set note=<target> field=<field> value=<value>` resolves its target fail-closed (a `[[Title]]` resolves by Obsidian basename semantics; zero or multiple matches list candidates instead of guessing; paths pass the vault-containment check) and applies the mutation through the existing schema-pack-validated attribute path. Report mode is the default and writes nothing; `--apply` requires the new opt-in `guardrails.marker_writeback` flag (default off), emits one `attribute-write` Brain log event per applied mutation carrying the prior value, and consumes exactly the applied markers so a re-run applies nothing. Per-marker isolation: one failing marker never aborts the rest.
+
+### Changed
+
+- **The note-space walker is a shared module.** The read-path/ignore-path/size-cap walking rules previously private to the inline scan now live in `src/core/brain/notes/note-walk.ts` and back the inline scan, the new title resolver, the open-loop scan, and the write-back file list - one set of rules instead of per-feature copies. Existing scan behavior is pinned unchanged by its tests.
+- **Marker grammar validation is per-kind.** `@osb` markers validate against a per-kind required-field table (`feedback`, `loop`, `set`) instead of feedback-specific hardcoded checks. Feedback parsing, downstream signal emission, and unknown-kind rejection are byte-identical; the three existing marker consumers now explicitly process only feedback markers.
+
 ## [1.30.1] - 2026-07-17
 
 A structural maintenance release with zero behavior change: every import cycle in the TypeScript source tree is removed and the largest source file is decomposed. The analysis and the verification gate come from code-ranker (v5.0.3); the full suite (5687 tests) is byte-for-byte green before and after.
@@ -6469,6 +6485,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.31.0]: https://github.com/itechmeat/open-second-brain/compare/v1.30.1...v1.31.0
 [1.30.1]: https://github.com/itechmeat/open-second-brain/compare/v1.30.0...v1.30.1
 [1.30.0]: https://github.com/itechmeat/open-second-brain/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/itechmeat/open-second-brain/compare/v1.28.0...v1.29.0
