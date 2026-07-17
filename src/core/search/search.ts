@@ -51,7 +51,7 @@ import {
   downrankTerminalEvidenceResults,
   isTerminalStatus,
 } from "./evidence-pack.ts";
-import type { EvidenceUnionRecord, EvidenceVerification } from "./evidence-pack.ts";
+import type { EvidenceVerification } from "./evidence-pack.ts";
 import { runFtsQueryDetailed } from "./fts.ts";
 import { mmrRerank } from "./mmr.ts";
 import { buildQueryPlan } from "./query-plan.ts";
@@ -72,14 +72,15 @@ import { formatLinePointer } from "./line-numbering.ts";
 import { SearchError } from "./types.ts";
 import type {
   BrainSearchResult,
+  EvidenceUnionRecord,
   ExpandHitInput,
   ExpandHitResult,
   ResolvedSearchConfig,
   SearchCard,
   SearchOptions,
   SearchOutcome,
+  StructuredRecallQueryDocument,
 } from "./types.ts";
-import type { StructuredRecallQueryDocument } from "./structured-query.ts";
 import { expandQuery } from "./query-expansion.ts";
 import { applyTunedParameters, loadTunedParameters } from "./tuning.ts";
 import { resolveRecallProfile } from "./profiles.ts";

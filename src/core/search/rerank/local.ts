@@ -18,7 +18,7 @@
  * (query, documents) always yields identical scores.
  */
 
-import type { RerankProvider } from "./provider.ts";
+import type { RerankProvider } from "./contract.ts";
 
 const TOKEN_RE = /[\p{L}\p{N}]{2,}/gu;
 

@@ -15,7 +15,7 @@ import { buildCoverageReport, planTargetedRetry } from "../../../src/core/search
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
-import type { StructuredRecallQueryDocument } from "../../../src/core/search/structured-query.ts";
+import type { StructuredRecallQueryDocument } from "../../../src/core/search/types.ts";
 
 describe("planTargetedRetry (pure decision)", () => {
   const report = (

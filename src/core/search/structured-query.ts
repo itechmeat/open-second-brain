@@ -1,16 +1,9 @@
-import { SearchError, type QueryIntent } from "./types.ts";
-
-export interface StructuredLexLane {
-  readonly include: ReadonlyArray<string>;
-  readonly exclude: ReadonlyArray<string>;
-}
-
-export interface StructuredRecallQueryDocument {
-  readonly intent: QueryIntent | null;
-  readonly lex: StructuredLexLane;
-  readonly vec: ReadonlyArray<string>;
-  readonly hyde: ReadonlyArray<string>;
-}
+import {
+  SearchError,
+  type QueryIntent,
+  type StructuredLexLane,
+  type StructuredRecallQueryDocument,
+} from "./types.ts";
 
 const ALLOWED_INTENTS = new Set<QueryIntent>(["neutral", "exact", "entity", "broad"]);
 const ALLOWED_LANES = new Set(["intent", "lex", "vec", "hyde"]);

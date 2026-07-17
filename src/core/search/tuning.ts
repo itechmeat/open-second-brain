@@ -27,20 +27,13 @@ import { createHash } from "node:crypto";
 
 import { runRecallBenchmark } from "./benchmark.ts";
 import type { RecallBenchmarkDataset } from "./benchmark.ts";
-import type { ResolvedSearchConfig } from "./types.ts";
+import type { ResolvedSearchConfig, TunedParameters } from "./types.ts";
 
 export const TUNING_SCHEMA_VERSION = "o2b.tuning.v1";
 
 /** Bounded grid axes - loadTunedParameters enforces these on read. */
 export const TUNING_POOL_MULTIPLIERS: ReadonlyArray<number> = Object.freeze([3, 4, 5]);
 export const TUNING_TRAVERSAL_DEPTHS: ReadonlyArray<number> = Object.freeze([1, 2]);
-
-export interface TunedParameters {
-  readonly poolMultiplier: number;
-  readonly traversalDepth: number;
-  readonly learnedWeights: boolean;
-  readonly expansion: boolean;
-}
 
 export interface TuningEvaluation {
   readonly params: TunedParameters;

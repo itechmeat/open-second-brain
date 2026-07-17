@@ -22,7 +22,7 @@
 
 import { SearchError } from "../types.ts";
 import type { ResolvedEmbeddingConfig } from "../types.ts";
-import type { EmbeddingProvider } from "./provider.ts";
+import type { EmbeddingProvider } from "./contract.ts";
 import {
   RETRYABLE_STATUSES,
   Semaphore,

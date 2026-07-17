@@ -16,7 +16,7 @@
  * this one.
  */
 
-import type { EmbeddingProvider } from "./provider.ts";
+import type { EmbeddingProvider } from "./contract.ts";
 import { LOCAL_EMBEDDING_MODEL } from "./signature.ts";
 
 /** Default vector width when `embedding_dimension` is not configured. */

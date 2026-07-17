@@ -25,7 +25,7 @@
 
 import { listEntities } from "../brain/entities/registry.ts";
 import { tokenizeForExpansion } from "./synonyms.ts";
-import type { StructuredRecallQueryDocument } from "./structured-query.ts";
+import type { StructuredRecallQueryDocument } from "./types.ts";
 
 /** Default cap on lex include terms. */
 export const EXPANSION_MAX_LEX_TERMS = 8;

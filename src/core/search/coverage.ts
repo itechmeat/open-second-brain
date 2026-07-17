@@ -14,6 +14,8 @@
  * in. Deterministic, no LLM, no clock.
  */
 
+import type { CompletenessReport, CompletenessVerdict } from "./types.ts";
+
 /** Share of the corpus a term may appear in and still count as rare. */
 export const RARE_TERM_CORPUS_SHARE = 0.02;
 
@@ -94,23 +96,6 @@ export interface CoverageReport {
 export const COMPLETENESS_COMPLETE_THRESHOLD = 0.8;
 /** IDF-weighted coverage at/above this (below complete) is partial. */
 export const COMPLETENESS_PARTIAL_THRESHOLD = 0.4;
-
-export type CompletenessVerdict = "complete" | "partial" | "sparse";
-
-/**
- * Search-completeness guard (Feature E): a deterministic verdict over
- * how well the returned results cover the query, plus the
- * false-absence guard — uncovered terms the corpus DOES contain. A
- * summarizer seeing a term in `uncoveredButPresentInCorpus` cannot
- * honestly claim the vault has nothing on it.
- */
-export interface CompletenessReport {
-  readonly verdict: CompletenessVerdict;
-  readonly idfWeightedCoverage: number;
-  readonly coveredTerms: ReadonlyArray<string>;
-  readonly uncoveredTerms: ReadonlyArray<string>;
-  readonly uncoveredButPresentInCorpus: ReadonlyArray<string>;
-}
 
 export function buildCompletenessReport(coverage: CoverageReport): CompletenessReport {
   const covered = coverage.terms.filter((t) => t.covered).map((t) => t.term);

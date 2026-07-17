@@ -3,13 +3,7 @@ import { dirname, join } from "node:path";
 
 import { resolveSessionScope } from "../brain/session-scope.ts";
 import { resolveIndexPath } from "./paths.ts";
-import { SearchError, type ResolvedSearchConfig } from "./types.ts";
-
-export interface SearchSessionFocus {
-  readonly query: string | null;
-  readonly pathPrefix: string | null;
-  readonly expiresAt: number | null;
-}
+import { SearchError, type ResolvedSearchConfig, type SearchSessionFocus } from "./types.ts";
 
 export interface SessionFocusInput {
   readonly query?: string | null;

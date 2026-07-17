@@ -24,7 +24,8 @@
 
 import { resolveOpenAiCompatEndpoint } from "../embeddings/provider-resolve.ts";
 import type { BrainSearchResult, ResolvedRerankConfig } from "../types.ts";
-import { makeRerankProvider, type RerankProvider } from "./provider.ts";
+import { makeRerankProvider } from "./provider.ts";
+import type { RerankProvider } from "./contract.ts";
 
 /** Fixed-precision so the reason string is stable for a given score. */
 function fmtScore(x: number): string {

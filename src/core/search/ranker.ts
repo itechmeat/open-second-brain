@@ -12,10 +12,15 @@
 import { clamp01 } from "../math.ts";
 import { PAGE_TIER_DEFAULT, tierWeight, type PageTier } from "../brain/page-meta/tier.ts";
 import { weibullDecay, DEFAULT_RECENCY, type WeibullRecencyOptions } from "./recency.ts";
-import { scoreSessionFocusTarget, type SearchSessionFocus } from "./session-focus.ts";
+import { scoreSessionFocusTarget } from "./session-focus.ts";
 import { rrfFuse, DEFAULT_RRF_K, type FusionMode } from "./fusion.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "./store.ts";
-import type { BrainSearchResult, ScoreBreakdown, WeightProfile } from "./types.ts";
+import type {
+  BrainSearchResult,
+  ScoreBreakdown,
+  SearchSessionFocus,
+  WeightProfile,
+} from "./types.ts";
 
 export interface RankerInputs {
   readonly keyword: ReadonlyArray<KeywordHit>;

@@ -20,7 +20,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveSearchConfig } from "../../../search/index.ts";
-import { makeProvider, type EmbeddingProvider } from "../../../search/embeddings/provider.ts";
+import { makeProvider } from "../../../search/embeddings/provider.ts";
+import type { EmbeddingProvider } from "../../../search/embeddings/contract.ts";
 import { findMergeCandidates } from "../../merge-candidates.ts";
 import { brainDirs } from "../../paths.ts";
 import { parsePreference } from "../../preference.ts";

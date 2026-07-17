@@ -8,7 +8,7 @@
  */
 
 import { SearchError } from "../types.ts";
-import type { EmbeddingProvider } from "./provider.ts";
+import type { EmbeddingProvider } from "./contract.ts";
 
 export class NullProvider implements EmbeddingProvider {
   readonly name = "null";

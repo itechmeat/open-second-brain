@@ -20,7 +20,7 @@
 
 import { SearchError } from "../types.ts";
 import type { OpenAiCompatEndpoint } from "../embeddings/provider-resolve.ts";
-import type { RerankProvider } from "./provider.ts";
+import type { RerankProvider } from "./contract.ts";
 
 /** Default per-request timeout when the caller does not override it. */
 export const DEFAULT_RERANK_TIMEOUT_MS = 5000;

@@ -39,6 +39,7 @@ type SearchConfigOverrides = Partial<
 export type {
   BrainSearchResult,
   DisclosureMode,
+  EvidencePack,
   ExpandedNote,
   ExpandedRawChunk,
   ExpandHitInput,
@@ -54,13 +55,14 @@ export type {
   SearchErrorCode,
   SearchOptions,
   SearchOutcome,
+  SearchSessionFocus,
+  StructuredRecallQueryDocument,
   VaultIgnoreRule,
 } from "./types.ts";
 export { SearchError, SEARCH_ERROR_CODES } from "./types.ts";
 export {
   parseStructuredRecallQueryDocument,
   structuredRecallQueryText,
-  type StructuredRecallQueryDocument,
 } from "./structured-query.ts";
 export {
   clearSessionFocus,
@@ -68,10 +70,9 @@ export {
   readSessionFocus,
   sessionFocusIsActive,
   writeSessionFocus,
-  type SearchSessionFocus,
 } from "./session-focus.ts";
 export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-gate.ts";
-export { buildEvidencePack, serializeEvidencePack, type EvidencePack } from "./evidence-pack.ts";
+export { buildEvidencePack, serializeEvidencePack } from "./evidence-pack.ts";
 export { serializeSearchCard, serializeIndexStatus } from "./serialize.ts";
 export {
   loadProviderRegistry,

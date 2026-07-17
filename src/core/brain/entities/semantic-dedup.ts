@@ -22,8 +22,8 @@
 import { discoverConfig } from "../../config.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { envOrConfig, parseBool, parseFloat01 } from "../../validate.ts";
-import { resolveConfiguredEmbeddingProvider } from "../../search/embeddings/provider-resolve.ts";
-import type { EmbeddingProvider } from "../../search/embeddings/provider.ts";
+import { resolveConfiguredEmbeddingProvider } from "../../search/embeddings/configured-provider.ts";
+import type { EmbeddingProvider } from "../../search/embeddings/contract.ts";
 import { jaccard, tokenise } from "../similarity.ts";
 import { buildEntityIndex } from "./index-builder.ts";
 import { normalizeEntityName } from "./canonical.ts";

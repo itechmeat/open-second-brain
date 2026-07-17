@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import type { EmbeddingProvider } from "../../../src/core/search/embeddings/provider.ts";
+import type { EmbeddingProvider } from "../../../src/core/search/embeddings/contract.ts";
 import { detectSemanticDedup } from "../../../src/core/brain/hygiene/detectors/dedup.ts";
 
 let vault: string;

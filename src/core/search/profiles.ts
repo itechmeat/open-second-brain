@@ -16,7 +16,7 @@
  * existing config path, byte-for-byte.
  */
 
-import type { TunedParameters } from "./tuning.ts";
+import type { TunedParameters } from "./types.ts";
 import { SearchError } from "./types.ts";
 
 /** The selectable profile names, narrowest-to-widest. */
