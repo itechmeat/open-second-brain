@@ -16,7 +16,7 @@ import { indexVault } from "../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { SEARCH_TOOLS } from "../../src/mcp/search-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
-import type { ServerContext } from "../../src/mcp/tools.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 let vault: string;
 let configHome: string;

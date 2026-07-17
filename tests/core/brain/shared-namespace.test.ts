@@ -17,7 +17,8 @@ import {
 import { appendBrainNote } from "../../../src/core/brain/note.ts";
 import { parseSignal } from "../../../src/core/brain/signal.ts";
 import { parseLogDay } from "../../../src/core/brain/log.ts";
-import { buildToolTable, findTool, type ServerContext } from "../../../src/mcp/tools.ts";
+import { buildToolTable, findTool } from "../../../src/mcp/tools.ts";
+import type { ServerContext } from "../../../src/mcp/tool-contract.ts";
 
 let tmp: string;
 let vault: string;

@@ -18,7 +18,7 @@
 
 import { toolDescriptors } from "../core/surface/descriptor.ts";
 import { coerceStrList } from "./coerce.ts";
-import type { ToolDefinition } from "./tools.ts";
+import type { ToolDefinition } from "./tool-contract.ts";
 
 export const TOOL_HYDRATE_NAME = "tool_hydrate";
 

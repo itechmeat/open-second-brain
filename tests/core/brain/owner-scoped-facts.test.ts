@@ -20,7 +20,7 @@ import {
   preferenceOwner,
 } from "../../../src/core/brain/owner-scoped-facts.ts";
 import { QUERY_TOOLS } from "../../../src/mcp/brain/query-tools.ts";
-import type { ServerContext } from "../../../src/mcp/tools.ts";
+import type { ServerContext } from "../../../src/mcp/tool-contract.ts";
 
 let vault: string;
 let configHome: string;

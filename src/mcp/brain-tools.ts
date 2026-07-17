@@ -36,7 +36,7 @@ import { SYNTHESIS_TOOLS } from "./brain/synthesis-tools.ts";
 import { GENERATION_TOOLS } from "./brain/generation-tools.ts";
 import { CALENDAR_TOOLS } from "./brain/calendar-tools.ts";
 import { MEMORY_BRIDGE_TOOLS } from "./brain/memory-bridge-tools.ts";
-import type { ToolDefinition } from "./tools.ts";
+import type { ToolDefinition } from "./tool-contract.ts";
 
 export { vaultRelativeSafe } from "./brain/shared.ts";
 

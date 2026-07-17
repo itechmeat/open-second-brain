@@ -13,7 +13,7 @@ import { loadTemporalConfigSafe } from "../../core/brain/policy.ts";
 import { buildIntentReview } from "../../core/brain/intent-review.ts";
 import { buildRetentionReview } from "../../core/brain/retention.ts";
 import { buildReviewCandidates } from "../../core/brain/review-candidates.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceIsoDate } from "../coerce.ts";
 
 async function toolBrainIntentReview(

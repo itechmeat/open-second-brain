@@ -41,7 +41,7 @@ import { extractPreCompactRecords } from "../../core/brain/pre-compact-extract.t
 import { EventTraceSelectorError, resolveLogEventTraces } from "../../core/brain/event-trace.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, coerceStrList, coerceBool } from "../coerce.ts";
 import {

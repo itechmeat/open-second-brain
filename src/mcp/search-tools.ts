@@ -35,7 +35,7 @@ import {
 } from "../core/config.ts";
 import { assessRecallAdequacy } from "../core/brain/recall-adequacy.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
-import type { ServerContext, ToolDefinition } from "./tools.ts";
+import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";

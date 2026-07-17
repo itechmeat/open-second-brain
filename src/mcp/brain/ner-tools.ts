@@ -16,7 +16,7 @@
 
 import { intakeExtraction, IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
 import { resolveAgentName } from "../../core/config.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
 import { wrapToolErrors } from "./shared.ts";
 

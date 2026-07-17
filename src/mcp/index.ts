@@ -18,7 +18,8 @@ export {
 export { MCPServer, errorResponse, type JsonRpcRequest, type JsonRpcResponse } from "./server.ts";
 export { serveHttp, startHttp, type ServeHttpOptions, type HttpServerHandle } from "./http.ts";
 export { serveStdio, serveStdioFromString } from "./stdio.ts";
-export { buildToolTable, PLACEHOLDER_AGENT_VALUES, type ToolDefinition } from "./tools.ts";
+export { buildToolTable, PLACEHOLDER_AGENT_VALUES } from "./tools.ts";
+export type { ToolDefinition } from "./tool-contract.ts";
 export { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";
 export { buildInstructions } from "./instructions.ts";
 export { slugify } from "../core/vault.ts";

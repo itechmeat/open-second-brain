@@ -19,21 +19,17 @@ import {
   SERVER_VERSION,
 } from "./protocol.ts";
 import { listResources, listResourceTemplates, readResource } from "./resources.ts";
-import {
-  buildToolTable,
-  findTool,
-  type ServerContext,
-  type ToolDefinition,
-  type ToolScope,
-} from "./tools.ts";
+import { buildToolTable, findTool } from "./tools.ts";
+import type {
+  ServerContext,
+  ToolCapabilityReport,
+  ToolDefinition,
+  ToolScope,
+} from "./tool-contract.ts";
 import { assertOutputContract } from "./output-contract.ts";
 import { ArtifactStore } from "./artifact-store.ts";
 import { applyPreviewBudget } from "./preview-budget.ts";
-import {
-  evaluateToolCapabilities,
-  type RuntimeCapabilityWindow,
-  type ToolCapabilityReport,
-} from "./capabilities.ts";
+import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";
 
 /** TTL after which a prior process's artifact run directory is pruned. */
 const ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;

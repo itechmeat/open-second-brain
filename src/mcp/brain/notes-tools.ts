@@ -12,7 +12,7 @@
 import type { FrontmatterMap, FrontmatterValue } from "../../core/types.ts";
 import { createNote, CreateNoteError } from "../../core/brain/notes/create-note.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStr } from "../coerce.ts";
 
 /**

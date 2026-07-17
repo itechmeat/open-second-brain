@@ -7,7 +7,7 @@
  */
 
 import { buildMcpLandscape } from "../../core/graph/mcp-config.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 
 async function toolMcpLandscape(ctx: ServerContext): Promise<Record<string, unknown>> {
   const landscape = buildMcpLandscape(ctx.vault);

@@ -14,7 +14,7 @@ import { resolveSearchConfig } from "../core/search/index.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import { coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
-import type { ServerContext, ToolDefinition } from "./tools.ts";
+import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 
 // Read-side handlers behind the consolidated `schema_inspect` views.
 // The per-view alias tools were removed in 1.0.0 (tombstones in

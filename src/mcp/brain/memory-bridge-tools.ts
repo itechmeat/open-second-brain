@@ -25,7 +25,7 @@ import {
 } from "../../core/brain/host-memory-write.ts";
 import type { ContinuityRecord } from "../../core/brain/continuity/types.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStr } from "../coerce.ts";
 
 function coerceMetadata(value: unknown): Readonly<Record<string, unknown>> | undefined {

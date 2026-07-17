@@ -33,7 +33,7 @@ import { executeRecompile, planRecompile } from "../../core/brain/recompile.ts";
 import { coerceBool } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { enforceCountGuard, readCountGuardArgs, vaultRelativeSafe } from "./shared.ts";
 
 function coerceStringArray(args: Record<string, unknown>, key: string): string[] | undefined {

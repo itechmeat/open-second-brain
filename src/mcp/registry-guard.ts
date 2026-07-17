@@ -16,7 +16,7 @@
  * Test-time module: nothing here runs on the MCP request path.
  */
 
-import type { ToolDefinition } from "./tools.ts";
+import type { ToolDefinition } from "./tool-contract.ts";
 
 export const TOOL_DESCRIPTION_MAX = 300;
 export const PROPERTY_DESCRIPTION_MAX = 160;

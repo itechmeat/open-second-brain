@@ -22,7 +22,7 @@ import {
   type AgendaSnapshot,
 } from "../../core/brain/agenda.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, coerceStrList } from "../coerce.ts";
 

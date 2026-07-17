@@ -1,4 +1,9 @@
-import type { ToolDefinition, ToolScope } from "./tools.ts";
+import type {
+  ToolCapabilityEntry,
+  ToolCapabilityReport,
+  ToolDefinition,
+  ToolScope,
+} from "./tool-contract.ts";
 
 export interface RuntimeCapabilityWindow {
   readonly allowedTools?: ReadonlyArray<string>;
@@ -10,20 +15,6 @@ export interface RuntimeCapabilityContext {
   readonly scope: ToolScope;
   readonly serverName: string;
   readonly window?: RuntimeCapabilityWindow;
-}
-
-export interface ToolCapabilityEntry {
-  readonly name: string;
-  readonly reason: string;
-}
-
-export interface ToolCapabilityReport {
-  readonly scope: ToolScope;
-  readonly server_name: string;
-  readonly static_tool_count: number;
-  readonly available_tool_count: number;
-  readonly available: ToolCapabilityEntry[];
-  readonly withheld: ToolCapabilityEntry[];
 }
 
 export interface ToolCapabilityEvaluation {

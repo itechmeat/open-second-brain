@@ -3,7 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildToolTable, findTool, type ServerContext } from "../../src/mcp/tools.ts";
+import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
 function ctx(): ServerContext {

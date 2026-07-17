@@ -40,7 +40,7 @@ import { appendLogEvent } from "../../core/brain/log.ts";
 import { appendBrainNote } from "../../core/brain/note.ts";
 import { mirrorSignal, resolveSharedNamespace } from "../../core/brain/shared-namespace.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import {
   emitObservedUse,
   isObservedUseVerdict,

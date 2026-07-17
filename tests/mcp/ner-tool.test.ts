@@ -18,7 +18,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { getEntity, listEntities } from "../../src/core/brain/entities/registry.ts";
 import { NER_TOOLS } from "../../src/mcp/brain/ner-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
-import type { ServerContext } from "../../src/mcp/tools.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 let vault: string;
 let configHome: string;

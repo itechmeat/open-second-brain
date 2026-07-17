@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { addRecallSource } from "../../src/core/brain/portability/recall-sources.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
-import { buildToolTable, findTool, type ServerContext } from "../../src/mcp/tools.ts";
+import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { writeMd } from "../helpers/search-fixtures.ts";
 
 let tmp: string;

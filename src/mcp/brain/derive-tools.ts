@@ -15,7 +15,7 @@ import { deriveFact, DeriveFactError } from "../../core/brain/derived-fact.ts";
 import { loadGuardrailsConfigSafe } from "../../core/brain/policy.ts";
 import { asProvenanceLevel } from "../../core/brain/provenance/provenance.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStr, coerceStrList } from "../coerce.ts";
 import { wrapToolErrors } from "./shared.ts";
 

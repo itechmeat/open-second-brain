@@ -15,7 +15,7 @@ import {
 } from "../../core/brain/research/research.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStr } from "../coerce.ts";
 import { isRecord, requiredString } from "./intake-args.ts";
 import { wrapToolErrors } from "./shared.ts";

@@ -40,49 +40,14 @@ import { listVaultPages } from "../core/vault.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
 import { coerceStr, coerceInt } from "./coerce.ts";
 import type { OutputSchema } from "./output-contract.ts";
-import type { ArtifactStore } from "./artifact-store.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
-import type { ToolCapabilityReport } from "./capabilities.ts";
 import { CAPABILITY_DIAGNOSTIC_TOOL } from "./capabilities.ts";
-
-export interface ServerContext {
-  readonly vault: string;
-  readonly configPath: string | null;
-  readonly repoRoot: string | null;
-  readonly capabilityReport?: ToolCapabilityReport;
-  /**
-   * Per-process preview-artifact store (v0.18.0). Present on the live MCP
-   * server context; `brain_artifact_get` reads parked tool-result payloads
-   * back through it. Optional so manually-built contexts stay valid.
-   */
-  readonly artifactStore?: ArtifactStore;
-}
-
-export interface ToolDefinition {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: Record<string, unknown>;
-  readonly outputSchema?: OutputSchema;
-  /**
-   * Optional MCP preview budget in characters (v0.18.0). When set and
-   * the serialized result exceeds it, the JSON-RPC `tools/call` path
-   * parks the full payload in the artifact store and returns a bounded
-   * preview envelope in `content[0].text` instead, leaving
-   * `structuredContent` intact. A tool with no budget is never truncated
-   * - opt-in only. The CLI bridge ignores the budget entirely.
-   */
-  readonly previewBudget?: number;
-  /**
-   * When true the tool stays callable via `tools/call` but is omitted
-   * from `tools/list` (token-diet): deprecated aliases keep working
-   * for old clients without re-paying their schema in every list.
-   */
-  readonly hidden?: boolean;
-  readonly handler: (
-    ctx: ServerContext,
-    args: Record<string, unknown>,
-  ) => Promise<unknown> | unknown;
-}
+import type {
+  ServerContext,
+  ToolCapabilityReport,
+  ToolDefinition,
+  ToolScope,
+} from "./tool-contract.ts";
 
 // PLACEHOLDER_AGENT_VALUES + normalizeAgentArgument live in
 // `src/core/agent-identity.ts` so the OpenClaw native plugin can import
@@ -294,8 +259,6 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
     },
   },
 };
-
-export type ToolScope = "full" | "writer" | "catalog";
 
 /**
  * Tombstones for the deprecated aliases removed in 1.0.0 (epic

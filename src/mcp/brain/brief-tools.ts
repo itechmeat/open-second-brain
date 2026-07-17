@@ -26,7 +26,7 @@ import { buildOperatorSummary } from "../../core/brain/trust/operator-summary.ts
 import { isoDate } from "../../core/brain/time.ts";
 import { captureReportDelta } from "../../core/brain/report-snapshot.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceIsoDate, coerceFormat } from "../coerce.ts";
 import {

@@ -1,6 +1,6 @@
 import { runBrainWatchdog } from "../core/brain/watchdog.ts";
 import { coerceBool, coerceInt, coerceStr } from "./coerce.ts";
-import type { ToolDefinition } from "./tools.ts";
+import type { ToolDefinition } from "./tool-contract.ts";
 
 export const WATCHDOG_TOOLS: ReadonlyArray<ToolDefinition> = [
   {

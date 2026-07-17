@@ -58,7 +58,7 @@ import {
 import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/brain/query-demand.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tools.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
 
