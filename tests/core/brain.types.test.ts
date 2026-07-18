@@ -93,6 +93,8 @@ describe("BRAIN_* const enums", () => {
       "attribute-write",
       // A2 (t_375e98fd) durability gate transient-content skip
       "durability-skip",
+      // A4 (t_f79b4fe0) write-time conflict advisory
+      "write-conflict-advisory",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

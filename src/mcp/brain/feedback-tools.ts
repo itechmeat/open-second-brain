@@ -23,6 +23,10 @@ import {
 } from "../../core/brain/dream-stage.ts";
 import { BRAIN_ROLES } from "../../core/brain/trust/role.ts";
 import { resolveEffectiveScope, writeSignal } from "../../core/brain/signal.ts";
+import {
+  adviseIncomingFeedback,
+  type WriteConflictAdvisory,
+} from "../../core/brain/write-advisory.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
 import { writePreference } from "../../core/brain/preference.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
@@ -177,6 +181,18 @@ async function toolBrainFeedback(
     process.stderr.write(`warning: append feedback log failed: ${(err as Error).message}\n`);
   }
 
+  // Write-time conflict advisory (A4): compare the incoming principle
+  // against confirmed same-scope preferences and surface a non-blocking
+  // advisory when it closely resembles an existing rule. Computed BEFORE
+  // any force-confirmed write so it never matches the pref this very call
+  // is about to create. The write has already landed; this never blocks it.
+  const advisory: WriteConflictAdvisory | null = adviseIncomingFeedback(ctx.vault, {
+    principle,
+    ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+    agent,
+    now,
+  });
+
   let prefResult: { path: string; id: string } | null = null;
   if (forceConfirmed) {
     // Escape hatch: skip the dream pass and create the confirmed rule now.
@@ -216,6 +232,7 @@ async function toolBrainFeedback(
   return {
     kind: prefResult ? "preference" : "signal",
     ...(mirror !== undefined ? { mirror } : {}),
+    ...(advisory !== null ? { advisory } : {}),
     signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
     signal_absolute_path: resolve(sigResult.path),
     signal_id: sigResult.id,

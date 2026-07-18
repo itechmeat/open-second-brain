@@ -15,7 +15,8 @@
  */
 
 import { dominantSignOf } from "../sign.ts";
-import { findSimilarPairs, tokenise } from "../similarity.ts";
+import { findSimilarPairs, jaccard, tokenise } from "../similarity.ts";
+import { BRAIN_HEALTH_DEFAULTS } from "../policy.ts";
 import {
   BRAIN_PREFERENCE_STATUS,
   type BrainPreferenceStatus,
@@ -238,6 +239,79 @@ export function detectNoteContradictions(
   }
   out.sort((x, y) => x.aId.localeCompare(y.aId) || x.bId.localeCompare(y.bId));
   return out;
+}
+
+/** Evidence for one incoming-vs-confirmed conflict. */
+export interface IncomingConflictEvidence {
+  /** The confirmed preference the incoming principle resembles. */
+  readonly prefId: string;
+  /** Principle-token jaccard that put the pair over the threshold. */
+  readonly jaccard: number;
+}
+
+/**
+ * A write-time conflict advisory: the confirmed same-scope preferences an
+ * incoming feedback principle resembles closely enough to be worth a
+ * second look. Advisory only - it is never a reason to block a write.
+ */
+export interface IncomingConflictAdvisory {
+  /** The scope bucket compared against; `null` for the unscoped bucket. */
+  readonly scope: string | null;
+  /** Non-empty, sorted by descending similarity then id. */
+  readonly conflicts: ReadonlyArray<IncomingConflictEvidence>;
+}
+
+export interface AdviseOnIncomingOptions {
+  /**
+   * Minimum principle jaccard for a confirmed preference to count as the
+   * same subject. Defaults to the health-pass default
+   * (`BRAIN_HEALTH_DEFAULTS.contradiction_jaccard`) so the write-time
+   * advisory and the batch contradiction detector use one threshold.
+   */
+  readonly jaccard?: number;
+}
+
+/**
+ * Compute a write-time conflict advisory for a single incoming feedback
+ * principle against already-confirmed preferences. Reuses the shared
+ * similarity kernel (`tokenise` + `jaccard`) that `detectContradictions`
+ * builds on, and mirrors its bucketing: only confirmed preferences in the
+ * SAME scope bucket are compared (an unscoped incoming signal compares
+ * against the unscoped bucket). Every confirmed same-scope preference
+ * whose principle overlaps the incoming principle at or above the
+ * threshold is returned as evidence.
+ *
+ * Unlike `detectContradictions`, this is a similarity-only signal: it does
+ * not derive preference polarity (that would require the full signal-sign
+ * map, which the write path deliberately does not load - only the scope
+ * bucket is read). High principle overlap is the language-agnostic shape
+ * of "you may be contradicting or duplicating an existing rule"; the
+ * operator judges. Pure and deterministic; never throws on well-formed
+ * input.
+ *
+ * Returns `null` when no confirmed same-scope preference clears the
+ * threshold - i.e. there is nothing to advise about.
+ */
+export function adviseOnIncoming(
+  principle: string,
+  scope: string | undefined,
+  confirmedPrefs: ReadonlyArray<PreferenceForContradiction>,
+  opts: AdviseOnIncomingOptions = {},
+): IncomingConflictAdvisory | null {
+  const threshold = opts.jaccard ?? BRAIN_HEALTH_DEFAULTS.contradiction_jaccard;
+  const bucketKey = scope ?? "";
+  const incomingTokens = tokenise(principle);
+  const conflicts: IncomingConflictEvidence[] = [];
+  for (const p of confirmedPrefs) {
+    if (p.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
+    if ((p.scope ?? "") !== bucketKey) continue;
+    const sim = jaccard(incomingTokens, tokenise(p.principle));
+    if (sim < threshold) continue;
+    conflicts.push({ prefId: p.id, jaccard: sim });
+  }
+  if (conflicts.length === 0) return null;
+  conflicts.sort((a, b) => b.jaccard - a.jaccard || a.prefId.localeCompare(b.prefId));
+  return { scope: scope ?? null, conflicts };
 }
 
 /**

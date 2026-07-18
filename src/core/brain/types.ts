@@ -270,6 +270,17 @@ export const BRAIN_LOG_EVENT_KIND = {
    * counts are discoverable through the log without a separate aggregator.
    */
   durabilitySkip: "durability-skip",
+  /**
+   * `write-conflict-advisory` (A4, t_f79b4fe0) - a feedback signal was
+   * written whose principle closely resembles one or more confirmed
+   * same-scope preferences. The advisory NEVER blocks the write; this
+   * event is its durable, queryable record. Payload carries the `scope`
+   * bucket, the resembling preferences (`conflicts`, one wikilink +
+   * jaccard per line), and the `agent`. Fires only on the operator-facing
+   * feedback path, never on the extracted-fact path, so the two never
+   * double-fire on a single write.
+   */
+  writeConflictAdvisory: "write-conflict-advisory",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
