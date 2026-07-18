@@ -42,6 +42,8 @@ export const BRAIN_ROOT_REL = "Brain";
 /** Vault-relative Brain subdirectory names. */
 export const BRAIN_INBOX_REL = posix.join(BRAIN_ROOT_REL, "inbox");
 export const BRAIN_PROCESSED_REL = posix.join(BRAIN_INBOX_REL, "processed");
+/** Write-approval staging area: `Brain/pending/sig-*.md` (A3, t_e540b093). */
+export const BRAIN_PENDING_REL = posix.join(BRAIN_ROOT_REL, "pending");
 export const BRAIN_PREFERENCES_REL = posix.join(BRAIN_ROOT_REL, "preferences");
 export const BRAIN_RETIRED_REL = posix.join(BRAIN_ROOT_REL, "retired");
 export const BRAIN_SKILL_PROPOSALS_REL = posix.join(BRAIN_ROOT_REL, "skill-proposals");
@@ -97,6 +99,8 @@ export interface BrainDirs {
   readonly inbox: string;
   /** Holding area for signals already folded into a preference. */
   readonly processed: string;
+  /** Write-approval staging area for extracted signals awaiting review. */
+  readonly pending: string;
   readonly preferences: string;
   readonly retired: string;
   readonly log: string;
@@ -119,6 +123,7 @@ export function brainDirs(vault: string): BrainDirs {
     brain,
     inbox: ensureInsideVault(join(vault, BRAIN_INBOX_REL), vault),
     processed: ensureInsideVault(join(vault, BRAIN_PROCESSED_REL), vault),
+    pending: ensureInsideVault(join(vault, BRAIN_PENDING_REL), vault),
     preferences: ensureInsideVault(join(vault, BRAIN_PREFERENCES_REL), vault),
     retired: ensureInsideVault(join(vault, BRAIN_RETIRED_REL), vault),
     log: ensureInsideVault(join(vault, BRAIN_LOG_REL), vault),

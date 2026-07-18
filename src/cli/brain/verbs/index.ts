@@ -102,6 +102,7 @@ export { cmdBrainObligation } from "./obligation.ts";
 export { cmdBrainAgenda } from "./agenda.ts";
 export { cmdBrainToday } from "./today.ts";
 export { cmdBrainApplyMarkers } from "./apply-markers.ts";
+export { cmdBrainPending } from "./pending.ts";
 export {
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,

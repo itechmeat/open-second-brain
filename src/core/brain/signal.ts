@@ -154,6 +154,14 @@ export interface WriteSignalOptions {
    * scope-less behaviour is byte-identical.
    */
   readonly defaultScope?: string;
+  /**
+   * Absolute target directory for the signal file (A3 / t_e540b093).
+   * Absent: writes to `Brain/inbox/` exactly as before - the default path
+   * stays byte-for-byte identical. Supplied (e.g. `Brain/pending/`) it
+   * stages the IDENTICAL frontmatter document elsewhere; the caller is
+   * responsible for passing a directory that resolves inside the vault.
+   */
+  readonly targetDir?: string;
 }
 
 /**
@@ -280,7 +288,7 @@ export function writeSignal(
   const dirs = brainDirs(vault);
   const allocated = allocateSlug({
     vault,
-    targetDir: dirs.inbox,
+    targetDir: options.targetDir ?? dirs.inbox,
     prefix: signalPrefix(sanitised.date),
     slug: sanitised.slug,
     maxAttempts: options.maxSlugAttempts,

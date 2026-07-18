@@ -117,6 +117,7 @@ import {
   cmdBrainAgenda,
   cmdBrainToday,
   cmdBrainApplyMarkers,
+  cmdBrainPending,
   cmdBrainAttentionFlows,
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,
@@ -372,6 +373,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainToday(rest);
       case "apply-markers":
         return await cmdBrainApplyMarkers(rest);
+      case "pending":
+        return await cmdBrainPending(rest);
       case "session-grep":
         return await cmdBrainSessionGrep(rest);
       case "session-describe":

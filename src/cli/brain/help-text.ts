@@ -98,6 +98,7 @@ Brain verbs (observing memory):
   agenda              Synthesize agenda conflicts/focus blocks from provided events
   today               Today dashboard: due obligations, open loops, recent activity, totals
   apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
+  pending             Review the write-approval queue: list | apply <id> | reject <id>
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -690,6 +691,16 @@ export const VERB_HELP: Record<string, string> = {
     "(annotated) so a re-run is idempotent. Unresolvable or invalid targets are\n" +
     "reported with an error code and candidates and left unconsumed. Source files\n" +
     "come from --path (repeatable) or notes.read_paths.\n",
+  pending:
+    "usage: o2b brain pending list [--vault <path>] [--json]\n" +
+    "       o2b brain pending apply <id> [--vault <path>] [--json]\n" +
+    "       o2b brain pending reject <id> --reason <text> [--vault <path>] [--json]\n" +
+    "Review the opt-in write-approval queue (write_approval.enabled). When the\n" +
+    "toggle is on, extracted signals are staged into Brain/pending/ instead of\n" +
+    "Brain/inbox/. list shows the staged signals; apply moves one into\n" +
+    "Brain/inbox/ unchanged (entity anchors and dedup hash preserved); reject\n" +
+    "moves it to Brain/retired/ with retire-shaped frontmatter. Applying or\n" +
+    "rejecting a missing id exits 2 (never a silent no-op).\n",
   agenda:
     "usage: o2b brain agenda --events <file|-> [args]\n" +
     "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +

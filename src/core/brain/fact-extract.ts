@@ -31,6 +31,8 @@ import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { classifyDurability, resolveDurabilityDenylist } from "./gates/durability.ts";
+import { resolveWriteApprovalEnabled } from "./pending.ts";
+import { brainDirs } from "./paths.ts";
 import type { DedupIndexEntry } from "./dedup-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import {
@@ -203,6 +205,14 @@ export interface RouteFactsInput {
    * exercised without touching the default config path.
    */
   readonly durabilityDenylist?: ReadonlyArray<RegExp>;
+  /**
+   * Write-approval toggle (A3). When omitted the router resolves
+   * `write_approval.enabled` from the plugin config on a non-dry write;
+   * tests inject the boolean directly. Enabled -> the durable signal is
+   * STAGED into `Brain/pending/`; disabled -> it lands in `Brain/inbox/`
+   * exactly as before (byte-for-byte).
+   */
+  readonly writeApprovalEnabled?: boolean;
 }
 
 export interface RouteFactsResult {
@@ -321,6 +331,20 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
     }
   }
 
+  // Staging decision (A3), resolved once AFTER the durability gate would run:
+  // an injected toggle wins (tests); otherwise the config decides. A durable
+  // signal is staged into Brain/pending/ when enabled, or written to
+  // Brain/inbox/ (targetDir undefined = byte-for-byte legacy path) when not.
+  let writeApprovalEnabled = input.writeApprovalEnabled ?? false;
+  if (input.writeApprovalEnabled === undefined && !input.dryRun) {
+    try {
+      writeApprovalEnabled = resolveWriteApprovalEnabled();
+    } catch {
+      writeApprovalEnabled = false;
+    }
+  }
+  const targetDir = writeApprovalEnabled ? brainDirs(vault).pending : undefined;
+
   for (const fact of input.facts) {
     const hash = factDedupHash(fact);
     // Chain order: dedup -> durability -> staging -> write. A deduped item
@@ -363,20 +387,24 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
     const anchors = entityAnchors(anchorables, fact.text);
     const topic = `fact-${fact.family}`;
     try {
-      const result = writeSignal(vault, {
-        topic,
-        signal: "positive",
-        agent: input.agent,
-        principle: fact.text,
-        created_at: isoSecond(input.now),
-        date: isoDate(input.now),
-        slug: topic,
-        source: [`[[${input.sessionRef}]]`],
-        source_type: BRAIN_SIGNAL_SOURCE_TYPE.extracted,
-        dedup_hash: hash,
-        session_ref: input.sessionRef,
-        ...(anchors.length > 0 ? { raw: `entities: ${anchors.join(", ")}` } : {}),
-      });
+      const result = writeSignal(
+        vault,
+        {
+          topic,
+          signal: "positive",
+          agent: input.agent,
+          principle: fact.text,
+          created_at: isoSecond(input.now),
+          date: isoDate(input.now),
+          slug: topic,
+          source: [`[[${input.sessionRef}]]`],
+          source_type: BRAIN_SIGNAL_SOURCE_TYPE.extracted,
+          dedup_hash: hash,
+          session_ref: input.sessionRef,
+          ...(anchors.length > 0 ? { raw: `entities: ${anchors.join(", ")}` } : {}),
+        },
+        targetDir !== undefined ? { targetDir } : {},
+      );
       input.dedup.set(hash, { id: result.id, path: result.path });
       created++;
     } catch {
