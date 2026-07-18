@@ -15,17 +15,21 @@
 
 import {
   backfillOutcome,
+  compareDecisions,
   findSimilarDecisions,
   listDecisions,
+  listRatedDecisions,
   recordDecision,
   showDecision,
+  updateRating,
   DecisionError,
 } from "../../core/brain/decisions/record.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { coerceStr } from "../coerce.ts";
+import { coerceBool, coerceInt, coerceStr, coerceStrList } from "../coerce.ts";
 import { wrapToolErrors } from "./shared.ts";
+import { DECISION_RATING_MAX, DECISION_RATING_MIN } from "../../core/brain/decisions/record.ts";
 
 const TOOL = "brain_decision";
 
@@ -45,6 +49,17 @@ async function toolBrainDecision(
         const reviewDate = coerceStr(args, "review_date", true)!;
         const premortem = coerceStr(args, "premortem", false) ?? undefined;
         const notes = coerceStr(args, "notes", false) ?? undefined;
+        const rating =
+          args["rating"] === undefined
+            ? undefined
+            : coerceInt(
+                args,
+                "rating",
+                DECISION_RATING_MIN,
+                DECISION_RATING_MIN,
+                DECISION_RATING_MAX,
+              );
+        const rationale = coerceStr(args, "rationale", false) ?? undefined;
         const res = recordDecision(ctx.vault, {
           title,
           chosen,
@@ -52,6 +67,8 @@ async function toolBrainDecision(
           reviewDate,
           ...(premortem ? { premortem } : {}),
           ...(notes ? { notes } : {}),
+          ...(rating !== undefined ? { rating } : {}),
+          ...(rationale ? { rationale } : {}),
           agent: agent ?? "",
         });
         return {
@@ -61,6 +78,40 @@ async function toolBrainDecision(
           review_date: res.record.reviewDate,
           review_obligation: res.reviewObligationSlug,
           obligation_created: res.obligationCreated,
+        };
+      }
+      case "rate": {
+        const slug = coerceStr(args, "slug", true)!;
+        const rating = coerceInt(
+          args,
+          "rating",
+          DECISION_RATING_MIN,
+          DECISION_RATING_MIN,
+          DECISION_RATING_MAX,
+        );
+        const rationale = coerceStr(args, "rationale", false) ?? undefined;
+        const res = updateRating(ctx.vault, {
+          slug,
+          rating,
+          ...(rationale ? { rationale } : {}),
+          ...(agent ? { agent } : {}),
+        });
+        return { action, id: res.id, slug: res.slug, rating: res.rating, rationale: res.rationale };
+      }
+      case "compare": {
+        const slugs = coerceStrList(args, "slugs");
+        const rows = compareDecisions(ctx.vault, slugs);
+        return {
+          action,
+          decisions: rows.map((d) => ({
+            id: d.id,
+            slug: d.slug,
+            title: d.title,
+            chosen: d.chosen,
+            rating: d.rating,
+            rationale: d.rationale,
+            outcome: d.outcome,
+          })),
         };
       }
       case "outcome": {
@@ -90,7 +141,8 @@ async function toolBrainDecision(
         };
       }
       case "list": {
-        const all = listDecisions(ctx.vault);
+        const ratedOnly = coerceBool(args, "rated");
+        const all = ratedOnly ? listRatedDecisions(ctx.vault) : listDecisions(ctx.vault);
         return {
           action,
           decisions: all.map((d) => ({
@@ -98,6 +150,7 @@ async function toolBrainDecision(
             slug: d.slug,
             title: d.title,
             chosen: d.chosen,
+            rating: d.rating,
             review_date: d.reviewDate,
             outcome: d.outcome,
           })),
@@ -124,7 +177,7 @@ async function toolBrainDecision(
       default:
         throw new MCPError(
           INVALID_PARAMS,
-          `${TOOL}: 'action' must be one of record, outcome, show, list, similar`,
+          `${TOOL}: 'action' must be one of record, outcome, rate, show, list, compare, similar`,
         );
     }
   });
@@ -134,13 +187,13 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Decision-record note family. action: record captures a `type: decision` note (chosen, assumption, review_date, optional premortem) and opens one review obligation idempotently; outcome backfills the hindsight outcome; show/list read decisions; similar surfaces past similar decisions with outcomes.",
+      "Decision-record note family. action: record captures a `type: decision` note (chosen, assumption, review_date, optional premortem/rating) + opens a review obligation; outcome backfills hindsight; rate sets a rating; show/list (rated sorts by rating)/compare read; similar finds past decisions.",
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["record", "outcome", "show", "list", "similar"],
+          enum: ["record", "outcome", "rate", "show", "list", "compare", "similar"],
           description: "Which decision operation to run.",
         },
         title: {
@@ -164,8 +217,24 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description: "record: optional pre-mortem (how could this go wrong).",
         },
         notes: { type: "string", description: "record: optional free-form body notes." },
-        slug: { type: "string", description: "outcome/show: decision slug." },
+        slug: { type: "string", description: "outcome/rate/show: decision slug." },
         outcome: { type: "string", description: "outcome: hindsight outcome to backfill." },
+        rating: {
+          type: "integer",
+          minimum: DECISION_RATING_MIN,
+          maximum: DECISION_RATING_MAX,
+          description: `record/rate: quality rating in [${DECISION_RATING_MIN}, ${DECISION_RATING_MAX}].`,
+        },
+        rationale: { type: "string", description: "record/rate: justification for the rating." },
+        rated: {
+          type: "boolean",
+          description: "list: return only rated decisions, sorted by rating.",
+        },
+        slugs: {
+          type: "array",
+          items: { type: "string" },
+          description: "compare: decision slugs to read side by side.",
+        },
         agent: {
           type: "string",
           description: "Optional agent identity override; defaults to the server-resolved name.",

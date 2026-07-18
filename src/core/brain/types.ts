@@ -339,6 +339,15 @@ export const BRAIN_LOG_EVENT_KIND = {
    * later hindsight backfill stay separately auditable.
    */
   decisionOutcome: "decision-outcome",
+  /**
+   * `decision-rating` (Belief lifecycle suite, B2, t_6fe43fcc) - the
+   * `rating` (and optional `rationale`) of an existing decision note was
+   * set or changed. Payload carries the `decision` wikilink, the new
+   * `rating`, an optional `rationale`, and the `agent`. Distinct from
+   * `decision-outcome` because a rating is a quality self-assessment, not
+   * the observed outcome; overloading either kind would blur the audit.
+   */
+  decisionRating: "decision-rating",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

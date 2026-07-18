@@ -17,10 +17,13 @@
 import { defaultConfigPath } from "../../../core/config.ts";
 import {
   backfillOutcome,
+  compareDecisions,
   findSimilarDecisions,
   listDecisions,
+  listRatedDecisions,
   recordDecision,
   showDecision,
+  updateRating,
 } from "../../../core/brain/decisions/record.ts";
 import { normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
@@ -43,13 +46,16 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
     premortem: { type: "string" },
     notes: { type: "string" },
     outcome: { type: "string" },
+    rating: { type: "string" },
+    rationale: { type: "string" },
+    rated: { type: "boolean" },
     json: { type: "boolean" },
   });
 
   const action = positional[0];
   if (action === undefined) {
     return usageError(
-      "brain decision requires an action: record | outcome | show | list | similar",
+      "brain decision requires an action: record | outcome | rate | show | list | compare | similar",
     );
   }
 
@@ -72,6 +78,12 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
         }
         const premortem = normalizeFlagString(flags["premortem"]);
         const notes = normalizeFlagString(flags["notes"]);
+        const ratingRaw = normalizeFlagString(flags["rating"]);
+        const rating = ratingRaw === null ? undefined : Number(ratingRaw);
+        if (rating !== undefined && !Number.isFinite(rating)) {
+          return usageError("brain decision record --rating must be a number");
+        }
+        const rationale = normalizeFlagString(flags["rationale"]);
         const res = recordDecision(vault, {
           title,
           chosen,
@@ -79,6 +91,8 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
           reviewDate,
           ...(premortem ? { premortem } : {}),
           ...(notes ? { notes } : {}),
+          ...(rating !== undefined ? { rating } : {}),
+          ...(rationale ? { rationale } : {}),
           agent: explicitAgent ?? "",
           configPath: config,
         });
@@ -114,6 +128,58 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
         }
         return 0;
       }
+      case "rate": {
+        const slug = positional[1];
+        const ratingRaw = normalizeFlagString(flags["rating"]);
+        if (slug === undefined || ratingRaw === null) {
+          return usageError("brain decision rate requires <slug> --rating <n>");
+        }
+        const rating = Number(ratingRaw);
+        if (!Number.isFinite(rating)) {
+          return usageError("brain decision rate --rating must be a number");
+        }
+        const rationale = normalizeFlagString(flags["rationale"]);
+        const res = updateRating(vault, {
+          slug,
+          rating,
+          ...(rationale ? { rationale } : {}),
+          ...(explicitAgent ? { agent: explicitAgent } : {}),
+          configPath: config,
+        });
+        if (wantsJson) {
+          okJson({ id: res.id, slug: res.slug, rating: res.rating, rationale: res.rationale });
+        } else {
+          ok(`rated ${res.id}: ${res.rating}`);
+        }
+        return 0;
+      }
+      case "compare": {
+        const slugs = positional.slice(1);
+        if (slugs.length === 0) {
+          return usageError("brain decision compare requires one or more slugs");
+        }
+        const rows = compareDecisions(vault, slugs);
+        if (wantsJson) {
+          okJson({
+            decisions: rows.map((d) => ({
+              id: d.id,
+              slug: d.slug,
+              title: d.title,
+              chosen: d.chosen,
+              rating: d.rating,
+              rationale: d.rationale,
+              outcome: d.outcome,
+            })),
+          });
+        } else if (rows.length === 0) {
+          ok("no matching decisions");
+        } else {
+          for (const d of rows) {
+            ok(`${d.id}: ${d.chosen} (rating ${d.rating ?? "none"})`);
+          }
+        }
+        return 0;
+      }
       case "show": {
         const slug = positional[1];
         if (slug === undefined) return usageError("brain decision show requires a slug");
@@ -132,6 +198,8 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
             review_date: res.reviewDate,
             outcome: res.outcome,
             premortem: res.premortem,
+            rating: res.rating,
+            rationale: res.rationale,
           });
         } else {
           ok(`${res.id}: chose "${res.chosen}" (review ${res.reviewDate ?? "none"})`);
@@ -139,7 +207,8 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
         return 0;
       }
       case "list": {
-        const all = listDecisions(vault);
+        const ratedOnly = flags["rated"] === true;
+        const all = ratedOnly ? listRatedDecisions(vault) : listDecisions(vault);
         if (wantsJson) {
           okJson({
             decisions: all.map((d) => ({
@@ -147,14 +216,18 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
               slug: d.slug,
               title: d.title,
               chosen: d.chosen,
+              rating: d.rating,
               review_date: d.reviewDate,
               outcome: d.outcome,
             })),
           });
         } else if (all.length === 0) {
-          ok("no decisions");
+          ok(ratedOnly ? "no rated decisions" : "no decisions");
         } else {
-          for (const d of all) ok(`${d.id}: ${d.chosen}${d.outcome ? ` -> ${d.outcome}` : ""}`);
+          for (const d of all) {
+            const rt = d.rating !== null ? ` [${d.rating}]` : "";
+            ok(`${d.id}${rt}: ${d.chosen}${d.outcome ? ` -> ${d.outcome}` : ""}`);
+          }
         }
         return 0;
       }

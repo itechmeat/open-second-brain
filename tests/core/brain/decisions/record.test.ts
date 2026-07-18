@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { mkdirSync, mkdtempSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,14 +7,18 @@ import { parseFrontmatter } from "../../../../src/core/vault.ts";
 import { readLogDay } from "../../../../src/core/brain/log-jsonl.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 import { listObligations } from "../../../../src/core/brain/obligations.ts";
+import { queryByTopic } from "../../../../src/core/brain/query.ts";
 import {
   DECISION_TYPE,
   DecisionError,
   backfillOutcome,
+  compareDecisions,
   findSimilarDecisions,
   listDecisions,
+  listRatedDecisions,
   recordDecision,
   showDecision,
+  updateRating,
 } from "../../../../src/core/brain/decisions/record.ts";
 
 let vault: string;
@@ -145,6 +149,74 @@ describe("showDecision / listDecisions", () => {
   test("returns empty when no decisions dir exists", () => {
     expect(listDecisions(vault)).toEqual([]);
     expect(showDecision(vault, "missing")).toBeNull();
+  });
+});
+
+describe("rating and rationale (B2)", () => {
+  test("captures rating and rationale at record time", () => {
+    const res = recordDecision(vault, baseInput({ rating: 4, rationale: "worked well" }));
+    expect(res.record.rating).toBe(4);
+    expect(res.record.rationale).toBe("worked well");
+    const [meta] = parseFrontmatter(res.record.path);
+    // The flat frontmatter parser returns scalars as strings.
+    expect(meta["rating"]).toBe("4");
+    expect(meta["rationale"]).toBe("worked well");
+  });
+
+  test("unrated decisions render without rating fields (byte-identical shape)", () => {
+    const res = recordDecision(vault, baseInput());
+    expect(res.record.rating).toBeNull();
+    expect(res.record.rationale).toBe("");
+    const raw = readFileSync(res.record.path, "utf8");
+    expect(raw).not.toContain("rating:");
+    expect(raw).not.toContain("rationale:");
+  });
+
+  test("updateRating sets the rating, logs it, and rejects out-of-range values", () => {
+    const res = recordDecision(vault, baseInput());
+    const updated = updateRating(vault, {
+      slug: res.record.slug,
+      rating: 5,
+      rationale: "great in hindsight",
+      agent: "tester",
+      now: new Date("2026-11-02T09:00:00Z"),
+    });
+    expect(updated.rating).toBe(5);
+    expect(updated.rationale).toBe("great in hindsight");
+
+    const { entries } = readLogDay(vault, "2026-11-02");
+    const rated = entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.decisionRating);
+    expect(rated.length).toBe(1);
+
+    expect(() =>
+      updateRating(vault, { slug: res.record.slug, rating: 6, agent: "tester" }),
+    ).toThrow(DecisionError);
+    expect(() =>
+      updateRating(vault, { slug: res.record.slug, rating: 0, agent: "tester" }),
+    ).toThrow(DecisionError);
+  });
+
+  test("listRatedDecisions returns only rated decisions, sorted by rating desc", () => {
+    recordDecision(vault, baseInput({ title: "low one", chosen: "a", rating: 2 }));
+    recordDecision(vault, baseInput({ title: "high one", chosen: "b", rating: 5 }));
+    recordDecision(vault, baseInput({ title: "unrated one", chosen: "c" }));
+    const rated = listRatedDecisions(vault);
+    expect(rated.map((d) => d.rating)).toEqual([5, 2]);
+  });
+
+  test("compareDecisions returns the requested decisions side by side", () => {
+    const a = recordDecision(vault, baseInput({ title: "opt a", chosen: "a", rating: 3 }));
+    const b = recordDecision(vault, baseInput({ title: "opt b", chosen: "b", rating: 4 }));
+    const compared = compareDecisions(vault, [a.record.slug, b.record.slug]);
+    expect(compared.map((d) => d.slug)).toEqual([a.record.slug, b.record.slug]);
+    expect(compared[1]!.rating).toBe(4);
+  });
+
+  test("rated decisions do not pollute signal/preference recall", () => {
+    recordDecision(vault, baseInput({ title: "deploy runtime choice", chosen: "Bun", rating: 5 }));
+    const recall = queryByTopic(vault, "deploy");
+    expect(recall.signals.length).toBe(0);
+    expect(recall.preference).toBeNull();
   });
 });
 

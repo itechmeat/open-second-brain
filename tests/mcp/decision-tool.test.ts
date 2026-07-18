@@ -95,6 +95,51 @@ describe("brain_decision tool", () => {
     expect((similar["similar"] as unknown[]).length).toBeGreaterThanOrEqual(1);
   });
 
+  test("rate, list rated, and compare (B2)", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    await call(server, {
+      action: "record",
+      title: "Option A",
+      chosen: "A",
+      assumption: "x",
+      review_date: "2026-12-01",
+      rating: 4,
+    });
+    await call(server, {
+      action: "record",
+      title: "Option B",
+      chosen: "B",
+      assumption: "y",
+      review_date: "2026-12-01",
+    });
+    const rated = payload(await call(server, { action: "rate", slug: "option-b", rating: 5 }));
+    expect(rated["rating"]).toBe(5);
+
+    const list = payload(await call(server, { action: "list", rated: true }));
+    const decisions = list["decisions"] as Array<{ rating: number }>;
+    expect(decisions.map((d) => d.rating)).toEqual([5, 4]);
+
+    const compared = payload(
+      await call(server, { action: "compare", slugs: ["option-a", "option-b"] }),
+    );
+    expect((compared["decisions"] as unknown[]).length).toBe(2);
+  });
+
+  test("out-of-range rating returns an error", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    await call(server, {
+      action: "record",
+      title: "Option C",
+      chosen: "C",
+      assumption: "z",
+      review_date: "2026-12-01",
+    });
+    const res = await call(server, { action: "rate", slug: "option-c", rating: 9 });
+    expect(res.error).toBeDefined();
+  });
+
   test("malformed input returns an error result", async () => {
     const server = new MCPServer({ vault, configPath: null });
     await initialize(server);

@@ -191,13 +191,15 @@ export const VERB_HELP: Record<string, string> = {
     "--replaced <id> follows the supersede chain to the live tip; --contests <id>\n" +
     "lists contesting claims; --rebuild rebuilds and persists Brain/claim-graph.json.\n",
   decision:
-    "usage: o2b brain decision <record|outcome|show|list|similar> [...] [--vault <path>] [--json]\n" +
+    "usage: o2b brain decision <record|outcome|rate|show|list|compare|similar> [...] [--vault <path>] [--json]\n" +
     "Decision-record note family under Brain/decisions/. record --title <t> --chosen <c>\n" +
-    "--assumption <a> --review-date <YYYY-MM-DD> [--premortem <p>] [--notes <n>] captures a\n" +
-    "type: decision note and opens one review obligation idempotently; outcome <slug>\n" +
-    "--outcome <text> backfills the hindsight outcome; show <slug> and list read stored\n" +
-    "decisions; similar --title <t> [--chosen <c>] surfaces historically similar decisions\n" +
-    "with their recorded outcomes.\n",
+    "--assumption <a> --review-date <YYYY-MM-DD> [--premortem <p>] [--notes <n>]\n" +
+    "[--rating <1-5>] [--rationale <r>] captures a type: decision note and opens one review\n" +
+    "obligation idempotently; outcome <slug> --outcome <text> backfills the hindsight\n" +
+    "outcome; rate <slug> --rating <1-5> [--rationale <r>] sets a rating (logged); show\n" +
+    "<slug> and list [--rated] read stored decisions (--rated sorts by rating); compare\n" +
+    "<slug...> reads decisions side by side; similar --title <t> [--chosen <c>] surfaces\n" +
+    "historically similar decisions with their recorded outcomes.\n",
   digest:
     "usage: o2b brain digest [--vault <path>] [--since <ISO>] [--until <ISO>] [--json] [--silent-if-empty]\n" +
     "Renders the 24-hour change digest. Empty + --silent-if-empty exits 2.\n",

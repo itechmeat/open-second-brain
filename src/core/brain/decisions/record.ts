@@ -55,6 +55,10 @@ export const DECISION_REVIEW_CADENCE = "yearly";
 export const DECISION_SIMILARITY_THRESHOLD = 0.2;
 /** Prefix applied to the review-obligation title. */
 const REVIEW_OBLIGATION_TITLE_PREFIX = "Review decision:";
+/** Inclusive lower bound of a decision rating (B2). */
+export const DECISION_RATING_MIN = 1;
+/** Inclusive upper bound of a decision rating (B2). */
+export const DECISION_RATING_MAX = 5;
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -88,6 +92,15 @@ export interface DecisionRecord {
   readonly premortem: string | null;
   readonly createdAt: string;
   readonly agent: string;
+  /**
+   * Quality self-assessment in [{@link DECISION_RATING_MIN},
+   * {@link DECISION_RATING_MAX}] (B2). `null` when the decision is
+   * unrated; an unrated decision omits the frontmatter key entirely so
+   * its on-disk shape is byte-identical to a B1 decision.
+   */
+  readonly rating: number | null;
+  /** Free-form justification for the rating (B2); empty when unrated. */
+  readonly rationale: string;
   /** Free-form operator prose from the note body. */
   readonly notes: string;
   readonly path: string;
@@ -101,6 +114,10 @@ export interface RecordDecisionInput {
   readonly reviewDate: string;
   readonly premortem?: string;
   readonly notes?: string;
+  /** Optional quality rating captured at record time (B2). */
+  readonly rating?: number;
+  /** Optional rationale for the rating (B2). */
+  readonly rationale?: string;
   readonly agent: string;
   readonly now?: Date;
   readonly configPath?: string;
@@ -117,6 +134,15 @@ export interface RecordDecisionResult {
 export interface BackfillOutcomeInput {
   readonly slug: string;
   readonly outcome: string;
+  readonly agent?: string;
+  readonly now?: Date;
+  readonly configPath?: string;
+}
+
+export interface UpdateRatingInput {
+  readonly slug: string;
+  readonly rating: number;
+  readonly rationale?: string;
   readonly agent?: string;
   readonly now?: Date;
   readonly configPath?: string;
@@ -171,6 +197,33 @@ function requireReviewDate(value: string): string {
   }
 }
 
+/**
+ * Validate a rating: an integer in the inclusive
+ * [{@link DECISION_RATING_MIN}, {@link DECISION_RATING_MAX}] band.
+ */
+function requireRating(value: number): number {
+  if (!Number.isInteger(value) || value < DECISION_RATING_MIN || value > DECISION_RATING_MAX) {
+    throw new DecisionError(
+      `decision: rating must be an integer in [${DECISION_RATING_MIN}, ${DECISION_RATING_MAX}]`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Parse a stored rating, tolerating a hand-edited value; null when
+ * absent or invalid. The flat frontmatter parser returns scalars as
+ * strings, so a numeric string (`"4"`) is accepted as well as a number.
+ */
+function parseRating(value: unknown): number | null {
+  let n: number;
+  if (typeof value === "number") n = value;
+  else if (typeof value === "string" && value.trim() !== "") n = Number(value);
+  else return null;
+  if (!Number.isInteger(n) || n < DECISION_RATING_MIN || n > DECISION_RATING_MAX) return null;
+  return n;
+}
+
 // ----- (De)serialization ----------------------------------------------------
 
 function render(record: Omit<DecisionRecord, "path">): string {
@@ -185,6 +238,12 @@ function render(record: Omit<DecisionRecord, "path">): string {
     `outcome: ${JSON.stringify(record.outcome)}`,
   ];
   if (record.premortem !== null) lines.push(`premortem: ${JSON.stringify(record.premortem)}`);
+  // Rating fields are omitted entirely when unset so an unrated decision
+  // is byte-identical to a B1-era note (additive-only surface).
+  if (record.rating !== null) {
+    lines.push(`rating: ${record.rating}`);
+    lines.push(`rationale: ${JSON.stringify(record.rationale)}`);
+  }
   lines.push(`created_at: ${record.createdAt}`);
   lines.push(`agent: ${JSON.stringify(record.agent)}`);
   lines.push("---", "", record.notes, "");
@@ -218,6 +277,8 @@ function parsePage(vault: string, slug: string): DecisionRecord | null {
     premortem: premortemRaw.length > 0 ? premortemRaw : null,
     createdAt: typeof meta["created_at"] === "string" ? meta["created_at"] : "",
     agent: typeof meta["agent"] === "string" ? meta["agent"] : "",
+    rating: parseRating(meta["rating"]),
+    rationale: typeof meta["rationale"] === "string" ? meta["rationale"] : "",
     notes: body.trim(),
     path,
   });
@@ -267,6 +328,11 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
   const assumption = requireField(input.assumption, "assumption");
   const reviewDate = requireReviewDate(input.reviewDate);
   const premortem = optionalField(input.premortem);
+  const rating = input.rating !== undefined ? requireRating(input.rating) : null;
+  const rationale =
+    rating !== null
+      ? sanitiseTextField(input.rationale ?? "", { maxLen: FIELD_MAX_LEN, singleLine: true }).trim()
+      : "";
   const now = input.now ?? new Date();
   const slug = slugify(title);
 
@@ -289,6 +355,8 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
     premortem,
     createdAt: isoSecond(now),
     agent,
+    rating,
+    rationale,
     notes: (input.notes ?? "").trim(),
   };
 
@@ -353,6 +421,69 @@ export function backfillOutcome(vault: string, input: BackfillOutcomeInput): Dec
   });
 
   return Object.freeze({ ...next, path: prior.path });
+}
+
+// ----- Rating (B2) ----------------------------------------------------------
+
+/**
+ * Set or change the `rating` (and optional `rationale`) of an existing
+ * decision (a logged mutation). Preserves every other field and the body.
+ * Rejects an unknown slug or an out-of-range rating with a typed error.
+ */
+export function updateRating(vault: string, input: UpdateRatingInput): DecisionRecord {
+  const slug = slugify(input.slug);
+  const prior = parsePage(vault, slug);
+  if (prior === null) throw new DecisionError(`no decision: ${slug}`);
+  const rating = requireRating(input.rating);
+  const rationale =
+    input.rationale !== undefined
+      ? sanitiseTextField(input.rationale, { maxLen: FIELD_MAX_LEN, singleLine: true }).trim()
+      : prior.rationale;
+  const now = input.now ?? new Date();
+
+  const explicitAgent = normalizeAgentArgument(input.agent ?? null);
+  const agent = explicitAgent ?? resolveAgentName(input.configPath);
+
+  const { path: _path, ...rest } = prior;
+  const next: Omit<DecisionRecord, "path"> = { ...rest, rating, rationale };
+  atomicWriteFileSync(prior.path, render(next));
+
+  appendLogEvent(vault, {
+    timestamp: isoSecond(now),
+    eventType: BRAIN_LOG_EVENT_KIND.decisionRating,
+    body: {
+      decision: `[[${prior.id}]]`,
+      rating: String(rating),
+      ...(rationale ? { rationale } : {}),
+      agent,
+    },
+  });
+
+  return Object.freeze({ ...next, path: prior.path });
+}
+
+/**
+ * Every rated decision, sorted by descending rating (ties break on slug).
+ * Unrated decisions are excluded - this is the rated-capture list surface,
+ * separate from ordinary signal/preference recall.
+ */
+export function listRatedDecisions(vault: string): DecisionRecord[] {
+  return listDecisions(vault)
+    .filter((d) => d.rating !== null)
+    .toSorted((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || a.slug.localeCompare(b.slug));
+}
+
+/**
+ * Read a specific set of decisions side by side for comparison, in the
+ * order requested. Unknown slugs are skipped (a comparison of what exists).
+ */
+export function compareDecisions(vault: string, slugs: ReadonlyArray<string>): DecisionRecord[] {
+  const out: DecisionRecord[] = [];
+  for (const slug of slugs) {
+    const page = parsePage(vault, slugify(slug));
+    if (page !== null) out.push(page);
+  }
+  return out;
 }
 
 // ----- Reads ----------------------------------------------------------------

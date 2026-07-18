@@ -98,6 +98,60 @@ describe("o2b brain decision", () => {
     expect(decisions[0].outcome).toBe("held up");
   });
 
+  test("rate and list --rated (B2)", async () => {
+    await runCli(
+      [
+        "brain",
+        "decision",
+        "record",
+        "--config",
+        configPath,
+        "--title",
+        "Option A",
+        "--chosen",
+        "A",
+        "--assumption",
+        "x",
+        "--review-date",
+        "2026-12-01",
+        "--rating",
+        "4",
+      ],
+      { env },
+    );
+    await runCli(
+      [
+        "brain",
+        "decision",
+        "record",
+        "--config",
+        configPath,
+        "--title",
+        "Option B",
+        "--chosen",
+        "B",
+        "--assumption",
+        "y",
+        "--review-date",
+        "2026-12-01",
+      ],
+      { env },
+    );
+    const rate = await runCli(
+      ["brain", "decision", "rate", "option-b", "--config", configPath, "--rating", "5", "--json"],
+      { env },
+    );
+    expect(rate.returncode).toBe(0);
+    expect(JSON.parse(rate.stdout).rating).toBe(5);
+
+    const list = await runCli(
+      ["brain", "decision", "list", "--rated", "--config", configPath, "--json"],
+      { env },
+    );
+    const { decisions } = JSON.parse(list.stdout);
+    expect(decisions.map((d: { rating: number }) => d.rating)).toEqual([5, 4]);
+  });
+
   test("missing required flags exit non-zero", async () => {
     const r = await runCli(
       ["brain", "decision", "record", "--config", configPath, "--title", "x"],
