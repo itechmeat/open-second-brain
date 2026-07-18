@@ -95,6 +95,32 @@ describe("brain_decision tool", () => {
     expect((similar["similar"] as unknown[]).length).toBeGreaterThanOrEqual(1);
   });
 
+  test("show surfaces commitment when set and omits it when unset (B3)", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    await call(server, {
+      action: "record",
+      title: "Committed choice",
+      chosen: "X",
+      assumption: "a",
+      review_date: "2026-12-01",
+      commitment: "decided",
+    });
+    await call(server, {
+      action: "record",
+      title: "Loose choice",
+      chosen: "Y",
+      assumption: "b",
+      review_date: "2026-12-01",
+    });
+    const withCommitment = payload(
+      await call(server, { action: "show", slug: "committed-choice" }),
+    );
+    expect(withCommitment["commitment"]).toBe("decided");
+    const without = payload(await call(server, { action: "show", slug: "loose-choice" }));
+    expect("commitment" in without).toBe(false);
+  });
+
   test("rate, list rated, and compare (B2)", async () => {
     const server = new MCPServer({ vault, configPath: null });
     await initialize(server);

@@ -211,6 +211,9 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
             premortem: res.premortem,
             rating: res.rating,
             rationale: res.rationale,
+            // Commitment tier (B3): emitted only when set so an unset
+            // decision stays byte-identical to a pre-B3 response.
+            ...(res.commitment !== null ? { commitment: res.commitment } : {}),
           });
         } else {
           ok(`${res.id}: chose "${res.chosen}" (review ${res.reviewDate ?? "none"})`);
@@ -230,6 +233,7 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
               rating: d.rating,
               review_date: d.reviewDate,
               outcome: d.outcome,
+              ...(d.commitment !== null ? { commitment: d.commitment } : {}),
             })),
           });
         } else if (all.length === 0) {

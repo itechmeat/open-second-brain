@@ -206,6 +206,68 @@ describe("o2b brain decision", () => {
     expect(parsed.surfaced.slug).toBe("adopt-bun-runtime");
   });
 
+  test("show/list surface commitment when set and omit it when unset (B3)", async () => {
+    await runCli(
+      [
+        "brain",
+        "decision",
+        "record",
+        "--config",
+        configPath,
+        "--title",
+        "Committed choice",
+        "--chosen",
+        "X",
+        "--assumption",
+        "a",
+        "--review-date",
+        "2026-12-01",
+        "--commitment",
+        "decided",
+      ],
+      { env },
+    );
+    await runCli(
+      [
+        "brain",
+        "decision",
+        "record",
+        "--config",
+        configPath,
+        "--title",
+        "Loose choice",
+        "--chosen",
+        "Y",
+        "--assumption",
+        "b",
+        "--review-date",
+        "2026-12-01",
+      ],
+      { env },
+    );
+
+    const shownSet = await runCli(
+      ["brain", "decision", "show", "committed-choice", "--config", configPath, "--json"],
+      { env },
+    );
+    expect(JSON.parse(shownSet.stdout).commitment).toBe("decided");
+
+    const shownUnset = await runCli(
+      ["brain", "decision", "show", "loose-choice", "--config", configPath, "--json"],
+      { env },
+    );
+    expect("commitment" in JSON.parse(shownUnset.stdout)).toBe(false);
+
+    const list = await runCli(["brain", "decision", "list", "--config", configPath, "--json"], {
+      env,
+    });
+    const { decisions } = JSON.parse(list.stdout);
+    const committed = decisions.find((d: { slug: string }) => d.slug === "committed-choice");
+    const loose = decisions.find((d: { slug: string }) => d.slug === "loose-choice");
+    expect(committed.commitment).toBe("decided");
+    expect("commitment" in loose).toBe(false);
+  });
+
   test("missing required flags exit non-zero", async () => {
     const r = await runCli(
       ["brain", "decision", "record", "--config", configPath, "--title", "x"],

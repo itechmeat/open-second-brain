@@ -147,6 +147,9 @@ async function toolBrainDecision(
           review_date: res.reviewDate,
           outcome: res.outcome,
           premortem: res.premortem,
+          // Commitment tier (B3): emitted only when set so an unset
+          // decision stays byte-identical to a pre-B3 response.
+          ...(res.commitment !== null ? { commitment: res.commitment } : {}),
         };
       }
       case "list": {
@@ -162,6 +165,7 @@ async function toolBrainDecision(
             rating: d.rating,
             review_date: d.reviewDate,
             outcome: d.outcome,
+            ...(d.commitment !== null ? { commitment: d.commitment } : {}),
           })),
         };
       }
