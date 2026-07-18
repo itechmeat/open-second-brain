@@ -30,7 +30,7 @@ import { basename, join, resolve } from "node:path";
 
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
 import { appendContinuityRecord } from "../continuity/store.ts";
-import { discoverMarkersDetailed } from "../inline.ts";
+import { discoverMarkersDetailed, isFeedbackMarker } from "../inline.ts";
 import { writeSignal } from "../signal.ts";
 import { importSessionRecall } from "../session-recall.ts";
 import { isoDate, isoSecond } from "../time.ts";
@@ -377,6 +377,9 @@ export async function importSession(
       malformed += discovery.malformed;
       const markers = discovery.markers;
       for (const m of markers) {
+        // Feedback markers only: loop / set markers are never imported
+        // as signals (loops live-derive, set markers apply via write-back).
+        if (!isFeedbackMarker(m)) continue;
         const hash = computeDedupHash({
           topic: m.topic,
           signal: m.signal,

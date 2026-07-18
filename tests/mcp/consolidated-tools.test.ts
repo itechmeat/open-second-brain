@@ -59,6 +59,7 @@ describe("brain_brief", () => {
     { view: "monthly", args: { month: "2026-05" } },
     { view: "operator", args: { include_dream: false } },
     { view: "digest", args: { since: "2026-05-01T00:00:00Z", until: "2026-05-03T00:00:00Z" } },
+    { view: "today" },
   ];
 
   for (const { view, args } of CASES) {
@@ -68,6 +69,49 @@ describe("brain_brief", () => {
       expect(typeof result).toBe("object");
     });
   }
+
+  test("view=today returns the four-section dashboard envelope", async () => {
+    const result = (await run("brain_brief", { view: "today" })) as Record<string, unknown>;
+    expect(typeof result["text"]).toBe("string");
+    expect(result["obligations"]).toBeDefined();
+    expect(result["open_loops"]).toBeDefined();
+    expect(result["recent_activity"]).toBeDefined();
+    expect(result["totals"]).toBeDefined();
+    expect(result["errors"]).toBeDefined();
+    expect(result["text"]).toContain("## Obligations");
+  });
+
+  test("today is advertised in the brain_brief view enum", () => {
+    const tool = findTool(TOOLS, "brain_brief");
+    const view = (tool.inputSchema as { properties: { view: { enum: readonly string[] } } })
+      .properties.view;
+    expect(view.enum).toContain("today");
+  });
+
+  test("view=today accepts a zero lookback window and a zero limit", async () => {
+    // The core builder and CLI both honour 0 (empty recent-activity section);
+    // the MCP surface must not reject it.
+    const result = (await run("brain_brief", {
+      view: "today",
+      lookback_days: 0,
+      limit: 0,
+    })) as Record<string, unknown>;
+    // 0 is accepted (no INVALID_PARAMS throw); the section computes cleanly.
+    expect(result["recent_activity"]).toBeDefined();
+    expect(result["totals"]).toMatchObject({ recentActivityTotal: 0 });
+    expect(result["errors"]).toEqual([]);
+  });
+
+  test("lookback_days and limit advertise a minimum of 0", () => {
+    const tool = findTool(TOOLS, "brain_brief");
+    const props = (
+      tool.inputSchema as {
+        properties: Record<string, { minimum?: number }>;
+      }
+    ).properties;
+    expect(props["lookback_days"]!.minimum).toBe(0);
+    expect(props["limit"]!.minimum).toBe(0);
+  });
 
   test("invalid view raises a clear error", async () => {
     await expect(run("brain_brief", { view: "hourly" })).rejects.toThrow(/view/);

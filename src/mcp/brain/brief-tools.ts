@@ -13,6 +13,7 @@ import {
   renderTriggerBriefSection,
 } from "../../core/brain/triggers/brief.ts";
 import { buildTimelineIndex } from "../../core/brain/temporal/build-index.ts";
+import { buildTodayDashboard } from "../../core/brain/today-dashboard.ts";
 import { buildDailyBrief } from "../../core/brain/temporal/daily-brief.ts";
 import { buildWeeklySynthesis } from "../../core/brain/temporal/weekly-brief.ts";
 import { loadTemporalConfigSafe } from "../../core/brain/policy.ts";
@@ -31,6 +32,7 @@ import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceIsoDate, coerceFormat } from "../coerce.ts";
 import {
   coerceIsoTimestampOrDate,
+  coerceNonNegativeInteger,
   coercePositiveInteger,
   dispatchByView,
   localizeEnvelope,
@@ -354,6 +356,42 @@ async function toolBrainOperatorSummary(
 
 // ----- brain_unlinked_mentions (v0.10.17) ----------------------------------
 
+/**
+ * `brain_brief view=today` - the today operator dashboard: due/overdue
+ * obligations, open loops, merged recent activity, and a totals rollup.
+ * Read-only; the clock is resolved at the tool boundary so the core
+ * builder stays deterministic. Write-back (the `@osb set` engine) stays
+ * CLI-only in this release and is deliberately not exposed here.
+ */
+async function toolBrainToday(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  // Non-negative (0 allowed): the core `buildTodayDashboard` and the CLI
+  // both accept a zero-day window and a zero-entry limit, so the MCP surface
+  // must not reject what they honour.
+  const lookbackDays = coerceNonNegativeInteger(
+    "brain_brief view=today",
+    "lookback_days",
+    args["lookback_days"],
+  );
+  const limit = coerceNonNegativeInteger("brain_brief view=today", "limit", args["limit"]);
+  const dashboard = buildTodayDashboard(ctx.vault, {
+    now: new Date(),
+    ...(lookbackDays !== undefined ? { activityLookbackDays: lookbackDays } : {}),
+    ...(limit !== undefined ? { activityLimit: limit } : {}),
+  });
+  return {
+    vault_path: ctx.vault,
+    text: dashboard.text,
+    obligations: dashboard.obligations,
+    open_loops: dashboard.openLoops,
+    recent_activity: dashboard.recentActivity,
+    totals: dashboard.totals,
+    errors: dashboard.errors,
+  };
+}
+
 const BRIEF_VIEW_HANDLERS: Readonly<
   Record<string, (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown>
 > = Object.freeze({
@@ -363,6 +401,7 @@ const BRIEF_VIEW_HANDLERS: Readonly<
   monthly: toolBrainMonthlyReview,
   operator: toolBrainOperatorSummary,
   digest: toolBrainDigest,
+  today: toolBrainToday,
 });
 
 async function toolBrainBrief(ctx: ServerContext, args: Record<string, unknown>): Promise<unknown> {
@@ -374,13 +413,13 @@ export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_brief",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Read-only Brain summary, one tool for every window: view=morning (session-start brief), daily, weekly, monthly, operator (maintenance dashboard), or digest (activity window). Replaces the per-window brief tools.",
+      "Read-only Brain summary, one tool for every window: view=morning (session-start brief), daily, weekly, monthly, operator (maintenance dashboard), digest (activity window), or today (operator dashboard: due obligations, open loops, recent activity, totals). Replaces the per-window brief tools.",
     inputSchema: {
       type: "object",
       properties: {
         view: {
           type: "string",
-          enum: ["morning", "daily", "weekly", "monthly", "operator", "digest"],
+          enum: ["morning", "daily", "weekly", "monthly", "operator", "digest", "today"],
           description: "Which summary to produce.",
         },
         date: {
@@ -415,8 +454,16 @@ export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         lookback_days: {
           type: "integer",
-          minimum: 1,
-          description: "view=morning: days of log history (default 7).",
+          // 0 is a valid today window (empty recent-activity section); view=morning
+          // still rejects 0 at runtime via its positive-integer coercer.
+          minimum: 0,
+          description:
+            "view=morning: days of log history (default 7). view=today: recent-activity window in days (default 7).",
+        },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          description: "view=today: max recent-activity entries, newest first (default 20).",
         },
         max_chars_per_memory: {
           type: "integer",

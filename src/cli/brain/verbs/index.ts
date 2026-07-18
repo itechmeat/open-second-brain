@@ -100,6 +100,8 @@ export { cmdBrainRecurrence } from "./recurrence.ts";
 export { cmdBrainAttentionFlows } from "./attention-flows.ts";
 export { cmdBrainObligation } from "./obligation.ts";
 export { cmdBrainAgenda } from "./agenda.ts";
+export { cmdBrainToday } from "./today.ts";
+export { cmdBrainApplyMarkers } from "./apply-markers.ts";
 export {
   cmdBrainSessionDescribe,
   cmdBrainSessionExpand,

@@ -87,6 +87,8 @@ describe("BRAIN_* const enums", () => {
       "session-lifecycle",
       // Agent Write Contract Suite (v0.41.0) terminal write-session audit
       "write-session",
+      // today-operator-surface (t_d7be2a0c) marker write-back audit
+      "attribute-write",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

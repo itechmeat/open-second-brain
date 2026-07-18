@@ -138,6 +138,34 @@ export function coercePositiveInteger(
   throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a positive integer`);
 }
 
+/**
+ * Coerce an optional integer argument that MAY be zero (non-negative).
+ * Distinct from {@link coercePositiveInteger}: some core builders accept
+ * `0` (e.g. a zero-day activity window or a zero-entry limit), and the MCP
+ * surface must not reject a value the core and CLI honour.
+ */
+export function coerceNonNegativeInteger(
+  tool: string,
+  field: string,
+  raw: unknown,
+): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "number") {
+    if (!Number.isInteger(raw) || raw < 0) {
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
+    }
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) {
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
+    }
+    return Number.parseInt(trimmed, 10);
+  }
+  throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
+}
+
 export function dispatchByView(
   table: Readonly<
     Record<

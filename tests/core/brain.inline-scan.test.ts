@@ -268,6 +268,33 @@ describe("scanInline", () => {
     expect(result.errors.some((e) => e.message.includes("too large"))).toBe(true);
   });
 
+  test("ignores loop and set markers: no signal, no rewrite", async () => {
+    const notePath = writeMd(
+      "Daily/2026-05-16.md",
+      [
+        "@osb feedback negative topic=kept principle=p",
+        "@osb loop follow up on the vendor id=vendor",
+        "@osb loop close id=old-loop",
+        "@osb set note=Roadmap field=completion value=65",
+        "",
+      ].join("\n"),
+    );
+    const result = await scanInline(tmp, { agent: "test" });
+    // Only the feedback marker becomes a signal; loop / set are ignored.
+    expect(result.found).toBe(1);
+    expect(result.created).toBe(1);
+    const inboxFiles = readdirSync(brainDirs(tmp).inbox).filter((n) => n.endsWith(".md"));
+    expect(inboxFiles.length).toBe(1);
+    // Loop / set markers are left verbatim - never annotated with the
+    // `@osb✓` consumed sentinel.
+    const after = readFileSync(notePath, "utf8");
+    expect(after).toContain("@osb loop follow up on the vendor id=vendor");
+    expect(after).toContain("@osb loop close id=old-loop");
+    expect(after).toContain("@osb set note=Roadmap field=completion value=65");
+    expect(after).not.toMatch(/@osb✓.*loop/);
+    expect(after).not.toMatch(/@osb✓.*set/);
+  });
+
   test("counts malformed marker attempts without creating signals", async () => {
     writeMd("Daily/bad.md", "@osb feedback negative topic=missing-principle\n");
     const result = await scanInline(tmp, { agent: "test" });
