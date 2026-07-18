@@ -32,6 +32,7 @@ import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceIsoDate, coerceFormat } from "../coerce.ts";
 import {
   coerceIsoTimestampOrDate,
+  coerceNonNegativeInteger,
   coercePositiveInteger,
   dispatchByView,
   localizeEnvelope,
@@ -366,12 +367,15 @@ async function toolBrainToday(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const lookbackDays = coercePositiveInteger(
+  // Non-negative (0 allowed): the core `buildTodayDashboard` and the CLI
+  // both accept a zero-day window and a zero-entry limit, so the MCP surface
+  // must not reject what they honour.
+  const lookbackDays = coerceNonNegativeInteger(
     "brain_brief view=today",
     "lookback_days",
     args["lookback_days"],
   );
-  const limit = coercePositiveInteger("brain_brief view=today", "limit", args["limit"]);
+  const limit = coerceNonNegativeInteger("brain_brief view=today", "limit", args["limit"]);
   const dashboard = buildTodayDashboard(ctx.vault, {
     now: new Date(),
     ...(lookbackDays !== undefined ? { activityLookbackDays: lookbackDays } : {}),
@@ -450,13 +454,15 @@ export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         lookback_days: {
           type: "integer",
-          minimum: 1,
+          // 0 is a valid today window (empty recent-activity section); view=morning
+          // still rejects 0 at runtime via its positive-integer coercer.
+          minimum: 0,
           description:
             "view=morning: days of log history (default 7). view=today: recent-activity window in days (default 7).",
         },
         limit: {
           type: "integer",
-          minimum: 1,
+          minimum: 0,
           description: "view=today: max recent-activity entries, newest first (default 20).",
         },
         max_chars_per_memory: {

@@ -164,8 +164,13 @@ describe("resolveNoteTarget - Obsidian-style title resolution", () => {
   });
 
   test("ignore-path exclusion drops matches under an excluded subtree", () => {
-    writeConfig(
-      "\nnotes:\n  read_paths:\n    - Daily\nvault:\n  ignore_paths:\n    - Daily/Archive\n",
+    // Self-contained config (mirrors the note-walk test): DEFAULT_BRAIN_CONFIG_YAML
+    // already defines a top-level `vault:` block, so appending a second one via
+    // writeConfig would make this fixture parser-dependent. Write the whole
+    // document once with the single `vault:` block we want under test.
+    atomicWriteFileSync(
+      join(brainDirs(vault).brain, "_brain.yaml"),
+      "schema_version: 1\nnotes:\n  read_paths:\n    - Daily\nvault:\n  ignore_paths:\n    - Daily/Archive\n",
     );
     writeMd("Daily/Archive/Old Note.md");
     let caught: unknown;

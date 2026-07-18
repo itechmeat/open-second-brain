@@ -292,6 +292,13 @@ describe("parseInlineMarker loop", () => {
     expect(parseInlineMarker(`@osb loop`, 1)).toBeNull();
     expect(parseInlineMarker(`@osb loop id=only`, 1)).toBeNull();
   });
+
+  test("a present-but-empty id rejects for both close and open forms", () => {
+    // A close token cannot reference an empty id, and an open loop must not
+    // be named after one - both are parse-level rejects, not usable markers.
+    expect(parseInlineMarker(`@osb loop close id=""`, 1)).toBeNull();
+    expect(parseInlineMarker(`@osb loop review pricing id=""`, 1)).toBeNull();
+  });
 });
 
 // ── Loop kind (block) ────────────────────────────────────────────────────────
@@ -329,6 +336,20 @@ describe("parseBlockMarker loop", () => {
 
   test("missing text field rejects", () => {
     expect(parseBlockMarker(["kind: loop", "id: x"].join("\n"), 1)).toBeNull();
+  });
+
+  test("a present-but-empty id field rejects instead of opening a loop named 'close'", () => {
+    // Regression: `text: close` with an empty `id:` used to be treated as a
+    // zero-id open loop named "close"; it must reject (empty id is unusable).
+    expect(parseBlockMarker(["kind: loop", "text: close", "id: "].join("\n"), 1)).toBeNull();
+    expect(parseBlockMarker(["kind: loop", "text: follow up", 'id: ""'].join("\n"), 1)).toBeNull();
+  });
+
+  test("a duplicate id field is ambiguous and rejects", () => {
+    // Two id lines evade a single-field id count; track occurrences so the
+    // ambiguous marker rejects rather than last-wins.
+    const body = ["kind: loop", "text: ship it", "id: a", "id: b"].join("\n");
+    expect(parseBlockMarker(body, 1)).toBeNull();
   });
 });
 
@@ -380,6 +401,28 @@ describe("parseBlockMarker set", () => {
   test("rejects when a required field is missing", () => {
     const body = ["kind: set", "note: Roadmap", "field: completion"].join("\n");
     expect(parseBlockMarker(body, 1)).toBeNull();
+  });
+
+  test("rejects a duplicate structural key rather than silently last-winning", () => {
+    // A repeated note / field / value is ambiguous and could mutate the wrong
+    // note; fail closed instead of picking the last assignment.
+    const dupNote = [
+      "kind: set",
+      "note: Roadmap",
+      "note: Other",
+      "field: completion",
+      "value: 65",
+    ].join("\n");
+    expect(parseBlockMarker(dupNote, 1)).toBeNull();
+
+    const dupValue = [
+      "kind: set",
+      "note: Roadmap",
+      "field: completion",
+      "value: 65",
+      "value: 90",
+    ].join("\n");
+    expect(parseBlockMarker(dupValue, 1)).toBeNull();
   });
 });
 

@@ -79,6 +79,15 @@ const ATTRIBUTE_LOG_VALUE_MAX_LEN = 4096;
  *   - `applied`        - apply mode; the frontmatter attribute was
  *                        written, the audit event appended, and the
  *                        marker consumed.
+ *   - `applied-unconsumed` - apply mode; the frontmatter attribute WAS
+ *                        written, but a post-write step failed: the audit
+ *                        append threw, the consumption rewrite threw, or the
+ *                        rewrite skipped a stale marker. The mutation stands
+ *                        while the marker stays live, so a naive retry would
+ *                        re-apply. This is surfaced honestly (not as
+ *                        `applied`) so the operator can reconcile; the CLI
+ *                        renders it and exits non-zero. `error` carries the
+ *                        cause.
  *   - `invalid-target` - the `note=` target did not resolve (empty,
  *                        missing, or ambiguous). The marker is left
  *                        unconsumed; `candidates` lists the ambiguous
@@ -88,7 +97,12 @@ const ATTRIBUTE_LOG_VALUE_MAX_LEN = 4096;
  *                        empty/multi-line/comma value, or an untyped
  *                        note). The marker is left unconsumed.
  */
-export type MarkerWritebackStatus = "would-apply" | "applied" | "invalid-target" | "invalid-field";
+export type MarkerWritebackStatus =
+  | "would-apply"
+  | "applied"
+  | "applied-unconsumed"
+  | "invalid-target"
+  | "invalid-field";
 
 /** One per-marker result row. Frozen. */
 export interface MarkerWritebackEntry {
@@ -129,6 +143,12 @@ export interface MarkerWritebackReport {
   readonly pendingCount: number;
   /** Count of `invalid-target` + `invalid-field` rows. */
   readonly failedCount: number;
+  /**
+   * Count of `applied-unconsumed` rows: mutations that landed but whose
+   * marker was not consumed (audit or rewrite failed / stale-skipped). A
+   * non-zero value is an operator hazard the CLI turns into a non-zero exit.
+   */
+  readonly unconsumedCount: number;
 }
 
 export interface MarkerWritebackOptions {
@@ -159,6 +179,9 @@ export class MarkerWritebackGuardrailError extends Error {
 interface AppliedMarker {
   readonly originText: string;
   readonly signalId: string;
+  /** Index into `entries` of this marker's row, so its status can be
+   * downgraded to `applied-unconsumed` if consumption does not confirm. */
+  readonly entryIndex: number;
 }
 
 /**
@@ -296,38 +319,73 @@ export async function applyMarkerWritebacks(
       }
 
       // ---- 4. Apply mode: write, audit, mark for consumption. ----------
-      // WRITE errors propagate; a failed mutation is never swallowed.
+      // The frontmatter WRITE itself still propagates on failure - a
+      // mutation that never landed is a hard error, not a partial state.
       assignNoteAttribute(vault, resolvedPath, {
         field: normalizedField,
         value: normalizedValue,
         pack,
       });
-      appendLogEvent(vault, {
-        timestamp: nowIso,
-        eventType: BRAIN_LOG_EVENT_KIND.attributeWrite,
-        agent: opts.agent,
-        body: {
-          note: resolvedPath,
-          field: normalizedField,
-          // Sanitised for the LOG surface only (best-effort secret
-          // redaction, matching apply-evidence's use of
-          // `sanitiseTextField`); the frontmatter mutation above already
-          // wrote `normalizedValue` verbatim, so redaction here never
-          // touches the actual data write.
-          prior_value: sanitiseTextField(priorValue ?? "null", {
-            maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
-            singleLine: true,
-          }),
-          new_value: sanitiseTextField(normalizedValue, {
-            maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
-            singleLine: true,
-          }),
-          source_path: file,
-          source_line: String(marker.originLine),
+      // Post-write steps are hardened per marker. Once the attribute is on
+      // disk, an audit-append failure must NOT throw the whole run: the
+      // mutation already stands, so we surface an honest `applied-unconsumed`
+      // row (mutation landed, marker still live) and leave the marker
+      // unconsumed for the operator to reconcile, rather than either losing
+      // the record silently or aborting the remaining markers.
+      let auditError: string | null = null;
+      try {
+        appendLogEvent(vault, {
+          timestamp: nowIso,
+          eventType: BRAIN_LOG_EVENT_KIND.attributeWrite,
           agent: opts.agent,
-        },
-      });
-      applied.push({ originText: marker.originText, signalId: resolvedPath });
+          body: {
+            note: resolvedPath,
+            field: normalizedField,
+            // Sanitised for the LOG surface only (best-effort secret
+            // redaction, matching apply-evidence's use of
+            // `sanitiseTextField`); the frontmatter mutation above already
+            // wrote `normalizedValue` verbatim, so redaction here never
+            // touches the actual data write.
+            prior_value: sanitiseTextField(priorValue ?? "null", {
+              maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
+              singleLine: true,
+            }),
+            new_value: sanitiseTextField(normalizedValue, {
+              maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
+              singleLine: true,
+            }),
+            source_path: file,
+            source_line: String(marker.originLine),
+            agent: opts.agent,
+          },
+        });
+      } catch (err) {
+        auditError = (err as Error).message ?? String(err);
+      }
+
+      if (auditError !== null) {
+        entries.push(
+          makeEntry({
+            status: "applied-unconsumed",
+            sourcePath: file,
+            sourceLine: marker.originLine,
+            rawTarget,
+            field: normalizedField,
+            value: normalizedValue,
+            resolvedPath,
+            priorValue,
+            error: `attribute written but audit append failed; marker left unconsumed: ${auditError}`,
+            errorCode: null,
+            candidates: [],
+          }),
+        );
+        // Deliberately NOT added to `applied`, so the consumption rewrite
+        // leaves the marker live for a retry.
+        continue;
+      }
+
+      const entryIndex = entries.length;
+      applied.push({ originText: marker.originText, signalId: resolvedPath, entryIndex });
       entries.push(
         makeEntry({
           status: "applied",
@@ -365,27 +423,65 @@ export async function applyMarkerWritebacks(
       );
       const queue = [...applied];
       const ops: RewriteOp[] = [];
+      const consumedIndices = new Set<number>();
       for (const marker of fresh) {
         const idx = queue.findIndex((entry) => entry.originText === marker.originText);
         if (idx < 0) continue;
         const [match] = queue.splice(idx, 1);
         ops.push({ marker, signalId: match!.signalId });
+        consumedIndices.add(match!.entryIndex);
       }
       // Sequential by design: this file's markers must be consumed before a
       // later source mutates and line-shifts this note, or the rewrite would
       // land on a stale line.
-      // oxlint-disable-next-line no-await-in-loop
-      await rewriteMarkers(absSource, ops);
+      let rewriteError: string | null = null;
+      try {
+        // oxlint-disable-next-line no-await-in-loop
+        await rewriteMarkers(absSource, ops);
+      } catch (err) {
+        rewriteError = (err as Error).message ?? String(err);
+      }
+
+      // Downgrade any applied marker whose consumption is not confirmed:
+      // the rewrite threw (nothing consumed in this file), or the marker was
+      // stale-skipped (its text no longer matched a live marker so no op was
+      // emitted). The mutation already stands, so the honest status is
+      // `applied-unconsumed` - a retry would re-apply otherwise.
+      for (const entry of applied) {
+        if (rewriteError === null && consumedIndices.has(entry.entryIndex)) continue;
+        const reason =
+          rewriteError !== null
+            ? `attribute written but marker consumption failed; marker left unconsumed: ${rewriteError}`
+            : "attribute written but the marker was not found for consumption (source changed); left unconsumed";
+        const prior = entries[entry.entryIndex]!;
+        entries[entry.entryIndex] = makeEntry({
+          ...prior,
+          status: "applied-unconsumed",
+          error: reason,
+        });
+      }
     }
   }
 
   let appliedCount = 0;
   let pendingCount = 0;
   let failedCount = 0;
+  let unconsumedCount = 0;
   for (const entry of entries) {
-    if (entry.status === "applied") appliedCount++;
-    else if (entry.status === "would-apply") pendingCount++;
-    else failedCount++;
+    switch (entry.status) {
+      case "applied":
+        appliedCount++;
+        break;
+      case "would-apply":
+        pendingCount++;
+        break;
+      case "applied-unconsumed":
+        unconsumedCount++;
+        break;
+      default:
+        // invalid-target, invalid-field
+        failedCount++;
+    }
   }
 
   return Object.freeze({
@@ -395,6 +491,7 @@ export async function applyMarkerWritebacks(
     appliedCount,
     pendingCount,
     failedCount,
+    unconsumedCount,
   });
 }
 

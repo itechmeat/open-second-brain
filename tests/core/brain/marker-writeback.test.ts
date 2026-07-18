@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -459,4 +459,53 @@ describe("apply mode - per-marker isolation", () => {
     expect(report.entries[0]!.error).toContain("declares no type");
     expect(readSource("Notes/journal.md")).not.toContain("@osb✓");
   });
+});
+
+describe("apply mode - consumption failure surfaces applied-unconsumed", () => {
+  // Forces the post-write hazard: the attribute write and audit append
+  // succeed, but the marker-consumption rewrite fails (the source lives in a
+  // read-only directory, so `atomicWriteFileSync` cannot create its temp
+  // file). The mutation stands while the marker stays live - the run must
+  // report that honestly (applied-unconsumed), not as a clean `applied`.
+  // Skipped when running as root, which bypasses directory write bits.
+  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "a failed rewrite yields applied-unconsumed with the mutation intact and the marker live",
+    async () => {
+      writeConfig({ markerWriteback: true });
+      writePaper("Notes/paper.md");
+      // Source lives in its own directory so it can be made read-only without
+      // touching the target note (Notes) or the log (Brain).
+      writeSource("Locked/journal.md", "@osb set note=paper field=status value=queued");
+      const lockedDir = join(vault, "Locked");
+      chmodSync(lockedDir, 0o555);
+
+      try {
+        const report = await applyMarkerWritebacks(vault, {
+          files: ["Locked/journal.md"],
+          apply: true,
+          agent: "a",
+          now: NOW,
+        });
+
+        // Honest partial status: not counted as a clean apply.
+        expect(report.appliedCount).toBe(0);
+        expect(report.unconsumedCount).toBe(1);
+        const entry = report.entries[0]!;
+        expect(entry.status).toBe("applied-unconsumed");
+        expect(entry.error).toContain("consumption failed");
+
+        // The mutation landed and the audit event was written before the
+        // consumption step failed.
+        expect(attrsOf("Notes/paper.md")).toEqual({ status: "queued" });
+        expect(attributeWriteEvents()).toHaveLength(1);
+
+        // The marker is still live (unconsumed) for the operator to reconcile.
+        expect(readSource("Locked/journal.md")).not.toContain("@osb✓");
+        expect(readSource("Locked/journal.md")).toContain("@osb set note=paper");
+      } finally {
+        // Restore write access so afterEach can clean the tmp vault.
+        chmodSync(lockedDir, 0o755);
+      }
+    },
+  );
 });

@@ -143,6 +143,10 @@ function classifyLoop(input: {
   readonly shape: MarkerShape;
 }): ParsedMarker | null {
   const { words, idValue, idCount, originLine, originText, shape } = input;
+  // A present-but-empty `id` is unusable for both forms: a close token
+  // cannot reference "", and an open loop must not be named after an empty
+  // id. Reject at parse level rather than emit a broken marker.
+  if (idCount === 1 && (idValue === null || idValue.length === 0)) return null;
   if (words.length >= 1 && words[0] === "close" && idCount >= 1) {
     if (words.length === 1 && idCount === 1 && idValue !== null) {
       return { kind: "loop", loop: "close", id: idValue, originLine, originText, shape };
@@ -397,6 +401,10 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
 export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMarker | null {
   const lines = body.split("\n");
   const fields: Record<string, string | string[]> = {};
+  // Occurrence count per key. A structural key appearing twice is
+  // ambiguous (which value wins?), so we reject it before dispatch rather
+  // than let the last assignment silently overwrite the earlier one.
+  const keyCounts: Record<string, number> = {};
   let i = 0;
   while (i < lines.length) {
     const raw = lines[i]!;
@@ -433,9 +441,11 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
       // Strip trailing empty lines that bled from blank rows.
       while (parts.length > 0 && parts[parts.length - 1] === "") parts.pop();
       fields[key] = parts.join("\n");
+      keyCounts[key] = (keyCounts[key] ?? 0) + 1;
       continue;
     }
     fields[key] = stripQuotes(value);
+    keyCounts[key] = (keyCounts[key] ?? 0) + 1;
     i++;
   }
 
@@ -453,7 +463,10 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
       .trim()
       .split(/\s+/)
       .filter((w) => w.length > 0);
-    const idCount = idField !== null && idField.length > 0 ? 1 : 0;
+    // Presence-based (not non-empty-based): an empty `id:` still counts as
+    // one occurrence so classifyLoop rejects it, and a duplicate `id:`
+    // drives idCount > 1 so the ambiguous marker is rejected too.
+    const idCount = keyCounts["id"] ?? 0;
     return classifyLoop({
       words,
       idValue: idCount === 1 ? idField : null,
@@ -465,6 +478,9 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
   }
 
   if (kind === "set") {
+    // Fail-closed on duplicate structural keys: a repeated note / field /
+    // value would silently last-win and could mutate the wrong note.
+    if (hasDuplicateKey(keyCounts, ["note", "field", "value"])) return null;
     if (!requiredFieldsPresent("set", fields)) return null;
     return {
       kind: "set",
@@ -501,6 +517,14 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
     originText: body,
     shape: "block",
   };
+}
+
+/** True when any of `keys` occurred more than once in the block body. */
+function hasDuplicateKey(counts: Record<string, number>, keys: ReadonlyArray<string>): boolean {
+  for (const key of keys) {
+    if ((counts[key] ?? 0) > 1) return true;
+  }
+  return false;
 }
 
 function stripQuotes(s: string): string {

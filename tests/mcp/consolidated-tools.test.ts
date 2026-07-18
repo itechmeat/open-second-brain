@@ -88,6 +88,31 @@ describe("brain_brief", () => {
     expect(view.enum).toContain("today");
   });
 
+  test("view=today accepts a zero lookback window and a zero limit", async () => {
+    // The core builder and CLI both honour 0 (empty recent-activity section);
+    // the MCP surface must not reject it.
+    const result = (await run("brain_brief", {
+      view: "today",
+      lookback_days: 0,
+      limit: 0,
+    })) as Record<string, unknown>;
+    // 0 is accepted (no INVALID_PARAMS throw); the section computes cleanly.
+    expect(result["recent_activity"]).toBeDefined();
+    expect(result["totals"]).toMatchObject({ recentActivityTotal: 0 });
+    expect(result["errors"]).toEqual([]);
+  });
+
+  test("lookback_days and limit advertise a minimum of 0", () => {
+    const tool = findTool(TOOLS, "brain_brief");
+    const props = (
+      tool.inputSchema as {
+        properties: Record<string, { minimum?: number }>;
+      }
+    ).properties;
+    expect(props["lookback_days"]!.minimum).toBe(0);
+    expect(props["limit"]!.minimum).toBe(0);
+  });
+
   test("invalid view raises a clear error", async () => {
     await expect(run("brain_brief", { view: "hourly" })).rejects.toThrow(/view/);
   });
