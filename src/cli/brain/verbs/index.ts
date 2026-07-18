@@ -50,6 +50,7 @@ export { cmdBrainBankExport } from "./bank-export.ts";
 export { cmdBrainBankImport } from "./bank-import.ts";
 export { cmdBrainBacklinks } from "./backlinks.ts";
 export { cmdBrainSemanticsBackfill } from "./semantics-backfill.ts";
+export { cmdBrainAuthoredAtBackfill } from "./authored-at-backfill.ts";
 export { cmdBrainMcpLandscape } from "./mcp-landscape.ts";
 export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";

@@ -72,6 +72,13 @@ export interface DocumentInput {
    * endpoint types without re-reading files (v6).
    */
   readonly pageType?: string | null;
+  /**
+   * Transcript turn instant this note was authored at, in unix seconds
+   * (conversation chronology, S1 / t_347e8224). Derived from the
+   * `authored_at` frontmatter field. Absent / null for a note with no
+   * turn instant, which then ranks byte-identically to pre-feature.
+   */
+  readonly authoredAt?: number | null;
 }
 
 export interface DocumentSummary {
@@ -145,6 +152,13 @@ export interface HydratedChunk {
   readonly startLine: number;
   readonly endLine: number;
   readonly mtime: number;
+  /**
+   * Transcript turn instant (unix seconds) or null (conversation
+   * chronology, S1). Feeds the exact-tie recency tie-break in the ranker
+   * and is surfaced on the search result. Null for notes with no turn
+   * instant, keeping their ordering byte-identical.
+   */
+  readonly authoredAt?: number | null;
 }
 
 export interface StoreCounts {
@@ -642,13 +656,14 @@ export class Store {
           number,
           number,
           string | null,
+          number | null,
           string,
           string,
           string,
         ]
       >(
-        "INSERT INTO documents(path, basename, title, content_hash, mtime, size, page_type, created_at, updated_at, indexed_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "INSERT INTO documents(path, basename, title, content_hash, mtime, size, page_type, authored_at, created_at, updated_at, indexed_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
           "ON CONFLICT(path) DO UPDATE SET " +
           "  basename = excluded.basename, " +
           "  title = excluded.title, " +
@@ -656,6 +671,7 @@ export class Store {
           "  mtime = excluded.mtime, " +
           "  size = excluded.size, " +
           "  page_type = excluded.page_type, " +
+          "  authored_at = excluded.authored_at, " +
           "  updated_at = excluded.updated_at, " +
           "  indexed_at = excluded.indexed_at " +
           "RETURNING id",
@@ -668,6 +684,7 @@ export class Store {
         doc.mtime,
         doc.size,
         doc.pageType ?? null,
+        doc.authoredAt ?? null,
         now,
         now,
         now,
@@ -1761,11 +1778,13 @@ export class Store {
           start_line: number;
           end_line: number;
           mtime: number;
+          authored_at: number | null;
         },
         number[]
       >(
         "SELECT c.id AS chunk_id, c.document_id, d.path AS path, d.title AS title, " +
-          "       c.content AS content, c.start_line AS start_line, c.end_line AS end_line, d.mtime AS mtime " +
+          "       c.content AS content, c.start_line AS start_line, c.end_line AS end_line, d.mtime AS mtime, " +
+          "       d.authored_at AS authored_at " +
           "FROM chunks c JOIN documents d ON d.id = c.document_id " +
           `WHERE c.id IN (${placeholders})`,
       )
@@ -1780,6 +1799,7 @@ export class Store {
         startLine: r.start_line,
         endLine: r.end_line,
         mtime: r.mtime,
+        authoredAt: r.authored_at,
       });
     }
     return out;

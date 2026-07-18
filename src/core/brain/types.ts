@@ -358,6 +358,16 @@ export const BRAIN_LOG_EVENT_KIND = {
    * merged timeline never double-counts a change.
    */
   decisionChangeReceipt: "decision-change-receipt",
+  /**
+   * `authored-at-backfill` (conversation chronology, S1 / t_347e8224) -
+   * the idempotent backfill stamped the `authored_at` frontmatter field
+   * onto session-imported signals that preserved a transcript turn
+   * instant but predate the field. Emitted once per non-dry-run apply.
+   * Payload carries the number of files `updated`, the number `scanned`,
+   * and the `agent`. A dry run and a re-run that finds nothing to add
+   * emit nothing, so the merged timeline records only real mutations.
+   */
+  authoredAtBackfill: "authored-at-backfill",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

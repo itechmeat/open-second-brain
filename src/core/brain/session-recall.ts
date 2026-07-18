@@ -30,6 +30,17 @@ export interface SessionRecallSearchInput {
   readonly sessionId?: string;
   readonly limit?: number;
   readonly snippetChars?: number;
+  /**
+   * Conversation-chronology time bounds (S1 / t_347e8224). Inclusive
+   * unix-ms lower / upper bounds on a record's effective instant (its
+   * turn `timestamp`, falling back to `createdAt`). A record whose
+   * instant falls outside the range is excluded; a record with no
+   * parseable instant is kept only when no bound is set. Absent bounds →
+   * byte-identical to the pre-feature unbounded search. Callers parse
+   * `since` / `before` strings through `time-range.ts` before calling.
+   */
+  readonly sinceMs?: number;
+  readonly untilMs?: number;
 }
 
 export interface SessionRecallHit {
@@ -150,6 +161,7 @@ export function searchSessionRecall(
   const limit = Math.max(1, input.limit ?? DEFAULT_LIMIT);
   const snippetChars = Math.max(1, input.snippetChars ?? DEFAULT_SNIPPET_CHARS);
   const hits = sessionRecallRecords(vault, input.sessionId)
+    .filter((record) => recordInTimeRange(record, input.sinceMs, input.untilMs))
     .map((record) => hitFor(record, needle, snippetChars))
     .filter((hit): hit is SessionRecallHit => hit !== null)
     .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
@@ -555,6 +567,28 @@ function occurrenceCount(text: string, needle: string): number {
     index = text.indexOf(needle, index + needle.length);
   }
   return count;
+}
+
+/**
+ * Whether a record's effective instant falls within the inclusive
+ * `[sinceMs, untilMs]` bounds (conversation chronology, S1). The instant
+ * is the turn `timestamp`, falling back to the record `createdAt` (the
+ * same precedence `compareRecords` uses). A record with no parseable
+ * instant is kept only when no bound is set - a bounded query is a
+ * deliberate time filter, so an undatable record cannot silently pass it.
+ */
+function recordInTimeRange(
+  record: ContinuityRecord,
+  sinceMs: number | undefined,
+  untilMs: number | undefined,
+): boolean {
+  if (sinceMs === undefined && untilMs === undefined) return true;
+  const raw = String(record.payload["timestamp"] ?? record.createdAt);
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return false;
+  if (sinceMs !== undefined && ms < sinceMs) return false;
+  if (untilMs !== undefined && ms > untilMs) return false;
+  return true;
 }
 
 function compareRecords(left: ContinuityRecord, right: ContinuityRecord): number {

@@ -53,8 +53,8 @@ function targetDocId(store: Store, sourceId: number): number | null {
   return row?.target_document_id ?? null;
 }
 
-test("schema version is 9", () => {
-  expect(LATEST_SCHEMA_VERSION).toBe(9);
+test("schema version is 10", () => {
+  expect(LATEST_SCHEMA_VERSION).toBe(10);
 });
 
 test("normalizeAlias lower-cases, trims, and NFC-normalises", () => {

@@ -279,7 +279,16 @@ export async function importSession(
         created_at: isoSecond(instant),
         date: isoDate(instant),
         slug: input.topic,
-        ...(fromTurn ? { recorded_at: isoSecond(instant), valid_from: isoSecond(instant) } : {}),
+        ...(fromTurn
+          ? {
+              recorded_at: isoSecond(instant),
+              valid_from: isoSecond(instant),
+              // Conversation chronology (S1): carry the turn instant as
+              // the authoring time so the search layer can expose it and
+              // break exact hybrid-score ties toward more recent turns.
+              authored_at: isoSecond(instant),
+            }
+          : {}),
         ...(input.scope ? { scope: input.scope } : {}),
         source: [`[[${sessionRef}]]`],
         source_type: BRAIN_SIGNAL_SOURCE_TYPE.session,

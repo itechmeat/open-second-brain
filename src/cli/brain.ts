@@ -66,6 +66,7 @@ import {
   cmdBrainBankImport,
   cmdBrainBacklinks,
   cmdBrainSemanticsBackfill,
+  cmdBrainAuthoredAtBackfill,
   cmdBrainMcpLandscape,
   cmdBrainMerge,
   cmdBrainExplorer,
@@ -275,6 +276,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainBacklinks(rest);
       case "semantics-backfill":
         return await cmdBrainSemanticsBackfill(rest);
+      case "authored-at-backfill":
+        return await cmdBrainAuthoredAtBackfill(rest);
       case "mcp-landscape":
         return await cmdBrainMcpLandscape(rest);
       case "scan-inline":

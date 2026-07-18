@@ -114,6 +114,16 @@ export interface WriteSignalInput {
   readonly valid_from?: string;
   readonly recorded_at?: string;
   /**
+   * Conversation-chronology authoring instant (S1 / t_347e8224). The
+   * transcript turn instant a session-imported signal was authored at,
+   * carried from `resolveEventInstant`. Additive and optional: absent →
+   * the written file is byte-identical to the historical path. Stamped
+   * alongside `valid_from` / `recorded_at` when the import preserves the
+   * turn's original event-time, so the search layer can expose it and
+   * break exact hybrid-score ties toward more recent statements.
+   */
+  readonly authored_at?: string;
+  /**
    * Caller-settable expiration (C5 / t_a82b674e). ISO date
    * (`YYYY-MM-DD`) or full timestamp. Additive and optional: absent →
    * the write is byte-identical to the historical path. When present it
@@ -349,6 +359,11 @@ export function writeSignal(
   }
   if (sanitised.recorded_at && sanitised.recorded_at.trim()) {
     metadata["recorded_at"] = sanitised.recorded_at.trim();
+  }
+  // Conversation-chronology authoring instant (S1). Emitted only when
+  // supplied, so legacy / live / non-turn writes stay byte-identical.
+  if (sanitised.authored_at && sanitised.authored_at.trim()) {
+    metadata["authored_at"] = sanitised.authored_at.trim();
   }
   // Caller-settable expiration (C5): validated + emitted only when
   // supplied so legacy / live writes stay byte-identical. Reader-side

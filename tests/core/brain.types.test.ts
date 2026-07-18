@@ -110,6 +110,8 @@ describe("BRAIN_* const enums", () => {
       "decision-rating",
       // Belief lifecycle suite (t_3547314d) decision-change receipt append
       "decision-change-receipt",
+      // Conversation chronology (t_347e8224) authored_at backfill
+      "authored-at-backfill",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

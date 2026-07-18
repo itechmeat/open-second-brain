@@ -132,6 +132,15 @@ export interface BrainSearchResult {
   readonly semanticScore: number;
   readonly linkBoost: number;
   readonly recencyBoost: number;
+  /**
+   * Transcript turn instant (unix seconds) this result was authored at
+   * (conversation chronology, S1 / t_347e8224). Present only for a note
+   * carrying an `authored_at` frontmatter instant; absent for every note
+   * with no turn instant, so the result shape stays byte-identical for a
+   * vault without transcript-authored notes. Exact hybrid-score ties are
+   * ordered newer-first by this value.
+   */
+  readonly authoredAt?: number;
   readonly searchType: "keyword" | "semantic" | "hybrid" | "link";
   /**
    * Explainable recall: one entry per scoring layer that contributed

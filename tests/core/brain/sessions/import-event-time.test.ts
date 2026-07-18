@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { brainDirs } from "../../../../src/core/brain/paths.ts";
+import { parseFrontmatter } from "../../../../src/core/vault.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../../../src/core/brain/policy.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { importSession } from "../../../../src/core/brain/sessions/import.ts";
@@ -113,6 +114,46 @@ describe("importSession — per-row event-time (preserveEventTime)", () => {
     expect(sig.valid_from).toBe("2020-03-15T08:30:00Z");
     // The filename calendar day reflects the event, not the import moment.
     expect(file.startsWith("sig-2020-03-15")).toBe(true);
+  });
+
+  test("stamps authored_at with the turn's ORIGINAL timestamp (conversation chronology, S1)", async () => {
+    const fixture = writeFixture(
+      "chronology.jsonl",
+      claudeSession({
+        topic: "evttime",
+        principle: "carry the authoring instant",
+        timestamp: "2020-03-15T08:30:00Z",
+      }),
+    );
+
+    const res = await importSession(tmp, fixture, {
+      agent: "test",
+      now: NOW,
+      preserveEventTime: true,
+    });
+    expect(res.signals_created).toBe(1);
+
+    const { file } = onlySignal(tmp);
+    const meta = parseFrontmatter(join(brainDirs(tmp).inbox, file))[0] as Record<string, unknown>;
+    expect(meta["authored_at"]).toBe("2020-03-15T08:30:00Z");
+  });
+
+  test("without preserveEventTime, no authored_at is written (byte-identity guard)", async () => {
+    const fixture = writeFixture(
+      "no-chronology.jsonl",
+      claudeSession({
+        topic: "evttime",
+        principle: "no authoring instant on the wall-clock path",
+        timestamp: "2020-03-15T08:30:00Z",
+      }),
+    );
+
+    const res = await importSession(tmp, fixture, { agent: "test", now: NOW });
+    expect(res.signals_created).toBe(1);
+
+    const { file } = onlySignal(tmp);
+    const meta = parseFrontmatter(join(brainDirs(tmp).inbox, file))[0] as Record<string, unknown>;
+    expect(meta["authored_at"]).toBeUndefined();
   });
 
   test("a turn with NO timestamp falls back to now (backward-compatible)", async () => {

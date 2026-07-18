@@ -75,6 +75,7 @@ Brain verbs (observing memory):
   bank-import         Reconstruct the page graph from a bank bundle (--mode skip|overwrite|merge)
   backlinks           List inbound references to a Brain artifact id
   semantics-backfill  Preview deterministic typed preference-edge backfill proposals
+  authored-at-backfill  Backfill authored_at on session signals (dry-run default; --apply to write)
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a registered agent session .jsonl (or directory)
@@ -441,6 +442,12 @@ export const VERB_HELP: Record<string, string> = {
     "Dry-run only. Previews deterministic typed preference-edge backfill\n" +
     "proposals, currently the inverse superseded_by edge when an active\n" +
     "preference supersedes a retired preference that lacks the pointer.\n",
+  "authored-at-backfill":
+    "usage: o2b brain authored-at-backfill [--apply] [--vault <path>] [--json]\n" +
+    "Dry-run by default. Stamps the additive authored_at frontmatter field\n" +
+    "onto session-imported signals that preserved a transcript turn instant\n" +
+    "(valid_from/recorded_at) but predate the field. Idempotent, and never\n" +
+    "re-embeds - it only edits frontmatter. Pass --apply to write.\n",
   codec:
     "usage: o2b brain codec --compress | --expand [--in <file>]\n" +
     "Run the deterministic, lossless session codec over stdin (or --in <file>)\n" +
@@ -753,8 +760,10 @@ export const VERB_HELP: Record<string, string> = {
     "  --workday-start HH:MM --workday-end HH:MM  clip focus blocks to a daily window\n" +
     "  [--json]\n",
   "session-grep":
-    "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--vault <path>] [--json]\n" +
-    "Search imported session recall raw turns and summary nodes.\n",
+    "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--since <t>] [--before <t>] [--vault <path>] [--json]\n" +
+    "Search imported session recall raw turns and summary nodes. --since and\n" +
+    "--before bound results to a time window (ISO date/datetime, today/\n" +
+    "yesterday/last week/last month, or <n>h/<n>d/<n>w); --before is inclusive.\n",
   "session-describe":
     "usage: o2b brain session-describe --session-id <id> [--vault <path>] [--json]\n" +
     "Describe counts and summary depths for an imported session recall DAG.\n",

@@ -16,7 +16,7 @@ import { SearchError } from "./types.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 9;
+export const LATEST_SCHEMA_VERSION = 10;
 
 /**
  * The wikilink-resolution basename of a stored document path: the final
@@ -407,6 +407,23 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
 
         INSERT INTO chunk_trigram(chunk_trigram) VALUES('rebuild');
       `);
+    },
+  },
+  {
+    // v10 (conversation chronology, t_347e8224) - a nullable
+    // `documents.authored_at` column (unix seconds) carrying the
+    // transcript turn instant a session-imported note was authored at.
+    // Surfaced on search results and used to break EXACT hybrid-score
+    // ties toward more recent statements. Additive and reindex-safe:
+    // existing rows default to NULL (no turn instant) until a reindex
+    // repopulates it from the `authored_at` frontmatter field, so a vault
+    // with no transcript-authored notes ranks byte-identically.
+    version: 10,
+    up(db) {
+      const docCols = db.query<{ name: string }, []>("PRAGMA table_info(documents)").all();
+      if (!docCols.some((c) => c.name === "authored_at")) {
+        db.exec("ALTER TABLE documents ADD COLUMN authored_at INTEGER");
+      }
     },
   },
 ]);
