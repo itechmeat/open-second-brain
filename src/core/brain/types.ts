@@ -363,6 +363,36 @@ export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN
 export const BRAIN_TOMBSTONE_STATUS = "tombstoned";
 
 /**
+ * Commitment-tier vocabulary (Belief lifecycle suite, B3, t_e112c63c).
+ * An optional, operator-facing epistemic stance on a belief - how firmly
+ * it is held, independent of the evidence-derived confidence float. The
+ * four-value ladder runs tentative -> fixed. Lives here (not in
+ * `commitment.ts`) so `preference.ts` / `types.ts` consumers can carry
+ * the value without importing the validator module - the same
+ * one-directional pattern as {@link BRAIN_TOMBSTONE_STATUS}. The write
+ * validator, tolerant reader, and typed error live in `commitment.ts`.
+ */
+export const BRAIN_COMMITMENT_TIER = {
+  exploring: "exploring",
+  leaning: "leaning",
+  decided: "decided",
+  locked: "locked",
+} as const;
+export type BrainCommitmentTier =
+  (typeof BRAIN_COMMITMENT_TIER)[keyof typeof BRAIN_COMMITMENT_TIER];
+
+const BRAIN_COMMITMENT_TIER_VALUES: ReadonlyArray<BrainCommitmentTier> =
+  Object.values(BRAIN_COMMITMENT_TIER);
+
+/** Type-guard narrowing an arbitrary value to {@link BrainCommitmentTier}. */
+export function isCommitmentTier(value: unknown): value is BrainCommitmentTier {
+  return (
+    typeof value === "string" &&
+    (BRAIN_COMMITMENT_TIER_VALUES as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/**
  * Precomputed set of every event-kind string. Both the markdown
  * parser (`appendLogEvent`) and the JSONL reader (`readLogDay`) need
  * the same set to validate incoming kinds; canonicalising the
@@ -610,6 +640,14 @@ export interface BrainPreference {
   readonly freshness_trend?: string;
   /** Optional wikilink to a retired pref this one replaces. */
   readonly supersedes?: string;
+  /**
+   * Optional commitment tier (Belief lifecycle suite, B3, t_e112c63c):
+   * `exploring | leaning | decided | locked`. When set, the injection
+   * formatter renders the tier label in place of the raw confidence
+   * float. Additive optional - absent on legacy files; emitted only when
+   * supplied so unset preferences stay byte-identical.
+   */
+  readonly commitment?: BrainCommitmentTier;
   readonly aliases?: ReadonlyArray<string>;
   /** Optional runtime schema taxonomy token. Inert metadata. */
   readonly schema_type?: string;

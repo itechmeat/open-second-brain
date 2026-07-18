@@ -329,12 +329,16 @@ function renderQuarantineLine(p: BrainPreference): string {
 }
 
 /**
- * Numeric `confidence_value` tail rendered next to the band in the
- * `confidence:` metadata. Empty when the field is `null` (legacy
- * preference written before v0.10.3 — the next dream refresh lifts
- * it to a real number).
+ * Tail rendered next to the confidence band in the `confidence:`
+ * metadata. When a commitment tier is set (Belief lifecycle suite, B3),
+ * the tier label is rendered in place of the raw confidence float; the
+ * band itself is unchanged. When no tier is set, the numeric
+ * `confidence_value` is rendered as before (empty when it is `null`, e.g.
+ * a legacy preference written before v0.10.3). Unset commitment therefore
+ * keeps the output byte-identical to today.
  */
 function formatConfidenceValueTail(p: BrainPreference): string {
+  if (p.commitment !== undefined) return ` (${p.commitment})`;
   if (p.confidence_value === null) return "";
   return ` (${p.confidence_value.toFixed(2)})`;
 }

@@ -28,6 +28,8 @@ import { brainDirs } from "./paths.ts";
 import { isTombstoned } from "./lifecycle/tombstone.ts";
 import { preferChainTips } from "./inject-governor.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
+import { readCommitmentTier } from "./commitment.ts";
+import type { BrainCommitmentTier } from "./types.ts";
 import {
   deriveEpistemicStatus,
   EPISTEMIC_STATUS,
@@ -88,6 +90,13 @@ export interface ContextPackItem extends ContextTransformAnnotations {
   readonly epistemic: EpistemicStatus;
   /** `evidenced_by` wikilinks grounding this item; empty when it cites none. */
   readonly evidenceRefs: ReadonlyArray<string>;
+  /**
+   * Commitment tier (Belief lifecycle suite, B3) when the source note
+   * declares one: `exploring | leaning | decided | locked`. Additive and
+   * present only when set, so a pack over commitment-free notes stays
+   * byte-identical.
+   */
+  readonly commitment?: BrainCommitmentTier;
   /**
    * Value-per-token density score (impact-per-token allocation,
    * t_affa3bd9): structural signal per estimated token that broke this
@@ -204,6 +213,7 @@ interface Candidate {
   readonly tokens: number;
   readonly epistemic: EpistemicStatus;
   readonly evidenceRefs: ReadonlyArray<string>;
+  readonly commitment: BrainCommitmentTier | null;
   readonly safety?: ContextSafetyReport;
   /**
    * Normalized `superseded_by` pointer when this memory has been
@@ -300,6 +310,7 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
         tokens: estimateTokens(guarded.safeText),
         epistemic: epistemic.status,
         evidenceRefs: epistemic.evidenceRefs,
+        commitment: readCommitmentTier(meta),
         supersededBy,
         ...(contextSafetyReport(guarded) ? { safety: contextSafetyReport(guarded) } : {}),
       });
@@ -426,6 +437,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       trimmed,
       epistemic: c.epistemic,
       evidenceRefs: c.evidenceRefs,
+      ...(c.commitment !== null ? { commitment: c.commitment } : {}),
       // When the per-memory char budget trimmed this item, recompute density
       // from the emitted (post-trim) body/tokens so the surfaced value reflects
       // the actual content/token-cost the agent receives, not the pre-budget

@@ -34,7 +34,8 @@ import { addObligation } from "../obligations.ts";
 import { decisionPath, decisionsDir, obligationPath, validateIsoDate } from "../paths.ts";
 import { jaccard, tokenise } from "../similarity.ts";
 import { isoSecond } from "../time.ts";
-import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
+import { BRAIN_LOG_EVENT_KIND, type BrainCommitmentTier } from "../types.ts";
+import { readCommitmentTier, validateCommitmentTier } from "../commitment.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -101,6 +102,12 @@ export interface DecisionRecord {
   readonly rating: number | null;
   /** Free-form justification for the rating (B2); empty when unrated. */
   readonly rationale: string;
+  /**
+   * Optional commitment tier (B3): `exploring | leaning | decided |
+   * locked`. `null` when unset; round-trips through frontmatter, emitted
+   * only when set so unset decisions stay byte-identical.
+   */
+  readonly commitment: BrainCommitmentTier | null;
   /** Free-form operator prose from the note body. */
   readonly notes: string;
   readonly path: string;
@@ -118,6 +125,8 @@ export interface RecordDecisionInput {
   readonly rating?: number;
   /** Optional rationale for the rating (B2). */
   readonly rationale?: string;
+  /** Optional commitment tier captured at record time (B3); validated on write. */
+  readonly commitment?: BrainCommitmentTier;
   readonly agent: string;
   readonly now?: Date;
   readonly configPath?: string;
@@ -244,6 +253,9 @@ function render(record: Omit<DecisionRecord, "path">): string {
     lines.push(`rating: ${record.rating}`);
     lines.push(`rationale: ${JSON.stringify(record.rationale)}`);
   }
+  // Commitment tier (B3): emitted only when set so an unset decision is
+  // byte-identical to a pre-B3 note.
+  if (record.commitment !== null) lines.push(`commitment: ${record.commitment}`);
   lines.push(`created_at: ${record.createdAt}`);
   lines.push(`agent: ${JSON.stringify(record.agent)}`);
   lines.push("---", "", record.notes, "");
@@ -279,6 +291,7 @@ function parsePage(vault: string, slug: string): DecisionRecord | null {
     agent: typeof meta["agent"] === "string" ? meta["agent"] : "",
     rating: parseRating(meta["rating"]),
     rationale: typeof meta["rationale"] === "string" ? meta["rationale"] : "",
+    commitment: readCommitmentTier(meta),
     notes: body.trim(),
     path,
   });
@@ -333,6 +346,7 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
     rating !== null
       ? sanitiseTextField(input.rationale ?? "", { maxLen: FIELD_MAX_LEN, singleLine: true }).trim()
       : "";
+  const commitment = validateCommitmentTier(input.commitment);
   const now = input.now ?? new Date();
   const slug = slugify(title);
 
@@ -357,6 +371,7 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
     agent,
     rating,
     rationale,
+    commitment,
     notes: (input.notes ?? "").trim(),
   };
 

@@ -30,6 +30,7 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceInt, coerceStr, coerceStrList } from "../coerce.ts";
 import { wrapToolErrors } from "./shared.ts";
 import { DECISION_RATING_MAX, DECISION_RATING_MIN } from "../../core/brain/decisions/record.ts";
+import { BRAIN_COMMITMENT_TIER, type BrainCommitmentTier } from "../../core/brain/types.ts";
 
 const TOOL = "brain_decision";
 
@@ -60,6 +61,7 @@ async function toolBrainDecision(
                 DECISION_RATING_MAX,
               );
         const rationale = coerceStr(args, "rationale", false) ?? undefined;
+        const commitment = coerceStr(args, "commitment", false) ?? undefined;
         const res = recordDecision(ctx.vault, {
           title,
           chosen,
@@ -69,6 +71,7 @@ async function toolBrainDecision(
           ...(notes ? { notes } : {}),
           ...(rating !== undefined ? { rating } : {}),
           ...(rationale ? { rationale } : {}),
+          ...(commitment ? { commitment: commitment as BrainCommitmentTier } : {}),
           agent: agent ?? "",
         });
         return {
@@ -226,6 +229,11 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description: `record/rate: quality rating in [${DECISION_RATING_MIN}, ${DECISION_RATING_MAX}].`,
         },
         rationale: { type: "string", description: "record/rate: justification for the rating." },
+        commitment: {
+          type: "string",
+          enum: Object.values(BRAIN_COMMITMENT_TIER),
+          description: "record: optional commitment tier (exploring|leaning|decided|locked).",
+        },
         rated: {
           type: "boolean",
           description: "list: return only rated decisions, sorted by rating.",

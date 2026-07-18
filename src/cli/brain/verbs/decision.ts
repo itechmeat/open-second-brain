@@ -25,6 +25,7 @@ import {
   showDecision,
   updateRating,
 } from "../../../core/brain/decisions/record.ts";
+import type { BrainCommitmentTier } from "../../../core/brain/types.ts";
 import { normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 const USAGE_ERROR_EXIT = 2;
@@ -48,6 +49,7 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
     outcome: { type: "string" },
     rating: { type: "string" },
     rationale: { type: "string" },
+    commitment: { type: "string" },
     rated: { type: "boolean" },
     json: { type: "boolean" },
   });
@@ -84,6 +86,7 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
           return usageError("brain decision record --rating must be a number");
         }
         const rationale = normalizeFlagString(flags["rationale"]);
+        const commitment = normalizeFlagString(flags["commitment"]);
         const res = recordDecision(vault, {
           title,
           chosen,
@@ -93,6 +96,7 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
           ...(notes ? { notes } : {}),
           ...(rating !== undefined ? { rating } : {}),
           ...(rationale ? { rationale } : {}),
+          ...(commitment ? { commitment: commitment as BrainCommitmentTier } : {}),
           agent: explicitAgent ?? "",
           configPath: config,
         });
