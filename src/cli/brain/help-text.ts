@@ -99,6 +99,7 @@ Brain verbs (observing memory):
   today               Today dashboard: due obligations, open loops, recent activity, totals
   apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
   pending             Review the write-approval queue: list | apply <id> | reject <id>
+  signal              Fact signal lifecycle: retire <id> --reason <text>
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -701,6 +702,14 @@ export const VERB_HELP: Record<string, string> = {
     "Brain/inbox/ unchanged (entity anchors and dedup hash preserved); reject\n" +
     "moves it to Brain/retired/ with retire-shaped frontmatter. Applying or\n" +
     "rejecting a missing id exits 2 (never a silent no-op).\n",
+  signal:
+    "usage: o2b brain signal retire <id> --reason <text> [--superseded-by <id>] [--vault <path>] [--json]\n" +
+    "Retire an extracted fact signal: move Brain/inbox/sig-*.md into\n" +
+    "Brain/retired/ with retire-shaped frontmatter (_status, retired_at,\n" +
+    "retired_reason, optional superseded_by, old-id alias). The directory move\n" +
+    "excludes it from the dream pass while it stays readable in Brain/retired/.\n" +
+    "Retiring a missing, already-retired, or non-signal id exits 2 (never a\n" +
+    "silent no-op).\n",
   agenda:
     "usage: o2b brain agenda --events <file|-> [args]\n" +
     "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +

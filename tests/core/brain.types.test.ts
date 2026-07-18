@@ -95,6 +95,8 @@ describe("BRAIN_* const enums", () => {
       "durability-skip",
       // A4 (t_f79b4fe0) write-time conflict advisory
       "write-conflict-advisory",
+      // A5 (t_66c12a67) fact signal retire lifecycle
+      "signal-retire",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

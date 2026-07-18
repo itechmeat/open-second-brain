@@ -281,6 +281,16 @@ export const BRAIN_LOG_EVENT_KIND = {
    * double-fire on a single write.
    */
   writeConflictAdvisory: "write-conflict-advisory",
+  /**
+   * `signal-retire` (A5, t_66c12a67) - an extracted fact signal was
+   * retired: moved from `Brain/inbox/` into `Brain/retired/` with retire
+   * metadata. Signals have no per-signal audit file (only preferences do),
+   * so this dedicated log event IS the audit trail. Payload carries the
+   * retired `signal` wikilink, the `reason`, an optional `superseded_by`
+   * pointer, and the `agent`. The directory move is what excludes the
+   * signal from the dream pass; this event records that it happened.
+   */
+  signalRetire: "signal-retire",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
