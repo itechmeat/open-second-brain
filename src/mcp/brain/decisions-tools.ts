@@ -36,6 +36,7 @@ import {
   ReceiptError,
   DECISION_HISTORY_DEFAULT_LIMIT,
 } from "../../core/brain/decisions/receipts.ts";
+import { recallRatedDecisions } from "../../core/brain/decisions/recall.ts";
 
 const TOOL = "brain_decision";
 
@@ -164,6 +165,39 @@ async function toolBrainDecision(
           })),
         };
       }
+      case "recall": {
+        const prompt = coerceStr(args, "prompt", true)!;
+        const turn = args["turn"] === undefined ? 0 : coerceInt(args, "turn", 0, 0, 1_000_000);
+        const count = args["count"] === undefined ? 0 : coerceInt(args, "count", 0, 0, 1_000_000);
+        const lastTurnRaw = args["last_turn"];
+        const lastTurn =
+          lastTurnRaw === undefined || lastTurnRaw === null
+            ? null
+            : coerceInt(args, "last_turn", 0, 0, 1_000_000);
+        const surfacedIds = coerceStrList(args, "surfaced_ids");
+        const res = recallRatedDecisions(ctx.vault, {
+          prompt,
+          turn,
+          state: {
+            surfacedIds,
+            lastTurn,
+            count: count || surfacedIds.length,
+          },
+        });
+        return {
+          action,
+          enabled: res.enabled,
+          surfaced: res.surfaced
+            ? { id: res.surfaced.id, slug: res.surfaced.slug, rating: res.surfaced.rating }
+            : null,
+          text: res.text,
+          state: {
+            surfaced_ids: res.state.surfacedIds,
+            last_turn: res.state.lastTurn,
+            count: res.state.count,
+          },
+        };
+      }
       case "history": {
         const subject = coerceStr(args, "subject", false) ?? undefined;
         const cursor = coerceStr(args, "cursor", false) ?? undefined;
@@ -213,7 +247,7 @@ async function toolBrainDecision(
       default:
         throw new MCPError(
           INVALID_PARAMS,
-          `${TOOL}: 'action' must be one of record, outcome, rate, show, list, compare, similar, history`,
+          `${TOOL}: 'action' must be one of record, outcome, rate, show, list, compare, similar, history, recall`,
         );
     }
   });
@@ -223,13 +257,23 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Decision-record note family. action: record captures a `type: decision` note (chosen, assumption, review_date, optional premortem/rating) + opens a review obligation; outcome backfills; rate sets a rating; show/list/compare read; similar finds past decisions; history reads decision-change receipts.",
+      "Decision-record family. action: record captures a `type: decision` note (chosen, assumption, review_date, optional premortem/rating); outcome backfills; rate sets a rating; show/list/compare read; similar finds past decisions; history reads receipts; recall resurfaces a rated decision on a prompt.",
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["record", "outcome", "rate", "show", "list", "compare", "similar", "history"],
+          enum: [
+            "record",
+            "outcome",
+            "rate",
+            "show",
+            "list",
+            "compare",
+            "similar",
+            "history",
+            "recall",
+          ],
           description: "Which decision operation to run.",
         },
         title: {
@@ -287,6 +331,23 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           maximum: 500,
           description: "history: page size (default 50).",
         },
+        prompt: { type: "string", description: "recall: the incoming prompt to match." },
+        turn: {
+          type: "integer",
+          minimum: 0,
+          description: "recall: monotonic turn index (spacing).",
+        },
+        surfaced_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "recall: decision ids already surfaced this session.",
+        },
+        last_turn: {
+          type: "integer",
+          minimum: 0,
+          description: "recall: turn of the last recall (spacing state).",
+        },
+        count: { type: "integer", minimum: 0, description: "recall: recalls surfaced so far." },
         agent: {
           type: "string",
           description: "Optional agent identity override; defaults to the server-resolved name.",

@@ -27,6 +27,7 @@ import {
 } from "../../../core/brain/decisions/record.ts";
 import type { BrainCommitmentTier } from "../../../core/brain/types.ts";
 import { queryDecisionChangeHistory } from "../../../core/brain/decisions/receipts.ts";
+import { recallRatedDecisions } from "../../../core/brain/decisions/recall.ts";
 import { normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 const USAGE_ERROR_EXIT = 2;
@@ -55,13 +56,15 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
     subject: { type: "string" },
     cursor: { type: "string" },
     limit: { type: "string" },
+    prompt: { type: "string" },
+    turn: { type: "string" },
     json: { type: "boolean" },
   });
 
   const action = positional[0];
   if (action === undefined) {
     return usageError(
-      "brain decision requires an action: record | outcome | rate | show | list | compare | similar | history",
+      "brain decision requires an action: record | outcome | rate | show | list | compare | similar | history | recall",
     );
   }
 
@@ -301,6 +304,37 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
             ok(`${r.ts} ${r.subject}: ${r.before} -> ${r.after} (${r.reason_code})`);
           }
           if (page.nextCursor) ok(`-- more: --cursor ${page.nextCursor}`);
+        }
+        return 0;
+      }
+      case "recall": {
+        const prompt = normalizeFlagString(flags["prompt"]);
+        if (!prompt) return usageError("brain decision recall requires --prompt <text>");
+        const turnRaw = normalizeFlagString(flags["turn"]);
+        const turn = turnRaw === null ? 0 : Number(turnRaw);
+        if (!Number.isInteger(turn) || turn < 0) {
+          return usageError("brain decision recall --turn must be a non-negative integer");
+        }
+        const res = recallRatedDecisions(vault, { prompt, turn, configPath: config });
+        if (wantsJson) {
+          okJson({
+            enabled: res.enabled,
+            surfaced: res.surfaced
+              ? { id: res.surfaced.id, slug: res.surfaced.slug, rating: res.surfaced.rating }
+              : null,
+            text: res.text,
+            state: {
+              surfaced_ids: res.state.surfacedIds,
+              last_turn: res.state.lastTurn,
+              count: res.state.count,
+            },
+          });
+        } else if (!res.enabled) {
+          ok("decision recall not configured");
+        } else if (res.surfaced === null) {
+          ok("no decision recalled");
+        } else {
+          ok(res.text);
         }
         return 0;
       }

@@ -152,6 +152,60 @@ describe("o2b brain decision", () => {
     expect(decisions.map((d: { rating: number }) => d.rating)).toEqual([5, 4]);
   });
 
+  test("recall is disabled unless configured (B5)", async () => {
+    await runCli(
+      [
+        "brain",
+        "decision",
+        "record",
+        "--config",
+        configPath,
+        "--title",
+        "Adopt Bun runtime",
+        "--chosen",
+        "Bun",
+        "--assumption",
+        "x",
+        "--review-date",
+        "2026-12-01",
+        "--rating",
+        "5",
+      ],
+      { env },
+    );
+    const off = await runCli(
+      [
+        "brain",
+        "decision",
+        "recall",
+        "--config",
+        configPath,
+        "--prompt",
+        "adopt Bun runtime",
+        "--json",
+      ],
+      { env },
+    );
+    expect(JSON.parse(off.stdout).enabled).toBe(false);
+
+    const on = await runCli(
+      [
+        "brain",
+        "decision",
+        "recall",
+        "--config",
+        configPath,
+        "--prompt",
+        "adopt Bun runtime for the API",
+        "--json",
+      ],
+      { env: { ...env, OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION: "3" } },
+    );
+    const parsed = JSON.parse(on.stdout);
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.surfaced.slug).toBe("adopt-bun-runtime");
+  });
+
   test("missing required flags exit non-zero", async () => {
     const r = await runCli(
       ["brain", "decision", "record", "--config", configPath, "--title", "x"],

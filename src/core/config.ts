@@ -513,6 +513,63 @@ export function resolveSessionHandoff(configPath?: string): boolean {
 }
 
 /**
+ * Rated-decision recall config keys (Belief lifecycle suite, B5,
+ * t_5712fa39). Both are OPTIONAL and default-OFF: when neither the env
+ * nor the config key is set, {@link resolveDecisionRecallMaxPerSession}
+ * returns `null`, which disables rated-decision recall entirely so the
+ * session-injection output is byte-identical to today.
+ */
+export const DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session";
+export const DECISION_RECALL_MAX_PER_SESSION_ENV_KEY =
+  "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION";
+export const DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns";
+export const DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY =
+  "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS";
+
+/**
+ * Shared body for a non-negative-integer config value: env var (trimmed)
+ * wins, falling back to the config key (trimmed). Returns `null` when
+ * unset, blank, or not a non-negative integer, so an unconfigured value
+ * leaves the caller's default behaviour intact.
+ */
+function resolveConfigNonNegativeInt(
+  envKey: string,
+  configKey: string,
+  configPath?: string,
+): number | null {
+  const env = process.env[envKey]?.trim();
+  const raw = env || discoverConfig(configPath).data[configKey]?.trim();
+  if (!raw || raw.length === 0) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) return null;
+  return n;
+}
+
+/**
+ * Max rated-decision recalls per session. `null` (the default) disables
+ * the feature entirely - injection stays byte-identical.
+ */
+export function resolveDecisionRecallMaxPerSession(configPath?: string): number | null {
+  return resolveConfigNonNegativeInt(
+    DECISION_RECALL_MAX_PER_SESSION_ENV_KEY,
+    DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY,
+    configPath,
+  );
+}
+
+/**
+ * Minimum turns between two rated-decision recalls. `null` (unset)
+ * resolves to `0` (no spacing) at the call site.
+ */
+export function resolveDecisionRecallMinSpacingTurns(configPath?: string): number | null {
+  return resolveConfigNonNegativeInt(
+    DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY,
+    DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY,
+    configPath,
+  );
+}
+
+/**
  * Wikilink output format (Workspace Insight Suite, t_5f31b5f1).
  * Default `preserve` keeps every generated/normalized link exactly as
  * typed - byte-identical to pre-suite behaviour. `full` and `short`

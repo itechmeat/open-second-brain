@@ -10,9 +10,13 @@
  * Introduced here by the chain-policy unit; the rated-decision recall
  * unit (B5) extends the same governor with per-session caps and spacing.
  *
- * Pure and language-agnostic: every decision is structural
+ * Pure and language-agnostic: every chain/decay decision is structural
  * (`superseded_by` presence, an integer recall count), never lexical.
+ * The B5 prompt-match is deterministic structural token overlap
+ * (`similarity.ts` jaccard) - no LLM, no language-specific word lists.
  */
+
+import { jaccard, tokenise } from "./similarity.ts";
 
 // ----- Decay thresholds -----------------------------------------------------
 
@@ -109,4 +113,138 @@ export function isLowRecallSupersededAncestor(
  */
 export function effectiveStaleThresholdDays(accelerated: boolean, normalDays: number): number {
   return accelerated ? Math.min(CHAIN_DECAY_STALE_DAYS, normalDays) : normalDays;
+}
+
+// ----- Rated-decision recall (B5, t_5712fa39) --------------------------------
+
+/**
+ * Minimum structural token overlap (jaccard of prompt tokens vs a rated
+ * decision's tokens) for a prompt to be treated as a match. Deterministic
+ * and language-agnostic - no LLM, no stopword list.
+ */
+export const DECISION_RECALL_MIN_OVERLAP = 0.2;
+
+/** One rated decision offered to the prompt matcher. */
+export interface RatedDecisionCandidate {
+  readonly id: string;
+  /** Rating in [1, 5]; higher ranks first on an overlap tie. */
+  readonly rating: number;
+  /** Verbatim text to match against (e.g. title + chosen). */
+  readonly text: string;
+}
+
+/** A prompt-match hit: which decision matched and how strongly. */
+export interface RatedDecisionMatch {
+  readonly id: string;
+  readonly rating: number;
+  readonly overlap: number;
+}
+
+/**
+ * Deterministically match a prompt against rated decisions by structural
+ * token overlap. Returns hits at or above `minOverlap`, ranked by
+ * descending overlap, then descending rating, then id (stable). Pure: no
+ * disk, no model, no language-specific vocabulary.
+ */
+export function matchRatedDecisions(
+  prompt: string,
+  candidates: ReadonlyArray<RatedDecisionCandidate>,
+  opts: { readonly minOverlap?: number } = {},
+): RatedDecisionMatch[] {
+  const minOverlap = opts.minOverlap ?? DECISION_RECALL_MIN_OVERLAP;
+  const promptTokens = tokenise(prompt);
+  if (promptTokens.size === 0) return [];
+  const out: RatedDecisionMatch[] = [];
+  for (const c of candidates) {
+    const overlap = jaccard(promptTokens, tokenise(c.text));
+    if (overlap < minOverlap) continue;
+    out.push({ id: c.id, rating: c.rating, overlap });
+  }
+  out.sort((a, b) => b.overlap - a.overlap || b.rating - a.rating || a.id.localeCompare(b.id));
+  return out;
+}
+
+/** Per-session caps + spacing for rated-decision recall. */
+export interface DecisionRecallConfig {
+  /**
+   * Maximum recalls per session. `null` DISABLES recall entirely - the
+   * governor surfaces nothing, so an unconfigured vault stays
+   * byte-identical.
+   */
+  readonly maxPerSession: number | null;
+  /** Minimum turns between two recalls. `0` means no spacing gate. */
+  readonly minSpacingTurns: number;
+}
+
+/** Session bookkeeping the governor threads across turns (caller-owned). */
+export interface DecisionRecallState {
+  /** Ids already surfaced this session (never re-surfaced). */
+  readonly surfacedIds: ReadonlyArray<string>;
+  /** Turn index of the most recent recall, or `null` when none yet. */
+  readonly lastTurn: number | null;
+  /** Total recalls surfaced this session. */
+  readonly count: number;
+}
+
+/** The zero state for a fresh session. */
+export const EMPTY_DECISION_RECALL_STATE: DecisionRecallState = Object.freeze({
+  surfacedIds: Object.freeze([]),
+  lastTurn: null,
+  count: 0,
+});
+
+export interface GovernDecisionRecallInput {
+  readonly matches: ReadonlyArray<RatedDecisionMatch>;
+  readonly state: DecisionRecallState;
+  /** Monotonic current turn index. */
+  readonly turn: number;
+  readonly config: DecisionRecallConfig;
+}
+
+export interface GovernDecisionRecallResult {
+  /** The single decision to resurface this turn, or `null` when gated. */
+  readonly surface: RatedDecisionMatch | null;
+  /** Next session state (advanced only when a decision was surfaced). */
+  readonly state: DecisionRecallState;
+}
+
+/**
+ * Apply per-session cap and spacing to a ranked match list, surfacing at
+ * most one new rated decision this turn. Gates, in order:
+ *   1. recall disabled (`maxPerSession === null`) -> surface nothing;
+ *   2. per-session cap reached -> surface nothing;
+ *   3. spacing: fewer than `minSpacingTurns` since the last recall ->
+ *      surface nothing;
+ *   4. otherwise surface the top-ranked match not already surfaced.
+ * The returned state advances only when a decision is surfaced, so a
+ * gated turn leaves the state (and thus future gating) unchanged.
+ */
+export function governDecisionRecall(input: GovernDecisionRecallInput): GovernDecisionRecallResult {
+  const { config, state, turn, matches } = input;
+  if (config.maxPerSession === null || config.maxPerSession <= 0) {
+    return { surface: null, state };
+  }
+  if (state.count >= config.maxPerSession) {
+    return { surface: null, state };
+  }
+  if (
+    state.lastTurn !== null &&
+    config.minSpacingTurns > 0 &&
+    turn - state.lastTurn < config.minSpacingTurns
+  ) {
+    return { surface: null, state };
+  }
+  const already = new Set(state.surfacedIds);
+  const pick = matches.find((m) => !already.has(m.id));
+  if (pick === undefined) {
+    return { surface: null, state };
+  }
+  return {
+    surface: pick,
+    state: Object.freeze({
+      surfacedIds: Object.freeze([...state.surfacedIds, pick.id]),
+      lastTurn: turn,
+      count: state.count + 1,
+    }),
+  };
 }

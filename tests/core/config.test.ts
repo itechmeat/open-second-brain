@@ -11,6 +11,8 @@ import {
   resolveAgentName,
   resolveExposeHostPaths,
   resolveLinkOutputFormat,
+  resolveDecisionRecallMaxPerSession,
+  resolveDecisionRecallMinSpacingTurns,
   resolveRecallAdequacyThresholds,
   resolveSkillsAttachTriggers,
   resolveSkillsDir,
@@ -40,6 +42,8 @@ beforeEach(() => {
     "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_WEAK",
     "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_MIN_RESULTS",
     "OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS",
+    "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION",
+    "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS",
   ]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
@@ -283,6 +287,37 @@ describe("resolveTimezone", () => {
     const cfg = join(tmp, "config.yaml");
     writeFileSync(cfg, 'timezone: "Europe/Belgrade"\n');
     expect(resolveTimezone(cfg)).toBe("UTC");
+  });
+});
+
+describe("resolveDecisionRecall config (B5)", () => {
+  test("returns null when unset (feature disabled, byte-identical)", () => {
+    const cfg = join(tmp, "missing.yaml");
+    expect(resolveDecisionRecallMaxPerSession(cfg)).toBeNull();
+    expect(resolveDecisionRecallMinSpacingTurns(cfg)).toBeNull();
+  });
+
+  test("reads non-negative integers from config", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(
+      cfg,
+      "decision_recall.max_per_session: 3\ndecision_recall.min_spacing_turns: 5\n",
+    );
+    expect(resolveDecisionRecallMaxPerSession(cfg)).toBe(3);
+    expect(resolveDecisionRecallMinSpacingTurns(cfg)).toBe(5);
+  });
+
+  test("rejects non-integer / negative values as null", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "decision_recall.max_per_session: -1\n");
+    expect(resolveDecisionRecallMaxPerSession(cfg)).toBeNull();
+  });
+
+  test("env wins over config", () => {
+    process.env["OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION"] = "7";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "decision_recall.max_per_session: 2\n");
+    expect(resolveDecisionRecallMaxPerSession(cfg)).toBe(7);
   });
 });
 

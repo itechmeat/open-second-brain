@@ -179,6 +179,47 @@ describe("brain_decision tool", () => {
     expect(receipts[0]!.reason_code).toBe("supersede");
   });
 
+  test("recall is disabled (byte-identical) when unconfigured (B5)", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    await call(server, {
+      action: "record",
+      title: "Adopt Bun runtime",
+      chosen: "Bun",
+      assumption: "x",
+      review_date: "2026-12-01",
+      rating: 5,
+    });
+    const res = payload(await call(server, { action: "recall", prompt: "adopt Bun runtime" }));
+    expect(res["enabled"]).toBe(false);
+    expect(res["surfaced"]).toBeNull();
+    expect(res["text"]).toBe("");
+  });
+
+  test("recall resurfaces a rated decision when configured (B5)", async () => {
+    process.env["OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION"] = "3";
+    try {
+      const server = new MCPServer({ vault, configPath: null });
+      await initialize(server);
+      await call(server, {
+        action: "record",
+        title: "Adopt Bun runtime for the CLI",
+        chosen: "Bun",
+        assumption: "x",
+        review_date: "2026-12-01",
+        rating: 5,
+      });
+      const res = payload(
+        await call(server, { action: "recall", prompt: "should we adopt Bun runtime for the API" }),
+      );
+      expect(res["enabled"]).toBe(true);
+      expect((res["surfaced"] as { slug: string }).slug).toBe("adopt-bun-runtime-for-the-cli");
+      expect(res["text"]).toContain("Recalled decision");
+    } finally {
+      delete process.env["OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION"];
+    }
+  });
+
   test("malformed input returns an error result", async () => {
     const server = new MCPServer({ vault, configPath: null });
     await initialize(server);
