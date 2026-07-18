@@ -30,6 +30,11 @@ import { IgnoreScope, parseIgnorePatterns } from "../../fs/ignore.ts";
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
 import { computePlanId, readCheckpoint } from "./checkpoint.ts";
 import { classifyPaths, readManifest } from "./content-manifest.ts";
+import {
+  extractableAllowlist,
+  partitionExtractable,
+  type SkippedPage,
+} from "./extractable-gate.ts";
 
 /**
  * Default set of ingestible (text-bearing) extensions, lowercase with the dot.
@@ -106,6 +111,12 @@ export interface BatchPlan {
   readonly batches: readonly IngestBatch[];
   /** Canonical paths classified `unchanged` and therefore skipped, sorted. */
   readonly skipped: readonly string[];
+  /**
+   * Pages skipped before extraction because their `schema_type` is not in the
+   * schema `extractable` allowlist (t_ed856388). Empty when the allowlist is
+   * unset (the gate is off), keeping the plan byte-identical to before.
+   */
+  readonly skippedNonExtractable: readonly SkippedPage[];
   /** Total number of files across all batches (`new` + `modified`). */
   readonly totalFiles: number;
   /** Total bytes across all batches. */
@@ -170,7 +181,20 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   // Discover ingestible files as canonical vault-relative paths, sorted.
   const discovered: string[] = [];
   collectIngestible(walkRoot, vault, extensions, excludeScope, discovered);
-  const relPaths = discovered.map((abs) => canonicalNotePath(toPosixRel(vault, abs))).toSorted();
+  const discoveredRel = discovered
+    .map((abs) => canonicalNotePath(toPosixRel(vault, abs)))
+    .toSorted();
+
+  // Honor the schema `extractable` allowlist (t_ed856388): pages whose
+  // schema_type is not extractable are skipped BEFORE extraction, reported with
+  // a reason, and logged. An empty allowlist gates nothing, so the discovered
+  // set (hence planId and the whole plan) stays byte-identical to before.
+  const partition = partitionExtractable(vault, discoveredRel, extractableAllowlist(vault));
+  const relPaths = partition.extractable;
+  const skippedNonExtractable = partition.skipped;
+  for (const s of skippedNonExtractable) {
+    process.stderr.write(`batch-plan: skipping non-extractable page ${s.path} (${s.reason})\n`);
+  }
 
   // The plan id keys on the FULL discovered set, so it is identical before and
   // after an interruption regardless of how many items have completed.
@@ -210,6 +234,7 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     maxBatchFiles: opts.maxBatchFiles,
     batches,
     skipped,
+    skippedNonExtractable,
     totalFiles: planned.length,
     totalBytes: planned.reduce((sum, f) => sum + f.bytes, 0),
     planId,

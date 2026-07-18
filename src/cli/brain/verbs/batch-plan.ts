@@ -67,6 +67,16 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
         total_files: plan.totalFiles,
         total_bytes: plan.totalBytes,
         skipped: [...plan.skipped],
+        // Only present when the extractable gate skipped something, so the
+        // no-declaration output is byte-identical to before.
+        ...(plan.skippedNonExtractable.length > 0
+          ? {
+              skipped_non_extractable: plan.skippedNonExtractable.map((s) => ({
+                path: s.path,
+                reason: s.reason,
+              })),
+            }
+          : {}),
         plan_id: plan.planId,
         resumed_completed: plan.resumedCompleted,
         batches: plan.batches.map((b) => ({
@@ -91,6 +101,10 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     if (plan.skipped.length > 0) {
       info(`  ${plan.skipped.length} unchanged file(s) skipped:`);
       for (const p of plan.skipped) info(`    - ${p}`);
+    }
+    if (plan.skippedNonExtractable.length > 0) {
+      info(`  ${plan.skippedNonExtractable.length} non-extractable page(s) skipped:`);
+      for (const s of plan.skippedNonExtractable) info(`    - ${s.path} (${s.reason})`);
     }
     return 0;
   } catch (err) {

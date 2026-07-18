@@ -161,6 +161,16 @@ function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
     total_files: plan.totalFiles,
     total_bytes: plan.totalBytes,
     skipped: [...plan.skipped],
+    // Only emitted when the extractable gate skipped something, so a plan with
+    // no extractable declaration serializes byte-identically to before.
+    ...(plan.skippedNonExtractable.length > 0
+      ? {
+          skipped_non_extractable: plan.skippedNonExtractable.map((s) => ({
+            path: s.path,
+            reason: s.reason,
+          })),
+        }
+      : {}),
     plan_id: plan.planId,
     resumed_completed: plan.resumedCompleted,
     batches: plan.batches.map((b) => ({
