@@ -253,7 +253,7 @@ describe("deleteBySource — confirmed cleanup", () => {
   });
 });
 
-describe("deleteBySource — D1 snapshot gate", () => {
+describe("deleteBySource - D1 snapshot gate", () => {
   test("confirm path snapshots before deleting and reports the recovery point", () => {
     seedContaminatedVault();
 
