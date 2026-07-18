@@ -7,6 +7,7 @@ import {
   DECISION_CHANGE_SCHEMA_VERSION,
   ReceiptError,
   appendDecisionChangeReceipt,
+  normalizeDecisionSubject,
   queryDecisionChangeHistory,
   readDecisionChangeReceipts,
 } from "../../../../src/core/brain/decisions/receipts.ts";
@@ -150,6 +151,83 @@ describe("lifecycle hook", () => {
     expect(receipts.length).toBe(1);
     expect(receipts[0]!.reason_code).toBe("supersede");
     expect(receipts[0]!.after).toContain("superseded_by");
+  });
+});
+
+describe("normalizeDecisionSubject", () => {
+  test("bare id is unchanged", () => {
+    expect(normalizeDecisionSubject("decision-adopt-bun")).toBe("decision-adopt-bun");
+  });
+
+  test("strips wikilink fencing", () => {
+    expect(normalizeDecisionSubject("[[decision-adopt-bun]]")).toBe("decision-adopt-bun");
+  });
+
+  test("strips a vault-relative directory prefix and .md extension", () => {
+    expect(normalizeDecisionSubject("Brain/decisions/decision-adopt-bun.md")).toBe(
+      "decision-adopt-bun",
+    );
+  });
+
+  test("mixed form (wikilinked path) reduces to the same bare id", () => {
+    expect(normalizeDecisionSubject("[[Brain/decisions/decision-adopt-bun.md]]")).toBe(
+      "decision-adopt-bun",
+    );
+  });
+
+  test("distinct subjects stay distinct after normalization", () => {
+    expect(normalizeDecisionSubject("decision-adopt-bun")).not.toBe(
+      normalizeDecisionSubject("decision-adopt-deno"),
+    );
+  });
+});
+
+describe("queryDecisionChangeHistory subject matching (bare/wikilink/path forms)", () => {
+  test("a bare-path-stored subject (lifecycle receipt) matches a bare id query", () => {
+    appendDecisionChangeReceipt(
+      vault,
+      baseInput({ subject: "Brain/decisions/decision-adopt-bun.md" }),
+    );
+    const page = queryDecisionChangeHistory(vault, { subject: "decision-adopt-bun" });
+    expect(page.total).toBe(1);
+  });
+
+  test("a bare-path-stored subject matches a wikilinked query", () => {
+    appendDecisionChangeReceipt(
+      vault,
+      baseInput({ subject: "Brain/decisions/decision-adopt-bun.md" }),
+    );
+    const page = queryDecisionChangeHistory(vault, { subject: "[[decision-adopt-bun]]" });
+    expect(page.total).toBe(1);
+  });
+
+  test("a wikilink-stored subject (decision record receipt) matches a bare id query", () => {
+    appendDecisionChangeReceipt(vault, baseInput({ subject: "[[decision-adopt-bun]]" }));
+    const page = queryDecisionChangeHistory(vault, { subject: "decision-adopt-bun" });
+    expect(page.total).toBe(1);
+  });
+
+  test("--subject bare id and --subject wikilink return identical results", () => {
+    appendDecisionChangeReceipt(vault, baseInput({ subject: "[[decision-adopt-bun]]" }));
+    appendDecisionChangeReceipt(
+      vault,
+      baseInput({ subject: "[[decision-adopt-bun]]", after: "confidence:high(0.91)" }),
+    );
+    const byBareId = queryDecisionChangeHistory(vault, { subject: "decision-adopt-bun" });
+    const byWikilink = queryDecisionChangeHistory(vault, { subject: "[[decision-adopt-bun]]" });
+    expect(byBareId.total).toBe(2);
+    expect(byWikilink.total).toBe(2);
+    expect(byBareId.receipts.map((r) => r.idempotency_key)).toEqual(
+      byWikilink.receipts.map((r) => r.idempotency_key),
+    );
+  });
+
+  test("distinct subjects remain distinct: no cross-match", () => {
+    appendDecisionChangeReceipt(vault, baseInput({ subject: "[[decision-adopt-bun]]" }));
+    appendDecisionChangeReceipt(vault, baseInput({ subject: "[[decision-adopt-deno]]" }));
+    const page = queryDecisionChangeHistory(vault, { subject: "decision-adopt-bun" });
+    expect(page.total).toBe(1);
+    expect(page.receipts[0]!.subject).toBe("[[decision-adopt-bun]]");
   });
 });
 

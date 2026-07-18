@@ -178,6 +178,34 @@ function computeIdempotencyKey(subject: string, before: string, after: string): 
   return createHash("sha256").update(`${subject}\n${before}\n${after}`, "utf8").digest("hex");
 }
 
+/**
+ * Reduce a receipt subject to its bare identifier for read-side matching.
+ *
+ * Receipts store `subject` in whichever shape the writer had on hand: a
+ * decision record's B4 hook stamps a wikilink (`[[decision-adopt-bun]]`,
+ * `record.ts`), while the lifecycle tombstone/supersede hook stamps a bare
+ * vault-relative path (`Brain/decisions/decision-adopt-bun.md`,
+ * `lifecycle/tombstone.ts`). A history query filtering by subject would
+ * otherwise require the caller to know which writer produced a given
+ * receipt. This strips, in order: a `[[ ]]` wikilink fence (and any
+ * `|alias` display suffix), a leading directory prefix, and a trailing
+ * `.md` extension - so the bare id, wikilink, and full-path forms of the
+ * same subject all normalize to one value. Storage is untouched; this is
+ * read-side normalization only, applied at query time in
+ * {@link queryDecisionChangeHistory}.
+ */
+export function normalizeDecisionSubject(raw: string): string {
+  let value = raw.trim();
+  const fence = /^\[\[([^\]]+)\]\]$/.exec(value);
+  if (fence) value = fence[1]!.trim();
+  const pipe = value.indexOf("|");
+  if (pipe >= 0) value = value.slice(0, pipe).trim();
+  const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
+  if (slash >= 0) value = value.slice(slash + 1);
+  if (value.toLowerCase().endsWith(".md")) value = value.slice(0, -3);
+  return value;
+}
+
 // ----- Append ---------------------------------------------------------------
 
 /**
@@ -447,8 +475,14 @@ export function queryDecisionChangeHistory(
   if (offset < 0) throw new ReceiptError("receipt: malformed cursor");
 
   const all = readDecisionChangeReceipts(vault).receipts;
-  const matching =
-    query.subject !== undefined ? all.filter((r) => r.subject === query.subject) : all;
+  let matching = all;
+  if (query.subject !== undefined) {
+    // Read-side only: receipts store subjects in whichever shape their
+    // writer had on hand (bare id, wikilink, or vault-relative path), so
+    // both sides are normalized to the bare id before comparing.
+    const wanted = normalizeDecisionSubject(query.subject);
+    matching = all.filter((r) => normalizeDecisionSubject(r.subject) === wanted);
+  }
   const total = matching.length;
   const page = matching.slice(offset, offset + limit);
   const nextOffset = offset + page.length;
