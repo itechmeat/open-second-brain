@@ -335,3 +335,28 @@ test("second_brain_status reports search.exists=false when index missing", async
   expect(search!["exists"]).toBe(false);
   expect(search!["hint"]).toMatch(/o2b search index/);
 });
+
+test("brain_search surfaces authoredAt when present and omits it otherwise", async () => {
+  writeMd(
+    "Brain/inbox/sig-dated.md",
+    "---\nkind: brain-signal\nsource_type: session\nauthored_at: 2026-05-20T10:00:00Z\n---\n\n# Turn\n\nchronology alpha token discussed here.",
+  );
+  writeMd(
+    "Brain/inbox/sig-plain.md",
+    "---\nkind: brain-signal\nsource_type: session\n---\n\n# Turn\n\nchronology alpha token discussed here.",
+  );
+  const cfg = resolveSearchConfig({ vault, configPath });
+  await indexVault(cfg);
+
+  const server = makeServer();
+  await initialize(server);
+  const resp = await call(server, "brain_search", { query: "chronology alpha token", limit: 10 });
+  const body = extractToolResult(resp);
+  const results = body["results"] as Array<Record<string, unknown>>;
+  const dated = results.find((r) => r["path"] === "Brain/inbox/sig-dated.md");
+  const plain = results.find((r) => r["path"] === "Brain/inbox/sig-plain.md");
+  expect(dated).toBeDefined();
+  expect(plain).toBeDefined();
+  expect(dated!["authoredAt"]).toBe(Math.floor(Date.parse("2026-05-20T10:00:00Z") / 1000));
+  expect("authoredAt" in plain!).toBe(false);
+});

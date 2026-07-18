@@ -275,3 +275,41 @@ test("search --evidence-pack --json exposes verification fields (union, complete
   expect(pack.completeness.verdict).toBe("sparse");
   expect(pack.completeness.uncovered_but_present_in_corpus.toSorted()).toEqual(["alpha", "zephyr"]);
 });
+
+test("search query --json surfaces authored_at when present, omits it otherwise", async () => {
+  writeVaultFile(
+    "Brain/inbox/sig-dated.md",
+    "---\nkind: brain-signal\nsource_type: session\nauthored_at: 2026-05-20T10:00:00Z\n---\n\n# Turn\n\nchronology alpha token discussed here.",
+  );
+  writeVaultFile(
+    "Brain/inbox/sig-plain.md",
+    "---\nkind: brain-signal\nsource_type: session\n---\n\n# Turn\n\nchronology alpha token discussed here.",
+  );
+  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+
+  const out = await runCli(["search", "chronology alpha token", "--json", "--limit", "10"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(out.returncode).toBe(0);
+  const obj = JSON.parse(out.stdout);
+  const dated = obj.results.find((r: { path: string }) => r.path === "Brain/inbox/sig-dated.md");
+  const plain = obj.results.find((r: { path: string }) => r.path === "Brain/inbox/sig-plain.md");
+  expect(dated).toBeDefined();
+  expect(plain).toBeDefined();
+  expect(dated.authored_at).toBe(Math.floor(Date.parse("2026-05-20T10:00:00Z") / 1000));
+  expect("authored_at" in plain).toBe(false);
+});
+
+test("search query --verbose prints an authored line only when present", async () => {
+  writeVaultFile(
+    "Brain/inbox/sig-dated.md",
+    "---\nkind: brain-signal\nsource_type: session\nauthored_at: 2026-05-20T10:00:00Z\n---\n\n# Turn\n\nchronology alpha token discussed here.",
+  );
+  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+
+  const out = await runCli(["search", "chronology alpha token", "--verbose"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(out.returncode).toBe(0);
+  expect(out.stdout).toContain("authored 2026-05-20T10:00:00.000Z");
+});

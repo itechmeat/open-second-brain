@@ -197,6 +197,7 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
           endLine: { type: "integer" },
           searchType: { type: "string" },
           reasons: { type: "array", items: { type: "string" } },
+          authoredAt: { type: "integer" },
           score_breakdown: {
             type: "object",
             properties: {
@@ -635,6 +636,9 @@ async function toolBrainSearch(
       endLine: r.endLine,
       searchType: r.searchType,
       reasons: r.reasons,
+      // Conversation chronology (S1): present only for a note carrying an
+      // authored_at instant, so the shape stays byte-identical otherwise.
+      ...(r.authoredAt !== undefined ? { authoredAt: r.authoredAt } : {}),
       ...(explain ? { score_breakdown: projectScoreBreakdown(r) } : {}),
       ...(r.trust !== undefined ? { trust: r.trust } : {}),
       ...(r.origin !== undefined ? { origin: r.origin } : {}),
