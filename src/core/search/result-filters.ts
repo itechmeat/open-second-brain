@@ -12,7 +12,9 @@ import { parseFrontmatter } from "../vault.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { isVisible, pageVisibility } from "../graph/visibility.ts";
 import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
-import { filterByProperties } from "./property-filter.ts";
+import { applyDegreeFilters, filterByProperties, type DegreePredicate } from "./property-filter.ts";
+import { degreeForPath, getGraphSnapshot } from "../brain/link-graph/graph-index.ts";
+import type { Store } from "./store.ts";
 import { deriveTrust } from "./enrich.ts";
 import { isTerminalStatus } from "./evidence-pack.ts";
 import { isTombstoned } from "../brain/lifecycle/tombstone.ts";
@@ -128,6 +130,24 @@ export function attachTrustMetadata(
       trust: deriveTrust({ mtimeMs, nowMs, ...(r.relations ? { relations: r.relations } : {}) }),
     });
   });
+}
+
+/**
+ * Graph-degree cardinality filter (t_9bee8f0b): drop rows whose
+ * backlink/outlink counts do not satisfy every predicate. Degree data
+ * comes from the memoized link-graph snapshot, so a repeat query against
+ * an unchanged index does no graph rebuild. An empty predicate list is a
+ * byte-identical pass-through (the caller gates on that, but this stays
+ * safe if called directly).
+ */
+export function applyDegreeFilter(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  predicates: ReadonlyArray<DegreePredicate>,
+  store: Store,
+): ReadonlyArray<BrainSearchResult> {
+  if (predicates.length === 0) return ranked;
+  const snapshot = getGraphSnapshot(store);
+  return applyDegreeFilters(ranked, predicates, (path) => degreeForPath(snapshot, path));
 }
 
 export function applyVisibilityScope(

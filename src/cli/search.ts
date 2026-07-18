@@ -56,6 +56,7 @@ import {
   SEARCH_LIMIT_MIN,
   SEARCH_LIMIT_MAX,
 } from "../core/search/index.ts";
+import { parseDegreePredicate, type DegreePredicate } from "../core/search/property-filter.ts";
 import type {
   IndexCheckReport,
   IndexProgressEvent,
@@ -620,6 +621,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     "semantic-weight": { type: "string" },
     "auto-refresh": { type: "boolean" },
     property: { type: "string-array" },
+    degree: { type: "string-array" },
     visibility: { type: "string-array" },
     "query-doc": { type: "string" },
     expand: { type: "boolean" },
@@ -680,6 +682,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     flags["semantic"] === true ? true : flags["keyword-only"] === true ? false : undefined;
 
   const properties = parsePropertyFlags(flags["property"] as string[] | undefined);
+  const degreeFilters = parseDegreeFlags(flags["degree"] as string[] | undefined);
   const visibility = flags["visibility"] as string[] | undefined;
 
   const searchOpts = {
@@ -689,6 +692,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     keywordOnly: flags["keyword-only"] === true,
     pathPrefix: typeof flags["path"] === "string" ? (flags["path"] as string) : undefined,
     ...(properties !== undefined ? { properties } : {}),
+    ...(degreeFilters !== undefined ? { degreeFilters } : {}),
     ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
     ...(flags["expand"] === true ? { expand: true } : {}),
@@ -753,6 +757,19 @@ function parsePropertyFlags(
   const frozen = new Map<string, ReadonlyArray<string>>();
   for (const [k, v] of acc) frozen.set(k, Object.freeze(v));
   return frozen;
+}
+
+/**
+ * Parse the repeatable `--degree <field><op><count>` flag into the
+ * `degreeFilters` predicate list that `search()` consumes, e.g.
+ * `--degree backlinks=0` (orphans) or `--degree outlinks>=5` (hubs).
+ * Invalid syntax throws a typed `SearchError` from
+ * {@link parseDegreePredicate}, surfaced by the search verb's error
+ * handler as exit 2.
+ */
+function parseDegreeFlags(raw: ReadonlyArray<string> | undefined): DegreePredicate[] | undefined {
+  if (!raw || raw.length === 0) return undefined;
+  return raw.map((entry) => parseDegreePredicate(entry));
 }
 
 function jsonForOutcome(o: SearchOutcome): unknown {

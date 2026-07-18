@@ -32,6 +32,20 @@ export interface GraphSnapshot {
   readonly adjacency: ReadonlyMap<number, ReadonlySet<number>>;
   /** documentId -> neighbour count (degree). Mirrors {@link adjacency}. */
   readonly degree: ReadonlyMap<number, number>;
+  /**
+   * documentId -> out-link count: distinct resolved documents this note
+   * links to (self-loops dropped). Only documents with at least one
+   * out-link appear; absence means zero. Feeds the `outlinks` filter
+   * predicate.
+   */
+  readonly outDegree: ReadonlyMap<number, number>;
+  /**
+   * documentId -> back-link count: distinct resolved documents that link
+   * to this note (self-loops dropped). Only documents with at least one
+   * back-link appear; absence means zero. Feeds the `backlinks` filter
+   * predicate.
+   */
+  readonly inDegree: ReadonlyMap<number, number>;
   /** Linked node ids in ascending order (the deterministic sweep order). */
   readonly nodesSorted: ReadonlyArray<number>;
   /** Count of distinct undirected edges. */
@@ -66,6 +80,11 @@ function buildGraphSnapshot(store: Store): GraphSnapshot {
   }
 
   const adjacency = new Map<number, Set<number>>();
+  // Directed neighbour sets, kept distinct so a note that links to the
+  // same target twice counts it once. Backlinks read `inNeighbours`,
+  // out-links read `outNeighbours`.
+  const outNeighbours = new Map<number, Set<number>>();
+  const inNeighbours = new Map<number, Set<number>>();
   let edgeCount = 0;
   for (const { source, target } of store.resolvedDocLinkPairs()) {
     if (source === target || !pathById.has(source) || !pathById.has(target)) continue;
@@ -77,10 +96,16 @@ function buildGraphSnapshot(store: Store): GraphSnapshot {
     }
     const back = adjacency.get(target) ?? adjacency.set(target, new Set()).get(target)!;
     back.add(source);
+    (outNeighbours.get(source) ?? outNeighbours.set(source, new Set()).get(source)!).add(target);
+    (inNeighbours.get(target) ?? inNeighbours.set(target, new Set()).get(target)!).add(source);
   }
 
   const degree = new Map<number, number>();
   for (const [node, neighbours] of adjacency) degree.set(node, neighbours.size);
+  const outDegree = new Map<number, number>();
+  for (const [node, neighbours] of outNeighbours) outDegree.set(node, neighbours.size);
+  const inDegree = new Map<number, number>();
+  for (const [node, neighbours] of inNeighbours) inDegree.set(node, neighbours.size);
 
   const nodesSorted = [...adjacency.keys()].toSorted((a, b) => a - b);
 
@@ -90,9 +115,33 @@ function buildGraphSnapshot(store: Store): GraphSnapshot {
     idByPath,
     adjacency,
     degree,
+    outDegree,
+    inDegree,
     nodesSorted,
     edgeCount,
   });
+}
+
+/** Directed degree of one note: distinct back-links and out-links. */
+export interface NoteDegree {
+  /** Distinct resolved documents that link TO this note. */
+  readonly backlinks: number;
+  /** Distinct resolved documents this note links to. */
+  readonly outlinks: number;
+}
+
+/**
+ * Look up a note's directed degree by vault-relative path. A path with no
+ * resolved edges (or an unknown path) is an orphan: `{ backlinks: 0,
+ * outlinks: 0 }`. Pure over the snapshot; no I/O.
+ */
+export function degreeForPath(snapshot: GraphSnapshot, path: string): NoteDegree {
+  const id = snapshot.idByPath.get(path);
+  if (id === undefined) return { backlinks: 0, outlinks: 0 };
+  return {
+    backlinks: snapshot.inDegree.get(id) ?? 0,
+    outlinks: snapshot.outDegree.get(id) ?? 0,
+  };
 }
 
 export interface GraphDegreeEntry {

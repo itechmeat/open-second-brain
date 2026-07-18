@@ -311,6 +311,8 @@ o2b partner codegraph report  Resolve the in-scope code project and report the c
 o2b search "<query>"          Hybrid full-text + semantic search across the vault
                               --property type=decision --property status=open
                               filters on frontmatter scalars (post-FTS phase)
+                              --degree backlinks=0 / --degree outlinks>=5 filter by graph
+                              cardinality (orphans, hubs; ops = != > >= < <=, ANDed)
                               --query-doc '<lanes>' separates intent/lex/vec/hyde recall lanes
                               --evidence-pack adds matched/missing term diagnostics, abstention text,
                               IDF-weighted coverage, per-token union records, and a completeness verdict

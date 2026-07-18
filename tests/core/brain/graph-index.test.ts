@@ -14,7 +14,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { getGraphSnapshot, graphStats } from "../../../src/core/brain/link-graph/graph-index.ts";
+import {
+  degreeForPath,
+  getGraphSnapshot,
+  graphStats,
+} from "../../../src/core/brain/link-graph/graph-index.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { makeConfig } from "../../helpers/search-fixtures.ts";
@@ -94,6 +98,33 @@ describe("getGraphSnapshot", () => {
       const after = getGraphSnapshot(store);
       expect(after).not.toBe(before); // rebuilt against the new revision
       expect(after.revision).toBe(before.revision + 1);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe("directed degree (backlinks / outlinks)", () => {
+  test("counts distinct out-links and back-links per note", async () => {
+    // hub -> a, hub -> b, a -> b. So:
+    //   hub: outlinks 2, backlinks 0
+    //   a:   outlinks 1, backlinks 1 (from hub)
+    //   b:   outlinks 0, backlinks 2 (from hub and a)
+    //   orphan: outlinks 0, backlinks 0
+    writeFileSync(join(vault, "hub.md"), `# hub\n\n${link(["a", "b"])}\n`);
+    writeFileSync(join(vault, "a.md"), `# a\n\n${link(["b"])}\n`);
+    writeFileSync(join(vault, "b.md"), "# b\n\nNo outbound links.\n");
+    writeFileSync(join(vault, "orphan.md"), "# orphan\n\nNothing.\n");
+    await indexVault(config);
+    const store = await Store.open(config, { mode: "read" });
+    try {
+      const snap = getGraphSnapshot(store);
+      expect(degreeForPath(snap, "hub.md")).toEqual({ backlinks: 0, outlinks: 2 });
+      expect(degreeForPath(snap, "a.md")).toEqual({ backlinks: 1, outlinks: 1 });
+      expect(degreeForPath(snap, "b.md")).toEqual({ backlinks: 2, outlinks: 0 });
+      expect(degreeForPath(snap, "orphan.md")).toEqual({ backlinks: 0, outlinks: 0 });
+      // Unknown path is treated as an orphan, not an error.
+      expect(degreeForPath(snap, "does-not-exist.md")).toEqual({ backlinks: 0, outlinks: 0 });
     } finally {
       await store.close();
     }

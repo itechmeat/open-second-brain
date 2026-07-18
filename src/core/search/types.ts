@@ -5,6 +5,7 @@
  */
 
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
+import type { DegreePredicate } from "./property-filter.ts";
 
 export type { VaultIgnoreRule };
 
@@ -550,6 +551,14 @@ export interface SearchOptions {
    * filter (existing behaviour).
    */
   readonly properties?: ReadonlyMap<string, ReadonlyArray<string>>;
+  /**
+   * Graph-degree cardinality predicates (t_9bee8f0b). Each predicate
+   * selects notes by backlink/outlink count (orphans `backlinks = 0`,
+   * hubs `outlinks >= N`, etc.); predicates are ANDed and applied as a
+   * post-rank phase backed by the link-graph degree index. Absent /
+   * empty = no filter, byte-identical to prior behaviour.
+   */
+  readonly degreeFilters?: ReadonlyArray<DegreePredicate>;
   /**
    * Per-query MMR override (v0.13.0). Absent uses the resolved config
    * default; `1` disables diversification for this query.
