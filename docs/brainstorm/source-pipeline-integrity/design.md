@@ -101,8 +101,10 @@ only P1 before P2 and O2 before O3; every prefix of the ship order leaves
 - **EPIPE handling is scoped to stdout write failures**: an early-closed
   stdout pipe exits 0; all other I/O errors keep failing loudly.
 - **MCP parity**: agent-relevant new surfaces (status snapshot, repair
-  preview, degree predicates, citation scan) get MCP counterparts; frozen
-  parity lists and tool-count tests update accordingly.
+  preview, degree predicates) get MCP counterparts; frozen parity lists and
+  tool-count tests update accordingly. The citation scan ships CLI-only,
+  following the existing precedent for operator-driven scan verbs; an MCP
+  counterpart is deferred until an agent workflow needs it.
 
 ## File changes
 

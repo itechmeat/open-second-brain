@@ -504,3 +504,14 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   bounds and `brain_search` results carry `authoredAt` when the indexed
   document preserved a turn instant. Context-pack reports list unresolved
   tension warnings for injected subject notes.
+- Since v1.34.0 `brain_status` joins the surface (103 total): one
+  consolidated operator snapshot over doctor, semantic health, hygiene,
+  stale scan, review queue, active profile, and state-file health, with a
+  next-command hint on every problem line.
+- Since v1.34.0 existing tools gain optional params: `brain_ingest_batch_plan`
+  accepts `src_subpath`, `exclude`, and `reconcile` (dispatched-vs-ingested
+  gap report), `brain_ingest_source` accepts `pre_extract` (deterministic
+  code-structure seeds), `brain_doctor` accepts `repair` / `apply` (guarded
+  fixes for doctor-detected classes), and `brain_search` accepts `degree`
+  (backlink/outlink cardinality predicates). Omitting every new param keeps
+  each tool's output byte-identical.
