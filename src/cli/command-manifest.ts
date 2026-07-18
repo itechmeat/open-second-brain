@@ -131,6 +131,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("export", "Export active preferences"),
         command("explorer", "Open or export Brain graph explorer"),
         command("doctor", "Check Brain invariants"),
+        command("status", "Unified operator status snapshot with next-command hints"),
         command("hygiene", "Hygiene pipeline: scan findings, apply remediation plan"),
         command("refresh", "Targeted recompile of stale derived pages"),
         command("anticipate", "Inspect or refresh the anticipatory context cache"),

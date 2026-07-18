@@ -773,6 +773,43 @@ describe("brain_doctor", () => {
 });
 
 // ---------------------------------------------------------------------------
+// brain_status
+// ---------------------------------------------------------------------------
+
+describe("brain_status", () => {
+  test("clean vault reports healthy with no problems", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const r = await call(server, "brain_status", {});
+    expect(r.result.isError).toBe(false);
+    const s = r.result.structuredContent;
+    expect(s.healthy).toBe(true);
+    expect(s.problems).toEqual([]);
+  });
+
+  test("a dangling workrun surfaces a problem carrying a next command", async () => {
+    const runs = join(vault, "Brain", "log", "dream-runs");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(
+      join(runs, "run-status.jsonl"),
+      JSON.stringify({ phase: "started", at: "2026-07-18T00:00:00.000Z", run_id: "run-status" }) +
+        "\n",
+      "utf8",
+    );
+    const server = makeServer();
+    await initialize(server);
+    const r = await call(server, "brain_status", {});
+    const s = r.result.structuredContent;
+    expect(s.healthy).toBe(false);
+    expect(s.problems.length).toBeGreaterThan(0);
+    for (const p of s.problems) {
+      expect(typeof p.nextCommand).toBe("string");
+      expect(p.nextCommand.startsWith("o2b ")).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Advertised-tool deprecation guard
 // ---------------------------------------------------------------------------
 

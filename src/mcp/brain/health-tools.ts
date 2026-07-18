@@ -10,6 +10,7 @@ import { resolveSearchConfig } from "../../core/search/index.ts";
 import { collectMaintenanceActions } from "../../core/brain/maintenance/collect.ts";
 import { runDoctor } from "../../core/brain/doctor.ts";
 import { applyRepair } from "../../core/brain/diagnostics.ts";
+import { buildOperatorSnapshot } from "../../core/brain/operator-snapshot.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
@@ -128,6 +129,20 @@ async function toolBrainHealth(
   };
 }
 
+// ----- brain_status --------------------------------------------------------
+
+async function toolBrainStatus(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const format = coerceFormat(args);
+  const snapshot = await buildOperatorSnapshot(
+    ctx.vault,
+    ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+  );
+  return { format, ...snapshot };
+}
+
 // ----- Serializers ---------------------------------------------------------
 
 export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
@@ -180,5 +195,23 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainHealth,
+  },
+  {
+    name: "brain_status",
+    description:
+      "Unified operator status snapshot: composes doctor, semantic health, hygiene, stale scan, review candidates, active profile, and state-file health. Every problem carries the exact next command to run; a healthy vault reports all-clear. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description:
+            "Output format hint. Structured result is identical; caller decides rendering.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainStatus,
   },
 ]);

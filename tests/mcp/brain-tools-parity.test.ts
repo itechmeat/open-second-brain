@@ -117,6 +117,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_skill_proposals",
   "brain_sources",
   "brain_stale_scan",
+  "brain_status",
   "brain_switch_vault",
   "brain_tension",
   "brain_tiers",

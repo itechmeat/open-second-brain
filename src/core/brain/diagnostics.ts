@@ -214,7 +214,7 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
       {
         code: "review-queue",
         issueClass: "review candidates pending",
-        nextCommand: "o2b brain review",
+        nextCommand: "o2b brain dream --dry-run",
         autoRepairable: false,
       },
       {

@@ -42,6 +42,7 @@ Brain verbs (observing memory):
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
   doctor              Validate Brain invariants (--strict; --remediate/--repair [--apply])
+  status              Unified operator status snapshot with next-command hints
   hygiene             Hygiene pipeline: scan findings; apply by ids (--dry-run)
   refresh             Targeted recompile of stale derived pages (--stale [--dry-run])
   anticipate          Inspect or refresh the anticipatory context cache (--session)
@@ -322,6 +323,12 @@ export const VERB_HELP: Record<string, string> = {
     "Semantic-health report: contradictory confirmed preferences, recurring\n" +
     "concepts with no dedicated preference, and confirmed preferences on stale\n" +
     "evidence, plus a clean/watch/investigate verdict. Read-only.\n",
+  status:
+    "usage: o2b brain status [--vault <path>] [--json]\n" +
+    "Unified operator status snapshot. Composes doctor, semantic health,\n" +
+    "hygiene, stale scan, review candidates, active profile, and state-file\n" +
+    "health into one readable view. Every problem line carries the exact next\n" +
+    "command to run; a healthy vault prints a compact all-clear. Read-only.\n",
   history:
     "usage: o2b brain history <slug> [--vault <path>] [--json]\n" +
     "Render a preference's edit-history timeline (one entry per content\n" +

@@ -108,6 +108,7 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_artifact_get: "the preview-budget escape hatch; truncating it would defeat itself",
   brain_health: "fixed-shape counters",
   brain_doctor: "issue list bounded by vault invariants; CLI surface renders full detail",
+  brain_status: "bounded operator snapshot: fixed counts plus a short problem list with hints",
   brain_recall_gate: "single verdict object",
   vault_health: "fixed list of manifest checks",
   brain_watchdog: "bounded probe report",

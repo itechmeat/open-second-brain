@@ -1243,6 +1243,49 @@ describe("brain doctor", () => {
   });
 });
 
+describe("brain status", () => {
+  test("clean vault prints a compact all-clear", async () => {
+    await bootstrap();
+    const r = await runCli(["brain", "status", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("all clear");
+  });
+
+  test("problem lines carry a next-command hint", async () => {
+    await bootstrap();
+    const runs = join(vault, "Brain", "log", "dream-runs");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(
+      join(runs, "run-cli-status.jsonl"),
+      JSON.stringify({
+        phase: "started",
+        at: "2026-07-18T00:00:00.000Z",
+        run_id: "run-cli-status",
+      }) + "\n",
+      "utf8",
+    );
+    const r = await runCli(["brain", "status", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("Problems:");
+    expect(r.stdout).toContain("-> next: o2b ");
+  });
+
+  test("--json emits the structured snapshot", async () => {
+    await bootstrap();
+    const r = await runCli(["brain", "status", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout);
+    expect(typeof payload.healthy).toBe("boolean");
+    expect(Array.isArray(payload.problems)).toBe(true);
+  });
+});
+
 // ── §9 scan-inline CLI ──────────────────────────────────────────────────────
 
 describe("brain scan-inline", () => {

@@ -96,7 +96,7 @@ describe("diagnostics-signal model", () => {
   test("O3 source classes carry their own next-command hint (not hardcoded downstream)", () => {
     expect(resolveSignal("stale-notes").nextCommand).toBe("o2b brain stale");
     expect(resolveSignal("hygiene-findings").nextCommand).toBe("o2b brain hygiene scan");
-    expect(resolveSignal("review-queue").nextCommand).toBe("o2b brain review");
+    expect(resolveSignal("review-queue").nextCommand).toBe("o2b brain dream --dry-run");
   });
 });
 
