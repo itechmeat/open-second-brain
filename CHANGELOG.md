@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.32.0] - 2026-07-18
+
+A memory write-path integrity and store safety wave: eleven units across four subsystems that make every durable write choke point validate its input, every destructive vault operation snapshot first, and every embeddings failure surface as a typed, actionable outcome. All gates are deterministic (the kernel still calls no LLM), every rejection is a typed error or a logged, visible skip, and no new dependency is added.
+
+### Added
+
+- **Vector validity gate.** A new `EMBEDDING_INVALID_VECTOR` error rejects non-finite (NaN/Infinity) and all-zero vectors at the store choke points (`vecUpsert`, `semanticTopK`) and in unit normalisation, so a broken embedder can no longer poison cosine distances silently. Previously only the dimension was checked and a NaN vector inserted cleanly.
+- **e5 instruction prefixes at index and query time.** Instruction-tuned embedders get the prompts they require: the embed path now distinguishes `query` from `passage` inputs, the multilingual-e5 preset carries `"query: "`/`"passage: "` defaults, and `embedding_prefix_query`/`embedding_prefix_passage` config keys (with env twins) override them; an explicit empty string disables. The active prefix pair is persisted in index meta, and changing it surfaces the same reindex-required path as a model change, so prefixed queries are never compared against unprefixed stored vectors.
+- **Embeddings quota classification.** HTTP 402, and 429 responses carrying provider quota tokens (for example `insufficient_quota`), now classify as a dedicated non-retriable `EMBEDDING_QUOTA_EXHAUSTED` outcome with an actionable message (quota or billing exhausted, semantic search degraded, check provider billing) instead of folding into a generic HTTP failure with blind retries. The classifier reads structured status fields on the error, not message strings.
+- **Retry-After honoring and graceful semantic degrade.** Rate-limit and transient retries honor the provider's `Retry-After` header (bounded by a 30-second cap); quota outcomes fail fast with zero retries; implicit semantic search degrades to the lexical lane with a warning that names the failure category, while explicit `--semantic` requests keep throwing the typed error rather than silently falling back.
+- **Snapshot-before-destructive-write gate.** A shared `withDestructiveSnapshot` wrapper over the existing tar+zst snapshot engine now fronts `o2b brain forget-source --confirm` (previously an unrecoverable bulk delete) and the new entity prune. The snapshot is taken before any deletion, the run id and archive path are reported as the recovery point, and dry runs take no snapshot.
+- **Entity label quality gate and prune.** `sanitizeEntityLabel` strips surrounding Markdown decoration and punctuation before normalization at every label-intake boundary, and a structural validator (no letter or digit in any script, empty after stripping, over-length, or on the operator-supplied `entities.label_denylist`) rejects junk labels: a typed error at creation, a logged skip at anchoring. `o2b brain entity prune` lists malformed historical nodes (dry-run default) and on `--confirm` removes them and their edges behind the snapshot gate; a new `entity-label-malformed` doctor lint surfaces candidates. Identity keys for all currently-valid labels are byte-stable.
+- **Deterministic durability gate for extracted facts.** A structural classifier (temp paths, progress counters, run-id and timestamp shapes, measurement-token dominance, exit-status shapes; extendable via `durability.denylist` regexes) rejects transient operational content before it persists as durable memory. Rejections are counted and logged as `durability-skip` events, never dropped silently; operator feedback writes are not gated. The classifier ships zero built-in natural-language word lists.
+- **Opt-in write-approval queue.** With `write_approval.enabled: true`, extracted signals stage into `Brain/pending/` instead of landing directly in the inbox; `o2b brain pending list | apply <id> | reject <id> --reason <text>` reviews the queue. Apply moves the unchanged document (anchors and dedup hash preserved) into the inbox; reject moves it to `Brain/retired/` with the reason. Default off preserves the direct-write behavior byte for byte.
+- **Write-time conflict advisory.** Recording feedback whose principle closely resembles a confirmed same-scope preference now returns an advisory naming the conflicting preference id and similarity evidence, in both the `brain_feedback` MCP response and the CLI output, and logs a `write-conflict-advisory` event. The write always proceeds; the advisory tightens the feedback loop that previously waited for the next health pass.
+- **Signal retire lifecycle.** `o2b brain signal retire <id> --reason <text> [--superseded-by <id>]` moves an inbox signal to `Brain/retired/` with retire frontmatter (`_status`, `retired_at`, `retired_reason`, optional `superseded_by`, old-id alias), mirroring the preference retire conventions, so an outdated extracted fact can be superseded without deleting its history. Retired signals leave the dream-pass intake but stay queryable.
+- **Store hardening.** A `harden-permissions` auto-safe remediation step (idempotent, step-capped, dry-run first) tightens existing `Brain/` files to owner-only modes; a `symlink-escape` doctor lint reports vault-internal symlinks resolving outside the vault root.
+
+### Changed
+
+- **MCP responses no longer expose absolute host paths by default.** The `vault_path` fields returned by the core MCP tools now carry a stable opaque reference (`vault://<hash>`) instead of the raw filesystem path, because tool responses land in model context. Set `expose_host_paths: true` (or `OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS=true`) to restore the raw value.
+- **Zero-norm and non-finite vectors now throw during normalisation.** `unitNormaliseInPlace` previously returned an all-zero vector unchanged on zero norm and propagated NaN silently; both cases now raise the typed `EMBEDDING_INVALID_VECTOR` error, because a silent all-zero embedding is a misleading no-op.
+
 ## [1.31.0] - 2026-07-17
 
 A today-operator-surface release: one read-only dashboard answering "what matters right now", a chronologically merged activity timeline, prose-native open loops, and a guarded write-back that turns prose markers into schema-validated frontmatter mutations. Every read surface is live-derived on demand and never stored; the single write path is opt-in, deterministic, and audited. No new dependency; the kernel still calls no LLM.
@@ -6485,6 +6508,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.32.0]: https://github.com/itechmeat/open-second-brain/compare/v1.31.0...v1.32.0
 [1.31.0]: https://github.com/itechmeat/open-second-brain/compare/v1.30.1...v1.31.0
 [1.30.1]: https://github.com/itechmeat/open-second-brain/compare/v1.30.0...v1.30.1
 [1.30.0]: https://github.com/itechmeat/open-second-brain/compare/v1.29.0...v1.30.0

@@ -237,6 +237,18 @@ o2b search <query> --expand   deterministic lex/vec/hyde expansion of a bare que
 
 Wikilinks to frontmatter `aliases:` resolve at index materialization (schema v7): exact paths always win, a real basename is never shadowed, collisions resolve first-wins by sorted path, and `o2b search status` counts the pass via `IndexStats.aliasResolved`. Bridge discovery and clusters also run as maintenance-lane tasks after `reindex`. Self-tuning only changes behavior under `search_self_tuning_enabled` (or `OPEN_SECOND_BRAIN_SEARCH_SELF_TUNING=1`); an explicit `--expand`/`expand` always wins over the tuned default. Every surface appends one run-level record to `Brain/metrics/<surface>.jsonl` - the dashboard data contract documented in `docs/metrics.md`.
 
+### Write-path integrity and store safety (since v1.32.0)
+
+```text
+o2b brain pending             list | apply <id> | reject <id> --reason <text> - review the opt-in write-approval queue (`write_approval.enabled`); staged extracted signals live in Brain/pending/, apply moves the unchanged document to the inbox, reject moves it to Brain/retired/ with the reason
+o2b brain signal retire       <id> --reason <text> [--superseded-by <id>] - move an inbox signal to Brain/retired/ with retire frontmatter (_status, retired_at, retired_reason, optional superseded_by, old-id alias); retired signals leave dream intake but stay queryable
+o2b brain entity prune        [--confirm] [--json] - list entity nodes whose labels fail the structural quality gate (dry-run default); --confirm removes nodes and their edges behind the snapshot gate and reports the recovery point
+o2b brain forget-source       --confirm now snapshots Brain/ before any deletion and reports the snapshot run id; dry runs take no snapshot
+o2b brain doctor              gains the `symlink-escape` error (vault-internal symlink resolving outside the vault root) and the `entity-label-malformed` warning (prune candidates); `--remediate` gains the auto-safe `harden-permissions` step (owner-only chmod for existing Brain/ files, idempotent, step-capped, dry-run first)
+```
+
+Extracted facts pass a deterministic durability gate before persisting: structural signals only (temp paths, progress counters, run-id and timestamp shapes, measurement-token dominance, exit-status shapes), extendable with `durability.denylist` regexes; rejections log `durability-skip` events and are surfaced by count in the route result. Entity labels are sanitized (`**Foo**` becomes `Foo`) and structurally validated at every intake boundary, with `entities.label_denylist` as the only vocabulary source. Feedback writes that closely resemble a confirmed same-scope preference return a conflict advisory (and log `write-conflict-advisory`) while the write proceeds. Embedding-side: `embedding_prefix_query`/`embedding_prefix_passage` (env twins, e5 preset defaults) control instruction prefixes, invalid vectors are rejected with `EMBEDDING_INVALID_VECTOR`, and quota exhaustion surfaces as non-retriable `EMBEDDING_QUOTA_EXHAUSTED` with Retry-After-aware backoff for plain rate limits.
+
 ## Stability and trust (since v1.0.0)
 
 ```text

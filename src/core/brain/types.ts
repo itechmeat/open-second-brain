@@ -241,6 +241,15 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   writeSession: "write-session",
   /**
+   * `entity-anchor-skip` (A1, t_657b365e) - fact-extract anchoring skipped a
+   * registered entity whose stored label fails the label quality gate
+   * (structurally junk after decoration stripping). Payload carries the
+   * entity `id`, the raw `name`, and the rejection `reason`. The skip is
+   * contained: it never breaks the enclosing capture, and `doctor` surfaces
+   * the same node as a `entity-label-malformed` prune candidate.
+   */
+  entityAnchorSkip: "entity-anchor-skip",
+  /**
    * `attribute-write` (today-operator-surface, t_d7be2a0c) - one audit
    * row per applied `@osb set` marker write-back. Payload carries the
    * mutated note path, the field, the prior value (`null` when the
@@ -250,6 +259,38 @@ export const BRAIN_LOG_EVENT_KIND = {
    * no extra wiring.
    */
   attributeWrite: "attribute-write",
+  /**
+   * `durability-skip` (A2, t_375e98fd) - the deterministic durability gate
+   * rejected an extracted fact as transient operational content before it
+   * reached the inbox. Payload carries the `family`, the structural
+   * `reason` that fired (e.g. `temp-path`, `progress-counter`), a
+   * secret-redacted `text` excerpt, the `hash` (dedup hash of the rejected
+   * fact for correlation), and the `agent`. The skip is never silent: this
+   * dedicated, queryable event kind IS the visibility surface, so rejection
+   * counts are discoverable through the log without a separate aggregator.
+   */
+  durabilitySkip: "durability-skip",
+  /**
+   * `write-conflict-advisory` (A4, t_f79b4fe0) - a feedback signal was
+   * written whose principle closely resembles one or more confirmed
+   * same-scope preferences. The advisory NEVER blocks the write; this
+   * event is its durable, queryable record. Payload carries the `scope`
+   * bucket, the resembling preferences (`conflicts`, one wikilink +
+   * jaccard per line), and the `agent`. Fires only on the operator-facing
+   * feedback path, never on the extracted-fact path, so the two never
+   * double-fire on a single write.
+   */
+  writeConflictAdvisory: "write-conflict-advisory",
+  /**
+   * `signal-retire` (A5, t_66c12a67) - an extracted fact signal was
+   * retired: moved from `Brain/inbox/` into `Brain/retired/` with retire
+   * metadata. Signals have no per-signal audit file (only preferences do),
+   * so this dedicated log event IS the audit trail. Payload carries the
+   * retired `signal` wikilink, the `reason`, an optional `superseded_by`
+   * pointer, and the `agent`. The directory move is what excludes the
+   * signal from the dream pass; this event records that it happened.
+   */
+  signalRetire: "signal-retire",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

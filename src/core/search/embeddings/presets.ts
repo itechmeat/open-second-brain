@@ -15,6 +15,15 @@
  * width, useful when setting `embedding_dimension` up front.
  */
 
+/**
+ * Instruction prefix an e5-family model expects before a search query
+ * (memory-write-path-integrity B2). Trailing space is intentional: the model
+ * was trained on `"query: <text>"`.
+ */
+export const E5_QUERY_PREFIX = "query: ";
+/** Instruction prefix an e5-family model expects before an indexed passage. */
+export const E5_PASSAGE_PREFIX = "passage: ";
+
 /** One curated embedding model the registration flow can recommend. */
 export interface EmbeddingModelPreset {
   /** Model string sent to the endpoint (`embedding_model` / profile defaultModel). */
@@ -27,6 +36,15 @@ export interface EmbeddingModelPreset {
   readonly multilingual: boolean;
   /** One-line guidance shown alongside the model. */
   readonly note: string;
+  /**
+   * Instruction prefix for a search query (memory-write-path-integrity B2).
+   * Present only for models trained with asymmetric instructions (e5). The
+   * configured `embedding_prefix_query` overrides it; an explicit empty
+   * string disables it.
+   */
+  readonly queryPrefix?: string;
+  /** Instruction prefix for an indexed passage; see {@link queryPrefix}. */
+  readonly passagePrefix?: string;
 }
 
 /**
@@ -42,6 +60,8 @@ export const EMBEDDING_MODEL_PRESETS: ReadonlyArray<EmbeddingModelPreset> = Obje
     dimension: 384,
     multilingual: true,
     note: "Small, fast, strong multilingual default. Prefix inputs with 'query:'/'passage:'.",
+    queryPrefix: E5_QUERY_PREFIX,
+    passagePrefix: E5_PASSAGE_PREFIX,
   },
   {
     model: "BAAI/bge-m3",
@@ -86,4 +106,45 @@ export const RECOMMENDED_EMBEDDING_MODEL: string = EMBEDDING_MODEL_PRESETS[0]!.m
 /** Look up a preset by exact model string (null when not curated). */
 export function findEmbeddingPreset(model: string): EmbeddingModelPreset | null {
   return EMBEDDING_MODEL_PRESETS.find((p) => p.model === model) ?? null;
+}
+
+/**
+ * Structural e5-family detection (memory-write-path-integrity B2). Matches the
+ * `e5` token wherever it appears delimited by `/` or `-` in the model id
+ * (`intfloat/e5-large-v2`, `intfloat/multilingual-e5-small`), so a custom e5
+ * model string not in the curated catalog still gets the instruction-prefix
+ * defaults. Keys off the model id structure, never the prose note.
+ */
+export function isE5FamilyModel(model: string | null): boolean {
+  if (!model) return false;
+  return /(^|[/-])e5([/-]|$)/i.test(model);
+}
+
+/** The prefix pair active for an embed run, after preset + config resolution. */
+export interface ResolvedEmbeddingPrefixes {
+  readonly queryPrefix: string;
+  readonly passagePrefix: string;
+}
+
+/**
+ * Resolve the active query/passage instruction prefixes
+ * (memory-write-path-integrity B2). Precedence per kind: an explicit config
+ * override (including an empty string, which disables the prefix) wins;
+ * otherwise the curated preset field; otherwise the structural e5 default;
+ * otherwise no prefix. A `null` override means "not configured" and falls
+ * through; an empty-string override means "explicitly disabled".
+ */
+export function resolveEmbeddingPrefixes(
+  model: string | null,
+  queryOverride: string | null,
+  passageOverride: string | null,
+): ResolvedEmbeddingPrefixes {
+  const preset = model ? findEmbeddingPreset(model) : null;
+  const e5 = isE5FamilyModel(model);
+  const queryDefault = preset?.queryPrefix ?? (e5 ? E5_QUERY_PREFIX : "");
+  const passageDefault = preset?.passagePrefix ?? (e5 ? E5_PASSAGE_PREFIX : "");
+  return {
+    queryPrefix: queryOverride ?? queryDefault,
+    passagePrefix: passageOverride ?? passageDefault,
+  };
 }

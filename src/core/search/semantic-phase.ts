@@ -5,9 +5,10 @@
  * to keyword-only with warnings when the lane cannot run).
  */
 
+import { classifyEmbeddingError } from "./embeddings/openai-compat.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { Store } from "./store.ts";
-import { SearchError } from "./types.ts";
+import { EMBEDDING_QUOTA_MESSAGE, SearchError } from "./types.ts";
 import type { ResolvedSearchConfig, SearchOptions } from "./types.ts";
 
 export interface SemanticPolicy {
@@ -91,7 +92,7 @@ export async function runSemanticPhase(
   let queryVec: number[];
   try {
     const provider = makeProvider(config.semantic);
-    const vectors = await provider.embed([query]);
+    const vectors = await provider.embed([query], "query");
     queryVec = vectors[0] ?? [];
   } catch (e) {
     if (opts.explicit) {
@@ -102,8 +103,18 @@ export async function runSemanticPhase(
       const msg = e instanceof Error ? e.message : String(e);
       throw new SearchError("EMBEDDING_PROVIDER_HTTP", `embedding provider failure: ${msg}`);
     }
-    const msg = e instanceof Error ? e.message : String(e);
-    warnings.push(`embedding provider unavailable: ${msg}`);
+    // Implicit path: degrade to keyword-only, but the warning must say WHY
+    // by naming the classification category, and for a quota exhaustion it
+    // carries the actionable billing message so the CLI/MCP caller learns
+    // the remediation, not just that semantic was skipped.
+    const cls = classifyEmbeddingError(e);
+    const detail =
+      cls.category === "quota"
+        ? EMBEDDING_QUOTA_MESSAGE
+        : e instanceof Error
+          ? e.message
+          : String(e);
+    warnings.push(`embedding provider unavailable [${cls.category}]: ${detail}`);
     return { attempted: false, hits: [], warnings };
   }
 

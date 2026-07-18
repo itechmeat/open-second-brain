@@ -198,6 +198,55 @@ describe("brain_feedback", () => {
     expect(text).toContain("topic: imperative-prompts");
   });
 
+  test("write-conflict advisory: names a confirmed same-scope preference and the write still proceeds", async () => {
+    const server = makeServer();
+    await initialize(server);
+    // Seed a confirmed same-scope preference.
+    await call(server, "brain_feedback", {
+      topic: "tabs-rule",
+      signal: "positive",
+      principle: "always indent source with tabs not spaces",
+      scope: "coding",
+      force_confirmed: true,
+    });
+    // A near-duplicate incoming signal in the same scope.
+    const r = await call(server, "brain_feedback", {
+      topic: "tabs-again",
+      signal: "negative",
+      principle: "always indent source with tabs not spaces",
+      scope: "coding",
+    });
+    expect(r.result.isError).toBe(false);
+    const s = r.result.structuredContent;
+    // The write always proceeds.
+    expect(s.signal_id).toMatch(/^sig-/);
+    // The advisory names the confirmed preference.
+    expect(s.advisory).toBeDefined();
+    expect(s.advisory.conflicts.map((c: { pref_id: string }) => c.pref_id)).toContain(
+      "pref-tabs-rule",
+    );
+  });
+
+  test("no advisory field for a non-conflicting write", async () => {
+    const server = makeServer();
+    await initialize(server);
+    await call(server, "brain_feedback", {
+      topic: "tabs-rule",
+      signal: "positive",
+      principle: "always indent source with tabs not spaces",
+      scope: "coding",
+      force_confirmed: true,
+    });
+    const r = await call(server, "brain_feedback", {
+      topic: "semantic-html",
+      signal: "positive",
+      principle: "prefer semantic HTML over generic containers",
+      scope: "coding",
+    });
+    expect(r.result.isError).toBe(false);
+    expect(r.result.structuredContent.advisory).toBeUndefined();
+  });
+
   test("INVALID_PARAMS when required field missing", async () => {
     const server = makeServer();
     await initialize(server);

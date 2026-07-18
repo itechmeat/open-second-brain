@@ -13,7 +13,17 @@ import {
   upsertEntity,
 } from "../../../core/brain/entities/registry.ts";
 import { BRAIN_ENTITY_STATUS, type BrainEntity } from "../../../core/brain/entities/types.ts";
-import { brainVerbContext, fail, normalizeFlagString, ok, okJson, parse } from "../helpers.ts";
+import { pruneEntityLabels } from "../../../core/brain/entities/label-hygiene.ts";
+import {
+  brainVerbContext,
+  fail,
+  info,
+  normalizeFlagString,
+  ok,
+  okJson,
+  parse,
+  usageError,
+} from "../helpers.ts";
 
 function entityPayload(entity: BrainEntity): Record<string, unknown> {
   return {
@@ -51,10 +61,12 @@ export async function cmdBrainEntity(argv: string[]): Promise<number> {
       return entityRelate(rest);
     case "archive":
       return entityArchive(rest);
+    case "prune":
+      return entityPrune(rest);
     default:
-      return fail(
+      return usageError(
         "brain entity requires a subcommand: set <category> <name> | get <name> | list | " +
-          "relate <from> <relation> <to> | archive <name> [--restore]",
+          "relate <from> <relation> <to> | archive <name> [--restore] | prune [--confirm]",
       );
   }
 }
@@ -188,6 +200,69 @@ function entityRelate(argv: string[]): number {
     return 0;
   } catch (exc) {
     return fail(`brain entity relate failed: ${(exc as Error).message}`);
+  }
+}
+
+function entityPrune(argv: string[]): number {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    confirm: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  const { vault } = brainVerbContext(flags);
+  const confirm = flags["confirm"] === true;
+  try {
+    const result = pruneEntityLabels(vault, { confirm, now: new Date() });
+    if (flags["json"]) {
+      okJson({
+        confirmed: result.confirmed,
+        candidates: result.candidates.map((c) => ({
+          id: c.id,
+          category: c.category,
+          name: c.name,
+          status: c.status,
+          reason: c.reason,
+          path: c.path,
+          inbound_references: [...c.inboundReferences],
+        })),
+        removed: [...result.removed],
+        edges_stripped: result.edgesStripped,
+        snapshot_run_id: result.snapshotRunId,
+        snapshot_path: result.snapshotPath,
+      });
+      return 0;
+    }
+    if (result.candidates.length === 0) {
+      ok("entity prune: no malformed labels found");
+      return 0;
+    }
+    if (result.confirmed) {
+      ok(`entity prune: removed ${result.removed.length} node(s)`);
+      for (const c of result.candidates) ok(`  - ${c.id} (${c.reason}) ${JSON.stringify(c.name)}`);
+      if (result.edgesStripped > 0) ok(`  stripped ${result.edgesStripped} inbound edge(s)`);
+      if (result.snapshotRunId) {
+        ok(`  recovery point: snapshot ${result.snapshotRunId}`);
+        if (result.snapshotPath) info(`    ${result.snapshotPath}`);
+      }
+      return 0;
+    }
+    ok(`entity prune (DRY RUN): ${result.candidates.length} malformed label(s) WOULD be removed:`);
+    for (const c of result.candidates) {
+      const edges =
+        c.inboundReferences.length > 0
+          ? `, ${c.inboundReferences.length} inbound edge(s) from ${c.inboundReferences.join(", ")}`
+          : "";
+      ok(`  - ${c.id} (${c.reason}) ${JSON.stringify(c.name)}${edges}`);
+    }
+    info("  re-run with --confirm to remove (a snapshot is taken first)");
+    return 0;
+  } catch (exc) {
+    const message = `brain entity prune failed: ${(exc as Error).message}`;
+    if (flags["json"]) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
   }
 }
 

@@ -89,6 +89,8 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
         deleted: [...plan.deleted],
         manifest_entry_removed: plan.manifestEntryRemoved,
         audit_record_id: plan.auditRecordId,
+        snapshot_run_id: plan.snapshotRunId,
+        snapshot_path: plan.snapshotPath,
       });
       return 0;
     }
@@ -107,6 +109,10 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
         for (const p of plan.originals) info(`    - ${p}`);
       }
       if (plan.auditRecordId) ok(`  audit: ${plan.auditRecordId}`);
+      if (plan.snapshotRunId) {
+        ok(`  recovery point: snapshot ${plan.snapshotRunId}`);
+        if (plan.snapshotPath) info(`    ${plan.snapshotPath}`);
+      }
       return 0;
     }
 

@@ -46,7 +46,12 @@ import { parseFrontmatterText } from "../vault.ts";
 import { appendMetric } from "../brain/metrics.ts";
 import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
-import { acquireWriterLock, Store } from "./store.ts";
+import {
+  acquireWriterLock,
+  Store,
+  EMBEDDING_PREFIX_QUERY_STATE_KEY,
+  EMBEDDING_PREFIX_PASSAGE_STATE_KEY,
+} from "./store.ts";
 import { LATEST_SCHEMA_VERSION } from "./schema.ts";
 import { SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
@@ -598,7 +603,7 @@ async function populateEmbeddings(
     throwIfAborted(signal, "index");
     const batch = pending.slice(i, i + superBatch);
     const texts = batch.map((p) => p.content);
-    const vectors = await provider.embed(texts);
+    const vectors = await provider.embed(texts, "passage");
     stats.embeddingsRetries += provider.consumeRetryCount?.() ?? 0;
     if (vectors.length !== batch.length) {
       throw new SearchError(
@@ -614,7 +619,10 @@ async function populateEmbeddings(
         "provider returned vectors of zero length",
       );
     }
-    store.ensureEmbeddingModel(model, dim);
+    store.ensureEmbeddingModel(model, dim, {
+      query: config.semantic.queryPrefix ?? "",
+      passage: config.semantic.passagePrefix ?? "",
+    });
     for (let j = 0; j < batch.length; j++) {
       const chunkId = batch[j]!.chunkId;
       const vec = vectors[j]!;
@@ -824,6 +832,25 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       !config.semantic.apiKey
     ) {
       warnings.push("embedding_api_key not configured; semantic search disabled");
+    }
+
+    // Instruction-prefix drift (memory-write-path-integrity B2). Stored
+    // vectors were embedded under the prefix pair recorded at index time; if
+    // the configured pair now differs they are not comparable to prefixed
+    // queries, so surface the reindex-required warning. A stored null is a
+    // pre-feature (unprefixed) index, compared as the empty pair.
+    if (config.semantic.enabled && counts.embeddings > 0) {
+      const storedQuery = store.getState(EMBEDDING_PREFIX_QUERY_STATE_KEY) ?? "";
+      const storedPassage = store.getState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY) ?? "";
+      const configuredQuery = config.semantic.queryPrefix ?? "";
+      const configuredPassage = config.semantic.passagePrefix ?? "";
+      if (storedQuery !== configuredQuery || storedPassage !== configuredPassage) {
+        warnings.push(
+          "embedding instruction prefixes changed since the last index run " +
+            `(stored [${storedQuery}|${storedPassage}], configured ` +
+            `[${configuredQuery}|${configuredPassage}]); run: o2b search reindex --embeddings`,
+        );
+      }
     }
 
     // Best-effort spend estimate to bring stale/missing embeddings current.

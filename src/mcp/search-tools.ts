@@ -12,6 +12,7 @@
 
 import {
   captureRecallFeedback,
+  EMBEDDING_QUOTA_MESSAGE,
   evaluateSurfacingGate,
   expandHit,
   indexStatus,
@@ -397,8 +398,11 @@ function truncateContent(c: string, max: number): string {
   return c.slice(0, max - 1) + "…";
 }
 
-function searchErrorToMcp(e: SearchError): MCPError {
+export function searchErrorToMcp(e: SearchError): MCPError {
   if (e.code === "INVALID_INPUT") return new MCPError(INVALID_PARAMS, e.message);
+  if (e.code === "EMBEDDING_QUOTA_EXHAUSTED") {
+    return new MCPError(INTERNAL_ERROR, EMBEDDING_QUOTA_MESSAGE);
+  }
   if (e.code === "INDEX_MISSING") {
     return new MCPError(INTERNAL_ERROR, "search index not initialised. Run: o2b search index");
   }

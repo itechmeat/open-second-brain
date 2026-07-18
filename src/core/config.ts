@@ -8,7 +8,7 @@
  */
 
 import { mkdirSync, readFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -259,6 +259,39 @@ export function resolveDeviceId(configPath?: string): string {
   } finally {
     release?.();
   }
+}
+
+/**
+ * Store-hardening escape hatch (D2). Default OFF: MCP responses redact
+ * the absolute vault host path to an opaque store reference (see
+ * {@link vaultStoreReference}) because those responses land in model
+ * context - the exact leak surface this guards. Set
+ * `expose_host_paths: true` (or the env twin) to restore the raw path
+ * for operators whose tooling depends on it.
+ */
+export function resolveExposeHostPaths(configPath?: string): boolean {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS", "expose_host_paths", configPath);
+}
+
+/** Prefix of the opaque store reference emitted in place of a host path. */
+export const VAULT_STORE_REF_PREFIX = "vault://";
+/** Hex length of the store-reference digest. */
+const VAULT_STORE_REF_HEX_LEN = 8;
+
+/**
+ * Stable opaque reference for a vault, of the form `vault://<8-hex>`.
+ * Derived from the device-id primitive plus a hash of the vault path, so
+ * it is stable across calls on the same install (agents correlate by it)
+ * and does not leak the absolute host path. Returned by MCP tools in
+ * place of the raw path unless {@link resolveExposeHostPaths} is on.
+ */
+export function vaultStoreReference(vaultPath: string, configPath?: string): string {
+  const deviceId = resolveDeviceId(configPath);
+  const digest = createHash("sha256")
+    .update(`${deviceId}\0${vaultPath}`)
+    .digest("hex")
+    .slice(0, VAULT_STORE_REF_HEX_LEN);
+  return `${VAULT_STORE_REF_PREFIX}${digest}`;
 }
 
 export function resolveLinkOutputFormat(configPath?: string): LinkOutputFormat {

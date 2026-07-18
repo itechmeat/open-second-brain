@@ -18,19 +18,56 @@ export const SEARCH_ERROR_CODES = [
   "EMBEDDING_PROVIDER_HTTP",
   "EMBEDDING_PROVIDER_TIMEOUT",
   "EMBEDDING_DIMENSION_MISMATCH",
+  "EMBEDDING_INVALID_VECTOR",
   "EMBEDDING_COST_GATE",
+  "EMBEDDING_QUOTA_EXHAUSTED",
   "RERANK_PROVIDER_HTTP",
   "INDEX_LOCKED",
   "INVALID_INPUT",
 ] as const;
 export type SearchErrorCode = (typeof SEARCH_ERROR_CODES)[number];
 
+/**
+ * Actionable operator-facing message for an exhausted embedding quota /
+ * billing limit (Task C1/C2). Shared by the provider (thrown message), the
+ * semantic-phase degrade warning, and the MCP error mapping so the single
+ * remediation instruction stays consistent across every surface.
+ */
+export const EMBEDDING_QUOTA_MESSAGE =
+  "embedding quota/billing exhausted: semantic search is degraded to keyword-only. " +
+  "Check your embedding provider billing and quota, raise the limit or top up, then reindex.";
+
+/**
+ * Coarse outcome category for an embedding-provider error (Task C1). Drives
+ * both the retry policy (`retriable`) and the degrade-warning wording.
+ * `quota` and `auth` fail fast; `rate_limit` and `transient` retry.
+ */
+export type EmbeddingErrorCategory = "quota" | "rate_limit" | "auth" | "transient" | "fatal";
+
+/**
+ * Additive structured context for a {@link SearchError} originating from a
+ * provider HTTP response. Both fields are optional so every existing
+ * two-argument call site stays valid.
+ */
+export interface SearchErrorOptions {
+  /** Upstream HTTP status code. */
+  readonly status?: number;
+  /** Parsed `Retry-After` delay in milliseconds. */
+  readonly retryAfterMs?: number;
+}
+
 export class SearchError extends Error {
   readonly code: SearchErrorCode;
-  constructor(code: SearchErrorCode, message: string) {
+  /** Upstream HTTP status when this error originated from a provider response. */
+  readonly status?: number;
+  /** Parsed `Retry-After` delay in milliseconds when the provider supplied one. */
+  readonly retryAfterMs?: number;
+  constructor(code: SearchErrorCode, message: string, opts?: SearchErrorOptions) {
     super(message);
     this.name = "SearchError";
     this.code = code;
+    if (opts?.status !== undefined) this.status = opts.status;
+    if (opts?.retryAfterMs !== undefined) this.retryAfterMs = opts.retryAfterMs;
   }
 }
 
@@ -712,6 +749,17 @@ export interface ResolvedEmbeddingConfig {
    * run whose estimated cost exceeds this is refused unless forced.
    */
   readonly costGateUsd: number;
+  /**
+   * Active instruction prefix for a search query
+   * (memory-write-path-integrity B2). Resolved from the preset default and
+   * the `embedding_prefix_query` config/env override; an empty string means
+   * no prefix (byte-identical to pre-feature behaviour). Optional so every
+   * existing config literal stays valid; the openai-compat provider treats
+   * an absent value as empty.
+   */
+  readonly queryPrefix?: string;
+  /** Active instruction prefix for an indexed passage; see {@link queryPrefix}. */
+  readonly passagePrefix?: string;
 }
 
 /**

@@ -213,6 +213,74 @@ test("ensureEmbeddingModel drops chunk_vec when dimension changes", async () => 
   await store.close();
 });
 
+test("a NaN vector cannot reach the vec table through vecUpsert", async () => {
+  if (!sqliteVecLoadable()) return;
+  const store = await Store.open(semanticConfig("m1", 4), { mode: "write" });
+  const docId = store.upsertDocument({
+    path: "vec/nan.md",
+    title: null,
+    contentHash: "h",
+    mtime: 0,
+    size: 1,
+  });
+  const [c0] = store.replaceChunks(docId, [
+    {
+      chunkIndex: 0,
+      content: "x",
+      contentHash: "h0",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 1,
+    },
+  ]);
+  expect(() => store.vecUpsert(c0!, [Number.NaN, 0, 0, 0], "m1", 4, "eh")).toThrow(
+    /EMBEDDING_INVALID_VECTOR|vecUpsert/,
+  );
+  const rows = store.rawQuery<{ c: number }>("SELECT count(*) AS c FROM chunk_vec");
+  expect(rows[0]?.c).toBe(0);
+  await store.close();
+});
+
+test("an all-zero vector cannot reach the vec table through vecUpsert", async () => {
+  if (!sqliteVecLoadable()) return;
+  const store = await Store.open(semanticConfig("m1", 4), { mode: "write" });
+  const docId = store.upsertDocument({
+    path: "vec/zero.md",
+    title: null,
+    contentHash: "h",
+    mtime: 0,
+    size: 1,
+  });
+  const [c0] = store.replaceChunks(docId, [
+    {
+      chunkIndex: 0,
+      content: "x",
+      contentHash: "h0",
+      startLine: 1,
+      endLine: 1,
+      tokenCount: 1,
+    },
+  ]);
+  expect(() => store.vecUpsert(c0!, [0, 0, 0, 0], "m1", 4, "eh")).toThrow(/zero/i);
+  const rows = store.rawQuery<{ c: number }>("SELECT count(*) AS c FROM chunk_vec");
+  expect(rows[0]?.c).toBe(0);
+  await store.close();
+});
+
+test("semanticTopK rejects a non-finite query vector before querying", async () => {
+  if (!sqliteVecLoadable()) return;
+  const store = await Store.open(semanticConfig("m1", 4), { mode: "write" });
+  expect(() => store.semanticTopK([Number.POSITIVE_INFINITY, 0, 0, 0], { limit: 5 })).toThrow(
+    /semanticTopK|EMBEDDING_INVALID_VECTOR/,
+  );
+  // An all-zero query vector has no direction for cosine similarity and must
+  // be rejected before querying, exactly as vecUpsert rejects it.
+  expect(() => store.semanticTopK([0, 0, 0, 0], { limit: 5 })).toThrow(
+    /zero|semanticTopK|EMBEDDING_INVALID_VECTOR/,
+  );
+  await store.close();
+});
+
 test("dimension mismatch is rejected on vecUpsert", async () => {
   if (!sqliteVecLoadable()) return;
   const store = await Store.open(semanticConfig("m1", 4), { mode: "write" });

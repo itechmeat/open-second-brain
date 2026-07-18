@@ -435,6 +435,21 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = Object.freeze({
 }) as BrainConfig;
 
 /**
+ * Load the configured snapshot `retention_count`, falling back to the
+ * default when the config file is missing, malformed, or otherwise
+ * unreadable. The destructive-snapshot gate uses this so a vault that
+ * has not run `brain init` still prunes to a sane bound rather than
+ * throwing mid-cleanup. This is the SAME `snapshots.retention_count`
+ * the dream pass reads via `loadBrainConfig`; the safe variant just
+ * tolerates an uninitialised vault the way every other read surface
+ * does.
+ */
+export const loadSnapshotRetentionSafe = makeSafeLoader(
+  (config: BrainConfig) => config.snapshots.retention_count,
+  DEFAULT_BRAIN_CONFIG.snapshots.retention_count,
+);
+
+/**
  * Serialised default `_brain.yaml`. Hand-formatted to match the design
  * doc verbatim — `brain init` writes this byte string so the file the
  * user sees is the file the docs describe.

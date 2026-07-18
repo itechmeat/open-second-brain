@@ -23,6 +23,7 @@ import { registerWriterDb, unregisterWriterDb } from "./store-exit.ts";
 import { computeCorpusGeneration } from "./corpus-generation.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
+import { assertValidVector } from "./vector-guard.ts";
 import {
   applyMigrations,
   documentBasename,
@@ -35,6 +36,22 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `index_state` keys for the active embedding instruction prefixes
+ * (memory-write-path-integrity B2). Recorded per index run so a later
+ * stored-vs-configured mismatch can surface the reindex-required warning:
+ * vectors embedded under one prefix pair are not comparable to queries
+ * embedded under another.
+ */
+export const EMBEDDING_PREFIX_QUERY_STATE_KEY = "embedding_prefix_query";
+export const EMBEDDING_PREFIX_PASSAGE_STATE_KEY = "embedding_prefix_passage";
+
+/** The query/passage instruction prefixes active for an index run. */
+export interface EmbeddingPrefixPair {
+  readonly query: string;
+  readonly passage: string;
+}
 
 export interface StoreOpenOptions {
   /** "read" never locks; "write" acquires an exclusive proper-lockfile. */
@@ -436,7 +453,10 @@ export class Store {
       ensureFts5(db);
       const vecLoaded = loadVec && tryLoadVecExtension(db);
       const store = new Store(db, config, vecLoaded, release);
-      store.ensureEmbeddingModel(config.semantic.model, config.semantic.dimension);
+      store.ensureEmbeddingModel(config.semantic.model, config.semantic.dimension, {
+        query: config.semantic.queryPrefix ?? "",
+        passage: config.semantic.passagePrefix ?? "",
+      });
       // Belt-and-suspenders: consolidate this writer's WAL on a
       // bypassed close (process.exit / signal-driven exit).
       registerWriterDb(db);
@@ -838,6 +858,7 @@ export class Store {
         `vector dimension ${len} != configured dimension ${dimension}`,
       );
     }
+    assertValidVector(vector, "vecUpsert");
     this.db.exec("BEGIN");
     try {
       const existing = this.db
@@ -943,7 +964,11 @@ export class Store {
    * and both old + new are non-null, drop embeddings + vec table and
    * log one line per design §13. First-time set just records state.
    */
-  ensureEmbeddingModel(model: string | null, dimension: number | null): ModelChangeOutcome {
+  ensureEmbeddingModel(
+    model: string | null,
+    dimension: number | null,
+    prefixes?: EmbeddingPrefixPair,
+  ): ModelChangeOutcome {
     const prevModel = this.getState("embedding_model");
     const prevDimRaw = this.getState("embedding_dimension");
     const prevDim = prevDimRaw === null ? null : Number(prevDimRaw);
@@ -951,6 +976,24 @@ export class Store {
     const modelChanged = prevModel !== null && model !== null && prevModel !== model;
     const dimChanged =
       prevDim !== null && dimension !== null && Number.isFinite(prevDim) && prevDim !== dimension;
+
+    // A prefix change invalidates stored vectors exactly as a model/dimension
+    // change does: vectors embedded under the old prefix are not comparable to
+    // queries embedded under the new one. Reuse the same clear-and-log path.
+    const prevQueryPrefix = this.getState(EMBEDDING_PREFIX_QUERY_STATE_KEY);
+    const prevPassagePrefix = this.getState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY);
+    // Legacy stores predate prefix metadata: absent state (null) means the
+    // existing vectors were embedded with EMPTY prefixes. Treat missing state
+    // as the empty pair so a switch to non-empty prefixes (e.g. E5's
+    // `query:`/`passage:`) is detected as a change and the now-incompatible
+    // unprefixed vectors are cleared, rather than silently marked compatible.
+    const effectivePrevQueryPrefix = prevQueryPrefix ?? "";
+    const effectivePrevPassagePrefix = prevPassagePrefix ?? "";
+    const prefixChanged =
+      prefixes !== undefined &&
+      this.countEmbeddings() > 0 &&
+      (effectivePrevQueryPrefix !== prefixes.query ||
+        effectivePrevPassagePrefix !== prefixes.passage);
 
     if (modelChanged || dimChanged) {
       this.clearEmbeddings();
@@ -960,10 +1003,22 @@ export class Store {
       );
       this.deleteState("embedding_model");
       this.deleteState("embedding_dimension");
+    } else if (prefixChanged) {
+      // Model/dimension unchanged: the prefix change alone triggers the clear.
+      this.clearEmbeddings();
+      // eslint-disable-next-line no-console
+      console.error(
+        `embedding prefixes changed from [${effectivePrevQueryPrefix}|${effectivePrevPassagePrefix}] ` +
+          `to [${prefixes.query}|${prefixes.passage}], embeddings cleared`,
+      );
     }
 
     if (model !== null) this.setState("embedding_model", model);
     if (dimension !== null) this.setState("embedding_dimension", String(dimension));
+    if (prefixes !== undefined) {
+      this.setState(EMBEDDING_PREFIX_QUERY_STATE_KEY, prefixes.query);
+      this.setState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY, prefixes.passage);
+    }
 
     // (Re)create vec table when we know the dimension and vec is loaded.
     if (this._vecLoaded && dimension !== null) {
@@ -1650,6 +1705,7 @@ export class Store {
     const limit = Math.max(1, opts.limit | 0);
     const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
 
+    assertValidVector(queryVector, "semanticTopK");
     const buf = vecToBuffer(queryVector);
     if (prefix) {
       const rows = this.db

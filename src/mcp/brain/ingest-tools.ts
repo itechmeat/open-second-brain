@@ -92,6 +92,10 @@ function serializePlan(plan: SourceCleanupPlan): Record<string, unknown> {
     deleted: [...plan.deleted],
     manifest_entry_removed: plan.manifestEntryRemoved,
     audit_record_id: plan.auditRecordId,
+    // The D1 recovery point. Only the run id is surfaced here (not the
+    // absolute archive path) so the response stays free of host paths; the
+    // archive lives at the deterministic `Brain/.snapshots/<run_id>.tar.zst`.
+    snapshot_run_id: plan.snapshotRunId,
   };
 }
 

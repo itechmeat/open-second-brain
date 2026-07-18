@@ -27,6 +27,24 @@ export function isoDate(d: Date = new Date()): string {
 }
 
 /**
+ * Compact UTC run-id stamp (`YYYY-MM-DD-HHMMSS`). Whole-second
+ * precision, no separators inside the time-of-day segment, so the
+ * result is a filesystem-safe run-id stem under
+ * {@link validateRunId} (`[A-Za-z0-9][A-Za-z0-9._-]*`). Shared by the
+ * `dream` run-id formatter and the destructive-snapshot gate so both
+ * mint ids the same way.
+ */
+export function compactRunStamp(d: Date = new Date()): string {
+  const yyyy = d.getUTCFullYear().toString().padStart(4, "0");
+  const mm = (d.getUTCMonth() + 1).toString().padStart(2, "0");
+  const dd = d.getUTCDate().toString().padStart(2, "0");
+  const hh = d.getUTCHours().toString().padStart(2, "0");
+  const mi = d.getUTCMinutes().toString().padStart(2, "0");
+  const ss = d.getUTCSeconds().toString().padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}-${hh}${mi}${ss}`;
+}
+
+/**
  * Render the gap between an ISO-8601 timestamp and `now` as a short,
  * human-readable relative-age label — "just now", "3m ago", "2h ago",
  * "5d ago", "2w ago", "3mo ago", "1y ago". Used by session-start

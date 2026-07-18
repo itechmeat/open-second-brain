@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { mirrorSignal, resolveSharedNamespace } from "../../../core/brain/shared-namespace.ts";
 import { resolveEffectiveScope, writeSignal } from "../../../core/brain/signal.ts";
+import { adviseIncomingFeedback } from "../../../core/brain/write-advisory.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../../core/brain/policy.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { writePreference } from "../../../core/brain/preference.ts";
@@ -109,6 +110,15 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     process.stderr.write(`warning: append feedback log failed: ${(err as Error).message}\n`);
   }
 
+  // Write-time conflict advisory (A4): non-blocking, computed BEFORE any
+  // force-confirmed write so it never matches the pref this call creates.
+  const advisory = adviseIncomingFeedback(vault, {
+    principle: String(flags["principle"]),
+    ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+    agent,
+    now,
+  });
+
   let prefResult: { path: string; id: string } | null = null;
   if (flags["force-confirmed"]) {
     try {
@@ -151,6 +161,7 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
       signal_path: sigResult.path,
       signal_id: sigResult.id,
       ...(mirror !== undefined ? { mirror } : {}),
+      ...(advisory !== null ? { advisory } : {}),
       ...(prefResult ? { preference_path: prefResult.path, preference_id: prefResult.id } : {}),
     });
     return 0;
@@ -159,6 +170,15 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   ok(`id: ${sigResult.id}`);
   if (mirror !== undefined) {
     ok(`mirror: ${mirror}`);
+  }
+  if (advisory !== null) {
+    const where = advisory.scope ?? "(unscoped)";
+    ok(
+      `advisory: incoming principle resembles ${advisory.conflicts.length} confirmed ${where} preference(s)`,
+    );
+    for (const c of advisory.conflicts) {
+      ok(`  - ${c.pref_id} (jaccard ${c.jaccard.toFixed(3)})`);
+    }
   }
   if (prefResult) {
     ok(`preference: ${prefResult.path}`);

@@ -6,14 +6,67 @@
  * unit-normalisation semantics.
  */
 
+import { assertValidVector } from "../vector-guard.ts";
+
 /** Statuses that warrant a transient retry with backoff. */
 export const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([429, 500, 502, 503, 504]);
 
 /** Auth statuses that trigger failover to the next probe key. */
 export const AUTH_STATUSES: ReadonlySet<number> = new Set([401, 403]);
 
-export function sleep(ms: number): Promise<void> {
-  return new Promise((res) => setTimeout(res, ms));
+/** HTTP 402 Payment Required: an unconditional billing/quota exhaustion signal. */
+export const PAYMENT_REQUIRED_STATUS = 402;
+
+/** HTTP 429 Too Many Requests: a rate-limit unless the body proves quota exhaustion. */
+export const RATE_LIMIT_STATUS = 429;
+
+/** Milliseconds per second, used to convert `Retry-After` delta-seconds. */
+const MS_PER_SECOND = 1000;
+
+/**
+ * Parse an HTTP `Retry-After` header value into milliseconds. The header is
+ * either a non-negative integer count of seconds (RFC 7231 delta-seconds) or
+ * an HTTP-date. Returns null when absent or unparseable. `nowMs` is
+ * injectable so date-form parsing stays deterministic in tests.
+ */
+export function parseRetryAfterMs(
+  headerValue: string | null,
+  nowMs: number = Date.now(),
+): number | null {
+  if (headerValue === null) return null;
+  const trimmed = headerValue.trim();
+  if (trimmed === "") return null;
+  // delta-seconds form: a bare non-negative integer.
+  if (/^\d+$/.test(trimmed)) {
+    return Number(trimmed) * MS_PER_SECOND;
+  }
+  // HTTP-date form: convert to a delay relative to now, floored at zero.
+  const dateMs = Date.parse(trimmed);
+  if (Number.isNaN(dateMs)) return null;
+  const delta = dateMs - nowMs;
+  return delta > 0 ? delta : 0;
+}
+
+/**
+ * Delay for `ms`, resolving early (never rejecting) if `signal` aborts. An
+ * abort-aware sleep lets a retry backoff react to cancellation immediately
+ * instead of blocking a sibling batch for up to the retry-after cap after
+ * the shared abort signal fires. The caller re-checks the signal on the next
+ * loop iteration to surface the cancellation.
+ */
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((res) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      res();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      res();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** Apply ±25% jitter to a backoff base (never negative). */
@@ -44,12 +97,18 @@ export class Semaphore {
   }
 }
 
-/** Unit-normalise a vector in place so cosine similarity equals 1 - L2²/2. */
+/**
+ * Unit-normalise a vector in place so cosine similarity equals 1 - L2²/2.
+ * A zero-norm or non-finite input has no meaningful unit direction, so it
+ * surfaces a typed {@link SearchError} (`EMBEDDING_INVALID_VECTOR`) rather
+ * than the former silent no-op that returned unnormalised zeros
+ * (memory-write-path-integrity B1).
+ */
 export function unitNormaliseInPlace(v: number[]): number[] {
+  assertValidVector(v, "unitNormalise");
   let s = 0;
   for (const x of v) s += x * x;
   const norm = Math.sqrt(s);
-  if (norm === 0) return v;
   for (let i = 0; i < v.length; i++) v[i] = (v[i] ?? 0) / norm;
   return v;
 }

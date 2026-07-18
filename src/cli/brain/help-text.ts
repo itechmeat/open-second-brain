@@ -75,7 +75,7 @@ Brain verbs (observing memory):
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a registered agent session .jsonl (or directory)
-  entity              Canonical entity registry: set, get, list, relate, archive
+  entity              Canonical entity registry: set, get, list, relate, archive, prune
   session-hook        Capture one runtime hook payload from stdin (internal hook bridge)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
@@ -98,6 +98,8 @@ Brain verbs (observing memory):
   agenda              Synthesize agenda conflicts/focus blocks from provided events
   today               Today dashboard: due obligations, open loops, recent activity, totals
   apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
+  pending             Review the write-approval queue: list | apply <id> | reject <id>
+  signal              Fact signal lifecycle: retire <id> --reason <text>
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -489,13 +491,16 @@ export const VERB_HELP: Record<string, string> = {
     "entry) exits 2 — never silent overwrites.\n" +
     "Default is --dry-run; --apply requires --yes in non-interactive mode.\n",
   entity:
-    "usage: o2b brain entity <set|get|list|relate|archive> [args]\n" +
+    "usage: o2b brain entity <set|get|list|relate|archive|prune> [args]\n" +
     "  set <category> <name> [--alias <a>]... [--body <md>] [--confidence <c>] [--json]\n" +
     "  get <name-or-alias> [--category <c>] [--json]      exit 2 when not found\n" +
     "  list [--category <c>] [--status active|archived] [--json]\n" +
     "  relate <from> <relation> <to> [--from-category <c>] [--to-category <c>] [--json]\n" +
     "  archive <name-or-alias> [--restore] [--category <c>] [--json]\n" +
-    "One canonical entity per (category, name); aliases resolve to the canonical record.",
+    "  prune [--confirm] [--json]                         dry-run default; snapshot before removal\n" +
+    "One canonical entity per (category, name); aliases resolve to the canonical record.\n" +
+    "Labels are decoration-stripped and quality-gated on set; prune removes historical\n" +
+    "malformed nodes and their edges. Denylist: entities.label_denylist config key.",
   "import-session":
     "usage: o2b brain import-session <path> [--vault <vault>]\n" +
     "                                [--format auto|<registered-adapter>]\n" +
@@ -687,6 +692,24 @@ export const VERB_HELP: Record<string, string> = {
     "(annotated) so a re-run is idempotent. Unresolvable or invalid targets are\n" +
     "reported with an error code and candidates and left unconsumed. Source files\n" +
     "come from --path (repeatable) or notes.read_paths.\n",
+  pending:
+    "usage: o2b brain pending list [--vault <path>] [--json]\n" +
+    "       o2b brain pending apply <id> [--vault <path>] [--json]\n" +
+    "       o2b brain pending reject <id> --reason <text> [--vault <path>] [--json]\n" +
+    "Review the opt-in write-approval queue (write_approval.enabled). When the\n" +
+    "toggle is on, extracted signals are staged into Brain/pending/ instead of\n" +
+    "Brain/inbox/. list shows the staged signals; apply moves one into\n" +
+    "Brain/inbox/ unchanged (entity anchors and dedup hash preserved); reject\n" +
+    "moves it to Brain/retired/ with retire-shaped frontmatter. Applying or\n" +
+    "rejecting a missing id exits 2 (never a silent no-op).\n",
+  signal:
+    "usage: o2b brain signal retire <id> --reason <text> [--superseded-by <id>] [--vault <path>] [--json]\n" +
+    "Retire an extracted fact signal: move Brain/inbox/sig-*.md into\n" +
+    "Brain/retired/ with retire-shaped frontmatter (_status, retired_at,\n" +
+    "retired_reason, optional superseded_by, old-id alias). The directory move\n" +
+    "excludes it from the dream pass while it stays readable in Brain/retired/.\n" +
+    "Retiring a missing, already-retired, or non-signal id exits 2 (never a\n" +
+    "silent no-op).\n",
   agenda:
     "usage: o2b brain agenda --events <file|-> [args]\n" +
     "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +

@@ -9,6 +9,7 @@ import {
   parseSimpleYaml,
   redactMapping,
   resolveAgentName,
+  resolveExposeHostPaths,
   resolveLinkOutputFormat,
   resolveRecallAdequacyThresholds,
   resolveSkillsAttachTriggers,
@@ -17,6 +18,8 @@ import {
   resolveVault,
   setConfigValue,
   validateTimezoneName,
+  vaultStoreReference,
+  VAULT_STORE_REF_PREFIX,
 } from "../../src/core/config.ts";
 
 let tmp: string;
@@ -36,6 +39,7 @@ beforeEach(() => {
     "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_SUFFICIENT",
     "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_WEAK",
     "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_MIN_RESULTS",
+    "OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS",
   ]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
@@ -409,5 +413,43 @@ describe("resolveRecallAdequacyThresholds", () => {
     const cfg = join(tmp, "config.yaml");
     writeFileSync(cfg, 'recall_adequacy_min_results: "0"\n');
     expect(() => resolveRecallAdequacyThresholds(cfg)).toThrow();
+  });
+});
+
+describe("resolveExposeHostPaths", () => {
+  test("defaults to false when unset", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "vault_path: /tmp/vault\n");
+    expect(resolveExposeHostPaths(cfg)).toBe(false);
+  });
+
+  test("reads the config key", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "expose_host_paths: true\n");
+    expect(resolveExposeHostPaths(cfg)).toBe(true);
+  });
+
+  test("env twin overrides", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "expose_host_paths: false\n");
+    process.env["OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS"] = "true";
+    expect(resolveExposeHostPaths(cfg)).toBe(true);
+  });
+});
+
+describe("vaultStoreReference", () => {
+  test("has the vault:// prefix and 8 hex chars", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "vault_path: /tmp/vault\n");
+    const ref = vaultStoreReference("/some/vault", cfg);
+    expect(ref.startsWith(VAULT_STORE_REF_PREFIX)).toBe(true);
+    expect(ref).toMatch(/^vault:\/\/[0-9a-f]{8}$/);
+  });
+
+  test("is stable for the same vault and differs across vaults", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "vault_path: /tmp/vault\n");
+    expect(vaultStoreReference("/a/vault", cfg)).toBe(vaultStoreReference("/a/vault", cfg));
+    expect(vaultStoreReference("/a/vault", cfg)).not.toBe(vaultStoreReference("/b/vault", cfg));
   });
 });

@@ -20,6 +20,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +30,7 @@ import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import { deleteBySource, searchBySourceFile } from "../../../src/core/brain/source-cleanup.ts";
+import { listSnapshots } from "../../../src/core/brain/snapshot.ts";
 
 let vault: string;
 
@@ -248,6 +250,71 @@ describe("deleteBySource — confirmed cleanup", () => {
     expect(second.derived).toEqual([]);
     // A no-op confirmed run writes no audit record.
     expect(second.auditRecordId).toBeNull();
+  });
+});
+
+describe("deleteBySource - D1 snapshot gate", () => {
+  test("confirm path snapshots before deleting and reports the recovery point", () => {
+    seedContaminatedVault();
+
+    // Learn which derived files will be deleted before running.
+    const preview = deleteBySource(vault, SOURCE, { now: NOW });
+    const derivedPaths = preview.derived.map((e) => e.path);
+    expect(derivedPaths.length).toBeGreaterThan(0);
+
+    const plan = deleteBySource(vault, SOURCE, { confirm: true, now: NOW });
+
+    // The plan carries the recovery point.
+    expect(plan.snapshotRunId).not.toBeNull();
+    expect(plan.snapshotPath).not.toBeNull();
+    expect(existsSync(plan.snapshotPath!)).toBe(true);
+
+    // A snapshot archive exists and is listed by the engine.
+    const snaps = listSnapshots(vault);
+    expect(snaps.some((s) => s.run_id === plan.snapshotRunId)).toBe(true);
+
+    // The archive is restorable: it contains the files that were deleted.
+    const tmp = mkdtempSync(join(tmpdir(), "o2b-src-snap-verify-"));
+    try {
+      const zstd = spawnSync("zstd", ["-d", "-c", plan.snapshotPath!], {
+        stdio: ["ignore", "pipe", "pipe"],
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      expect(zstd.status).toBe(0);
+      const tar = spawnSync("tar", ["-x", "-C", tmp], {
+        input: zstd.stdout,
+        stdio: ["pipe", "inherit", "pipe"],
+      });
+      expect(tar.status).toBe(0);
+      // Every deleted derived path is recoverable from the archive.
+      for (const rel of derivedPaths) {
+        expect(existsSync(join(tmp, rel))).toBe(true);
+      }
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("dry-run takes NO snapshot", () => {
+    seedContaminatedVault();
+    const before = listSnapshots(vault).length;
+    const plan = deleteBySource(vault, SOURCE, { now: NOW });
+    expect(plan.snapshotRunId).toBeNull();
+    expect(plan.snapshotPath).toBeNull();
+    expect(listSnapshots(vault).length).toBe(before);
+  });
+
+  test("confirm with nothing to delete takes NO snapshot (no-op stays a no-op)", () => {
+    // A pristine vault with no derived material for this source.
+    const before = listSnapshots(vault).length;
+    const plan = deleteBySource(vault, "imports/does-not-exist.md", {
+      confirm: true,
+      now: NOW,
+    });
+    expect(plan.deleted).toEqual([]);
+    expect(plan.snapshotRunId).toBeNull();
+    expect(plan.snapshotPath).toBeNull();
+    expect(listSnapshots(vault).length).toBe(before);
   });
 });
 
