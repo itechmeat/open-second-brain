@@ -38,7 +38,12 @@ afterEach(() => {
   __clearEntityIndexCache();
 });
 
-function writeEntityNode(category: string, id: string, name: string): void {
+function writeEntityNode(
+  category: string,
+  id: string,
+  name: string,
+  aliases: ReadonlyArray<string> = [],
+): void {
   const dir = join(brainDirs(vault).entities, category);
   mkdirSync(dir, { recursive: true });
   writeFrontmatterAtomic(
@@ -48,6 +53,7 @@ function writeEntityNode(category: string, id: string, name: string): void {
       entity_id: id,
       category,
       name,
+      ...(aliases.length > 0 ? { aliases: [...aliases] } : {}),
       status: "active",
       created_at: "2026-07-18T00:00:00Z",
       updated_at: "2026-07-18T00:00:00Z",
@@ -96,6 +102,37 @@ describe("routeExtractedFacts anchoring with a junk-label node", () => {
     const skip = log.entries.find((e) => e.eventType === "entity-anchor-skip");
     expect(skip).toBeDefined();
     expect(skip!.body["entity"]).toBe("ent-orgs-junk");
+    expect(skip!.body["reason"]).toBe("empty");
+  });
+
+  test("anchors on a valid alias even when the name fails the gate, and logs the name skip", () => {
+    // The name is structurally junk but a valid alias survives the gate.
+    // The entity must NOT be silently excluded: it anchors via the alias,
+    // aligned with the atomic-facts anchoring path, while the name skip is
+    // still logged.
+    writeEntityNode("orgs", "ent-orgs-junkname", "***", ["Initech"]);
+
+    const dedup = new Map<string, DedupIndexEntry>();
+    const result = routeExtractedFacts(vault, {
+      facts: [{ family: "quantity", text: "initech shipped 7 units", line: 1 }],
+      agent: "claude-dev-agent",
+      now: NOW,
+      sessionRef: "session#turn-3",
+      dedup,
+    });
+    expect(result.created).toBe(1);
+
+    // Anchored via the valid alias form.
+    const anchored = inboxSignalBodies().find((b) => b.includes("entities:"));
+    expect(anchored).toBeDefined();
+    expect(anchored!).toContain("ent-orgs-junkname");
+
+    // The junk NAME skip is still logged.
+    const log = readLogDay(vault, "2026-07-18");
+    const skip = log.entries.find(
+      (e) => e.eventType === "entity-anchor-skip" && e.body["entity"] === "ent-orgs-junkname",
+    );
+    expect(skip).toBeDefined();
     expect(skip!.body["reason"]).toBe("empty");
   });
 

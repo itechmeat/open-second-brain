@@ -241,11 +241,13 @@ interface AnchorableEntity {
 
 /**
  * Reduce the active registry to anchorable entities: sanitise each label
- * (name + aliases) through the quality gate before normalisation, keep only
- * the valid forms, and DROP any entity whose stored name fails the gate. A
- * dropped entity is a historical junk-label node; the skip is logged (via a
- * dedicated event kind) and contained - a logging failure never aborts the
- * enclosing capture. `doctor` surfaces the same node as a prune candidate.
+ * (name + aliases) through the quality gate before normalisation and keep
+ * only the valid forms. When the stored NAME fails the gate the skip is
+ * logged (via a dedicated event kind) and contained - a logging failure
+ * never aborts the enclosing capture, and `doctor` surfaces the same node
+ * as a prune candidate. The entity is still anchored on its remaining
+ * VALID forms (aliases that pass the gate): a node with at least one valid
+ * form is never silently excluded, matching the atomic-facts anchoring path.
  */
 function buildAnchorables(
   vault: string,
@@ -267,7 +269,8 @@ function buildAnchorables(
       } catch {
         // A skip that cannot be logged must still not break capture.
       }
-      continue;
+      // Fall through: entityMatchForms drops the junk name form itself, so a
+      // valid alias still yields an anchorable form.
     }
     const forms = entityMatchForms([entity.name, ...entity.aliases]).filter(
       (f) => f.length >= MIN_ANCHOR_FORM_LENGTH,
