@@ -11,6 +11,7 @@
  */
 
 import { planBatches } from "../../../core/brain/ingest/batch-plan.ts";
+import { reconcilePlan } from "../../../core/brain/ingest/reconcile.ts";
 import { brainVerbContext, fail, info, ok, okJson, parse, usageError } from "../helpers.ts";
 
 /** Default caps, mirroring the MCP surface (1 MiB / 25 files per batch). */
@@ -34,13 +35,14 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     "src-subpath": { type: "string" },
     exclude: { type: "string-array" },
     resume: { type: "boolean" },
+    reconcile: { type: "boolean" },
     json: { type: "boolean" },
   });
   const sourceDir = positional[0];
   if (!sourceDir) {
     return usageError(
       "usage: o2b brain batch-plan <source-dir> [--max-bytes N] [--max-files N] " +
-        "[--src-subpath PATH] [--exclude PATTERN]... [--resume] [--json]",
+        "[--src-subpath PATH] [--exclude PATTERN]... [--resume] [--reconcile] [--json]",
     );
   }
 
@@ -51,6 +53,7 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     const resume = flags["resume"] === true;
     const srcSubpath = flags["src-subpath"] as string | undefined;
     const exclude = (flags["exclude"] as string[] | undefined) ?? [];
+    const reconcile = flags["reconcile"] === true;
     const plan = planBatches(vault, sourceDir, {
       maxBatchBytes,
       maxBatchFiles,
@@ -58,6 +61,9 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
       ...(srcSubpath !== undefined ? { srcSubpath } : {}),
       ...(exclude.length > 0 ? { exclude } : {}),
     });
+    // The reconcile is read-only: it diffs the plan's dispatched set against the
+    // checkpoint and reports the gap; it never re-dispatches.
+    const report = reconcile ? reconcilePlan(vault, plan) : undefined;
 
     if (flags["json"]) {
       okJson({
@@ -84,6 +90,17 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
           total_bytes: b.totalBytes,
           files: b.files.map((f) => ({ path: f.path, bytes: f.bytes, status: f.status })),
         })),
+        // Only present with --reconcile, so the default output is unchanged.
+        ...(report !== undefined
+          ? {
+              reconcile: {
+                dispatched: [...report.dispatched],
+                ingested: [...report.ingested],
+                missing: [...report.missing],
+                complete: report.complete,
+              },
+            }
+          : {}),
       });
       return 0;
     }
@@ -105,6 +122,14 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     if (plan.skippedNonExtractable.length > 0) {
       info(`  ${plan.skippedNonExtractable.length} non-extractable page(s) skipped:`);
       for (const s of plan.skippedNonExtractable) info(`    - ${s.path} (${s.reason})`);
+    }
+    if (report !== undefined) {
+      if (report.complete) {
+        ok(`  reconcile: all ${report.dispatched.length} dispatched source(s) ingested`);
+      } else {
+        info(`  reconcile: ${report.missing.length} dispatched source(s) never ingested:`);
+        for (const p of report.missing) info(`    - ${p}`);
+      }
     }
     return 0;
   } catch (err) {

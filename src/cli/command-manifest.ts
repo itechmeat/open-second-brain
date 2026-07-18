@@ -216,6 +216,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("vault", "string"),
             flag("max-bytes", "string"),
             flag("max-files", "string"),
+            flag("reconcile", "boolean"),
             flag("json", "boolean"),
           ],
         ),

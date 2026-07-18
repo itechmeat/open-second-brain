@@ -12,6 +12,7 @@
 import { planBatches, type BatchPlan } from "../../core/brain/ingest/batch-plan.ts";
 import { clearCheckpoint } from "../../core/brain/ingest/checkpoint.ts";
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
+import { reconcilePlan } from "../../core/brain/ingest/reconcile.ts";
 import { IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
 import {
   deleteBySource,
@@ -210,6 +211,7 @@ async function toolBrainIngestBatchPlan(
     Number.MAX_SAFE_INTEGER,
   );
   const resume = coerceBoolOptional(args, "resume") ?? false;
+  const reconcile = coerceBoolOptional(args, "reconcile") ?? false;
   const srcSubpath = coerceStr(args, "src_subpath", false) ?? undefined;
   const exclude = coerceStrList(args, "exclude");
   const plan = planBatches(ctx.vault, sourceDir, {
@@ -219,12 +221,27 @@ async function toolBrainIngestBatchPlan(
     ...(srcSubpath !== undefined ? { srcSubpath } : {}),
     ...(exclude.length > 0 ? { exclude } : {}),
   });
+  // Reconcile BEFORE any checkpoint clear below, so the gap report reads a live
+  // checkpoint. Read-only: it only diffs dispatched vs completed.
+  const report = reconcile ? reconcilePlan(ctx.vault, plan) : undefined;
   // A resumed plan that comes back empty is fully drained: drop its checkpoint
   // (the content manifest is the authoritative final state from here on).
   if (resume && plan.batches.length === 0) {
     clearCheckpoint(ctx.vault, plan.planId);
   }
-  return serializeBatchPlan(plan);
+  const serialized = serializeBatchPlan(plan);
+  return report === undefined
+    ? serialized
+    : {
+        ...serialized,
+        reconcile: {
+          plan_id: report.planId,
+          dispatched: [...report.dispatched],
+          ingested: [...report.ingested],
+          missing: [...report.missing],
+          complete: report.complete,
+        },
+      };
 }
 
 export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
@@ -286,7 +303,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         pre_extract: {
           type: "boolean",
           description:
-            "Run the deterministic no-LLM code-structure pass over the source file and return its class/function/import/inheritance seeds under `pre_extract`. Off by default; absent leaves the response unchanged.",
+            "Run the deterministic no-LLM code-structure pass over the source file; returns class/function/import/inheritance seeds under `pre_extract`. Off by default.",
         },
       },
       required: ["source_path", "summary", "entities"],
@@ -377,6 +394,11 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "boolean",
           description:
             "Resume an interrupted plan: exclude items already recorded completed in this plan's checkpoint. Default false.",
+        },
+        reconcile: {
+          type: "boolean",
+          description:
+            "Also return a `reconcile` gap report diffing the plan's dispatched sources against the checkpoint's ingested set. Read-only; no retry. Default false.",
         },
         src_subpath: {
           type: "string",
