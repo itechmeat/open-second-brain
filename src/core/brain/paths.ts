@@ -81,9 +81,16 @@ export const BRAIN_ACTIVE_FILE = "active.md";
 export const BRAIN_LESSONS_FILE = "lessons.md";
 export const BRAIN_PINNED_FILE = "pinned.md";
 export const BRAIN_INDEX_FILE = "_INDEX.md";
+/** Persisted claim-graph projection artifact (Belief lifecycle suite, A3). */
+export const BRAIN_CLAIM_GRAPH_FILE = "claim-graph.json";
 
 /** Vault-relative path of the `o2b index` output file. */
 export const BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
+
+/** Path of the persisted claim-graph projection: `Brain/claim-graph.json`. */
+export function claimGraphPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_CLAIM_GRAPH_FILE), vault);
+}
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 

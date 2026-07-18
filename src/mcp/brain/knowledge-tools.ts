@@ -41,6 +41,18 @@ import { aggregateQuantities } from "../../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../../core/brain/truth/collision.ts";
 import { computeTruthStateWithConflicts } from "../../core/brain/truth/conflicts.ts";
 import { appendClaimEvent, readClaimEvents } from "../../core/brain/truth/store.ts";
+import {
+  allClaims,
+  buildClaimGraph,
+  currentTruth,
+  loadClaimGraph,
+  rebuildClaimGraph,
+  truthAt,
+  whatContests,
+  whatReplaced,
+  type ClaimGraph,
+  type ClaimNode,
+} from "../../core/brain/claim-graph.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -556,9 +568,110 @@ function toolBrainCodegraphReport(
   return report as unknown as Record<string, unknown>;
 }
 
+// ----- brain_claims (Belief lifecycle suite, A3) -----------------------------
+
+function renderClaimNode(n: ClaimNode): Record<string, unknown> {
+  return {
+    id: n.id,
+    path: n.path,
+    topic: n.topic,
+    principle: n.principle,
+    valid_from: n.valid_from,
+    valid_until: n.valid_until,
+    superseded_by: n.superseded_by,
+    contradicts: n.contradicts,
+    provenance: n.provenance,
+    tombstoned: n.tombstoned,
+  };
+}
+
+const CLAIMS_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Load the persisted claim graph, or build a fresh in-memory one. */
+function resolveClaimGraph(vault: string): ClaimGraph {
+  return loadClaimGraph(vault) ?? buildClaimGraph(vault);
+}
+
+/**
+ * Claim-graph query surface: current truth (default), truth at an
+ * instant, history, what replaced X, what contests X, or rebuild.
+ */
+function toolBrainClaims(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const operation = coerceStr(args, "operation", false) ?? "current";
+  switch (operation) {
+    case "rebuild": {
+      const graph = rebuildClaimGraph(ctx.vault);
+      return { operation, rebuilt: true, node_count: graph.node_count, truncated: graph.truncated };
+    }
+    case "replaced": {
+      const id = coerceStr(args, "id", true)!;
+      const tip = whatReplaced(resolveClaimGraph(ctx.vault), id);
+      return { operation, id, tip: tip ? renderClaimNode(tip) : null };
+    }
+    case "contests": {
+      const id = coerceStr(args, "id", true)!;
+      const rows = whatContests(resolveClaimGraph(ctx.vault), id);
+      return { operation, id, claims: rows.map(renderClaimNode) };
+    }
+    case "at": {
+      const at = coerceStr(args, "at", true)!;
+      const iso = CLAIMS_DATE_ONLY_RE.test(at) ? `${at}T00:00:00Z` : at;
+      const probe = Date.parse(iso);
+      if (Number.isNaN(probe)) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          `brain_claims: 'at' must be an ISO instant or YYYY-MM-DD date; got ${at}`,
+        );
+      }
+      const rows = truthAt(resolveClaimGraph(ctx.vault), probe);
+      return { operation, at, count: rows.length, claims: rows.map(renderClaimNode) };
+    }
+    case "history": {
+      const rows = allClaims(resolveClaimGraph(ctx.vault));
+      return { operation, count: rows.length, claims: rows.map(renderClaimNode) };
+    }
+    case "current": {
+      const rows = currentTruth(resolveClaimGraph(ctx.vault));
+      return { operation, count: rows.length, claims: rows.map(renderClaimNode) };
+    }
+    default:
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_claims: 'operation' must be one of current, at, history, replaced, contests, rebuild",
+      );
+  }
+}
+
 // ----- brain_truth (Entity Truth & Self-Improving Dream Suite) ---------------
 
 export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: "brain_claims",
+    description:
+      "Claim-graph query (a projection over superseded_by / contradicts / valid_from / valid_until). operation: current (default) = truth now; at = truth at an instant; history = every claim incl. tombstoned; replaced = what replaced X; contests = what contests X; rebuild = rebuild the projection.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["current", "at", "history", "replaced", "contests", "rebuild"],
+          description: "Which claim-graph query to run (default: current).",
+        },
+        at: {
+          type: "string",
+          description: "at: ISO-8601 instant or YYYY-MM-DD date to evaluate truth.",
+        },
+        id: { type: "string", description: "replaced/contests: the claim id/wikilink to resolve." },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    handler: toolBrainClaims,
+    previewBudget: MCP_PREVIEW_BUDGET,
+  },
   {
     name: "brain_codegraph_report",
     description:

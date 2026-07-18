@@ -288,6 +288,8 @@ describe("tool listing", () => {
         "brain_tune",
         // CodeGraph & MCP Operational Readability (v1.12.0).
         "brain_codegraph_report",
+        // Belief lifecycle suite (t_6916369f): claim-graph query surface.
+        "brain_claims",
         // Agent Write Contract Suite: provider-agnostic write sessions.
         "brain_write_session",
         // Knowledge Provenance Suite (v1.7.0).
@@ -631,7 +633,9 @@ describe("stdio loop", () => {
     //   ranking, retrieval-ranking-quality t_65588d8b) = 98.
     // + brain_lifecycle (cross-type tombstone + supersede lifecycle,
     //   belief-lifecycle-decision-memory t_7d5a3589) = 99.
-    expect(list.result.tools.length).toBe(99);
+    // + brain_claims (claim-graph query surface,
+    //   belief-lifecycle-decision-memory t_6916369f) = 100.
+    expect(list.result.tools.length).toBe(100);
   });
 
   test("returns parse error for invalid JSON", async () => {

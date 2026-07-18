@@ -16,6 +16,7 @@ Brain verbs (observing memory):
   apply-evidence   Log a real-work application of a preference
   note             Append a one-line narrative milestone to Brain/log/today
   lifecycle        Tombstone/supersede a memory, resolve chain tips, curator slices
+  claims           Claim-graph query: current truth, truth-at-T, replaced-by, contested-by
   digest           Render the recent-changes digest (markdown or --json)
   intent-review    Read-only pre-dream review of active signal clusters
   retention        Recommendation-only keep/improve/park/prune review
@@ -181,6 +182,13 @@ export const VERB_HELP: Record<string, string> = {
     "[--high-use-min <n>] lists injected-never-used, contradicted, and high-used\n" +
     "memories from observed-use verdicts. Tombstoned entries stay on disk for audit\n" +
     "but are excluded from recall, inject, and active.md.\n",
+  claims:
+    "usage: o2b brain claims [--at <instant>] [--history] [--replaced <id>] [--contests <id>] [--rebuild] [--vault <path>] [--json]\n" +
+    "Query the claim-graph projection over existing superseded_by / contradicts /\n" +
+    "valid_from / valid_until relations. Default is current truth; --at <ISO|YYYY-MM-DD>\n" +
+    "gives truth at that instant; --history lists every claim (tombstoned included);\n" +
+    "--replaced <id> follows the supersede chain to the live tip; --contests <id>\n" +
+    "lists contesting claims; --rebuild rebuilds and persists Brain/claim-graph.json.\n",
   digest:
     "usage: o2b brain digest [--vault <path>] [--since <ISO>] [--until <ISO>] [--json] [--silent-if-empty]\n" +
     "Renders the 24-hour change digest. Empty + --silent-if-empty exits 2.\n",

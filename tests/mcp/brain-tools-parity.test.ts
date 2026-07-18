@@ -53,6 +53,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_benchmark",
   "brain_bridges",
   "brain_brief",
+  "brain_claims",
   "brain_clusters",
   "brain_codegraph_report",
   "brain_context",
