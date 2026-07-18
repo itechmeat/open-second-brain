@@ -368,6 +368,18 @@ export const BRAIN_LOG_EVENT_KIND = {
    * emit nothing, so the merged timeline records only real mutations.
    */
   authoredAtBackfill: "authored-at-backfill",
+  /**
+   * `tension` (Belief lifecycle suite, S2, t_0e3f2bee) - a detected
+   * contradiction was persisted as a tension note, or an existing tension
+   * moved through its `open -> confirmed | dismissed | resolved` state
+   * machine. Payload carries the `tension` wikilink, the two `subject`
+   * ids, the `action` (`detected | confirm | dismiss | resolve`), the
+   * resulting `status`, and the `agent`; transitions also carry the `from`
+   * status. Re-detection of an already-persisted pair refreshes the note
+   * in place and emits nothing, so the merged timeline records only the
+   * first detection and each deliberate transition.
+   */
+  tension: "tension",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

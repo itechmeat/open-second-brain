@@ -18,6 +18,7 @@ Brain verbs (observing memory):
   lifecycle        Tombstone/supersede a memory, resolve chain tips, curator slices
   claims           Claim-graph query: current truth, truth-at-T, replaced-by, contested-by
   decision         Capture/review decisions: record/outcome/show/list/similar
+  tension          Triage persisted contradictions: list/show/confirm/dismiss/resolve
   digest           Render the recent-changes digest (markdown or --json)
   intent-review    Read-only pre-dream review of active signal clusters
   retention        Recommendation-only keep/improve/park/prune review
@@ -205,6 +206,16 @@ export const VERB_HELP: Record<string, string> = {
     "delta, reason code) appended alongside the truth ledger; recall --prompt <text>\n" +
     "[--turn <n>] deterministically resurfaces a rated decision matching the prompt when\n" +
     "decision_recall.max_per_session is configured (byte-identical when unset).\n",
+  tension:
+    "usage: o2b brain tension <list|show|confirm|dismiss|resolve> [...] [--vault <path>] [--json]\n" +
+    "Triage persisted contradictions under Brain/tensions/. Detection persists a\n" +
+    "tension note (open state) with a dedup key (subject pair + stance signature) so\n" +
+    "re-detection updates the existing note instead of duplicating. list [--unresolved]\n" +
+    "and show <slug> read; confirm <slug> moves open -> confirmed; dismiss <slug>\n" +
+    "[--reason <r>] and resolve <slug> [--reason <r>] close it (open|confirmed ->\n" +
+    "dismissed|resolved). Invalid transitions are rejected. A context pack that injects\n" +
+    "a subject note of an unresolved (open|confirmed) tension emits a warning; dismissed\n" +
+    "and resolved tensions warn about nothing.\n",
   digest:
     "usage: o2b brain digest [--vault <path>] [--since <ISO>] [--until <ISO>] [--json] [--silent-if-empty]\n" +
     "Renders the 24-hour change digest. Empty + --silent-if-empty exits 2.\n",

@@ -15,6 +15,7 @@ import {
   cmdBrainLifecycle,
   cmdBrainClaims,
   cmdBrainDecision,
+  cmdBrainTension,
   cmdBrainDream,
   cmdBrainApplyEvidence,
   cmdBrainDigest,
@@ -172,6 +173,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainClaims(rest);
       case "decision":
         return await cmdBrainDecision(rest);
+      case "tension":
+        return await cmdBrainTension(rest);
       case "dream":
         return await cmdBrainDream(rest);
       case "apply-evidence":

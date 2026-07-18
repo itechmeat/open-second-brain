@@ -27,6 +27,7 @@ import {
 import { brainDirs } from "./paths.ts";
 import { isTombstoned } from "./lifecycle/tombstone.ts";
 import { preferChainTips } from "./inject-governor.ts";
+import { tensionWarningsForContextItems } from "./tensions.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import { readCommitmentTier } from "./commitment.ts";
 import type { BrainCommitmentTier } from "./types.ts";
@@ -122,6 +123,14 @@ export interface ContextPackReport {
   readonly receiptId?: string;
   readonly telemetryId?: string;
   readonly lanes?: ContextLanesReport;
+  /**
+   * Injection-time tension warnings (Belief lifecycle suite, S2,
+   * t_0e3f2bee): one line per UNRESOLVED (open or confirmed) tension whose
+   * subject note is present in `items`. Present only when at least one such
+   * warning fires, so a vault with no unresolved tensions touching the pack
+   * keeps the report byte-identical.
+   */
+  readonly warnings?: ReadonlyArray<string>;
 }
 
 export interface ContextPackOptions {
@@ -561,6 +570,17 @@ function finalizeContextPackReport(
   startedAtMs: number,
 ): ContextPackReport {
   let enriched = report;
+  // Belief lifecycle suite (S2, t_0e3f2bee): flag any injected memory that
+  // is a subject of an unresolved (open/confirmed) tension. Additive: with
+  // no such tension the helper returns [] and the `warnings` key is never
+  // added, so a tension-free pack stays byte-identical.
+  const tensionWarnings = tensionWarningsForContextItems(
+    vault,
+    report.items.map((item) => item.id),
+  );
+  if (tensionWarnings.length > 0) {
+    enriched = { ...enriched, warnings: tensionWarnings };
+  }
   // Gated emissions route through the lazy emit kernel (t_5d7aa7c5):
   // with the option absent the thunk never runs, and a broken
   // continuity store can no longer fail the pack (fail-open).

@@ -292,6 +292,8 @@ describe("tool listing", () => {
         "brain_claims",
         // Belief lifecycle suite (t_ac03214d): decision-record note family.
         "brain_decision",
+        // Belief lifecycle suite (t_0e3f2bee): persisted-contradiction lifecycle.
+        "brain_tension",
         // Agent Write Contract Suite: provider-agnostic write sessions.
         "brain_write_session",
         // Knowledge Provenance Suite (v1.7.0).
@@ -639,7 +641,9 @@ describe("stdio loop", () => {
     //   belief-lifecycle-decision-memory t_6916369f) = 100.
     // + brain_decision (decision-record note family,
     //   belief-lifecycle-decision-memory t_ac03214d) = 101.
-    expect(list.result.tools.length).toBe(101);
+    // + brain_tension (persisted-contradiction lifecycle,
+    //   belief-lifecycle-decision-memory t_0e3f2bee) = 102.
+    expect(list.result.tools.length).toBe(102);
   });
 
   test("returns parse error for invalid JSON", async () => {
