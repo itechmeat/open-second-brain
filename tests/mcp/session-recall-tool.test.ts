@@ -126,4 +126,42 @@ describe("session recall MCP tools", () => {
     expect(expanded).toMatchObject({ next_cursor: "1" });
     expect(expanded.raw_content).toHaveLength(1);
   });
+
+  test("since/before bound grep to a time window (S1)", async () => {
+    // Both turns are at 2026-05-20T17:00:0Xz; a before-bound in the past
+    // drops them, an enclosing window keeps them.
+    const before = await callTool("brain_session_grep", {
+      query: "receipt",
+      session_id: "session-mcp",
+      before: "2026-05-19",
+    });
+    expect((before.hits as Array<unknown>).length).toBe(0);
+
+    const windowed = await callTool("brain_session_grep", {
+      query: "receipt",
+      session_id: "session-mcp",
+      since: "2026-05-20",
+      before: "2026-05-21",
+    });
+    expect(
+      (windowed.hits as Array<{ kind: string }>).some((hit) => hit.kind === "session_turn"),
+    ).toBe(true);
+  });
+
+  test("an unparseable time bound rejects with an MCP error (S1)", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 9,
+      method: "tools/call",
+      params: {
+        name: "brain_session_grep",
+        arguments: { query: "receipt", since: "not-a-date" },
+      },
+    })) as { error?: { message: string }; result?: { isError?: boolean } };
+    // The invalid-input surfaces as an error (either JSON-RPC error or an
+    // isError tool result), never a silently ignored filter.
+    expect(response.error !== undefined || response.result?.isError === true).toBe(true);
+  });
 });

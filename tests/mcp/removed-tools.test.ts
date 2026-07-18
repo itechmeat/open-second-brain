@@ -161,5 +161,13 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   //   ingestion-import-robustness t_2e2e959f) = 97.
   // + brain_observed_use (observed-use verdict feeding recall ranking,
   //   retrieval-ranking-quality t_65588d8b) = 98.
-  expect(list.result.tools.length).toBe(98);
+  // + brain_lifecycle (cross-type tombstone + supersede lifecycle,
+  //   belief-lifecycle-decision-memory t_7d5a3589) = 99.
+  // + brain_claims (claim-graph query surface,
+  //   belief-lifecycle-decision-memory t_6916369f) = 100.
+  // + brain_decision (decision-record note family,
+  //   belief-lifecycle-decision-memory t_ac03214d) = 101.
+  // + brain_tension (persisted-contradiction lifecycle,
+  //   belief-lifecycle-decision-memory t_0e3f2bee) = 102.
+  expect(list.result.tools.length).toBe(102);
 });

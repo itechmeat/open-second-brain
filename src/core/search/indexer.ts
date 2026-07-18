@@ -204,6 +204,22 @@ function aliasesFromFrontmatter(frontmatter: Record<string, unknown>): string[] 
   return raw.filter((v): v is string => typeof v === "string");
 }
 
+/**
+ * The note's `authored_at` frontmatter instant as unix seconds, or null
+ * when undeclared or unparseable (conversation chronology, S1). Tolerant
+ * by design: a malformed value never fails indexing, it just leaves the
+ * document with no turn instant so it ranks byte-identically. A value at
+ * or before the Unix epoch is treated as absent (the import layer's "no
+ * timestamp" sentinel), never a real authoring instant.
+ */
+function authoredAtFromFrontmatter(frontmatter: Record<string, unknown>): number | null {
+  const raw = frontmatter["authored_at"];
+  if (typeof raw !== "string") return null;
+  const ms = Date.parse(raw.trim());
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.floor(ms / 1000);
+}
+
 const UTF8_FATAL = new TextDecoder("utf-8", { fatal: true });
 
 function readUtf8(absPath: string): string {
@@ -312,6 +328,7 @@ async function indexInto(
           mtime: mtimeSec,
           size: file.stat.size,
           pageType: pageTypeFromFrontmatter(frontmatter),
+          authoredAt: authoredAtFromFrontmatter(frontmatter),
         });
         // Framework-kind files feed the tier-guard post-pass: keep the
         // parsed frontmatter of this run's changed docs that declare a

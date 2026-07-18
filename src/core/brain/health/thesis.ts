@@ -46,7 +46,8 @@ import { parseFrontmatter, slugify } from "../../vault.ts";
 import { nextDueDate, parseCadence, type ObligationCadence } from "../obligations.ts";
 import { thesesDir, thesisPath, validateIsoDate } from "../paths.ts";
 import { isoDate, isoSecond } from "../time.ts";
-import { type BrainSignalSign } from "../types.ts";
+import { type BrainSignalSign, type BrainCommitmentTier } from "../types.ts";
+import { readCommitmentTier, validateCommitmentTier } from "../commitment.ts";
 import {
   DEFAULT_NEGATION_MARKERS,
   deriveNoteStance,
@@ -84,6 +85,12 @@ export interface ThesisPage {
   /** Last time supporting evidence landed, or null if never. */
   readonly lastSupportAt: string | null;
   readonly agent: string;
+  /**
+   * Optional commitment tier (Belief lifecycle suite, B3): how firmly the
+   * standing position is held. `null` when unset; round-trips through
+   * frontmatter, emitted only when set so unset theses stay byte-identical.
+   */
+  readonly commitment: BrainCommitmentTier | null;
   readonly notes: string;
   readonly path: string;
 }
@@ -95,6 +102,8 @@ export interface RecordThesisInput {
   readonly falsification?: string;
   /** Review cadence; defaults to `monthly`. */
   readonly cadence?: string;
+  /** Optional commitment tier (B3); validated on write. */
+  readonly commitment?: BrainCommitmentTier;
   readonly agent: string;
   readonly notes?: string;
   /** Overrides `last_updated` (defaults to today, UTC). */
@@ -111,6 +120,8 @@ export interface UpdateThesisInput {
   readonly counterEvidence?: string;
   readonly falsification?: string;
   readonly cadence?: string;
+  /** Optional commitment tier (B3); validated on write when supplied. */
+  readonly commitment?: BrainCommitmentTier;
   readonly notes?: string;
   readonly now?: Date;
 }
@@ -177,11 +188,11 @@ function render(page: Omit<ThesisPage, "path">): string {
     `last_updated: ${page.lastUpdated}`,
     `last_support_at: ${page.lastSupportAt ?? ""}`,
     `agent: ${JSON.stringify(page.agent)}`,
-    "---",
-    "",
-    renderBody(page),
-    "",
   ];
+  // Commitment tier (B3): emitted only when set so unset theses stay
+  // byte-identical to today.
+  if (page.commitment !== null) lines.push(`commitment: ${page.commitment}`);
+  lines.push("---", "", renderBody(page), "");
   return lines.join("\n");
 }
 
@@ -222,6 +233,7 @@ function parsePage(vault: string, slug: string): ThesisPage | null {
     lastUpdated: parseIsoOrEmpty(meta["last_updated"]),
     lastSupportAt: lastSupport.length > 0 ? lastSupport : null,
     agent: typeof meta["agent"] === "string" ? meta["agent"] : "",
+    commitment: readCommitmentTier(meta),
     notes: sections.get(SECTION_NOTES) ?? "",
     path,
   });
@@ -249,6 +261,7 @@ export function recordThesis(vault: string, input: RecordThesisInput): ThesisPag
     lastUpdated: input.lastUpdated ? validateIsoDate(input.lastUpdated) : isoDate(now),
     lastSupportAt: input.lastSupportAt ? validateIsoDate(input.lastSupportAt) : null,
     agent: input.agent,
+    commitment: validateCommitmentTier(input.commitment),
     notes: (input.notes ?? "").trim(),
   };
   mkdirSync(thesesDir(vault), { recursive: true });
@@ -280,6 +293,8 @@ export function updateThesis(vault: string, input: UpdateThesisInput): ThesisPag
     lastUpdated: isoDate(now),
     lastSupportAt: prior.lastSupportAt,
     agent: prior.agent,
+    commitment:
+      input.commitment !== undefined ? validateCommitmentTier(input.commitment) : prior.commitment,
     notes: input.notes !== undefined ? input.notes.trim() : prior.notes,
   };
   atomicWriteFileSync(prior.path, render(page));

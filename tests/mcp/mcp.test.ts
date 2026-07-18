@@ -279,6 +279,8 @@ describe("tool listing", () => {
         "brain_tiers",
         "brain_secrets",
         "brain_maintenance",
+        // Belief lifecycle suite (t_7d5a3589): cross-type tombstone + supersede.
+        "brain_lifecycle",
         // Link & Recall Intelligence Suite (v0.45.0).
         "brain_bridges",
         "brain_clusters",
@@ -286,6 +288,12 @@ describe("tool listing", () => {
         "brain_tune",
         // CodeGraph & MCP Operational Readability (v1.12.0).
         "brain_codegraph_report",
+        // Belief lifecycle suite (t_6916369f): claim-graph query surface.
+        "brain_claims",
+        // Belief lifecycle suite (t_ac03214d): decision-record note family.
+        "brain_decision",
+        // Belief lifecycle suite (t_0e3f2bee): persisted-contradiction lifecycle.
+        "brain_tension",
         // Agent Write Contract Suite: provider-agnostic write sessions.
         "brain_write_session",
         // Knowledge Provenance Suite (v1.7.0).
@@ -627,7 +635,15 @@ describe("stdio loop", () => {
     //   ingestion-import-robustness t_2e2e959f) = 97.
     // + brain_observed_use (session-end observed-use verdict feeding recall
     //   ranking, retrieval-ranking-quality t_65588d8b) = 98.
-    expect(list.result.tools.length).toBe(98);
+    // + brain_lifecycle (cross-type tombstone + supersede lifecycle,
+    //   belief-lifecycle-decision-memory t_7d5a3589) = 99.
+    // + brain_claims (claim-graph query surface,
+    //   belief-lifecycle-decision-memory t_6916369f) = 100.
+    // + brain_decision (decision-record note family,
+    //   belief-lifecycle-decision-memory t_ac03214d) = 101.
+    // + brain_tension (persisted-contradiction lifecycle,
+    //   belief-lifecycle-decision-memory t_0e3f2bee) = 102.
+    expect(list.result.tools.length).toBe(102);
   });
 
   test("returns parse error for invalid JSON", async () => {

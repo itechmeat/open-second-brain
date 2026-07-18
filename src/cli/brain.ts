@@ -12,6 +12,10 @@ import {
   cmdBrainInit,
   cmdBrainFeedback,
   cmdBrainNote,
+  cmdBrainLifecycle,
+  cmdBrainClaims,
+  cmdBrainDecision,
+  cmdBrainTension,
   cmdBrainDream,
   cmdBrainApplyEvidence,
   cmdBrainDigest,
@@ -63,6 +67,7 @@ import {
   cmdBrainBankImport,
   cmdBrainBacklinks,
   cmdBrainSemanticsBackfill,
+  cmdBrainAuthoredAtBackfill,
   cmdBrainMcpLandscape,
   cmdBrainMerge,
   cmdBrainExplorer,
@@ -162,6 +167,14 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainFeedback(rest);
       case "note":
         return await cmdBrainNote(rest);
+      case "lifecycle":
+        return await cmdBrainLifecycle(rest);
+      case "claims":
+        return await cmdBrainClaims(rest);
+      case "decision":
+        return await cmdBrainDecision(rest);
+      case "tension":
+        return await cmdBrainTension(rest);
       case "dream":
         return await cmdBrainDream(rest);
       case "apply-evidence":
@@ -266,6 +279,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainBacklinks(rest);
       case "semantics-backfill":
         return await cmdBrainSemanticsBackfill(rest);
+      case "authored-at-backfill":
+        return await cmdBrainAuthoredAtBackfill(rest);
       case "mcp-landscape":
         return await cmdBrainMcpLandscape(rest);
       case "scan-inline":

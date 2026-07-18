@@ -50,6 +50,13 @@ import { writePreferenceTxn } from "./preference-txn.ts";
 import { appendLogEvent, type BrainLogEntry } from "./log.ts";
 import { moveToRetired, parsePreference } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
+import { isTombstoned } from "./lifecycle/tombstone.ts";
+import { appendDecisionChangeReceipt } from "./decisions/receipts.ts";
+import {
+  CHAIN_DECAY_STALE_DAYS,
+  effectiveStaleThresholdDays,
+  isLowRecallSupersededAncestor,
+} from "./inject-governor.ts";
 import { isPinned } from "./pin.ts";
 import { createSnapshot, pruneSnapshots } from "./snapshot.ts";
 import { loadBrainConfig, resolveGuardrails } from "./policy.ts";
@@ -506,6 +513,33 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       );
     }
 
+    // Belief lifecycle suite (B4): the preference-confidence update path
+    // emits a decision-change receipt for each material confidence band
+    // change captured this pass. `bandDrops` is the existing, already-
+    // computed set of material weakenings (a band actually dropped), so
+    // this rides on data the refresh already produced without touching its
+    // byte-identical no-op guarantees. The receipt's idempotency key
+    // (subject + before + after) makes a re-run a no-op. Fail-soft.
+    for (const d of refresh.bandDrops) {
+      const before = `confidence:${d.previous}${d.previous_value !== null ? `(${d.previous_value.toFixed(2)})` : ""}`;
+      const after = `confidence:${d.next}(${d.next_value.toFixed(2)})`;
+      try {
+        appendDecisionChangeReceipt(vault, {
+          subject: d.id,
+          before,
+          after,
+          confidenceDelta: d.previous_value !== null ? d.next_value - d.previous_value : null,
+          actor: opts.agentName ?? "dream",
+          rationale: `applied ${d.applied} / violated ${d.violated}`,
+          reasonCode: "confidence-refresh",
+          ts: now.toISOString(),
+        });
+      } catch {
+        // Accountability mirror is best-effort; the refreshed preference
+        // bytes remain authoritative.
+      }
+    }
+
     for (const r of plan.retires) {
       const fromPath = preferencePath(vault, r.slug);
       if (!existsSync(fromPath)) continue;
@@ -540,6 +574,19 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
           retired_by: wikilinkToRun,
           ...(r.supersededBy ? { superseded_by: r.supersededBy } : {}),
         });
+        // Belief lifecycle suite (A4): record the accelerated retirement of
+        // a low-recall superseded ancestor as a dedicated audit event.
+        if (r.chainDecay) {
+          appendLogEvent(vault, {
+            timestamp: isoSecond(now),
+            eventType: BRAIN_LOG_EVENT_KIND.chainDecay,
+            body: {
+              preference: `[[ret-${r.slug}]]`,
+              reason: r.reason,
+              stale_days: String(CHAIN_DECAY_STALE_DAYS),
+            },
+          });
+        }
       } catch (err) {
         // A retire failure is logged via the `skip-corrupted-frontmatter`
         // pathway only if it stemmed from a parse error during the
@@ -879,6 +926,9 @@ function scanBrain(vault: string): ScanResult {
     for (const name of readdirSync(dirs.inbox)) {
       if (!name.endsWith(".md")) continue;
       const full = join(dirs.inbox, name);
+      // Belief lifecycle suite (t_7d5a3589): a tombstoned signal is
+      // excluded from the dream pass so it is never re-clustered.
+      if (isTombstoned(parseFrontmatter(full)[0])) continue;
       try {
         const sig = parseSignal(full);
         signals.push({ path: full, signal: sig, active: true });
@@ -891,6 +941,7 @@ function scanBrain(vault: string): ScanResult {
     for (const name of readdirSync(dirs.processed)) {
       if (!name.endsWith(".md")) continue;
       const full = join(dirs.processed, name);
+      if (isTombstoned(parseFrontmatter(full)[0])) continue;
       try {
         const sig = parseSignal(full);
         signals.push({ path: full, signal: sig, active: false });
@@ -903,9 +954,18 @@ function scanBrain(vault: string): ScanResult {
     for (const name of readdirSync(dirs.preferences)) {
       if (!name.endsWith(".md")) continue;
       const full = join(dirs.preferences, name);
+      const rawMeta = parseFrontmatter(full)[0];
+      if (isTombstoned(rawMeta)) continue;
+      // Belief lifecycle suite (A4): capture the raw superseded_by pointer
+      // (the typed parser drops it) so accelerated chain decay can see a
+      // temporally-superseded ancestor.
+      const supersededBy =
+        typeof rawMeta["superseded_by"] === "string" && rawMeta["superseded_by"] !== ""
+          ? (rawMeta["superseded_by"] as string)
+          : null;
       try {
         const pref = parsePreference(full);
-        preferences.push({ path: full, pref });
+        preferences.push({ path: full, pref, supersededBy });
       } catch {
         corrupted.push({ path: full });
       }
@@ -1381,6 +1441,16 @@ function planAutoRetires(
       effectiveStatus === BRAIN_PREFERENCE_STATUS.confirmed ||
       effectiveStatus === BRAIN_PREFERENCE_STATUS.quarantine
     ) {
+      // Belief lifecycle suite (A4): a low-recall superseded ancestor
+      // decays on the accelerated window so it leaves the working set
+      // faster than a live memory. Non-superseded / well-used prefs keep
+      // the normal window, so a vault with no chains is byte-identical.
+      const effectiveApplied = refreshed ? refreshed.applied_count : rec.pref.applied_count;
+      const chainDecay = isLowRecallSupersededAncestor({
+        supersededBy: rec.supersededBy,
+        appliedCount: effectiveApplied,
+      });
+      const staleDays = effectiveStaleThresholdDays(chainDecay, cfg.retire.stale_evidence_days);
       if (!effectiveLastEvidence) {
         // Confirmed with no evidence at all? Shouldn't happen, but
         // gate on the same staleness rule using `confirmed_at`. We
@@ -1389,7 +1459,7 @@ function planAutoRetires(
         const confirmedAt = refreshed ? refreshed.confirmed_at : rec.pref.confirmed_at;
         if (!confirmedAt) continue;
         const days = daysBetween(Date.parse(confirmedAt), now.getTime());
-        if (days > cfg.retire.stale_evidence_days) {
+        if (days > staleDays) {
           if (isPinned(rec.pref)) {
             plan.retainPinned.push({
               preference: renderPrefLink({
@@ -1403,6 +1473,7 @@ function planAutoRetires(
               slug,
               principle: rec.pref.principle,
               reason: BRAIN_RETIRED_REASON.staleNoEvidence,
+              ...(chainDecay ? { chainDecay: true } : {}),
             });
             refresh.updated.delete(slug);
           }
@@ -1410,7 +1481,7 @@ function planAutoRetires(
         continue;
       }
       const days = daysBetween(Date.parse(effectiveLastEvidence), now.getTime());
-      if (days > cfg.retire.stale_evidence_days) {
+      if (days > staleDays) {
         if (isPinned(rec.pref)) {
           plan.retainPinned.push({
             preference: renderPrefLink({
@@ -1424,6 +1495,7 @@ function planAutoRetires(
             slug,
             principle: rec.pref.principle,
             reason: BRAIN_RETIRED_REASON.staleNoEvidence,
+            ...(chainDecay ? { chainDecay: true } : {}),
           });
           refresh.updated.delete(slug);
         }

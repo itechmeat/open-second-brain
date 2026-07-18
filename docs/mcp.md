@@ -492,3 +492,15 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   the incoming principle closely resembles a confirmed same-scope preference
   (the write still proceeds); the advisory names the preference id and the
   similarity evidence.
+- Since v1.33.0 four belief-lifecycle tools join the surface (102 total):
+  `brain_lifecycle` (tombstone / supersede / temporal-replace / tip /
+  curator), `brain_claims` (claim-graph queries: current truth,
+  truth-at-instant, replaced-by, contested-by), `brain_decision`
+  (record / outcome / rate / list / compare / similar / history / recall),
+  and `brain_tension` (detect / list / show / confirm / dismiss / resolve).
+  Decision-change receipts store only accountable provenance; free-text
+  hidden-reasoning fields are rejected by the closed schema.
+- Since v1.33.0 `brain_session_grep` accepts `since` / `before` turn-time
+  bounds and `brain_search` results carry `authoredAt` when the indexed
+  document preserved a turn instant. Context-pack reports list unresolved
+  tension warnings for injected subject notes.

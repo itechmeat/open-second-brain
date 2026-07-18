@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.33.0] - 2026-07-18
+
+A belief lifecycle and decision memory wave: eleven units that give memories a full lifecycle (tombstone, supersede, temporal replacement, tension triage) and make decisions first-class, auditable citizens of the brain (records, ratings, commitment tiers, change receipts, governed recall). Everything is deterministic (the kernel still calls no LLM), every mutation is logged or receipted, and vaults that do not opt in behave byte-identically.
+
+### Added
+
+- Cross-type tombstone and supersede lifecycle (`o2b brain lifecycle`, MCP `brain_lifecycle`): idempotent soft delete via frontmatter (`_status: tombstoned`, reason, timestamp, optional `superseded_by`) across preferences, signals, and learnings; tombstoned and superseded-non-tip entries leave recall, inject, and `Brain/active.md` but stay on disk for audit; curator slices list injected-never-used, contradicted, and high-used memories from observed-use verdicts.
+- Atomic temporal fact-replacement (`o2b brain lifecycle temporal-replace`): closes the predecessor and opens the successor at one shared instant with half-open `[valid_from, valid_to)` intervals, whole-day semantics for date-only facts, and both-or-neither write atomicity; the successor link reuses `superseded_by`.
+- Persisted claim-graph query surface (`o2b brain claims`, MCP `brain_claims`): one bounded, deterministically rebuildable projection (`Brain/claim-graph.json`) over existing `superseded_by`/`contradicts` relations and bi-temporal validity, answering current truth, truth-at-instant, what-replaced, and what-contests; current-truth by default, history opt-in.
+- Supersedes-chain consumer policy: context packs inject only chain tips under budget (an explicit historical flag keeps the chain), recall annotates superseded hits with a pointer to their replacement, and the dream pass accelerates decay of low-recall superseded ancestors (`chain-decay` events, named threshold constants).
+- Decision-record note family (`o2b brain decision`, MCP `brain_decision`): `type: decision` notes under `Brain/decisions/` with chosen, assumption, `review_date` (opens exactly one review obligation, idempotently), outcome backfill, optional pre-mortem, and similar-decision recall with recorded outcomes.
+- Rated decision capture: `rating` (1-5) plus `rationale` round-trip through decision frontmatter, `list --rated` sorts by rating, `compare` reads decisions side by side; rated decisions stay out of signal and preference recall.
+- Commitment tier vocabulary: optional `commitment: exploring | leaning | decided | locked` on preferences, theses, and decision records; injected text renders the tier label in place of the raw confidence float when set and is byte-identical when unset.
+- Decision-change receipts: `decision_change.v1` JSONL alongside the truth ledger recording before, after, evidence, confidence delta, alternatives, actor, and reason code with durable idempotency keys; emitted on decision record/outcome/rating, lifecycle tombstone/supersede, and material confidence-band drops; `o2b brain decision history` pages the trail with an opaque cursor and normalized subject matching.
+- Rated-decision recall governor: deterministic token-overlap prompt matching resurfaces rated decisions verbatim under `decision_recall.max_per_session` and `decision_recall.min_spacing_turns` (config plus env twins); disabled and byte-identical when unset, with governor state flags on both CLI and MCP.
+- Conversation chronology: session imports stamp `authored_at` on turn signals, the search index (schema v10) carries and returns it (`authored_at` in CLI JSON, `authoredAt` in MCP results), exact hybrid-score ties break toward more recently authored content, `session-grep` accepts `--since`/`--before`, and `o2b brain authored-at-backfill` upgrades existing vaults idempotently (dry-run default, no re-embedding).
+- Tension objects (`o2b brain tension`, MCP `brain_tension`): detected contradictions persist under `Brain/tensions/` with a deterministic dedup key and an open -> confirmed/dismissed/resolved state machine; re-detection refreshes instead of duplicating; context packs warn when a subject note of an unresolved tension is injected.
+
+### Changed
+
+- The MCP tool surface grows from 98 to 102 tools (`brain_lifecycle`, `brain_claims`, `brain_decision`, `brain_tension`); `brain_session_grep` gains `since`/`before` parameters and `brain_search` results expose `authoredAt`.
+- Search store schema advances to v10 with a nullable `authored_at` column; existing indexes migrate in place and documents without a turn instant are unchanged.
+- Context-pack reports gain an additive `warnings` array (unresolved-tension notices) and items carry optional `commitment`; packs without tensions or tiers stay byte-identical.
+
 ## [1.32.0] - 2026-07-18
 
 A memory write-path integrity and store safety wave: eleven units across four subsystems that make every durable write choke point validate its input, every destructive vault operation snapshot first, and every embeddings failure surface as a typed, actionable outcome. All gates are deterministic (the kernel still calls no LLM), every rejection is a typed error or a logged, visible skip, and no new dependency is added.
@@ -6508,6 +6532,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.33.0]: https://github.com/itechmeat/open-second-brain/compare/v1.32.0...v1.33.0
 [1.32.0]: https://github.com/itechmeat/open-second-brain/compare/v1.31.0...v1.32.0
 [1.31.0]: https://github.com/itechmeat/open-second-brain/compare/v1.30.1...v1.31.0
 [1.30.1]: https://github.com/itechmeat/open-second-brain/compare/v1.30.0...v1.30.1

@@ -3,6 +3,8 @@ import {
   expandSessionRecall,
   searchSessionRecall,
 } from "../../../core/brain/session-recall.ts";
+import { resolveTimeRange } from "../../../core/search/time-range.ts";
+import { SearchError } from "../../../core/search/types.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
@@ -13,8 +15,14 @@ export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
     "session-id": { type: "string" },
     limit: { type: "string" },
     "snippet-chars": { type: "string" },
+    since: { type: "string" },
+    before: { type: "string" },
   });
   const vault = brainVerbContext(flags).vault;
+  // Conversation-chronology bounds (S1): --since / --before parse through
+  // the shared time-range grammar; --before maps onto the inclusive upper
+  // edge. Absent bounds leave the search unbounded (byte-identical).
+  const bounds = sessionGrepBounds(stringOptional(flags["since"]), stringOptional(flags["before"]));
   const result = searchSessionRecall(vault, {
     query: requiredString(flags["query"], "brain session-grep", "--query"),
     ...(stringOptional(flags["session-id"]) !== undefined
@@ -35,9 +43,30 @@ export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
           ),
         }
       : {}),
+    ...(bounds.sinceMs !== null ? { sinceMs: bounds.sinceMs } : {}),
+    ...(bounds.untilMs !== null ? { untilMs: bounds.untilMs } : {}),
   });
   writeOutput(result, flags["json"] === true);
   return 0;
+}
+
+function sessionGrepBounds(
+  since: string | undefined,
+  before: string | undefined,
+): { sinceMs: number | null; untilMs: number | null } {
+  if (since === undefined && before === undefined) return { sinceMs: null, untilMs: null };
+  try {
+    return resolveTimeRange(
+      {
+        ...(since !== undefined ? { since } : {}),
+        ...(before !== undefined ? { until: before } : {}),
+      },
+      Date.now(),
+    );
+  } catch (exc) {
+    if (exc instanceof SearchError) throw new CliError(exc.message);
+    throw exc;
+  }
 }
 
 export async function cmdBrainSessionDescribe(argv: string[]): Promise<number> {

@@ -326,3 +326,103 @@ test("limit truncates after ranking", () => {
   );
   expect(ranked.length).toBe(5);
 });
+
+// ── conversation chronology: exact-score recency tie-break (S1 / t_347e8224) ──
+
+/** Like `hyd`, but with an explicit `authored_at` (unix seconds) or null. */
+function hydAuthored(
+  chunkId: number,
+  docId: number,
+  mtime: number,
+  authoredAt: number | null,
+): HydratedChunk {
+  return Object.freeze({
+    chunkId,
+    documentId: docId,
+    path: `doc${docId}.md`,
+    title: `Doc ${docId}`,
+    content: `chunk ${chunkId}`,
+    startLine: 1,
+    endLine: 1,
+    mtime,
+    authoredAt,
+  });
+}
+
+const T_OLD = 1_700_000_000; // unix seconds
+const T_NEW = 1_700_100_000;
+
+test("exact hybrid-score tie orders the more recent authored_at first (S1)", () => {
+  // Equal bm25 + no boosts → an EXACT score tie between the two chunks.
+  const kw: KeywordHit[] = [
+    { chunkId: 1, documentId: 10, bm25: -3 },
+    { chunkId: 2, documentId: 11, bm25: -3 },
+  ];
+  const hydrated = new Map<number, HydratedChunk>([
+    // chunk 1 is OLDER, chunk 2 is NEWER; identical mtime so only authored_at differs.
+    [1, hydAuthored(1, 10, OLD_MTIME, T_OLD)],
+    [2, hydAuthored(2, 11, OLD_MTIME, T_NEW)],
+  ]);
+  const ranked = rankResults(
+    { keyword: kw, semantic: [], hydrated, inboundLinkSources: new Map(), tagsByDoc: new Map() },
+    { keywordWeight: 1, semanticWeight: 0, limit: 10, nowMs: NOW },
+  );
+  expect(ranked[0]!.score).toBeCloseTo(ranked[1]!.score, 6);
+  expect(ranked[0]!.chunkId).toBe(2); // newer first
+  expect(ranked[0]!.authoredAt).toBe(T_NEW);
+  expect(ranked[1]!.authoredAt).toBe(T_OLD);
+});
+
+test("a non-tied pair keeps today's order regardless of authored_at (S1 regression)", () => {
+  // chunk 1 has the STRONGER bm25 (higher score) but the OLDER authored_at;
+  // chunk 2 is weaker but newer. Different scores → recency must NOT reorder.
+  const kw: KeywordHit[] = [
+    { chunkId: 1, documentId: 10, bm25: -10 },
+    { chunkId: 2, documentId: 11, bm25: -1 },
+  ];
+  const hydrated = new Map<number, HydratedChunk>([
+    [1, hydAuthored(1, 10, OLD_MTIME, T_OLD)],
+    [2, hydAuthored(2, 11, OLD_MTIME, T_NEW)],
+  ]);
+  const ranked = rankResults(
+    { keyword: kw, semantic: [], hydrated, inboundLinkSources: new Map(), tagsByDoc: new Map() },
+    { keywordWeight: 1, semanticWeight: 0, limit: 10, nowMs: NOW },
+  );
+  expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+  expect(ranked[0]!.chunkId).toBe(1); // stronger score wins despite older authored_at
+});
+
+test("an exact tie where neither side carries authored_at keeps the historical order (S1)", () => {
+  const kw: KeywordHit[] = [
+    { chunkId: 1, documentId: 10, bm25: -3 },
+    { chunkId: 2, documentId: 11, bm25: -3 },
+  ];
+  const hydrated = new Map<number, HydratedChunk>([
+    [1, hydAuthored(1, 10, OLD_MTIME, null)],
+    [2, hydAuthored(2, 11, OLD_MTIME, null)],
+  ]);
+  const ranked = rankResults(
+    { keyword: kw, semantic: [], hydrated, inboundLinkSources: new Map(), tagsByDoc: new Map() },
+    { keywordWeight: 1, semanticWeight: 0, limit: 10, nowMs: NOW },
+  );
+  // Equal keywordScore + mtime → chunkId asc (the historical final tie-break).
+  expect(ranked.map((r) => r.chunkId)).toEqual([1, 2]);
+  expect(ranked[0]!.authoredAt).toBeUndefined();
+});
+
+test("an exact tie with only one authored_at falls through to the historical tie-break (S1)", () => {
+  const kw: KeywordHit[] = [
+    { chunkId: 1, documentId: 10, bm25: -3 },
+    { chunkId: 2, documentId: 11, bm25: -3 },
+  ];
+  const hydrated = new Map<number, HydratedChunk>([
+    // Only chunk 2 has an instant; a mixed pair must not be reordered by it.
+    [1, hydAuthored(1, 10, OLD_MTIME, null)],
+    [2, hydAuthored(2, 11, OLD_MTIME, T_NEW)],
+  ]);
+  const ranked = rankResults(
+    { keyword: kw, semantic: [], hydrated, inboundLinkSources: new Map(), tagsByDoc: new Map() },
+    { keywordWeight: 1, semanticWeight: 0, limit: 10, nowMs: NOW },
+  );
+  expect(ranked.map((r) => r.chunkId)).toEqual([1, 2]); // chunkId asc, unchanged
+});

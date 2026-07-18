@@ -291,8 +291,138 @@ export const BRAIN_LOG_EVENT_KIND = {
    * signal from the dream pass; this event records that it happened.
    */
   signalRetire: "signal-retire",
+  /**
+   * `tombstone` (Belief lifecycle suite, Track A anchor, t_7d5a3589) - a
+   * memory of any type (preference, signal, learning) was tombstoned:
+   * marked `_status: tombstoned` in frontmatter without deletion,
+   * optionally carrying a `superseded_by` replacement pointer (a
+   * supersede). Payload carries the vault-relative `path`, the `reason`,
+   * the `prior_status` the entry held before tombstoning, an optional
+   * `superseded_by` wikilink, and the `agent`. Re-issuing a tombstone is
+   * a byte-identical no-op and emits no event.
+   */
+  tombstone: "tombstone",
+  /**
+   * `temporal-replace` (Belief lifecycle suite, A2, t_3ba9c404) - an
+   * atomic temporal fact replacement closed a predecessor
+   * (`valid_until = T`) and opened a successor (`valid_from = T`) at one
+   * shared instant, reusing `superseded_by` as the successor link.
+   * Payload carries the vault-relative `predecessor` and `successor`
+   * paths, the shared instant `at`, and the `agent`. The pair is written
+   * atomically (both or neither); this event records that it happened.
+   */
+  temporalReplace: "temporal-replace",
+  /**
+   * `chain-decay` (Belief lifecycle suite, A4, t_d9365884) - the dream
+   * pass retired a low-recall superseded ancestor on the accelerated
+   * chain-decay window rather than the normal stale-evidence window.
+   * Payload carries the retired `preference` wikilink, the `reason`, and
+   * the `stale_days` window that fired. A memory that is not a superseded
+   * ancestor never produces this event, so a chain-free vault is
+   * byte-identical.
+   */
+  chainDecay: "chain-decay",
+  /**
+   * `decision-record` (Belief lifecycle suite, Track B anchor, t_ac03214d)
+   * - a first-class decision note was captured under `Brain/decisions/`.
+   * Payload carries the `decision` wikilink, the `chosen` option, the
+   * `review_date`, whether a review `obligation` was opened, and the
+   * `agent`. One event per capture; re-capturing an existing decision
+   * slug rejects instead of double-logging.
+   */
+  decisionRecord: "decision-record",
+  /**
+   * `decision-outcome` (Belief lifecycle suite, B1, t_ac03214d) - the
+   * `outcome` field of an existing decision note was backfilled. Payload
+   * carries the `decision` wikilink, the recorded `outcome`, and the
+   * `agent`. Distinct from `decision-record` so the capture and the
+   * later hindsight backfill stay separately auditable.
+   */
+  decisionOutcome: "decision-outcome",
+  /**
+   * `decision-rating` (Belief lifecycle suite, B2, t_6fe43fcc) - the
+   * `rating` (and optional `rationale`) of an existing decision note was
+   * set or changed. Payload carries the `decision` wikilink, the new
+   * `rating`, an optional `rationale`, and the `agent`. Distinct from
+   * `decision-outcome` because a rating is a quality self-assessment, not
+   * the observed outcome; overloading either kind would blur the audit.
+   */
+  decisionRating: "decision-rating",
+  /**
+   * `decision-change-receipt` (Belief lifecycle suite, B4, t_3547314d) - a
+   * `decision_change.v1` receipt was appended to the receipts log at the
+   * moment a belief changed (a supersede/tombstone or a preference
+   * confidence update). Payload carries the `subject`, the `reason_code`,
+   * the `idempotency_key`, and the `agent`. Emitted only on an actual
+   * append; an idempotent replay is a no-op and logs nothing, so the
+   * merged timeline never double-counts a change.
+   */
+  decisionChangeReceipt: "decision-change-receipt",
+  /**
+   * `authored-at-backfill` (conversation chronology, S1 / t_347e8224) -
+   * the idempotent backfill stamped the `authored_at` frontmatter field
+   * onto session-imported signals that preserved a transcript turn
+   * instant but predate the field. Emitted once per non-dry-run apply.
+   * Payload carries the number of files `updated`, the number `scanned`,
+   * and the `agent`. A dry run and a re-run that finds nothing to add
+   * emit nothing, so the merged timeline records only real mutations.
+   */
+  authoredAtBackfill: "authored-at-backfill",
+  /**
+   * `tension` (Belief lifecycle suite, S2, t_0e3f2bee) - a detected
+   * contradiction was persisted as a tension note, or an existing tension
+   * moved through its `open -> confirmed | dismissed | resolved` state
+   * machine. Payload carries the `tension` wikilink, the two `subject`
+   * ids, the `action` (`detected | confirm | dismiss | resolve`), the
+   * resulting `status`, and the `agent`; transitions also carry the `from`
+   * status. Re-detection of an already-persisted pair refreshes the note
+   * in place and emits nothing, so the merged timeline records only the
+   * first detection and each deliberate transition.
+   */
+  tension: "tension",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
+
+/**
+ * Cross-type lifecycle status value (Belief lifecycle suite, t_7d5a3589).
+ * Written into the `_status` frontmatter slot by the tombstone/supersede
+ * lifecycle module to mark a memory of any type retired-in-place. Lives
+ * here (not in the lifecycle module) so `preference.ts` can tolerate the
+ * value on read without importing from `lifecycle/` - the design's
+ * one-directional import rule (lifecycle imports from types/preference,
+ * never the reverse).
+ */
+export const BRAIN_TOMBSTONE_STATUS = "tombstoned";
+
+/**
+ * Commitment-tier vocabulary (Belief lifecycle suite, B3, t_e112c63c).
+ * An optional, operator-facing epistemic stance on a belief - how firmly
+ * it is held, independent of the evidence-derived confidence float. The
+ * four-value ladder runs tentative -> fixed. Lives here (not in
+ * `commitment.ts`) so `preference.ts` / `types.ts` consumers can carry
+ * the value without importing the validator module - the same
+ * one-directional pattern as {@link BRAIN_TOMBSTONE_STATUS}. The write
+ * validator, tolerant reader, and typed error live in `commitment.ts`.
+ */
+export const BRAIN_COMMITMENT_TIER = {
+  exploring: "exploring",
+  leaning: "leaning",
+  decided: "decided",
+  locked: "locked",
+} as const;
+export type BrainCommitmentTier =
+  (typeof BRAIN_COMMITMENT_TIER)[keyof typeof BRAIN_COMMITMENT_TIER];
+
+const BRAIN_COMMITMENT_TIER_VALUES: ReadonlyArray<BrainCommitmentTier> =
+  Object.values(BRAIN_COMMITMENT_TIER);
+
+/** Type-guard narrowing an arbitrary value to {@link BrainCommitmentTier}. */
+export function isCommitmentTier(value: unknown): value is BrainCommitmentTier {
+  return (
+    typeof value === "string" &&
+    (BRAIN_COMMITMENT_TIER_VALUES as ReadonlyArray<string>).includes(value)
+  );
+}
 
 /**
  * Precomputed set of every event-kind string. Both the markdown
@@ -542,6 +672,14 @@ export interface BrainPreference {
   readonly freshness_trend?: string;
   /** Optional wikilink to a retired pref this one replaces. */
   readonly supersedes?: string;
+  /**
+   * Optional commitment tier (Belief lifecycle suite, B3, t_e112c63c):
+   * `exploring | leaning | decided | locked`. When set, the injection
+   * formatter renders the tier label in place of the raw confidence
+   * float. Additive optional - absent on legacy files; emitted only when
+   * supplied so unset preferences stay byte-identical.
+   */
+  readonly commitment?: BrainCommitmentTier;
   readonly aliases?: ReadonlyArray<string>;
   /** Optional runtime schema taxonomy token. Inert metadata. */
   readonly schema_type?: string;

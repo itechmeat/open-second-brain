@@ -449,6 +449,10 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         semanticScore: c.semanticScore,
         linkBoost,
         recencyBoost: recency,
+        // Conversation chronology (S1): expose the authoring instant only
+        // when the note carries one, so a note with no turn instant keeps
+        // the byte-identical result shape.
+        ...(hyd.authoredAt != null ? { authoredAt: hyd.authoredAt } : {}),
         searchType: c.searchType,
         reasons: buildReasons({
           reuseBoost,
@@ -483,8 +487,18 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
   }
 
   // Tie-break per design §7: final_score desc, keywordScore desc, mtime desc, chunkId asc.
+  // Conversation chronology (S1): on an EXACT hybrid-score tie, order by
+  // more recent authoring instant FIRST - but only when BOTH results carry
+  // an `authored_at`. A pair where either side has none falls through to
+  // the historical tie-break, so any non-tied pair (and every pair without
+  // turn instants) keeps today's order byte-identically.
   ranked.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    const aAuthored = inputs.hydrated.get(a.chunkId)?.authoredAt ?? null;
+    const bAuthored = inputs.hydrated.get(b.chunkId)?.authoredAt ?? null;
+    if (aAuthored !== null && bAuthored !== null && aAuthored !== bAuthored) {
+      return bAuthored - aAuthored;
+    }
     if (b.keywordScore !== a.keywordScore) return b.keywordScore - a.keywordScore;
     const am = inputs.hydrated.get(a.chunkId)?.mtime ?? 0;
     const bm = inputs.hydrated.get(b.chunkId)?.mtime ?? 0;

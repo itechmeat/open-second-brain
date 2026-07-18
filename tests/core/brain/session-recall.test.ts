@@ -137,3 +137,65 @@ describe("session recall DAG", () => {
     expect(hit?.line_end).toBe(2);
   });
 });
+
+function turnAt(turnId: string, text: string, timestamp: string): SessionTurn {
+  return { turnId, role: "user", text, timestamp };
+}
+
+const parseMs = (iso: string): number => Date.parse(iso);
+
+const byString = (a: string, b: string): number => a.localeCompare(b);
+
+describe("session recall — since/before time bounds (S1 / t_347e8224)", () => {
+  function seed(): void {
+    importSessionRecall(vault, {
+      sessionId: "session-time",
+      turns: [
+        turnAt("t1", "chronology alpha needle", "2026-01-10T09:00:00.000Z"),
+        turnAt("t2", "chronology beta needle", "2026-03-15T09:00:00.000Z"),
+        turnAt("t3", "chronology gamma needle", "2026-06-20T09:00:00.000Z"),
+      ],
+      summaryGroupSize: 8,
+      createdAt: "2026-06-20T09:00:00.000Z",
+    });
+  }
+
+  function turnIdsFor(input: { sinceMs?: number; untilMs?: number }): string[] {
+    return searchSessionRecall(vault, {
+      query: "needle",
+      sessionId: "session-time",
+      ...input,
+    })
+      .hits.filter((h) => h.kind === "session_turn")
+      .map((h) => h.turn_id ?? "");
+  }
+
+  test("sinceMs excludes turns before the lower bound", () => {
+    seed();
+    expect(turnIdsFor({ sinceMs: parseMs("2026-03-01T00:00:00.000Z") }).toSorted(byString)).toEqual(
+      ["t2", "t3"],
+    );
+  });
+
+  test("untilMs excludes turns after the upper bound", () => {
+    seed();
+    expect(turnIdsFor({ untilMs: parseMs("2026-04-01T00:00:00.000Z") }).toSorted(byString)).toEqual(
+      ["t1", "t2"],
+    );
+  });
+
+  test("since + until keep only turns inside the window", () => {
+    seed();
+    expect(
+      turnIdsFor({
+        sinceMs: parseMs("2026-02-01T00:00:00.000Z"),
+        untilMs: parseMs("2026-04-01T00:00:00.000Z"),
+      }),
+    ).toEqual(["t2"]);
+  });
+
+  test("no bounds is byte-identical to the unbounded search (all three turns)", () => {
+    seed();
+    expect(turnIdsFor({}).toSorted(byString)).toEqual(["t1", "t2", "t3"]);
+  });
+});

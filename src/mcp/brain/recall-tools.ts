@@ -56,6 +56,8 @@ import {
   expandSessionRecall,
   searchSessionRecall,
 } from "../../core/brain/session-recall.ts";
+import { resolveTimeRange } from "../../core/search/time-range.ts";
+import { SearchError } from "../../core/search/types.ts";
 import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/brain/query-demand.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
@@ -758,6 +760,12 @@ async function toolBrainSessionGrep(
     "snippet_chars",
     args["snippet_chars"],
   );
+  // Conversation-chronology bounds (S1): `since` / `before` parse through
+  // the shared time-range grammar (ISO date/datetime, today/yesterday,
+  // <n>h/<n>d/<n>w). `before` maps onto the range's inclusive upper edge.
+  const since = optionalStringArg("brain_session_grep", args, "since");
+  const before = optionalStringArg("brain_session_grep", args, "before");
+  const bounds = resolveSessionGrepBounds(since, before);
   return {
     ...searchSessionRecall(ctx.vault, {
       query: requiredStringArg("brain_session_grep", args, "query"),
@@ -768,8 +776,35 @@ async function toolBrainSessionGrep(
         : {}),
       ...(limit !== undefined ? { limit } : {}),
       ...(snippetChars !== undefined ? { snippetChars } : {}),
+      ...(bounds.sinceMs !== null ? { sinceMs: bounds.sinceMs } : {}),
+      ...(bounds.untilMs !== null ? { untilMs: bounds.untilMs } : {}),
     }),
   };
+}
+
+/**
+ * Resolve `since` / `before` session-grep bounds through the shared
+ * time-range grammar, mapping `before` onto the inclusive upper edge. An
+ * unparseable point or an inverted range surfaces as an INVALID_PARAMS
+ * error rather than a silently ignored filter.
+ */
+function resolveSessionGrepBounds(
+  since: string | undefined,
+  before: string | undefined,
+): { sinceMs: number | null; untilMs: number | null } {
+  if (since === undefined && before === undefined) return { sinceMs: null, untilMs: null };
+  try {
+    return resolveTimeRange(
+      {
+        ...(since !== undefined ? { since } : {}),
+        ...(before !== undefined ? { until: before } : {}),
+      },
+      Date.now(),
+    );
+  } catch (exc) {
+    if (exc instanceof SearchError) throw new MCPError(INVALID_PARAMS, exc.message);
+    throw exc;
+  }
 }
 
 async function toolBrainSessionDescribe(
@@ -1130,7 +1165,8 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_session_grep",
     previewBudget: MCP_PREVIEW_BUDGET,
-    description: "Search imported session recall raw turns and summary nodes.",
+    description:
+      "Search imported session recall raw turns and summary nodes, optionally bounded to a time window (since/before).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1148,6 +1184,16 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description: "Maximum chars per hit snippet.",
+        },
+        since: {
+          type: "string",
+          description:
+            "Optional inclusive lower time bound on turn authoring time (ISO date/datetime, today/yesterday/last week/last month, or <n>h/<n>d/<n>w).",
+        },
+        before: {
+          type: "string",
+          description:
+            "Optional inclusive upper time bound on turn authoring time (same grammar as since).",
         },
       },
       required: ["query"],

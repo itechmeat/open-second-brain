@@ -97,6 +97,23 @@ describe("BRAIN_* const enums", () => {
       "write-conflict-advisory",
       // A5 (t_66c12a67) fact signal retire lifecycle
       "signal-retire",
+      // Belief lifecycle suite (t_7d5a3589) cross-type tombstone + supersede
+      "tombstone",
+      // Belief lifecycle suite (t_3ba9c404) atomic temporal fact-replacement
+      "temporal-replace",
+      // Belief lifecycle suite (t_d9365884) supersedes-chain decay acceleration
+      "chain-decay",
+      // Belief lifecycle suite (t_ac03214d) decision-record capture + outcome backfill
+      "decision-record",
+      "decision-outcome",
+      // Belief lifecycle suite (t_6fe43fcc) decision rating update
+      "decision-rating",
+      // Belief lifecycle suite (t_3547314d) decision-change receipt append
+      "decision-change-receipt",
+      // Conversation chronology (t_347e8224) authored_at backfill
+      "authored-at-backfill",
+      // Belief lifecycle suite (t_0e3f2bee) tension object detect + transitions
+      "tension",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

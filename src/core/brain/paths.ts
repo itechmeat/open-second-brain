@@ -56,6 +56,9 @@ export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
 export const BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
 /** Declared-thesis register pages: `Brain/theses/thesis-<slug>.md` (D3). */
 export const BRAIN_THESES_REL = posix.join(BRAIN_ROOT_REL, "theses");
+export const BRAIN_DECISIONS_REL = posix.join(BRAIN_ROOT_REL, "decisions");
+/** Persisted contradiction (tension) notes: `Brain/tensions/tension-<slug>.md` (S2). */
+export const BRAIN_TENSIONS_REL = posix.join(BRAIN_ROOT_REL, "tensions");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
 /** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
@@ -81,9 +84,16 @@ export const BRAIN_ACTIVE_FILE = "active.md";
 export const BRAIN_LESSONS_FILE = "lessons.md";
 export const BRAIN_PINNED_FILE = "pinned.md";
 export const BRAIN_INDEX_FILE = "_INDEX.md";
+/** Persisted claim-graph projection artifact (Belief lifecycle suite, A3). */
+export const BRAIN_CLAIM_GRAPH_FILE = "claim-graph.json";
 
 /** Vault-relative path of the `o2b index` output file. */
 export const BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
+
+/** Path of the persisted claim-graph projection: `Brain/claim-graph.json`. */
+export function claimGraphPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_CLAIM_GRAPH_FILE), vault);
+}
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
@@ -297,6 +307,28 @@ export function thesesDir(vault: string): string {
 export function thesisPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
   return ensureInsideVault(join(vault, BRAIN_THESES_REL, `thesis-${s}.md`), vault);
+}
+
+/** Decision-record note-family dir: `Brain/decisions/`. */
+export function decisionsDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_DECISIONS_REL), vault);
+}
+
+/** A single decision page: `Brain/decisions/decision-<slug>.md`. */
+export function decisionPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_DECISIONS_REL, `decision-${s}.md`), vault);
+}
+
+/** Persisted-contradiction note-family dir: `Brain/tensions/` (S2). */
+export function tensionsDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_TENSIONS_REL), vault);
+}
+
+/** A single tension page: `Brain/tensions/tension-<slug>.md` (S2). */
+export function tensionPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_TENSIONS_REL, `tension-${s}.md`), vault);
 }
 
 /** Proposal scan watermark path: `Brain/procedural-memory/proposal-watermark.json`. */

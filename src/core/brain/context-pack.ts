@@ -25,7 +25,12 @@ import {
   type ContextSafetyReport,
 } from "./safety/context-guard.ts";
 import { brainDirs } from "./paths.ts";
+import { isTombstoned } from "./lifecycle/tombstone.ts";
+import { preferChainTips } from "./inject-governor.ts";
+import { tensionWarningsForContextItems } from "./tensions.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
+import { readCommitmentTier } from "./commitment.ts";
+import type { BrainCommitmentTier } from "./types.ts";
 import {
   deriveEpistemicStatus,
   EPISTEMIC_STATUS,
@@ -87,6 +92,13 @@ export interface ContextPackItem extends ContextTransformAnnotations {
   /** `evidenced_by` wikilinks grounding this item; empty when it cites none. */
   readonly evidenceRefs: ReadonlyArray<string>;
   /**
+   * Commitment tier (Belief lifecycle suite, B3) when the source note
+   * declares one: `exploring | leaning | decided | locked`. Additive and
+   * present only when set, so a pack over commitment-free notes stays
+   * byte-identical.
+   */
+  readonly commitment?: BrainCommitmentTier;
+  /**
    * Value-per-token density score (impact-per-token allocation,
    * t_affa3bd9): structural signal per estimated token that broke this
    * item's within-tier tie. Present only when `densityRanking` is on;
@@ -111,6 +123,14 @@ export interface ContextPackReport {
   readonly receiptId?: string;
   readonly telemetryId?: string;
   readonly lanes?: ContextLanesReport;
+  /**
+   * Injection-time tension warnings (Belief lifecycle suite, S2,
+   * t_0e3f2bee): one line per UNRESOLVED (open or confirmed) tension whose
+   * subject note is present in `items`. Present only when at least one such
+   * warning fires, so a vault with no unresolved tensions touching the pack
+   * keeps the report byte-identical.
+   */
+  readonly warnings?: ReadonlyArray<string>;
 }
 
 export interface ContextPackOptions {
@@ -181,6 +201,13 @@ export interface ContextPackOptions {
    * on the `density_ranking_context_pack` config key.
    */
   readonly densityRanking?: boolean;
+  /**
+   * Belief lifecycle suite (A4, t_d9365884): keep superseded ancestors in
+   * the pack instead of collapsing each supersedes-chain to its live tip.
+   * The explicit historical flag - history is opt-in, never inferred from
+   * the query. Omitted/false injects only chain tips.
+   */
+  readonly includeHistorical?: boolean;
 }
 
 interface Candidate {
@@ -195,7 +222,15 @@ interface Candidate {
   readonly tokens: number;
   readonly epistemic: EpistemicStatus;
   readonly evidenceRefs: ReadonlyArray<string>;
+  readonly commitment: BrainCommitmentTier | null;
   readonly safety?: ContextSafetyReport;
+  /**
+   * Normalized `superseded_by` pointer when this memory has been
+   * replaced (Belief lifecycle suite, A4). Drives inject tip-preference:
+   * a superseded ancestor is dropped in favour of its live tip unless
+   * the caller opts into `includeHistorical`.
+   */
+  readonly supersededBy: string | null;
 }
 
 function withOptionalLanes(
@@ -234,6 +269,10 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
       } catch {
         continue;
       }
+      // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
+      // superseded-non-tip) memory stays on disk for audit but is never
+      // injected into a context pack.
+      if (isTombstoned(meta)) continue;
       const id = typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
       const tier = readTier(meta);
       const created = typeof meta["created_at"] === "string" ? meta["created_at"] : "";
@@ -248,6 +287,10 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
       const createdAtMs = created ? Date.parse(created) : fallbackMtimeMs;
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
       const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
+      const supersededBy =
+        typeof meta["superseded_by"] === "string" && meta["superseded_by"] !== ""
+          ? (meta["superseded_by"] as string)
+          : null;
       const contextLane = normalizeContextLane(meta["context_lane"]);
       const epistemic = deriveEpistemicStatus(meta);
       const guarded = guardBrainContextSnippet(body, {
@@ -276,6 +319,8 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
         tokens: estimateTokens(guarded.safeText),
         epistemic: epistemic.status,
         evidenceRefs: epistemic.evidenceRefs,
+        commitment: readCommitmentTier(meta),
+        supersededBy,
         ...(contextSafetyReport(guarded) ? { safety: contextSafetyReport(guarded) } : {}),
       });
     }
@@ -304,7 +349,14 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // Default off, so the surfaced bodies are byte-identical to the legacy
   // blocklist guard unless the vault enables the flag.
   const delimitUntrusted = loadGuardrailsConfigSafe(vault).untrusted_source_delimiting;
-  const candidates = collectCandidates(vault, delimitUntrusted);
+  // Belief lifecycle suite (A4, t_d9365884): prefer supersedes-chain tips.
+  // A superseded ancestor is dropped in favour of its live tip so a chain
+  // of replacements injects only the current belief; `includeHistorical`
+  // keeps the whole chain (explicit flag, never inferred). A vault with no
+  // supersession chains passes through byte-identically.
+  const candidates = preferChainTips(collectCandidates(vault, delimitUntrusted), {
+    historical: opts.includeHistorical === true,
+  }).kept;
 
   // Focus boost (within-tier only): computed once per candidate, 0 for
   // every candidate when no active focus is supplied, so the default
@@ -394,6 +446,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       trimmed,
       epistemic: c.epistemic,
       evidenceRefs: c.evidenceRefs,
+      ...(c.commitment !== null ? { commitment: c.commitment } : {}),
       // When the per-memory char budget trimmed this item, recompute density
       // from the emitted (post-trim) body/tokens so the surfaced value reflects
       // the actual content/token-cost the agent receives, not the pre-budget
@@ -517,6 +570,17 @@ function finalizeContextPackReport(
   startedAtMs: number,
 ): ContextPackReport {
   let enriched = report;
+  // Belief lifecycle suite (S2, t_0e3f2bee): flag any injected memory that
+  // is a subject of an unresolved (open/confirmed) tension. Additive: with
+  // no such tension the helper returns [] and the `warnings` key is never
+  // added, so a tension-free pack stays byte-identical.
+  const tensionWarnings = tensionWarningsForContextItems(
+    vault,
+    report.items.map((item) => item.id),
+  );
+  if (tensionWarnings.length > 0) {
+    enriched = { ...enriched, warnings: tensionWarnings };
+  }
   // Gated emissions route through the lazy emit kernel (t_5d7aa7c5):
   // with the option absent the thunk never runs, and a broken
   // continuity store can no longer fail the pack (fail-open).

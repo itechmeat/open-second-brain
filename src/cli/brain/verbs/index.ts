@@ -1,6 +1,10 @@
 export { cmdBrainInit } from "./init.ts";
 export { cmdBrainFeedback } from "./feedback.ts";
 export { cmdBrainNote } from "./note.ts";
+export { cmdBrainLifecycle } from "./lifecycle.ts";
+export { cmdBrainClaims } from "./claims.ts";
+export { cmdBrainDecision } from "./decision.ts";
+export { cmdBrainTension } from "./tension.ts";
 export { cmdBrainDream } from "./dream.ts";
 export { cmdBrainApplyEvidence } from "./apply-evidence.ts";
 export { cmdBrainDigest } from "./digest.ts";
@@ -47,6 +51,7 @@ export { cmdBrainBankExport } from "./bank-export.ts";
 export { cmdBrainBankImport } from "./bank-import.ts";
 export { cmdBrainBacklinks } from "./backlinks.ts";
 export { cmdBrainSemanticsBackfill } from "./semantics-backfill.ts";
+export { cmdBrainAuthoredAtBackfill } from "./authored-at-backfill.ts";
 export { cmdBrainMcpLandscape } from "./mcp-landscape.ts";
 export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";

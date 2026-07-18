@@ -54,6 +54,7 @@ import {
   BRAIN_MEMORY_LAYER,
   BRAIN_PREFERENCE_STATUS,
   BRAIN_RETIRED_REASON,
+  BRAIN_TOMBSTONE_STATUS,
   type BrainConfidence,
   type BrainEvidenceSummary,
   type BrainMemoryLayer,
@@ -61,8 +62,10 @@ import {
   type BrainPreferenceStatus,
   type BrainRetired,
   type BrainRetiredReason,
+  type BrainCommitmentTier,
   isBrainMemoryLayer,
 } from "./types.ts";
+import { readCommitmentTier, validateCommitmentTier } from "./commitment.ts";
 import type { PageLifecycle } from "./page-meta/lifecycle.ts";
 import type { PageTier } from "./page-meta/tier.ts";
 import { computeContentHash } from "./content-hash.ts";
@@ -150,6 +153,13 @@ export interface WritePreferenceInput {
    * only when supplied so legacy fixtures stay byte-identical.
    */
   readonly tier?: PageTier;
+  /**
+   * Optional commitment tier (Belief lifecycle suite, B3, t_e112c63c):
+   * `exploring | leaning | decided | locked`. User-editable, unprefixed
+   * in YAML. Validated on write; emitted only when supplied so legacy
+   * fixtures stay byte-identical.
+   */
+  readonly commitment?: BrainCommitmentTier;
   readonly pinned?: boolean;
   /**
    * Directional freshness trend (Time-Aware Recall & Activation Suite,
@@ -550,6 +560,12 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   if (input.tier !== undefined) {
     metadata["tier"] = input.tier;
   }
+  // `commitment` tier (B3): validated on write, emitted only when a valid
+  // tier is supplied so unset preferences stay byte-identical.
+  const commitment = validateCommitmentTier(input.commitment);
+  if (commitment !== null) {
+    metadata["commitment"] = commitment;
+  }
   // Brain lifecycle suite (F5): bi-temporal validity, emitted only when
   // supplied (e.g. dream filled it from the source signal's ISO text).
   // Reader-side support already exists via readBitemporalSlots; legacy
@@ -734,7 +750,12 @@ export function parsePreference(
   // status-folder-mismatch the parser surfaces below as a typed error
   // (doctor downgrades it to a warning) — see §4 of the design doc.
   const statusValues = Object.values(BRAIN_PREFERENCE_STATUS) as ReadonlyArray<string>;
-  if (!statusValues.includes(status) && status !== "retired") {
+  // `tombstoned` (Belief lifecycle suite, t_7d5a3589) is a cross-type
+  // lifecycle status the tombstone module stamps into `_status` in place.
+  // It is tolerated on read - like `retired` - so an audit read and the
+  // doctor see a coherent tombstoned entry rather than a corrupt file;
+  // recall / inject / active.md / dream exclude it via `isTombstoned`.
+  if (!statusValues.includes(status) && status !== "retired" && status !== BRAIN_TOMBSTONE_STATUS) {
     throw new Error(
       `preference status must be one of ${statusValues.join(", ")}; got ${JSON.stringify(status)} (${path})`,
     );
@@ -791,6 +812,7 @@ export function parsePreference(
     ...(optionalScalarString(meta, "supersedes") !== undefined
       ? { supersedes: optionalScalarString(meta, "supersedes") }
       : {}),
+    ...(readCommitmentTier(meta) !== null ? { commitment: readCommitmentTier(meta)! } : {}),
     ...(meta["aliases"] !== undefined && Array.isArray(meta["aliases"])
       ? { aliases: [...(meta["aliases"] as ReadonlyArray<string>)] }
       : {}),
@@ -1218,7 +1240,10 @@ function enforceStatusFolderInvariant(
       parent === "preferences" &&
       status !== BRAIN_PREFERENCE_STATUS.unconfirmed &&
       status !== BRAIN_PREFERENCE_STATUS.confirmed &&
-      status !== BRAIN_PREFERENCE_STATUS.quarantine
+      status !== BRAIN_PREFERENCE_STATUS.quarantine &&
+      // A tombstoned preference stays in `preferences/` for audit; the
+      // lifecycle module marks it in place rather than moving the file.
+      status !== BRAIN_TOMBSTONE_STATUS
     ) {
       throw new BrainStatusFolderMismatchError(
         "preference file frontmatter status does not match preferences/ folder",

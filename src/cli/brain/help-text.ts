@@ -15,6 +15,10 @@ Brain verbs (observing memory):
   dream            Deterministic dreaming pass; stage/validate/apply staged bundles
   apply-evidence   Log a real-work application of a preference
   note             Append a one-line narrative milestone to Brain/log/today
+  lifecycle        Tombstone/supersede a memory, resolve chain tips, curator slices
+  claims           Claim-graph query: current truth, truth-at-T, replaced-by, contested-by
+  decision         Capture/review decisions: record/outcome/show/list/similar
+  tension          Detect + triage persisted contradictions: detect/list/show/confirm/dismiss/resolve
   digest           Render the recent-changes digest (markdown or --json)
   intent-review    Read-only pre-dream review of active signal clusters
   retention        Recommendation-only keep/improve/park/prune review
@@ -72,6 +76,7 @@ Brain verbs (observing memory):
   bank-import         Reconstruct the page graph from a bank bundle (--mode skip|overwrite|merge)
   backlinks           List inbound references to a Brain artifact id
   semantics-backfill  Preview deterministic typed preference-edge backfill proposals
+  authored-at-backfill  Backfill authored_at on session signals (dry-run default; --apply to write)
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   import-session      Replay signals from a registered agent session .jsonl (or directory)
@@ -171,6 +176,51 @@ export const VERB_HELP: Record<string, string> = {
     "Append one narrative-milestone line to Brain/log/<today>.md under the `note`\n" +
     "event kind. CLI mirror of the MCP `brain_note` tool — same on-disk contract.\n" +
     "Use from cron jobs and shell scripts. Multi-line text collapses to one line.\n",
+  lifecycle:
+    "usage: o2b brain lifecycle <tombstone|supersede|temporal-replace|tip|curator> [...] [--vault <path>] [--json]\n" +
+    "Cross-type tombstone + supersede lifecycle. tombstone <path> --reason <r>\n" +
+    "[--superseded-by <id>] marks a memory _status: tombstoned in place (no delete);\n" +
+    "supersede <predecessor> <successor> tombstones the predecessor and records the\n" +
+    "replacement pointer; temporal-replace <predecessor> <successor> --at <T> closes the\n" +
+    "predecessor (valid_until = T) and opens the successor (valid_from = T) at one shared\n" +
+    "instant; tip <id> walks a supersede chain to its live tip; curator\n" +
+    "[--high-use-min <n>] lists injected-never-used, contradicted, and high-used\n" +
+    "memories from observed-use verdicts. Tombstoned entries stay on disk for audit\n" +
+    "but are excluded from recall, inject, and active.md.\n",
+  claims:
+    "usage: o2b brain claims [--at <instant>] [--history] [--replaced <id>] [--contests <id>] [--rebuild] [--vault <path>] [--json]\n" +
+    "Query the claim-graph projection over existing superseded_by / contradicts /\n" +
+    "valid_from / valid_until relations. Default is current truth; --at <ISO|YYYY-MM-DD>\n" +
+    "gives truth at that instant; --history lists every claim (tombstoned included);\n" +
+    "--replaced <id> follows the supersede chain to the live tip; --contests <id>\n" +
+    "lists contesting claims; --rebuild rebuilds and persists Brain/claim-graph.json.\n",
+  decision:
+    "usage: o2b brain decision <record|outcome|rate|show|list|compare|similar|history|recall> [...] [--vault <path>] [--json]\n" +
+    "Decision-record note family under Brain/decisions/. record --title <t> --chosen <c>\n" +
+    "--assumption <a> --review-date <YYYY-MM-DD> [--premortem <p>] [--notes <n>]\n" +
+    "[--rating <1-5>] [--rationale <r>] captures a type: decision note and opens one review\n" +
+    "obligation idempotently; outcome <slug> --outcome <text> backfills the hindsight\n" +
+    "outcome; rate <slug> --rating <1-5> [--rationale <r>] sets a rating (logged); show\n" +
+    "<slug> and list [--rated] read stored decisions (--rated sorts by rating); compare\n" +
+    "<slug...> reads decisions side by side; similar --title <t> [--chosen <c>] surfaces\n" +
+    "historically similar decisions with their recorded outcomes; history [--subject <id>]\n" +
+    "[--cursor <c>] [--limit <n>] pages decision-change receipts (before/after, confidence\n" +
+    "delta, reason code) appended alongside the truth ledger; recall --prompt <text>\n" +
+    "[--turn <n>] [--count <n>] [--last-turn <n>] [--surfaced-ids <id> ...]\n" +
+    "deterministically resurfaces a rated decision matching the prompt when\n" +
+    "decision_recall.max_per_session is configured (byte-identical when unset); the\n" +
+    "count/last-turn/surfaced-ids flags thread the per-session cap and spacing state.\n",
+  tension:
+    "usage: o2b brain tension <detect|list|show|confirm|dismiss|resolve> [...] [--vault <path>] [--json]\n" +
+    "Triage persisted contradictions under Brain/tensions/. detect [--jaccard <n>] scans\n" +
+    "the configured note corpus (notes.read_paths) and persists a\n" +
+    "tension note (open state) with a dedup key (subject pair + stance signature) so\n" +
+    "re-detection updates the existing note instead of duplicating. list [--unresolved]\n" +
+    "and show <slug> read; confirm <slug> moves open -> confirmed; dismiss <slug>\n" +
+    "[--reason <r>] and resolve <slug> [--reason <r>] close it (open|confirmed ->\n" +
+    "dismissed|resolved). Invalid transitions are rejected. A context pack that injects\n" +
+    "a subject note of an unresolved (open|confirmed) tension emits a warning; dismissed\n" +
+    "and resolved tensions warn about nothing.\n",
   digest:
     "usage: o2b brain digest [--vault <path>] [--since <ISO>] [--until <ISO>] [--json] [--silent-if-empty]\n" +
     "Renders the 24-hour change digest. Empty + --silent-if-empty exits 2.\n",
@@ -408,6 +458,12 @@ export const VERB_HELP: Record<string, string> = {
     "Dry-run only. Previews deterministic typed preference-edge backfill\n" +
     "proposals, currently the inverse superseded_by edge when an active\n" +
     "preference supersedes a retired preference that lacks the pointer.\n",
+  "authored-at-backfill":
+    "usage: o2b brain authored-at-backfill [--apply] [--vault <path>] [--json]\n" +
+    "Dry-run by default. Stamps the additive authored_at frontmatter field\n" +
+    "onto session-imported signals that preserved a transcript turn instant\n" +
+    "(valid_from/recorded_at) but predate the field. Idempotent, and never\n" +
+    "re-embeds - it only edits frontmatter. Pass --apply to write.\n",
   codec:
     "usage: o2b brain codec --compress | --expand [--in <file>]\n" +
     "Run the deterministic, lossless session codec over stdin (or --in <file>)\n" +
@@ -720,8 +776,10 @@ export const VERB_HELP: Record<string, string> = {
     "  --workday-start HH:MM --workday-end HH:MM  clip focus blocks to a daily window\n" +
     "  [--json]\n",
   "session-grep":
-    "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--vault <path>] [--json]\n" +
-    "Search imported session recall raw turns and summary nodes.\n",
+    "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--since <t>] [--before <t>] [--vault <path>] [--json]\n" +
+    "Search imported session recall raw turns and summary nodes. --since and\n" +
+    "--before bound results to a time window (ISO date/datetime, today/\n" +
+    "yesterday/last week/last month, or <n>h/<n>d/<n>w); --before is inclusive.\n",
   "session-describe":
     "usage: o2b brain session-describe --session-id <id> [--vault <path>] [--json]\n" +
     "Describe counts and summary depths for an imported session recall DAG.\n",

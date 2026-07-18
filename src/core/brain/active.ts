@@ -44,6 +44,7 @@ import {
   loadGuardrailsConfigSafe,
 } from "./policy.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
+import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { sortByProvenanceTrust } from "./provenance/trust-order.ts";
@@ -199,7 +200,12 @@ function readActivePreferences(vault: string): BrainPreference[] {
     if (!name.endsWith(".md")) continue;
     const full = join(dirs.preferences, name);
     try {
-      out.push(parsePreference(full));
+      const pref = parsePreference(full);
+      // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
+      // superseded-non-tip) preference remains on disk for audit but
+      // never appears in the active-preferences digest.
+      if ((pref.status as string) === BRAIN_TOMBSTONE_STATUS) continue;
+      out.push(pref);
     } catch {
       // Corrupted or status/folder-mismatched file — silently omit
       // here. `brain_doctor` is the surface that flags it. See the
@@ -323,12 +329,16 @@ function renderQuarantineLine(p: BrainPreference): string {
 }
 
 /**
- * Numeric `confidence_value` tail rendered next to the band in the
- * `confidence:` metadata. Empty when the field is `null` (legacy
- * preference written before v0.10.3 — the next dream refresh lifts
- * it to a real number).
+ * Tail rendered next to the confidence band in the `confidence:`
+ * metadata. When a commitment tier is set (Belief lifecycle suite, B3),
+ * the tier label is rendered in place of the raw confidence float; the
+ * band itself is unchanged. When no tier is set, the numeric
+ * `confidence_value` is rendered as before (empty when it is `null`, e.g.
+ * a legacy preference written before v0.10.3). Unset commitment therefore
+ * keeps the output byte-identical to today.
  */
 function formatConfidenceValueTail(p: BrainPreference): string {
+  if (p.commitment !== undefined) return ` (${p.commitment})`;
   if (p.confidence_value === null) return "";
   return ` (${p.confidence_value.toFixed(2)})`;
 }

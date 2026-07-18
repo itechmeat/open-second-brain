@@ -770,6 +770,9 @@ function jsonForOutcome(o: SearchOutcome): unknown {
       end_line: r.endLine,
       search_type: r.searchType,
       reasons: r.reasons,
+      // Conversation chronology (S1): present only for a note carrying an
+      // authored_at instant, so the shape stays byte-identical otherwise.
+      ...(r.authoredAt !== undefined ? { authored_at: r.authoredAt } : {}),
       ...(r.origin !== undefined ? { origin: r.origin } : {}),
       ...(o.evidencePack ? { why_retrieved: r.reasons } : {}),
       document_id: r.documentId,
@@ -808,8 +811,14 @@ function renderOutcomeHuman(o: SearchOutcome, verbose: boolean): string {
     const score = r.score.toFixed(2);
     const originSuffix = r.origin !== undefined ? `  •  ${r.origin}` : "";
     lines.push(`[${i + 1}] ${r.path}  •  ${score}${originSuffix}`);
+    // Conversation chronology (S1): show the authoring instant only for a
+    // note that carries one; a note without stays byte-identical.
+    const authoredSuffix =
+      r.authoredAt !== undefined
+        ? `  •  authored ${new Date(r.authoredAt * 1000).toISOString()}`
+        : "";
     lines.push(
-      `    line ${r.startLine}-${r.endLine}  •  ${r.searchType}` +
+      `    line ${r.startLine}-${r.endLine}  •  ${r.searchType}${authoredSuffix}` +
         (verbose
           ? `  •  kw=${r.keywordScore.toFixed(2)} sem=${r.semanticScore.toFixed(2)} link=${r.linkBoost.toFixed(2)} rec=${r.recencyBoost.toFixed(2)}`
           : ""),
