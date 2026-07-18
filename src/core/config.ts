@@ -8,7 +8,7 @@
  */
 
 import { mkdirSync, readFileSync } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -273,22 +273,95 @@ export function resolveExposeHostPaths(configPath?: string): boolean {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS", "expose_host_paths", configPath);
 }
 
+/**
+ * Device-local installation secret that keys {@link vaultStoreReference}.
+ *
+ * Sixteen random bytes (128-bit) rendered as 32 lowercase hex, generated
+ * once and persisted beside `device_id` in the same device-local config.
+ * Three properties make the store reference unguessable offline:
+ *
+ *   - it is NEVER synced (device-local config, like `device_id`);
+ *   - it is NEVER derived from `device_id`, so the `O2B_DEVICE_ID=""`
+ *     sharding opt-out (which makes the device id empty and predictable)
+ *     cannot weaken it;
+ *   - it has NO empty/predictable escape hatch: the only env override
+ *     ({@link INSTALLATION_SECRET_ENV_KEY}, for deterministic tests) is
+ *     honoured solely when it is itself a full 32-hex key.
+ *
+ * A missing or corrupt persisted value self-heals to a fresh key under the
+ * same directory lock `resolveDeviceId` uses, so a concurrent first use
+ * cannot split into two keys.
+ */
+export const INSTALLATION_SECRET_CONFIG_KEY = "installation_secret";
+/** Test-only env override; honoured ONLY when it is a full 32-hex key. */
+export const INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET";
+/** Strict shape: 32 lowercase hex = 16 bytes = a 128-bit key. */
+export const INSTALLATION_SECRET_RE = /^[0-9a-f]{32}$/;
+
+export function isValidInstallationSecret(value: string): boolean {
+  return INSTALLATION_SECRET_RE.test(value);
+}
+
+export function resolveInstallationSecret(configPath?: string): string {
+  // Env override exists for deterministic tests only, and is accepted solely
+  // as a full 32-hex key so it can never make the secret empty or guessable.
+  const env = process.env[INSTALLATION_SECRET_ENV_KEY];
+  if (env !== undefined && isValidInstallationSecret(env)) return env;
+  const resolved = configPath ?? defaultConfigPath();
+
+  const read = (): string | null => {
+    const value = discoverConfig(resolved).data[INSTALLATION_SECRET_CONFIG_KEY];
+    return value && isValidInstallationSecret(value) ? value : null;
+  };
+
+  const existing = read();
+  if (existing !== null) return existing;
+
+  // First-use generation under a directory lock, mirroring resolveDeviceId:
+  // a lock failure falls through to the unlocked path so secret resolution
+  // never fails outright.
+  const dir = dirname(resolved);
+  mkdirSync(dir, { recursive: true });
+  let release: (() => void) | undefined;
+  try {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        release = lockfile.lockSync(dir, { stale: 10_000, realpath: false });
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ELOCKED") break;
+        Bun.sleepSync(50);
+      }
+    }
+    const won = read();
+    if (won !== null) return won;
+    const generated = randomBytes(16).toString("hex");
+    setConfigValue(INSTALLATION_SECRET_CONFIG_KEY, generated, resolved);
+    return generated;
+  } finally {
+    release?.();
+  }
+}
+
 /** Prefix of the opaque store reference emitted in place of a host path. */
 export const VAULT_STORE_REF_PREFIX = "vault://";
-/** Hex length of the store-reference digest. */
-const VAULT_STORE_REF_HEX_LEN = 8;
+/** Hex length of the store-reference digest (128 bits of HMAC-SHA256). */
+const VAULT_STORE_REF_HEX_LEN = 32;
 
 /**
- * Stable opaque reference for a vault, of the form `vault://<8-hex>`.
- * Derived from the device-id primitive plus a hash of the vault path, so
- * it is stable across calls on the same install (agents correlate by it)
- * and does not leak the absolute host path. Returned by MCP tools in
- * place of the raw path unless {@link resolveExposeHostPaths} is on.
+ * Stable opaque reference for a vault, of the form `vault://<32-hex>`.
+ * Computed as HMAC-SHA256, keyed by the device-local
+ * {@link resolveInstallationSecret}, over the ABSOLUTE vault path. The key
+ * makes the reference unguessable offline (a plain hash of a common host
+ * path is trivially reversible), and truncating to 128 bits keeps collisions
+ * negligible. It is stable across calls on the same install (agents correlate
+ * by it) and never leaks the raw path. Returned by MCP tools in place of the
+ * absolute path unless {@link resolveExposeHostPaths} is on.
  */
 export function vaultStoreReference(vaultPath: string, configPath?: string): string {
-  const deviceId = resolveDeviceId(configPath);
-  const digest = createHash("sha256")
-    .update(`${deviceId}\0${vaultPath}`)
+  const key = resolveInstallationSecret(configPath);
+  const digest = createHmac("sha256", key)
+    .update(resolve(vaultPath))
     .digest("hex")
     .slice(0, VAULT_STORE_REF_HEX_LEN);
   return `${VAULT_STORE_REF_PREFIX}${digest}`;

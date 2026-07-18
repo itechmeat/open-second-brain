@@ -438,12 +438,12 @@ describe("resolveExposeHostPaths", () => {
 });
 
 describe("vaultStoreReference", () => {
-  test("has the vault:// prefix and 8 hex chars", () => {
+  test("has the vault:// prefix and 32 hex chars (128-bit keyed digest)", () => {
     const cfg = join(tmp, "config.yaml");
     writeFileSync(cfg, "vault_path: /tmp/vault\n");
     const ref = vaultStoreReference("/some/vault", cfg);
     expect(ref.startsWith(VAULT_STORE_REF_PREFIX)).toBe(true);
-    expect(ref).toMatch(/^vault:\/\/[0-9a-f]{8}$/);
+    expect(ref).toMatch(/^vault:\/\/[0-9a-f]{32}$/);
   });
 
   test("is stable for the same vault and differs across vaults", () => {

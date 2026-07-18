@@ -332,7 +332,7 @@ describe("tool calls", () => {
     const s = r.result.structuredContent;
     // Default (expose_host_paths unset): the absolute host path is redacted
     // to a stable opaque reference, never the raw path.
-    expect(s.vault_path).toMatch(/^vault:\/\/[0-9a-f]{8}$/);
+    expect(s.vault_path).toMatch(/^vault:\/\/[0-9a-f]{32}$/);
     expect(s.vault_path).not.toBe(vault);
     // The raw host path must not leak through any field, including nested
     // ones like config.vault_path.
