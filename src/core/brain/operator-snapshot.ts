@@ -91,14 +91,13 @@ export async function buildOperatorSnapshot(
 
   // --- State-file health ---
   const configPresent = existsSync(brainConfigPath(vault));
-  let searchIndexPresent = false;
+  let searchDbPath: string | null = null;
   try {
-    searchIndexPresent = existsSync(
-      resolveSearchConfig({ vault, configPath: opts.configPath ?? undefined }).dbPath,
-    );
+    searchDbPath = resolveSearchConfig({ vault, configPath: opts.configPath ?? undefined }).dbPath;
   } catch {
-    searchIndexPresent = false;
+    searchDbPath = null;
   }
+  const searchIndexPresent = searchDbPath !== null && existsSync(searchDbPath);
   if (!configPresent) {
     problem("state-file", "Brain config `_brain.yaml` is missing");
   }
@@ -106,7 +105,12 @@ export async function buildOperatorSnapshot(
   // --- Doctor + semantic health ---
   let healthVerdict = "clean";
   try {
-    const doctor = runDoctor(vault, { now });
+    // Thread the resolved search DB path so DB-backed findings (e.g.
+    // tier-drift) are included rather than silently skipped.
+    const doctor = runDoctor(vault, {
+      now,
+      ...(searchDbPath !== null ? { dbPath: searchDbPath } : {}),
+    });
     if (doctor.errors.length > 0) {
       problem("doctor-errors", `${doctor.errors.length} invariant error(s)`);
     }
@@ -119,7 +123,8 @@ export async function buildOperatorSnapshot(
       problem("semantic-health", `semantic-health verdict: ${verdict}`);
     }
   } catch {
-    // doctor never throws in practice; keep the snapshot resilient anyway.
+    // A failed probe must degrade the snapshot, never read as all-clear.
+    problem("doctor-errors", "doctor probe failed to run");
   }
 
   // --- Hygiene ---
@@ -129,7 +134,7 @@ export async function buildOperatorSnapshot(
       problem("hygiene-findings", `${hy.findings.length} hygiene finding(s)`);
     }
   } catch {
-    /* fail-soft */
+    problem("hygiene-findings", "hygiene scan failed to run");
   }
 
   // --- Stale scan ---
@@ -144,7 +149,7 @@ export async function buildOperatorSnapshot(
       problem("stale-notes", `${staleTotal} stale entr${staleTotal === 1 ? "y" : "ies"}`);
     }
   } catch {
-    /* fail-soft */
+    problem("stale-notes", "stale scan failed to run");
   }
 
   // --- Review candidates (dry-run dream) ---
@@ -157,7 +162,7 @@ export async function buildOperatorSnapshot(
       problem("review-queue", `${reviewQueue} review candidate(s) pending`);
     }
   } catch {
-    /* fail-soft */
+    problem("review-queue", "review-candidate scan failed to run");
   }
 
   // --- Active profile (informational) ---

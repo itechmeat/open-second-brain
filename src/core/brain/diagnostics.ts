@@ -322,24 +322,36 @@ const walGapFixer: Fixer = {
   apply(vault: string, item: RepairItem): AppliedFix | null {
     const path = join(vault, item.target);
     if (!existsSync(path)) return null;
-    // Re-check: only act while the run is still dangling (idempotent).
-    if (!scanDanglingWorkruns(vault).some((p) => vaultRelative(p, vault) === item.target)) {
-      return null;
+
+    let handle: ReturnType<typeof acquireLockSync>;
+    try {
+      handle = acquireLockSync(path);
+    } catch {
+      return null; // contended: leave for a later run
     }
-    const line =
-      JSON.stringify({
-        phase: WORKRUN_PHASE.interrupted,
-        at: new Date().toISOString(),
-        reason: "closed by doctor --repair",
-      }) + "\n";
-    const existing = readFileSync(path, "utf8");
-    const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-    appendFileSync(path, prefix + line, "utf8");
-    return {
-      code: item.code,
-      target: item.target,
-      detail: item.detail,
-    };
+    try {
+      // Re-check under the lock so two concurrent repairs cannot both observe
+      // the run as dangling and append duplicate terminal markers (idempotent).
+      if (!scanDanglingWorkruns(vault).some((p) => vaultRelative(p, vault) === item.target)) {
+        return null;
+      }
+      const line =
+        JSON.stringify({
+          phase: WORKRUN_PHASE.interrupted,
+          at: new Date().toISOString(),
+          reason: "closed by doctor --repair",
+        }) + "\n";
+      const existing = readFileSync(path, "utf8");
+      const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+      appendFileSync(path, prefix + line, "utf8");
+      return {
+        code: item.code,
+        target: item.target,
+        detail: item.detail,
+      };
+    } finally {
+      handle.release();
+    }
   },
 };
 
@@ -446,7 +458,15 @@ function structuralReview(rel: string, field: string, dead: string): RepairItem 
  */
 function removeOriginBullet(body: string, dead: string): string {
   const lines = body.split("\n");
+  let inOrigin = false;
   const kept = lines.filter((line) => {
+    // Track section boundaries so a matching bullet outside `## Origin` (in
+    // Notes, How-to-apply, or any other section) is never dropped.
+    if (/^#{1,6}\s+/.test(line)) {
+      inOrigin = /^##\s+Origin\s*$/.test(line);
+      return true;
+    }
+    if (!inOrigin) return true;
     const m = /^\s*-\s+(\[\[.+?\]\])\s*$/.exec(line);
     if (!m) return true;
     return normaliseWikilinkTarget(m[1]!) !== dead;

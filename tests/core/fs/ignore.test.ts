@@ -115,6 +115,14 @@ describe("comments, blanks, and escapes", () => {
     const scope = scopeOf(["", "foo   \n"]);
     expect(scope.isIgnored("foo", false)).toBe(true);
   });
+
+  test("a backslash-escaped trailing space is retained as a literal filename", () => {
+    const scope = scopeOf(["", "foo\\ \n"]);
+    // The escaping backslash is consumed; the rule matches `foo ` (with space),
+    // not a literal backslash followed by a space.
+    expect(scope.isIgnored("foo ", false)).toBe(true);
+    expect(scope.isIgnored("foo", false)).toBe(false);
+  });
 });
 
 describe("malformed patterns", () => {

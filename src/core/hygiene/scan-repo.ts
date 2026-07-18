@@ -212,7 +212,11 @@ export function listScanTargets(root: string): string[] {
   for (const name of SCAN_ROOT_FILES) {
     const p = join(root, name);
     try {
-      if (statSync(p).isFile()) abs.push(p);
+      // Honor the same ignore scope collectFiles applies to recursive targets,
+      // so an ignored root file (e.g. a gitignored README.md) is not scanned.
+      if (statSync(p).isFile() && !baseScope.isIgnored(toPosixRel(root, p), false)) {
+        abs.push(p);
+      }
     } catch {
       // absent root file is fine
     }

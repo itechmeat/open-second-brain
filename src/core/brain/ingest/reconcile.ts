@@ -46,13 +46,26 @@ export interface ReconcileReport {
  * reports an empty (explicitly `complete`) gap.
  */
 export function reconcilePlan(vault: string, plan: BatchPlan): ReconcileReport {
-  const dispatched = collectDispatched(plan);
   const completed = new Set(readCheckpoint(vault, plan.planId)?.completed ?? []);
 
+  // Batch files are the sources actually dispatched for (re)ingest this run.
+  const batchFiles = new Set<string>();
+  for (const batch of plan.batches) {
+    for (const file of batch.files) batchFiles.add(file.path);
+  }
+  // Manifest-`unchanged` skips are ingested by definition (their content hash
+  // already matched a prior ingest). `--resume` drops completed items before
+  // building batches/skips, so a checkpoint completion is the only surviving
+  // record of a fully-resumed source - fold it in so it is not lost.
+  const confirmed = new Set<string>([...plan.skipped, ...completed]);
+
+  const dispatched = [...new Set<string>([...batchFiles, ...confirmed])].toSorted();
   const ingested: string[] = [];
   const missing: string[] = [];
   for (const path of dispatched) {
-    if (completed.has(path)) ingested.push(path);
+    // Missing only for a dispatched batch source with neither a manifest-skip
+    // nor a checkpoint confirmation. Skips and checkpointed paths are ingested.
+    if (confirmed.has(path)) ingested.push(path);
     else missing.push(path);
   }
 
@@ -63,18 +76,4 @@ export function reconcilePlan(vault: string, plan: BatchPlan): ReconcileReport {
     missing,
     complete: missing.length === 0,
   };
-}
-
-/**
- * The dispatched set: the batch files plus the manifest-`unchanged` skips, as a
- * sorted, deduped list. `skippedNonExtractable` is excluded - those pages were
- * deliberately gated out before dispatch, so they were never part of the work.
- */
-function collectDispatched(plan: BatchPlan): string[] {
-  const set = new Set<string>();
-  for (const batch of plan.batches) {
-    for (const file of batch.files) set.add(file.path);
-  }
-  for (const path of plan.skipped) set.add(path);
-  return [...set].toSorted();
 }

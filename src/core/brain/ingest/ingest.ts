@@ -201,13 +201,17 @@ export function ingestSource(
  */
 function runPreExtract(vault: string, canonicalSource: string): PreExtractResult {
   const abs = join(vault, canonicalSource);
-  if (!existsSync(abs)) {
+  try {
+    return preExtractCodeStructure(canonicalSource, readFileSync(abs, "utf8"));
+  } catch {
+    // A source with no readable file bytes - a URL/identity-only source, a
+    // directory, a permission failure, or a deletion race - cannot be parsed,
+    // so it is reported as unextracted rather than aborting the whole ingest.
     return {
       extracted: false,
       reason: `source has no readable file bytes for code-structure pre-extraction: ${canonicalSource}`,
     };
   }
-  return preExtractCodeStructure(canonicalSource, readFileSync(abs, "utf8"));
 }
 
 /** Read a stable `created_at` from an existing summary page, else fall back. */

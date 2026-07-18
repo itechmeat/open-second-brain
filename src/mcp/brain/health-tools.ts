@@ -25,8 +25,13 @@ async function toolBrainDoctor(
   // Guarded repair mode (O2). Opt-in and dry-run by default; `apply`
   // performs the fixes. `strict` stays read-only and cannot apply.
   const repair = coerceBool(args, "repair");
+  const apply = coerceBool(args, "apply");
+  // `apply` is a modifier of `repair`; on its own it would silently return
+  // read-only diagnostics, so reject it up front.
+  if (apply && !repair) {
+    throw new Error("brain_doctor: apply requires repair");
+  }
   if (repair) {
-    const apply = coerceBool(args, "apply");
     if (strict && apply) {
       throw new Error("brain_doctor: cannot combine strict (read-only) with repair + apply");
     }

@@ -105,6 +105,38 @@ describe("reconcilePlan", () => {
     expect(report.complete).toBe(false);
   });
 
+  test("an already-ingested, all-unchanged plan reports complete", () => {
+    write("Docs/a.md");
+    write("Docs/b.md");
+    // Ingest both so the content manifest records them; a re-plan then
+    // classifies every source `unchanged` (manifest skips), not new work.
+    ingest("Docs/a.md", "seed-plan");
+    ingest("Docs/b.md", "seed-plan");
+    const plan = planBatches(vault, "Docs", CAPS);
+    expect(plan.batches).toEqual([]); // nothing new to dispatch
+
+    const report = reconcilePlan(vault, plan);
+    // Manifest-confirmed unchanged sources are ingested, not a false gap.
+    expect(report.ingested).toEqual(["Docs/a.md", "Docs/b.md"]);
+    expect(report.missing).toEqual([]);
+    expect(report.complete).toBe(true);
+  });
+
+  test("a fully-resumed plan counts checkpointed sources as ingested", () => {
+    write("Docs/a.md");
+    write("Docs/b.md");
+    const first = planBatches(vault, "Docs", CAPS);
+    ingest("Docs/a.md", first.planId);
+    ingest("Docs/b.md", first.planId);
+    // Re-plan with --resume: checkpointed completions are dropped before
+    // batches/skips are built, so the plan enumerates nothing itself.
+    const resumed = planBatches(vault, "Docs", { ...CAPS, resume: true });
+
+    const report = reconcilePlan(vault, resumed);
+    expect(report.missing).toEqual([]);
+    expect(report.complete).toBe(true);
+  });
+
   test("is idempotent and read-only over checkpoint state", () => {
     write("Docs/a.md");
     write("Docs/b.md");

@@ -86,6 +86,23 @@ describe("nested gitignore composition", () => {
   });
 });
 
+describe("root scan files", () => {
+  test("a root file ignored by .gitignore is excluded from the scan", () => {
+    put("README.md", "# readme\n");
+    put("src/a.ts");
+    put(".gitignore", "README.md\n");
+    const targets = listScanTargets(root);
+    expect(targets).toContain("src/a.ts");
+    expect(targets).not.toContain("README.md");
+  });
+
+  test("a root file is scanned when no ignore rule matches it", () => {
+    put("README.md", "# readme\n");
+    const targets = listScanTargets(root);
+    expect(targets).toContain("README.md");
+  });
+});
+
 describe("malformed patterns", () => {
   test("a malformed pattern warns on stderr and never silently skips", () => {
     put("src/a.ts");

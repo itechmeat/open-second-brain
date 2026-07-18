@@ -129,7 +129,10 @@ function stripTrailingWhitespace(line: string): string {
     if (backslashes % 2 === 1) break;
     end--;
   }
-  return line.slice(0, end);
+  // Consume the backslash that escapes a retained trailing whitespace char so
+  // the compiled rule matches the literal filename (`foo\ ` -> `foo `), not a
+  // backslash followed by whitespace.
+  return line.slice(0, end).replace(/\\([ \t])$/, "$1");
 }
 
 /** Compile one non-comment, non-blank pattern line into a rule. */

@@ -192,9 +192,6 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   const partition = partitionExtractable(vault, discoveredRel, extractableAllowlist(vault));
   const relPaths = partition.extractable;
   const skippedNonExtractable = partition.skipped;
-  for (const s of skippedNonExtractable) {
-    process.stderr.write(`batch-plan: skipping non-extractable page ${s.path} (${s.reason})\n`);
-  }
 
   // The plan id keys on the FULL discovered set, so it is identical before and
   // after an interruption regardless of how many items have completed.
@@ -312,7 +309,7 @@ function collectIngestible(
     if (entry.isDirectory()) {
       if (exclude.isIgnored(rel, true)) continue;
       collectIngestible(abs, vault, extensions, exclude, out);
-    } else if (entry.isFile() && extensions.has(extname(entry.name))) {
+    } else if (entry.isFile() && extensions.has(extname(entry.name).toLowerCase())) {
       if (exclude.isIgnored(rel, false)) continue;
       out.push(abs);
     }

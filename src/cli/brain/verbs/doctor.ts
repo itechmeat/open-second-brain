@@ -23,6 +23,12 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   });
   const { config, vault } = brainVerbContext(flags);
 
+  // `--apply` is a modifier of `--repair`; on its own it would silently
+  // fall through to a read-only doctor run, so reject it up front.
+  if (flags["apply"] && !flags["repair"]) {
+    return usageError("--apply requires --repair");
+  }
+
   // Guarded repair mode (O2). Opt-in and dry-run by default; `--apply`
   // performs the fixes. `--strict` stays read-only, so it can never be
   // combined with an applying repair. Plain / `--strict` doctor below is
