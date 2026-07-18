@@ -268,6 +268,86 @@ describe("o2b brain decision", () => {
     expect("commitment" in loose).toBe(false);
   });
 
+  test("recall threads governor cap and surfaced-id state from CLI flags (B5)", async () => {
+    await runCli(
+      [
+        "brain",
+        "decision",
+        "record",
+        "--config",
+        configPath,
+        "--title",
+        "Adopt Bun runtime",
+        "--chosen",
+        "Bun",
+        "--assumption",
+        "x",
+        "--review-date",
+        "2026-12-01",
+        "--rating",
+        "5",
+      ],
+      { env },
+    );
+    const recallEnv = { ...env, OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION: "3" };
+
+    // Fresh state surfaces the matching rated decision.
+    const first = await runCli(
+      [
+        "brain",
+        "decision",
+        "recall",
+        "--config",
+        configPath,
+        "--prompt",
+        "adopt Bun runtime for the API",
+        "--json",
+      ],
+      { env: recallEnv },
+    );
+    expect(JSON.parse(first.stdout).surfaced.slug).toBe("adopt-bun-runtime");
+
+    // --count at the cap gates recall (cap passthrough).
+    const capped = await runCli(
+      [
+        "brain",
+        "decision",
+        "recall",
+        "--config",
+        configPath,
+        "--prompt",
+        "adopt Bun runtime for the API",
+        "--count",
+        "3",
+        "--json",
+      ],
+      { env: recallEnv },
+    );
+    const cappedOut = JSON.parse(capped.stdout);
+    expect(cappedOut.enabled).toBe(true);
+    expect(cappedOut.surfaced).toBeNull();
+
+    // --surfaced-ids marks the only match already seen, so it is not re-surfaced.
+    const seen = await runCli(
+      [
+        "brain",
+        "decision",
+        "recall",
+        "--config",
+        configPath,
+        "--prompt",
+        "adopt Bun runtime for the API",
+        "--surfaced-ids",
+        "decision-adopt-bun-runtime",
+        "--json",
+      ],
+      { env: recallEnv },
+    );
+    const seenOut = JSON.parse(seen.stdout);
+    expect(seenOut.surfaced).toBeNull();
+    expect(seenOut.state.surfaced_ids).toContain("decision-adopt-bun-runtime");
+  });
+
   test("missing required flags exit non-zero", async () => {
     const r = await runCli(
       ["brain", "decision", "record", "--config", configPath, "--title", "x"],

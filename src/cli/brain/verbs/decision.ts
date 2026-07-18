@@ -9,6 +9,9 @@
  *   - `show <slug>`
  *   - `list`
  *   - `similar --title <t> [--chosen <c>]`  historically similar decisions
+ *   - `recall --prompt <t> [--turn <n>] [--count <n>] [--last-turn <n>]
+ *              [--surfaced-ids <id> ...]`  resurface a rated decision,
+ *              threading the per-session cap and spacing state
  *
  * CLI mirror of the `brain_decision` MCP tool; both delegate to the core
  * decision module so the on-disk shape cannot drift.
@@ -58,6 +61,9 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
     limit: { type: "string" },
     prompt: { type: "string" },
     turn: { type: "string" },
+    count: { type: "string" },
+    "last-turn": { type: "string" },
+    "surfaced-ids": { type: "string-array" },
     json: { type: "boolean" },
   });
 
@@ -319,7 +325,34 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
         if (!Number.isInteger(turn) || turn < 0) {
           return usageError("brain decision recall --turn must be a non-negative integer");
         }
-        const res = recallRatedDecisions(vault, { prompt, turn, configPath: config });
+        // Governor state passthrough (B5): let the CLI exercise the same
+        // per-session cap and spacing the MCP recall action accepts.
+        const countRaw = normalizeFlagString(flags["count"]);
+        const count = countRaw === null ? 0 : Number(countRaw);
+        if (!Number.isInteger(count) || count < 0) {
+          return usageError("brain decision recall --count must be a non-negative integer");
+        }
+        const lastTurnRaw = normalizeFlagString(flags["last-turn"]);
+        let lastTurn: number | null = null;
+        if (lastTurnRaw !== null) {
+          lastTurn = Number(lastTurnRaw);
+          if (!Number.isInteger(lastTurn) || lastTurn < 0) {
+            return usageError("brain decision recall --last-turn must be a non-negative integer");
+          }
+        }
+        const surfacedIds = Array.isArray(flags["surfaced-ids"])
+          ? (flags["surfaced-ids"] as string[])
+          : [];
+        const res = recallRatedDecisions(vault, {
+          prompt,
+          turn,
+          state: {
+            surfacedIds,
+            lastTurn,
+            count: count || surfacedIds.length,
+          },
+          configPath: config,
+        });
         if (wantsJson) {
           okJson({
             enabled: res.enabled,
