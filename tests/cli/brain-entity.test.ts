@@ -120,4 +120,29 @@ describe("o2b brain entity", () => {
     expect(out.returncode).not.toBe(0);
     expect(out.stderr).toContain("alias");
   });
+
+  test("set strips Markdown decoration from the stored name", async () => {
+    const out = await runCli(["brain", "entity", "set", "projects", "**Mercury**", "--json"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as Record<string, unknown>;
+    expect(payload["name"]).toBe("Mercury");
+    expect(payload["id"]).toBe("ent-projects-mercury");
+  });
+
+  test("set rejects a structurally-junk name with a non-zero exit", async () => {
+    const out = await runCli(["brain", "entity", "set", "people", "***"], { env: env() });
+    expect(out.returncode).not.toBe(0);
+    expect(out.stderr).toContain("invalid entity label");
+  });
+
+  test("prune is dry-run by default and reports no candidates on a clean vault", async () => {
+    await seed();
+    const out = await runCli(["brain", "entity", "prune", "--json"], { env: env() });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as { confirmed: boolean; candidates: unknown[] };
+    expect(payload.confirmed).toBe(false);
+    expect(payload.candidates).toEqual([]);
+  });
 });

@@ -142,7 +142,9 @@ describe("upsertEntity", () => {
     expect(listEntities(vault)).toHaveLength(2);
   });
 
-  test("rejects empty names", () => {
+  test("rejects empty names via the label quality gate", () => {
+    // A1: an empty (post-strip) name is now rejected by the typed label
+    // quality gate rather than the old bespoke "name must not be empty".
     expect(() =>
       upsertEntity(vault, {
         category: "people",
@@ -150,7 +152,29 @@ describe("upsertEntity", () => {
         agent: "claude-dev-agent",
         now: NOW,
       }),
-    ).toThrow(/name/i);
+    ).toThrow(/invalid entity label/i);
+  });
+
+  test("strips Markdown/punctuation decoration from the stored name (A1)", () => {
+    const { entity } = upsertEntity(vault, {
+      category: "projects",
+      name: "**Mercury.**",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    expect(entity.name).toBe("Mercury");
+    expect(entity.id).toBe("ent-projects-mercury");
+  });
+
+  test("rejects a structurally-junk name with a typed error (A1)", () => {
+    expect(() =>
+      upsertEntity(vault, {
+        category: "people",
+        name: "***",
+        agent: "claude-dev-agent",
+        now: NOW,
+      }),
+    ).toThrow(/invalid entity label/i);
   });
 });
 

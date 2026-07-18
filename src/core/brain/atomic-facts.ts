@@ -10,7 +10,7 @@
  * missed one costs nothing.
  */
 
-import { normalizeEntityName } from "./entities/canonical.ts";
+import { entityMatchForms, normalizeEntityName } from "./entities/canonical.ts";
 
 /** Cap on one assertion's text length. */
 export const MAX_ASSERTION_CHARS = 300;
@@ -110,15 +110,26 @@ export function splitSentences(text: string): string[] {
   return out.map((s) => s.trim()).filter((s) => s !== "");
 }
 
-/** Anchor an assertion against active registry entities, sorted ids. */
+/** Minimum normalised form length that participates in substring matching. */
+const MIN_ANCHOR_FORM_LENGTH = 3;
+
+/**
+ * Anchor an assertion against active registry entities, sorted ids. Labels
+ * pass through the quality gate (sanitise decoration, then normalise, drop
+ * structurally-invalid forms) before matching - the same shared kernel the
+ * fact-extract path uses. Pure: no I/O, so a junk stored label is simply
+ * skipped (the fact-extract path is the one that logs the skip).
+ */
 function anchorEntities(text: string, entities: ReadonlyArray<AtomicEntityLike>): string[] {
   if (entities.length === 0) return [];
   const haystack = normalizeEntityName(text);
   const ids: string[] = [];
   for (const entity of entities) {
     if (entity.status !== "active") continue;
-    const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
-    if (forms.some((f) => f.length >= 3 && haystack.includes(f))) ids.push(entity.id);
+    const forms = entityMatchForms([entity.name, ...entity.aliases]).filter(
+      (f) => f.length >= MIN_ANCHOR_FORM_LENGTH,
+    );
+    if (forms.some((f) => haystack.includes(f))) ids.push(entity.id);
   }
   return ids.toSorted();
 }

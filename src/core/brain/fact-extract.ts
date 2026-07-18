@@ -26,11 +26,17 @@
 import { createHash } from "node:crypto";
 
 import { writeSignal } from "./signal.ts";
+import { appendLogEvent } from "./log.ts";
 import { isoDate, isoSecond } from "./time.ts";
-import { BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
 import type { DedupIndexEntry } from "./dedup-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
-import { normalizeEntityName } from "./entities/canonical.ts";
+import {
+  entityMatchForms,
+  normalizeEntityName,
+  sanitizeEntityLabel,
+  validateEntityLabel,
+} from "./entities/canonical.ts";
 import { BRAIN_ENTITY_STATUS } from "./entities/types.ts";
 
 export type FactFamily = "url" | "email" | "quantity";
@@ -195,20 +201,66 @@ export interface RouteFactsResult {
   readonly deduped: number;
 }
 
+/** Minimum normalised form length that participates in substring matching. */
+const MIN_ANCHOR_FORM_LENGTH = 3;
+
+/** A registry entity reduced to its clean, matchable label forms. */
+interface AnchorableEntity {
+  readonly id: string;
+  readonly forms: ReadonlyArray<string>;
+}
+
 /**
- * Resolve canonical-entity anchors for a fact: every active registry
- * entity whose name or alias (normalised) appears in the fact text.
- * The canonicalization kernel is the comparison boundary, so facts and
- * the registry compare like with like.
+ * Reduce the active registry to anchorable entities: sanitise each label
+ * (name + aliases) through the quality gate before normalisation, keep only
+ * the valid forms, and DROP any entity whose stored name fails the gate. A
+ * dropped entity is a historical junk-label node; the skip is logged (via a
+ * dedicated event kind) and contained - a logging failure never aborts the
+ * enclosing capture. `doctor` surfaces the same node as a prune candidate.
  */
-function entityAnchors(index: ReturnType<typeof buildEntityIndex>, factText: string): string[] {
-  if (index.entities.length === 0) return [];
-  const haystack = normalizeEntityName(factText);
-  const ids: string[] = [];
+function buildAnchorables(
+  vault: string,
+  index: ReturnType<typeof buildEntityIndex>,
+  agent: string,
+  now: Date,
+): AnchorableEntity[] {
+  const out: AnchorableEntity[] = [];
   for (const entity of index.entities) {
     if (entity.status !== BRAIN_ENTITY_STATUS.active) continue;
-    const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
-    if (forms.some((f) => f.length >= 3 && haystack.includes(f))) ids.push(entity.id);
+    const nameVerdict = validateEntityLabel(sanitizeEntityLabel(entity.name));
+    if (!nameVerdict.valid) {
+      try {
+        appendLogEvent(vault, {
+          timestamp: isoSecond(now),
+          eventType: BRAIN_LOG_EVENT_KIND.entityAnchorSkip,
+          body: { entity: entity.id, name: entity.name, reason: nameVerdict.reason!, agent },
+        });
+      } catch {
+        // A skip that cannot be logged must still not break capture.
+      }
+      continue;
+    }
+    const forms = entityMatchForms([entity.name, ...entity.aliases]).filter(
+      (f) => f.length >= MIN_ANCHOR_FORM_LENGTH,
+    );
+    if (forms.length === 0) continue;
+    out.push({ id: entity.id, forms });
+  }
+  return out;
+}
+
+/**
+ * Resolve canonical-entity anchors for a fact: every anchorable registry
+ * entity whose normalised label form appears in the fact text. The
+ * canonicalization kernel is the comparison boundary, so facts and the
+ * registry compare like with like.
+ */
+function entityAnchors(anchorables: ReadonlyArray<AnchorableEntity>, factText: string): string[] {
+  if (anchorables.length === 0) return [];
+  const haystack = normalizeEntityName(factText);
+  const ids: string[] = [];
+  for (const entity of anchorables) {
+    if (entity.forms.some((f) => haystack.includes(f))) ids.push(entity.id);
   }
   return ids;
 }
@@ -230,6 +282,11 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
   } catch {
     entityIndex = { entities: [], byKey: new Map(), byAlias: new Map(), conflicts: [] };
   }
+  // Precompute anchorable entities once (a dry run writes nothing, so it
+  // neither anchors nor logs skips). Junk-label nodes are skipped-with-log here.
+  const anchorables = input.dryRun
+    ? []
+    : buildAnchorables(vault, entityIndex, input.agent, input.now);
 
   for (const fact of input.facts) {
     const hash = factDedupHash(fact);
@@ -238,7 +295,7 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
       continue;
     }
     if (input.dryRun) continue;
-    const anchors = entityAnchors(entityIndex, fact.text);
+    const anchors = entityAnchors(anchorables, fact.text);
     const topic = `fact-${fact.family}`;
     try {
       const result = writeSignal(vault, {

@@ -50,6 +50,7 @@ import {
   entityLexicalAliasCandidates,
   resolveEntitySemanticDedupConfig,
 } from "./entities/semantic-dedup.ts";
+import { findMalformedEntityLabels } from "./entities/label-hygiene.ts";
 import { buildCaptureBoundary } from "./capture-boundary.ts";
 import { verifyContentHash } from "./content-hash.ts";
 import { readTierDriftCount } from "./frontmatter-tiers.ts";
@@ -1406,6 +1407,22 @@ function checkEntities(vault: string, issues: DoctorIssue[]): void {
           "with that id exists in the registry.",
       });
     }
+  }
+
+  // A1 (t_657b365e): surface stored nodes whose labels fail the quality
+  // gate (structurally junk after decoration stripping, or operator-
+  // denylisted) as prune candidates. Warning severity - the operator runs
+  // `o2b brain entity prune` (dry-run default) to review and remove them.
+  for (const malformed of findMalformedEntityLabels(vault)) {
+    issues.push({
+      severity: "warning",
+      code: "entity-label-malformed",
+      path: malformed.path,
+      message:
+        `${malformed.id} has a malformed label ${JSON.stringify(malformed.name)} ` +
+        `(${malformed.reason}). Review with 'o2b brain entity prune' and re-run with ` +
+        "--confirm to remove the node and its edges behind a snapshot.",
+    });
   }
 
   // semantic-retrieval-precision (t_47fd9523): opt-in, proposal-only

@@ -20,7 +20,13 @@ import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.t
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
 import { isoSecond } from "../time.ts";
 import { entityPath } from "../paths.ts";
-import { entityIdentityKey, normalizeEntityName, validateEntityCategory } from "./canonical.ts";
+import {
+  assertValidEntityLabel,
+  entityIdentityKey,
+  normalizeEntityName,
+  validateEntityCategory,
+} from "./canonical.ts";
+import { resolveEntityLabelDenylist } from "./label-hygiene.ts";
 import { buildEntityIndex, parseEntityFile, type EntityIndex } from "./index-builder.ts";
 import {
   BRAIN_ENTITY_ID_PREFIX,
@@ -43,6 +49,8 @@ export interface UpsertEntityInput {
   readonly confidence?: string;
   /** Markdown body (current structured state). Replaces on update. */
   readonly body?: string;
+  /** Config path for denylist resolution; env still wins when set. */
+  readonly configPath?: string;
 }
 
 export interface UpsertEntityResult {
@@ -212,8 +220,13 @@ function allocateEntityId(index: EntityIndex, category: string, name: string): s
 
 export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEntityResult {
   const category = validateEntityCategory(input.category);
-  const name = input.name.trim();
-  if (!normalizeEntityName(name)) throw new Error("entity name must not be empty");
+  // Label quality gate (A1): strip Markdown/punctuation decoration BEFORE
+  // normalisation and reject structurally-junk or denylisted names with a
+  // typed error at this creation boundary. The stored display name is the
+  // sanitised form; for a clean label sanitisation is a no-op, so the
+  // identity key stays byte-identical to before (backward compatibility).
+  const denylist = resolveEntityLabelDenylist(input.configPath);
+  const name = assertValidEntityLabel(input.name, { denylist });
   const index = buildEntityIndex(vault);
   const stamp = isoSecond(input.now);
 

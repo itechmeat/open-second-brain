@@ -240,6 +240,15 @@ export const BRAIN_LOG_EVENT_KIND = {
    * file - the log records outcomes, not chatter.
    */
   writeSession: "write-session",
+  /**
+   * `entity-anchor-skip` (A1, t_657b365e) - fact-extract anchoring skipped a
+   * registered entity whose stored label fails the label quality gate
+   * (structurally junk after decoration stripping). Payload carries the
+   * entity `id`, the raw `name`, and the rejection `reason`. The skip is
+   * contained: it never breaks the enclosing capture, and `doctor` surfaces
+   * the same node as a `entity-label-malformed` prune candidate.
+   */
+  entityAnchorSkip: "entity-anchor-skip",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
