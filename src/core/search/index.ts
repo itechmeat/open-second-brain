@@ -19,6 +19,7 @@ import {
   type ExpandedProvider,
 } from "./embeddings/registry.ts";
 import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
+import { resolveEmbeddingPrefixes } from "./embeddings/presets.ts";
 import { SearchError } from "./types.ts";
 import type {
   ResolvedEmbeddingConfig,
@@ -221,6 +222,26 @@ function parseNonNegativeFloat(raw: string | null, fallback: number, fieldName: 
     throw new SearchError("INVALID_INPUT", `${fieldName} must be a number >= 0, got '${raw}'`);
   }
   return n;
+}
+
+/**
+ * Raw setting lookup that preserves an explicit empty string
+ * (memory-write-path-integrity B2). Unlike `envOrConfig`, which folds `""`
+ * into "unset", this returns `""` when a key is present-but-empty so an
+ * operator can explicitly DISABLE a preset-provided default; only a truly
+ * absent key returns null.
+ */
+function rawSetting(
+  env: NodeJS.ProcessEnv,
+  config: Readonly<Record<string, string>>,
+  envKey: string,
+  configKey: string,
+): string | null {
+  const e = env[envKey];
+  if (e !== undefined) return e;
+  const c = config[configKey];
+  if (c !== undefined) return c;
+  return null;
 }
 
 /**
@@ -475,6 +496,21 @@ export function resolveSearchConfig(opts: {
     "embedding_cost_gate_usd",
   );
 
+  // Instruction prefixes (memory-write-path-integrity B2). Resolved with raw
+  // presence, not `envOrConfig`, because an explicit empty string must DISABLE
+  // a preset prefix rather than fall through to the default. An absent key
+  // (null) falls through to the preset / structural e5 default.
+  const { queryPrefix, passagePrefix } = resolveEmbeddingPrefixes(
+    model,
+    rawSetting(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_PREFIX_QUERY", "embedding_prefix_query"),
+    rawSetting(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_EMBEDDING_PREFIX_PASSAGE",
+      "embedding_prefix_passage",
+    ),
+  );
+
   const semantic: ResolvedEmbeddingConfig = Object.freeze({
     enabled: semanticEnabled,
     provider,
@@ -488,6 +524,8 @@ export function resolveSearchConfig(opts: {
     batchSize,
     maxRetries,
     costGateUsd,
+    queryPrefix,
+    passagePrefix,
   });
 
   // Cross-encoder rerank (retrieval-precision-quality-loop, card A). Off

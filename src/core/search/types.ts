@@ -749,6 +749,17 @@ export interface ResolvedEmbeddingConfig {
    * run whose estimated cost exceeds this is refused unless forced.
    */
   readonly costGateUsd: number;
+  /**
+   * Active instruction prefix for a search query
+   * (memory-write-path-integrity B2). Resolved from the preset default and
+   * the `embedding_prefix_query` config/env override; an empty string means
+   * no prefix (byte-identical to pre-feature behaviour). Optional so every
+   * existing config literal stays valid; the openai-compat provider treats
+   * an absent value as empty.
+   */
+  readonly queryPrefix?: string;
+  /** Active instruction prefix for an indexed passage; see {@link queryPrefix}. */
+  readonly passagePrefix?: string;
 }
 
 /**

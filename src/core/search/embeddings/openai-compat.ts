@@ -19,7 +19,7 @@
 
 import { EMBEDDING_QUOTA_MESSAGE, SearchError } from "../types.ts";
 import type { EmbeddingErrorCategory, ResolvedEmbeddingConfig } from "../types.ts";
-import type { EmbeddingProvider } from "./contract.ts";
+import type { EmbeddingProvider, EmbedKind } from "./contract.ts";
 import {
   AUTH_STATUSES,
   PAYMENT_REQUIRED_STATUS,
@@ -251,10 +251,23 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     return this._dimension;
   }
 
-  async embed(texts: ReadonlyArray<string>): Promise<number[][]> {
+  /**
+   * Resolve the instruction prefix for an embed `kind`
+   * (memory-write-path-integrity B2). No kind, or an empty configured prefix,
+   * yields no prefix so the sent text is byte-identical to pre-feature runs.
+   */
+  private prefixFor(kind?: EmbedKind): string {
+    if (kind === "query") return this.config.queryPrefix ?? "";
+    if (kind === "passage") return this.config.passagePrefix ?? "";
+    return "";
+  }
+
+  async embed(texts: ReadonlyArray<string>, kind?: EmbedKind): Promise<number[][]> {
     if (texts.length === 0) return [];
+    const prefix = this.prefixFor(kind);
+    const prepared = prefix === "" ? texts : texts.map((t) => prefix + t);
     const batches = chunkArray(
-      texts.map((t, i) => ({ text: t, originalIndex: i })),
+      prepared.map((t, i) => ({ text: t, originalIndex: i })),
       this.config.batchSize,
     );
     const sem = new Semaphore(this.config.concurrency);

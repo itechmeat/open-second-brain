@@ -37,6 +37,22 @@ import {
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * `index_state` keys for the active embedding instruction prefixes
+ * (memory-write-path-integrity B2). Recorded per index run so a later
+ * stored-vs-configured mismatch can surface the reindex-required warning:
+ * vectors embedded under one prefix pair are not comparable to queries
+ * embedded under another.
+ */
+export const EMBEDDING_PREFIX_QUERY_STATE_KEY = "embedding_prefix_query";
+export const EMBEDDING_PREFIX_PASSAGE_STATE_KEY = "embedding_prefix_passage";
+
+/** The query/passage instruction prefixes active for an index run. */
+export interface EmbeddingPrefixPair {
+  readonly query: string;
+  readonly passage: string;
+}
+
 export interface StoreOpenOptions {
   /** "read" never locks; "write" acquires an exclusive proper-lockfile. */
   readonly mode: "read" | "write";
@@ -437,7 +453,10 @@ export class Store {
       ensureFts5(db);
       const vecLoaded = loadVec && tryLoadVecExtension(db);
       const store = new Store(db, config, vecLoaded, release);
-      store.ensureEmbeddingModel(config.semantic.model, config.semantic.dimension);
+      store.ensureEmbeddingModel(config.semantic.model, config.semantic.dimension, {
+        query: config.semantic.queryPrefix ?? "",
+        passage: config.semantic.passagePrefix ?? "",
+      });
       // Belt-and-suspenders: consolidate this writer's WAL on a
       // bypassed close (process.exit / signal-driven exit).
       registerWriterDb(db);
@@ -945,7 +964,11 @@ export class Store {
    * and both old + new are non-null, drop embeddings + vec table and
    * log one line per design §13. First-time set just records state.
    */
-  ensureEmbeddingModel(model: string | null, dimension: number | null): ModelChangeOutcome {
+  ensureEmbeddingModel(
+    model: string | null,
+    dimension: number | null,
+    prefixes?: EmbeddingPrefixPair,
+  ): ModelChangeOutcome {
     const prevModel = this.getState("embedding_model");
     const prevDimRaw = this.getState("embedding_dimension");
     const prevDim = prevDimRaw === null ? null : Number(prevDimRaw);
@@ -953,6 +976,16 @@ export class Store {
     const modelChanged = prevModel !== null && model !== null && prevModel !== model;
     const dimChanged =
       prevDim !== null && dimension !== null && Number.isFinite(prevDim) && prevDim !== dimension;
+
+    // A prefix change invalidates stored vectors exactly as a model/dimension
+    // change does: vectors embedded under the old prefix are not comparable to
+    // queries embedded under the new one. Reuse the same clear-and-log path.
+    const prevQueryPrefix = this.getState(EMBEDDING_PREFIX_QUERY_STATE_KEY);
+    const prevPassagePrefix = this.getState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY);
+    const prefixChanged =
+      prefixes !== undefined &&
+      (prevQueryPrefix !== null || prevPassagePrefix !== null) &&
+      (prevQueryPrefix !== prefixes.query || prevPassagePrefix !== prefixes.passage);
 
     if (modelChanged || dimChanged) {
       this.clearEmbeddings();
@@ -962,10 +995,22 @@ export class Store {
       );
       this.deleteState("embedding_model");
       this.deleteState("embedding_dimension");
+    } else if (prefixChanged) {
+      // Model/dimension unchanged: the prefix change alone triggers the clear.
+      this.clearEmbeddings();
+      // eslint-disable-next-line no-console
+      console.error(
+        `embedding prefixes changed from [${prevQueryPrefix}|${prevPassagePrefix}] ` +
+          `to [${prefixes.query}|${prefixes.passage}], embeddings cleared`,
+      );
     }
 
     if (model !== null) this.setState("embedding_model", model);
     if (dimension !== null) this.setState("embedding_dimension", String(dimension));
+    if (prefixes !== undefined) {
+      this.setState(EMBEDDING_PREFIX_QUERY_STATE_KEY, prefixes.query);
+      this.setState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY, prefixes.passage);
+    }
 
     // (Re)create vec table when we know the dimension and vec is loaded.
     if (this._vecLoaded && dimension !== null) {

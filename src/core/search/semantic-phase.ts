@@ -92,7 +92,7 @@ export async function runSemanticPhase(
   let queryVec: number[];
   try {
     const provider = makeProvider(config.semantic);
-    const vectors = await provider.embed([query]);
+    const vectors = await provider.embed([query], "query");
     queryVec = vectors[0] ?? [];
   } catch (e) {
     if (opts.explicit) {
