@@ -43,6 +43,34 @@ const CANCELLED_SENTINEL = "embed cancelled";
 /** Max characters of an error response body echoed into the thrown message. */
 const ERROR_BODY_HEAD_LEN = 300;
 
+/** Fallback backoff base (ms) when the configured schedule runs out. */
+const DEFAULT_BACKOFF_MS = 4000;
+
+/**
+ * Upper bound (ms) on how long a provider `Retry-After` is honored before a
+ * retry (Task C2). A cooperative reindex should pause for a short provider
+ * hint, but a multi-minute Retry-After would stall the run; past this cap we
+ * still wait the cap rather than the raw hint. 30s balances respecting the
+ * provider against keeping an interactive reindex responsive.
+ */
+export const RETRY_AFTER_CAP_MS = 30_000;
+
+/**
+ * Delay (ms) before the next retry of a just-failed attempt (1-based
+ * `attempt`). When the provider supplied a `Retry-After`, honor it capped at
+ * `capMs`; otherwise use the configured exponential backoff with jitter.
+ */
+export function computeRetryDelayMs(
+  retryAfterMs: number | null,
+  attempt: number,
+  backoffMs: ReadonlyArray<number>,
+  capMs: number,
+): number {
+  if (retryAfterMs !== null) return Math.min(retryAfterMs, capMs);
+  const base = backoffMs[attempt - 1] ?? backoffMs[backoffMs.length - 1] ?? DEFAULT_BACKOFF_MS;
+  return jittered(base);
+}
+
 /**
  * OpenAI-compatible provider error `code`/`type` values that denote quota /
  * billing exhaustion. These are wire-protocol identifiers, not natural
@@ -346,8 +374,11 @@ export class OpenAICompatProvider implements EmbeddingProvider {
         if (!cls.retriable || attempt >= maxAttempts) throw cls.error;
         lastError = cls.error;
         this.retriesSeen++;
-        const wait = jittered(
-          this.backoffMs[attempt - 1] ?? this.backoffMs[this.backoffMs.length - 1] ?? 4000,
+        const wait = computeRetryDelayMs(
+          cls.retryAfterMs,
+          attempt,
+          this.backoffMs,
+          RETRY_AFTER_CAP_MS,
         );
         await sleep(wait);
       }

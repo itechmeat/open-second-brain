@@ -59,7 +59,7 @@ export type {
   StructuredRecallQueryDocument,
   VaultIgnoreRule,
 } from "./types.ts";
-export { SearchError, SEARCH_ERROR_CODES } from "./types.ts";
+export { EMBEDDING_QUOTA_MESSAGE, SearchError, SEARCH_ERROR_CODES } from "./types.ts";
 export {
   parseStructuredRecallQueryDocument,
   structuredRecallQueryText,
