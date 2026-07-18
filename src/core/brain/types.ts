@@ -259,6 +259,17 @@ export const BRAIN_LOG_EVENT_KIND = {
    * no extra wiring.
    */
   attributeWrite: "attribute-write",
+  /**
+   * `durability-skip` (A2, t_375e98fd) - the deterministic durability gate
+   * rejected an extracted fact as transient operational content before it
+   * reached the inbox. Payload carries the `family`, the structural
+   * `reason` that fired (e.g. `temp-path`, `progress-counter`), a
+   * secret-redacted `text` excerpt, the `hash` (dedup hash of the rejected
+   * fact for correlation), and the `agent`. The skip is never silent: this
+   * dedicated, queryable event kind IS the visibility surface, so rejection
+   * counts are discoverable through the log without a separate aggregator.
+   */
+  durabilitySkip: "durability-skip",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

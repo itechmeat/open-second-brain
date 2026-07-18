@@ -29,6 +29,8 @@ import { writeSignal } from "./signal.ts";
 import { appendLogEvent } from "./log.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
+import { sanitiseTextField } from "../redactor.ts";
+import { classifyDurability, resolveDurabilityDenylist } from "./gates/durability.ts";
 import type { DedupIndexEntry } from "./dedup-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import {
@@ -194,12 +196,29 @@ export interface RouteFactsInput {
   /** Shared dedup index (the caller owns it across turns/files). */
   readonly dedup: Map<string, DedupIndexEntry>;
   readonly dryRun?: boolean;
+  /**
+   * Pre-compiled operator durability denylist (A2). When omitted the router
+   * resolves `durability.denylist` from the plugin config on the first
+   * non-dry write; tests inject a compiled list directly so the wiring is
+   * exercised without touching the default config path.
+   */
+  readonly durabilityDenylist?: ReadonlyArray<RegExp>;
 }
 
 export interface RouteFactsResult {
   readonly created: number;
   readonly deduped: number;
+  /**
+   * Facts the durability gate (A2) rejected as transient operational
+   * content before the write. Each rejection is also a logged
+   * `durability-skip` event - this count is the additive result-shape
+   * surface, never a silent drop.
+   */
+  readonly durabilityRejected: number;
 }
+
+/** Max length of the redacted fact text carried onto a `durability-skip` log. */
+const DURABILITY_LOG_TEXT_MAX_LEN = 200;
 
 /** Minimum normalised form length that participates in substring matching. */
 const MIN_ANCHOR_FORM_LENGTH = 3;
@@ -273,9 +292,10 @@ function entityAnchors(anchorables: ReadonlyArray<AnchorableEntity>, factText: s
  * the capture boundary; both seams pin that order with tests.
  */
 export function routeExtractedFacts(vault: string, input: RouteFactsInput): RouteFactsResult {
-  if (input.facts.length === 0) return { created: 0, deduped: 0 };
+  if (input.facts.length === 0) return { created: 0, deduped: 0, durabilityRejected: 0 };
   let created = 0;
   let deduped = 0;
+  let durabilityRejected = 0;
   let entityIndex: ReturnType<typeof buildEntityIndex>;
   try {
     entityIndex = buildEntityIndex(vault);
@@ -288,10 +308,55 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
     ? []
     : buildAnchorables(vault, entityIndex, input.agent, input.now);
 
+  // Resolve the operator durability denylist once (an injected list wins so
+  // tests exercise the wiring without the default config path). Tolerant: a
+  // bad config never crashes capture, and the built-in structural detectors
+  // remain the primary gate.
+  let durabilityDenylist: ReadonlyArray<RegExp> = input.durabilityDenylist ?? [];
+  if (input.durabilityDenylist === undefined && !input.dryRun) {
+    try {
+      durabilityDenylist = resolveDurabilityDenylist();
+    } catch {
+      durabilityDenylist = [];
+    }
+  }
+
   for (const fact of input.facts) {
     const hash = factDedupHash(fact);
+    // Chain order: dedup -> durability -> staging -> write. A deduped item
+    // never reaches the durability gate.
     if (input.dedup.has(hash)) {
       deduped++;
+      continue;
+    }
+    // Durability gate (A2): reject transient operational content before the
+    // write. A rejected fact is a counted, logged skip - never a silent drop.
+    const verdict = classifyDurability(fact.text, { denylist: durabilityDenylist });
+    if (!verdict.durable) {
+      durabilityRejected++;
+      if (!input.dryRun) {
+        try {
+          appendLogEvent(vault, {
+            timestamp: isoSecond(input.now),
+            eventType: BRAIN_LOG_EVENT_KIND.durabilitySkip,
+            agent: input.agent,
+            body: {
+              family: fact.family,
+              reason: verdict.reason!,
+              // Secret-redacted for the LOG surface only (matching the
+              // attribute-write audit); the fact is skipped, not written.
+              text: sanitiseTextField(fact.text, {
+                maxLen: DURABILITY_LOG_TEXT_MAX_LEN,
+                singleLine: true,
+              }),
+              hash,
+              agent: input.agent,
+            },
+          });
+        } catch {
+          // A skip that cannot be logged must still not break capture.
+        }
+      }
       continue;
     }
     if (input.dryRun) continue;
@@ -318,5 +383,5 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
       // One unwritable fact must not break capture; the next turn retries.
     }
   }
-  return { created, deduped };
+  return { created, deduped, durabilityRejected };
 }
