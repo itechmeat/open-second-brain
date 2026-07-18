@@ -77,6 +77,7 @@ import {
   cmdBrainUpgrade,
   handleBrainSnapshotSubcommand,
   cmdBrainScanInline,
+  cmdBrainScanCitations,
   cmdBrainEntity,
   cmdBrainImportSession,
   cmdBrainForgetSource,
@@ -286,6 +287,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainMcpLandscape(rest);
       case "scan-inline":
         return await cmdBrainScanInline(rest);
+      case "scan-citations":
+        return cmdBrainScanCitations(rest);
       case "import-session":
         return await cmdBrainImportSession(rest);
       case "handoff":

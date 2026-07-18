@@ -194,6 +194,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("semantics-backfill", "Preview Brain semantics backfill"),
         command("mcp-landscape", "List MCP servers configured across the vault"),
         command("scan-inline", "Capture inline @osb markers"),
+        command("scan-citations", "Promote inline [Source: ...] citations to dated events"),
         command("import-session", "Replay registered agent sessions"),
         command("handoff", "Write an operator-readable session handoff note"),
         command("intention", "Manage scoped current-intention chains"),

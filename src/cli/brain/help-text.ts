@@ -79,6 +79,7 @@ Brain verbs (observing memory):
   authored-at-backfill  Backfill authored_at on session signals (dry-run default; --apply to write)
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
+  scan-citations      Promote inline [Source: <name>, YYYY-MM-DD] markers to dated provenance events
   import-session      Replay signals from a registered agent session .jsonl (or directory)
   entity              Canonical entity registry: set, get, list, relate, archive, prune
   session-hook        Capture one runtime hook payload from stdin (internal hook bridge)
@@ -536,6 +537,16 @@ export const VERB_HELP: Record<string, string> = {
     "create signals in Brain/inbox/, and annotate the source files with\n" +
     "@osb✓ [[sig-...]]. Brain/, .git, node_modules, and similar directories\n" +
     "are always skipped. Idempotent on re-run.\n",
+  "scan-citations":
+    "usage: o2b brain scan-citations [--vault <path>] [--path <subdir>...] [--exclude <subdir>...]\n" +
+    "                                 [--dry-run] [--strict] [--json] [--agent <name>]\n" +
+    "Walk the vault for inline [Source: <name>, YYYY-MM-DD] provenance markers\n" +
+    "and promote each well-formed citation into the temporal timeline as a\n" +
+    "dated source-citation event stamped at the citation date. Dedup is on\n" +
+    "(normalized name, date), so a re-run over an unchanged vault promotes\n" +
+    "nothing. Malformed markers are reported and skipped; --strict exits 2\n" +
+    "when any malformed marker is found. Brain/ and the usual build dirs are\n" +
+    "always skipped.\n",
   "import-claude-memory":
     "usage: o2b brain import-claude-memory [--vault <path>] [--memory <path>]\n" +
     "                                       [--dry-run | --apply] [--yes] [--json]\n" +

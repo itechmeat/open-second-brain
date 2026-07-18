@@ -61,6 +61,7 @@ export { cmdBrainOkfImport } from "./okf-import.ts";
 export { cmdBrainUpgrade } from "./upgrade.ts";
 export { cmdBrainSnapshotDiff, handleBrainSnapshotSubcommand } from "./snapshot.ts";
 export { cmdBrainScanInline } from "./scan-inline.ts";
+export { cmdBrainScanCitations } from "./scan-citations.ts";
 export { cmdBrainImportSession } from "./import-session.ts";
 export { cmdBrainHandoff } from "./handoff.ts";
 export { cmdBrainIntention } from "./intention.ts";
