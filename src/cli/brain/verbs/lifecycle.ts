@@ -5,6 +5,7 @@
  * Actions:
  *   - `tombstone <path> --reason <r> [--superseded-by <id>]`
  *   - `supersede <predecessor> <successor> [--reason <r>]`
+ *   - `temporal-replace <predecessor> <successor> --at <T>`
  *   - `tip <id>`            resolve a supersede chain to its live tip
  *   - `curator [--high-use-min <n>]`  read slices over observed-use verdicts
  *
@@ -14,6 +15,7 @@
 
 import { defaultConfigPath } from "../../../core/config.ts";
 import { curatorSlices } from "../../../core/brain/lifecycle/curator.ts";
+import { temporalReplace } from "../../../core/brain/lifecycle/temporal-replace.ts";
 import {
   resolveChainTipInVault,
   supersede,
@@ -51,12 +53,15 @@ export async function cmdBrainLifecycle(argv: string[]): Promise<number> {
     reason: { type: "string" },
     "superseded-by": { type: "string" },
     "high-use-min": { type: "string" },
+    at: { type: "string" },
     json: { type: "boolean" },
   });
 
   const action = positional[0];
   if (action === undefined) {
-    return usageError("brain lifecycle requires an action: tombstone | supersede | tip | curator");
+    return usageError(
+      "brain lifecycle requires an action: tombstone | supersede | temporal-replace | tip | curator",
+    );
   }
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
@@ -123,6 +128,38 @@ export async function cmdBrainLifecycle(argv: string[]): Promise<number> {
               ? `superseded ${res.path} -> ${res.state.supersededBy}`
               : `already tombstoned: ${res.path}`,
           );
+        }
+        return 0;
+      }
+      case "temporal-replace": {
+        const predecessor = positional[1];
+        const successor = positional[2];
+        if (predecessor === undefined || successor === undefined) {
+          return usageError("brain lifecycle temporal-replace requires <predecessor> <successor>");
+        }
+        const at = normalizeFlagString(flags["at"]);
+        if (!at) {
+          return usageError(
+            "brain lifecycle temporal-replace requires --at <ISO-8601 instant or YYYY-MM-DD>",
+          );
+        }
+        const res = temporalReplace({
+          vault,
+          predecessor,
+          successor,
+          at,
+          ...(explicitAgent ? { agent: explicitAgent } : {}),
+          configPath: config,
+        });
+        if (wantsJson) {
+          okJson({
+            at: res.at,
+            predecessor: res.predecessor,
+            successor: res.successor,
+            agent: res.agent,
+          });
+        } else {
+          ok(`temporal-replace ${res.predecessor} -> ${res.successor} at ${res.at}`);
         }
         return 0;
       }

@@ -3,16 +3,21 @@
  * suite, Track A anchor, t_7d5a3589).
  *
  * One tool, `brain_lifecycle`, dispatching on `action`:
- *   - `tombstone`  mark a memory `_status: tombstoned` in place
- *   - `supersede`  tombstone a predecessor and record its successor
- *   - `tip`        resolve a supersede chain to its live tip
- *   - `curator`    read slices over observed-use verdicts
+ *   - `tombstone`         mark a memory `_status: tombstoned` in place
+ *   - `supersede`         tombstone a predecessor and record its successor
+ *   - `temporal-replace`  close one fact and open another at a shared instant
+ *   - `tip`               resolve a supersede chain to its live tip
+ *   - `curator`           read slices over observed-use verdicts
  *
  * MCP mirror of the `o2b brain lifecycle` CLI verb; both delegate to the
  * core lifecycle module so the on-disk shape cannot drift.
  */
 
 import { curatorSlices } from "../../core/brain/lifecycle/curator.ts";
+import {
+  temporalReplace,
+  TemporalReplaceError,
+} from "../../core/brain/lifecycle/temporal-replace.ts";
 import {
   resolveChainTipInVault,
   supersede,
@@ -46,7 +51,7 @@ async function toolBrainLifecycle(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  return wrapToolErrors(TOOL, [TombstoneError], async () => {
+  return wrapToolErrors(TOOL, [TombstoneError, TemporalReplaceError], async () => {
     const action = coerceStr(args, "action", true)!;
     const agent = coerceStr(args, "agent", false) ?? undefined;
 
@@ -88,6 +93,25 @@ async function toolBrainLifecycle(
           superseded_by: res.state.supersededBy,
         };
       }
+      case "temporal-replace": {
+        const predecessor = coerceStr(args, "predecessor", true)!;
+        const successor = coerceStr(args, "successor", true)!;
+        const at = coerceStr(args, "at", true)!;
+        const res = temporalReplace({
+          vault: ctx.vault,
+          predecessor,
+          successor,
+          at,
+          ...(agent ? { agent } : {}),
+        });
+        return {
+          action,
+          at: res.at,
+          predecessor: res.predecessor,
+          successor: res.successor,
+          agent: res.agent,
+        };
+      }
       case "tip": {
         const id = coerceStr(args, "id", true)!;
         const res = resolveChainTipInVault(ctx.vault, id);
@@ -112,7 +136,7 @@ async function toolBrainLifecycle(
       default:
         throw new MCPError(
           INVALID_PARAMS,
-          `${TOOL}: 'action' must be one of tombstone, supersede, tip, curator`,
+          `${TOOL}: 'action' must be one of tombstone, supersede, temporal-replace, tip, curator`,
         );
     }
   });
@@ -122,13 +146,13 @@ export const LIFECYCLE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Cross-type tombstone + supersede lifecycle. action: tombstone marks a memory `_status: tombstoned` in place (leaves recall/inject/active.md, kept for audit); supersede tombstones a predecessor and points it at a successor; tip resolves a chain to its tip; curator slices observed-use verdicts.",
+      "Cross-type lifecycle. action: tombstone marks a memory tombstoned in place (kept for audit); supersede tombstones a predecessor and links a successor; temporal-replace closes one fact and opens a successor at a shared instant; tip resolves a chain tip; curator slices observed-use verdicts.",
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["tombstone", "supersede", "tip", "curator"],
+          enum: ["tombstone", "supersede", "temporal-replace", "tip", "curator"],
           description: "Which lifecycle operation to run.",
         },
         path: {
@@ -145,11 +169,18 @@ export const LIFECYCLE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         predecessor: {
           type: "string",
-          description: "supersede: vault-relative path of the predecessor being replaced.",
+          description:
+            "supersede/temporal-replace: vault-relative path of the predecessor being replaced.",
         },
         successor: {
           type: "string",
-          description: "supersede: successor id/wikilink that supersedes the predecessor.",
+          description:
+            "supersede: successor id/wikilink. temporal-replace: vault-relative path of the successor.",
+        },
+        at: {
+          type: "string",
+          description:
+            "temporal-replace: shared instant T (ISO-8601 UTC instant or YYYY-MM-DD date).",
         },
         id: { type: "string", description: "tip: id/wikilink whose chain tip to resolve." },
         high_use_min: {
