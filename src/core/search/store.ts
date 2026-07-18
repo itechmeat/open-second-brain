@@ -463,7 +463,7 @@ export class Store {
 
     try {
       applyPragmas(db);
-      applyMigrations(db);
+      applyMigrations(db, { ftsTokenize: config.ftsTokenize });
       ensureFts5(db);
       const vecLoaded = loadVec && tryLoadVecExtension(db);
       const store = new Store(db, config, vecLoaded, release);

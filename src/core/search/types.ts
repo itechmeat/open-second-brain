@@ -1006,4 +1006,14 @@ export interface ResolvedSearchConfig {
    * gated on a signature marker, so a drifted staging DB is rebuilt.
    */
   readonly resumeReindex: boolean;
+  /**
+   * FTS5 tokenizer clause for the searchable `chunk_fts` table (Q1 of the
+   * search config, t_618f7211), assembled from validated
+   * `search_fts_diacritics` / `search_fts_stemmer` config keys. Absent
+   * config yields the historical `unicode61 remove_diacritics 2`
+   * byte-identically. Applied only when the index is (re)built, so a
+   * change requires an explicit `o2b search reindex`; the CJK trigram
+   * shadow index is untouched by this clause.
+   */
+  readonly ftsTokenize: string;
 }

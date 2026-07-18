@@ -353,6 +353,15 @@ estimated spend exceeds it unless `--force-cost`. `search_fusion_mode`
 lanes by reciprocal rank (`search_rrf_k`, default 60); `linear` keeps
 ranking bit-identical.
 
+FTS tokenizer (since v1.34.0): `search_fts_diacritics` (default `2`; also
+`0`/`1`) sets the `unicode61 remove_diacritics` rule, and
+`search_fts_stemmer` (default `none`; also `porter`) layers Porter
+stemming over it. Unset keys keep the historical
+`unicode61 remove_diacritics 2` clause byte-identically. An out-of-range
+value is rejected loudly; the CJK trigram prefilter is unaffected.
+Changing either key only takes effect after `o2b search reindex` — there
+is no implicit reindex.
+
 Typed relations participate in ranking (relation polarity): a page whose
 frontmatter declares `superseded_by:` is demoted when it matches and its
 successor is boosted or pulled in, `contradicts:` surfaces warning-style
