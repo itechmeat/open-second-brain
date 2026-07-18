@@ -99,6 +99,8 @@ describe("BRAIN_* const enums", () => {
       "signal-retire",
       // Belief lifecycle suite (t_7d5a3589) cross-type tombstone + supersede
       "tombstone",
+      // Belief lifecycle suite (t_3ba9c404) atomic temporal fact-replacement
+      "temporal-replace",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

@@ -302,6 +302,16 @@ export const BRAIN_LOG_EVENT_KIND = {
    * a byte-identical no-op and emits no event.
    */
   tombstone: "tombstone",
+  /**
+   * `temporal-replace` (Belief lifecycle suite, A2, t_3ba9c404) - an
+   * atomic temporal fact replacement closed a predecessor
+   * (`valid_until = T`) and opened a successor (`valid_from = T`) at one
+   * shared instant, reusing `superseded_by` as the successor link.
+   * Payload carries the vault-relative `predecessor` and `successor`
+   * paths, the shared instant `at`, and the `agent`. The pair is written
+   * atomically (both or neither); this event records that it happened.
+   */
+  temporalReplace: "temporal-replace",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
