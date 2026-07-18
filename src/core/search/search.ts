@@ -78,6 +78,7 @@ import { toSearchCard } from "./cards.ts";
 import {
   applyAgentScope,
   applyPropertyFilter,
+  applyStatusFilter,
   applyVisibilityScope,
   attachTrustMetadata,
   buildTerminalPaths,
@@ -874,9 +875,13 @@ export async function search(
       // match the requested key/value pairs, then visibility scoping (v3)
       // drops pages outside the requested visibility scope. Caching by
       // document path bounds the read cost to the result set.
+      // Belief lifecycle suite (t_7d5a3589): drop tombstoned (incl.
+      // superseded-non-tip) memories before any other post-rank stage.
+      // A vault with no tombstoned entries passes through unchanged.
+      const statusFiltered = applyStatusFilter(ranked, config.vault, frontmatterCache);
       const propFiltered = hasPropertyFilter
-        ? applyPropertyFilter(ranked, opts.properties!, config.vault, frontmatterCache)
-        : ranked;
+        ? applyPropertyFilter(statusFiltered, opts.properties!, config.vault, frontmatterCache)
+        : statusFiltered;
       const visible = applyVisibilityScope(
         propFiltered,
         visibilityScope,

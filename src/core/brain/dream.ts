@@ -50,6 +50,7 @@ import { writePreferenceTxn } from "./preference-txn.ts";
 import { appendLogEvent, type BrainLogEntry } from "./log.ts";
 import { moveToRetired, parsePreference } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
+import { isTombstoned } from "./lifecycle/tombstone.ts";
 import { isPinned } from "./pin.ts";
 import { createSnapshot, pruneSnapshots } from "./snapshot.ts";
 import { loadBrainConfig, resolveGuardrails } from "./policy.ts";
@@ -879,6 +880,9 @@ function scanBrain(vault: string): ScanResult {
     for (const name of readdirSync(dirs.inbox)) {
       if (!name.endsWith(".md")) continue;
       const full = join(dirs.inbox, name);
+      // Belief lifecycle suite (t_7d5a3589): a tombstoned signal is
+      // excluded from the dream pass so it is never re-clustered.
+      if (isTombstoned(parseFrontmatter(full)[0])) continue;
       try {
         const sig = parseSignal(full);
         signals.push({ path: full, signal: sig, active: true });
@@ -891,6 +895,7 @@ function scanBrain(vault: string): ScanResult {
     for (const name of readdirSync(dirs.processed)) {
       if (!name.endsWith(".md")) continue;
       const full = join(dirs.processed, name);
+      if (isTombstoned(parseFrontmatter(full)[0])) continue;
       try {
         const sig = parseSignal(full);
         signals.push({ path: full, signal: sig, active: false });
@@ -903,6 +908,7 @@ function scanBrain(vault: string): ScanResult {
     for (const name of readdirSync(dirs.preferences)) {
       if (!name.endsWith(".md")) continue;
       const full = join(dirs.preferences, name);
+      if (isTombstoned(parseFrontmatter(full)[0])) continue;
       try {
         const pref = parsePreference(full);
         preferences.push({ path: full, pref });

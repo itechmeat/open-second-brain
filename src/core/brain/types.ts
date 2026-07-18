@@ -291,8 +291,30 @@ export const BRAIN_LOG_EVENT_KIND = {
    * signal from the dream pass; this event records that it happened.
    */
   signalRetire: "signal-retire",
+  /**
+   * `tombstone` (Belief lifecycle suite, Track A anchor, t_7d5a3589) - a
+   * memory of any type (preference, signal, learning) was tombstoned:
+   * marked `_status: tombstoned` in frontmatter without deletion,
+   * optionally carrying a `superseded_by` replacement pointer (a
+   * supersede). Payload carries the vault-relative `path`, the `reason`,
+   * the `prior_status` the entry held before tombstoning, an optional
+   * `superseded_by` wikilink, and the `agent`. Re-issuing a tombstone is
+   * a byte-identical no-op and emits no event.
+   */
+  tombstone: "tombstone",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
+
+/**
+ * Cross-type lifecycle status value (Belief lifecycle suite, t_7d5a3589).
+ * Written into the `_status` frontmatter slot by the tombstone/supersede
+ * lifecycle module to mark a memory of any type retired-in-place. Lives
+ * here (not in the lifecycle module) so `preference.ts` can tolerate the
+ * value on read without importing from `lifecycle/` - the design's
+ * one-directional import rule (lifecycle imports from types/preference,
+ * never the reverse).
+ */
+export const BRAIN_TOMBSTONE_STATUS = "tombstoned";
 
 /**
  * Precomputed set of every event-kind string. Both the markdown

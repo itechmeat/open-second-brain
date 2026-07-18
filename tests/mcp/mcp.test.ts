@@ -279,6 +279,8 @@ describe("tool listing", () => {
         "brain_tiers",
         "brain_secrets",
         "brain_maintenance",
+        // Belief lifecycle suite (t_7d5a3589): cross-type tombstone + supersede.
+        "brain_lifecycle",
         // Link & Recall Intelligence Suite (v0.45.0).
         "brain_bridges",
         "brain_clusters",
@@ -627,7 +629,9 @@ describe("stdio loop", () => {
     //   ingestion-import-robustness t_2e2e959f) = 97.
     // + brain_observed_use (session-end observed-use verdict feeding recall
     //   ranking, retrieval-ranking-quality t_65588d8b) = 98.
-    expect(list.result.tools.length).toBe(98);
+    // + brain_lifecycle (cross-type tombstone + supersede lifecycle,
+    //   belief-lifecycle-decision-memory t_7d5a3589) = 99.
+    expect(list.result.tools.length).toBe(99);
   });
 
   test("returns parse error for invalid JSON", async () => {

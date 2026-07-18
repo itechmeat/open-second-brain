@@ -15,6 +15,7 @@ import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
 import { filterByProperties } from "./property-filter.ts";
 import { deriveTrust } from "./enrich.ts";
 import { isTerminalStatus } from "./evidence-pack.ts";
+import { isTombstoned } from "../brain/lifecycle/tombstone.ts";
 import type { BrainSearchResult } from "./types.ts";
 
 /**
@@ -62,6 +63,28 @@ export function buildTerminalPaths(
     }
   }
   return terminal;
+}
+
+/**
+ * Belief lifecycle suite (t_7d5a3589): drop tombstoned (incl.
+ * superseded-non-tip) rows from a ranked result set. A tombstoned memory
+ * stays on disk for audit but must not be recalled. Reads each unique
+ * path's cached frontmatter once; a vault with no tombstoned entries
+ * passes through byte-identically (nothing is dropped).
+ */
+export function applyStatusFilter(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  vault: string,
+  frontmatterCache: Map<string, FrontmatterMap>,
+): ReadonlyArray<BrainSearchResult> {
+  return ranked.filter((r) => {
+    try {
+      return !isTombstoned(readCachedFrontmatter(frontmatterCache, vault, r.path));
+    } catch {
+      // Unreadable frontmatter is not a tombstone; leave the row in.
+      return true;
+    }
+  });
 }
 
 export function applyPropertyFilter(

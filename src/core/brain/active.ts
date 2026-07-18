@@ -44,6 +44,7 @@ import {
   loadGuardrailsConfigSafe,
 } from "./policy.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
+import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { sortByProvenanceTrust } from "./provenance/trust-order.ts";
@@ -199,7 +200,12 @@ function readActivePreferences(vault: string): BrainPreference[] {
     if (!name.endsWith(".md")) continue;
     const full = join(dirs.preferences, name);
     try {
-      out.push(parsePreference(full));
+      const pref = parsePreference(full);
+      // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
+      // superseded-non-tip) preference remains on disk for audit but
+      // never appears in the active-preferences digest.
+      if ((pref.status as string) === BRAIN_TOMBSTONE_STATUS) continue;
+      out.push(pref);
     } catch {
       // Corrupted or status/folder-mismatched file — silently omit
       // here. `brain_doctor` is the surface that flags it. See the

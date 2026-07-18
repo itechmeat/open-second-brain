@@ -84,6 +84,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_intention",
   "brain_knowledge_gaps",
   "brain_labels",
+  "brain_lifecycle",
   "brain_maintenance",
   "brain_mcp_landscape",
   "brain_memory_bridge",

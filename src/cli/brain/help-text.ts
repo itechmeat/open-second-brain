@@ -15,6 +15,7 @@ Brain verbs (observing memory):
   dream            Deterministic dreaming pass; stage/validate/apply staged bundles
   apply-evidence   Log a real-work application of a preference
   note             Append a one-line narrative milestone to Brain/log/today
+  lifecycle        Tombstone/supersede a memory, resolve chain tips, curator slices
   digest           Render the recent-changes digest (markdown or --json)
   intent-review    Read-only pre-dream review of active signal clusters
   retention        Recommendation-only keep/improve/park/prune review
@@ -171,6 +172,15 @@ export const VERB_HELP: Record<string, string> = {
     "Append one narrative-milestone line to Brain/log/<today>.md under the `note`\n" +
     "event kind. CLI mirror of the MCP `brain_note` tool — same on-disk contract.\n" +
     "Use from cron jobs and shell scripts. Multi-line text collapses to one line.\n",
+  lifecycle:
+    "usage: o2b brain lifecycle <tombstone|supersede|tip|curator> [...] [--vault <path>] [--json]\n" +
+    "Cross-type tombstone + supersede lifecycle. tombstone <path> --reason <r>\n" +
+    "[--superseded-by <id>] marks a memory _status: tombstoned in place (no delete);\n" +
+    "supersede <predecessor> <successor> tombstones the predecessor and records the\n" +
+    "replacement pointer; tip <id> walks a supersede chain to its live tip; curator\n" +
+    "[--high-use-min <n>] lists injected-never-used, contradicted, and high-used\n" +
+    "memories from observed-use verdicts. Tombstoned entries stay on disk for audit\n" +
+    "but are excluded from recall, inject, and active.md.\n",
   digest:
     "usage: o2b brain digest [--vault <path>] [--since <ISO>] [--until <ISO>] [--json] [--silent-if-empty]\n" +
     "Renders the 24-hour change digest. Empty + --silent-if-empty exits 2.\n",

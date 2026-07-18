@@ -25,6 +25,7 @@ import {
   type ContextSafetyReport,
 } from "./safety/context-guard.ts";
 import { brainDirs } from "./paths.ts";
+import { isTombstoned } from "./lifecycle/tombstone.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import {
   deriveEpistemicStatus,
@@ -234,6 +235,10 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
       } catch {
         continue;
       }
+      // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
+      // superseded-non-tip) memory stays on disk for audit but is never
+      // injected into a context pack.
+      if (isTombstoned(meta)) continue;
       const id = typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
       const tier = readTier(meta);
       const created = typeof meta["created_at"] === "string" ? meta["created_at"] : "";

@@ -35,6 +35,8 @@ import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
+import { isTombstoned } from "./lifecycle/tombstone.ts";
+import { parseFrontmatter } from "../vault.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 import type { BrainPreference, BrainRetired, BrainSignal } from "./types.ts";
@@ -318,9 +320,13 @@ function collectSignals(dir: string, topic: string, out: BrainSignal[]): void {
     if (!entry.name.startsWith("sig-") || !entry.name.endsWith(".md")) {
       continue;
     }
+    const path = join(dir, entry.name);
+    // Belief lifecycle suite (t_7d5a3589): a tombstoned signal is
+    // excluded from recall.
+    if (isTombstoned(parseFrontmatter(path)[0])) continue;
     let sig: BrainSignal;
     try {
-      sig = parseSignal(join(dir, entry.name));
+      sig = parseSignal(path);
     } catch {
       // Corrupted frontmatter is the doctor's concern; queries skip.
       continue;
@@ -350,6 +356,9 @@ function findPreferenceForTopic(
       continue;
     }
     const path = join(dir, entry.name);
+    // Belief lifecycle suite (t_7d5a3589): a tombstoned entry is excluded
+    // from recall while remaining on disk for audit.
+    if (isTombstoned(parseFrontmatter(path)[0])) continue;
     try {
       const parsed = kind === "preference" ? parsePreference(path) : parseRetired(path);
       if (parsed.topic === topic) return parsed;

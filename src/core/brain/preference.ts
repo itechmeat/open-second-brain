@@ -54,6 +54,7 @@ import {
   BRAIN_MEMORY_LAYER,
   BRAIN_PREFERENCE_STATUS,
   BRAIN_RETIRED_REASON,
+  BRAIN_TOMBSTONE_STATUS,
   type BrainConfidence,
   type BrainEvidenceSummary,
   type BrainMemoryLayer,
@@ -734,7 +735,12 @@ export function parsePreference(
   // status-folder-mismatch the parser surfaces below as a typed error
   // (doctor downgrades it to a warning) — see §4 of the design doc.
   const statusValues = Object.values(BRAIN_PREFERENCE_STATUS) as ReadonlyArray<string>;
-  if (!statusValues.includes(status) && status !== "retired") {
+  // `tombstoned` (Belief lifecycle suite, t_7d5a3589) is a cross-type
+  // lifecycle status the tombstone module stamps into `_status` in place.
+  // It is tolerated on read - like `retired` - so an audit read and the
+  // doctor see a coherent tombstoned entry rather than a corrupt file;
+  // recall / inject / active.md / dream exclude it via `isTombstoned`.
+  if (!statusValues.includes(status) && status !== "retired" && status !== BRAIN_TOMBSTONE_STATUS) {
     throw new Error(
       `preference status must be one of ${statusValues.join(", ")}; got ${JSON.stringify(status)} (${path})`,
     );
@@ -1218,7 +1224,10 @@ function enforceStatusFolderInvariant(
       parent === "preferences" &&
       status !== BRAIN_PREFERENCE_STATUS.unconfirmed &&
       status !== BRAIN_PREFERENCE_STATUS.confirmed &&
-      status !== BRAIN_PREFERENCE_STATUS.quarantine
+      status !== BRAIN_PREFERENCE_STATUS.quarantine &&
+      // A tombstoned preference stays in `preferences/` for audit; the
+      // lifecycle module marks it in place rather than moving the file.
+      status !== BRAIN_TOMBSTONE_STATUS
     ) {
       throw new BrainStatusFolderMismatchError(
         "preference file frontmatter status does not match preferences/ folder",
