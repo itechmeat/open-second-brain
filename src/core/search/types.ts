@@ -110,6 +110,13 @@ export interface TrustMetadata {
   readonly age_days: number;
   readonly superseded: boolean;
   readonly conflict: boolean;
+  /**
+   * Belief lifecycle suite (A4, t_d9365884): when the hit is superseded,
+   * the `superseded_by` successor target so recall carries a pointer to
+   * the replacement. `null` when the hit is not superseded or declares no
+   * successor target.
+   */
+  readonly replacement: string | null;
 }
 
 export interface BrainSearchResult {

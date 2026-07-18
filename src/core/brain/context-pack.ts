@@ -26,6 +26,7 @@ import {
 } from "./safety/context-guard.ts";
 import { brainDirs } from "./paths.ts";
 import { isTombstoned } from "./lifecycle/tombstone.ts";
+import { preferChainTips } from "./inject-governor.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
 import {
   deriveEpistemicStatus,
@@ -182,6 +183,13 @@ export interface ContextPackOptions {
    * on the `density_ranking_context_pack` config key.
    */
   readonly densityRanking?: boolean;
+  /**
+   * Belief lifecycle suite (A4, t_d9365884): keep superseded ancestors in
+   * the pack instead of collapsing each supersedes-chain to its live tip.
+   * The explicit historical flag - history is opt-in, never inferred from
+   * the query. Omitted/false injects only chain tips.
+   */
+  readonly includeHistorical?: boolean;
 }
 
 interface Candidate {
@@ -197,6 +205,13 @@ interface Candidate {
   readonly epistemic: EpistemicStatus;
   readonly evidenceRefs: ReadonlyArray<string>;
   readonly safety?: ContextSafetyReport;
+  /**
+   * Normalized `superseded_by` pointer when this memory has been
+   * replaced (Belief lifecycle suite, A4). Drives inject tip-preference:
+   * a superseded ancestor is dropped in favour of its live tip unless
+   * the caller opts into `includeHistorical`.
+   */
+  readonly supersededBy: string | null;
 }
 
 function withOptionalLanes(
@@ -253,6 +268,10 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
       const createdAtMs = created ? Date.parse(created) : fallbackMtimeMs;
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
       const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
+      const supersededBy =
+        typeof meta["superseded_by"] === "string" && meta["superseded_by"] !== ""
+          ? (meta["superseded_by"] as string)
+          : null;
       const contextLane = normalizeContextLane(meta["context_lane"]);
       const epistemic = deriveEpistemicStatus(meta);
       const guarded = guardBrainContextSnippet(body, {
@@ -281,6 +300,7 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
         tokens: estimateTokens(guarded.safeText),
         epistemic: epistemic.status,
         evidenceRefs: epistemic.evidenceRefs,
+        supersededBy,
         ...(contextSafetyReport(guarded) ? { safety: contextSafetyReport(guarded) } : {}),
       });
     }
@@ -309,7 +329,14 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // Default off, so the surfaced bodies are byte-identical to the legacy
   // blocklist guard unless the vault enables the flag.
   const delimitUntrusted = loadGuardrailsConfigSafe(vault).untrusted_source_delimiting;
-  const candidates = collectCandidates(vault, delimitUntrusted);
+  // Belief lifecycle suite (A4, t_d9365884): prefer supersedes-chain tips.
+  // A superseded ancestor is dropped in favour of its live tip so a chain
+  // of replacements injects only the current belief; `includeHistorical`
+  // keeps the whole chain (explicit flag, never inferred). A vault with no
+  // supersession chains passes through byte-identically.
+  const candidates = preferChainTips(collectCandidates(vault, delimitUntrusted), {
+    historical: opts.includeHistorical === true,
+  }).kept;
 
   // Focus boost (within-tier only): computed once per candidate, 0 for
   // every candidate when no active focus is supplied, so the default

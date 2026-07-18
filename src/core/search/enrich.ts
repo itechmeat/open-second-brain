@@ -111,10 +111,15 @@ export interface DeriveTrustInput {
 export function deriveTrust(input: DeriveTrustInput): TrustMetadata {
   const ageDays = Math.max(0, Math.floor((input.nowMs - input.mtimeMs) / DAY_MS));
   const relations = input.relations ?? [];
+  const supersededEdge = relations.find((r) => r.relation === SUPERSEDED_RELATION);
+  // Belief lifecycle suite (A4): carry a pointer to the replacement so a
+  // superseded recall hit tells the agent what replaced it.
+  const replacement = supersededEdge && supersededEdge.target !== "" ? supersededEdge.target : null;
   return Object.freeze({
     age_days: ageDays,
-    superseded: relations.some((r) => r.relation === SUPERSEDED_RELATION),
+    superseded: supersededEdge !== undefined,
     conflict: relations.some((r) => r.relation === CONFLICT_RELATION),
+    replacement,
   });
 }
 

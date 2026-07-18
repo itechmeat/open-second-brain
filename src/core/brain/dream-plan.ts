@@ -19,6 +19,13 @@ export interface SignalRecord {
 export interface PreferenceRecord {
   readonly path: string;
   readonly pref: BrainPreference;
+  /**
+   * Raw `superseded_by` frontmatter pointer (Belief lifecycle suite, A4).
+   * The typed parser drops it, so scanBrain captures it from raw
+   * frontmatter to drive accelerated decay of low-recall superseded
+   * ancestors. `null` when the memory is a chain tip.
+   */
+  readonly supersededBy: string | null;
 }
 
 export interface RetiredRecord {
@@ -143,6 +150,13 @@ export interface RetirePlan {
   readonly principle: string;
   readonly reason: BrainRetiredReason;
   readonly supersededBy?: string;
+  /**
+   * Belief lifecycle suite (A4, t_d9365884): this retire fired on the
+   * accelerated chain-decay window (a low-recall superseded ancestor),
+   * i.e. it would not yet have retired under the normal stale window. The
+   * apply path emits a `chain-decay` event for these.
+   */
+  readonly chainDecay?: boolean;
 }
 
 export interface NotedRedundantPlan {

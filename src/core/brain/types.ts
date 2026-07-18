@@ -312,6 +312,16 @@ export const BRAIN_LOG_EVENT_KIND = {
    * atomically (both or neither); this event records that it happened.
    */
   temporalReplace: "temporal-replace",
+  /**
+   * `chain-decay` (Belief lifecycle suite, A4, t_d9365884) - the dream
+   * pass retired a low-recall superseded ancestor on the accelerated
+   * chain-decay window rather than the normal stale-evidence window.
+   * Payload carries the retired `preference` wikilink, the `reason`, and
+   * the `stale_days` window that fired. A memory that is not a superseded
+   * ancestor never produces this event, so a chain-free vault is
+   * byte-identical.
+   */
+  chainDecay: "chain-decay",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
