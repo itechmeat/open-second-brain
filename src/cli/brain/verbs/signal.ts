@@ -23,6 +23,7 @@ import {
   okJson,
   parse,
   resolveBrainAgent,
+  usageError,
 } from "../helpers.ts";
 
 export async function cmdBrainSignal(argv: string[]): Promise<number> {
@@ -32,7 +33,7 @@ export async function cmdBrainSignal(argv: string[]): Promise<number> {
     case "retire":
       return signalRetire(rest);
     default:
-      return fail("brain signal requires a subcommand: retire <id> --reason <text>");
+      return usageError("brain signal requires a subcommand: retire <id> --reason <text>");
   }
 }
 
@@ -44,9 +45,9 @@ function signalRetire(argv: string[]): number {
     agent: { type: "string" },
     json: { type: "boolean" },
   });
-  if (positional.length < 1) return fail("brain signal retire requires an <id> argument");
+  if (positional.length < 1) return usageError("brain signal retire requires an <id> argument");
   const reason = normalizeFlagString(flags["reason"]);
-  if (reason === null) return fail("brain signal retire requires --reason <text>");
+  if (reason === null) return usageError("brain signal retire requires --reason <text>");
   const supersededBy = normalizeFlagString(flags["superseded-by"]);
   const { config, vault } = brainVerbContext(flags);
   const agent = resolveBrainAgent(flags, config);
@@ -78,6 +79,11 @@ function signalRetire(argv: string[]): number {
       process.stderr.write(`${exc.message}\n`);
       return 2;
     }
-    return fail(`brain signal retire failed: ${(exc as Error).message}`);
+    const message = `brain signal retire failed: ${(exc as Error).message}`;
+    if (flags["json"]) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
   }
 }

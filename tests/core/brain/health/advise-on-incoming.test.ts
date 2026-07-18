@@ -95,14 +95,24 @@ describe("adviseOnIncoming", () => {
       "coding",
       [
         pref({
-          id: "pref-close",
+          id: "pref-z",
+          principle: "always indent source code with tabs not spaces here",
+        }),
+        pref({
+          id: "pref-a",
           principle: "always indent source code with tabs not spaces here",
         }),
         pref({ id: "pref-loose", principle: "always indent source code with tabs everywhere" }),
       ],
     );
     expect(advisory).not.toBeNull();
-    expect(advisory!.conflicts[0]!.prefId).toBe("pref-close");
-    expect(advisory!.conflicts[0]!.jaccard).toBeGreaterThanOrEqual(advisory!.conflicts[1]!.jaccard);
+    // pref-a and pref-z tie on similarity (identical principles) and must
+    // break ties lexicographically by id; pref-loose is a weaker match.
+    expect(advisory!.conflicts.map((conflict) => conflict.prefId)).toEqual([
+      "pref-a",
+      "pref-z",
+      "pref-loose",
+    ]);
+    expect(advisory!.conflicts[0]!.jaccard).toBeGreaterThanOrEqual(advisory!.conflicts[2]!.jaccard);
   });
 });

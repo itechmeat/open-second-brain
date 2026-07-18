@@ -982,10 +982,18 @@ export class Store {
     // queries embedded under the new one. Reuse the same clear-and-log path.
     const prevQueryPrefix = this.getState(EMBEDDING_PREFIX_QUERY_STATE_KEY);
     const prevPassagePrefix = this.getState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY);
+    // Legacy stores predate prefix metadata: absent state (null) means the
+    // existing vectors were embedded with EMPTY prefixes. Treat missing state
+    // as the empty pair so a switch to non-empty prefixes (e.g. E5's
+    // `query:`/`passage:`) is detected as a change and the now-incompatible
+    // unprefixed vectors are cleared, rather than silently marked compatible.
+    const effectivePrevQueryPrefix = prevQueryPrefix ?? "";
+    const effectivePrevPassagePrefix = prevPassagePrefix ?? "";
     const prefixChanged =
       prefixes !== undefined &&
-      (prevQueryPrefix !== null || prevPassagePrefix !== null) &&
-      (prevQueryPrefix !== prefixes.query || prevPassagePrefix !== prefixes.passage);
+      this.countEmbeddings() > 0 &&
+      (effectivePrevQueryPrefix !== prefixes.query ||
+        effectivePrevPassagePrefix !== prefixes.passage);
 
     if (modelChanged || dimChanged) {
       this.clearEmbeddings();
@@ -1000,7 +1008,7 @@ export class Store {
       this.clearEmbeddings();
       // eslint-disable-next-line no-console
       console.error(
-        `embedding prefixes changed from [${prevQueryPrefix}|${prevPassagePrefix}] ` +
+        `embedding prefixes changed from [${effectivePrevQueryPrefix}|${effectivePrevPassagePrefix}] ` +
           `to [${prefixes.query}|${prefixes.passage}], embeddings cleared`,
       );
     }

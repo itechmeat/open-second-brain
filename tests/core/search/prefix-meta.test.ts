@@ -83,6 +83,30 @@ test("a stored-vs-configured prefix mismatch surfaces a reindex-required warning
   expect(status.warnings.some((w) => /prefix/i.test(w) && /reindex/i.test(w))).toBe(true);
 });
 
+test("legacy embeddings without prefix metadata are cleared when non-empty prefixes are configured", async () => {
+  if (!sqliteVecLoadable()) return;
+  writeMd(vault, "a.md", "# A\n\nA note embedded before prefix metadata existed.");
+  await indexVault(cfg({ queryPrefix: "", passagePrefix: "" }), { embeddings: true });
+
+  // Simulate a legacy store that predates prefix metadata: strip the recorded
+  // prefix state so both keys read as absent (null), leaving unprefixed vectors.
+  const legacy = await Store.open(cfg({ queryPrefix: "", passagePrefix: "" }), { mode: "write" });
+  legacy.deleteState("embedding_prefix_query");
+  legacy.deleteState("embedding_prefix_passage");
+  expect(legacy.countEmbeddings()).toBeGreaterThan(0);
+  await legacy.close();
+
+  // Opening with non-empty E5 prefixes must treat the missing state as the
+  // empty pair, detect the change, and clear the now-incompatible vectors.
+  const upgraded = await Store.open(cfg({ queryPrefix: "query: ", passagePrefix: "passage: " }), {
+    mode: "write",
+  });
+  expect(upgraded.countEmbeddings()).toBe(0);
+  expect(upgraded.getState("embedding_prefix_query")).toBe("query: ");
+  expect(upgraded.getState("embedding_prefix_passage")).toBe("passage: ");
+  await upgraded.close();
+});
+
 test("matching stored and configured prefixes produce no prefix warning", async () => {
   if (!sqliteVecLoadable()) return;
   writeMd(vault, "a.md", "# A\n\nNote embedded with a prefix.");

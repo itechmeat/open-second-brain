@@ -15,7 +15,15 @@ import {
   PendingSignalNotFoundError,
   rejectPending,
 } from "../../../core/brain/pending.ts";
-import { brainVerbContext, fail, normalizeFlagString, ok, okJson, parse } from "../helpers.ts";
+import {
+  brainVerbContext,
+  fail,
+  normalizeFlagString,
+  ok,
+  okJson,
+  parse,
+  usageError,
+} from "../helpers.ts";
 
 export async function cmdBrainPending(argv: string[]): Promise<number> {
   const sub = argv[0];
@@ -28,7 +36,7 @@ export async function cmdBrainPending(argv: string[]): Promise<number> {
     case "reject":
       return pendingReject(rest);
     default:
-      return fail(
+      return usageError(
         "brain pending requires a subcommand: list | apply <id> | reject <id> --reason <text>",
       );
   }
@@ -60,7 +68,12 @@ function pendingList(argv: string[]): number {
     }
     return 0;
   } catch (exc) {
-    return fail(`brain pending list failed: ${(exc as Error).message}`);
+    const message = `brain pending list failed: ${(exc as Error).message}`;
+    if (flags["json"]) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
   }
 }
 
@@ -69,7 +82,7 @@ function pendingApply(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  if (positional.length < 1) return fail("brain pending apply requires an <id> argument");
+  if (positional.length < 1) return usageError("brain pending apply requires an <id> argument");
   const { vault } = brainVerbContext(flags);
   try {
     const res = applyPending(vault, positional[0]!);
@@ -84,7 +97,12 @@ function pendingApply(argv: string[]): number {
       process.stderr.write(`${exc.message}\n`);
       return 2;
     }
-    return fail(`brain pending apply failed: ${(exc as Error).message}`);
+    const message = `brain pending apply failed: ${(exc as Error).message}`;
+    if (flags["json"]) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
   }
 }
 
@@ -94,9 +112,9 @@ function pendingReject(argv: string[]): number {
     reason: { type: "string" },
     json: { type: "boolean" },
   });
-  if (positional.length < 1) return fail("brain pending reject requires an <id> argument");
+  if (positional.length < 1) return usageError("brain pending reject requires an <id> argument");
   const reason = normalizeFlagString(flags["reason"]);
-  if (reason === null) return fail("brain pending reject requires --reason <text>");
+  if (reason === null) return usageError("brain pending reject requires --reason <text>");
   const { vault } = brainVerbContext(flags);
   try {
     const res = rejectPending(vault, positional[0]!, reason, { now: new Date() });
@@ -111,6 +129,11 @@ function pendingReject(argv: string[]): number {
       process.stderr.write(`${exc.message}\n`);
       return 2;
     }
-    return fail(`brain pending reject failed: ${(exc as Error).message}`);
+    const message = `brain pending reject failed: ${(exc as Error).message}`;
+    if (flags["json"]) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
   }
 }

@@ -76,14 +76,35 @@ export function hasTempPath(text: string): boolean {
 }
 
 /**
- * Progress-counter shapes: an `N/M` integer ratio (e.g. `3/10`) or an
+ * Progress-counter tokens: an `N/M` integer ratio (e.g. `3/10`) or an
  * `NN%` percentage (e.g. `87%`, `50%`). Both are language-neutral notation.
+ * Matched as WHOLE tokens (after stripping wrapper punctuation) so a
+ * counter is only detected when it stands on its own, not when the same
+ * notation is embedded in a factual sentence.
  */
-const RATIO_RE = /\b\d+\s*\/\s*\d+\b/;
-const PERCENT_RE = /\b\d+(?:\.\d+)?%/;
+const RATIO_TOKEN_RE = /^\d+\/\d+$/;
+const PERCENT_TOKEN_RE = /^\d+(?:\.\d+)?%$/;
 
+/** Minimum share of counter tokens for the "counter-dominant" verdict. */
+export const PROGRESS_COUNTER_DOMINANCE_MIN_SHARE = 0.25;
+
+/**
+ * True when progress-counter tokens are counter-DOMINANT: their share of
+ * whitespace-split tokens (after stripping wrapper punctuation, but never
+ * the meaningful `%`/`/`) meets {@link PROGRESS_COUNTER_DOMINANCE_MIN_SHARE}.
+ * A standalone `50%` or `3/10 done` status line is counter-dominant; a
+ * percentage embedded in prose (`Acme owns 50% of the venture`) is not, so
+ * a durable fact carrying incidental notation is not discarded as transient.
+ */
 export function hasProgressCounter(text: string): boolean {
-  return RATIO_RE.test(text) || PERCENT_RE.test(text);
+  const tokens = text.split(/\s+/).filter((t) => t.length > 0);
+  if (tokens.length === 0) return false;
+  let counters = 0;
+  for (const token of tokens) {
+    const stripped = token.replace(/^["'([{]+/, "").replace(/["')\]}.,:;!?]+$/, "");
+    if (RATIO_TOKEN_RE.test(stripped) || PERCENT_TOKEN_RE.test(stripped)) counters++;
+  }
+  return counters > 0 && counters / tokens.length >= PROGRESS_COUNTER_DOMINANCE_MIN_SHARE;
 }
 
 /**
@@ -192,11 +213,95 @@ export const DURABILITY_DENYLIST_CONFIG_KEY = "durability.denylist";
 export const DURABILITY_DENYLIST_ENV_KEY = "OPEN_SECOND_BRAIN_DURABILITY_DENYLIST";
 
 /**
+ * True when the quantifier starting at index `i` of `source` is unbounded:
+ * `*`, `+`, or `{n,}` / `{,}` (no upper bound). `{n}` and `{n,m}` are bounded.
+ */
+function isUnboundedQuantifierAt(source: string, i: number): boolean {
+  const ch = source[i];
+  if (ch === "*" || ch === "+") return true;
+  if (ch === "{") {
+    const close = source.indexOf("}", i);
+    return close !== -1 && /^\d*,$/.test(source.slice(i + 1, close));
+  }
+  return false;
+}
+
+/** True when a group body carries an unbounded quantifier (ignores classes). */
+function bodyHasUnboundedQuantifier(body: string): boolean {
+  let inClass = false;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (inClass) {
+      if (ch === "]") inClass = false;
+      continue;
+    }
+    if (ch === "[") {
+      inClass = true;
+      continue;
+    }
+    if (isUnboundedQuantifierAt(body, i)) return true;
+  }
+  return false;
+}
+
+/**
+ * Reject a regex source that carries the classic catastrophic-backtracking
+ * shape: an unbounded quantifier (`*`, `+`, `{n,}`) applied to a group whose
+ * body ALSO contains an unbounded quantifier (`(a+)+`, `(.*)*`, `([0-9]+)*`).
+ * These patterns can stall {@link classifyDurability} - which runs the
+ * operator denylist synchronously on every fact - for exponential time on a
+ * crafted input. Bounded (`{n}`, `{n,m}`) quantifiers and single-level
+ * quantifiers (`(abc)+`) are safe and pass. This is a targeted guard for the
+ * dominant ReDoS class, not a complete safe-regex analyzer (alternation
+ * overlap such as `(a|a)+` is out of scope); it exists so an operator typo
+ * cannot turn the capture hot path into a denial of service.
+ */
+export function hasNestedUnboundedQuantifier(source: string): boolean {
+  const stack: number[] = [];
+  let inClass = false;
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (inClass) {
+      if (ch === "]") inClass = false;
+      continue;
+    }
+    if (ch === "[") {
+      inClass = true;
+      continue;
+    }
+    if (ch === "(") {
+      stack.push(i);
+      continue;
+    }
+    if (ch === ")") {
+      const start = stack.pop();
+      if (start === undefined) continue;
+      if (
+        isUnboundedQuantifierAt(source, i + 1) &&
+        bodyHasUnboundedQuantifier(source.slice(start + 1, i))
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Compile a comma-separated list of operator regexes into non-global
- * `RegExp` objects. Pure. An unparseable entry is SKIPPED rather than thrown
- * (the same tolerance `resolveTimezone` applies to an invalid IANA zone): an
- * operator typo must never crash the capture hot path, and the built-in
- * structural detectors remain the primary gate. Empty / absent yields `[]`.
+ * `RegExp` objects. Pure. An unparseable OR catastrophic-backtracking entry
+ * is SKIPPED rather than thrown (the same tolerance `resolveTimezone` applies
+ * to an invalid IANA zone): an operator typo must never crash or stall the
+ * capture hot path, and the built-in structural detectors remain the primary
+ * gate. Empty / absent yields `[]`.
  *
  * Multiple patterns are comma-delimited; a regex that needs a literal comma
  * can spell it `[,]` or `\x2c`, matching the exact-label denylist convention.
@@ -207,6 +312,9 @@ export function compileDurabilityDenylist(raw: string | undefined): RegExp[] {
   for (const part of raw.split(",")) {
     const pattern = part.trim();
     if (pattern.length === 0) continue;
+    // Reject unsafe patterns before compiling: the denylist runs on every
+    // fact, so a catastrophic-backtracking regex is a denial-of-service.
+    if (hasNestedUnboundedQuantifier(pattern)) continue;
     try {
       out.push(new RegExp(pattern));
     } catch {

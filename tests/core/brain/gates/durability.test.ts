@@ -74,6 +74,20 @@ describe("progress-counter detector", () => {
     expect(hasProgressCounter("paid 120 USD")).toBe(false);
     expect(hasProgressCounter("ada@example.com")).toBe(false);
   });
+
+  test("negative: a percentage embedded in a factual sentence is not counter-dominant", () => {
+    // Regression: an incidental percentage in prose must NOT be classified as
+    // a transient progress counter and discarded.
+    expect(hasProgressCounter("Acme owns 50% of the venture")).toBe(false);
+    expect(hasProgressCounter("the survey found that 87% of respondents agreed")).toBe(false);
+    expect(hasProgressCounter("the display uses a 16/9 aspect ratio in the spec")).toBe(false);
+    expect(classifyDurability("Acme owns 50% of the venture").durable).toBe(true);
+  });
+
+  test("positive: counter-dominant status strings still flagged", () => {
+    expect(hasProgressCounter("step 3/10 done")).toBe(true);
+    expect(classifyDurability("step 3/10 done").durable).toBe(false);
+  });
 });
 
 describe("run-id / timestamp detector", () => {
@@ -179,6 +193,24 @@ describe("operator denylist (config regexes extend the gate)", () => {
     const res = compileDurabilityDenylist("(unclosed, ^ok-");
     expect(res.length).toBe(1);
     expect(res[0]!.test("ok-fine")).toBe(true);
+  });
+
+  test("compileDurabilityDenylist skips catastrophic-backtracking patterns", () => {
+    // A nested-unbounded-quantifier regex (ReDoS) runs on every fact; it must
+    // be dropped before compilation so a crafted input cannot stall capture.
+    // The safe sibling still compiles.
+    const res = compileDurabilityDenylist("(a+)+$, ^scratch:");
+    expect(res.length).toBe(1);
+    expect(res[0]!.test("scratch: throwaway")).toBe(true);
+    // Bounded and single-level quantifiers remain allowed.
+    expect(compileDurabilityDenylist("(abc)+").length).toBe(1);
+    expect(compileDurabilityDenylist("(a{2}){3}").length).toBe(1);
+    // Classifying a would-be-catastrophic input stays fast (no hang) because
+    // the dangerous pattern was never compiled.
+    const denylist = compileDurabilityDenylist("(a+)+$");
+    const start = Date.now();
+    expect(classifyDurability(`${"a".repeat(40)}!`, { denylist }).durable).toBe(true);
+    expect(Date.now() - start).toBeLessThan(1000);
   });
 
   test("compileDurabilityDenylist on empty/absent yields no regexes", () => {

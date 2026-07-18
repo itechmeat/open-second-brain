@@ -334,6 +334,9 @@ describe("tool calls", () => {
     // to a stable opaque reference, never the raw path.
     expect(s.vault_path).toMatch(/^vault:\/\/[0-9a-f]{8}$/);
     expect(s.vault_path).not.toBe(vault);
+    // The raw host path must not leak through any field, including nested
+    // ones like config.vault_path.
+    expect(JSON.stringify(s)).not.toContain(vault);
     expect(s.vault_exists).toBe(true);
     expect(s.config.api_key).toBe("[REDACTED]");
     expect(s.config_keys).toContain("vault_path");

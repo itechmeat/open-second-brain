@@ -273,6 +273,11 @@ test("semanticTopK rejects a non-finite query vector before querying", async () 
   expect(() => store.semanticTopK([Number.POSITIVE_INFINITY, 0, 0, 0], { limit: 5 })).toThrow(
     /semanticTopK|EMBEDDING_INVALID_VECTOR/,
   );
+  // An all-zero query vector has no direction for cosine similarity and must
+  // be rejected before querying, exactly as vecUpsert rejects it.
+  expect(() => store.semanticTopK([0, 0, 0, 0], { limit: 5 })).toThrow(
+    /zero|semanticTopK|EMBEDDING_INVALID_VECTOR/,
+  );
   await store.close();
 });
 

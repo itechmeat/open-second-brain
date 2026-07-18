@@ -24,10 +24,12 @@ import { listSnapshots } from "../../../src/core/brain/snapshot.ts";
 
 let vault: string;
 let configHome: string;
+let originalDenylist: string | undefined;
 
 const NOW = new Date("2026-07-18T12:00:00Z");
 
 beforeEach(() => {
+  originalDenylist = process.env[ENTITY_LABEL_DENYLIST_ENV_KEY];
   vault = mkdtempSync(join(tmpdir(), "o2b-label-hygiene-vault-"));
   configHome = mkdtempSync(join(tmpdir(), "o2b-label-hygiene-cfg-"));
   const configPath = join(configHome, "config.yaml");
@@ -41,6 +43,13 @@ afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
   __clearEntityIndexCache();
+  // Restore any pre-existing env value so this suite does not contaminate
+  // other tests sharing the process.
+  if (originalDenylist === undefined) {
+    delete process.env[ENTITY_LABEL_DENYLIST_ENV_KEY];
+  } else {
+    process.env[ENTITY_LABEL_DENYLIST_ENV_KEY] = originalDenylist;
+  }
 });
 
 /** Write an entity node file directly, bypassing the creation quality gate. */

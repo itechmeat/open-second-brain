@@ -22,6 +22,7 @@ import {
   ok,
   okJson,
   parse,
+  usageError,
 } from "../helpers.ts";
 
 function entityPayload(entity: BrainEntity): Record<string, unknown> {
@@ -63,7 +64,7 @@ export async function cmdBrainEntity(argv: string[]): Promise<number> {
     case "prune":
       return entityPrune(rest);
     default:
-      return fail(
+      return usageError(
         "brain entity requires a subcommand: set <category> <name> | get <name> | list | " +
           "relate <from> <relation> <to> | archive <name> [--restore] | prune [--confirm]",
       );
@@ -256,7 +257,12 @@ function entityPrune(argv: string[]): number {
     info("  re-run with --confirm to remove (a snapshot is taken first)");
     return 0;
   } catch (exc) {
-    return fail(`brain entity prune failed: ${(exc as Error).message}`);
+    const message = `brain entity prune failed: ${(exc as Error).message}`;
+    if (flags["json"]) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
   }
 }
 

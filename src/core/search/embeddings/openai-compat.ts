@@ -393,7 +393,7 @@ export class OpenAICompatProvider implements EmbeddingProvider {
           this.backoffMs,
           RETRY_AFTER_CAP_MS,
         );
-        await sleep(wait);
+        await sleep(wait, opts?.parentSignal);
       }
     }
     throw lastError ?? new SearchError("EMBEDDING_PROVIDER_HTTP", "retry loop exhausted");

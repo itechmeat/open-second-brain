@@ -115,13 +115,26 @@ describe("adviseIncomingFeedback", () => {
     const prefsDir = brainDirs(vault).preferences;
     rmSync(prefsDir, { recursive: true, force: true });
     writeFileSync(prefsDir, "not a directory");
-    const advisory = adviseIncomingFeedback(vault, {
-      principle: "always indent source with tabs not spaces",
-      scope: "coding",
-      agent: "test-agent",
-      now: NOW,
-    });
-    expect(advisory).toBeNull();
+    // Capture stderr so we can assert the degradation is VISIBLE, not a
+    // silently-swallowed failure.
+    const originalStderrWrite = process.stderr.write.bind(process.stderr);
+    let captured = "";
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const advisory = adviseIncomingFeedback(vault, {
+        principle: "always indent source with tabs not spaces",
+        scope: "coding",
+        agent: "test-agent",
+        now: NOW,
+      });
+      expect(advisory).toBeNull();
+      expect(captured).toContain("write-conflict advisory computation failed");
+    } finally {
+      process.stderr.write = originalStderrWrite;
+    }
   });
 
   test("the extracted-fact path never fires the advisory (no double-fire)", () => {

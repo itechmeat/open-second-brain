@@ -45,19 +45,38 @@ export interface WithDestructiveSnapshotOptions {
   readonly now?: Date;
 }
 
+/** Upper bound on run-id collision retries before giving up. */
+const MAX_SNAPSHOT_ID_ATTEMPTS = 64;
+
 /**
- * Resolve a unique run id: start from `<label>-<compactStamp>` and, if
- * an archive already exists at that id (two destructive ops in the same
- * second), append `-2`, `-3`, ... until free. Mirrors the collision
- * strategy `nextAvailableDreamRunId` uses in `dream.ts`, but probes only
- * the snapshot archive since this gate has no separate workrun artifact.
+ * Create the recovery snapshot behind a unique run id. Selection and
+ * creation are fused so a concurrent process cannot win the id between an
+ * availability probe and the write: we start from `<label>-<compactStamp>`,
+ * append `-2`, `-3`, ... on collision, and RETRY `createSnapshot` when the
+ * write fails because the archive now exists (a racing process claimed it).
+ * Any other create failure (missing tooling, unwritable archive) propagates
+ * on the first attempt. Mirrors the collision strategy `nextAvailableDreamRunId`
+ * uses in `dream.ts`, but closes the check-then-write race window.
  */
-function nextAvailableSnapshotRunId(vault: string, baseRunId: string): string {
-  let candidate = baseRunId;
-  for (let n = 2; existsSync(snapshotPath(vault, candidate)); n++) {
-    candidate = `${baseRunId}-${n}`;
+function createUniqueSnapshot(
+  vault: string,
+  baseRunId: string,
+): { runId: string; snapshot: ReturnType<typeof createSnapshot> } {
+  for (let n = 1; n <= MAX_SNAPSHOT_ID_ATTEMPTS; n++) {
+    const candidate = n === 1 ? baseRunId : `${baseRunId}-${n}`;
+    if (existsSync(snapshotPath(vault, candidate))) continue;
+    try {
+      return { runId: candidate, snapshot: createSnapshot(vault, candidate) };
+    } catch (err) {
+      // A concurrent op may have created this archive between our probe and
+      // the write; createSnapshot refuses to overwrite. Retry the next id
+      // only for that collision - any other failure is a real error.
+      if (!existsSync(snapshotPath(vault, candidate))) throw err;
+    }
   }
-  return candidate;
+  throw new Error(
+    `could not reserve a unique snapshot run id from "${baseRunId}" after ${MAX_SNAPSHOT_ID_ATTEMPTS} attempts`,
+  );
 }
 
 /**
@@ -75,18 +94,30 @@ export function withDestructiveSnapshot<T>(
   // id (separators, traversal, Windows-reserved) - a typed error before
   // any snapshot or mutation is attempted.
   const baseRunId = validateRunId(`${label}-${compactRunStamp(opts.now ?? new Date())}`);
-  const runId = nextAvailableSnapshotRunId(vault, baseRunId);
 
-  // Snapshot FIRST. A throw here (missing tooling, unwritable archive)
-  // aborts before `op` runs - the destructive work never happens.
-  const snap = createSnapshot(vault, runId);
+  // Snapshot FIRST, behind a collision-safe unique id. A throw here (missing
+  // tooling, unwritable archive) aborts before `op` runs - the destructive
+  // work never happens.
+  const { runId, snapshot: snap } = createUniqueSnapshot(vault, baseRunId);
 
   // Run the destructive operation. If it throws, we deliberately do NOT
   // prune: the archive we just wrote is the recovery point, and letting
   // the error propagate keeps it in place.
   const result = op();
 
-  pruneSnapshots(vault, loadSnapshotRetentionSafe(vault));
+  // Prune is best-effort: the destructive op has already committed, so a
+  // prune failure must NOT surface as an operation failure (that could
+  // trigger an unsafe retry of committed work). Retention is a cleanup
+  // concern, not a correctness one - warn and keep the successful result.
+  try {
+    pruneSnapshots(vault, loadSnapshotRetentionSafe(vault));
+  } catch (err) {
+    process.stderr.write(
+      `warning: snapshot prune after ${runId} failed (operation already committed): ${
+        (err as Error).message ?? String(err)
+      }\n`,
+    );
+  }
 
   return { snapshot: { runId, path: snap.path }, result };
 }

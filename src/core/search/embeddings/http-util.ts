@@ -47,8 +47,26 @@ export function parseRetryAfterMs(
   return delta > 0 ? delta : 0;
 }
 
-export function sleep(ms: number): Promise<void> {
-  return new Promise((res) => setTimeout(res, ms));
+/**
+ * Delay for `ms`, resolving early (never rejecting) if `signal` aborts. An
+ * abort-aware sleep lets a retry backoff react to cancellation immediately
+ * instead of blocking a sibling batch for up to the retry-after cap after
+ * the shared abort signal fires. The caller re-checks the signal on the next
+ * loop iteration to surface the cancellation.
+ */
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((res) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      res();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      res();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** Apply ±25% jitter to a backoff base (never negative). */

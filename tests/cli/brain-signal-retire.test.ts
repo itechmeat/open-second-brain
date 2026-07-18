@@ -69,6 +69,7 @@ describe("o2b brain signal retire", () => {
     const out = await runCli(["brain", "signal", "retire", id], { env: env() });
     expect(out.returncode).not.toBe(0);
     expect(existsSync(join(brainDirs(vault).inbox, `${id}.md`))).toBe(true);
+    expect(existsSync(join(brainDirs(vault).retired, `${id}.md`))).toBe(false);
   });
 
   test("a missing id exits 2", async () => {
