@@ -177,11 +177,13 @@ export const VERB_HELP: Record<string, string> = {
     "event kind. CLI mirror of the MCP `brain_note` tool — same on-disk contract.\n" +
     "Use from cron jobs and shell scripts. Multi-line text collapses to one line.\n",
   lifecycle:
-    "usage: o2b brain lifecycle <tombstone|supersede|tip|curator> [...] [--vault <path>] [--json]\n" +
+    "usage: o2b brain lifecycle <tombstone|supersede|temporal-replace|tip|curator> [...] [--vault <path>] [--json]\n" +
     "Cross-type tombstone + supersede lifecycle. tombstone <path> --reason <r>\n" +
     "[--superseded-by <id>] marks a memory _status: tombstoned in place (no delete);\n" +
     "supersede <predecessor> <successor> tombstones the predecessor and records the\n" +
-    "replacement pointer; tip <id> walks a supersede chain to its live tip; curator\n" +
+    "replacement pointer; temporal-replace <predecessor> <successor> --at <T> closes the\n" +
+    "predecessor (valid_until = T) and opens the successor (valid_from = T) at one shared\n" +
+    "instant; tip <id> walks a supersede chain to its live tip; curator\n" +
     "[--high-use-min <n>] lists injected-never-used, contradicted, and high-used\n" +
     "memories from observed-use verdicts. Tombstoned entries stay on disk for audit\n" +
     "but are excluded from recall, inject, and active.md.\n",
@@ -204,8 +206,10 @@ export const VERB_HELP: Record<string, string> = {
     "historically similar decisions with their recorded outcomes; history [--subject <id>]\n" +
     "[--cursor <c>] [--limit <n>] pages decision-change receipts (before/after, confidence\n" +
     "delta, reason code) appended alongside the truth ledger; recall --prompt <text>\n" +
-    "[--turn <n>] deterministically resurfaces a rated decision matching the prompt when\n" +
-    "decision_recall.max_per_session is configured (byte-identical when unset).\n",
+    "[--turn <n>] [--count <n>] [--last-turn <n>] [--surfaced-ids <id> ...]\n" +
+    "deterministically resurfaces a rated decision matching the prompt when\n" +
+    "decision_recall.max_per_session is configured (byte-identical when unset); the\n" +
+    "count/last-turn/surfaced-ids flags thread the per-session cap and spacing state.\n",
   tension:
     "usage: o2b brain tension <detect|list|show|confirm|dismiss|resolve> [...] [--vault <path>] [--json]\n" +
     "Triage persisted contradictions under Brain/tensions/. detect [--jaccard <n>] scans\n" +
