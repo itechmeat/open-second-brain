@@ -174,9 +174,13 @@ describe("brain_decision tool", () => {
     expect(supersede.result).toBeDefined();
 
     const history = payload(await call(server, { action: "history" }));
-    expect(history["total"]).toBe(1);
+    // Two record creations each emit a decision-record receipt (B4), plus
+    // the supersede receipt from the lifecycle hook.
+    expect(history["total"]).toBe(3);
     const receipts = history["receipts"] as Array<{ reason_code: string }>;
-    expect(receipts[0]!.reason_code).toBe("supersede");
+    const codes = receipts.map((r) => r.reason_code);
+    expect(codes.filter((c) => c === "decision-record").length).toBe(2);
+    expect(codes).toContain("supersede");
   });
 
   test("recall is disabled (byte-identical) when unconfigured (B5)", async () => {

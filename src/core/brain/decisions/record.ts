@@ -36,6 +36,12 @@ import { jaccard, tokenise } from "../similarity.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainCommitmentTier } from "../types.ts";
 import { readCommitmentTier, validateCommitmentTier } from "../commitment.ts";
+import {
+  appendDecisionChangeReceipt,
+  DECISION_CHANGE_REASON,
+  RECEIPT_ABSENT_STATE,
+  type AppendReceiptInput,
+} from "./receipts.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -60,6 +66,14 @@ const REVIEW_OBLIGATION_TITLE_PREFIX = "Review decision:";
 export const DECISION_RATING_MIN = 1;
 /** Inclusive upper bound of a decision rating (B2). */
 export const DECISION_RATING_MAX = 5;
+/** Receipt before/after state prefix for the chosen option (B4 trail). */
+const RECEIPT_CHOSEN_PREFIX = "chosen:";
+/** Receipt before/after state prefix for the hindsight outcome (B4 trail). */
+const RECEIPT_OUTCOME_PREFIX = "outcome:";
+/** Receipt before/after state prefix for the quality rating (B4 trail). */
+const RECEIPT_RATING_PREFIX = "rating:";
+/** Receipt state token for an unset rating (B4 trail). */
+const RECEIPT_RATING_UNSET = "none";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -233,6 +247,27 @@ function parseRating(value: unknown): number | null {
   return n;
 }
 
+// ----- Change receipts (B4) -------------------------------------------------
+
+/**
+ * Emit one decision-change receipt for a decision mutation. A mutation
+ * whose before-state equals its after-state changed no belief, so it
+ * emits nothing (an operator re-applying the same value is a no-op, in
+ * the spirit of the receipt idempotency key). Fail-soft otherwise: the
+ * decision note and its `decision-*` log event are authoritative, so an
+ * accountability-log hiccup must never fail the mutation itself. This
+ * mirrors the lifecycle supersede/tombstone receipt path.
+ */
+function emitDecisionChangeReceipt(vault: string, input: AppendReceiptInput): void {
+  if (input.before === input.after) return;
+  try {
+    appendDecisionChangeReceipt(vault, input);
+  } catch {
+    // Receipt is best-effort accountability; the decision note and its
+    // `decision-*` log event remain authoritative.
+  }
+}
+
 // ----- (De)serialization ----------------------------------------------------
 
 function render(record: Omit<DecisionRecord, "path">): string {
@@ -393,6 +428,19 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
     },
   });
 
+  // B4 change trail: a decision's creation is a belief change with an
+  // absent before-state (no prior belief existed), per the closed schema.
+  emitDecisionChangeReceipt(vault, {
+    subject: `[[${record.id}]]`,
+    before: RECEIPT_ABSENT_STATE,
+    after: `${RECEIPT_CHOSEN_PREFIX}${chosen}`,
+    actor: agent,
+    rationale: assumption,
+    reasonCode: DECISION_CHANGE_REASON.record,
+    ts: isoSecond(now),
+    ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+  });
+
   return {
     record: Object.freeze({ ...record, path }),
     reviewObligationSlug: review.slug,
@@ -435,6 +483,18 @@ export function backfillOutcome(vault: string, input: BackfillOutcomeInput): Dec
     },
   });
 
+  // B4 change trail: backfilling the outcome moves the belief state from
+  // the prior outcome (empty until the first backfill) to the new one.
+  emitDecisionChangeReceipt(vault, {
+    subject: `[[${prior.id}]]`,
+    before: `${RECEIPT_OUTCOME_PREFIX}${prior.outcome}`,
+    after: `${RECEIPT_OUTCOME_PREFIX}${outcome}`,
+    actor: agent,
+    reasonCode: DECISION_CHANGE_REASON.outcome,
+    ts: isoSecond(now),
+    ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+  });
+
   return Object.freeze({ ...next, path: prior.path });
 }
 
@@ -472,6 +532,19 @@ export function updateRating(vault: string, input: UpdateRatingInput): DecisionR
       ...(rationale ? { rationale } : {}),
       agent,
     },
+  });
+
+  // B4 change trail: rating is a belief-quality change; the before-state
+  // is the prior rating (`none` when previously unrated).
+  emitDecisionChangeReceipt(vault, {
+    subject: `[[${prior.id}]]`,
+    before: `${RECEIPT_RATING_PREFIX}${prior.rating ?? RECEIPT_RATING_UNSET}`,
+    after: `${RECEIPT_RATING_PREFIX}${rating}`,
+    actor: agent,
+    ...(rationale ? { rationale } : {}),
+    reasonCode: DECISION_CHANGE_REASON.rating,
+    ts: isoSecond(now),
+    ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
   });
 
   return Object.freeze({ ...next, path: prior.path });

@@ -20,6 +20,10 @@ import {
   showDecision,
   updateRating,
 } from "../../../../src/core/brain/decisions/record.ts";
+import {
+  DECISION_CHANGE_REASON,
+  queryDecisionChangeHistory,
+} from "../../../../src/core/brain/decisions/receipts.ts";
 
 let vault: string;
 
@@ -249,5 +253,64 @@ describe("findSimilarDecisions", () => {
       excludeSlug: res.record.slug,
     });
     expect(hits.find((h) => h.slug === res.record.slug)).toBeUndefined();
+  });
+});
+
+describe("decision-change receipts (B4 trail)", () => {
+  test("record -> outcome -> rate emits one receipt per mutation in order", () => {
+    const rec = recordDecision(vault, baseInput({ now: new Date("2026-07-18T12:00:00Z") }));
+    const subject = `[[${rec.record.id}]]`;
+
+    backfillOutcome(vault, {
+      slug: rec.record.slug,
+      outcome: "held up",
+      agent: "tester",
+      now: new Date("2026-07-18T12:00:01Z"),
+    });
+    updateRating(vault, {
+      slug: rec.record.slug,
+      rating: 5,
+      rationale: "worked well",
+      agent: "tester",
+      now: new Date("2026-07-18T12:00:02Z"),
+    });
+
+    const page = queryDecisionChangeHistory(vault, { subject });
+    expect(page.total).toBe(3);
+    expect(page.receipts.map((r) => r.reason_code)).toEqual([
+      DECISION_CHANGE_REASON.record,
+      DECISION_CHANGE_REASON.outcome,
+      DECISION_CHANGE_REASON.rating,
+    ]);
+
+    // The creation receipt carries an explicit absent before-state.
+    const [created, outcome, rated] = page.receipts;
+    expect(created!.before).toBe("(absent)");
+    expect(created!.after).toContain("Bun");
+    expect(outcome!.after).toContain("held up");
+    expect(rated!.after).toContain("5");
+    // Every receipt in the trail shares the one decision subject.
+    expect(page.receipts.every((r) => r.subject === subject)).toBe(true);
+  });
+
+  test("replaying an identical mutation is idempotent (no duplicate receipt)", () => {
+    const rec = recordDecision(vault, baseInput({ now: new Date("2026-07-18T12:00:00Z") }));
+    backfillOutcome(vault, {
+      slug: rec.record.slug,
+      outcome: "held up",
+      agent: "tester",
+      now: new Date("2026-07-18T12:00:01Z"),
+    });
+    // Same before/after -> same idempotency key -> no new receipt.
+    backfillOutcome(vault, {
+      slug: rec.record.slug,
+      outcome: "held up",
+      agent: "tester",
+      now: new Date("2026-07-18T12:00:05Z"),
+    });
+    const page = queryDecisionChangeHistory(vault, { subject: `[[${rec.record.id}]]` });
+    expect(
+      page.receipts.filter((r) => r.reason_code === DECISION_CHANGE_REASON.outcome).length,
+    ).toBe(1);
   });
 });

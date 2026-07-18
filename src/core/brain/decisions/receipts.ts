@@ -34,6 +34,25 @@ import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 /** Schema tag stamped on every receipt line. */
 export const DECISION_CHANGE_SCHEMA_VERSION = "decision_change.v1";
 
+/**
+ * Sentinel `before`/`after` state for a receipt whose belief did not
+ * exist on that side of the change (a creation has no prior state). The
+ * closed schema requires a non-empty string, so an absent state is this
+ * explicit marker rather than the empty string.
+ */
+export const RECEIPT_ABSENT_STATE = "(absent)";
+
+/**
+ * Closed reason-code vocabulary for decision-record change receipts. A
+ * decision mutation stamps exactly one of these so the change trail is
+ * machine-filterable alongside the lifecycle codes (supersede/tombstone).
+ */
+export const DECISION_CHANGE_REASON = Object.freeze({
+  record: "decision-record",
+  outcome: "decision-outcome",
+  rating: "decision-rating",
+} as const);
+
 /** Same canonical UTC shape the truth ledger and log writer emit. */
 const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
