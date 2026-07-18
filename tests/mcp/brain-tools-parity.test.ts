@@ -63,6 +63,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_context_receipts",
   "brain_create_note",
   "brain_dead_ends",
+  "brain_decision",
   "brain_deep_synthesis",
   "brain_delete_by_source",
   "brain_derive_fact",

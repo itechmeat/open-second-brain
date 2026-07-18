@@ -165,5 +165,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   //   belief-lifecycle-decision-memory t_7d5a3589) = 99.
   // + brain_claims (claim-graph query surface,
   //   belief-lifecycle-decision-memory t_6916369f) = 100.
-  expect(list.result.tools.length).toBe(100);
+  // + brain_decision (decision-record note family,
+  //   belief-lifecycle-decision-memory t_ac03214d) = 101.
+  expect(list.result.tools.length).toBe(101);
 });

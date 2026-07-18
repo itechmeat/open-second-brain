@@ -290,6 +290,8 @@ describe("tool listing", () => {
         "brain_codegraph_report",
         // Belief lifecycle suite (t_6916369f): claim-graph query surface.
         "brain_claims",
+        // Belief lifecycle suite (t_ac03214d): decision-record note family.
+        "brain_decision",
         // Agent Write Contract Suite: provider-agnostic write sessions.
         "brain_write_session",
         // Knowledge Provenance Suite (v1.7.0).
@@ -635,7 +637,9 @@ describe("stdio loop", () => {
     //   belief-lifecycle-decision-memory t_7d5a3589) = 99.
     // + brain_claims (claim-graph query surface,
     //   belief-lifecycle-decision-memory t_6916369f) = 100.
-    expect(list.result.tools.length).toBe(100);
+    // + brain_decision (decision-record note family,
+    //   belief-lifecycle-decision-memory t_ac03214d) = 101.
+    expect(list.result.tools.length).toBe(101);
   });
 
   test("returns parse error for invalid JSON", async () => {

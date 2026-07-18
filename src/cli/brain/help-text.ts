@@ -17,6 +17,7 @@ Brain verbs (observing memory):
   note             Append a one-line narrative milestone to Brain/log/today
   lifecycle        Tombstone/supersede a memory, resolve chain tips, curator slices
   claims           Claim-graph query: current truth, truth-at-T, replaced-by, contested-by
+  decision         Capture/review decisions: record/outcome/show/list/similar
   digest           Render the recent-changes digest (markdown or --json)
   intent-review    Read-only pre-dream review of active signal clusters
   retention        Recommendation-only keep/improve/park/prune review
@@ -189,6 +190,14 @@ export const VERB_HELP: Record<string, string> = {
     "gives truth at that instant; --history lists every claim (tombstoned included);\n" +
     "--replaced <id> follows the supersede chain to the live tip; --contests <id>\n" +
     "lists contesting claims; --rebuild rebuilds and persists Brain/claim-graph.json.\n",
+  decision:
+    "usage: o2b brain decision <record|outcome|show|list|similar> [...] [--vault <path>] [--json]\n" +
+    "Decision-record note family under Brain/decisions/. record --title <t> --chosen <c>\n" +
+    "--assumption <a> --review-date <YYYY-MM-DD> [--premortem <p>] [--notes <n>] captures a\n" +
+    "type: decision note and opens one review obligation idempotently; outcome <slug>\n" +
+    "--outcome <text> backfills the hindsight outcome; show <slug> and list read stored\n" +
+    "decisions; similar --title <t> [--chosen <c>] surfaces historically similar decisions\n" +
+    "with their recorded outcomes.\n",
   digest:
     "usage: o2b brain digest [--vault <path>] [--since <ISO>] [--until <ISO>] [--json] [--silent-if-empty]\n" +
     "Renders the 24-hour change digest. Empty + --silent-if-empty exits 2.\n",

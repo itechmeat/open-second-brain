@@ -322,6 +322,23 @@ export const BRAIN_LOG_EVENT_KIND = {
    * byte-identical.
    */
   chainDecay: "chain-decay",
+  /**
+   * `decision-record` (Belief lifecycle suite, Track B anchor, t_ac03214d)
+   * - a first-class decision note was captured under `Brain/decisions/`.
+   * Payload carries the `decision` wikilink, the `chosen` option, the
+   * `review_date`, whether a review `obligation` was opened, and the
+   * `agent`. One event per capture; re-capturing an existing decision
+   * slug rejects instead of double-logging.
+   */
+  decisionRecord: "decision-record",
+  /**
+   * `decision-outcome` (Belief lifecycle suite, B1, t_ac03214d) - the
+   * `outcome` field of an existing decision note was backfilled. Payload
+   * carries the `decision` wikilink, the recorded `outcome`, and the
+   * `agent`. Distinct from `decision-record` so the capture and the
+   * later hindsight backfill stay separately auditable.
+   */
+  decisionOutcome: "decision-outcome",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

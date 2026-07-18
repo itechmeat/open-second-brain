@@ -37,6 +37,7 @@ import { GENERATION_TOOLS } from "./brain/generation-tools.ts";
 import { CALENDAR_TOOLS } from "./brain/calendar-tools.ts";
 import { MEMORY_BRIDGE_TOOLS } from "./brain/memory-bridge-tools.ts";
 import { LIFECYCLE_TOOLS } from "./brain/lifecycle-tools.ts";
+import { DECISIONS_TOOLS } from "./brain/decisions-tools.ts";
 import type { ToolDefinition } from "./tool-contract.ts";
 
 export { vaultRelativeSafe } from "./brain/shared.ts";
@@ -69,4 +70,5 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...CALENDAR_TOOLS,
   ...MEMORY_BRIDGE_TOOLS,
   ...LIFECYCLE_TOOLS,
+  ...DECISIONS_TOOLS,
 ]);

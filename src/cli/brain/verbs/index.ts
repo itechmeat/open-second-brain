@@ -3,6 +3,7 @@ export { cmdBrainFeedback } from "./feedback.ts";
 export { cmdBrainNote } from "./note.ts";
 export { cmdBrainLifecycle } from "./lifecycle.ts";
 export { cmdBrainClaims } from "./claims.ts";
+export { cmdBrainDecision } from "./decision.ts";
 export { cmdBrainDream } from "./dream.ts";
 export { cmdBrainApplyEvidence } from "./apply-evidence.ts";
 export { cmdBrainDigest } from "./digest.ts";
