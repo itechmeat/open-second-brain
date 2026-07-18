@@ -483,3 +483,12 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   the prior or the new file, never a torn hybrid.
 - MCP tools can declare lightweight output contracts; declared contracts are
   validated against `structuredContent` before the text mirror is emitted.
+- Since v1.32.0 the `vault_path` fields returned by the core tools carry a
+  stable opaque store reference (`vault://<hash>`) instead of the absolute
+  host path, because tool responses land in model context. Set
+  `expose_host_paths: true` (or `OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS=true`)
+  to restore the raw path.
+- Since v1.32.0 `brain_feedback` responses include a conflict advisory when
+  the incoming principle closely resembles a confirmed same-scope preference
+  (the write still proceeds); the advisory names the preference id and the
+  similarity evidence.
