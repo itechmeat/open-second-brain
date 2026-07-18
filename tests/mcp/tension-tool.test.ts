@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -81,6 +81,43 @@ describe("brain_tension tool", () => {
 
     const resolved = payload(await call(server, { action: "resolve", slug, reason: "merged" }));
     expect(resolved["status"]).toBe("resolved");
+  });
+
+  test("detect scans the note corpus and persists a tension", async () => {
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nnotes:\n  read_paths:\n    - Notes\n",
+      "utf8",
+    );
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(
+      join(vault, "Notes", "tabs.md"),
+      "---\nid: note-tabs\n---\nAlways use tabs for indentation in source files.\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(vault, "Notes", "spaces.md"),
+      "---\nid: note-spaces\n---\nNever use tabs for indentation in source files.\n",
+      "utf8",
+    );
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+
+    const detected = payload(await call(server, { action: "detect" }));
+    expect(detected["created"]).toBe(1);
+    expect(detected["scanned_files"]).toBe(2);
+    expect((detected["tensions"] as unknown[]).length).toBe(1);
+
+    const listed = payload(await call(server, { action: "list" }));
+    expect((listed["tensions"] as unknown[]).length).toBe(1);
+  });
+
+  test("detect rejects an out-of-range jaccard", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const bad = await call(server, { action: "detect", jaccard: 2 });
+    expect(bad.error).toBeDefined();
   });
 
   test("an invalid transition returns an error", async () => {

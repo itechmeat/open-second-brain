@@ -48,6 +48,45 @@ function seed(): string {
   return persistTension(vault, finding, { agent: "tester" }).record.slug;
 }
 
+describe("o2b brain tension detect", () => {
+  test("scans the note corpus and persists a tension", async () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nnotes:\n  read_paths:\n    - Notes\n",
+      "utf8",
+    );
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(
+      join(vault, "Notes", "tabs.md"),
+      "---\nid: note-tabs\n---\nAlways use tabs for indentation in source files.\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(vault, "Notes", "spaces.md"),
+      "---\nid: note-spaces\n---\nNever use tabs for indentation in source files.\n",
+      "utf8",
+    );
+    const r = await runCli(["brain", "tension", "detect", "--config", configPath, "--json"], {
+      env,
+    });
+    expect(r.returncode).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.scanned_files).toBe(2);
+    expect(out.created).toBe(1);
+    expect(out.tensions.length).toBe(1);
+    expect(out.tensions[0].status).toBe("open");
+  });
+
+  test("rejects an out-of-range --jaccard", async () => {
+    const r = await runCli(
+      ["brain", "tension", "detect", "--config", configPath, "--jaccard", "2"],
+      { env },
+    );
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("--jaccard must be a number in (0, 1]");
+  });
+});
+
 describe("o2b brain tension", () => {
   test("list surfaces a persisted open tension", async () => {
     seed();

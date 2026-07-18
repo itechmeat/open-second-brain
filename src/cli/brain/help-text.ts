@@ -18,7 +18,7 @@ Brain verbs (observing memory):
   lifecycle        Tombstone/supersede a memory, resolve chain tips, curator slices
   claims           Claim-graph query: current truth, truth-at-T, replaced-by, contested-by
   decision         Capture/review decisions: record/outcome/show/list/similar
-  tension          Triage persisted contradictions: list/show/confirm/dismiss/resolve
+  tension          Detect + triage persisted contradictions: detect/list/show/confirm/dismiss/resolve
   digest           Render the recent-changes digest (markdown or --json)
   intent-review    Read-only pre-dream review of active signal clusters
   retention        Recommendation-only keep/improve/park/prune review
@@ -207,8 +207,9 @@ export const VERB_HELP: Record<string, string> = {
     "[--turn <n>] deterministically resurfaces a rated decision matching the prompt when\n" +
     "decision_recall.max_per_session is configured (byte-identical when unset).\n",
   tension:
-    "usage: o2b brain tension <list|show|confirm|dismiss|resolve> [...] [--vault <path>] [--json]\n" +
-    "Triage persisted contradictions under Brain/tensions/. Detection persists a\n" +
+    "usage: o2b brain tension <detect|list|show|confirm|dismiss|resolve> [...] [--vault <path>] [--json]\n" +
+    "Triage persisted contradictions under Brain/tensions/. detect [--jaccard <n>] scans\n" +
+    "the configured note corpus (notes.read_paths) and persists a\n" +
     "tension note (open state) with a dedup key (subject pair + stance signature) so\n" +
     "re-detection updates the existing note instead of duplicating. list [--unresolved]\n" +
     "and show <slug> read; confirm <slug> moves open -> confirmed; dismiss <slug>\n" +

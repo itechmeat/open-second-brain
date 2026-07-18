@@ -3,6 +3,7 @@
  * t_0e3f2bee).
  *
  * One tool, `brain_tension`, dispatching on `action`:
+ *   - `detect`    scan the note corpus and persist detected contradictions
  *   - `list`      list persisted tensions (optionally unresolved only)
  *   - `show`      read one tension
  *   - `confirm`   open -> confirmed
@@ -15,6 +16,7 @@
 
 import {
   confirmTension,
+  detectTensionsInVault,
   dismissTension,
   listTensions,
   listUnresolvedTensions,
@@ -56,6 +58,31 @@ async function toolBrainTension(
     const reason = coerceStr(args, "reason", false) ?? undefined;
 
     switch (action) {
+      case "detect":
+      case "scan": {
+        const rawJaccard = args["jaccard"];
+        let jaccard: number | undefined;
+        if (rawJaccard !== undefined && rawJaccard !== null) {
+          if (typeof rawJaccard !== "number" || !Number.isFinite(rawJaccard)) {
+            throw new MCPError(INVALID_PARAMS, `${TOOL}: 'jaccard' must be a number`);
+          }
+          if (rawJaccard <= 0 || rawJaccard > 1) {
+            throw new MCPError(INVALID_PARAMS, `${TOOL}: 'jaccard' must be in (0, 1]`);
+          }
+          jaccard = rawJaccard;
+        }
+        const res = detectTensionsInVault(ctx.vault, {
+          ...(jaccard !== undefined ? { jaccard } : {}),
+          ...(agent ? { agent } : {}),
+        });
+        return {
+          action,
+          created: res.created,
+          updated: res.updated,
+          scanned_files: res.scannedFiles,
+          tensions: res.records.map(renderRow),
+        };
+      }
       case "list": {
         const unresolved = coerceBool(args, "unresolved");
         const rows = unresolved ? listUnresolvedTensions(ctx.vault) : listTensions(ctx.vault);
@@ -97,7 +124,7 @@ async function toolBrainTension(
       default:
         throw new MCPError(
           INVALID_PARAMS,
-          `${TOOL}: 'action' must be one of list, show, confirm, dismiss, resolve`,
+          `${TOOL}: 'action' must be one of detect, list, show, confirm, dismiss, resolve`,
         );
     }
   });
@@ -107,18 +134,23 @@ export const TENSION_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Persisted-contradiction (tension) lifecycle. action: list (optionally unresolved only) and show read tensions under Brain/tensions/; confirm moves open->confirmed; dismiss/resolve close it. Invalid transitions error. Unresolved tensions warn at context-pack injection.",
+      "Persisted-contradiction (tension) lifecycle. action: detect scans notes.read_paths and persists contradictions as open tensions (idempotent); list/show read; confirm=open->confirmed; dismiss/resolve close. Invalid transitions error. Unresolved tensions warn at context-pack injection.",
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["list", "show", "confirm", "dismiss", "resolve"],
+          enum: ["detect", "list", "show", "confirm", "dismiss", "resolve"],
           description: "Which tension operation to run.",
         },
         slug: {
           type: "string",
           description: "show/confirm/dismiss/resolve: the tension slug.",
+        },
+        jaccard: {
+          type: "number",
+          description:
+            "detect: minimum prose token overlap (0, 1] for two notes to count as the same subject. Defaults to the shared health threshold.",
         },
         unresolved: {
           type: "boolean",

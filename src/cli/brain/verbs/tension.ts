@@ -3,6 +3,7 @@
  * lifecycle suite, S2, t_0e3f2bee).
  *
  * Actions:
+ *   - `detect [--jaccard <n>] [--path <p>]`  scan the note corpus, persist tensions
  *   - `list [--unresolved]`                 list persisted tensions
  *   - `show <slug>`                         read one tension
  *   - `confirm <slug> [--reason <r>]`       open -> confirmed
@@ -10,14 +11,16 @@
  *   - `resolve <slug> [--reason <r>]`       open|confirmed -> resolved
  *
  * CLI mirror of the `brain_tension` MCP tool; both delegate to the core
- * tensions module so the on-disk shape cannot drift. Detection persists
- * tensions programmatically (via the core `detectTensions`); this verb is
- * the operator surface for triaging what detection found.
+ * tensions module so the on-disk shape cannot drift. `detect` is the
+ * operator trigger that runs the contradiction detector over the
+ * configured note corpus (`notes.read_paths`) and persists findings; the
+ * other actions triage what detection found.
  */
 
 import { defaultConfigPath } from "../../../core/config.ts";
 import {
   confirmTension,
+  detectTensionsInVault,
   dismissTension,
   listTensions,
   listUnresolvedTensions,
@@ -55,6 +58,7 @@ export async function cmdBrainTension(argv: string[]): Promise<number> {
     config: { type: "string" },
     agent: { type: "string" },
     reason: { type: "string" },
+    jaccard: { type: "string" },
     unresolved: { type: "boolean" },
     json: { type: "boolean" },
   });
@@ -62,7 +66,7 @@ export async function cmdBrainTension(argv: string[]): Promise<number> {
   const action = positional[0];
   if (action === undefined) {
     return usageError(
-      "brain tension requires an action: list | show | confirm | dismiss | resolve",
+      "brain tension requires an action: detect | list | show | confirm | dismiss | resolve",
     );
   }
 
@@ -81,6 +85,37 @@ export async function cmdBrainTension(argv: string[]): Promise<number> {
 
   try {
     switch (action) {
+      case "detect":
+      case "scan": {
+        const jaccardRaw = normalizeFlagString(flags["jaccard"]);
+        let jaccard: number | undefined;
+        if (jaccardRaw !== null) {
+          const parsed = Number(jaccardRaw);
+          if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
+            return usageError("--jaccard must be a number in (0, 1]");
+          }
+          jaccard = parsed;
+        }
+        const res = detectTensionsInVault(vault, {
+          ...(jaccard !== undefined ? { jaccard } : {}),
+          ...(explicitAgent ? { agent: explicitAgent } : {}),
+          configPath: config,
+        });
+        if (wantsJson) {
+          okJson({
+            created: res.created,
+            updated: res.updated,
+            scanned_files: res.scannedFiles,
+            tensions: res.records.map(renderRow),
+          });
+        } else {
+          ok(
+            `scanned ${res.scannedFiles} note(s): ${res.created} created, ` +
+              `${res.updated} refreshed`,
+          );
+        }
+        return 0;
+      }
       case "list": {
         const rows =
           flags["unresolved"] === true ? listUnresolvedTensions(vault) : listTensions(vault);

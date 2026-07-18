@@ -41,7 +41,9 @@ import {
   type NoteForContradiction,
 } from "./health/contradiction.ts";
 import { appendLogEvent } from "./log.ts";
+import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "./notes/note-walk.ts";
 import { tensionPath, tensionsDir } from "./paths.ts";
+import { BRAIN_HEALTH_DEFAULTS } from "./policy.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainSignalSign } from "./types.ts";
 
@@ -59,6 +61,12 @@ const QUOTE_MAX_LEN = 512;
 const DEDUP_HASH_LEN = 12;
 /** Readable-stem cap so the composed slug stays a sane filename length. */
 const SLUG_STEM_MAX_LEN = 48;
+/**
+ * Byte cap for a note read during a vault scan. Files over the cap are
+ * skipped (and not counted as scanned), matching the open-loop scanner's
+ * 1 MiB ceiling so one pathological file cannot stall detection.
+ */
+const NOTE_SCAN_MAX_BYTES = 1024 * 1024;
 
 /** The lifecycle states a tension can occupy. */
 export const TENSION_STATUS = {
@@ -488,6 +496,83 @@ export function detectTensions(
     else updated++;
   }
   return { records, created, updated };
+}
+
+export interface DetectTensionsInVaultOptions {
+  /**
+   * Explicit note roots to scan. When omitted (or all-blank) the roots
+   * come from `notes.read_paths` in `Brain/_brain.yaml`; a vault with no
+   * configured read paths scans nothing and creates no tensions, so an
+   * un-opted-in vault is byte-identical to today.
+   */
+  readonly paths?: ReadonlyArray<string>;
+  /**
+   * Minimum prose jaccard for two notes to count as the same subject.
+   * Defaults to the shared health threshold
+   * ({@link BRAIN_HEALTH_DEFAULTS.contradiction_jaccard}).
+   */
+  readonly jaccard?: number;
+  readonly negationMarkers?: ReadonlySet<string>;
+  readonly agent?: string;
+  readonly now?: Date;
+  readonly configPath?: string;
+  /** Byte cap per scanned file; defaults to {@link NOTE_SCAN_MAX_BYTES}. */
+  readonly maxFileSizeBytes?: number;
+}
+
+export interface DetectTensionsInVaultResult extends DetectTensionsResult {
+  /** How many note files were read and fed to the detector. */
+  readonly scannedFiles: number;
+}
+
+/**
+ * Production entry point for tension detection: load the configured note
+ * corpus (`notes.read_paths`) as prose notes and persist every detected
+ * contradiction as a tension. This is the operator-triggerable scan behind
+ * the `detect` action on the tension CLI verb and MCP tool; without it the
+ * detector ({@link detectTensions}) had no production caller and the
+ * operator could never create a tension.
+ *
+ * Each markdown file under a configured root becomes one
+ * {@link NoteForContradiction}: `id` is the frontmatter `id` when present
+ * (else the vault-relative path), `subject` is the optional frontmatter
+ * `subject` bucket, and `text` is the note body. The Brain machinery root
+ * and `vault.ignore_paths` are excluded by the shared note walker.
+ */
+export function detectTensionsInVault(
+  vault: string,
+  opts: DetectTensionsInVaultOptions = {},
+): DetectTensionsInVaultResult {
+  const roots = resolveNoteRoots(vault, opts.paths);
+  if (roots.length === 0) return { records: [], created: 0, updated: 0, scannedFiles: 0 };
+
+  const rules = buildNoteWalkRules(vault);
+  const cap = opts.maxFileSizeBytes ?? NOTE_SCAN_MAX_BYTES;
+  const notes: NoteForContradiction[] = [];
+  for (const file of walkMarkdownFiles(vault, roots, rules, { maxFileSizeBytes: cap })) {
+    let meta: Readonly<Record<string, unknown>>;
+    let body: string;
+    try {
+      [meta, body] = parseFrontmatter(file.absPath);
+    } catch {
+      continue; // unreadable or malformed frontmatter - skip, do not count
+    }
+    const rawId = meta["id"];
+    const id = typeof rawId === "string" && rawId.trim() !== "" ? rawId.trim() : file.relPath;
+    const rawSubject = meta["subject"];
+    const subject =
+      typeof rawSubject === "string" && rawSubject.trim() !== "" ? rawSubject.trim() : undefined;
+    notes.push({ id, ...(subject !== undefined ? { subject } : {}), text: body });
+  }
+
+  const result = detectTensions(vault, notes, {
+    jaccard: opts.jaccard ?? BRAIN_HEALTH_DEFAULTS.contradiction_jaccard,
+    ...(opts.negationMarkers !== undefined ? { negationMarkers: opts.negationMarkers } : {}),
+    ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  });
+  return { ...result, scannedFiles: notes.length };
 }
 
 // ----- Transitions ----------------------------------------------------------
