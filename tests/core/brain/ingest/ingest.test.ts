@@ -122,3 +122,56 @@ describe("ingestSource", () => {
     expect(readCheckpoint(vault, planId)).toBeNull();
   });
 });
+
+describe("ingestSource pre-extract pass (P4, t_ef786747)", () => {
+  const CODE_INPUT = {
+    sourcePath: "Code/widget.ts",
+    summary: "A widget module.",
+    extraction: { entities: [{ category: "concept", name: "Widget" }], relations: [] },
+  };
+
+  function writeCode(): void {
+    mkdirSync(join(vault, "Code"), { recursive: true });
+    writeFileSync(
+      join(vault, "Code", "widget.ts"),
+      'import { h } from "./dom";\nexport class Widget extends Base {}\n',
+      "utf8",
+    );
+  }
+
+  test("returns deterministic code-structure seeds when the pass is on", () => {
+    writeCode();
+    const res = ingestSource(vault, CODE_INPUT, { agent: "claude", now: NOW, preExtract: true });
+    expect(res.preExtract?.extracted).toBe(true);
+    if (res.preExtract?.extracted) {
+      expect(res.preExtract.language).toBe("typescript");
+      expect(res.preExtract.entities).toEqual([{ kind: "class", name: "Widget" }]);
+      expect(res.preExtract.edges).toEqual([
+        { kind: "imports", from: "Code/widget.ts", to: "./dom" },
+        { kind: "inherits", from: "Widget", to: "Base" },
+      ]);
+    }
+  });
+
+  test("with the pass off the result carries no seeds and the page is byte-identical", () => {
+    writeCode();
+    // First ingest creates the entity + page; a second (idempotent) re-ingest
+    // reaches a stable state where the entity already exists, so the page no
+    // longer changes between runs. Compare that stable off-page against an
+    // on-page: the only variable left is the pass, proving it never leaks.
+    ingestSource(vault, CODE_INPUT, { agent: "claude", now: NOW });
+    const off = ingestSource(vault, CODE_INPUT, { agent: "claude", now: NOW });
+    const offBytes = readSummary(off.summaryPath);
+    expect(off.preExtract).toBeUndefined();
+
+    const on = ingestSource(vault, CODE_INPUT, { agent: "claude", now: NOW, preExtract: true });
+    expect(readSummary(on.summaryPath)).toBe(offBytes);
+    expect(on.preExtract?.extracted).toBe(true);
+  });
+
+  test("a non-code source reports unextracted rather than a fake empty success", () => {
+    // INPUT's source is not materialized on disk, so there is nothing to read.
+    const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW, preExtract: true });
+    expect(res.preExtract?.extracted).toBe(false);
+  });
+});

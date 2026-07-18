@@ -219,6 +219,11 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("json", "boolean"),
           ],
         ),
+        command(
+          "pre-extract",
+          "Extract deterministic code structure (classes/functions/imports/inheritance) from a source file as JSON seeds",
+          [flag("json", "boolean")],
+        ),
         command("links", "Normalize wikilink path format across Brain notes"),
         command("bridges", "Propose, accept, or dismiss embedding-near bridge links"),
         command("clusters", "Detect link-graph communities and materialize cluster notes"),

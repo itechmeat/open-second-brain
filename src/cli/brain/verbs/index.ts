@@ -68,6 +68,7 @@ export { cmdBrainProject } from "./project.ts";
 export { cmdBrainSource } from "./source.ts";
 export { cmdBrainForgetSource } from "./forget-source.ts";
 export { cmdBrainBatchPlan } from "./batch-plan.ts";
+export { cmdBrainPreExtract } from "./pre-extract.ts";
 export { cmdBrainDistill } from "./distill.ts";
 export { cmdBrainLinks } from "./links.ts";
 export { cmdBrainProfile } from "./profile.ts";

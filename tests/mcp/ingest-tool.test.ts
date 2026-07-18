@@ -78,6 +78,35 @@ describe("brain_ingest_source", () => {
       handler(ctx, { summary: "x", entities: [{ category: "concept", name: "A" }] }),
     ).rejects.toThrow(MCPError);
   });
+
+  test("pre_extract surfaces deterministic code-structure seeds (P4)", async () => {
+    mkdirSync(join(vault, "Code"), { recursive: true });
+    writeFileSync(
+      join(vault, "Code", "widget.ts"),
+      'import { h } from "./dom";\nexport class Widget extends Base {}\n',
+      "utf8",
+    );
+    const res = (await handler(ctx, {
+      source_path: "Code/widget.ts",
+      summary: "A widget.",
+      entities: [{ category: "concept", name: "Widget" }],
+      pre_extract: true,
+    })) as Record<string, unknown>;
+    expect(res["pre_extract"]).toMatchObject({
+      extracted: true,
+      language: "typescript",
+      entities: [{ kind: "class", name: "Widget" }],
+    });
+  });
+
+  test("without pre_extract the response omits the seeds field (byte-identical)", async () => {
+    const res = (await handler(ctx, {
+      source_path: "Articles/eth.md",
+      summary: "x",
+      entities: [{ category: "concept", name: "A" }],
+    })) as Record<string, unknown>;
+    expect(res["pre_extract"]).toBeUndefined();
+  });
 });
 
 describe("brain_ingest_batch_plan resume (t_ba1fa5f6)", () => {

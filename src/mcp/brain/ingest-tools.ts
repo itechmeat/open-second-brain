@@ -42,6 +42,7 @@ async function toolBrainIngestSource(
   const sourcePath = coerceStr(args, "source_path", true)!;
   const summary = coerceStr(args, "summary", true)!;
   const planId = coerceStr(args, "plan_id", false) ?? undefined;
+  const preExtract = coerceBoolOptional(args, "pre_extract") ?? false;
   const parsed = parseExtractionIntakeArgs(args, TOOL);
   const agent =
     parsed.agent && parsed.agent.trim().length > 0
@@ -52,7 +53,12 @@ async function toolBrainIngestSource(
     const res = ingestSource(
       ctx.vault,
       { sourcePath, summary, extraction: parsed.intake },
-      { agent, now: new Date(), ...(planId !== undefined ? { planId } : {}) },
+      {
+        agent,
+        now: new Date(),
+        ...(planId !== undefined ? { planId } : {}),
+        ...(preExtract ? { preExtract: true } : {}),
+      },
     );
     return {
       summary_path: res.summaryPath,
@@ -60,6 +66,9 @@ async function toolBrainIngestSource(
       entities_created: [...res.entitiesCreated],
       entities_updated: [...res.entitiesUpdated],
       connections: [...res.connections],
+      // Only emitted when the pre-extract pass ran, so a call without it is
+      // byte-identical to before (P4).
+      ...(res.preExtract !== undefined ? { pre_extract: res.preExtract } : {}),
     };
   });
 }
@@ -273,6 +282,11 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description:
             "Optional batch-plan id (from brain_ingest_batch_plan). When set, a successful ingest records this source into that plan's resume checkpoint.",
+        },
+        pre_extract: {
+          type: "boolean",
+          description:
+            "Run the deterministic no-LLM code-structure pass over the source file and return its class/function/import/inheritance seeds under `pre_extract`. Off by default; absent leaves the response unchanged.",
         },
       },
       required: ["source_path", "summary", "entities"],

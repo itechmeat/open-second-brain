@@ -81,6 +81,7 @@ import {
   cmdBrainImportSession,
   cmdBrainForgetSource,
   cmdBrainBatchPlan,
+  cmdBrainPreExtract,
   cmdBrainDistill,
   cmdBrainHandoff,
   cmdBrainIntention,
@@ -299,6 +300,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainForgetSource(rest);
       case "batch-plan":
         return await cmdBrainBatchPlan(rest);
+      case "pre-extract":
+        return await cmdBrainPreExtract(rest);
       case "distill":
         return await cmdBrainDistill(rest);
       case "links":
