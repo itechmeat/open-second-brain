@@ -249,6 +249,16 @@ export const BRAIN_LOG_EVENT_KIND = {
    * the same node as a `entity-label-malformed` prune candidate.
    */
   entityAnchorSkip: "entity-anchor-skip",
+  /**
+   * `attribute-write` (today-operator-surface, t_d7be2a0c) - one audit
+   * row per applied `@osb set` marker write-back. Payload carries the
+   * mutated note path, the field, the prior value (`null` when the
+   * field was absent), the new value, the marker source path + line,
+   * and the agent identity. Because the event lands in the Brain log,
+   * applied write-backs surface in the merged activity timeline with
+   * no extra wiring.
+   */
+  attributeWrite: "attribute-write",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
@@ -1057,6 +1067,16 @@ export interface BrainGuardrailConfig {
    * recall is byte-identical when no scope is requested.
    */
   readonly owner_scoped_facts?: boolean;
+  /**
+   * Opt-in marker write-back (today-operator-surface, t_d7be2a0c). When
+   * `true`, the `@osb set note=... field=... value=...` marker write-back
+   * engine is permitted to APPLY mutations: it resolves each target
+   * fail-closed, validates the assignment against the schema pack, writes
+   * the frontmatter attribute, and emits one `attribute-write` audit
+   * event per applied mutation. Defaults to `false`, so apply refuses and
+   * only the dry-run report path (which never writes) is available.
+   */
+  readonly marker_writeback?: boolean;
 }
 
 /**
@@ -1289,6 +1309,7 @@ export interface ResolvedBrainGuardrailConfig {
   readonly derived_fact_synthesis: boolean;
   readonly provenance_trust_ordering: boolean;
   readonly owner_scoped_facts: boolean;
+  readonly marker_writeback: boolean;
 }
 
 /**

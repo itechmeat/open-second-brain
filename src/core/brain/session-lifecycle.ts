@@ -7,7 +7,7 @@ import { brainDirs } from "./paths.ts";
 import { buildCaptureBoundary, type SessionCaptureDecision } from "./capture-boundary.ts";
 import { extractFacts, routeExtractedFacts } from "./fact-extract.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
-import { discoverMarkersDetailed } from "./inline.ts";
+import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
@@ -462,6 +462,9 @@ function captureMarkers(
   const discovery = discoverMarkersDetailed(text);
   counters.malformed += discovery.malformed;
   for (const marker of discovery.markers) {
+    // Feedback markers only: loop / set markers are never turned into
+    // signals here (loops live-derive, set markers apply via write-back).
+    if (!isFeedbackMarker(marker)) continue;
     const dedupHash = computeDedupHash({
       topic: marker.topic,
       signal: marker.signal,

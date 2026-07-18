@@ -53,6 +53,29 @@ describe("captureSessionLifecycleEvent", () => {
     expect(signal.session_ref).toBe("session:session-1#UserPromptSubmit");
   });
 
+  test("captures only feedback markers, ignoring loop and set kinds", async () => {
+    const result = await captureSessionLifecycleEvent(
+      vault,
+      {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "session-kinds",
+        prompt: [
+          "@osb feedback positive topic=only-feedback principle=p",
+          "@osb loop follow up on vendor id=vendor",
+          "@osb set note=Roadmap field=completion value=65",
+        ].join("\n"),
+      },
+      { agent: "tester", now: new Date("2026-05-30T10:20:00Z") },
+    );
+    expect(result.signals_created).toBe(1);
+    const signalFiles = readdirSync(join(vault, "Brain", "inbox")).filter((name) =>
+      name.endsWith(".md"),
+    );
+    expect(signalFiles).toHaveLength(1);
+    const signal = parseSignal(join(vault, "Brain", "inbox", signalFiles[0]!));
+    expect(signal.topic).toBe("only-feedback");
+  });
+
   test("replays brain_feedback tool input through the same signal boundary", async () => {
     const result = await captureSessionLifecycleEvent(
       vault,

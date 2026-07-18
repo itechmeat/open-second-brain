@@ -144,6 +144,7 @@ export const BRAIN_GUARDRAIL_DEFAULTS: ResolvedBrainGuardrailConfig = Object.fre
   derived_fact_synthesis: false,
   provenance_trust_ordering: false,
   owner_scoped_facts: false,
+  marker_writeback: false,
 }) as ResolvedBrainGuardrailConfig;
 
 /**
@@ -170,6 +171,7 @@ export function resolveGuardrails(cfg: BrainConfig): ResolvedBrainGuardrailConfi
     provenance_trust_ordering:
       g.provenance_trust_ordering ?? BRAIN_GUARDRAIL_DEFAULTS.provenance_trust_ordering,
     owner_scoped_facts: g.owner_scoped_facts ?? BRAIN_GUARDRAIL_DEFAULTS.owner_scoped_facts,
+    marker_writeback: g.marker_writeback ?? BRAIN_GUARDRAIL_DEFAULTS.marker_writeback,
   };
 }
 
@@ -1073,6 +1075,7 @@ export function validateBrainConfigDetailed(
       derived_fact_synthesis?: boolean;
       provenance_trust_ordering?: boolean;
       owner_scoped_facts?: boolean;
+      marker_writeback?: boolean;
     } = {};
 
     if ("promotion_min_signals" in rawMap) {
@@ -1132,6 +1135,7 @@ export function validateBrainConfigDetailed(
       "derived_fact_synthesis",
       "provenance_trust_ordering",
       "owner_scoped_facts",
+      "marker_writeback",
     ] as const) {
       if (key in rawMap) {
         const flag = rawMap[key];
@@ -1158,6 +1162,7 @@ export function validateBrainConfigDetailed(
         "derived_fact_synthesis",
         "provenance_trust_ordering",
         "owner_scoped_facts",
+        "marker_writeback",
       ],
       "guardrails",
       source,

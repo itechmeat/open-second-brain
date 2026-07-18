@@ -96,6 +96,8 @@ Brain verbs (observing memory):
   attention-flows     Declarative attention recipes for open loops and learnings
   obligation          Recurring obligations with cadence-driven next-due dates
   agenda              Synthesize agenda conflicts/focus blocks from provided events
+  today               Today dashboard: due obligations, open loops, recent activity, totals
+  apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -670,6 +672,24 @@ export const VERB_HELP: Record<string, string> = {
     "  list [--overdue] [--vault <path>] [--json]\n" +
     "  show --slug <s> [--vault <path>] [--json]\n" +
     "  remove --slug <s> [--vault <path>] [--json]\n",
+  today:
+    "usage: o2b brain today [--vault <path>] [--json] [--lookback-days <n>] [--limit <n>]\n" +
+    "Read-only today dashboard: due and overdue obligations, open loops, merged\n" +
+    "recent activity, and a totals rollup. Each section derives live and in\n" +
+    "isolation, so a section that fails to compute is reported without blanking\n" +
+    "the rest. --lookback-days bounds the recent-activity window (default 7);\n" +
+    "--limit caps the recent-activity entries (default 20). Never writes.\n",
+  "apply-markers":
+    "usage: o2b brain apply-markers [--vault <path>] [--path <subdir>...] [--apply]\n" +
+    "                                [--agent <name>] [--json]\n" +
+    "Apply @osb set markers as schema-validated frontmatter attribute writes.\n" +
+    "Report mode by default: lists each pending marker with its resolved target\n" +
+    "and validation verdict and writes nothing. --apply performs the mutations\n" +
+    "and requires the guardrails.marker_writeback flag in _brain.yaml; with the\n" +
+    "flag off, --apply refuses and writes nothing. Applied markers are consumed\n" +
+    "(annotated) so a re-run is idempotent. Unresolvable or invalid targets are\n" +
+    "reported with an error code and candidates and left unconsumed. Source files\n" +
+    "come from --path (repeatable) or notes.read_paths.\n",
   agenda:
     "usage: o2b brain agenda --events <file|-> [args]\n" +
     "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +
