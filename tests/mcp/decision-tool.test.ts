@@ -140,6 +140,45 @@ describe("brain_decision tool", () => {
     expect(res.error).toBeDefined();
   });
 
+  test("history reads decision-change receipts (B4)", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    // A supersede/tombstone emits a decision-change receipt via the hook.
+    await call(server, {
+      action: "record",
+      title: "Old choice",
+      chosen: "old",
+      assumption: "x",
+      review_date: "2026-12-01",
+    });
+    await call(server, {
+      action: "record",
+      title: "New choice",
+      chosen: "new",
+      assumption: "y",
+      review_date: "2026-12-01",
+    });
+    const supersede = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 20,
+      method: "tools/call",
+      params: {
+        name: "brain_lifecycle",
+        arguments: {
+          action: "supersede",
+          predecessor: "Brain/decisions/decision-old-choice.md",
+          successor: "decision-new-choice",
+        },
+      },
+    })) as { result?: unknown };
+    expect(supersede.result).toBeDefined();
+
+    const history = payload(await call(server, { action: "history" }));
+    expect(history["total"]).toBe(1);
+    const receipts = history["receipts"] as Array<{ reason_code: string }>;
+    expect(receipts[0]!.reason_code).toBe("supersede");
+  });
+
   test("malformed input returns an error result", async () => {
     const server = new MCPServer({ vault, configPath: null });
     await initialize(server);

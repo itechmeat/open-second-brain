@@ -26,6 +26,7 @@ import {
   updateRating,
 } from "../../../core/brain/decisions/record.ts";
 import type { BrainCommitmentTier } from "../../../core/brain/types.ts";
+import { queryDecisionChangeHistory } from "../../../core/brain/decisions/receipts.ts";
 import { normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 const USAGE_ERROR_EXIT = 2;
@@ -51,13 +52,16 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
     rationale: { type: "string" },
     commitment: { type: "string" },
     rated: { type: "boolean" },
+    subject: { type: "string" },
+    cursor: { type: "string" },
+    limit: { type: "string" },
     json: { type: "boolean" },
   });
 
   const action = positional[0];
   if (action === undefined) {
     return usageError(
-      "brain decision requires an action: record | outcome | rate | show | list | compare | similar",
+      "brain decision requires an action: record | outcome | rate | show | list | compare | similar | history",
     );
   }
 
@@ -259,6 +263,44 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
           for (const h of hits) {
             ok(`${h.id} (${h.jaccard.toFixed(2)})${h.outcome ? ` -> ${h.outcome}` : ""}`);
           }
+        }
+        return 0;
+      }
+      case "history": {
+        const subject = normalizeFlagString(flags["subject"]);
+        const cursor = normalizeFlagString(flags["cursor"]);
+        const limitRaw = normalizeFlagString(flags["limit"]);
+        const limit = limitRaw === null ? undefined : Number(limitRaw);
+        if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+          return usageError("brain decision history --limit must be a positive integer");
+        }
+        const page = queryDecisionChangeHistory(vault, {
+          ...(subject ? { subject } : {}),
+          ...(cursor ? { cursor } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+        });
+        if (wantsJson) {
+          okJson({
+            total: page.total,
+            next_cursor: page.nextCursor,
+            receipts: page.receipts.map((r) => ({
+              ts: r.ts,
+              subject: r.subject,
+              before: r.before,
+              after: r.after,
+              confidence_delta: r.confidence_delta,
+              reason_code: r.reason_code,
+              actor: r.actor,
+              idempotency_key: r.idempotency_key,
+            })),
+          });
+        } else if (page.receipts.length === 0) {
+          ok("no decision-change receipts");
+        } else {
+          for (const r of page.receipts) {
+            ok(`${r.ts} ${r.subject}: ${r.before} -> ${r.after} (${r.reason_code})`);
+          }
+          if (page.nextCursor) ok(`-- more: --cursor ${page.nextCursor}`);
         }
         return 0;
       }

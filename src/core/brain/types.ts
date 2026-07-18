@@ -348,6 +348,16 @@ export const BRAIN_LOG_EVENT_KIND = {
    * the observed outcome; overloading either kind would blur the audit.
    */
   decisionRating: "decision-rating",
+  /**
+   * `decision-change-receipt` (Belief lifecycle suite, B4, t_3547314d) - a
+   * `decision_change.v1` receipt was appended to the receipts log at the
+   * moment a belief changed (a supersede/tombstone or a preference
+   * confidence update). Payload carries the `subject`, the `reason_code`,
+   * the `idempotency_key`, and the `agent`. Emitted only on an actual
+   * append; an idempotent replay is a no-op and logs nothing, so the
+   * merged timeline never double-counts a change.
+   */
+  decisionChangeReceipt: "decision-change-receipt",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

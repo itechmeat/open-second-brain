@@ -31,6 +31,11 @@ import { coerceBool, coerceInt, coerceStr, coerceStrList } from "../coerce.ts";
 import { wrapToolErrors } from "./shared.ts";
 import { DECISION_RATING_MAX, DECISION_RATING_MIN } from "../../core/brain/decisions/record.ts";
 import { BRAIN_COMMITMENT_TIER, type BrainCommitmentTier } from "../../core/brain/types.ts";
+import {
+  queryDecisionChangeHistory,
+  ReceiptError,
+  DECISION_HISTORY_DEFAULT_LIMIT,
+} from "../../core/brain/decisions/receipts.ts";
 
 const TOOL = "brain_decision";
 
@@ -38,7 +43,7 @@ async function toolBrainDecision(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  return wrapToolErrors(TOOL, [DecisionError], async () => {
+  return wrapToolErrors(TOOL, [DecisionError, ReceiptError], async () => {
     const action = coerceStr(args, "action", true)!;
     const agent = coerceStr(args, "agent", false) ?? undefined;
 
@@ -159,6 +164,34 @@ async function toolBrainDecision(
           })),
         };
       }
+      case "history": {
+        const subject = coerceStr(args, "subject", false) ?? undefined;
+        const cursor = coerceStr(args, "cursor", false) ?? undefined;
+        const limit =
+          args["limit"] === undefined
+            ? DECISION_HISTORY_DEFAULT_LIMIT
+            : coerceInt(args, "limit", DECISION_HISTORY_DEFAULT_LIMIT, 1, 500);
+        const page = queryDecisionChangeHistory(ctx.vault, {
+          ...(subject ? { subject } : {}),
+          ...(cursor ? { cursor } : {}),
+          limit,
+        });
+        return {
+          action,
+          total: page.total,
+          next_cursor: page.nextCursor,
+          receipts: page.receipts.map((r) => ({
+            ts: r.ts,
+            subject: r.subject,
+            before: r.before,
+            after: r.after,
+            confidence_delta: r.confidence_delta,
+            reason_code: r.reason_code,
+            actor: r.actor,
+            idempotency_key: r.idempotency_key,
+          })),
+        };
+      }
       case "similar": {
         const title = coerceStr(args, "title", true)!;
         const chosen = coerceStr(args, "chosen", false) ?? undefined;
@@ -180,7 +213,7 @@ async function toolBrainDecision(
       default:
         throw new MCPError(
           INVALID_PARAMS,
-          `${TOOL}: 'action' must be one of record, outcome, rate, show, list, compare, similar`,
+          `${TOOL}: 'action' must be one of record, outcome, rate, show, list, compare, similar, history`,
         );
     }
   });
@@ -190,13 +223,13 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Decision-record note family. action: record captures a `type: decision` note (chosen, assumption, review_date, optional premortem/rating) + opens a review obligation; outcome backfills hindsight; rate sets a rating; show/list (rated sorts by rating)/compare read; similar finds past decisions.",
+      "Decision-record note family. action: record captures a `type: decision` note (chosen, assumption, review_date, optional premortem/rating) + opens a review obligation; outcome backfills; rate sets a rating; show/list/compare read; similar finds past decisions; history reads decision-change receipts.",
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["record", "outcome", "rate", "show", "list", "compare", "similar"],
+          enum: ["record", "outcome", "rate", "show", "list", "compare", "similar", "history"],
           description: "Which decision operation to run.",
         },
         title: {
@@ -242,6 +275,17 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "array",
           items: { type: "string" },
           description: "compare: decision slugs to read side by side.",
+        },
+        subject: {
+          type: "string",
+          description: "history: filter decision-change receipts to one subject id.",
+        },
+        cursor: { type: "string", description: "history: opaque cursor from a prior page." },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 500,
+          description: "history: page size (default 50).",
         },
         agent: {
           type: "string",

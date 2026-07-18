@@ -51,6 +51,7 @@ import { appendLogEvent, type BrainLogEntry } from "./log.ts";
 import { moveToRetired, parsePreference } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
 import { isTombstoned } from "./lifecycle/tombstone.ts";
+import { appendDecisionChangeReceipt } from "./decisions/receipts.ts";
 import {
   CHAIN_DECAY_STALE_DAYS,
   effectiveStaleThresholdDays,
@@ -510,6 +511,33 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
         { overwrite: true },
         historyOpts,
       );
+    }
+
+    // Belief lifecycle suite (B4): the preference-confidence update path
+    // emits a decision-change receipt for each material confidence band
+    // change captured this pass. `bandDrops` is the existing, already-
+    // computed set of material weakenings (a band actually dropped), so
+    // this rides on data the refresh already produced without touching its
+    // byte-identical no-op guarantees. The receipt's idempotency key
+    // (subject + before + after) makes a re-run a no-op. Fail-soft.
+    for (const d of refresh.bandDrops) {
+      const before = `confidence:${d.previous}${d.previous_value !== null ? `(${d.previous_value.toFixed(2)})` : ""}`;
+      const after = `confidence:${d.next}(${d.next_value.toFixed(2)})`;
+      try {
+        appendDecisionChangeReceipt(vault, {
+          subject: d.id,
+          before,
+          after,
+          confidenceDelta: d.previous_value !== null ? d.next_value - d.previous_value : null,
+          actor: opts.agentName ?? "dream",
+          rationale: `applied ${d.applied} / violated ${d.violated}`,
+          reasonCode: "confidence-refresh",
+          ts: now.toISOString(),
+        });
+      } catch {
+        // Accountability mirror is best-effort; the refreshed preference
+        // bytes remain authoritative.
+      }
     }
 
     for (const r of plan.retires) {

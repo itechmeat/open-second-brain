@@ -31,6 +31,7 @@ import { sanitiseTextField } from "../../redactor.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
+import { appendDecisionChangeReceipt } from "../decisions/receipts.ts";
 import { BRAIN_ROOT_REL } from "../paths.ts";
 import { resolveNotePath } from "../note-path.ts";
 import { isoSecond } from "../time.ts";
@@ -242,6 +243,30 @@ export function tombstone(input: TombstoneInput): TombstoneResult {
       agent,
     },
   });
+
+  // Belief lifecycle suite (B4): a supersede/tombstone is a belief change,
+  // so it emits a decision-change receipt. The receipt's own idempotency
+  // key (subject + before + after) makes a replay a no-op, mirroring the
+  // tombstone no-op above. Fail-soft: an accountability-log hiccup must
+  // never fail the tombstone write itself.
+  try {
+    appendDecisionChangeReceipt(input.vault, {
+      subject: relPath,
+      before: `status:${priorStatus}`,
+      after:
+        supersededBy !== null
+          ? `status:tombstoned superseded_by:${supersededBy}`
+          : "status:tombstoned",
+      actor: agent,
+      rationale: reason,
+      reasonCode: supersededBy !== null ? "supersede" : "tombstone",
+      ...(supersededBy !== null ? { alternatives: [priorStatus] } : {}),
+      ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+    });
+  } catch {
+    // Receipt is best-effort accountability; the tombstone frontmatter and
+    // its `tombstone` log event remain authoritative.
+  }
 
   return {
     changed: true,
