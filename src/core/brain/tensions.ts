@@ -234,7 +234,7 @@ function canonicalPair(finding: NoteContradictionFinding): {
  */
 export function tensionDedupKey(finding: NoteContradictionFinding): string {
   const { idLow, idHigh, signLow, signHigh } = canonicalPair(finding);
-  return `${idLow} ${idHigh} ${signLow}-${signHigh}`;
+  return `${idLow} ${idHigh} ${signLow}-${signHigh}`;
 }
 
 /**

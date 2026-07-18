@@ -75,6 +75,15 @@ describe("tensionDedupKey", () => {
     const flipped: NoteContradictionFinding = { ...f, aSign: "negative", bSign: "positive" };
     expect(tensionDedupKey(f)).not.toBe(tensionDedupKey(flipped));
   });
+
+  test("uses printable space separators and no control bytes", () => {
+    // Guards against control characters (e.g. NUL) leaking into the
+    // dedup_key that is written verbatim into tension note frontmatter -
+    // such bytes make the Markdown note binary to grep/git and break the
+    // Syncthing-safe, human-readable contract.
+    const key = tensionDedupKey(finding());
+    expect(key).toBe("pref-spaces pref-tabs negative-positive");
+  });
 });
 
 describe("persistTension", () => {
