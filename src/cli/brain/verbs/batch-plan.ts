@@ -31,13 +31,16 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     vault: { type: "string" },
     "max-bytes": { type: "string" },
     "max-files": { type: "string" },
+    "src-subpath": { type: "string" },
+    exclude: { type: "string-array" },
     resume: { type: "boolean" },
     json: { type: "boolean" },
   });
   const sourceDir = positional[0];
   if (!sourceDir) {
     return usageError(
-      "usage: o2b brain batch-plan <source-dir> [--max-bytes N] [--max-files N] [--resume] [--json]",
+      "usage: o2b brain batch-plan <source-dir> [--max-bytes N] [--max-files N] " +
+        "[--src-subpath PATH] [--exclude PATTERN]... [--resume] [--json]",
     );
   }
 
@@ -46,7 +49,15 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     const maxBatchBytes = parseCap(flags["max-bytes"], "--max-bytes", DEFAULT_MAX_BATCH_BYTES);
     const maxBatchFiles = parseCap(flags["max-files"], "--max-files", DEFAULT_MAX_BATCH_FILES);
     const resume = flags["resume"] === true;
-    const plan = planBatches(vault, sourceDir, { maxBatchBytes, maxBatchFiles, resume });
+    const srcSubpath = flags["src-subpath"] as string | undefined;
+    const exclude = (flags["exclude"] as string[] | undefined) ?? [];
+    const plan = planBatches(vault, sourceDir, {
+      maxBatchBytes,
+      maxBatchFiles,
+      resume,
+      ...(srcSubpath !== undefined ? { srcSubpath } : {}),
+      ...(exclude.length > 0 ? { exclude } : {}),
+    });
 
     if (flags["json"]) {
       okJson({

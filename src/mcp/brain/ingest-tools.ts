@@ -20,7 +20,7 @@ import {
   type SourceCleanupPlan,
 } from "../../core/brain/source-cleanup.ts";
 import { resolveAgentName } from "../../core/config.ts";
-import { coerceBoolOptional, coerceInt, coerceStr } from "../coerce.ts";
+import { coerceBoolOptional, coerceInt, coerceStr, coerceStrList } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
@@ -191,7 +191,15 @@ async function toolBrainIngestBatchPlan(
     Number.MAX_SAFE_INTEGER,
   );
   const resume = coerceBoolOptional(args, "resume") ?? false;
-  const plan = planBatches(ctx.vault, sourceDir, { maxBatchBytes, maxBatchFiles, resume });
+  const srcSubpath = coerceStr(args, "src_subpath", false) ?? undefined;
+  const exclude = coerceStrList(args, "exclude");
+  const plan = planBatches(ctx.vault, sourceDir, {
+    maxBatchBytes,
+    maxBatchFiles,
+    resume,
+    ...(srcSubpath !== undefined ? { srcSubpath } : {}),
+    ...(exclude.length > 0 ? { exclude } : {}),
+  });
   // A resumed plan that comes back empty is fully drained: drop its checkpoint
   // (the content manifest is the authoritative final state from here on).
   if (resume && plan.batches.length === 0) {
@@ -345,6 +353,17 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "boolean",
           description:
             "Resume an interrupted plan: exclude items already recorded completed in this plan's checkpoint. Default false.",
+        },
+        src_subpath: {
+          type: "string",
+          description:
+            "Scope discovery to a subtree of source_dir (e.g. pkg/a). A value escaping source_dir is a typed error. Absent walks the whole dir.",
+        },
+        exclude: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Gitignore-style patterns (relative to source_dir) whose matches are dropped from discovery. Same engine as the hygiene scan.",
         },
       },
       required: ["source_dir"],
