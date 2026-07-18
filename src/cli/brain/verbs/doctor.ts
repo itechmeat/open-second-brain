@@ -3,6 +3,7 @@ import { runDoctor } from "../../../core/brain/doctor.ts";
 import {
   applyRemediation,
   collectDriftedSlugs,
+  collectWidePermissions,
   planRemediation,
 } from "../../../core/brain/health/remediation.ts";
 import { loadBrainConfigDetailed, resolveHealth } from "../../../core/brain/policy.ts";
@@ -84,6 +85,7 @@ function runRemediate(
   const plan = planRemediation(
     {
       driftedSlugs: collectDriftedSlugs(vault),
+      widePermissions: collectWidePermissions(vault),
       contradictions: (sh?.contradictions ?? []).map((c) => ({ aId: c.aId, bId: c.bId })),
       staleClaims: (sh?.staleClaims ?? []).map((s) => ({ id: s.id })),
       conceptGaps: (sh?.conceptGaps ?? []).map((g) => ({ term: g.term })),

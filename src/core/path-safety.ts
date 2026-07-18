@@ -43,15 +43,26 @@ export function ensureInsideVault(target: string, vault: string): string {
   // Realpath protection only matters when the vault actually exists on
   // disk — otherwise there is no symlink to follow. Pure-lexical inputs
   // (used by unit tests) skip this branch and rely on step 1 above.
-  if (existsSync(resolvedVault)) {
-    const realVault = safeRealpath(resolvedVault);
-    const realAncestor = safeRealpath(deepestExistingAncestor(resolvedTarget));
-    if (!isLexicallyInside(realAncestor, realVault)) {
-      throw new Error(`path escapes vault via symlink: ${target}`);
-    }
+  if (existsSync(resolvedVault) && !realpathInsideVault(resolvedTarget, resolvedVault)) {
+    throw new Error(`path escapes vault via symlink: ${target}`);
   }
 
   return resolvedTarget;
+}
+
+/**
+ * Step 2 of {@link ensureInsideVault} as a non-throwing predicate: does
+ * `target`'s realpath (following symlinks for its deepest existing
+ * ancestor) resolve inside `vault`? Returns true when the vault does not
+ * exist on disk (no symlink to follow). Shared with the doctor's
+ * `symlink-escape` lint so the two-step check lives in exactly one place.
+ */
+export function realpathInsideVault(target: string, vault: string): boolean {
+  const resolvedVault = resolve(vault);
+  if (!existsSync(resolvedVault)) return true;
+  const realVault = safeRealpath(resolvedVault);
+  const realAncestor = safeRealpath(deepestExistingAncestor(resolve(target)));
+  return isLexicallyInside(realAncestor, realVault);
 }
 
 function isLexicallyInside(target: string, root: string): boolean {

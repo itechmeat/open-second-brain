@@ -18,9 +18,10 @@
  * judgment).
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { ensureInsideVault, vaultRelative } from "../../path-safety.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import { computeContentHash, verifyContentHash } from "../content-hash.ts";
 import { brainDirs, preferencePath } from "../paths.ts";
@@ -29,6 +30,20 @@ import { acquireLockSync } from "../sync-lockfile.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../types.ts";
 
 export type RemediationClass = "auto-safe" | "needs-review";
+
+/** Canonical hardened modes: owner-only for files and directories. */
+const FILE_TARGET_MODE = 0o600;
+const DIR_TARGET_MODE = 0o700;
+/** Group + other permission bits. Any set = "wider than owner-only". */
+const NON_OWNER_MODE_MASK = 0o077;
+
+export interface WidePermissionFinding {
+  /** Vault-relative POSIX path of the over-permissioned entry. */
+  readonly path: string;
+  readonly isDir: boolean;
+  /** Current permission bits (`mode & 0o777`). */
+  readonly mode: number;
+}
 
 export interface RemediationStep {
   /** Finding code this step addresses. */
@@ -53,6 +68,11 @@ export interface RemediationFindings {
   readonly contradictions: ReadonlyArray<{ aId: string; bId: string }>;
   readonly staleClaims: ReadonlyArray<{ id: string }>;
   readonly conceptGaps: ReadonlyArray<{ term: string }>;
+  /**
+   * Brain/ entries whose POSIX mode is wider than owner-only (D2). Optional
+   * so existing callers stay valid; absent is treated as an empty list.
+   */
+  readonly widePermissions?: ReadonlyArray<WidePermissionFinding>;
 }
 
 export interface PlanRemediationOptions {
@@ -75,10 +95,11 @@ export interface RemediationOutcome {
 // review steps. Pinned explicitly so the plan is identical on every
 // Syncthing peer.
 const CODE_ORDER: ReadonlyMap<string, number> = new Map([
-  ["content-hash-drift", 0],
-  ["contradictory-preferences", 1],
-  ["stale-claim", 2],
-  ["concept-gap", 3],
+  ["wide-permissions", 0],
+  ["content-hash-drift", 1],
+  ["contradictory-preferences", 2],
+  ["stale-claim", 3],
+  ["concept-gap", 4],
 ]);
 
 /**
@@ -114,11 +135,85 @@ export function collectDriftedSlugs(vault: string): string[] {
   return out.toSorted((a, b) => a.localeCompare(b));
 }
 
+export interface CollectWidePermissionsOptions {
+  /** Injectable platform for testing; defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform;
+  /** Injectable logger for the Windows skip line; defaults to stderr. */
+  readonly log?: (message: string) => void;
+}
+
+/**
+ * Scan `Brain/` for files/dirs whose POSIX mode exposes group/other
+ * permissions - the `harden-permissions` targets. Symlinks are skipped
+ * (a chmod would touch the link target, not the link).
+ *
+ * On Windows the walk is skipped entirely: POSIX file modes are not
+ * meaningful there. Per the no-silent-fallback rule this skip is logged
+ * with an explicit reason rather than returning an empty list quietly.
+ *
+ * Returns findings sorted by path for deterministic plans. Already-tight
+ * entries (owner-only) produce no finding, which is what makes the
+ * migration idempotent across runs.
+ */
+export function collectWidePermissions(
+  vault: string,
+  opts: CollectWidePermissionsOptions = {},
+): WidePermissionFinding[] {
+  const platform = opts.platform ?? process.platform;
+  if (platform === "win32") {
+    const log = opts.log ?? ((m: string): void => void process.stderr.write(`${m}\n`));
+    log("harden-permissions: skipped on win32 (POSIX file modes are not meaningful)");
+    return [];
+  }
+  const root = brainDirs(vault).brain;
+  if (!existsSync(root)) return [];
+  const out: WidePermissionFinding[] = [];
+  const visit = (abs: string): void => {
+    let st;
+    try {
+      st = lstatSync(abs);
+    } catch {
+      return;
+    }
+    // Never chmod through a symlink (it would retarget the link's target).
+    if (st.isSymbolicLink()) return;
+    const isDir = st.isDirectory();
+    if (!isDir && !st.isFile()) return;
+    const mode = st.mode & 0o777;
+    if ((mode & NON_OWNER_MODE_MASK) !== 0) {
+      out.push({ path: vaultRelative(abs, vault), isDir, mode });
+    }
+    if (isDir) {
+      let names: string[];
+      try {
+        names = readdirSync(abs);
+      } catch {
+        return;
+      }
+      for (const name of names) visit(join(abs, name));
+    }
+  };
+  visit(root);
+  return out.toSorted((a, b) => a.path.localeCompare(b.path));
+}
+
 export function planRemediation(
   findings: RemediationFindings,
   opts: PlanRemediationOptions,
 ): RemediationPlan {
   const steps: RemediationStep[] = [];
+
+  for (const perm of findings.widePermissions ?? []) {
+    steps.push({
+      code: "wide-permissions",
+      action: "harden-permissions",
+      target: perm.path,
+      classification: "auto-safe",
+      detail:
+        `chmod ${perm.isDir ? "0700" : "0600"} ${perm.path} ` +
+        `(currently ${perm.mode.toString(8).padStart(3, "0")})`,
+    });
+  }
 
   for (const slug of findings.driftedSlugs) {
     steps.push({
@@ -208,6 +303,35 @@ function restampContentHash(vault: string, slug: string): boolean {
   }
 }
 
+/**
+ * Chmod a Brain/ entry to owner-only (`0o600` file, `0o700` dir). The
+ * path is re-validated through `ensureInsideVault` and re-stat'd so the
+ * canonical mode is derived at apply time, keeping the operation
+ * idempotent (an already-tight entry writes nothing). Returns true when
+ * a chmod happened, false when the entry is gone, a symlink, or already
+ * owner-only.
+ */
+function hardenPermissions(vault: string, relPath: string): boolean {
+  let abs: string;
+  try {
+    abs = ensureInsideVault(join(vault, relPath), vault);
+  } catch {
+    return false; // path escapes the vault - never touch it
+  }
+  let st;
+  try {
+    st = lstatSync(abs);
+  } catch {
+    return false;
+  }
+  if (st.isSymbolicLink()) return false;
+  const isDir = st.isDirectory();
+  if (!isDir && !st.isFile()) return false;
+  if ((st.mode & NON_OWNER_MODE_MASK) === 0) return false; // already hardened
+  chmodSync(abs, isDir ? DIR_TARGET_MODE : FILE_TARGET_MODE);
+  return true;
+}
+
 export function applyRemediation(
   vault: string,
   plan: RemediationPlan,
@@ -227,8 +351,12 @@ export function applyRemediation(
       budget--;
       continue;
     }
-    const didWrite =
-      step.action === "restamp-content-hash" ? restampContentHash(vault, step.target) : false;
+    let didWrite = false;
+    if (step.action === "restamp-content-hash") {
+      didWrite = restampContentHash(vault, step.target);
+    } else if (step.action === "harden-permissions") {
+      didWrite = hardenPermissions(vault, step.target);
+    }
     if (didWrite) {
       applied.push(step);
       budget--;

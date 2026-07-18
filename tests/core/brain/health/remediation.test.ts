@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,6 +18,7 @@ import { brainDirs } from "../../../../src/core/brain/paths.ts";
 import { parsePreference, writePreference } from "../../../../src/core/brain/preference.ts";
 import {
   applyRemediation,
+  collectWidePermissions,
   planRemediation,
 } from "../../../../src/core/brain/health/remediation.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../../../../src/core/brain/types.ts";
@@ -126,5 +127,115 @@ describe("applyRemediation", () => {
     expect(outcome.applied.length).toBe(1);
     expect(outcome.applied[0]!.target).toBe("a-drift");
     expect(outcome.skipped.map((s) => s.target)).toContain("b-drift");
+  });
+});
+
+describe("harden-permissions (D2)", () => {
+  // POSIX modes are meaningless on Windows; the migration is skipped
+  // there, so its assertions only run on POSIX hosts.
+  const posix = process.platform !== "win32";
+
+  test("collects Brain/ files wider than 0o600 and dirs wider than 0o700", () => {
+    if (!posix) return;
+    const dirs = brainDirs(vault);
+    const wideFile = join(dirs.preferences, "wide.md");
+    writeFileSync(wideFile, "x", "utf8");
+    chmodSync(wideFile, 0o644);
+    const tightFile = join(dirs.preferences, "tight.md");
+    writeFileSync(tightFile, "y", "utf8");
+    chmodSync(tightFile, 0o600);
+    chmodSync(dirs.preferences, 0o755);
+
+    const findings = collectWidePermissions(vault, { platform: "linux" });
+    const paths = findings.map((f) => f.path);
+    expect(paths).toContain("Brain/preferences/wide.md");
+    expect(paths).toContain("Brain/preferences");
+    // An already-tight file produces no finding (idempotence precondition).
+    expect(paths).not.toContain("Brain/preferences/tight.md");
+    const wide = findings.find((f) => f.path === "Brain/preferences/wide.md")!;
+    expect(wide.isDir).toBe(false);
+    const dirFinding = findings.find((f) => f.path === "Brain/preferences")!;
+    expect(dirFinding.isDir).toBe(true);
+  });
+
+  test("plans wide permissions as auto-safe steps and apply chmods them", () => {
+    if (!posix) return;
+    const dirs = brainDirs(vault);
+    const wideFile = join(dirs.preferences, "wide.md");
+    writeFileSync(wideFile, "x", "utf8");
+    chmodSync(wideFile, 0o646);
+
+    const plan = planRemediation(
+      {
+        ...allFindings,
+        driftedSlugs: [],
+        widePermissions: collectWidePermissions(vault, { platform: "linux" }),
+      },
+      { stepCap: 10 },
+    );
+    const permStep = plan.steps.find((s) => s.action === "harden-permissions");
+    expect(permStep).toBeDefined();
+    expect(permStep!.classification).toBe("auto-safe");
+
+    const outcome = applyRemediation(vault, plan, { dryRun: false });
+    expect(outcome.applied.some((s) => s.action === "harden-permissions")).toBe(true);
+    expect(statSync(wideFile).mode & 0o777).toBe(0o600);
+  });
+
+  test("dry-run lists the chmod without touching the file", () => {
+    if (!posix) return;
+    const dirs = brainDirs(vault);
+    const wideFile = join(dirs.preferences, "wide.md");
+    writeFileSync(wideFile, "x", "utf8");
+    chmodSync(wideFile, 0o644);
+
+    const plan = planRemediation(
+      {
+        driftedSlugs: [],
+        contradictions: [],
+        staleClaims: [],
+        conceptGaps: [],
+        widePermissions: collectWidePermissions(vault, { platform: "linux" }),
+      },
+      { stepCap: 10 },
+    );
+    const outcome = applyRemediation(vault, plan, { dryRun: true });
+    expect(outcome.applied.some((s) => s.action === "harden-permissions")).toBe(true);
+    // File is untouched under dry-run.
+    expect(statSync(wideFile).mode & 0o777).toBe(0o644);
+  });
+
+  test("re-running after a chmod is idempotent (no new findings)", () => {
+    if (!posix) return;
+    const dirs = brainDirs(vault);
+    const wideFile = join(dirs.preferences, "wide.md");
+    writeFileSync(wideFile, "x", "utf8");
+    chmodSync(wideFile, 0o644);
+
+    const plan = planRemediation(
+      {
+        driftedSlugs: [],
+        contradictions: [],
+        staleClaims: [],
+        conceptGaps: [],
+        widePermissions: collectWidePermissions(vault, { platform: "linux" }),
+      },
+      { stepCap: 10 },
+    );
+    applyRemediation(vault, plan, { dryRun: false });
+    // The second collection sees a hardened tree.
+    const second = collectWidePermissions(vault, { platform: "linux" });
+    expect(second.some((f) => f.path === "Brain/preferences/wide.md")).toBe(false);
+  });
+
+  test("windows is skipped cleanly with an explicit logged reason", () => {
+    const logged: string[] = [];
+    const findings = collectWidePermissions(vault, {
+      platform: "win32",
+      log: (m) => logged.push(m),
+    });
+    expect(findings).toEqual([]);
+    expect(logged.length).toBe(1);
+    expect(logged[0]).toMatch(/win32/i);
   });
 });

@@ -39,6 +39,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { realpathInsideVault, vaultRelative } from "../path-safety.ts";
 import { REMOVED_TOOLS } from "../removed-surfaces.ts";
 import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
 import { computeActiveBudgetPressure } from "./active-budget-pressure.ts";
@@ -395,6 +396,15 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
           "Merge its rows into the day's log (union + dedup by ts and content), then delete it.",
       });
     }
+  } catch {
+    /* doctor never throws */
+  }
+  // Store hardening (D2): a symlink inside Brain/ whose realpath resolves
+  // OUTSIDE the vault root is an exfiltration/clobber hazard. Lint only -
+  // never auto-fixed, because removing an operator-created link is a
+  // judgment call.
+  try {
+    checkSymlinkEscape(vault, issues);
   } catch {
     /* doctor never throws */
   }
@@ -816,6 +826,46 @@ function checkLogs(vault: string, issues: DoctorIssue[]): void {
       });
     }
   }
+}
+
+// ----- Symlink-escape lint (D2) ---------------------------------------------
+
+/**
+ * Walk `Brain/` and report every symlink whose realpath resolves outside
+ * the vault root. Reuses {@link realpathInsideVault} (the same two-step
+ * check `ensureInsideVault` performs) so a symlink pointing at an
+ * in-vault target never flags. Directory symlinks are reported but NOT
+ * descended into - following them would leave the vault.
+ */
+function checkSymlinkEscape(vault: string, issues: DoctorIssue[]): void {
+  const root = brainDirs(vault).brain;
+  if (!existsSync(root)) return;
+  const visit = (dir: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        if (!realpathInsideVault(full, vault)) {
+          issues.push({
+            severity: "error",
+            code: "symlink-escape",
+            path: vaultRelative(full, vault),
+            message:
+              `symlink '${vaultRelative(full, vault)}' resolves outside the vault root. ` +
+              "A reader following it leaves the vault; remove or repoint the link.",
+          });
+        }
+        continue; // never descend through a symlink
+      }
+      if (entry.isDirectory()) visit(full);
+    }
+  };
+  visit(root);
 }
 
 // ----- Helpers --------------------------------------------------------------

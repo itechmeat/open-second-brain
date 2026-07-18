@@ -21,7 +21,12 @@
  * only assembles them in a stable order and applies scope filtering.
  */
 
-import { discoverConfig, redactMapping } from "../core/config.ts";
+import {
+  discoverConfig,
+  redactMapping,
+  resolveExposeHostPaths,
+  vaultStoreReference,
+} from "../core/config.ts";
 import { REMOVED_TOOLS } from "../core/removed-surfaces.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
@@ -69,6 +74,20 @@ function vaultRelpath(target: string, vault: string): string {
   }
 }
 
+/**
+ * The `vault_path` field for an MCP response. By default this is the
+ * opaque, stable store reference (`vault://<hex>`) rather than the
+ * absolute host path, since MCP responses land in model context. The
+ * `expose_host_paths` config escape hatch restores the raw path for
+ * operators whose tooling depends on it (D2).
+ */
+function vaultPathField(ctx: ServerContext): string {
+  const configPath = ctx.configPath ?? undefined;
+  return resolveExposeHostPaths(configPath)
+    ? ctx.vault
+    : vaultStoreReference(ctx.vault, configPath);
+}
+
 // ── Tool implementations ────────────────────────────────────────────────────
 
 async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> {
@@ -114,7 +133,7 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     config_exists: discovery.exists,
     config_keys: configKeys,
     config: redactMapping(discovery.data),
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     vault_exists: vaultExists,
     ...(vault ? { vault } : {}),
     ...(brain ? { brain } : {}),
@@ -145,7 +164,7 @@ async function toolQuery(
     if (matched.length >= limit) break;
   }
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     total_pages: pages.length,
     returned: matched.length,
     limit,
@@ -178,7 +197,7 @@ async function toolVaultHealth(
   }).map((n) => ({ code: n.code, severity: n.severity, message: n.message }));
 
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     config_path: ctx.configPath ? String(ctx.configPath) : null,
     repo_root: repoRoot ? String(repoRoot) : null,
     ok: payload.every((c) => c.ok),

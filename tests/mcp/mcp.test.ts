@@ -321,7 +321,7 @@ describe("tool listing", () => {
 });
 
 describe("tool calls", () => {
-  test("second_brain_status reports vault and config", async () => {
+  test("second_brain_status returns an opaque store reference by default", async () => {
     const vault = join(tmp, "vault");
     mkdirSync(vault);
     const config = join(tmp, "config.yaml");
@@ -330,10 +330,37 @@ describe("tool calls", () => {
     await initialize(server);
     const r = (await callTool(server, "second_brain_status"))! as any;
     const s = r.result.structuredContent;
-    expect(s.vault_path).toBe(vault);
+    // Default (expose_host_paths unset): the absolute host path is redacted
+    // to a stable opaque reference, never the raw path.
+    expect(s.vault_path).toMatch(/^vault:\/\/[0-9a-f]{8}$/);
+    expect(s.vault_path).not.toBe(vault);
     expect(s.vault_exists).toBe(true);
     expect(s.config.api_key).toBe("[REDACTED]");
     expect(s.config_keys).toContain("vault_path");
+  });
+
+  test("the store reference is stable across calls for the same vault", async () => {
+    const vault = join(tmp, "vault");
+    mkdirSync(vault);
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, "vault_path: /tmp/vault\n");
+    const server = new MCPServer({ vault, configPath: config });
+    await initialize(server);
+    const a = ((await callTool(server, "second_brain_status"))! as any).result.structuredContent;
+    const b = ((await callTool(server, "second_brain_status"))! as any).result.structuredContent;
+    expect(a.vault_path).toBe(b.vault_path);
+  });
+
+  test("expose_host_paths=true restores the raw absolute path", async () => {
+    const vault = join(tmp, "vault");
+    mkdirSync(vault);
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, "vault_path: /tmp/vault\nexpose_host_paths: true\n");
+    const server = new MCPServer({ vault, configPath: config });
+    await initialize(server);
+    const r = (await callTool(server, "second_brain_status"))! as any;
+    const s = r.result.structuredContent;
+    expect(s.vault_path).toBe(vault);
   });
 
   test("second_brain_status includes a `brain` section with counts and activity", async () => {
