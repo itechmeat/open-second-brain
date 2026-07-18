@@ -23,6 +23,7 @@ import { registerWriterDb, unregisterWriterDb } from "./store-exit.ts";
 import { computeCorpusGeneration } from "./corpus-generation.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
+import { assertValidVector } from "./vector-guard.ts";
 import {
   applyMigrations,
   documentBasename,
@@ -838,6 +839,7 @@ export class Store {
         `vector dimension ${len} != configured dimension ${dimension}`,
       );
     }
+    assertValidVector(vector, "vecUpsert");
     this.db.exec("BEGIN");
     try {
       const existing = this.db
@@ -1650,6 +1652,7 @@ export class Store {
     const limit = Math.max(1, opts.limit | 0);
     const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
 
+    assertValidVector(queryVector, "semanticTopK");
     const buf = vecToBuffer(queryVector);
     if (prefix) {
       const rows = this.db

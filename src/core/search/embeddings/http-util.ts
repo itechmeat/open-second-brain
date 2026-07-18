@@ -6,6 +6,8 @@
  * unit-normalisation semantics.
  */
 
+import { assertValidVector } from "../vector-guard.ts";
+
 /** Statuses that warrant a transient retry with backoff. */
 export const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([429, 500, 502, 503, 504]);
 
@@ -77,12 +79,18 @@ export class Semaphore {
   }
 }
 
-/** Unit-normalise a vector in place so cosine similarity equals 1 - L2²/2. */
+/**
+ * Unit-normalise a vector in place so cosine similarity equals 1 - L2²/2.
+ * A zero-norm or non-finite input has no meaningful unit direction, so it
+ * surfaces a typed {@link SearchError} (`EMBEDDING_INVALID_VECTOR`) rather
+ * than the former silent no-op that returned unnormalised zeros
+ * (memory-write-path-integrity B1).
+ */
 export function unitNormaliseInPlace(v: number[]): number[] {
+  assertValidVector(v, "unitNormalise");
   let s = 0;
   for (const x of v) s += x * x;
   const norm = Math.sqrt(s);
-  if (norm === 0) return v;
   for (let i = 0; i < v.length; i++) v[i] = (v[i] ?? 0) / norm;
   return v;
 }
