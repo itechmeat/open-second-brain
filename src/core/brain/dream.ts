@@ -63,7 +63,7 @@ import {
   vaultRelative,
 } from "./paths.ts";
 import { countSigns, dominantSignOf } from "./sign.ts";
-import { isoDate, isoSecond } from "./time.ts";
+import { compactRunStamp, isoDate, isoSecond } from "./time.ts";
 import {
   emptyPlan,
   filterWithinWindow,
@@ -1464,13 +1464,7 @@ function daysBetween(thenMs: number, nowMs: number): number {
 
 function formatRunId(d: Date): string {
   // dream-YYYY-MM-DD-HHMMSS
-  const yyyy = d.getUTCFullYear().toString().padStart(4, "0");
-  const mm = (d.getUTCMonth() + 1).toString().padStart(2, "0");
-  const dd = d.getUTCDate().toString().padStart(2, "0");
-  const hh = d.getUTCHours().toString().padStart(2, "0");
-  const mi = d.getUTCMinutes().toString().padStart(2, "0");
-  const ss = d.getUTCSeconds().toString().padStart(2, "0");
-  return `dream-${yyyy}-${mm}-${dd}-${hh}${mi}${ss}`;
+  return `dream-${compactRunStamp(d)}`;
 }
 
 function nextAvailableDreamRunId(vault: string, baseRunId: string): string {

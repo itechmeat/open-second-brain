@@ -58,6 +58,10 @@ import { BRAIN_SOURCE_KIND } from "./ingest/ingest.ts";
 import { manifestPath, readManifest, writeManifestAtomic } from "./ingest/content-manifest.ts";
 import { appendContinuitySourceInvalidation } from "./continuity/store.ts";
 import { isoSecond } from "./time.ts";
+import { withDestructiveSnapshot } from "./snapshot-gate.ts";
+
+/** Run-id label for the snapshot taken before a confirmed source cleanup. */
+const DELETE_BY_SOURCE_SNAPSHOT_LABEL = "delete-by-source";
 
 /** How a page was found to trace back to the source. */
 export type SourceCleanupMatch = "source_path" | "session_ref" | "wikilink" | "evidenced_by";
@@ -109,6 +113,14 @@ export interface SourceCleanupPlan {
   readonly manifestEntryRemoved: boolean;
   /** Id of the audit continuity record, when one was written. */
   readonly auditRecordId: string | null;
+  /**
+   * Run id of the pre-deletion snapshot taken behind the D1 gate, or
+   * null when none was taken (a dry run, or a confirmed run with nothing
+   * to delete). This is the recovery point the operator can roll back to.
+   */
+  readonly snapshotRunId: string | null;
+  /** Absolute path of the snapshot archive, paired with {@link snapshotRunId}. */
+  readonly snapshotPath: string | null;
   /** Total referencing pages + originals (the reported blast radius). */
   readonly blastRadius: number;
 }
@@ -498,6 +510,8 @@ export function deleteBySource(
       deleted: Object.freeze([]),
       manifestEntryRemoved: false,
       auditRecordId: null,
+      snapshotRunId: null,
+      snapshotPath: null,
       blastRadius,
     });
   }
@@ -525,37 +539,61 @@ export function deleteBySource(
   };
 
   let auditRecordId: string | null = null;
-  try {
-    for (const entry of derived) {
-      if (removeFile(vault, entry.path)) deleted.push(entry.path);
-    }
-    if (includeOriginals) {
-      for (const original of originals) {
-        if (removeFile(vault, original)) deleted.push(original);
-      }
-    }
 
-    if (manifestKey !== null && existsSync(manifestPath(vault))) {
-      const entries = { ...readManifest(vault).entries };
-      if (entries[manifestKey] !== undefined) {
-        delete entries[manifestKey];
-        manifestEntryRemoved = writeManifestAtomic(vault, entries);
-      }
-    }
-  } catch (err) {
-    // A removeFile (or manifest write) that throws mid-cleanup would otherwise
-    // exit before the audit append, leaving already-deleted paths with no
-    // record for a retry to reconstruct. Persist what was removed so far, then
-    // rethrow; never let an audit-write error mask the original failure.
+  // The destructive core: remove derived entries, opt-in originals, and
+  // the manifest index entry, then audit. Runs behind the D1 snapshot
+  // gate so every confirmed cleanup has a pre-deletion recovery point.
+  const runDeletion = (): void => {
     try {
-      writeInvalidationAudit();
-    } catch {
-      /* swallow: the original error below is the one that matters */
-    }
-    throw err;
-  }
+      for (const entry of derived) {
+        if (removeFile(vault, entry.path)) deleted.push(entry.path);
+      }
+      if (includeOriginals) {
+        for (const original of originals) {
+          if (removeFile(vault, original)) deleted.push(original);
+        }
+      }
 
-  auditRecordId = writeInvalidationAudit();
+      if (manifestKey !== null && existsSync(manifestPath(vault))) {
+        const entries = { ...readManifest(vault).entries };
+        if (entries[manifestKey] !== undefined) {
+          delete entries[manifestKey];
+          manifestEntryRemoved = writeManifestAtomic(vault, entries);
+        }
+      }
+    } catch (err) {
+      // A removeFile (or manifest write) that throws mid-cleanup would otherwise
+      // exit before the audit append, leaving already-deleted paths with no
+      // record for a retry to reconstruct. Persist what was removed so far, then
+      // rethrow; never let an audit-write error mask the original failure.
+      try {
+        writeInvalidationAudit();
+      } catch {
+        /* swallow: the original error below is the one that matters */
+      }
+      throw err;
+    }
+    auditRecordId = writeInvalidationAudit();
+  };
+
+  // Only snapshot when there is something to remove. A confirmed run over
+  // a source with no derived material, no included originals, and no
+  // manifest entry is a no-op and must stay one - snapshotting an empty
+  // deletion would churn `.snapshots/` for nothing.
+  const hasWork =
+    derived.length > 0 || (includeOriginals && originals.length > 0) || manifestKey !== null;
+
+  let snapshotRunId: string | null = null;
+  let snapshotArchivePath: string | null = null;
+  if (hasWork) {
+    const gated = withDestructiveSnapshot(vault, DELETE_BY_SOURCE_SNAPSHOT_LABEL, runDeletion, {
+      now: opts.now,
+    });
+    snapshotRunId = gated.snapshot.runId;
+    snapshotArchivePath = gated.snapshot.path;
+  } else {
+    runDeletion();
+  }
 
   return Object.freeze({
     source: canonical,
@@ -568,6 +606,8 @@ export function deleteBySource(
     deleted: Object.freeze(deleted),
     manifestEntryRemoved,
     auditRecordId,
+    snapshotRunId,
+    snapshotPath: snapshotArchivePath,
     blastRadius,
   });
 }
