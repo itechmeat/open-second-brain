@@ -12,6 +12,39 @@ export const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([429, 500, 502, 5
 /** Auth statuses that trigger failover to the next probe key. */
 export const AUTH_STATUSES: ReadonlySet<number> = new Set([401, 403]);
 
+/** HTTP 402 Payment Required: an unconditional billing/quota exhaustion signal. */
+export const PAYMENT_REQUIRED_STATUS = 402;
+
+/** HTTP 429 Too Many Requests: a rate-limit unless the body proves quota exhaustion. */
+export const RATE_LIMIT_STATUS = 429;
+
+/** Milliseconds per second, used to convert `Retry-After` delta-seconds. */
+const MS_PER_SECOND = 1000;
+
+/**
+ * Parse an HTTP `Retry-After` header value into milliseconds. The header is
+ * either a non-negative integer count of seconds (RFC 7231 delta-seconds) or
+ * an HTTP-date. Returns null when absent or unparseable. `nowMs` is
+ * injectable so date-form parsing stays deterministic in tests.
+ */
+export function parseRetryAfterMs(
+  headerValue: string | null,
+  nowMs: number = Date.now(),
+): number | null {
+  if (headerValue === null) return null;
+  const trimmed = headerValue.trim();
+  if (trimmed === "") return null;
+  // delta-seconds form: a bare non-negative integer.
+  if (/^\d+$/.test(trimmed)) {
+    return Number(trimmed) * MS_PER_SECOND;
+  }
+  // HTTP-date form: convert to a delay relative to now, floored at zero.
+  const dateMs = Date.parse(trimmed);
+  if (Number.isNaN(dateMs)) return null;
+  const delta = dateMs - nowMs;
+  return delta > 0 ? delta : 0;
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
 }
