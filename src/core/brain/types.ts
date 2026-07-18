@@ -392,6 +392,18 @@ export const BRAIN_LOG_EVENT_KIND = {
    * an unchanged vault promotes nothing and stays byte-identical.
    */
   sourceCitation: "source-citation",
+  /**
+   * `doctor-repair` (Source pipeline integrity suite, O2, t_bd6cc4cb) - the
+   * guarded `o2b brain doctor --repair --apply` mode performed one targeted
+   * fix for an issue class the doctor already detects. One event per applied
+   * fix. Payload carries the diagnostics-signal `code` (e.g. `wal-gap`,
+   * `orphaned-reference`), the `target` (vault-relative path or field ref the
+   * fix touched), a one-line `detail`, and the `agent`. A dry-run preview
+   * writes nothing and emits no event; re-running after a successful apply is
+   * a no-op because the underlying issue is gone, so the timeline never
+   * double-counts a fix.
+   */
+  doctorRepair: "doctor-repair",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

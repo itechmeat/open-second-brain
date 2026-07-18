@@ -116,6 +116,8 @@ describe("BRAIN_* const enums", () => {
       "tension",
       // Source pipeline integrity suite (t_a3d1adb0) inline citation promotion
       "source-citation",
+      // Source pipeline integrity suite (t_bd6cc4cb) guarded doctor repair
+      "doctor-repair",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

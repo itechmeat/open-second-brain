@@ -41,7 +41,7 @@ Brain verbs (observing memory):
   snapshot diff    Read-only diff between two snapshots, or snapshot vs live
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
-  doctor              Validate Brain invariants (--strict; --remediate [--dry-run])
+  doctor              Validate Brain invariants (--strict; --remediate/--repair [--apply])
   hygiene             Hygiene pipeline: scan findings; apply by ids (--dry-run)
   refresh             Targeted recompile of stale derived pages (--stale [--dry-run])
   anticipate          Inspect or refresh the anticipatory context cache (--session)
@@ -305,10 +305,13 @@ export const VERB_HELP: Record<string, string> = {
     "(warm | stale | miss), or force a refresh first (TTL debounce applies).\n",
   doctor:
     "usage: o2b brain doctor [--vault <path>] [--json] [--strict]\n" +
-    "                        [--remediate [--dry-run]]\n" +
+    "                        [--remediate [--dry-run]] [--repair [--apply]]\n" +
     "Validate invariants. Warnings exit 0 (or 2 with --strict). Errors always exit 1.\n" +
     "--remediate builds a dependency-ordered repair plan and applies the\n" +
-    "auto-safe steps (content-hash re-stamp); --dry-run previews without writing.\n",
+    "auto-safe steps (content-hash re-stamp); --dry-run previews without writing.\n" +
+    "--repair previews safe fixes for detected classes (WAL gaps, orphaned\n" +
+    "references); --repair --apply performs them and logs one event per fix.\n" +
+    "Plain doctor and --strict stay read-only.\n",
   watchdog:
     "usage: o2b brain watchdog [--vault <path>] [--json] [--remediate [--dry-run]]\n" +
     "                           [--restore <run_id> [--force-restore]] [--attempt <n>]\n" +

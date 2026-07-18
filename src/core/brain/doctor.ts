@@ -1445,7 +1445,7 @@ function checkEntities(vault: string, issues: DoctorIssue[]): void {
   }
 }
 
-function collectAllBasenames(vault: string): ReadonlySet<string> {
+export function collectAllBasenames(vault: string): ReadonlySet<string> {
   const out = new Set<string>();
   const dirs = brainDirs(vault);
   for (const d of [

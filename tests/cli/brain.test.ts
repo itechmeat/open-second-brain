@@ -1200,6 +1200,47 @@ describe("brain doctor", () => {
     // we accept either non-zero code as a regression guard.
     expect([1, 2]).toContain(r.returncode);
   });
+
+  test("--repair previews without writing; --repair --apply performs the fix", async () => {
+    await bootstrap();
+    // Plant a dangling dream workrun (WAL gap): last phase is non-terminal.
+    const runs = join(vault, "Brain", "log", "dream-runs");
+    mkdirSync(runs, { recursive: true });
+    const wr = join(runs, "run-cli.jsonl");
+    writeFileSync(
+      wr,
+      JSON.stringify({ phase: "started", at: "2026-07-18T00:00:00.000Z", run_id: "run-cli" }) +
+        "\n",
+      "utf8",
+    );
+    const before = readFileSync(wr, "utf8");
+
+    // Dry-run preview: exit 0, previews the fix, writes nothing.
+    const preview = await runCli(["brain", "doctor", "--vault", vault, "--repair"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(preview.returncode).toBe(0);
+    expect(preview.stdout).toContain("would fix");
+    expect(preview.stdout).toContain("wal-gap");
+    expect(readFileSync(wr, "utf8")).toBe(before);
+
+    // Apply: exit 0, performs the fix, closes the gap.
+    const applied = await runCli(["brain", "doctor", "--vault", vault, "--repair", "--apply"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(applied.returncode).toBe(0);
+    expect(applied.stdout).toContain("fixed");
+    expect(readFileSync(wr, "utf8")).toContain("interrupted");
+  });
+
+  test("--strict --repair --apply is refused (read-only guard)", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["brain", "doctor", "--vault", vault, "--strict", "--repair", "--apply"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(2);
+  });
 });
 
 // ── §9 scan-inline CLI ──────────────────────────────────────────────────────

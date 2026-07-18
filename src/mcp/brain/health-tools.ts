@@ -9,6 +9,7 @@
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { collectMaintenanceActions } from "../../core/brain/maintenance/collect.ts";
 import { runDoctor } from "../../core/brain/doctor.ts";
+import { applyRepair } from "../../core/brain/diagnostics.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
@@ -19,6 +20,21 @@ async function toolBrainDoctor(
 ): Promise<Record<string, unknown>> {
   const strict = coerceBool(args, "strict");
   const format = coerceFormat(args);
+
+  // Guarded repair mode (O2). Opt-in and dry-run by default; `apply`
+  // performs the fixes. `strict` stays read-only and cannot apply.
+  const repair = coerceBool(args, "repair");
+  if (repair) {
+    const apply = coerceBool(args, "apply");
+    if (strict && apply) {
+      throw new Error("brain_doctor: cannot combine strict (read-only) with repair + apply");
+    }
+    const outcome = applyRepair(ctx.vault, {
+      dryRun: !apply,
+      ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+    });
+    return { format, repair: outcome };
+  }
 
   const result = runDoctor(ctx.vault, {
     strict,
@@ -118,13 +134,23 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_doctor",
     description:
-      "Validate `Brain/` invariants: status-vs-folder consistency, frontmatter validity, duplicate ids, ISO parsing, log header parsing. Read-only.",
+      "Validate `Brain/` invariants (status-vs-folder, frontmatter, duplicate ids, ISO, log headers). Read-only by default; `repair` previews safe fixes for detected classes (WAL gaps, orphaned references), `repair`+`apply` performs them and logs one event per fix.",
     inputSchema: {
       type: "object",
       properties: {
         strict: {
           type: "boolean",
           description: "When true, warnings demote `ok` to false (CLI exit-code parity).",
+        },
+        repair: {
+          type: "boolean",
+          description:
+            "Preview safe fixes for issue classes the doctor detects (dry-run). Read-only unless `apply` is also set.",
+        },
+        apply: {
+          type: "boolean",
+          description:
+            "With `repair`, perform the fixes and log one typed event per fix; otherwise `repair` is a dry-run preview.",
         },
         format: {
           type: "string",

@@ -13,7 +13,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -731,6 +739,36 @@ describe("brain_doctor", () => {
     expect(Array.isArray(s.suggested_actions)).toBe(true);
     // Empty vault → empty actions array, but the field is always
     // present so MCP clients can rely on the shape.
+  });
+
+  test("repair:true previews a WAL-gap fix without writing; apply performs it", async () => {
+    // Plant a dangling dream workrun (WAL gap).
+    const runs = join(vault, "Brain", "log", "dream-runs");
+    mkdirSync(runs, { recursive: true });
+    const wr = join(runs, "run-mcp.jsonl");
+    writeFileSync(
+      wr,
+      JSON.stringify({ phase: "started", at: "2026-07-18T00:00:00.000Z", run_id: "run-mcp" }) +
+        "\n",
+      "utf8",
+    );
+    const before = readFileSync(wr, "utf8");
+
+    const server = makeServer();
+    await initialize(server);
+
+    const preview = await call(server, "brain_doctor", { repair: true });
+    expect(preview.result.isError).toBe(false);
+    const p = preview.result.structuredContent;
+    expect(p.repair.dryRun).toBe(true);
+    expect(p.repair.applied.length).toBe(1);
+    expect(readFileSync(wr, "utf8")).toBe(before); // nothing written
+
+    const applied = await call(server, "brain_doctor", { repair: true, apply: true });
+    const a = applied.result.structuredContent;
+    expect(a.repair.dryRun).toBe(false);
+    expect(a.repair.applied.length).toBe(1);
+    expect(readFileSync(wr, "utf8")).toContain("interrupted");
   });
 });
 
