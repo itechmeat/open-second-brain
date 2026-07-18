@@ -25,6 +25,7 @@ import { ensureVaultCurrent } from "../core/maintenance/ensure-current.ts";
 import { doctor } from "../core/doctor.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
+import { installStdoutEpipeGuard, isEpipeError } from "./stdout-guard.ts";
 import { handleAiderSubcommand } from "./aider.ts";
 import { handleBrainSubcommand } from "./brain.ts";
 import { handleDisciplineSubcommand } from "./discipline.ts";
@@ -930,5 +931,15 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2)).then((code) => process.exit(code));
+  // O1 (t_2ed754d1): an early-closed stdout pipe (`o2b <listing> | head -1`)
+  // must exit clean. The listener catches Bun's asynchronous closed-pipe
+  // `error` event; the `.catch` covers a synchronous EPIPE throw. Every other
+  // error keeps its existing loud failure.
+  installStdoutEpipeGuard();
+  main(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err: unknown) => {
+      if (isEpipeError(err)) process.exit(0);
+      throw err;
+    });
 }
