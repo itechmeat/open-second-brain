@@ -34,7 +34,11 @@
  * memory-signal-provenance-lifecycle release added `brain_ingest_batch_plan`
  * (deterministic large-folder ingest planner: skips unchanged sources via the
  * content-hash manifest and shards the remainder into size+count-bounded
- * batches for parallel-subagent dispatch).
+ * batches for parallel-subagent dispatch); the recall-trust-and-write-surface
+ * release added `brain_update_note` and `brain_append_note` (single-operation
+ * batches over the atomic write-batch core, kernel 2) and `brain_write_batch`
+ * (the general all-or-nothing multi-operation write surface, kernel 2's second
+ * consumer).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -47,6 +51,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_agent_query",
   "brain_analytics",
   "brain_anticipatory_context",
+  "brain_append_note",
   "brain_apply_evidence",
   "brain_audit",
   "brain_backlinks",
@@ -126,6 +131,8 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_truth",
   "brain_tune",
   "brain_unlinked_mentions",
+  "brain_update_note",
+  "brain_write_batch",
   "brain_write_session",
 ] as const;
 

@@ -25,6 +25,19 @@ const SUPERSEDED_RELATION = "superseded_by";
 const CONFLICT_RELATION = "contradicts";
 
 /**
+ * True when a page's surfaced typed relations mark it superseded (it
+ * declares a `superseded_by` edge). This is the single source of truth
+ * `deriveTrust` uses for the inline `trust.superseded` flag; the
+ * relation-only supersede fade (t_c4a9cef8) reuses it so display and
+ * ranking agree on what "superseded" means.
+ */
+export function hasSupersededRelation(
+  relations: ReadonlyArray<{ readonly relation: string }>,
+): boolean {
+  return relations.some((r) => r.relation === SUPERSEDED_RELATION);
+}
+
+/**
  * Project a result's structured score breakdown. A primary ranked result
  * carries `breakdown` verbatim; a synthetic result (link-traversal
  * expansion, relation-polarity successor pull-in) carries none, so the
@@ -117,7 +130,7 @@ export function deriveTrust(input: DeriveTrustInput): TrustMetadata {
   const replacement = supersededEdge && supersededEdge.target !== "" ? supersededEdge.target : null;
   return Object.freeze({
     age_days: ageDays,
-    superseded: supersededEdge !== undefined,
+    superseded: hasSupersededRelation(relations),
     conflict: relations.some((r) => r.relation === CONFLICT_RELATION),
     replacement,
   });

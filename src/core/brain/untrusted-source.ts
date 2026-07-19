@@ -124,3 +124,20 @@ export function wrapUntrustedSource(text: string, provenance: UntrustedProvenanc
   const open = `<${UNTRUSTED_SOURCE_TAG} path="${escapeAttribute(path)}" sha256="${sha256}">`;
   return `${open}\n${body}\n</${UNTRUSTED_SOURCE_TAG}>`;
 }
+
+/**
+ * Fence AGGREGATE untrusted content that has no single source file - text
+ * assembled from many vault notes at once, such as a recall brief built from
+ * note titles. It uses the SAME delimiter tag and the SAME body
+ * neutralization as {@link wrapUntrustedSource}, so a downstream model treats
+ * the span identically as vault-derived untrusted content; it just carries an
+ * `origin` label instead of a per-file `path`/`sha256` (there is no single
+ * file to hash). The body is neutralized (control/bidi/zero-width strip plus
+ * delimiter escape) so embedded content can neither close the fence early nor
+ * forge a second provenance frame.
+ */
+export function fenceUntrustedContent(text: string, origin: string): string {
+  const body = neutralizeUntrustedText(text);
+  const open = `<${UNTRUSTED_SOURCE_TAG} origin="${escapeAttribute(origin)}">`;
+  return `${open}\n${body}\n</${UNTRUSTED_SOURCE_TAG}>`;
+}

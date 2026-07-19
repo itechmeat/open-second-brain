@@ -66,6 +66,18 @@ describe("normalizeContinuityRecord", () => {
     expect(normalized!.turnId).toBe("t-3");
   });
 
+  test("agent_id surfaces as a first-class field (t_5be0654d)", () => {
+    const normalized = normalizeContinuityRecord({
+      ...LEGACY_RAW,
+      kind: "token_impact",
+      payload: { session_id: "s-1", agent_id: "claude-dev-agent", delta_tokens: 60 },
+    });
+    expect(normalized!.agentId).toBe("claude-dev-agent");
+    // Absent agent_id leaves the field undefined (byte-identical for old records).
+    const without = normalizeContinuityRecord(LEGACY_RAW);
+    expect(without!.agentId).toBeUndefined();
+  });
+
   test("malformed rows and non-record values normalize to null, fail-soft", () => {
     expect(normalizeContinuityRecord(null)).toBeNull();
     expect(normalizeContinuityRecord("garbage")).toBeNull();

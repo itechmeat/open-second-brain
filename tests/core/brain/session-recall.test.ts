@@ -138,6 +138,70 @@ describe("session recall DAG", () => {
   });
 });
 
+describe("session recall - include_raw plus extracted discriminator (C2 / t_ac1d36ea)", () => {
+  function seed(): void {
+    importSessionRecall(vault, {
+      sessionId: "session-raw",
+      turns: [
+        turn("t1", "user", "Find continuity receipt details."),
+        turn("t2", "assistant", "Summary mentions receipts and tests."),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-05-20T17:00:00.000Z",
+    });
+  }
+
+  test("flag omitted is byte-identical: no extracted, no raw on any hit", () => {
+    seed();
+    const search = searchSessionRecall(vault, {
+      query: "receipt",
+      sessionId: "session-raw",
+      limit: 4,
+    });
+    for (const hit of search.hits) {
+      expect("extracted" in hit).toBe(false);
+      expect("raw" in hit).toBe(false);
+    }
+  });
+
+  test("include_raw stamps extracted (summary=true, turn=false) and inlines raw captures", () => {
+    seed();
+    const search = searchSessionRecall(vault, {
+      query: "receipt",
+      sessionId: "session-raw",
+      limit: 4,
+      includeRaw: true,
+    });
+    const turnHit = search.hits.find((hit) => hit.kind === "session_turn");
+    const summaryHit = search.hits.find((hit) => hit.kind === "session_summary_node");
+    expect(turnHit?.extracted).toBe(false);
+    expect(summaryHit?.extracted).toBe(true);
+    // A raw capture carries itself; a derived record carries its source turns.
+    expect(turnHit?.raw?.map((raw) => raw.turn_id)).toEqual([turnHit?.turn_id ?? ""]);
+    expect(summaryHit?.raw?.map((raw) => raw.turn_id)).toEqual(["t1", "t2"]);
+    expect(summaryHit?.raw?.every((raw) => raw.text.length > 0)).toBe(true);
+  });
+
+  test("raw payloads respect the clip contract: a tiny raw budget drops text, keeps identity", () => {
+    seed();
+    const search = searchSessionRecall(vault, {
+      query: "receipt",
+      sessionId: "session-raw",
+      limit: 4,
+      includeRaw: true,
+      rawBudgetChars: 90,
+    });
+    const summaryHit = search.hits.find((hit) => hit.kind === "session_summary_node");
+    expect(summaryHit?.raw?.length).toBe(2);
+    // Under the tiny budget the large `text` field is clipped away while the
+    // identity-bearing turn_id survives (clipPayloadToBudget protected keys).
+    for (const raw of summaryHit?.raw ?? []) {
+      expect(raw.text).toBe("");
+      expect(raw.turn_id.length).toBeGreaterThan(0);
+    }
+  });
+});
+
 function turnAt(turnId: string, text: string, timestamp: string): SessionTurn {
   return { turnId, role: "user", text, timestamp };
 }

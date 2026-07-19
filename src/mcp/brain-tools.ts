@@ -32,6 +32,7 @@ import { DISTILL_TOOLS } from "./brain/distill-tools.ts";
 import { RESEARCH_TOOLS } from "./brain/research-tools.ts";
 import { DERIVE_TOOLS } from "./brain/derive-tools.ts";
 import { NOTES_TOOLS } from "./brain/notes-tools.ts";
+import { WRITE_BATCH_TOOLS } from "./brain/write-batch-tools.ts";
 import { SYNTHESIS_TOOLS } from "./brain/synthesis-tools.ts";
 import { GENERATION_TOOLS } from "./brain/generation-tools.ts";
 import { CALENDAR_TOOLS } from "./brain/calendar-tools.ts";
@@ -66,6 +67,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...RESEARCH_TOOLS,
   ...DERIVE_TOOLS,
   ...NOTES_TOOLS,
+  ...WRITE_BATCH_TOOLS,
   ...SYNTHESIS_TOOLS,
   ...GENERATION_TOOLS,
   ...CALENDAR_TOOLS,

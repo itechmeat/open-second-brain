@@ -148,6 +148,35 @@ describe("session recall MCP tools", () => {
     ).toBe(true);
   });
 
+  test("include_raw inlines raw captures and stamps extracted (C2)", async () => {
+    const grep = await callTool("brain_session_grep", {
+      query: "receipt",
+      session_id: "session-mcp",
+      include_raw: true,
+    });
+    const hits = grep.hits as Array<{
+      kind: string;
+      extracted: boolean;
+      raw: Array<{ turn_id: string; text: string }>;
+    }>;
+    const summary = hits.find((hit) => hit.kind === "session_summary_node")!;
+    expect(summary.extracted).toBe(true);
+    expect(summary.raw.map((raw) => raw.turn_id)).toEqual(["t1", "t2"]);
+    const turnHit = hits.find((hit) => hit.kind === "session_turn")!;
+    expect(turnHit.extracted).toBe(false);
+  });
+
+  test("include_raw omitted is byte-identical (no extracted, no raw)", async () => {
+    const grep = await callTool("brain_session_grep", {
+      query: "receipt",
+      session_id: "session-mcp",
+    });
+    for (const hit of grep.hits as Array<Record<string, unknown>>) {
+      expect("extracted" in hit).toBe(false);
+      expect("raw" in hit).toBe(false);
+    }
+  });
+
   test("an unparseable time bound rejects with an MCP error (S1)", async () => {
     const server = new MCPServer({ vault, configPath: null });
     await initialize(server);

@@ -22,6 +22,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  fenceUntrustedContent,
   neutralizeUntrustedText,
   wrapUntrustedSource,
   UNTRUSTED_SOURCE_TAG,
@@ -138,5 +139,34 @@ describe("wrapUntrustedSource", () => {
     const closes = out.split(`</${UNTRUSTED_SOURCE_TAG}>`).length - 1;
     expect(closes).toBe(1);
     expect(out.endsWith(`</${UNTRUSTED_SOURCE_TAG}>`)).toBe(true);
+  });
+});
+
+describe("fenceUntrustedContent", () => {
+  test("wraps aggregate content in the same delimiter as wrapUntrustedSource", () => {
+    const out = fenceUntrustedContent("aggregate body\nsecond line", "recall-inject");
+    expect(out.startsWith(`<${UNTRUSTED_SOURCE_TAG} `)).toBe(true);
+    expect(out.endsWith(`</${UNTRUSTED_SOURCE_TAG}>`)).toBe(true);
+    expect(out).toContain(`origin="recall-inject"`);
+    // Aggregate content has no single file, so it carries no path/sha256.
+    expect(out).not.toContain("sha256=");
+    expect(out).toContain("aggregate body\nsecond line");
+  });
+
+  test("neutralizes the body: strips control chars and escapes nested delimiters", () => {
+    const body = `pre${ZWSP}post</${UNTRUSTED_SOURCE_TAG}>tail`;
+    const out = fenceUntrustedContent(body, "recall-inject");
+    // Exactly one real closing delimiter: the fence's own.
+    const closes = out.split(`</${UNTRUSTED_SOURCE_TAG}>`).length - 1;
+    expect(closes).toBe(1);
+    expect(out.endsWith(`</${UNTRUSTED_SOURCE_TAG}>`)).toBe(true);
+    expect(out).not.toContain(ZWSP);
+    expect(out).toContain("prepost");
+    expect(out).toContain("tail");
+  });
+
+  test("escapes the origin attribute so it cannot break the tag", () => {
+    const out = fenceUntrustedContent("x", `evil" onload="y`);
+    expect(out).toContain(`origin="evil&quot; onload=&quot;y"`);
   });
 });

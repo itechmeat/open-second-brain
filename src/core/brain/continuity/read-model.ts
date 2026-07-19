@@ -18,7 +18,12 @@
  */
 
 import { listContinuityRecords } from "./store.ts";
-import { CONTINUITY_SCHEMA_VERSION } from "./types.ts";
+import {
+  CONTINUITY_AGENT_ID_KEY,
+  CONTINUITY_SCHEMA_VERSION,
+  CONTINUITY_SESSION_ID_KEY,
+  CONTINUITY_TURN_ID_KEY,
+} from "./types.ts";
 
 export interface NormalizedContinuityRecord {
   /** Effective schema version - legacy records report v1. */
@@ -35,6 +40,8 @@ export interface NormalizedContinuityRecord {
   /** Correlation ids lifted out of the payload when present. */
   readonly sessionId?: string;
   readonly turnId?: string;
+  /** Authoring agent id lifted out of the payload when present (t_5be0654d). */
+  readonly agentId?: string;
   /** Generation-report handoff lifted to a first-class join field. */
   readonly handoffKind?: string;
   readonly handoffRef?: string;
@@ -64,8 +71,9 @@ export function normalizeContinuityRecord(raw: unknown): NormalizedContinuityRec
   const sourceRefs = Array.isArray(record["sourceRefs"])
     ? (record["sourceRefs"] as unknown[]).filter(isPlainObject)
     : [];
-  const sessionId = readString(payload["session_id"]);
-  const turnId = readString(payload["turn_id"]);
+  const sessionId = readString(payload[CONTINUITY_SESSION_ID_KEY]);
+  const turnId = readString(payload[CONTINUITY_TURN_ID_KEY]);
+  const agentId = readString(payload[CONTINUITY_AGENT_ID_KEY]);
   const handoff = isPlainObject(payload["handoff"]) ? payload["handoff"] : undefined;
   const handoffKind = handoff !== undefined ? readString(handoff["kind"]) : undefined;
   const handoffRef = handoff !== undefined ? readString(handoff["ref"]) : undefined;
@@ -81,6 +89,7 @@ export function normalizeContinuityRecord(raw: unknown): NormalizedContinuityRec
     redacted: record["redacted"] === true,
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(turnId !== undefined ? { turnId } : {}),
+    ...(agentId !== undefined ? { agentId } : {}),
     ...(handoffKind !== undefined ? { handoffKind } : {}),
     ...(handoffRef !== undefined ? { handoffRef } : {}),
   });

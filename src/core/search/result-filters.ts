@@ -15,9 +15,16 @@ import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
 import { applyDegreeFilters, filterByProperties, type DegreePredicate } from "./property-filter.ts";
 import { degreeForPath, getGraphSnapshot } from "../brain/link-graph/graph-index.ts";
 import type { Store } from "./store.ts";
-import { deriveTrust } from "./enrich.ts";
+import { deriveTrust, hasSupersededRelation } from "./enrich.ts";
 import { isTerminalStatus } from "./evidence-pack.ts";
 import { isTombstoned } from "../brain/lifecycle/tombstone.ts";
+import { SUPERSEDE_FADE_MULTIPLIER } from "./ranker.ts";
+import {
+  keepVerdict,
+  multiplyVerdict,
+  type RankAdjuster,
+  type RankAdjustVerdict,
+} from "./rank-adjust.ts";
 import type { BrainSearchResult } from "./types.ts";
 
 /**
@@ -130,6 +137,33 @@ export function attachTrustMetadata(
       trust: deriveTrust({ mtimeMs, nowMs, ...(r.relations ? { relations: r.relations } : {}) }),
     });
   });
+}
+
+/** Namespace name kernel 1 uses when attributing the fade. */
+export const SUPERSEDE_FADE_ADJUSTER_NAME = "supersede_fade";
+
+/**
+ * Relation-only supersede fade (t_c4a9cef8): the second consumer of
+ * kernel 1. Fade any candidate whose surfaced typed relations mark it
+ * superseded - reusing {@link hasSupersededRelation}, the exact source of
+ * truth `attachTrustMetadata` / `deriveTrust` use for display - by the
+ * named-constant {@link SUPERSEDE_FADE_MULTIPLIER}. The caller supplies a
+ * documentId → relations lookup (the per-query typed-relations fetch in
+ * search.ts) so the adjuster does no I/O of its own. A candidate with no
+ * supersede relation is kept unchanged, so a pool with no such relation
+ * ranks byte-identically. This is orthogonal to the superseded-non-tip
+ * tombstone drop, which removes tombstoned rows before the fade runs.
+ */
+export function supersedeFadeAdjuster(
+  relationsFor: (documentId: number) => ReadonlyArray<{ readonly relation: string }>,
+): RankAdjuster {
+  return {
+    name: SUPERSEDE_FADE_ADJUSTER_NAME,
+    adjust(result: BrainSearchResult): RankAdjustVerdict {
+      if (!hasSupersededRelation(relationsFor(result.documentId))) return keepVerdict();
+      return multiplyVerdict(SUPERSEDE_FADE_MULTIPLIER, "superseded");
+    },
+  };
 }
 
 /**

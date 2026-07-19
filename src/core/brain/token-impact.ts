@@ -46,8 +46,16 @@
  */
 
 import { emitGatedTelemetry } from "./continuity/emit.ts";
-import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
-import type { ContinuityRecord } from "./continuity/types.ts";
+import {
+  appendContinuityRecord,
+  clipPayloadToBudget,
+  listContinuityRecords,
+} from "./continuity/store.ts";
+import {
+  CONTINUITY_AGENT_ID_KEY,
+  CONTINUITY_SESSION_ID_KEY,
+  type ContinuityRecord,
+} from "./continuity/types.ts";
 
 /** How the prompt-token counts on a sample were obtained. */
 export type TokenCountMethod = "exact" | "fallback";
@@ -59,6 +67,8 @@ export interface TokenImpactInput {
   readonly createdAt?: string;
   readonly host?: string;
   readonly sessionId?: string;
+  /** Authoring agent id, clip-protected beside session_id (t_5be0654d). */
+  readonly agentId?: string;
   readonly turnId?: string;
   /**
    * Opaque correlation id for the context pack this sample measures - a
@@ -82,6 +92,8 @@ export interface TokenImpactOutcomeInput {
   readonly createdAt?: string;
   readonly host?: string;
   readonly sessionId?: string;
+  /** Authoring agent id, clip-protected beside session_id (t_5be0654d). */
+  readonly agentId?: string;
   readonly packId?: string;
   readonly outcome: TokenImpactOutcome;
   /** Observed prompt tokens for the inference this outcome describes. */
@@ -101,6 +113,15 @@ export interface TokenImpactFilter {
    * aggregation time without truncating the durable log.
    */
   readonly maxSamples?: number;
+  /**
+   * Per-record output-budget clip in characters for {@link listTokenImpact}
+   * (t_5be0654d). When set, each returned sample's payload is clipped to
+   * this many characters with the identity keys (session_id, agent_id)
+   * always retained; other keys are dropped only as far as needed to fit.
+   * Omitted (the default) returns payloads unchanged - byte-identical.
+   * Never applied to {@link summarizeTokenImpact}, which needs every field.
+   */
+  readonly payloadBudgetChars?: number;
 }
 
 export interface TokenImpactMethodStats {
@@ -186,7 +207,8 @@ export function emitTokenImpact<G>(
     const modeled = resolveModeled(input);
     const payload: Record<string, unknown> = {
       ...(input.host !== undefined ? { host: input.host } : {}),
-      ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
+      ...(input.sessionId !== undefined ? { [CONTINUITY_SESSION_ID_KEY]: input.sessionId } : {}),
+      ...(input.agentId !== undefined ? { [CONTINUITY_AGENT_ID_KEY]: input.agentId } : {}),
       ...(input.turnId !== undefined ? { turn_id: input.turnId } : {}),
       ...(input.packId !== undefined ? { pack_id: input.packId } : {}),
       method: input.method,
@@ -226,7 +248,8 @@ export function recordTokenImpactOutcome<G>(
     }
     const payload: Record<string, unknown> = {
       ...(input.host !== undefined ? { host: input.host } : {}),
-      ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
+      ...(input.sessionId !== undefined ? { [CONTINUITY_SESSION_ID_KEY]: input.sessionId } : {}),
+      ...(input.agentId !== undefined ? { [CONTINUITY_AGENT_ID_KEY]: input.agentId } : {}),
       ...(input.packId !== undefined ? { pack_id: input.packId } : {}),
       outcome: input.outcome,
       ...(input.tokensPerInference !== undefined
@@ -259,6 +282,17 @@ export function listTokenImpact(
   }).filter((record) => matchesFilter(record, filter));
   records = records.toReversed();
   if (filter.limit !== undefined) records = records.slice(0, Math.max(0, Math.floor(filter.limit)));
+  // Output-budget clip (t_5be0654d): trim each retained sample's payload to
+  // the char budget with the identity keys protected. A record that fits (or
+  // no budget) is returned by the SAME reference, so the default is
+  // byte-identical.
+  if (filter.payloadBudgetChars !== undefined) {
+    const budget = filter.payloadBudgetChars;
+    records = records.map((record) => {
+      const clipped = clipPayloadToBudget(record.payload, budget);
+      return clipped === record.payload ? record : { ...record, payload: clipped };
+    });
+  }
   return Object.freeze(records);
 }
 
@@ -287,8 +321,15 @@ export function summarizeTokenImpact(
   vault: string,
   filter: TokenImpactFilter = {},
 ): TokenImpactSummary {
-  // The roll-up spans the full filtered window - `limit` never bounds it.
-  const { limit: _limit, maxSamples, ...summaryFilter } = filter;
+  // The roll-up spans the full filtered window - `limit` never bounds it,
+  // and the per-record clip budget never applies (aggregation needs every
+  // field, e.g. delta_tokens, which the clip may drop).
+  const {
+    limit: _limit,
+    maxSamples,
+    payloadBudgetChars: _payloadBudgetChars,
+    ...summaryFilter
+  } = filter;
   let samples = listTokenImpact(vault, summaryFilter);
   if (maxSamples !== undefined) samples = samples.slice(0, Math.max(0, Math.floor(maxSamples)));
 

@@ -33,6 +33,8 @@ export interface HookPayloadBase {
   readonly transcript_path?: string | null;
   readonly cwd?: string;
   readonly hook_event_name?: string;
+  /** UserPromptSubmit: the submitted user prompt text. */
+  readonly prompt?: string;
   readonly stop_hook_active?: boolean;
   readonly tool_name?: string;
   readonly tool_input?: unknown;

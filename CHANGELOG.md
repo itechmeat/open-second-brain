@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.0] - 2026-07-19
+
+A trusted recall and memory write surface wave: ten units that carry vault knowledge to the agent at the moment it matters and make every step accountable. An opt-in bounded recall brief lands on each prompt, retrieval zero-ranks quarantined material and hands back receipts naming every exclusion, a supersede relation on a successor fades the superseded note without editing it, and MCP agents gain the full atomic note lifecycle: update, append, and all-or-nothing mixed batches. Two shared kernels carry the wave: a deterministic retrieval rank-adjustment stage and an atomic multi-operation write core. The kernel still calls no LLM, and every new surface is byte-identical when its flag or param is omitted.
+
+### Added
+
+- Bounded recall inject on UserPromptSubmit: with `recall_inject_enabled: "true"` (env `OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED`) a hook relevance-recalls a small brief of vault notes into each prompt under hard caps (4 notes, 900 chars, a fixed time budget), abstains below a confidence floor, injects nothing on any internal error or timeout, and writes one audit line per decision (inject, abstain, error) recording counts and scores, never content. The brief is fenced as untrusted content with neutralized titles; the hook process itself stays fail-open for the session.
+- Retrieval trust gate plus per-pack receipts: with `search_trust_gate_enabled: "true"` (env `OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE`), material carrying quarantine signals (self-approval quarantine state, untrusted-source provenance, entity-contamination marker) is zero-ranked out of both semantic and lexical search through a new deterministic rank-adjustment stage, and every search outcome carries two compact-reference receipts, `memory_trust_assessment` and `retrieval_decision_trace`, counting each exclusion with its reason so nothing is dropped silently.
+- Relation-only supersede fade: with `search_supersede_fade_enabled: "true"` (env `OPEN_SECOND_BRAIN_SEARCH_SUPERSEDE_FADE`), an inbound `supersedes` or `superseded_by` relation authored on a successor fades the unchanged superseded note by a named multiplier on both search paths, so deprecating a note takes one edit on its replacement; the existing tombstone drop is untouched.
+- `brain_update_note` and `brain_append_note` MCP tools: update an existing note's body and/or merge frontmatter keys, or append to its body, under the exact create-note safety envelope (path traversal, Brain machinery root, vault-scope exclusions), with atomic write semantics and a typed error when the target does not exist.
+- `brain_write_batch` MCP tool: an ordered mixed batch (create note, update note body or frontmatter, append note, apply evidence, append log line) validated and projected in memory first, then committed all-or-nothing; the first invalid operation aborts with a typed error naming its index and nothing touches disk; a duplicate note target within one batch is refused.
+- `include_raw` on session recall (`brain_session_grep`): responses carry the original raw capture inline beside each derived record, and every item is stamped with an `extracted` boolean discriminator (derived versus raw); an optional `raw_budget_chars` clips raw payloads while identity fields survive.
+- Knowledge-gap loop: with `gap_loop_enabled: "true"` (env `OPEN_SECOND_BRAIN_GAP_LOOP_ENABLED`, threshold via `gap_loop_threshold`), recurring recall gaps aggregated from existing gap-count telemetry promote at session end into durable task notes under `Brain/gap-tasks/` (stable-key dedup, never the kanban board), open gap tasks render as a session-start agenda, and a later confident recall on the topic auto-closes the task; gap tasks never match their own text.
+- Typed age-labeled session-start timeline: the morning brief renders recalled items as one chronological Recent activity timeline with a per-item structural type marker and relative age label built by a pure rendering helper; the underlying data arrays are unchanged.
+- Clip-protected pack identity: `agent_id` joins `session_id` on pack and continuity identity, and the new `clipPayloadToBudget` primitive retains both fields under any output-budget truncation while dropping non-protected keys.
+- Fail-fast doctor readiness probes: `o2b doctor --readiness` runs three functional probes (model-inference key resolvable, embedding provider loadable with model and dims, runtime-adapter wiring) with per-check timeouts and outcomes pass, fail with a reason, or skipped-not-configured; any failure exits non-zero, and without the flag doctor output stays byte-identical.
+
+### Changed
+
+- The MCP tool surface grows from 103 to 106 tools (`brain_update_note`, `brain_append_note`, `brain_write_batch`); `brain_session_grep` gains optional `include_raw` and `raw_budget_chars` params and stays byte-identical when they are omitted.
+- Search ranking flows through a deterministic rank-adjustment stage (`src/core/search/rank-adjust.ts`); with no adjusters registered the stage returns its input unchanged.
+
+### Fixed
+
+- The temporal-replace lifecycle test derived its expected log day from the wall clock and failed on any date after its authoring day; it now derives the day from the operation result.
+
 ## [1.34.0] - 2026-07-18
 
 A source pipeline integrity and operator tooling wave: eleven units that make vault intake trustworthy end to end (scoped and gated discovery, reconciled dispatch, deterministic pre-extraction, citation provenance), extend the query surface (configurable FTS tokenizer, graph-degree predicates), and give the operator a repairing doctor plus one consolidated status snapshot. Two shared kernels carry the wave: a gitignore-semantics path-scope engine and a diagnostics-signal registry whose next-command hints travel with the issue definitions. Everything stays deterministic (the kernel calls no LLM) and every new surface is byte-identical when unused.
@@ -6556,6 +6582,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.35.0]: https://github.com/itechmeat/open-second-brain/compare/v1.34.0...v1.35.0
 [1.34.0]: https://github.com/itechmeat/open-second-brain/compare/v1.33.0...v1.34.0
 [1.33.0]: https://github.com/itechmeat/open-second-brain/compare/v1.32.0...v1.33.0
 [1.32.0]: https://github.com/itechmeat/open-second-brain/compare/v1.31.0...v1.32.0

@@ -756,6 +756,50 @@ export function resolveContextPackOutcomeEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Prompt-time bounded recall-inject gate (recall-trust-and-write-surface,
+ * A2 / t_2ce46130). Default OFF: the opt-in UserPromptSubmit recall-inject
+ * hook stays a no-op unless `recall_inject_enabled: "true"` (or the matching
+ * env override), when each user prompt relevance-recalls a small bounded,
+ * clip-safe brief of vault notes and injects it as additionalContext. The
+ * hook is fail-closed (any error or timeout injects nothing) and audited
+ * (every inject/abstain/error decision writes one line). Flag off keeps the
+ * prompt preamble byte-identical.
+ */
+export function resolveRecallInjectEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED",
+    "recall_inject_enabled",
+    configPath,
+  );
+}
+
+/**
+ * Knowledge-gap loop gate (recall-trust-and-write-surface, A3 /
+ * t_67d38036). Default OFF: the opt-in session-start gap agenda and
+ * session-end gap promotion/auto-close stay dormant unless
+ * `gap_loop_enabled: "true"` (or the matching env override). Flag off keeps
+ * the session preamble byte-identical and writes no gap-task notes.
+ */
+export function resolveGapLoopEnabled(configPath?: string): boolean {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_GAP_LOOP_ENABLED", "gap_loop_enabled", configPath);
+}
+
+/**
+ * Optional gap-loop recurrence threshold override (A3). A valid positive
+ * integer (env first, then config) wins; anything else returns undefined so
+ * the caller falls back to the named-constant default. Env-overridable so an
+ * operator can tune how often a gap must recur before it promotes to a task.
+ */
+export function resolveGapLoopThreshold(configPath?: string): number | undefined {
+  const env = process.env["OPEN_SECOND_BRAIN_GAP_LOOP_THRESHOLD"]?.trim();
+  const raw = env || discoverConfig(configPath).data["gap_loop_threshold"]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) return undefined;
+  return value;
+}
+
+/**
  * Optional external judge command for the memory benchmark (Memory
  * Observability Suite, t_882c396a). Unset (the default) means the
  * judge phase is skipped - the harness itself never calls an LLM.

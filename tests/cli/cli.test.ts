@@ -201,6 +201,89 @@ describe("doctor", () => {
     expect(r.stdout).toContain("[FAIL] claude_manifest");
     expect(r.stdout).toContain("[FAIL] codex_manifest");
   });
+
+  // Semantic search forced off so the readiness probes are deterministic
+  // (llm_key + embedding_provider skip; adapter wiring passes) regardless
+  // of any embedding env in the developer's shell.
+  const READINESS_ENV = {
+    OPEN_SECOND_BRAIN_CONFIG: "",
+    XDG_CONFIG_HOME: "",
+    VAULT_DIR: "",
+    OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "false",
+  };
+
+  test("without --readiness the output has no readiness section (byte-identical opt-out)", async () => {
+    const plain = await runCli(["doctor", "--vault", tmp], { env: READINESS_ENV });
+    expect(plain.returncode).toBe(0);
+    expect(plain.stdout).not.toContain("readiness:");
+
+    const withFlag = await runCli(["doctor", "--vault", tmp, "--readiness"], {
+      env: READINESS_ENV,
+    });
+    // The readiness run appends its section; the base output is unchanged,
+    // so the plain output is an exact prefix of the readiness output.
+    expect(withFlag.stdout.startsWith(plain.stdout)).toBe(true);
+  });
+
+  test("--readiness runs the three probes with explicit outcomes", async () => {
+    const r = await runCli(["doctor", "--vault", tmp, "--readiness"], { env: READINESS_ENV });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("readiness:");
+    expect(r.stdout).toContain("llm_key:");
+    expect(r.stdout).toContain("embedding_provider:");
+    expect(r.stdout).toContain("runtime_adapter_wiring:");
+    // No silent pass: skipped surfaces explicitly, and wiring passes.
+    expect(r.stdout).toContain("[SKIP] llm_key:");
+    expect(r.stdout).toContain("[PASS] runtime_adapter_wiring:");
+  });
+
+  test("--readiness --json omits the readiness key without the flag and adds it with it", async () => {
+    const plain = await runCli(["doctor", "--vault", tmp, "--json"], { env: READINESS_ENV });
+    expect(JSON.parse(plain.stdout).readiness).toBeUndefined();
+
+    const withFlag = await runCli(["doctor", "--vault", tmp, "--json", "--readiness"], {
+      env: READINESS_ENV,
+    });
+    const parsed = JSON.parse(withFlag.stdout);
+    expect(Array.isArray(parsed.readiness)).toBe(true);
+    expect(parsed.readiness.length).toBe(3);
+    expect(parsed.readiness.every((p: { status: string }) => typeof p.status === "string")).toBe(
+      true,
+    );
+  });
+
+  test("--readiness exits 1 with a fail reason when a probe fails", async () => {
+    // A key-requiring embedding provider (openai-compat) with no key makes the
+    // llm_key probe fail deterministically - the phase-4 QA scenario.
+    const cfg = join(tmp, "readiness-fail-config.yaml");
+    writeFileSync(
+      cfg,
+      [
+        `vault: ${tmp}`,
+        'search_semantic_enabled: "true"',
+        'embedding_provider: "openai-compat"',
+        'embedding_base_url: "https://example.invalid/v1"',
+        'embedding_model: "test-model"',
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const r = await runCli(["doctor", "--vault", tmp, "--readiness"], {
+      env: {
+        OPEN_SECOND_BRAIN_CONFIG: cfg,
+        XDG_CONFIG_HOME: "",
+        VAULT_DIR: "",
+        // Fall through to the config file (empty = unset), and make sure no
+        // developer-shell embedding key leaks in to rescue the probe.
+        OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "",
+        OPEN_SECOND_BRAIN_EMBEDDING_KEY: "",
+        OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER: "",
+      },
+    });
+    expect(r.returncode).toBe(1);
+    expect(r.stdout).toContain("[FAIL] llm_key:");
+    // The failure carries a reason, never a silent fail.
+    expect(r.stdout).toMatch(/\[FAIL\] llm_key:.+/);
+  });
 });
 
 describe("onboarding", () => {

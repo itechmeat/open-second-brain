@@ -86,6 +86,17 @@ const TREND_MULTIPLIERS: ReadonlyMap<string, number> = new Map([
   ["stale", 0.85],
 ]);
 
+/**
+ * Relation-only supersede fade (t_c4a9cef8), applied through kernel 1 by
+ * the supersede-fade adjuster - NOT inside `rankResults`. It lives here,
+ * beside the freshness multipliers, because it is the same family of
+ * bounded score-scaling constant: a candidate a surfaced `superseded_by`
+ * relation marks superseded is faded to this share of its score so a
+ * stale memory that survived the tombstone drop cannot outrank the memory
+ * that replaced it. A pool with no such relation ranks byte-identically.
+ */
+export const SUPERSEDE_FADE_MULTIPLIER = 0.5;
+
 export interface RankerOptions {
   readonly keywordWeight: number;
   readonly semanticWeight: number;

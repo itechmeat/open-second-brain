@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 
 import { charSpanToLineSpan } from "../search/line-numbering.ts";
-import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
+import {
+  appendContinuityRecord,
+  clipPayloadToBudget,
+  listContinuityRecords,
+} from "./continuity/store.ts";
 import type { ContinuityRecord, ContinuitySourceRef } from "./continuity/types.ts";
 import { readLineageLedger } from "./lineage/ledger.ts";
 import type { SessionLineage } from "./lineage/types.ts";
@@ -41,6 +45,25 @@ export interface SessionRecallSearchInput {
    */
   readonly sinceMs?: number;
   readonly untilMs?: number;
+  /**
+   * Inline-raw disclosure (C2 / t_ac1d36ea). When true, every returned hit
+   * gains an `extracted` discriminator and a `raw` array carrying the
+   * original raw captures beside the derived record (a distilled summary
+   * node carries the source turns it was distilled from; a raw turn carries
+   * itself). Reuses the same collect/expand machinery as
+   * {@link expandSessionRecall}. Omitted (the default) leaves hits
+   * byte-identical to the pre-feature response.
+   */
+  readonly includeRaw?: boolean;
+  /**
+   * Per-raw-record output-budget clip in characters, applied only when
+   * `includeRaw` is set. Each inlined raw capture's payload is clipped to
+   * this many characters through the shared clip contract
+   * ({@link clipPayloadToBudget}), so the protected identity keys
+   * (session_id, agent_id) always survive while bulky fields such as the
+   * turn text drop first. Omitted returns raw captures unclipped.
+   */
+  readonly rawBudgetChars?: number;
 }
 
 export interface SessionRecallHit {
@@ -60,6 +83,17 @@ export interface SessionRecallHit {
   readonly role?: string;
   readonly depth?: number;
   readonly source_record_ids?: ReadonlyArray<string>;
+  /**
+   * Present only under `includeRaw` (C2): true for a derived/distilled
+   * record (a summary node), false for a raw capture (a session turn).
+   */
+  readonly extracted?: boolean;
+  /**
+   * Present only under `includeRaw` (C2): the original raw captures
+   * inlined beside this record, clip-contract-respecting when a raw
+   * budget is set.
+   */
+  readonly raw?: ReadonlyArray<ExpandedRawTurn>;
 }
 
 export interface SessionRecallSearchResult {
@@ -160,13 +194,56 @@ export function searchSessionRecall(
   if (needle.length === 0) return Object.freeze({ hits: Object.freeze([]) });
   const limit = Math.max(1, input.limit ?? DEFAULT_LIMIT);
   const snippetChars = Math.max(1, input.snippetChars ?? DEFAULT_SNIPPET_CHARS);
-  const hits = sessionRecallRecords(vault, input.sessionId)
+  const records = sessionRecallRecords(vault, input.sessionId);
+  const hits = records
     .filter((record) => recordInTimeRange(record, input.sinceMs, input.untilMs))
     .map((record) => hitFor(record, needle, snippetChars))
     .filter((hit): hit is SessionRecallHit => hit !== null)
     .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
     .slice(0, limit);
-  return Object.freeze({ hits: Object.freeze(hits) });
+  if (input.includeRaw !== true) return Object.freeze({ hits: Object.freeze(hits) });
+  const byId = new Map(records.map((record) => [record.id, record]));
+  const decorated = hits.map((hit) => decorateHitWithRaw(hit, byId, input.rawBudgetChars));
+  return Object.freeze({ hits: Object.freeze(decorated) });
+}
+
+/**
+ * Attach the `extracted` discriminator and inlined `raw` captures to one
+ * hit (C2). A distilled summary node carries the raw turns it was distilled
+ * from; a raw turn carries itself. The collect/expand machinery is shared
+ * with {@link expandSessionRecall} (never duplicated), and each raw payload
+ * is clip-contract-respecting when a budget is set.
+ */
+function decorateHitWithRaw(
+  hit: SessionRecallHit,
+  byId: ReadonlyMap<string, ContinuityRecord>,
+  rawBudgetChars: number | undefined,
+): SessionRecallHit {
+  const record = byId.get(hit.id);
+  if (record === undefined) return hit;
+  const raw = collectRawRecords(record, byId).map((source) =>
+    expandedRawTurn(clipRawRecord(source, rawBudgetChars)),
+  );
+  return Object.freeze({
+    ...hit,
+    extracted: record.kind === "session_summary_node",
+    raw: Object.freeze(raw),
+  });
+}
+
+/**
+ * A view of one raw record whose payload is clipped to `budgetChars`
+ * through the shared clip contract (protected identity keys survive). No
+ * budget returns the record unchanged, keeping the unclipped path
+ * byte-identical.
+ */
+function clipRawRecord(
+  record: ContinuityRecord,
+  budgetChars: number | undefined,
+): ContinuityRecord {
+  const clipped = clipPayloadToBudget(record.payload, budgetChars);
+  if (clipped === record.payload) return record;
+  return { ...record, payload: clipped };
 }
 
 export function describeSessionRecall(

@@ -54,6 +54,8 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
       cacheEnabled: false,
       cacheTtlSeconds: 300,
       relationPolarityEnabled: true,
+      retrievalTrustGateEnabled: false,
+      supersedeFadeEnabled: false,
       learnedWeightsEnabled: false,
       activationEnabled: true,
       twoPassEnabled: true,
