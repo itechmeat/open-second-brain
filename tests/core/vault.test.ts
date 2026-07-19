@@ -58,6 +58,29 @@ describe("parseFrontmatter", () => {
     expect(body).toBe("Body.");
   });
 
+  test("block list with a bare empty dash item is not silently dropped", () => {
+    // Regression for the CodeRabbit edge case: an isolated `-` (or `- `)
+    // must NOT reset blockKey and drop the rest of the list. The empty
+    // item surfaces as an empty-string element, and subsequent items are
+    // still captured.
+    const path = join(tmp, "note.md");
+    writeFileSync(path, "---\ntags:\n  - brain\n  -\n  - brain/signal\n---\n\nBody.\n");
+    const [meta] = parseFrontmatter(path);
+    expect(meta["tags"]).toEqual(["brain", "", "brain/signal"]);
+  });
+
+  test("dash-prefixed string without whitespace is not a list item", () => {
+    // `-foo` has no space after the dash, so it must NOT be parsed as a
+    // block-list item (only `- foo` / bare `-` count). As a lone line it
+    // is simply ignored as a non-key/value line.
+    const path = join(tmp, "note.md");
+    writeFileSync(path, "---\nkey: value\n-foo\nother: end\n---\n\nBody.\n");
+    const [meta] = parseFrontmatter(path);
+    expect(meta["key"]).toBe("value");
+    expect(meta["other"]).toBe("end");
+    expect(meta["-foo"]).toBeUndefined();
+  });
+
   test("block-style list with quoted items parses as strings", () => {
     const path = join(tmp, "note.md");
     writeFileSync(path, '---\ntags:\n  - plain\n  - "needs, comma"\ntitle: Mixed\n---\n\nBody.\n');

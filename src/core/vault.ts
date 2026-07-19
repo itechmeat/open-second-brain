@@ -18,6 +18,10 @@ import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 const KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
+// Block-sequence dash item: `- item` or a bare `-` (empty item). The
+// leading whitespace is required so `-foo` (a dash-prefixed string, not a
+// list item) is NOT matched. Captures the item text after the whitespace.
+const DASH_ITEM_RE = /^-(?:\s+(.*))?$/;
 const PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
 const CODE_BLOCK_RE = /```[\s\S]*?```|`[^`]+`/g;
 const SLUG_INVALID_RE = /[^a-z0-9]+/g;
@@ -90,16 +94,14 @@ export function parseFrontmatterText(text: string): readonly [FrontmatterMap, st
   const lines = fmBlock.split("\n");
   let blockKey: string | null = null;
 
-  const isDashItem = (s: string): RegExpExecArray | null => /^-\s+(.*?)\s*$/.exec(s);
-
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!.trim();
     if (!line || line.startsWith("#")) continue;
 
-    const dash = isDashItem(line);
+    const dash = DASH_ITEM_RE.exec(line);
     if (dash && blockKey !== null) {
       const arr = (metadata[blockKey] as string[] | undefined) ?? [];
-      arr.push(stripQuotes(dash[1]!));
+      arr.push(stripQuotes(dash[1] ?? ""));
       metadata[blockKey] = arr;
       continue;
     }
@@ -127,7 +129,7 @@ export function parseFrontmatterText(text: string): readonly [FrontmatterMap, st
         nextMeaningful = cand;
         break;
       }
-      if (nextMeaningful !== null && isDashItem(nextMeaningful)) {
+      if (nextMeaningful !== null && DASH_ITEM_RE.test(nextMeaningful)) {
         metadata[key] = [];
         blockKey = key;
       } else {
