@@ -27,7 +27,11 @@ import {
 import { appendMetric } from "../../core/brain/metrics.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { createTriggers } from "../../core/brain/triggers/store.ts";
-import { deepSynthesis, synthesisCandidates } from "../../core/brain/deep-synthesis.ts";
+import {
+  deepSynthesis,
+  synthesisCandidates,
+  synthesisFindingsJson,
+} from "../../core/brain/deep-synthesis.ts";
 import { diarize, DiarizationError } from "../../core/brain/diarization.ts";
 import { discoverIdeas, ideaCandidates } from "../../core/brain/idea-discovery.ts";
 import { auditMoc, MocAuditError } from "../../core/brain/link-graph/moc-audit.ts";
@@ -373,6 +377,7 @@ async function toolBrainDeepSynthesis(
           source_artifacts: report.strongestObjection.sourceArtifacts,
         }
       : null,
+    ...synthesisFindingsJson(report),
     ...(triggersCreated !== undefined ? { triggers_created: triggersCreated } : {}),
   };
 }
@@ -816,7 +821,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_deep_synthesis",
     description:
-      "Topic-scoped deterministic dossier: matched notes, agreements (positive typed relations), contradictions, stale claims, and knowledge gaps (dangling wikilinks). Evidence assembly only - prose synthesis stays with the caller. Optional triggers=true enqueues findings.",
+      "Topic-scoped deterministic dossier: matched notes, agreements, contradictions, stale claims, knowledge gaps (dangling wikilinks), plus per-finding causal context, decomposed confidence, and a visible evidence-loss ledger. Evidence assembly only. triggers=true enqueues findings.",
     inputSchema: {
       type: "object",
       properties: {

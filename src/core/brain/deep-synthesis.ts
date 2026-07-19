@@ -614,6 +614,47 @@ export async function deepSynthesis(
   });
 }
 
+/**
+ * The additive t_40fa4e8d surface of a report, in the snake_case shape
+ * both the CLI `--json` payload and the MCP structured content emit.
+ * Shared so the two operator surfaces stay byte-identical: each finding
+ * carries its evidence identity, causal context, and decomposed
+ * confidence, and the evidence loss is a visible ledger, never silent.
+ */
+export function synthesisFindingsJson(report: DeepSynthesisReport): {
+  findings: ReadonlyArray<{
+    evidence: { path: string; kind: string; content_hash: string };
+    title: string | null;
+    causal_context: {
+      relations: ReadonlyArray<SynthesisRelation>;
+      superseded_by: string | null;
+      dangling_citations: number;
+    };
+    confidence: SynthesisConfidence;
+  }>;
+  excluded_findings: ReadonlyArray<SynthesisExcludedFinding>;
+  excluded_finding_count: number;
+} {
+  return {
+    findings: report.findings.map((f) => ({
+      evidence: {
+        path: f.evidence.path,
+        kind: f.evidence.kind,
+        content_hash: f.evidence.contentHash,
+      },
+      title: f.title,
+      causal_context: {
+        relations: f.causalContext.relations,
+        superseded_by: f.causalContext.supersededBy,
+        dangling_citations: f.causalContext.danglingCitations,
+      },
+      confidence: f.confidence,
+    })),
+    excluded_findings: report.excludedFindings,
+    excluded_finding_count: report.excludedFindingCount,
+  };
+}
+
 /** Contradiction and gap findings as trigger candidates (Kernel B). */
 export function synthesisCandidates(report: DeepSynthesisReport): ReadonlyArray<InsightCandidate> {
   const out: InsightCandidate[] = [];
