@@ -198,6 +198,9 @@ describe("tool listing", () => {
         // as single-operation batches over the atomic write-batch core.
         "brain_update_note",
         "brain_append_note",
+        // Recall-trust-and-write-surface W2: general all-or-nothing multi-op
+        // write surface (kernel 2's second consumer).
+        "brain_write_batch",
         "brain_pinned_context",
         "brain_context",
         "brain_query",
@@ -653,7 +656,9 @@ describe("stdio loop", () => {
     //   source-pipeline-integrity O3 t_9f9c5466) = 103.
     // + brain_update_note / brain_append_note (single-operation batches over
     //   the atomic write-batch core, recall-trust-and-write-surface W1) = 105.
-    expect(list.result.tools.length).toBe(105);
+    // + brain_write_batch (general all-or-nothing multi-op write surface,
+    //   recall-trust-and-write-surface W2) = 106.
+    expect(list.result.tools.length).toBe(106);
   });
 
   test("returns parse error for invalid JSON", async () => {

@@ -33,6 +33,14 @@ import type { FrontmatterMap } from "../types.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { CreateNoteError, createNote, resolveNoteTarget } from "./notes/create-note.ts";
 import { formatFrontmatter, parseFrontmatter } from "../vault.ts";
+import {
+  appendApplyEvidence,
+  type AppendApplyEvidenceInput,
+  type AppendApplyEvidenceOptions,
+} from "./apply-evidence.ts";
+import { appendBrainNote, type AppendBrainNoteInput } from "./note.ts";
+import { preferencePath, validateSlug } from "./paths.ts";
+import { BRAIN_APPLY_RESULT } from "./types.ts";
 
 /** Separator inserted between the existing body and appended text. */
 const APPEND_SEPARATOR = "\n\n";
@@ -67,8 +75,33 @@ export interface AppendNoteOperation {
   readonly content: string;
 }
 
+/**
+ * Record one apply-evidence event against a preference. Maps to the
+ * {@link appendApplyEvidence} core writer; the kernel only pre-validates
+ * so an invalid op aborts the batch before any commit.
+ */
+export interface ApplyEvidenceOperation {
+  readonly kind: "apply_evidence";
+  readonly input: AppendApplyEvidenceInput;
+  readonly options?: AppendApplyEvidenceOptions;
+}
+
+/**
+ * Append one narrative note line to today's Brain log. Maps to the
+ * {@link appendBrainNote} core writer. `vault` is supplied by the batch.
+ */
+export interface AppendLogLineOperation {
+  readonly kind: "append_log_line";
+  readonly input: Omit<AppendBrainNoteInput, "vault">;
+}
+
 /** Typed operation the write-batch core understands. */
-export type WriteOperation = CreateNoteOperation | UpdateNoteOperation | AppendNoteOperation;
+export type WriteOperation =
+  | CreateNoteOperation
+  | UpdateNoteOperation
+  | AppendNoteOperation
+  | ApplyEvidenceOperation
+  | AppendLogLineOperation;
 
 /** Machine-readable reason a write batch was refused. */
 export type WriteBatchErrorCode =
@@ -111,7 +144,9 @@ export class WriteBatchError extends Error {
 export type WriteBatchOpResult =
   | { readonly kind: "create_note"; readonly path: string; readonly created: true }
   | { readonly kind: "update_note"; readonly path: string; readonly updated: true }
-  | { readonly kind: "append_note"; readonly path: string; readonly appended: true };
+  | { readonly kind: "append_note"; readonly path: string; readonly appended: true }
+  | { readonly kind: "apply_evidence"; readonly logged_at: string; readonly log_path: string }
+  | { readonly kind: "append_log_line"; readonly logged_at: string; readonly log_path: string };
 
 export interface WriteBatchResult {
   /** Number of operations committed (== operations.length on success). */
@@ -167,6 +202,10 @@ function projectOperation(
       return projectUpdateNote(vault, operation as UpdateNoteOperation, index, noteTargets);
     case "append_note":
       return projectAppendNote(vault, operation as AppendNoteOperation, index, noteTargets);
+    case "apply_evidence":
+      return projectApplyEvidence(vault, operation as ApplyEvidenceOperation, index);
+    case "append_log_line":
+      return projectAppendLogLine(vault, operation as AppendLogLineOperation, index);
     default:
       throw new WriteBatchError(
         "invalid_operation",
@@ -304,6 +343,121 @@ function projectAppendNote(
       mkdirSync(dirname(target.abs), { recursive: true });
       atomicWriteFileSync(target.abs, contents);
       return { kind: "append_note", path: target.relPath, appended: true };
+    },
+  };
+}
+
+/** Accepted apply-evidence result values, for phase-1 validation. */
+const APPLY_RESULTS: ReadonlySet<string> = new Set([
+  BRAIN_APPLY_RESULT.applied,
+  BRAIN_APPLY_RESULT.violated,
+  BRAIN_APPLY_RESULT.outdated,
+]);
+
+/**
+ * Project an apply_evidence operation. Pre-validates the required fields,
+ * the result enum, and the target preference's existence so an invalid
+ * op aborts the batch before any commit. The commit delegates to the
+ * {@link appendApplyEvidence} core writer, which re-validates and renders
+ * the log event - the kernel does not reimplement it.
+ */
+function projectApplyEvidence(
+  vault: string,
+  op: ApplyEvidenceOperation,
+  index: number,
+): PlannedOperation {
+  const input = op.input;
+  if (input === null || typeof input !== "object") {
+    throw new WriteBatchError(
+      "invalid_operation",
+      index,
+      `operation ${index}: missing evidence input`,
+    );
+  }
+  const prefId = typeof input.pref_id === "string" ? input.pref_id.trim() : "";
+  if (prefId === "") {
+    throw new WriteBatchError(
+      "invalid_operation",
+      index,
+      `operation ${index}: apply_evidence requires pref_id`,
+    );
+  }
+  if (typeof input.artifact !== "string" || input.artifact.trim() === "") {
+    throw new WriteBatchError(
+      "invalid_operation",
+      index,
+      `operation ${index}: apply_evidence requires artifact`,
+    );
+  }
+  if (typeof input.agent !== "string" || input.agent.trim() === "") {
+    throw new WriteBatchError(
+      "invalid_operation",
+      index,
+      `operation ${index}: apply_evidence requires agent`,
+    );
+  }
+  if (!APPLY_RESULTS.has(input.result)) {
+    throw new WriteBatchError(
+      "invalid_operation",
+      index,
+      `operation ${index}: apply_evidence result must be applied, violated, or outdated`,
+    );
+  }
+  // Existence pre-check mirrors appendApplyEvidence's own resolution so a
+  // missing preference aborts the whole batch before any write happens.
+  const slug = prefId.startsWith("pref-") ? prefId.slice("pref-".length) : prefId;
+  try {
+    validateSlug(slug);
+  } catch (err) {
+    throw new WriteBatchError(
+      "invalid_operation",
+      index,
+      `operation ${index}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!existsSync(preferencePath(vault, slug))) {
+    throw new WriteBatchError(
+      "preference_not_found",
+      index,
+      `operation ${index}: preference not found: pref-${slug}`,
+      { pref_id: `pref-${slug}` },
+    );
+  }
+  return {
+    commit: () => {
+      const res = appendApplyEvidence(vault, input, op.options ?? {});
+      return { kind: "apply_evidence", logged_at: res.logged_at, log_path: res.log_path };
+    },
+  };
+}
+
+/**
+ * Project an append_log_line operation. Pre-validates that the text is a
+ * non-empty string; the commit delegates to the {@link appendBrainNote}
+ * core writer.
+ */
+function projectAppendLogLine(
+  vault: string,
+  op: AppendLogLineOperation,
+  index: number,
+): PlannedOperation {
+  const input = op.input;
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    typeof input.text !== "string" ||
+    input.text.trim() === ""
+  ) {
+    throw new WriteBatchError(
+      "invalid_operation",
+      index,
+      `operation ${index}: append_log_line requires non-empty text`,
+    );
+  }
+  return {
+    commit: () => {
+      const res = appendBrainNote({ vault, ...input });
+      return { kind: "append_log_line", logged_at: res.logged_at, log_path: res.log_path };
     },
   };
 }
