@@ -3,7 +3,7 @@
  * session/project scope filtering; omitting the filter is byte-identical.
  */
 
-import { test, expect, beforeEach, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
@@ -42,12 +42,23 @@ test("a session scope filter returns only that scope plus unscoped pages", async
 
 test("omitting the scope filter is byte-identical (every page reachable)", async () => {
   const cfg = await indexed();
-  const withOut = await search(cfg, { query: "widgets" });
-  const withEmpty = await search(cfg, { query: "widgets", scope: {} });
-  expect(withEmpty.results.map((r) => r.path).toSorted()).toEqual(
-    withOut.results.map((r) => r.path).toSorted(),
-  );
-  expect(withOut.results.map((r) => r.path).toSorted()).toEqual(["s1.md", "s2.md", "shared.md"]);
+  // Freeze the clock across both calls: recency decay is a continuous
+  // function of wall-clock time, so two real Date.now() reads even a
+  // millisecond apart would perturb the low-order digits of `score` /
+  // `recencyBoost` and make a full-object comparison flaky for reasons
+  // that have nothing to do with the scope filter under test.
+  const nowMs = Date.now();
+  const dateNowSpy = spyOn(Date, "now").mockReturnValue(nowMs);
+  try {
+    const withOut = await search(cfg, { query: "widgets" });
+    const withEmpty = await search(cfg, { query: "widgets", scope: {} });
+    // Full-projection equality: same result objects, in the same order, not
+    // just the same set of paths - byte-identical means byte-identical.
+    expect(withEmpty.results).toEqual(withOut.results);
+    expect(withOut.results.map((r) => r.path).toSorted()).toEqual(["s1.md", "s2.md", "shared.md"]);
+  } finally {
+    dateNowSpy.mockRestore();
+  }
 });
 
 test("a project scope filter is independent of the session axis", async () => {
