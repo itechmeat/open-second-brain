@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { BRAIN_LOG_REL, ensureInsideVault } from "../paths.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
 import { safeContinuityPayload } from "./redaction.ts";
-import { CONTINUITY_SCHEMA_VERSION } from "./types.ts";
+import { CLIP_PROTECTED_PAYLOAD_KEYS, CONTINUITY_SCHEMA_VERSION } from "./types.ts";
 import type {
   AppendContinuityRecordInput,
   ContinuityRecord,
@@ -187,6 +187,45 @@ export function appendContinuitySourceInvalidation(
       payload: { reason: input.reason },
     }),
   );
+}
+
+/**
+ * Clip a continuity payload to a character budget while guaranteeing the
+ * protected identity keys survive (t_5be0654d). Non-protected keys are
+ * dropped, in original order, only as far as needed to fit `budgetChars`;
+ * the protected keys ({@link CLIP_PROTECTED_PAYLOAD_KEYS}) are ALWAYS
+ * retained, even if they alone exceed the budget, so a clipped record
+ * stays correlatable to its session and agent.
+ *
+ * Byte-identical when there is no budget pressure: an undefined or
+ * non-finite budget, or a payload already within budget, returns the SAME
+ * payload reference unchanged (no allocation, no reordering).
+ */
+export function clipPayloadToBudget(
+  payload: Readonly<Record<string, unknown>>,
+  budgetChars: number | undefined,
+  protectedKeys: ReadonlyArray<string> = CLIP_PROTECTED_PAYLOAD_KEYS,
+): Readonly<Record<string, unknown>> {
+  if (budgetChars === undefined || !Number.isFinite(budgetChars)) return payload;
+  if (JSON.stringify(payload).length <= budgetChars) return payload;
+
+  const keys = Object.keys(payload);
+  const protectedSet = new Set(protectedKeys);
+  // Protected keys that actually exist are retained unconditionally.
+  const included = new Set(keys.filter((key) => protectedSet.has(key)));
+  const build = (chosen: ReadonlySet<string>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const key of keys) if (chosen.has(key)) out[key] = payload[key];
+    return out;
+  };
+  // Greedily keep non-protected keys, in original order, while they fit.
+  for (const key of keys) {
+    if (included.has(key)) continue;
+    const trial = new Set(included);
+    trial.add(key);
+    if (JSON.stringify(build(trial)).length <= budgetChars) included.add(key);
+  }
+  return Object.freeze(build(included));
 }
 
 export function listContinuityRecords(
