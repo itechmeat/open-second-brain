@@ -107,6 +107,7 @@ Brain verbs (observing memory):
   apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
   pending             Review the write-approval queue: list | apply <id> | reject <id>
   signal              Fact signal lifecycle: retire <id> --reason <text>
+  telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -787,6 +788,15 @@ export const VERB_HELP: Record<string, string> = {
     "excludes it from the dream pass while it stays readable in Brain/retired/.\n" +
     "Retiring a missing, already-retired, or non-signal id exits 2 (never a\n" +
     "silent no-op).\n",
+  "telegram-capture":
+    "usage: o2b brain telegram-capture <run|catchup> [--vault <path>]\n" +
+    "Inbound Telegram capture bot. run long-polls getUpdates via fetch (needs\n" +
+    "TELEGRAM_BOT_TOKEN or telegram_bot_token, and telegram_chat_allowlist);\n" +
+    "each allowlisted text message becomes one staged capture, /catchup replies\n" +
+    "with captures since the last acknowledged one, and every rejected or\n" +
+    "malformed update is one logged decision. A missing token exits with a typed\n" +
+    "error. catchup renders the same summary to stdout from disk, no token or\n" +
+    "network needed. Nothing runs implicitly from hooks.\n",
   agenda:
     "usage: o2b brain agenda --events <file|-> [args]\n" +
     "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +

@@ -844,6 +844,38 @@ export function resolveSessionCaptureRoles(configPath?: string): SessionCaptureR
   return roles.length > 0 ? roles : null;
 }
 
+/**
+ * Inbound Telegram capture bot token (Knowledge intake suite, t_f8f5ef6a).
+ * Order: `TELEGRAM_BOT_TOKEN` env -> `telegram_bot_token` config -> null.
+ * The key contains "token", so {@link redactMapping} redacts it from any
+ * config snapshot. `null` (the default) means the capture runner exits with
+ * a typed error rather than starting; nothing runs without an explicit token.
+ */
+export function resolveTelegramBotToken(configPath?: string): string | null {
+  const env = process.env["TELEGRAM_BOT_TOKEN"]?.trim();
+  const raw = env || discoverConfig(configPath).data["telegram_bot_token"]?.trim();
+  return raw !== undefined && raw.length > 0 ? raw : null;
+}
+
+/**
+ * Allowlisted Telegram chat ids for the capture bot (Knowledge intake
+ * suite, t_f8f5ef6a). Order: `TELEGRAM_CHAT_ALLOWLIST` env ->
+ * `telegram_chat_allowlist` config, comma-separated. Empty (the default)
+ * accepts no chats - the allowlist is structural and must be explicit, so a
+ * misconfigured bot captures nothing rather than everything.
+ */
+export function resolveTelegramCaptureAllowlist(configPath?: string): string[] {
+  const env = process.env["TELEGRAM_CHAT_ALLOWLIST"]?.trim();
+  const raw = env || discoverConfig(configPath).data["telegram_chat_allowlist"]?.trim();
+  if (!raw) return [];
+  const ids: string[] = [];
+  for (const part of raw.split(",")) {
+    const id = part.trim();
+    if (id.length > 0 && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
 /** Replace values for keys whose name suggests a secret with `[REDACTED]`. */
 export function redactMapping<T extends Record<string, unknown>>(data: T): Record<string, unknown> {
   const redacted: Record<string, unknown> = {};
